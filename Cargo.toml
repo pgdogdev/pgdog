@@ -1,0 +1,16 @@
+[package]
+name = "pgdog"
+version = "0.1.0"
+edition = "2021"
+description = "Modern PostgreSQL proxy and pooler."
+authors = ["Lev Kokotov <lev.kokotov@gmail.com>"]
+
+[dependencies]
+pin-project = "1"
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+parking_lot = "0.12"
+thiserror = "2"
+bytes = "1"
+# mlua = "0.10"
