@@ -4,7 +4,7 @@ use std::ops::{Deref, DerefMut};
 
 use bytes::Bytes;
 use tokio::io::AsyncWriteExt;
-use tokio::net::TcpStream;
+use tokio::net::{TcpSocket, TcpStream, ToSocketAddrs};
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::task::spawn;
 
@@ -38,6 +38,12 @@ impl Connection {
             stream: Stream::Plain(stream),
             peer_addr,
         })
+    }
+
+    pub async fn server(addr: impl ToSocketAddrs) -> Result<Self, Error> {
+        let mut stream = TcpStream::connect(addr).await?;
+
+        todo!()
     }
 }
 
