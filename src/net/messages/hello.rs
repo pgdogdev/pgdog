@@ -1,10 +1,13 @@
+//! Client/server connection startup messages.
+
 use crate::net::{c_string, Error};
 use bytes::{BufMut, Bytes, BytesMut};
 use tokio::io::{AsyncRead, AsyncReadExt};
+use tracing::debug;
 
 use std::marker::Unpin;
 
-use super::{Payload, ToBytes};
+use super::{Payload, Protocol, ToBytes};
 
 /// First message a client sends to the server
 /// and a server expects from a client.
@@ -25,6 +28,8 @@ impl Startup {
     pub async fn from_stream(stream: &mut (impl AsyncRead + Unpin)) -> Result<Self, Error> {
         let _len = stream.read_i32().await?;
         let code = stream.read_i32().await?;
+
+        debug!("📡 => {}", code);
 
         match code {
             // SSLRequest (F)
@@ -128,6 +133,19 @@ impl ToBytes for SslReply {
             SslReply::Yes => Bytes::from("S"),
             SslReply::No => Bytes::from("N"),
         })
+    }
+}
+
+impl std::fmt::Display for SslReply {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                Self::Yes => "S",
+                Self::No => "N",
+            }
+        )
     }
 }
 

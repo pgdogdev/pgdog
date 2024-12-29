@@ -4,24 +4,35 @@ use std::ops::{Deref, DerefMut};
 
 use bytes::Bytes;
 use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::net::{TcpSocket, TcpStream, ToSocketAddrs};
-use tokio::sync::mpsc::{channel, Receiver, Sender};
+use tokio::select;
+use tokio::sync::broadcast::{channel, Receiver, Sender};
 use tokio::task::spawn;
 
 use super::Error;
 use crate::net::Stream;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Message {
     Bytes(Bytes),
     Flush,
+    Shutdown { error: bool },
+}
+
+impl Message {
+    pub async fn read(stream: &mut (impl AsyncRead + Unpin + Send)) -> Result<Self, Error> {
+        let code = stream.read_u8().await? as char;
+
+        todo!()
+    }
 }
 
 /// Client connection.
 #[allow(dead_code)]
 pub struct Connection {
-    stream: Stream,
-    peer_addr: SocketAddr,
+    tx: Sender<Message>,
+    rx: Receiver<Message>,
 }
 
 impl Connection {
@@ -31,32 +42,17 @@ impl Connection {
     ///
     /// * `stream`: TCP connection socket.
     ///
-    pub fn new(stream: TcpStream) -> Result<Self, Error> {
-        let peer_addr = stream.peer_addr()?;
-
-        Ok(Self {
-            stream: Stream::Plain(stream),
-            peer_addr,
-        })
+    pub fn new(stream: Stream) -> Result<Self, Error> {
+        let (tx, rx) = channel::<Message>(4096);
+        spawn(async move {
+            // select! {}
+        });
+        todo!()
     }
 
     pub async fn server(addr: impl ToSocketAddrs) -> Result<Self, Error> {
         let mut stream = TcpStream::connect(addr).await?;
 
         todo!()
-    }
-}
-
-impl Deref for Connection {
-    type Target = Stream;
-
-    fn deref(&self) -> &Self::Target {
-        &self.stream
-    }
-}
-
-impl DerefMut for Connection {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.stream
     }
 }

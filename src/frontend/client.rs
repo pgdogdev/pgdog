@@ -13,8 +13,6 @@ pub struct Client {
 
 impl Client {
     pub fn new(stream: TcpStream) -> Result<Self, Error> {
-        Ok(Self {
-            connection: Connection::new(stream)?,
-        })
+        todo!()
     }
 }

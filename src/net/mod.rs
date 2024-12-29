@@ -3,6 +3,7 @@ pub mod connection;
 pub mod error;
 pub mod messages;
 pub mod stream;
+pub mod tls;
 
 pub use bidirectional::Bidirectional;
 pub use connection::Connection;
