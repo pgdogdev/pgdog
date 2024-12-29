@@ -149,6 +149,15 @@ impl std::fmt::Display for SslReply {
     }
 }
 
+impl Protocol for SslReply {
+    fn code(&self) -> char {
+        match self {
+            SslReply::Yes => 'S',
+            SslReply::No => 'N',
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
     use crate::net::messages::ToBytes;
