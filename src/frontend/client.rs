@@ -1,6 +1,5 @@
 //! Frontend client.
 //!
-use tokio::net::TcpStream;
 
 use super::Error;
 use crate::net::{Connection, Stream};

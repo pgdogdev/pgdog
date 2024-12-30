@@ -2,7 +2,7 @@
 //! connections the same across the code.
 use bytes::{BufMut, Bytes, BytesMut};
 use pin_project::pin_project;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufStream, ReadBuf};
 use tokio::net::TcpStream;
 use tokio_native_tls::TlsStream;
 use tracing::debug;
@@ -16,8 +16,8 @@ use super::messages::{Protocol, ToBytes};
 /// A network socket.
 #[pin_project(project = StreamProjection)]
 pub enum Stream {
-    Plain(#[pin] TcpStream),
-    Tls(#[pin] TlsStream<TcpStream>),
+    Plain(#[pin] BufStream<TcpStream>),
+    Tls(#[pin] BufStream<TlsStream<TcpStream>>),
 }
 
 impl AsyncRead for Stream {
@@ -71,6 +71,16 @@ impl AsyncWrite for Stream {
 }
 
 impl Stream {
+    /// Wrap an unencrypted TCP stream.
+    pub fn plain(stream: TcpStream) -> Self {
+        Self::Plain(BufStream::new(stream))
+    }
+
+    /// Wrap an encrypted TCP stream.
+    pub fn tls(stream: TlsStream<TcpStream>) -> Self {
+        Self::Tls(BufStream::new(stream))
+    }
+
     /// Send data via the stream.
     pub async fn send(
         &mut self,
@@ -121,7 +131,7 @@ impl Stream {
     /// Get the wrapped TCP stream back.
     pub(crate) fn take(self) -> Result<TcpStream, crate::net::Error> {
         match self {
-            Self::Plain(stream) => Ok(stream),
+            Self::Plain(stream) => Ok(stream.into_inner()),
             _ => Err(crate::net::Error::UnexpectedTlsRequest),
         }
     }

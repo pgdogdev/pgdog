@@ -40,7 +40,7 @@ impl Listener {
         while let Ok((stream, addr)) = listener.accept().await {
             info!("🔌 {}", addr);
 
-            let mut stream = Stream::Plain(stream);
+            let mut stream = Stream::plain(stream);
 
             loop {
                 let startup = Startup::from_stream(&mut stream).await?;
@@ -50,7 +50,7 @@ impl Listener {
                         stream.send_flush(SslReply::Yes).await?;
                         let plain = stream.take()?;
                         let cipher = tls.accept(plain).await?;
-                        stream = Stream::Tls(cipher);
+                        stream = Stream::tls(cipher);
                     }
 
                     Startup::Startup { params } => {

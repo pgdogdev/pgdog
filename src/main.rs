@@ -2,6 +2,7 @@ use frontend::listener::Listener;
 use tracing::Level;
 
 pub mod backend;
+pub mod channel;
 pub mod frontend;
 pub mod net;
 // pub mod plugin;
