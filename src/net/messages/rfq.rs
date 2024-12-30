@@ -1,8 +1,7 @@
 //! ReadyForQuery message, indicating that the backend server
 //! is ready to receive the next query.
 
-use super::{Payload, Protocol, ToBytes};
-use bytes::BufMut;
+use crate::net::messages::{code, prelude::*};
 
 // ReadyForQuery (F).
 #[derive(Debug)]
@@ -23,11 +22,22 @@ impl ReadyForQuery {
 }
 
 impl ToBytes for ReadyForQuery {
-    fn to_bytes(&self) -> Result<bytes::Bytes, crate::net::Error> {
+    fn to_bytes(&self) -> Result<bytes::Bytes, Error> {
         let mut payload = Payload::named(self.code());
         payload.put_u8(self.status as u8);
 
         Ok(payload.freeze())
+    }
+}
+
+impl FromBytes for ReadyForQuery {
+    fn from_bytes(mut bytes: Bytes) -> Result<Self, Error> {
+        code!(bytes.get_u8() as char, 'R');
+
+        let _len = bytes.get_i32();
+        let status = bytes.get_u8() as char;
+
+        Ok(Self { status })
     }
 }
 

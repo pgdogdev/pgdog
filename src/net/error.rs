@@ -2,8 +2,6 @@
 
 use thiserror::Error;
 
-use super::connection::Message;
-
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("{0}")]
@@ -18,6 +16,9 @@ pub enum Error {
     #[error("connection is not sending messages")]
     ConnectionDown,
 
-    #[error("{0}")]
-    Mpsc(#[from] tokio::sync::mpsc::error::SendError<Message>),
+    #[error("unexpected message, expected {0} got {0}")]
+    UnexpectedMessage(char, char),
+
+    #[error("unexpected payload")]
+    UnexpectedPayload,
 }

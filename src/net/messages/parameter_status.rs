@@ -1,6 +1,9 @@
 //! ParameterStatus (B) message.
 
-use super::{Payload, Protocol, ToBytes};
+use crate::net::{
+    c_string, c_string_buf,
+    messages::{code, prelude::*},
+};
 
 /// ParameterStatus (B) message.
 pub struct ParameterStatus {
@@ -9,7 +12,8 @@ pub struct ParameterStatus {
 }
 
 impl ParameterStatus {
-    ///
+    /// Fake parameter status messages we can return
+    /// to a client to make this seem like a legitimate PostgreSQL connection.
     pub fn fake() -> Vec<ParameterStatus> {
         vec![
             ParameterStatus {
@@ -36,6 +40,19 @@ impl ToBytes for ParameterStatus {
         payload.put_string(&self.value);
 
         Ok(payload.freeze())
+    }
+}
+
+impl FromBytes for ParameterStatus {
+    fn from_bytes(mut bytes: Bytes) -> Result<Self, Error> {
+        code!(bytes.get_u8() as char, 'S');
+
+        let _len = bytes.get_i32();
+
+        let name = c_string_buf(&mut bytes);
+        let value = c_string_buf(&mut bytes);
+
+        Ok(Self { name, value })
     }
 }
 

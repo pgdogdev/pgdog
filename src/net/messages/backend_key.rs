@@ -1,10 +1,11 @@
 //! Backend key data.
 
-use super::{Payload, Protocol, ToBytes};
-use bytes::BufMut;
+use crate::net::messages::code;
+use crate::net::messages::prelude::*;
 use rand::Rng;
 
 /// BackendKeyData (B)
+#[derive(Copy, Clone, Debug)]
 pub struct BackendKeyData {
     pid: i32,
     secret: i32,
@@ -28,6 +29,19 @@ impl ToBytes for BackendKeyData {
         payload.put_i32(self.secret);
 
         Ok(payload.freeze())
+    }
+}
+
+impl FromBytes for BackendKeyData {
+    fn from_bytes(mut bytes: Bytes) -> Result<Self, Error> {
+        code!(bytes.get_u8() as char, 'K');
+
+        let _len = bytes.get_i32();
+
+        Ok(Self {
+            pid: bytes.get_i32(),
+            secret: bytes.get_i32(),
+        })
     }
 }
 

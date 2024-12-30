@@ -1,6 +1,6 @@
 //! Network socket wrapper allowing us to treat secure, plain and UNIX
 //! connections the same across the code.
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::{BufMut, BytesMut};
 use pin_project::pin_project;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufStream, ReadBuf};
 use tokio::net::TcpStream;
@@ -11,7 +11,7 @@ use std::io::Error;
 use std::pin::Pin;
 use std::task::Context;
 
-use super::messages::{Protocol, ToBytes};
+use super::messages::{Message, Protocol, ToBytes};
 
 /// A network socket.
 #[pin_project(project = StreamProjection)]
@@ -110,7 +110,7 @@ impl Stream {
     }
 
     /// Read a message from the stream.
-    pub async fn read(&mut self) -> Result<Bytes, crate::net::Error> {
+    pub async fn read(&mut self) -> Result<Message, crate::net::Error> {
         let code = self.read_u8().await?;
         let len = self.read_i32().await?;
 
@@ -123,9 +123,11 @@ impl Stream {
 
         self.read_exact(&mut bytes[5..]).await?;
 
-        debug!("📡 => {}", code as char);
+        let message = Message::new(bytes.freeze());
 
-        Ok(bytes.freeze())
+        debug!("📡 => {}", message.code());
+
+        Ok(message)
     }
 
     /// Get the wrapped TCP stream back.

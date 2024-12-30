@@ -7,7 +7,7 @@ use tracing::debug;
 
 use std::marker::Unpin;
 
-use super::{Payload, Protocol, ToBytes};
+use super::{FromBytes, Payload, Protocol, ToBytes};
 
 /// First message a client sends to the server
 /// and a server expects from a client.
@@ -155,6 +155,12 @@ impl Protocol for SslReply {
             SslReply::Yes => 'S',
             SslReply::No => 'N',
         }
+    }
+}
+
+impl FromBytes for SslReply {
+    fn from_bytes(bytes: Bytes) -> Result<Self, Error> {
+        todo!()
     }
 }
 

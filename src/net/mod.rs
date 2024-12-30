@@ -1,12 +1,12 @@
 pub mod bidirectional;
-pub mod connection;
+//pub mod connection;
 pub mod error;
 pub mod messages;
 pub mod stream;
 pub mod tls;
 
 pub use bidirectional::Bidirectional;
-pub use connection::Connection;
+//pub use connection::Connection;
 pub use error::Error;
 pub use stream::Stream;
 
@@ -40,4 +40,36 @@ pub async fn c_string(stream: &mut (impl AsyncRead + Unpin)) -> Result<String, E
     }
 
     Ok(buf)
+}
+
+/// Read a C-Style String from the buffer.
+///
+/// See [`c_string`] for how this works.
+pub fn c_string_buf(buf: &mut impl bytes::Buf) -> String {
+    let mut result = String::new();
+    while buf.remaining() > 0 {
+        let c = buf.get_u8();
+
+        if c != 0 {
+            result.push(c as char);
+        } else {
+            break;
+        }
+    }
+
+    result
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use bytes::Bytes;
+
+    #[test]
+    fn test_c_string_buf() {
+        let mut buf = Bytes::from("hello\0world\0");
+        assert_eq!(c_string_buf(&mut buf), "hello");
+        assert_eq!(c_string_buf(&mut buf), "world");
+        assert_eq!(c_string_buf(&mut buf), "");
+    }
 }

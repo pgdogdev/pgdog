@@ -5,7 +5,7 @@ pub mod payload;
 pub use payload::Payload;
 
 pub mod auth;
-pub use auth::AuthenticationOk;
+pub use auth::Authentication;
 
 pub mod rfq;
 pub use rfq::ReadyForQuery;
@@ -16,49 +16,70 @@ pub use backend_key::BackendKeyData;
 pub mod parameter_status;
 pub use parameter_status::ParameterStatus;
 
+pub mod prelude;
+
 use crate::net::Error;
 
 use bytes::Bytes;
-use tokio::io::AsyncWrite;
-use tracing::debug;
 
+/// Convert a Rust struct to a PostgreSQL wire protocol message.
 pub trait ToBytes {
+    /// Create the protocol message as an array of bytes.
+    /// The message must conform to the spec. No additional manipulation
+    /// of the data will take place.
     fn to_bytes(&self) -> Result<Bytes, Error>;
 }
 
-#[async_trait::async_trait]
-pub trait Protocol: ToBytes {
+/// Convert a PostgreSQL wire protocol message to a Rust struct.
+pub trait FromBytes: Sized {
+    /// Perform the conversion.
+    fn from_bytes(bytes: Bytes) -> Result<Self, Error>;
+}
+
+/// PostgreSQL wire protocol message.
+pub trait Protocol: ToBytes + FromBytes {
+    /// 99% of messages have a letter code.
     fn code(&self) -> char;
+}
 
-    async fn write(&self, stream: &mut (impl AsyncWrite + Unpin + Send)) -> Result<(), Error> {
-        use tokio::io::AsyncWriteExt;
+/// PostgreSQL protocol message.
+pub struct Message {
+    payload: Bytes,
+}
 
-        let bytes = self.to_bytes()?;
-
-        debug!("📡 <= {}", self.code());
-
-        stream.write_all(&bytes).await?;
-
-        Ok(())
+impl ToBytes for Message {
+    fn to_bytes(&self) -> Result<Bytes, Error> {
+        Ok(self.payload.clone())
     }
 }
 
-macro_rules! send {
-    ($t:tt) => {
-        impl $t {
-            pub async fn write(
-                &self,
-                stream: &mut (impl tokio::io::AsyncWrite + std::marker::Unpin),
-            ) -> Result<(), crate::net::Error> {
-                use tokio::io::AsyncWriteExt;
+impl Protocol for Message {
+    fn code(&self) -> char {
+        self.payload[0] as char
+    }
+}
 
-                let bytes = self.to_bytes()?;
-                stream.write_all(&bytes).await?;
+impl FromBytes for Message {
+    fn from_bytes(bytes: Bytes) -> Result<Self, Error> {
+        Ok(Self { payload: bytes })
+    }
+}
 
-                Ok(())
-            }
+impl Message {
+    /// Create new message from network payload.
+    pub fn new(payload: Bytes) -> Self {
+        Self { payload }
+    }
+}
+
+/// Check that the message we received is what we expected.
+/// Return an error otherwise.
+macro_rules! code {
+    ($code: expr, $expected: expr) => {
+        if $code != $expected {
+            return Err(crate::net::Error::UnexpectedMessage($expected, $code));
         }
     };
 }
 
-pub(crate) use send;
+pub(crate) use code;

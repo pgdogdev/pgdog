@@ -7,7 +7,7 @@ use tokio::net::{TcpListener, TcpStream, ToSocketAddrs};
 use tokio::stream;
 
 use crate::net::messages::{hello::SslReply, Startup, ToBytes};
-use crate::net::messages::{AuthenticationOk, ParameterStatus, ReadyForQuery};
+use crate::net::messages::{Authentication, ParameterStatus, ReadyForQuery};
 use crate::net::messages::{BackendKeyData, Protocol};
 use crate::net::tls::acceptor;
 use crate::net::Stream;
@@ -54,15 +54,13 @@ impl Listener {
                     }
 
                     Startup::Startup { params } => {
-                        stream.send(AuthenticationOk::default()).await?;
+                        stream.send(Authentication::Ok).await?;
                         let params = ParameterStatus::fake();
                         for param in params {
                             stream.send(param).await?;
                         }
-                        stream.send(BackendKeyData::new()).await?;
-                        stream.send_flush(ReadyForQuery::idle()).await?;
 
-                        self.clients.push(Client::new(stream)?);
+                        self.clients.push(Client::new(stream).await?);
                         break;
                     }
 
