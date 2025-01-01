@@ -1,7 +1,7 @@
 //! Client/server connection startup messages.
 
 use crate::net::{c_string, Error};
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tracing::debug;
 
@@ -159,8 +159,13 @@ impl Protocol for SslReply {
 }
 
 impl FromBytes for SslReply {
-    fn from_bytes(bytes: Bytes) -> Result<Self, Error> {
-        todo!()
+    fn from_bytes(mut bytes: Bytes) -> Result<Self, Error> {
+        let answer = bytes.get_u8() as char;
+        match answer {
+            'S' => Ok(SslReply::Yes),
+            'N' => Ok(SslReply::No),
+            answer => return Err(Error::UnexpectedSslReply(answer)),
+        }
     }
 }
 

@@ -1,18 +1,14 @@
 //! Connection listener.
 //!
-use std::net::SocketAddr;
 
-use tokio::io::AsyncWriteExt;
-use tokio::net::{TcpListener, TcpStream, ToSocketAddrs};
-use tokio::stream;
+use tokio::net::TcpListener;
 
-use crate::net::messages::{hello::SslReply, Startup, ToBytes};
-use crate::net::messages::{Authentication, ParameterStatus, ReadyForQuery};
-use crate::net::messages::{BackendKeyData, Protocol};
+use crate::net::messages::{hello::SslReply, Startup};
+use crate::net::messages::{Authentication, ParameterStatus};
 use crate::net::tls::acceptor;
 use crate::net::Stream;
 
-use tracing::{debug, info};
+use tracing::info;
 
 use super::{Client, Error};
 

@@ -60,7 +60,7 @@ impl super::ToBytes for Payload {
         let mut buf = BytesMut::new();
         let len = self.bytes.len() as i32 + 4; // self
 
-        if let Some(name) = self.name.clone() {
+        if let Some(name) = self.name {
             buf.put_u8(name as u8);
         }
 

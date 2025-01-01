@@ -41,7 +41,6 @@ impl FromBytes for ReadyForQuery {
     }
 }
 
-#[async_trait::async_trait]
 impl Protocol for ReadyForQuery {
     fn code(&self) -> char {
         'Z'

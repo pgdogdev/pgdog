@@ -1,3 +1,4 @@
+//! PostgreSQL wire protocol messages.
 pub mod hello;
 pub use hello::Startup;
 

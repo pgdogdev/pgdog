@@ -4,12 +4,6 @@ use super::Error;
 use crate::net::messages::{BackendKeyData, Message, Protocol, ReadyForQuery, ToBytes};
 use crate::net::Stream;
 
-use tokio::select;
-use tokio::sync::mpsc::{channel, Receiver, Sender};
-use tokio::task::spawn;
-
-use tracing::debug;
-
 /// Frontend client.
 #[allow(dead_code)]
 pub struct Client {

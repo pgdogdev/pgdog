@@ -4,8 +4,10 @@ use super::{code, prelude::*};
 
 use super::FromBytes;
 
+/// Authentication messages.
 #[derive(Debug)]
 pub enum Authentication {
+    /// AuthenticationOk (F)
     Ok,
 }
 
@@ -13,13 +15,13 @@ impl FromBytes for Authentication {
     fn from_bytes(mut bytes: Bytes) -> Result<Self, Error> {
         code!(bytes.get_u8() as char, 'R');
 
-        let len = bytes.get_i32();
+        let _len = bytes.get_i32();
 
         let status = bytes.get_i32();
 
         match status {
             0 => Ok(Authentication::Ok),
-            _ => todo!(),
+            status => Err(Error::UnsupportedAuthentication(status)),
         }
     }
 }

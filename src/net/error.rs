@@ -21,4 +21,10 @@ pub enum Error {
 
     #[error("unexpected payload")]
     UnexpectedPayload,
+
+    #[error("unsupported authentication: {0}")]
+    UnsupportedAuthentication(i32),
+
+    #[error("unexpected ssl request reply: {0}")]
+    UnexpectedSslReply(char),
 }

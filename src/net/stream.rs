@@ -82,6 +82,11 @@ impl Stream {
     }
 
     /// Send data via the stream.
+    ///
+    /// # Performance
+    ///
+    /// This is fast because the stream is buffered. Make sure to call [`Stream::send_flush`]
+    /// for the last message in the exchange.
     pub async fn send(
         &mut self,
         message: impl ToBytes + Protocol,
@@ -99,6 +104,11 @@ impl Stream {
 
     /// Send data via the stream and flush the buffer,
     /// ensuring the message is sent immediately.
+    ///
+    /// # Performance
+    ///
+    /// This will flush all buffers and ensure the data is actually sent via the socket.
+    /// Use this only for the last message in the exchange to avoid bottlenecks.
     pub async fn send_flush(
         &mut self,
         message: impl ToBytes + Protocol,
@@ -110,6 +120,12 @@ impl Stream {
     }
 
     /// Read a message from the stream.
+    ///
+    /// # Performance
+    ///
+    /// The stream is buffered, so this is quite fast. The pooler will perform exactly
+    /// one memory allocation per protocol message. It can be optimized to re-use an existing
+    /// buffer but it's not worth the complexity.
     pub async fn read(&mut self) -> Result<Message, crate::net::Error> {
         let code = self.read_u8().await?;
         let len = self.read_i32().await?;
@@ -119,7 +135,7 @@ impl Stream {
         bytes.put_u8(code);
         bytes.put_i32(len);
 
-        bytes.resize(len as usize + 1, 0);
+        bytes.resize(len as usize + 1, 0); // self + 1 byte for the message code
 
         self.read_exact(&mut bytes[5..]).await?;
 
