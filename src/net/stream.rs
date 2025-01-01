@@ -119,6 +119,22 @@ impl Stream {
         Ok(())
     }
 
+    pub async fn send_flush_many(
+        &mut self,
+        messages: Vec<impl ToBytes + Protocol>,
+    ) -> Result<(), crate::net::Error> {
+        let len = messages.len();
+        for (i, message) in messages.into_iter().enumerate() {
+            if i == len - 1 {
+                self.send_flush(message).await?;
+            } else {
+                self.send(message).await?;
+            }
+        }
+
+        Ok(())
+    }
+
     /// Read a message from the stream.
     ///
     /// # Performance

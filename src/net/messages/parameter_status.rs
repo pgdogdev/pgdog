@@ -7,8 +7,10 @@ use crate::net::{
 
 /// ParameterStatus (B) message.
 pub struct ParameterStatus {
-    name: String,
-    value: String,
+    /// Parameter name, e.g. `client_encoding`.
+    pub name: String,
+    /// Parameter value, e.g. `UTF8`.
+    pub value: String,
 }
 
 impl ParameterStatus {

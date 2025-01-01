@@ -1,10 +1,11 @@
 //! Connection listener.
 //!
 
-use tokio::net::TcpListener;
+use std::net::SocketAddr;
+
+use tokio::net::{TcpListener, TcpStream};
 
 use crate::net::messages::{hello::SslReply, Startup};
-use crate::net::messages::{Authentication, ParameterStatus};
 use crate::net::tls::acceptor;
 use crate::net::Stream;
 
@@ -14,7 +15,6 @@ use super::{Client, Error};
 
 pub struct Listener {
     addr: String,
-    clients: Vec<Client>,
 }
 
 impl Listener {
@@ -22,48 +22,58 @@ impl Listener {
     pub fn new(addr: impl ToString) -> Self {
         Self {
             addr: addr.to_string(),
-            clients: vec![],
         }
     }
 
     pub async fn listen(&mut self) -> Result<(), Error> {
         info!("🐕 pgDog listening on {}", self.addr);
 
-        let tls = acceptor().await?;
-
         let listener = TcpListener::bind(&self.addr).await?;
 
         while let Ok((stream, addr)) = listener.accept().await {
             info!("🔌 {}", addr);
 
-            let mut stream = Stream::plain(stream);
+            tokio::spawn(async move {
+                Self::handle_client(stream, addr).await?;
+                Ok::<(), Error>(())
+            });
+        }
 
-            loop {
-                let startup = Startup::from_stream(&mut stream).await?;
+        Ok(())
+    }
 
-                match startup {
-                    Startup::Ssl => {
+    async fn handle_client(stream: TcpStream, addr: SocketAddr) -> Result<(), Error> {
+        let mut stream = Stream::plain(stream);
+        let tls = acceptor().await?;
+
+        loop {
+            let startup = Startup::from_stream(&mut stream).await?;
+
+            match startup {
+                Startup::Ssl => {
+                    if let Some(ref tls) = tls {
                         stream.send_flush(SslReply::Yes).await?;
                         let plain = stream.take()?;
                         let cipher = tls.accept(plain).await?;
                         stream = Stream::tls(cipher);
-                    }
-
-                    Startup::Startup { params } => {
-                        stream.send(Authentication::Ok).await?;
-                        let params = ParameterStatus::fake();
-                        for param in params {
-                            stream.send(param).await?;
-                        }
-
-                        self.clients.push(Client::new(stream).await?);
-                        break;
-                    }
-
-                    Startup::Cancel { pid, secret } => {
-                        break;
+                    } else {
+                        stream.send_flush(SslReply::No).await?;
                     }
                 }
+
+                Startup::Startup { params } => {
+                    tokio::spawn(async move {
+                        Client::new(stream, params).await?.spawn().await?;
+
+                        info!("disconnected {}", addr);
+
+                        Ok::<(), Error>(())
+                    });
+
+                    break;
+                }
+
+                Startup::Cancel { pid, secret } => (),
             }
         }
 
