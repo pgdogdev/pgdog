@@ -3,14 +3,15 @@
 use once_cell::sync::OnceCell;
 use tokio::fs::read_to_string;
 use tokio_native_tls::{
-    native_tls::{Identity, TlsAcceptor},
-    TlsAcceptor as TlsAcceptorAsync,
+    native_tls::{Identity, TlsAcceptor, TlsConnector},
+    TlsAcceptor as TlsAcceptorAsync, TlsConnector as TlsConnectorAsync,
 };
 use tracing::info;
 
 use super::Error;
 
 static ACCEPTOR: OnceCell<TlsAcceptorAsync> = OnceCell::new();
+static CONNECTOR: OnceCell<TlsConnectorAsync> = OnceCell::new();
 
 /// Create a new TLS acceptor from the cert and key.
 pub async fn acceptor() -> Result<Option<TlsAcceptorAsync>, Error> {
@@ -33,4 +34,21 @@ pub async fn acceptor() -> Result<Option<TlsAcceptorAsync>, Error> {
     let _ = ACCEPTOR.set(acceptor.clone());
 
     Ok(Some(acceptor))
+}
+
+/// Create new TLS connector.
+pub fn connector() -> Result<TlsConnectorAsync, Error> {
+    if let Some(connector) = CONNECTOR.get() {
+        return Ok(connector.clone());
+    }
+    let connector = TlsConnector::builder()
+        .danger_accept_invalid_certs(true)
+        .danger_accept_invalid_hostnames(true)
+        .build()
+        .unwrap();
+    let connector = TlsConnectorAsync::from(connector);
+
+    let _ = CONNECTOR.set(connector.clone());
+
+    Ok(connector)
 }

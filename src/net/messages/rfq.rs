@@ -6,7 +6,7 @@ use crate::net::messages::{code, prelude::*};
 // ReadyForQuery (F).
 #[derive(Debug)]
 pub struct ReadyForQuery {
-    status: char,
+    pub status: char,
 }
 
 impl ReadyForQuery {
@@ -32,7 +32,7 @@ impl ToBytes for ReadyForQuery {
 
 impl FromBytes for ReadyForQuery {
     fn from_bytes(mut bytes: Bytes) -> Result<Self, Error> {
-        code!(bytes.get_u8() as char, 'R');
+        code!(bytes.get_u8() as char, 'Z');
 
         let _len = bytes.get_i32();
         let status = bytes.get_u8() as char;

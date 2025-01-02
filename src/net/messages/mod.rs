@@ -17,6 +17,12 @@ pub use backend_key::BackendKeyData;
 pub mod parameter_status;
 pub use parameter_status::ParameterStatus;
 
+pub mod error_response;
+pub use error_response::ErrorResponse;
+
+pub mod query;
+pub use query::Query;
+
 pub mod prelude;
 
 use crate::net::Error;
@@ -70,6 +76,11 @@ impl Message {
     /// Create new message from network payload.
     pub fn new(payload: Bytes) -> Self {
         Self { payload }
+    }
+
+    /// Take the message payload.
+    pub fn payload(&self) -> Bytes {
+        self.payload.clone()
     }
 }
 

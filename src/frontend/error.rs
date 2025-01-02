@@ -13,4 +13,7 @@ pub enum Error {
 
     #[error("net: {0}")]
     Net(#[from] crate::net::Error),
+
+    #[error("{0}")]
+    Backend(#[from] crate::backend::Error),
 }

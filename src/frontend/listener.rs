@@ -9,7 +9,7 @@ use crate::net::messages::{hello::SslReply, Startup};
 use crate::net::tls::acceptor;
 use crate::net::Stream;
 
-use tracing::info;
+use tracing::{error, info};
 
 use super::{Client, Error};
 
@@ -62,13 +62,23 @@ impl Listener {
                 }
 
                 Startup::Startup { params } => {
-                    tokio::spawn(async move {
+                    let handle = tokio::spawn(async move {
                         Client::new(stream, params).await?.spawn().await?;
-
-                        info!("disconnected {}", addr);
 
                         Ok::<(), Error>(())
                     });
+
+                    match handle.await {
+                        Ok(Ok(_client)) => {
+                            info!("disconnected {}", addr);
+                        }
+
+                        Ok(Err(err)) => {
+                            error!("disconnected with error: {:?}", err);
+                        }
+
+                        Err(_) => {}
+                    }
 
                     break;
                 }

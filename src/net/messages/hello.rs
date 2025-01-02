@@ -74,6 +74,21 @@ impl Startup {
                 .map(|pair| pair.1.as_str()),
         }
     }
+
+    /// Create new startup message from config.
+    pub fn new() -> Self {
+        Self::Startup {
+            params: vec![
+                ("user".into(), "pgdog".into()),
+                ("database".into(), "pgdog".into()),
+            ],
+        }
+    }
+
+    /// Create new startup TLS request.
+    pub fn tls() -> Self {
+        Self::Ssl
+    }
 }
 
 impl super::ToBytes for Startup {
@@ -113,6 +128,7 @@ impl super::ToBytes for Startup {
 
                 payload.put_i32(196608);
                 payload.put(params_buf);
+                payload.put_u8(0); // Terminating null character.
 
                 Ok(payload.freeze())
             }
@@ -121,7 +137,7 @@ impl super::ToBytes for Startup {
 }
 
 /// Reply to a SSLRequest (F) message.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum SslReply {
     Yes,
     No,
@@ -196,6 +212,6 @@ mod test {
 
         let bytes = startup.to_bytes().unwrap();
 
-        assert_eq!(bytes.clone().get_i32(), 40);
+        assert_eq!(bytes.clone().get_i32(), 41);
     }
 }

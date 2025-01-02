@@ -3,6 +3,8 @@
 use tokio::select;
 
 use super::Error;
+use crate::backend::pool::Connection;
+use crate::backend::Server;
 use crate::net::messages::{
     Authentication, BackendKeyData, Message, ParameterStatus, Protocol, ReadyForQuery,
 };
@@ -50,7 +52,11 @@ impl Client {
 
     /// Run the client.
     pub async fn spawn(mut self) -> Result<Self, Error> {
+        let mut server = Connection::new();
+
         loop {
+            self.state = State::Idle;
+
             select! {
                 buffer = self.buffer() => {
                     let buffer = buffer?;
@@ -60,7 +66,25 @@ impl Client {
                         break;
                     }
 
+                    self.state = State::Waiting;
+                    server.connect().await?;
                     self.state = State::Active;
+
+                    server.send(buffer).await?;
+                }
+
+                message = server.read() => {
+                    let message = message?;
+
+                    if message.code() == 'Z' {
+                        self.stream.send_flush(message).await?;
+
+                        if server.done() {
+                            server.disconnect();
+                        }
+                    } else {
+                        self.stream.send(message).await?;
+                    }
                 }
             }
         }

@@ -11,7 +11,7 @@ use std::io::Error;
 use std::pin::Pin;
 use std::task::Context;
 
-use super::messages::{Message, Protocol, ToBytes};
+use super::messages::{FromBytes, Message, Protocol, ToBytes};
 
 /// A network socket.
 #[pin_project(project = StreamProjection)]
@@ -119,7 +119,8 @@ impl Stream {
         Ok(())
     }
 
-    pub async fn send_flush_many(
+    /// Send mulitple messages and flush the buffer.
+    pub async fn send_many(
         &mut self,
         messages: Vec<impl ToBytes + Protocol>,
     ) -> Result<(), crate::net::Error> {
@@ -160,6 +161,17 @@ impl Stream {
         debug!("📡 => {}", message.code());
 
         Ok(message)
+    }
+
+    /// Read a specific message from the stream. If the message received doesn't match the expected type,
+    /// an error is returned.
+    ///
+    /// # Performance
+    ///
+    /// Same as [`Stream::read`].
+    pub async fn read_message<T: Protocol + FromBytes>(&mut self) -> Result<T, crate::net::Error> {
+        let message = self.read().await?;
+        Ok(T::from_bytes(message.payload())?)
     }
 
     /// Get the wrapped TCP stream back.
