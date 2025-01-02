@@ -1,8 +1,9 @@
 //! PostgreSQL serer connection.
+use std::time::Instant;
+
 use bytes::{BufMut, BytesMut};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tokio::spawn;
 use tracing::{debug, info};
 
 use super::Error;
@@ -22,6 +23,7 @@ pub struct Server {
     id: BackendKeyData,
     params: Vec<(String, String)>,
     state: State,
+    created_at: Instant,
 }
 
 impl Server {
@@ -94,13 +96,14 @@ impl Server {
 
         let id = key_data.ok_or(Error::NoBackendKeyData)?;
 
-        info!("💾 {}", addr);
+        info!("new server connection [{}]", addr);
 
         Ok(Server {
             stream,
             id,
             params,
             state: State::Idle,
+            created_at: Instant::now(),
         })
     }
 
@@ -165,7 +168,7 @@ impl Server {
             return Err(Error::NotInSync);
         }
 
-        self.stream.send(Query::new(query)).await?;
+        self.send(vec![Query::new(query)]).await?;
 
         let mut messages = vec![];
 
@@ -177,15 +180,18 @@ impl Server {
     }
 
     /// Attempt to rollback the transaction on this server, if any has been started.
-    pub fn rollback(mut self) {
-        spawn(async move {
-            if self.in_sync() {
-                if let Err(_err) = self.execute("ROLLBACK").await {
-                    self.state = State::Error;
-                }
-            } else {
+    pub async fn rollback(&mut self) {
+        if self.in_sync() {
+            if let Err(_err) = self.execute("ROLLBACK").await {
                 self.state = State::Error;
             }
-        });
+        } else {
+            self.state = State::Error;
+        }
+    }
+
+    /// Server connection unique identifier.
+    pub fn id(&self) -> &BackendKeyData {
+        &self.id
     }
 }

@@ -2,13 +2,16 @@
 
 use tokio::time::sleep;
 
-use crate::net::messages::{Message, Protocol};
+use crate::net::messages::{BackendKeyData, Message, Protocol};
 
-use super::super::{Error, Server};
+use super::super::{
+    pool::{pool, Guard},
+    Error, Server,
+};
 use std::{ops::Deref, time::Duration};
 
 pub struct Connection {
-    server: Option<Server>,
+    server: Option<Guard>,
 }
 
 impl Connection {
@@ -18,9 +21,10 @@ impl Connection {
     }
 
     /// Create a server connection if one doesn't exist already.
-    pub async fn get(&mut self) -> Result<(), Error> {
+    pub async fn get(&mut self, id: &BackendKeyData) -> Result<(), Error> {
         if self.server.is_none() {
-            self.server = Some(Server::connect("127.0.0.1:5432").await?);
+            let server = pool().get(id).await?;
+            self.server = Some(server);
         }
 
         Ok(())
@@ -58,13 +62,5 @@ impl Deref for Connection {
 
     fn deref(&self) -> &Self::Target {
         self.server.as_ref().unwrap()
-    }
-}
-
-impl Drop for Connection {
-    fn drop(&mut self) {
-        if let Some(server) = self.server.take() {
-            server.rollback();
-        }
     }
 }

@@ -68,7 +68,7 @@ impl Client {
 
                     flush = buffer.flush();
                     self.state = State::Waiting;
-                    server.get().await?;
+                    server.get(&self.id).await?;
                     self.state = State::Active;
 
                     server.send(buffer.into()).await?;
