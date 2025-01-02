@@ -50,6 +50,7 @@ pub trait Protocol: ToBytes + FromBytes {
 }
 
 /// PostgreSQL protocol message.
+#[derive(Debug)]
 pub struct Message {
     payload: Bytes,
 }

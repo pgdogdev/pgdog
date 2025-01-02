@@ -7,8 +7,10 @@ use rand::Rng;
 /// BackendKeyData (B)
 #[derive(Copy, Clone, Debug, Hash, PartialEq, Eq)]
 pub struct BackendKeyData {
-    pid: i32,
-    secret: i32,
+    /// Process ID.
+    pub pid: i32,
+    /// Process secret.
+    pub secret: i32,
 }
 
 impl BackendKeyData {

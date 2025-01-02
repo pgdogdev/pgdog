@@ -107,6 +107,25 @@ impl Server {
         })
     }
 
+    /// Request query cancellation for the given backend server identifier.
+    pub async fn cancel(addr: &str, id: &BackendKeyData) -> Result<(), Error> {
+        debug!("cancelling query");
+
+        let mut stream = TcpStream::connect(addr).await?;
+        stream
+            .write_all(
+                &Startup::Cancel {
+                    pid: id.pid,
+                    secret: id.secret,
+                }
+                .to_bytes()?,
+            )
+            .await?;
+        stream.flush().await?;
+
+        Ok(())
+    }
+
     /// Send messages to the server.
     pub async fn send(&mut self, messages: Vec<impl Protocol + ToBytes>) -> Result<(), Error> {
         self.state = State::Active;
@@ -172,7 +191,7 @@ impl Server {
 
     /// Execute a query on the server and return the result.
     pub async fn execute(&mut self, query: &str) -> Result<Vec<Message>, Error> {
-        if self.state == State::Active {
+        if !self.in_sync() {
             return Err(Error::NotInSync);
         }
 

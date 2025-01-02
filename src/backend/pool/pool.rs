@@ -191,4 +191,23 @@ impl Pool {
 
         self.comms.ready.notify_one();
     }
+
+    /// Server connection used by the client.
+    pub fn peer(&self, id: &BackendKeyData) -> Option<BackendKeyData> {
+        self.inner
+            .lock()
+            .taken
+            .iter()
+            .find(|p| p.client == *id)
+            .map(|p| p.server)
+    }
+
+    /// Send a cancellation request if the client is connected to a server.
+    pub async fn cancel(&self, id: &BackendKeyData) -> Result<(), super::super::Error> {
+        if let Some(server) = self.peer(id) {
+            Server::cancel("127.0.0.1:5432", &server).await?;
+        }
+
+        Ok(())
+    }
 }
