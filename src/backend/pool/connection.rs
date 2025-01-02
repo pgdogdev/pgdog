@@ -18,7 +18,7 @@ impl Connection {
     }
 
     /// Create a server connection if one doesn't exist already.
-    pub async fn connect(&mut self) -> Result<(), Error> {
+    pub async fn get(&mut self) -> Result<(), Error> {
         if self.server.is_none() {
             self.server = Some(Server::connect("127.0.0.1:5432").await?);
         }

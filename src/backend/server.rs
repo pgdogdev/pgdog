@@ -146,6 +146,14 @@ impl Server {
         self.state == State::Idle
     }
 
+    /// Server connection is synchronized and can receive more messages.
+    pub fn in_sync(&self) -> bool {
+        matches!(
+            self.state,
+            State::IdleInTransaction | State::TransactionError | State::Idle
+        )
+    }
+
     /// Server parameters.
     pub fn params(&self) -> &Vec<(String, String)> {
         &self.params
@@ -171,18 +179,12 @@ impl Server {
     /// Attempt to rollback the transaction on this server, if any has been started.
     pub fn rollback(mut self) {
         spawn(async move {
-            match self.state {
-                State::IdleInTransaction => {
-                    if let Err(_err) = self.execute("ROLLBACK").await {
-                        self.state = State::Error;
-                    }
-                }
-
-                State::Active => {
+            if self.in_sync() {
+                if let Err(_err) = self.execute("ROLLBACK").await {
                     self.state = State::Error;
                 }
-
-                _ => (),
+            } else {
+                self.state = State::Error;
             }
         });
     }

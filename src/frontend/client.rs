@@ -4,9 +4,8 @@ use tokio::select;
 
 use super::{Buffer, Error};
 use crate::backend::pool::Connection;
-use crate::backend::Server;
 use crate::net::messages::{
-    Authentication, BackendKeyData, Message, ParameterStatus, Protocol, ReadyForQuery,
+    Authentication, BackendKeyData, ParameterStatus, Protocol, ReadyForQuery,
 };
 use crate::net::Stream;
 use crate::state::State;
@@ -69,7 +68,7 @@ impl Client {
 
                     flush = buffer.flush();
                     self.state = State::Waiting;
-                    server.connect().await?;
+                    server.get().await?;
                     self.state = State::Active;
 
                     server.send(buffer.into()).await?;
