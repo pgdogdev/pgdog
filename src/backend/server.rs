@@ -157,6 +157,14 @@ impl Server {
         )
     }
 
+    /// Server is still inside a transaction.
+    pub fn in_transaction(&self) -> bool {
+        matches!(
+            self.state,
+            State::IdleInTransaction | State::TransactionError
+        )
+    }
+
     /// Server parameters.
     pub fn params(&self) -> &Vec<(String, String)> {
         &self.params
@@ -181,11 +189,13 @@ impl Server {
 
     /// Attempt to rollback the transaction on this server, if any has been started.
     pub async fn rollback(&mut self) {
-        if self.in_sync() {
+        if self.in_transaction() {
             if let Err(_err) = self.execute("ROLLBACK").await {
                 self.state = State::Error;
             }
-        } else {
+        }
+
+        if !self.in_sync() {
             self.state = State::Error;
         }
     }

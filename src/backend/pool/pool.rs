@@ -92,8 +92,6 @@ impl Pool {
 
     /// Get a connetion from the pool.
     pub async fn get(&self, id: &BackendKeyData) -> Result<Guard, Error> {
-        let _waiting = Waiting::new(self.clone());
-
         loop {
             let config = {
                 let mut guard = self.inner.lock();
@@ -110,6 +108,7 @@ impl Pool {
             };
 
             self.comms.request.notify_one();
+            let _waiting = Waiting::new(self.clone());
 
             select! {
                 _ = self.comms.ready.notified() => {
