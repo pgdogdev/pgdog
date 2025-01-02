@@ -5,7 +5,7 @@ use crate::net::messages::prelude::*;
 use rand::Rng;
 
 /// BackendKeyData (B)
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq)]
 pub struct BackendKeyData {
     pid: i32,
     secret: i32,

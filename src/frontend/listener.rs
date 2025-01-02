@@ -1,10 +1,15 @@
-//! Connection listener.
-//!
+//! Connection listener. Handles all client connections.
 
+use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::sync::Arc;
 
+use parking_lot::Mutex;
 use tokio::net::{TcpListener, TcpStream};
+use tokio::select;
+use tokio::signal::ctrl_c;
 
+use crate::net::messages::BackendKeyData;
 use crate::net::messages::{hello::SslReply, Startup};
 use crate::net::tls::acceptor;
 use crate::net::Stream;
@@ -13,8 +18,14 @@ use tracing::{error, info};
 
 use super::{Client, Error};
 
+/// Connected clients.
+type Clients = Arc<Mutex<HashMap<BackendKeyData, ()>>>;
+
+/// Client connections listener and handler.
+#[derive(Debug)]
 pub struct Listener {
     addr: String,
+    clients: Clients,
 }
 
 impl Listener {
@@ -22,27 +33,47 @@ impl Listener {
     pub fn new(addr: impl ToString) -> Self {
         Self {
             addr: addr.to_string(),
+            clients: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
+    /// Listen for client connections and handle them.
     pub async fn listen(&mut self) -> Result<(), Error> {
         info!("🐕 pgDog listening on {}", self.addr);
 
         let listener = TcpListener::bind(&self.addr).await?;
 
-        while let Ok((stream, addr)) = listener.accept().await {
-            info!("🔌 {}", addr);
+        // Load TLS cert, if any.
+        let _ = acceptor().await?;
 
-            tokio::spawn(async move {
-                Self::handle_client(stream, addr).await?;
-                Ok::<(), Error>(())
-            });
+        loop {
+            select! {
+                connection = listener.accept() => {
+                   let (stream, addr) = connection?;
+                   let clients = self.clients.clone();
+
+                   tokio::spawn(async move {
+                       Self::handle_client(stream, addr, clients).await?;
+                       Ok::<(), Error>(())
+                   });
+                }
+
+                _ = ctrl_c() => {
+                    break;
+                }
+            }
         }
 
         Ok(())
     }
 
-    async fn handle_client(stream: TcpStream, addr: SocketAddr) -> Result<(), Error> {
+    async fn handle_client(
+        stream: TcpStream,
+        addr: SocketAddr,
+        clients: Clients,
+    ) -> Result<(), Error> {
+        info!("client connected [{}]", addr);
+
         let mut stream = Stream::plain(stream);
         let tls = acceptor().await?;
 
@@ -62,24 +93,17 @@ impl Listener {
                 }
 
                 Startup::Startup { params } => {
-                    let handle = tokio::spawn(async move {
-                        Client::new(stream, params).await?.spawn().await?;
+                    let client = Client::new(stream, params).await?;
+                    let id = client.id();
 
-                        Ok::<(), Error>(())
-                    });
+                    clients.lock().insert(id, ());
 
-                    match handle.await {
-                        Ok(Ok(_client)) => {
-                            info!("disconnected {}", addr);
-                        }
-
-                        Ok(Err(err)) => {
-                            error!("disconnected with error: {:?}", err);
-                        }
-
-                        Err(_) => {}
+                    match client.spawn().await {
+                        Ok(_) => info!("client disconnected [{}]", addr),
+                        Err(err) => error!("client disconnected with error [{}]: {:?}", addr, err),
                     }
 
+                    clients.lock().remove(&id);
                     break;
                 }
 

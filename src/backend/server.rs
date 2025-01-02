@@ -16,6 +16,7 @@ use crate::net::{
 };
 use crate::state::State;
 
+/// PostgreSQL server connection.
 pub struct Server {
     stream: Stream,
     id: BackendKeyData,
