@@ -42,6 +42,8 @@ impl Server {
         debug!("=> {}", addr);
         let mut stream = Stream::plain(TcpStream::connect(addr).await?);
 
+        let server_name = addr.split(":").next().unwrap().to_string();
+
         // Request TLS.
         stream.write_all(&Startup::tls().to_bytes()?).await?;
         stream.flush().await?;
@@ -54,7 +56,7 @@ impl Server {
             let connector = connector()?;
             let plain = stream.take()?;
 
-            let server_name = ServerName::try_from(addr.to_string())?;
+            let server_name = ServerName::try_from(server_name)?;
 
             let cipher =
                 tokio_rustls::TlsStream::Client(connector.connect(server_name, plain).await?);
