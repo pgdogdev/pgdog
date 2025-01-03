@@ -10,7 +10,7 @@ use std::io::Error;
 use std::pin::Pin;
 use std::task::Context;
 
-use super::messages::{FromBytes, Message, Protocol, ToBytes};
+use super::messages::{FromBytes, Message, Protocol};
 
 /// A network socket.
 #[pin_project(project = StreamProjection)]
