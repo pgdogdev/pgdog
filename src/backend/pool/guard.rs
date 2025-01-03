@@ -42,7 +42,7 @@ impl Deref for Guard {
     type Target = Server;
 
     fn deref(&self) -> &Self::Target {
-        &self.server.as_ref().unwrap()
+        self.server.as_ref().unwrap()
     }
 }
 

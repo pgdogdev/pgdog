@@ -67,6 +67,12 @@ pub struct Pool {
     comms: Arc<Comms>,
 }
 
+impl Default for Pool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Pool {
     /// Create new connection pool.
     pub fn new() -> Self {
@@ -100,8 +106,8 @@ impl Pool {
                 let mut guard = self.inner.lock();
                 if let Some(server) = guard.conns.pop_back() {
                     guard.taken.push(Mapping {
-                        client: id.clone(),
-                        server: server.id().clone(),
+                        client: *id,
+                        server: *server.id(),
                     });
 
                     return Ok(Guard::new(self.clone(), server));
@@ -176,13 +182,11 @@ impl Pool {
                         let age = c.age(now);
                         if remove <= 0 {
                             true
+                        } else if age >= config.idle_timeout() {
+                            remove -= 1;
+                            false
                         } else {
-                            if age >= config.idle_timeout() {
-                                remove -= 1;
-                                false
-                            } else {
-                                true
-                            }
+                            true
                         }
                     });
 
@@ -210,7 +214,7 @@ impl Pool {
     pub(super) fn checkin(&self, server: Server) {
         let now = Instant::now();
         let mut guard = self.inner.lock();
-        let id = server.id().clone();
+        let id = *server.id();
         let too_old = server.age(now).as_millis() >= guard.config.max_age as u128;
 
         if server.done() && !too_old {

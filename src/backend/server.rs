@@ -137,7 +137,7 @@ impl Server {
     }
 
     /// Send messages to the server.
-    pub async fn send(&mut self, messages: Vec<impl Protocol + ToBytes>) -> Result<(), Error> {
+    pub async fn send(&mut self, messages: Vec<impl Protocol>) -> Result<(), Error> {
         self.state = State::Active;
         if let Err(err) = self.stream().send_many(messages).await {
             self.state = State::Error;
@@ -167,21 +167,17 @@ impl Server {
             }
         };
 
-        match message.code() {
-            'Z' => {
-                let rfq = ReadyForQuery::from_bytes(message.payload())?;
-                match rfq.status {
-                    'I' => self.state = State::Idle,
-                    'T' => self.state = State::IdleInTransaction,
-                    'E' => self.state = State::TransactionError,
-                    status => {
-                        self.state = State::Error;
-                        return Err(Error::UnexpectedTransactionStatus(status));
-                    }
+        if message.code() == 'Z' {
+            let rfq = ReadyForQuery::from_bytes(message.payload())?;
+            match rfq.status {
+                'I' => self.state = State::Idle,
+                'T' => self.state = State::IdleInTransaction,
+                'E' => self.state = State::TransactionError,
+                status => {
+                    self.state = State::Error;
+                    return Err(Error::UnexpectedTransactionStatus(status));
                 }
             }
-
-            _ => (),
         }
 
         Ok(message)

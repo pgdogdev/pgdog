@@ -180,7 +180,7 @@ impl FromBytes for SslReply {
         match answer {
             'S' => Ok(SslReply::Yes),
             'N' => Ok(SslReply::No),
-            answer => return Err(Error::UnexpectedSslReply(answer)),
+            answer => Err(Error::UnexpectedSslReply(answer)),
         }
     }
 }

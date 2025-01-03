@@ -15,6 +15,12 @@ pub struct Connection {
     server: Option<Guard>,
 }
 
+impl Default for Connection {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Connection {
     /// Create new server connection handler.
     pub fn new() -> Self {

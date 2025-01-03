@@ -33,7 +33,7 @@ impl Client {
 
         let id = BackendKeyData::new();
 
-        stream.send(id.clone()).await?;
+        stream.send(id).await?;
         stream.send_flush(ReadyForQuery::idle()).await?;
 
         Ok(Self {
@@ -46,7 +46,7 @@ impl Client {
 
     /// Get client's identifier.
     pub fn id(&self) -> BackendKeyData {
-        self.id.clone()
+        self.id
     }
 
     /// Run the client.
@@ -115,6 +115,6 @@ impl Client {
             }
         }
 
-        Ok(buffer.into())
+        Ok(buffer)
     }
 }

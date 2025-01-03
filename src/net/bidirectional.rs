@@ -1,5 +1,5 @@
 use bytes::Bytes;
-use tokio::sync::mpsc::{channel, Receiver, Sender};
+use tokio::sync::mpsc::{Receiver, Sender};
 
 use super::Error;
 

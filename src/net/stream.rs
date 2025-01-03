@@ -86,10 +86,7 @@ impl Stream {
     ///
     /// This is fast because the stream is buffered. Make sure to call [`Stream::send_flush`]
     /// for the last message in the exchange.
-    pub async fn send(
-        &mut self,
-        message: impl ToBytes + Protocol,
-    ) -> Result<(), crate::net::Error> {
+    pub async fn send(&mut self, message: impl Protocol) -> Result<(), crate::net::Error> {
         // debug!("📡 <= {}", message.code());
 
         let bytes = message.to_bytes()?;
@@ -108,10 +105,7 @@ impl Stream {
     ///
     /// This will flush all buffers and ensure the data is actually sent via the socket.
     /// Use this only for the last message in the exchange to avoid bottlenecks.
-    pub async fn send_flush(
-        &mut self,
-        message: impl ToBytes + Protocol,
-    ) -> Result<(), crate::net::Error> {
+    pub async fn send_flush(&mut self, message: impl Protocol) -> Result<(), crate::net::Error> {
         self.send(message).await?;
         self.flush().await?;
 
@@ -121,7 +115,7 @@ impl Stream {
     /// Send mulitple messages and flush the buffer.
     pub async fn send_many(
         &mut self,
-        messages: Vec<impl ToBytes + Protocol>,
+        messages: Vec<impl Protocol>,
     ) -> Result<(), crate::net::Error> {
         let len = messages.len();
         for (i, message) in messages.into_iter().enumerate() {
@@ -170,7 +164,7 @@ impl Stream {
     /// Same as [`Stream::read`].
     pub async fn read_message<T: Protocol + FromBytes>(&mut self) -> Result<T, crate::net::Error> {
         let message = self.read().await?;
-        Ok(T::from_bytes(message.payload())?)
+        T::from_bytes(message.payload())
     }
 
     /// Get the wrapped TCP stream back.

@@ -46,17 +46,17 @@ impl ToBytes for ErrorResponse {
     fn to_bytes(&self) -> Result<Bytes, Error> {
         let mut payload = Payload::named(self.code());
 
-        payload.put_u8('S' as u8);
+        payload.put_u8(b'S');
         payload.put_string(&self.severity);
 
-        payload.put_u8('C' as u8);
+        payload.put_u8(b'C');
         payload.put_string(&self.code);
 
-        payload.put_u8('M' as u8);
+        payload.put_u8(b'M');
         payload.put_string(&self.message);
 
         if let Some(ref detail) = self.detail {
-            payload.put_u8('D' as u8);
+            payload.put_u8(b'D');
             payload.put_string(detail);
         }
 

@@ -9,6 +9,12 @@ pub struct Buffer {
     buffer: Vec<Message>,
 }
 
+impl Default for Buffer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Buffer {
     /// Create new buffer.
     pub fn new() -> Self {
@@ -31,7 +37,7 @@ impl Buffer {
     /// The buffer is full and the client won't send any more messages
     /// until it gets a reply, or we don't want to buffer the data in memory.
     pub fn full(&self) -> bool {
-        if let Some(ref message) = self.buffer.last() {
+        if let Some(message) = self.buffer.last() {
             // Flush (F) | Sync (F) | Query (F) | CopyData (F) | CopyDone (F)
             if matches!(message.code(), 'H' | 'S' | 'Q' | 'd' | 'c') {
                 return true;
@@ -42,9 +48,9 @@ impl Buffer {
     }
 }
 
-impl Into<Vec<Message>> for Buffer {
-    fn into(self) -> Vec<Message> {
-        self.buffer
+impl From<Buffer> for Vec<Message> {
+    fn from(val: Buffer) -> Self {
+        val.buffer
     }
 }
 

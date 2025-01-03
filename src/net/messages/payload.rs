@@ -10,6 +10,12 @@ pub struct Payload {
     name: Option<char>,
 }
 
+impl Default for Payload {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Payload {
     /// Create new payload.
     pub fn new() -> Self {

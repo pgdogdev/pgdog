@@ -13,6 +13,12 @@ pub struct BackendKeyData {
     pub secret: i32,
 }
 
+impl Default for BackendKeyData {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl BackendKeyData {
     /// Create new random BackendKeyData (B) message.
     pub fn new() -> Self {
