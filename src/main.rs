@@ -1,5 +1,5 @@
 use frontend::listener::Listener;
-use tracing::Level;
+use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 pub mod auth;
 pub mod backend;
@@ -12,11 +12,11 @@ pub mod state;
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt()
-        .with_max_level(Level::DEBUG)
+    tracing_subscriber::registry()
+        .with(fmt::layer())
+        .with(EnvFilter::from_default_env())
         .init();
 
     let mut listener = Listener::new("0.0.0.0:6432");
     listener.listen().await.unwrap();
-    println!("Hello, world!");
 }

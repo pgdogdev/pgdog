@@ -4,7 +4,6 @@ use bytes::{BufMut, BytesMut};
 use pin_project::pin_project;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufStream, ReadBuf};
 use tokio::net::TcpStream;
-use tokio_native_tls::TlsStream;
 use tracing::debug;
 
 use std::io::Error;
@@ -17,7 +16,7 @@ use super::messages::{FromBytes, Message, Protocol, ToBytes};
 #[pin_project(project = StreamProjection)]
 pub enum Stream {
     Plain(#[pin] BufStream<TcpStream>),
-    Tls(#[pin] BufStream<TlsStream<TcpStream>>),
+    Tls(#[pin] BufStream<tokio_rustls::TlsStream<TcpStream>>),
 }
 
 impl AsyncRead for Stream {
@@ -77,7 +76,7 @@ impl Stream {
     }
 
     /// Wrap an encrypted TCP stream.
-    pub fn tls(stream: TlsStream<TcpStream>) -> Self {
+    pub fn tls(stream: tokio_rustls::TlsStream<TcpStream>) -> Self {
         Self::Tls(BufStream::new(stream))
     }
 
@@ -91,7 +90,7 @@ impl Stream {
         &mut self,
         message: impl ToBytes + Protocol,
     ) -> Result<(), crate::net::Error> {
-        debug!("📡 <= {}", message.code());
+        // debug!("📡 <= {}", message.code());
 
         let bytes = message.to_bytes()?;
         match self {

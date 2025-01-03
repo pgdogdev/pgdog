@@ -2,7 +2,7 @@
 
 use std::collections::VecDeque;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use once_cell::sync::OnceCell;
 use parking_lot::Mutex;
@@ -33,6 +33,7 @@ struct Inner {
     taken: Vec<Mapping>,
     config: Config,
     waiting: usize,
+    banned_at: Option<Instant>,
 }
 
 struct Comms {
@@ -74,6 +75,7 @@ impl Pool {
                 taken: Vec::new(),
                 config: Config::default(),
                 waiting: 0,
+                banned_at: None,
             })),
             comms: Arc::new(Comms {
                 ready: Notify::new(),
@@ -176,6 +178,8 @@ impl Pool {
 
         if server.done() {
             guard.conns.push_back(server);
+        } else if server.error() {
+            guard.banned_at = Some(Instant::now());
         }
 
         let index = guard

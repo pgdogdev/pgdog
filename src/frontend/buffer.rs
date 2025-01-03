@@ -29,11 +29,11 @@ impl Buffer {
     }
 
     /// The buffer is full and the client won't send any more messages
-    /// until it gets a reply.
+    /// until it gets a reply, or we don't want to buffer the data in memory.
     pub fn full(&self) -> bool {
         if let Some(ref message) = self.buffer.last() {
-            // Flush (F) | Sync (F) | Query (F)
-            if matches!(message.code(), 'H' | 'S' | 'Q') {
+            // Flush (F) | Sync (F) | Query (F) | CopyData (F) | CopyDone (F)
+            if matches!(message.code(), 'H' | 'S' | 'Q' | 'd' | 'c') {
                 return true;
             }
         }

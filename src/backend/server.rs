@@ -1,7 +1,8 @@
 //! PostgreSQL serer connection.
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use bytes::{BufMut, BytesMut};
+use rustls_pki_types::ServerName;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tracing::{debug, info};
@@ -44,7 +45,12 @@ impl Server {
             let connector = connector()?;
             let plain = stream.take()?;
 
-            stream = Stream::tls(connector.connect(addr, plain).await?);
+            let server_name = ServerName::try_from(addr.to_string())?;
+
+            let cipher =
+                tokio_rustls::TlsStream::Client(connector.connect(server_name, plain).await?);
+
+            stream = Stream::tls(cipher);
         }
 
         stream.write_all(&Startup::new().to_bytes()?).await?;
@@ -109,8 +115,6 @@ impl Server {
 
     /// Request query cancellation for the given backend server identifier.
     pub async fn cancel(addr: &str, id: &BackendKeyData) -> Result<(), Error> {
-        debug!("cancelling query");
-
         let mut stream = TcpStream::connect(addr).await?;
         stream
             .write_all(
@@ -129,19 +133,33 @@ impl Server {
     /// Send messages to the server.
     pub async fn send(&mut self, messages: Vec<impl Protocol + ToBytes>) -> Result<(), Error> {
         self.state = State::Active;
-        self.stream.send_many(messages).await?;
-        Ok(())
+        if let Err(err) = self.stream.send_many(messages).await {
+            self.state = State::Error;
+            Err(err.into())
+        } else {
+            Ok(())
+        }
     }
 
     /// Flush all pending messages making sure they are sent to the server immediately.
     pub async fn flush(&mut self) -> Result<(), Error> {
-        self.stream.flush().await?;
-        Ok(())
+        if let Err(err) = self.stream.flush().await {
+            self.state = State::Error;
+            Err(err.into())
+        } else {
+            Ok(())
+        }
     }
 
     /// Read a single message from the server.
     pub async fn read(&mut self) -> Result<Message, Error> {
-        let message = self.stream.read().await?;
+        let message = match self.stream.read().await {
+            Ok(message) => message,
+            Err(err) => {
+                self.state = State::Error;
+                return Err(err.into());
+            }
+        };
 
         match message.code() {
             'Z' => {
@@ -184,6 +202,11 @@ impl Server {
         )
     }
 
+    /// The server connection permanently failed.
+    pub fn error(&self) -> bool {
+        self.state == State::Error
+    }
+
     /// Server parameters.
     pub fn params(&self) -> &Vec<(String, String)> {
         &self.params
@@ -222,5 +245,10 @@ impl Server {
     /// Server connection unique identifier.
     pub fn id(&self) -> &BackendKeyData {
         &self.id
+    }
+
+    /// How old this connection is.
+    pub fn age(&self) -> Duration {
+        self.created_at.elapsed()
     }
 }

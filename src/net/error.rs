@@ -1,6 +1,7 @@
 //! Frontend errors.
 
 use thiserror::Error;
+use tokio_rustls::rustls;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -27,4 +28,10 @@ pub enum Error {
 
     #[error("unexpected ssl request reply: {0}")]
     UnexpectedSslReply(char),
+
+    #[error("{0}")]
+    TlsCertificate(#[from] rustls::pki_types::pem::Error),
+
+    #[error("{0}")]
+    Rustls(#[from] rustls::Error),
 }

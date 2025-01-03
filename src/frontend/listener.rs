@@ -42,6 +42,10 @@ impl Listener {
     pub async fn listen(&mut self) -> Result<(), Error> {
         info!("🐕 pgDog listening on {}", self.addr);
 
+        // Init the pool early in case we need to spin up some
+        // connections.
+        let _pool = pool();
+
         let listener = TcpListener::bind(&self.addr).await?;
 
         // Load TLS cert, if any.
@@ -87,7 +91,7 @@ impl Listener {
                         stream.send_flush(SslReply::Yes).await?;
                         let plain = stream.take()?;
                         let cipher = tls.accept(plain).await?;
-                        stream = Stream::tls(cipher);
+                        stream = Stream::tls(tokio_rustls::TlsStream::Server(cipher));
                     } else {
                         stream.send_flush(SslReply::No).await?;
                     }

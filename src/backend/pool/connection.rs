@@ -38,7 +38,8 @@ impl Connection {
     /// Read a message from the server connection.
     pub async fn read(&mut self) -> Result<Message, Error> {
         if let Some(ref mut server) = self.server {
-            server.read().await
+            let message = server.read().await?;
+            Ok(message)
         } else {
             // Suspend the future until select! cancels it.
             loop {

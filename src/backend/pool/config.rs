@@ -20,7 +20,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            min: 0,
+            min: 1,
             max: 10,
             checkout_timeout: 5_000,
             idle_timeout: 60_000,

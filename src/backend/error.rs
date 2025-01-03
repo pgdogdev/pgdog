@@ -10,6 +10,9 @@ pub enum Error {
     #[error("{0}")]
     Tls(#[from] tokio_native_tls::native_tls::Error),
 
+    #[error("{0}")]
+    InvalidTlsDnsName(#[from] rustls_pki_types::InvalidDnsNameError),
+
     #[error("net: {0}")]
     Net(#[from] crate::net::Error),
 
