@@ -38,13 +38,24 @@ impl Buffer {
     /// until it gets a reply, or we don't want to buffer the data in memory.
     pub fn full(&self) -> bool {
         if let Some(message) = self.buffer.last() {
-            // Flush (F) | Sync (F) | Query (F) | CopyData (F) | CopyDone (F)
-            if matches!(message.code(), 'H' | 'S' | 'Q' | 'd' | 'c') {
+            // Flush (F) | Sync (F) | Query (F) | CopyDone (F)
+            if matches!(message.code(), 'H' | 'S' | 'Q' | 'c') {
+                return true;
+            }
+
+            // CopyData (F)
+            // Flush data to backend if we've buffered 4K.
+            if message.code() == 'd' && self.len() > 4096 {
                 return true;
             }
         }
 
         false
+    }
+
+    /// Number of bytes in the buffer.
+    pub fn len(&self) -> usize {
+        self.buffer.iter().map(|b| b.len()).sum()
     }
 }
 

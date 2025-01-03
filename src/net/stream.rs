@@ -86,8 +86,8 @@ impl Stream {
     ///
     /// This is fast because the stream is buffered. Make sure to call [`Stream::send_flush`]
     /// for the last message in the exchange.
-    pub async fn send(&mut self, message: impl Protocol) -> Result<(), crate::net::Error> {
-        // debug!("📡 <= {}", message.code());
+    pub async fn send(&mut self, message: impl Protocol) -> Result<usize, crate::net::Error> {
+        debug!("📡 <= {}", message.code());
 
         let bytes = message.to_bytes()?;
         match self {
@@ -95,7 +95,7 @@ impl Stream {
             Stream::Tls(ref mut stream) => stream.write_all(&bytes).await?,
         }
 
-        Ok(())
+        Ok(bytes.len())
     }
 
     /// Send data via the stream and flush the buffer,
@@ -105,28 +105,29 @@ impl Stream {
     ///
     /// This will flush all buffers and ensure the data is actually sent via the socket.
     /// Use this only for the last message in the exchange to avoid bottlenecks.
-    pub async fn send_flush(&mut self, message: impl Protocol) -> Result<(), crate::net::Error> {
-        self.send(message).await?;
+    pub async fn send_flush(&mut self, message: impl Protocol) -> Result<usize, crate::net::Error> {
+        let sent = self.send(message).await?;
         self.flush().await?;
 
-        Ok(())
+        Ok(sent)
     }
 
     /// Send mulitple messages and flush the buffer.
     pub async fn send_many(
         &mut self,
         messages: Vec<impl Protocol>,
-    ) -> Result<(), crate::net::Error> {
+    ) -> Result<usize, crate::net::Error> {
         let len = messages.len();
+        let mut sent = 0;
         for (i, message) in messages.into_iter().enumerate() {
             if i == len - 1 {
-                self.send_flush(message).await?;
+                sent += self.send_flush(message).await?;
             } else {
-                self.send(message).await?;
+                sent += self.send(message).await?;
             }
         }
 
-        Ok(())
+        Ok(sent)
     }
 
     /// Read a message from the stream.

@@ -86,6 +86,11 @@ impl Message {
     pub fn payload(&self) -> Bytes {
         self.payload.clone()
     }
+
+    /// Number of bytes in the message.
+    pub fn len(&self) -> usize {
+        self.payload.len()
+    }
 }
 
 /// Check that the message we received is what we expected.

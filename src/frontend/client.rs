@@ -9,6 +9,7 @@ use crate::net::messages::{
 };
 use crate::net::Stream;
 use crate::state::State;
+use crate::stats::ConnStats;
 
 /// Frontend client.
 #[allow(dead_code)]
@@ -17,6 +18,7 @@ pub struct Client {
     id: BackendKeyData,
     state: State,
     params: Vec<(String, String)>,
+    stats: ConnStats,
 }
 
 impl Client {
@@ -41,6 +43,7 @@ impl Client {
             id,
             state: State::Idle,
             params,
+            stats: ConnStats::default(),
         })
     }
 
@@ -80,15 +83,19 @@ impl Client {
                 message = server.read() => {
                     let message = message?;
 
+                    self.stats.bytes_sent += message.len();
+
                     // ReadyForQuery (B) | CopyInResponse (B)
                     if matches!(message.code(), 'Z' | 'G') || flush {
                         self.stream.send_flush(message).await?;
                         flush = false;
+                        self.stats.queries += 1;
                     }  else {
                         self.stream.send(message).await?;
                     }
 
                     if server.done() {
+                        self.stats.transactions += 1;
                         server.disconnect();
                     }
                 }
@@ -107,6 +114,8 @@ impl Client {
 
         while !buffer.full() {
             let message = self.stream.read().await?;
+
+            self.stats.bytes_received += message.len();
 
             match message.code() {
                 // Terminate (F)

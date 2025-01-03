@@ -11,16 +11,19 @@ use tokio::{
 use tracing::{debug, info};
 
 use super::Error;
-use crate::net::messages::{
-    Authentication, BackendKeyData, ErrorResponse, Message, ParameterStatus, Query, ReadyForQuery,
-    Terminate,
-};
 use crate::net::{
     messages::{hello::SslReply, FromBytes, Protocol, Startup, ToBytes},
     tls::connector,
     Stream,
 };
 use crate::state::State;
+use crate::{
+    net::messages::{
+        Authentication, BackendKeyData, ErrorResponse, Message, ParameterStatus, Query,
+        ReadyForQuery, Terminate,
+    },
+    stats::ConnStats,
+};
 
 /// PostgreSQL server connection.
 pub struct Server {
@@ -30,6 +33,7 @@ pub struct Server {
     params: Vec<(String, String)>,
     state: State,
     created_at: Instant,
+    stats: ConnStats,
 }
 
 impl Server {
@@ -116,6 +120,7 @@ impl Server {
             params,
             state: State::Idle,
             created_at: Instant::now(),
+            stats: ConnStats::default(),
         })
     }
 
@@ -139,11 +144,15 @@ impl Server {
     /// Send messages to the server.
     pub async fn send(&mut self, messages: Vec<impl Protocol>) -> Result<(), Error> {
         self.state = State::Active;
-        if let Err(err) = self.stream().send_many(messages).await {
-            self.state = State::Error;
-            Err(err.into())
-        } else {
-            Ok(())
+        match self.stream().send_many(messages).await {
+            Ok(sent) => {
+                self.stats.bytes_sent += sent;
+                Ok(())
+            }
+            Err(err) => {
+                self.state = State::Error;
+                Err(err.into())
+            }
         }
     }
 
@@ -167,10 +176,18 @@ impl Server {
             }
         };
 
+        self.stats.bytes_received += message.len();
+
         if message.code() == 'Z' {
+            self.stats.queries += 1;
+
             let rfq = ReadyForQuery::from_bytes(message.payload())?;
+
             match rfq.status {
-                'I' => self.state = State::Idle,
+                'I' => {
+                    self.state = State::Idle;
+                    self.stats.transactions += 1;
+                }
                 'T' => self.state = State::IdleInTransaction,
                 'E' => self.state = State::TransactionError,
                 status => {
