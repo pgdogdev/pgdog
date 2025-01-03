@@ -144,7 +144,7 @@ impl Pool {
                         match timeout(config.connect_timeout(), Server::connect("127.0.0.1:5432")).await {
                             Ok(Ok(conn)) => {
                                 let mut guard = self.inner.lock();
-                                guard.conns.push_back(conn);
+                                guard.conns.push_front(conn);
 
                                 self.comms.ready.notify_one();
                             }
@@ -177,7 +177,6 @@ impl Pool {
                         if remove <= 0 {
                             true
                         } else {
-
                             if age >= config.idle_timeout() {
                                 remove -= 1;
                                 false
