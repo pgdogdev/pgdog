@@ -10,6 +10,7 @@ use super::super::{
 };
 use std::{ops::Deref, time::Duration};
 
+/// Wrapper around a server connection.
 pub struct Connection {
     server: Option<Guard>,
 }
@@ -18,6 +19,11 @@ impl Connection {
     /// Create new server connection handler.
     pub fn new() -> Self {
         Self { server: None }
+    }
+
+    /// Check if the connection is available.
+    pub fn connected(&self) -> bool {
+        self.server.is_some()
     }
 
     /// Create a server connection if one doesn't exist already.

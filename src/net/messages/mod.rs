@@ -23,6 +23,9 @@ pub use error_response::ErrorResponse;
 pub mod query;
 pub use query::Query;
 
+pub mod terminate;
+pub use terminate::Terminate;
+
 pub mod prelude;
 
 use crate::net::Error;

@@ -3,13 +3,17 @@ use std::time::{Duration, Instant};
 
 use bytes::{BufMut, BytesMut};
 use rustls_pki_types::ServerName;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::TcpStream,
+    spawn,
+};
 use tracing::{debug, info};
 
 use super::Error;
 use crate::net::messages::{
     Authentication, BackendKeyData, ErrorResponse, Message, ParameterStatus, Query, ReadyForQuery,
+    Terminate,
 };
 use crate::net::{
     messages::{hello::SslReply, FromBytes, Protocol, Startup, ToBytes},
@@ -20,7 +24,8 @@ use crate::state::State;
 
 /// PostgreSQL server connection.
 pub struct Server {
-    stream: Stream,
+    addr: String,
+    stream: Option<Stream>,
     id: BackendKeyData,
     params: Vec<(String, String)>,
     state: State,
@@ -105,7 +110,8 @@ impl Server {
         info!("new server connection [{}]", addr);
 
         Ok(Server {
-            stream,
+            addr: addr.to_string(),
+            stream: Some(stream),
             id,
             params,
             state: State::Idle,
@@ -133,7 +139,7 @@ impl Server {
     /// Send messages to the server.
     pub async fn send(&mut self, messages: Vec<impl Protocol + ToBytes>) -> Result<(), Error> {
         self.state = State::Active;
-        if let Err(err) = self.stream.send_many(messages).await {
+        if let Err(err) = self.stream().send_many(messages).await {
             self.state = State::Error;
             Err(err.into())
         } else {
@@ -143,7 +149,7 @@ impl Server {
 
     /// Flush all pending messages making sure they are sent to the server immediately.
     pub async fn flush(&mut self) -> Result<(), Error> {
-        if let Err(err) = self.stream.flush().await {
+        if let Err(err) = self.stream().flush().await {
             self.state = State::Error;
             Err(err.into())
         } else {
@@ -153,7 +159,7 @@ impl Server {
 
     /// Read a single message from the server.
     pub async fn read(&mut self) -> Result<Message, Error> {
-        let message = match self.stream.read().await {
+        let message = match self.stream().read().await {
             Ok(message) => message,
             Err(err) => {
                 self.state = State::Error;
@@ -248,7 +254,25 @@ impl Server {
     }
 
     /// How old this connection is.
-    pub fn age(&self) -> Duration {
-        self.created_at.elapsed()
+    pub fn age(&self, instant: Instant) -> Duration {
+        instant.duration_since(self.created_at)
+    }
+
+    fn stream(&mut self) -> &mut Stream {
+        self.stream.as_mut().unwrap()
+    }
+}
+
+impl Drop for Server {
+    fn drop(&mut self) {
+        let mut stream = self.stream.take().unwrap();
+
+        info!("closing server connection [{}]", self.addr,);
+
+        spawn(async move {
+            stream.write_all(&Terminate.to_bytes()?).await?;
+            stream.flush().await?;
+            Ok::<(), Error>(())
+        });
     }
 }

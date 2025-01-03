@@ -7,8 +7,9 @@ use std::time::{Duration, Instant};
 use once_cell::sync::OnceCell;
 use parking_lot::Mutex;
 use tokio::sync::Notify;
-use tokio::time::sleep;
+use tokio::time::{sleep, timeout};
 use tokio::{select, spawn};
+use tracing::error;
 
 use crate::backend::Server;
 use crate::net::messages::BackendKeyData;
@@ -113,11 +114,11 @@ impl Pool {
             let _waiting = Waiting::new(self.clone());
 
             select! {
-                _ = self.comms.ready.notified() => {
+                _ =  self.comms.ready.notified() => {
                     continue;
                 }
 
-                _ = sleep(Duration::from_millis(config.checkout_timeout)) => {
+                _ = sleep(config.checkout_timeout()) => {
                     return Err(Error::CheckoutTimeout);
                 }
             }
@@ -129,20 +130,32 @@ impl Pool {
         loop {
             select! {
                 _ = self.comms.request.notified() => {
-                    let (available, can_create_more) = {
+                    let (available, total, config) = {
                         let guard = self.inner.lock();
                         let total = guard.conns.len() + guard.taken.len();
-                        (!guard.conns.is_empty(), total < guard.config.max)
+                        (!guard.conns.is_empty(), total, guard.config.clone())
                     };
+
+                    let can_create_more = total < config.max;
 
                     if available {
                         self.comms.ready.notify_one();
                     } else if can_create_more {
-                        if let Ok(conn) = Server::connect("127.0.0.1:5432").await {
-                            let mut guard = self.inner.lock();
-                            guard.conns.push_back(conn);
+                        match timeout(config.connect_timeout(), Server::connect("127.0.0.1:5432")).await {
+                            Ok(Ok(conn)) => {
+                                let mut guard = self.inner.lock();
+                                guard.conns.push_back(conn);
 
-                            self.comms.ready.notify_one();
+                                self.comms.ready.notify_one();
+                            }
+
+                            Ok(Err(err)) => {
+                                error!("error connecting to server: {:?}", err);
+                            }
+
+                            Err(_) => {
+                                error!("server connection timeout");
+                            }
                         }
                     }
                 }
@@ -151,13 +164,36 @@ impl Pool {
                     break;
                 }
 
+                // Perform maintenance ~3 times per second.
                 _ = sleep(Duration::from_millis(333)) => {
-                    let guard = self.inner.lock();
+                    let now = Instant::now();
+                    let mut guard = self.inner.lock();
+                    let config = guard.config.clone();
+
+                    // Remove idle connections.
+                    let mut remove = std::cmp::max(0, guard.conns.len() as i64 - config.min as i64);
+                    guard.conns.retain(|c| {
+                        let age = c.age(now);
+                        if remove <= 0 {
+                            true
+                        } else {
+
+                            if age >= config.idle_timeout() {
+                                remove -= 1;
+                                false
+                            } else {
+                                true
+                            }
+                        }
+                    });
+
+                    // Remove connections based on max age.
+                    guard.conns.retain(|c| {
+                        let age = c.age(now);
+                        age < config.max_age()
+                    });
 
                     // If we have clients waiting still, try to open a connection again.
-                    // This only happens if the pool failed to open a connection upon request
-                    // for some reason. This ensures that we don't create a thundering herd, by opening
-                    // one connection at a time.
                     if guard.waiting > 0 {
                         self.comms.request.notify_one();
                     }
@@ -173,10 +209,12 @@ impl Pool {
 
     /// Check the connection back into the pool.
     pub(super) fn checkin(&self, server: Server) {
+        let now = Instant::now();
         let mut guard = self.inner.lock();
         let id = server.id().clone();
+        let too_old = server.age(now).as_millis() >= guard.config.max_age as u128;
 
-        if server.done() {
+        if server.done() && !too_old {
             guard.conns.push_back(server);
         } else if server.error() {
             guard.banned_at = Some(Instant::now());
