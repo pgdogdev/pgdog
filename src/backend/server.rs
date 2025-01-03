@@ -33,6 +33,7 @@ pub struct Server {
     params: Vec<(String, String)>,
     state: State,
     created_at: Instant,
+    last_used_at: Instant,
     stats: ConnStats,
 }
 
@@ -122,6 +123,7 @@ impl Server {
             params,
             state: State::Idle,
             created_at: Instant::now(),
+            last_used_at: Instant::now(),
             stats: ConnStats::default(),
         })
     }
@@ -189,6 +191,7 @@ impl Server {
                 'I' => {
                     self.state = State::Idle;
                     self.stats.transactions += 1;
+                    self.last_used_at = Instant::now();
                 }
                 'T' => self.state = State::IdleInTransaction,
                 'E' => self.state = State::TransactionError,
@@ -271,6 +274,11 @@ impl Server {
     /// How old this connection is.
     pub fn age(&self, instant: Instant) -> Duration {
         instant.duration_since(self.created_at)
+    }
+
+    /// How long this connection has been idle.
+    pub fn idle_for(&self, instant: Instant) -> Duration {
+        instant.duration_since(self.last_used_at)
     }
 
     fn stream(&mut self) -> &mut Stream {

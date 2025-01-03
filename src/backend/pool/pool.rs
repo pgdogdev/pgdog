@@ -20,7 +20,7 @@ static POOL: OnceCell<Pool> = OnceCell::new();
 
 /// Get a connection pool handle.
 pub fn pool() -> Pool {
-    POOL.get_or_init(Pool::new).clone()
+    POOL.get_or_init(|| Pool::new("127.0.0.1:5432")).clone()
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -34,7 +34,7 @@ struct Inner {
     taken: Vec<Mapping>,
     config: Config,
     waiting: usize,
-    banned_at: Option<Instant>,
+    ban: Option<Ban>,
 }
 
 struct Comms {
@@ -60,35 +60,37 @@ impl Drop for Waiting {
     }
 }
 
+#[derive(Debug)]
+struct Ban {
+    created_at: Instant,
+    reason: Error,
+}
+
 /// Connection pool.
 #[derive(Clone)]
 pub struct Pool {
     inner: Arc<Mutex<Inner>>,
     comms: Arc<Comms>,
-}
-
-impl Default for Pool {
-    fn default() -> Self {
-        Self::new()
-    }
+    addr: String,
 }
 
 impl Pool {
     /// Create new connection pool.
-    pub fn new() -> Self {
+    pub fn new(addr: &str) -> Self {
         let pool = Self {
             inner: Arc::new(Mutex::new(Inner {
                 conns: VecDeque::new(),
                 taken: Vec::new(),
                 config: Config::default(),
                 waiting: 0,
-                banned_at: None,
+                ban: None,
             })),
             comms: Arc::new(Comms {
                 ready: Notify::new(),
                 request: Notify::new(),
                 shutdown: Notify::new(),
             }),
+            addr: addr.to_owned(),
         };
 
         let custodian = pool.clone();
@@ -147,7 +149,7 @@ impl Pool {
                     if available {
                         self.comms.ready.notify_one();
                     } else if can_create_more {
-                        match timeout(config.connect_timeout(), Server::connect("127.0.0.1:5432")).await {
+                        match timeout(config.connect_timeout(), Server::connect(&self.addr)).await {
                             Ok(Ok(conn)) => {
                                 let mut guard = self.inner.lock();
                                 guard.conns.push_front(conn);
@@ -179,10 +181,10 @@ impl Pool {
                     // Remove idle connections.
                     let mut remove = std::cmp::max(0, guard.conns.len() as i64 - config.min as i64);
                     guard.conns.retain(|c| {
-                        let age = c.age(now);
+                        let idle_for = c.idle_for(now);
                         if remove <= 0 {
                             true
-                        } else if age >= config.idle_timeout() {
+                        } else if idle_for >= config.idle_timeout() {
                             remove -= 1;
                             false
                         } else {
@@ -220,7 +222,10 @@ impl Pool {
         if server.done() && !too_old {
             guard.conns.push_back(server);
         } else if server.error() {
-            guard.banned_at = Some(Instant::now());
+            guard.ban = Some(Ban {
+                created_at: Instant::now(),
+                reason: Error::ServerError,
+            });
         }
 
         let index = guard
@@ -254,5 +259,23 @@ impl Pool {
         }
 
         Ok(())
+    }
+
+    /// Is this pool banned?
+    pub fn banned(&self) -> bool {
+        self.inner.lock().ban.is_some()
+    }
+
+    /// Ban this connection pool from serving traffic.
+    pub fn ban(&self) {
+        self.inner.lock().ban = Some(Ban {
+            created_at: Instant::now(),
+            reason: Error::ManualBan,
+        });
+    }
+
+    /// Unban this pool from serving traffic.
+    pub fn unban(&self) {
+        self.inner.lock().ban = None;
     }
 }
