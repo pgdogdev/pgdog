@@ -14,4 +14,7 @@ pub enum Error {
 
     #[error("no replicas")]
     NoReplicas,
+
+    #[error("no such shard: {0}")]
+    NoShard(usize),
 }

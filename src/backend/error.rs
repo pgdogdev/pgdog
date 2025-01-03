@@ -2,6 +2,8 @@ use thiserror::Error;
 
 use crate::net::messages::ErrorResponse;
 
+use super::databases::User;
+
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("{0}")]
@@ -33,4 +35,7 @@ pub enum Error {
 
     #[error("{0}")]
     Pool(#[from] crate::backend::pool::Error),
+
+    #[error("no such user/database: {0}")]
+    NoDatabase(User),
 }

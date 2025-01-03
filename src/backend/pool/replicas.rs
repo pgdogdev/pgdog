@@ -42,6 +42,14 @@ impl Replicas {
         self.len() == 0
     }
 
+    /// Create new identical replica pool.
+    pub fn duplicate(&self) -> Replicas {
+        Self {
+            pools: self.pools.iter().map(|p| p.duplicate()).collect(),
+            checkout_timeout: self.checkout_timeout,
+        }
+    }
+
     async fn get_internal(&self, id: &BackendKeyData) -> Result<Guard, Error> {
         loop {
             if self.is_empty() {
@@ -51,13 +59,15 @@ impl Replicas {
             let clear = self
                 .pools
                 .iter()
-                .filter(|p| !p.banned())
+                .filter(|p| p.available())
                 .choose(&mut rand::thread_rng());
 
             if let Some(clear) = clear {
                 match clear.get(id).await {
                     Ok(conn) => return Ok(conn),
-                    Err(err) => {}
+                    Err(_err) => {
+                        clear.ban();
+                    }
                 }
             } else {
                 self.pools.iter().for_each(|p| p.unban());

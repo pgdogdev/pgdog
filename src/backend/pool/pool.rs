@@ -1,6 +1,7 @@
 //! Connection pool.
 
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -35,12 +36,16 @@ struct Inner {
     config: Config,
     waiting: usize,
     ban: Option<Ban>,
+    online: bool,
+    paused: bool,
 }
 
 struct Comms {
     ready: Notify,
     request: Notify,
     shutdown: Notify,
+    resume: Notify,
+    ref_count: AtomicUsize,
 }
 
 struct Waiting {
@@ -66,12 +71,40 @@ struct Ban {
     reason: Error,
 }
 
+impl Ban {
+    fn expired(&self, now: Instant) -> bool {
+        now.duration_since(self.created_at) > Duration::from_secs(300)
+    }
+}
+
 /// Connection pool.
-#[derive(Clone)]
 pub struct Pool {
     inner: Arc<Mutex<Inner>>,
     comms: Arc<Comms>,
     addr: String,
+}
+
+impl Clone for Pool {
+    fn clone(&self) -> Self {
+        let clone = Self {
+            inner: self.inner.clone(),
+            comms: self.comms.clone(),
+            addr: self.addr.clone(),
+        };
+
+        self.comms.ref_count.fetch_add(1, Ordering::Relaxed);
+
+        clone
+    }
+}
+
+impl Drop for Pool {
+    fn drop(&mut self) {
+        let remaining = self.comms.ref_count.fetch_sub(1, Ordering::Relaxed);
+        if remaining == 1 {
+            self.comms.shutdown.notify_one();
+        }
+    }
 }
 
 impl Pool {
@@ -84,11 +117,15 @@ impl Pool {
                 config: Config::default(),
                 waiting: 0,
                 ban: None,
+                online: true,
+                paused: false,
             })),
             comms: Arc::new(Comms {
                 ready: Notify::new(),
                 request: Notify::new(),
                 shutdown: Notify::new(),
+                resume: Notify::new(),
+                ref_count: AtomicUsize::new(0),
             }),
             addr: addr.to_owned(),
         };
@@ -133,16 +170,25 @@ impl Pool {
         }
     }
 
+    /// Create new identical connection pool.
+    pub fn duplicate(&self) -> Pool {
+        Pool::new(&self.addr)
+    }
+
     /// Run the connection pool.
     async fn spawn(self) {
         loop {
             select! {
                 _ = self.comms.request.notified() => {
-                    let (available, total, config) = {
+                    let (available, total, config, paused) = {
                         let guard = self.inner.lock();
                         let total = guard.conns.len() + guard.taken.len();
-                        (!guard.conns.is_empty(), total, guard.config.clone())
+                        (!guard.conns.is_empty(), total, guard.config.clone(), guard.paused)
                     };
+
+                    if paused {
+                        continue;
+                    }
 
                     let can_create_more = total < config.max;
 
@@ -169,6 +215,7 @@ impl Pool {
                 }
 
                 _ = self.comms.shutdown.notified() => {
+                    self.inner.lock().online = false;
                     break;
                 }
 
@@ -198,6 +245,13 @@ impl Pool {
                         age < config.max_age()
                     });
 
+                    // Unban if ban expired.
+                    if let Some(ban) = guard.ban.take() {
+                        if !ban.expired(now) {
+                            guard.ban = Some(ban);
+                        }
+                    }
+
                     // If we have clients waiting still, try to open a connection again.
                     if guard.waiting > 0 {
                         self.comms.request.notify_one();
@@ -219,7 +273,7 @@ impl Pool {
         let id = *server.id();
         let too_old = server.age(now).as_millis() >= guard.config.max_age as u128;
 
-        if server.done() && !too_old {
+        if server.done() && !too_old && guard.online && !guard.paused {
             guard.conns.push_back(server);
         } else if server.error() {
             guard.ban = Some(Ban {
@@ -266,6 +320,12 @@ impl Pool {
         self.inner.lock().ban.is_some()
     }
 
+    /// Pool is available to serve connections.
+    pub fn available(&self) -> bool {
+        let guard = self.inner.lock();
+        !guard.paused && guard.online && guard.ban.is_none()
+    }
+
     /// Ban this connection pool from serving traffic.
     pub fn ban(&self) {
         self.inner.lock().ban = Some(Ban {
@@ -277,5 +337,23 @@ impl Pool {
     /// Unban this pool from serving traffic.
     pub fn unban(&self) {
         self.inner.lock().ban = None;
+    }
+
+    /// Pause pool.
+    pub fn pause(&self) {
+        self.inner.lock().paused = true;
+    }
+
+    /// Wait for pool to resume if it's paused.
+    pub async fn wait_resume(&self) {
+        if self.inner.lock().paused {
+            self.comms.resume.notified().await;
+        }
+    }
+
+    /// Resume the pool.
+    pub fn resume(&self) {
+        self.inner.lock().paused = false;
+        self.comms.resume.notify_waiters();
     }
 }

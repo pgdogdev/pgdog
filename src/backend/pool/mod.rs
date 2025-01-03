@@ -14,3 +14,10 @@ pub mod error;
 pub use error::Error;
 
 pub mod replicas;
+pub use replicas::Replicas;
+
+pub mod shard;
+pub use shard::Shard;
+
+pub mod cluster;
+pub use cluster::Cluster;
