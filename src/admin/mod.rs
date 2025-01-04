@@ -9,6 +9,7 @@ pub mod error;
 pub mod parser;
 pub mod pause;
 pub mod prelude;
+pub mod reconnect;
 
 pub use error::Error;
 
