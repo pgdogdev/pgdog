@@ -3,6 +3,7 @@
 use crate::net::{
     c_string_buf,
     messages::{code, prelude::*},
+    Parameter,
 };
 
 /// ParameterStatus (B) message.
@@ -11,6 +12,15 @@ pub struct ParameterStatus {
     pub name: String,
     /// Parameter value, e.g. `UTF8`.
     pub value: String,
+}
+
+impl From<Parameter> for ParameterStatus {
+    fn from(value: Parameter) -> Self {
+        ParameterStatus {
+            name: value.name,
+            value: value.value,
+        }
+    }
 }
 
 impl ParameterStatus {

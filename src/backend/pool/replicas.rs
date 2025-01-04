@@ -52,6 +52,15 @@ impl Replicas {
         }
     }
 
+    /// Cancel a query if one is running.
+    pub async fn cancel(&self, id: &BackendKeyData) -> Result<(), super::super::Error> {
+        for pool in &self.pools {
+            pool.cancel(id).await?;
+        }
+
+        Ok(())
+    }
+
     async fn get_internal(&self, id: &BackendKeyData) -> Result<Guard, Error> {
         loop {
             if self.is_empty() {

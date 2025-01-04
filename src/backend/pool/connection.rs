@@ -4,7 +4,7 @@ use tokio::time::sleep;
 
 use crate::{
     backend::databases::databases,
-    net::messages::{BackendKeyData, Message, Protocol},
+    net::messages::{BackendKeyData, Message, ParameterStatus, Protocol},
 };
 
 use super::{
@@ -50,6 +50,18 @@ impl Connection {
         }
 
         Ok(())
+    }
+
+    /// Get server parameters.
+    pub async fn parameters(&mut self, id: &BackendKeyData) -> Result<Vec<ParameterStatus>, Error> {
+        self.connect(id).await?;
+        let params = self
+            .params()
+            .iter()
+            .map(|p| ParameterStatus::from(p.clone()))
+            .collect();
+        self.disconnect();
+        Ok(params)
     }
 
     /// Disconnect from a server.

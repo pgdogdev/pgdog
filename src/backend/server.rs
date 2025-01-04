@@ -13,8 +13,9 @@ use tracing::{debug, info};
 use super::{pool::Address, Error};
 use crate::net::{
     messages::{hello::SslReply, FromBytes, Protocol, Startup, ToBytes},
+    parameter::Parameters,
     tls::connector,
-    Stream,
+    Parameter, Stream,
 };
 use crate::state::State;
 use crate::{
@@ -30,7 +31,7 @@ pub struct Server {
     addr: String,
     stream: Option<Stream>,
     id: BackendKeyData,
-    params: Vec<(String, String)>,
+    params: Parameters,
     state: State,
     created_at: Instant,
     last_used_at: Instant,
@@ -87,7 +88,7 @@ impl Server {
             }
         }
 
-        let mut params = vec![];
+        let mut params = Parameters::default();
         let mut key_data: Option<BackendKeyData> = None;
 
         loop {
@@ -99,7 +100,10 @@ impl Server {
                 // ParameterStatus (B)
                 'S' => {
                     let parameter = ParameterStatus::from_bytes(message.payload())?;
-                    params.push((parameter.name, parameter.value));
+                    params.push(Parameter {
+                        name: parameter.name,
+                        value: parameter.value,
+                    });
                 }
                 // BackendKeyData (B)
                 'K' => {
@@ -235,7 +239,7 @@ impl Server {
 
     /// Server parameters.
     #[inline]
-    pub fn params(&self) -> &Vec<(String, String)> {
+    pub fn params(&self) -> &Parameters {
         &self.params
     }
 

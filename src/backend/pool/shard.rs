@@ -37,4 +37,11 @@ impl Shard {
             replicas: self.replicas.duplicate(),
         }
     }
+
+    pub async fn cancel(&self, id: &BackendKeyData) -> Result<(), super::super::Error> {
+        self.primary.cancel(id).await?;
+        self.replicas.cancel(id).await?;
+
+        Ok(())
+    }
 }

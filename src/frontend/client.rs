@@ -4,12 +4,10 @@ use tokio::select;
 
 use super::{Buffer, Error};
 use crate::backend::pool::Connection;
-use crate::net::parameter::Parameters;
-use crate::net::Stream;
-use crate::net::{
-    messages::{Authentication, BackendKeyData, ParameterStatus, Protocol, ReadyForQuery},
-    Parameter,
+use crate::net::messages::{
+    Authentication, BackendKeyData, ParameterStatus, Protocol, ReadyForQuery,
 };
+use crate::net::{parameter::Parameters, Stream};
 use crate::state::State;
 use crate::stats::ConnStats;
 
@@ -27,15 +25,20 @@ impl Client {
     /// Create new frontend client from the given TCP stream.
     pub async fn new(mut stream: Stream, params: Parameters) -> Result<Self, Error> {
         // TODO: perform authentication.
+        let user = params.get_required("user")?;
+        let database = params.get_default("database", user);
+
         stream.send(Authentication::Ok).await?;
 
-        // TODO: fetch actual server params from the backend.
-        let backend_params = ParameterStatus::fake();
-        for param in backend_params {
-            stream.send(param).await?;
-        }
-
         let id = BackendKeyData::new();
+
+        // Get server parameters and send them to the client.
+        {
+            let mut conn = Connection::new(user, database)?;
+            for param in conn.parameters(&id).await? {
+                stream.send(param).await?;
+            }
+        }
 
         stream.send(id).await?;
         stream.send_flush(ReadyForQuery::idle()).await?;
@@ -67,12 +70,18 @@ impl Client {
 
             select! {
                 buffer = self.buffer() => {
-                    let buffer = buffer?;
-
-                    if buffer.is_empty() {
-                        self.state = State::Disconnected;
-                        break;
-                    }
+                    let buffer = match buffer {
+                        Ok(buffer) => if buffer.is_empty() {
+                            self.state = State::Disconnected;
+                            break;
+                        } else { buffer },
+                        Err(_) => {
+                            // IO error typically means the client disconnected
+                            // abruptly.
+                            self.state = State::Disconnected;
+                            break;
+                        },
+                    };
 
                     flush = buffer.flush();
 
@@ -130,24 +139,5 @@ impl Client {
         }
 
         Ok(buffer)
-    }
-
-    /// Find a paramaeter by name.
-    fn parameter(&self, name: &str) -> Option<&str> {
-        self.params
-            .iter()
-            .filter(|p| p.name == name)
-            .next()
-            .map(|p| p.value.as_str())
-    }
-
-    /// Get parameter value or returned an error.
-    fn required_parameter(&self, name: &str) -> Result<&str, Error> {
-        self.parameter(name).ok_or(Error::Parameter(name.into()))
-    }
-
-    /// Get parameter value or returned a default value if it doesn't exist.
-    fn default_parameter<'a>(&'a self, name: &str, default_value: &'a str) -> &str {
-        self.parameter(name).map_or(default_value, |p| p)
     }
 }

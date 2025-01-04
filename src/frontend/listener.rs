@@ -9,7 +9,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::select;
 use tokio::signal::ctrl_c;
 
-use crate::backend::pool::pool;
+use crate::backend::databases::databases;
 use crate::net::messages::BackendKeyData;
 use crate::net::messages::{hello::SslReply, Startup};
 use crate::net::tls::acceptor;
@@ -110,7 +110,7 @@ impl Listener {
 
                 Startup::Cancel { pid, secret } => {
                     let id = BackendKeyData { pid, secret };
-                    // pool().cancel(&id).await?;
+                    if let Err(_) = databases().cancel(&id).await {}
                 }
             }
         }

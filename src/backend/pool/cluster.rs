@@ -40,4 +40,13 @@ impl Cluster {
             shards: self.shards.iter().map(|s| s.duplicate()).collect(),
         }
     }
+
+    /// Cancel a query executed by one of the shards.
+    pub async fn cancel(&self, id: &BackendKeyData) -> Result<(), super::super::Error> {
+        for shard in &self.shards {
+            shard.cancel(id).await?;
+        }
+
+        Ok(())
+    }
 }

@@ -6,6 +6,8 @@ use std::sync::Arc;
 use arc_swap::ArcSwap;
 use once_cell::sync::Lazy;
 
+use crate::net::messages::BackendKeyData;
+
 use super::{pool::Address, Cluster, Error};
 
 static DATABASES: Lazy<ArcSwap<Databases>> =
@@ -99,6 +101,15 @@ impl Databases {
         } else {
             Err(Error::NoDatabase(user.clone()))
         }
+    }
+
+    /// Cancel a query running on one of the databases proxied by the pooler.
+    pub async fn cancel(&self, id: &BackendKeyData) -> Result<(), Error> {
+        for (_, cluster) in &self.databases {
+            cluster.cancel(id).await?;
+        }
+
+        Ok(())
     }
 
     /// Create new identical databases.

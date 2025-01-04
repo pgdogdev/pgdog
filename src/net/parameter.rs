@@ -2,7 +2,7 @@
 
 use std::ops::{Deref, DerefMut};
 
-use super::Error;
+use super::{messages::ParameterStatus, Error};
 
 /// Startup parameter.
 #[derive(Debug, Clone, PartialEq)]
