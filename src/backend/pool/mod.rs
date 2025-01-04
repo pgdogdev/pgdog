@@ -3,6 +3,7 @@ pub use connection::Connection;
 
 pub mod pool;
 pub use pool::{pool, Pool};
+use pool::{Ban, Mapping};
 
 pub mod config;
 pub use config::Config;
@@ -21,3 +22,10 @@ pub use shard::Shard;
 
 pub mod cluster;
 pub use cluster::Cluster;
+
+pub mod ban;
+pub mod monitor;
+pub use monitor::Monitor;
+pub mod inner;
+pub mod stats;
+use inner::Inner;

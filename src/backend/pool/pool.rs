@@ -6,16 +6,16 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use once_cell::sync::OnceCell;
-use parking_lot::Mutex;
+use parking_lot::lock_api::MutexGuard;
+use parking_lot::{Mutex, RawMutex};
+use tokio::select;
 use tokio::sync::Notify;
-use tokio::time::{sleep, timeout};
-use tokio::{select, spawn};
-use tracing::error;
+use tokio::time::sleep;
 
 use crate::backend::Server;
 use crate::net::messages::BackendKeyData;
 
-use super::{Config, Error, Guard};
+use super::{Config, Error, Guard, Inner, Monitor};
 
 static POOL: OnceCell<Pool> = OnceCell::new();
 
@@ -24,28 +24,50 @@ pub fn pool() -> Pool {
     POOL.get_or_init(|| Pool::new("127.0.0.1:5432")).clone()
 }
 
+/// Mapping between a client and a server.
 #[derive(Debug, Copy, Clone, PartialEq)]
-struct Mapping {
-    client: BackendKeyData,
-    server: BackendKeyData,
+pub(super) struct Mapping {
+    /// Client ID.
+    pub(super) client: BackendKeyData,
+    /// Server ID.
+    pub(super) server: BackendKeyData,
 }
 
-struct Inner {
-    conns: VecDeque<Server>,
-    taken: Vec<Mapping>,
-    config: Config,
-    waiting: usize,
-    ban: Option<Ban>,
-    online: bool,
-    paused: bool,
+/// Internal pool notifications.
+pub(super) struct Comms {
+    /// An idle connection is available in the pool.
+    pub(super) ready: Notify,
+    /// A client requests a new connection to be open
+    /// or waiting for one to be returned to the pool.
+    pub(super) request: Notify,
+    /// Pool is shutting down.
+    pub(super) shutdown: Notify,
+    /// Pool is resumed from a pause.
+    pub(super) resume: Notify,
+    /// Number of references (clones) of this pool.
+    /// When this number reaches 0, the maintenance loop is stopped
+    /// and the pool is dropped.
+    pub(super) ref_count: AtomicUsize,
 }
 
-struct Comms {
-    ready: Notify,
-    request: Notify,
-    shutdown: Notify,
-    resume: Notify,
-    ref_count: AtomicUsize,
+/// Pool state.
+pub struct State {
+    /// Number of connections checked out.
+    pub checked_out: usize,
+    /// Number of idle connections.
+    pub idle: usize,
+    /// Total number of connections managed by the pool.
+    pub total: usize,
+    /// Is the pool online?
+    pub online: bool,
+    /// Pool has no idle connections.
+    pub empty: bool,
+    /// Pool configuration.
+    pub config: Config,
+    /// The pool is paused.
+    pub paused: bool,
+    /// Number of clients waiting for a connection.
+    pub waiting: usize,
 }
 
 struct Waiting {
@@ -66,13 +88,15 @@ impl Drop for Waiting {
 }
 
 #[derive(Debug)]
-struct Ban {
-    created_at: Instant,
-    reason: Error,
+pub(super) struct Ban {
+    /// When the banw as created.
+    pub(super) created_at: Instant,
+    /// Why it was created.
+    pub(super) reason: Error,
 }
 
 impl Ban {
-    fn expired(&self, now: Instant) -> bool {
+    pub(super) fn expired(&self, now: Instant) -> bool {
         now.duration_since(self.created_at) > Duration::from_secs(300)
     }
 }
@@ -130,10 +154,8 @@ impl Pool {
             addr: addr.to_owned(),
         };
 
-        let custodian = pool.clone();
-        spawn(async move {
-            custodian.spawn().await;
-        });
+        // Launch the maintenance loop.
+        Monitor::new(&pool);
 
         pool
     }
@@ -141,8 +163,9 @@ impl Pool {
     /// Get a connetion from the pool.
     pub async fn get(&self, id: &BackendKeyData) -> Result<Guard, Error> {
         loop {
-            let config = {
-                let mut guard = self.inner.lock();
+            // Fast path, idle connection available.
+            let checkout_timeout = {
+                let mut guard = self.lock();
                 if let Some(server) = guard.conns.pop_back() {
                     guard.taken.push(Mapping {
                         client: *id,
@@ -152,18 +175,22 @@ impl Pool {
                     return Ok(Guard::new(self.clone(), server));
                 }
 
-                guard.config.clone()
+                guard.config.checkout_timeout()
             };
 
-            self.comms.request.notify_one();
+            // Slow path, pool is empty, will create new connection
+            // or wait for one to be returned if the pool is maxed out.
+            self.comms().request.notify_one();
             let _waiting = Waiting::new(self.clone());
 
             select! {
-                _ =  self.comms.ready.notified() => {
+                // A connection may be available.
+                _ =  self.comms().ready.notified() => {
                     continue;
                 }
 
-                _ = sleep(config.checkout_timeout()) => {
+                // Waited too long, return an error.
+                _ = sleep(checkout_timeout) => {
                     return Err(Error::CheckoutTimeout);
                 }
             }
@@ -175,131 +202,24 @@ impl Pool {
         Pool::new(&self.addr)
     }
 
-    /// Run the connection pool.
-    async fn spawn(self) {
-        loop {
-            select! {
-                _ = self.comms.request.notified() => {
-                    let (available, total, config, paused) = {
-                        let guard = self.inner.lock();
-                        let total = guard.conns.len() + guard.taken.len();
-                        (!guard.conns.is_empty(), total, guard.config.clone(), guard.paused)
-                    };
-
-                    if paused {
-                        continue;
-                    }
-
-                    let can_create_more = total < config.max;
-
-                    if available {
-                        self.comms.ready.notify_one();
-                    } else if can_create_more {
-                        match timeout(config.connect_timeout(), Server::connect(&self.addr)).await {
-                            Ok(Ok(conn)) => {
-                                let mut guard = self.inner.lock();
-                                guard.conns.push_front(conn);
-
-                                self.comms.ready.notify_one();
-                            }
-
-                            Ok(Err(err)) => {
-                                error!("error connecting to server: {:?}", err);
-                            }
-
-                            Err(_) => {
-                                error!("server connection timeout");
-                            }
-                        }
-                    }
-                }
-
-                _ = self.comms.shutdown.notified() => {
-                    self.inner.lock().online = false;
-                    break;
-                }
-
-                // Perform maintenance ~3 times per second.
-                _ = sleep(Duration::from_millis(333)) => {
-                    let now = Instant::now();
-                    let mut guard = self.inner.lock();
-                    let config = guard.config.clone();
-
-                    // Remove idle connections.
-                    let mut remove = std::cmp::max(0, guard.conns.len() as i64 - config.min as i64);
-                    guard.conns.retain(|c| {
-                        let idle_for = c.idle_for(now);
-                        if remove <= 0 {
-                            true
-                        } else if idle_for >= config.idle_timeout() {
-                            remove -= 1;
-                            false
-                        } else {
-                            true
-                        }
-                    });
-
-                    // Remove connections based on max age.
-                    guard.conns.retain(|c| {
-                        let age = c.age(now);
-                        age < config.max_age()
-                    });
-
-                    // Unban if ban expired.
-                    if let Some(ban) = guard.ban.take() {
-                        if !ban.expired(now) {
-                            guard.ban = Some(ban);
-                        }
-                    }
-
-                    // If we have clients waiting still, try to open a connection again.
-                    if guard.waiting > 0 {
-                        self.comms.request.notify_one();
-                    }
-
-                    // Create a new connection to bring up the minimum open connections amount.
-                    if guard.conns.len() + guard.taken.len() < guard.config.min {
-                        self.comms.request.notify_one();
-                    }
-                }
-            }
-        }
-    }
-
     /// Check the connection back into the pool.
     pub(super) fn checkin(&self, server: Server) {
+        // Ask for the time before locking.
+        // This can take some time on some systems, e.g. EC2.
         let now = Instant::now();
-        let mut guard = self.inner.lock();
-        let id = *server.id();
-        let too_old = server.age(now).as_millis() >= guard.config.max_age as u128;
 
-        if server.done() && !too_old && guard.online && !guard.paused {
-            guard.conns.push_back(server);
-        } else if server.error() {
-            guard.ban = Some(Ban {
-                created_at: Instant::now(),
-                reason: Error::ServerError,
-            });
-        }
+        // Check everything and maybe check the connection
+        // into the idle pool.
+        self.lock().maybe_check_in(server, now);
 
-        let index = guard
-            .taken
-            .iter()
-            .enumerate()
-            .find(|(_i, p)| p.server == id)
-            .map(|(i, _p)| i);
-
-        if let Some(index) = index {
-            guard.taken.remove(index);
-        }
-
-        self.comms.ready.notify_one();
+        // Notify clients that a connection may be available
+        // or at least they should request a new one from the pool again.
+        self.comms().ready.notify_one();
     }
 
     /// Server connection used by the client.
     pub fn peer(&self, id: &BackendKeyData) -> Option<BackendKeyData> {
-        self.inner
-            .lock()
+        self.lock()
             .taken
             .iter()
             .find(|p| p.client == *id)
@@ -317,18 +237,18 @@ impl Pool {
 
     /// Is this pool banned?
     pub fn banned(&self) -> bool {
-        self.inner.lock().ban.is_some()
+        self.lock().ban.is_some()
     }
 
     /// Pool is available to serve connections.
     pub fn available(&self) -> bool {
-        let guard = self.inner.lock();
+        let guard = self.lock();
         !guard.paused && guard.online && guard.ban.is_none()
     }
 
     /// Ban this connection pool from serving traffic.
     pub fn ban(&self) {
-        self.inner.lock().ban = Some(Ban {
+        self.lock().ban = Some(Ban {
             created_at: Instant::now(),
             reason: Error::ManualBan,
         });
@@ -336,24 +256,62 @@ impl Pool {
 
     /// Unban this pool from serving traffic.
     pub fn unban(&self) {
-        self.inner.lock().ban = None;
+        self.lock().ban = None;
     }
 
     /// Pause pool.
     pub fn pause(&self) {
-        self.inner.lock().paused = true;
+        self.lock().paused = true;
     }
 
     /// Wait for pool to resume if it's paused.
     pub async fn wait_resume(&self) {
         if self.inner.lock().paused {
-            self.comms.resume.notified().await;
+            self.comms().resume.notified().await;
         }
     }
 
     /// Resume the pool.
     pub fn resume(&self) {
-        self.inner.lock().paused = false;
-        self.comms.resume.notify_waiters();
+        {
+            let mut guard = self.lock();
+            guard.paused = false;
+            guard.ban = None;
+        }
+
+        self.comms().resume.notify_waiters();
+    }
+
+    /// Pool exclusive lock.
+    #[inline]
+    pub(super) fn lock<'a>(&'a self) -> MutexGuard<'a, RawMutex, Inner> {
+        self.inner.lock()
+    }
+
+    /// Internal notifications.
+    #[inline]
+    pub(super) fn comms(&self) -> &Comms {
+        &self.comms
+    }
+
+    /// Pool address.
+    pub(crate) fn addr(&self) -> &str {
+        &self.addr
+    }
+
+    /// Pool state.
+    pub fn state(&self) -> State {
+        let guard = self.lock();
+
+        State {
+            checked_out: guard.checked_out(),
+            idle: guard.idle(),
+            total: guard.total(),
+            online: guard.online,
+            empty: guard.idle() == 0,
+            config: guard.config,
+            paused: guard.paused,
+            waiting: guard.waiting,
+        }
     }
 }
