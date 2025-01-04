@@ -32,6 +32,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             binding
         }
         workers => {
+            info!("Spawning {} workers", workers);
             let mut builder = Builder::new_multi_thread();
             builder.worker_threads(workers).enable_all();
             builder
