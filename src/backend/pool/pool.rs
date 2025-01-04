@@ -3,13 +3,13 @@
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use parking_lot::lock_api::MutexGuard;
 use parking_lot::{Mutex, RawMutex};
 use tokio::select;
 use tokio::sync::Notify;
-use tokio::time::sleep;
+use tokio::time::{sleep, timeout};
 use tracing::error;
 
 use crate::backend::Server;
@@ -59,6 +59,10 @@ pub struct State {
     pub paused: bool,
     /// Number of clients waiting for a connection.
     pub waiting: usize,
+    /// Pool ban.
+    pub ban: Option<Ban>,
+    /// Pool is banned.
+    pub banned: bool,
 }
 
 struct Waiting {
@@ -110,12 +114,12 @@ impl Drop for Pool {
 
 impl Pool {
     /// Create new connection pool.
-    pub fn new(addr: &Address) -> Self {
+    pub fn new(addr: &Address, config: Config) -> Self {
         let pool = Self {
             inner: Arc::new(Mutex::new(Inner {
                 conns: VecDeque::new(),
                 taken: Vec::new(),
-                config: Config::default(),
+                config,
                 waiting: 0,
                 ban: None,
                 online: true,
@@ -139,20 +143,38 @@ impl Pool {
     /// Get a connetion from the pool.
     pub async fn get(&self, id: &BackendKeyData) -> Result<Guard, Error> {
         loop {
-            // Fast path, idle connection available.
-            let checkout_timeout = {
+            // Fast path, idle connection probably available.
+            let (checkout_timeout, healthcheck_timeout, healthcheck_interval, server) = {
                 let mut guard = self.lock();
-                if let Some(server) = guard.conns.pop_back() {
+
+                if guard.banned() {
+                    return Err(Error::Banned);
+                }
+
+                let conn = if let Some(server) = guard.conns.pop_back() {
                     guard.taken.push(Mapping {
                         client: *id,
                         server: *server.id(),
                     });
 
-                    return Ok(Guard::new(self.clone(), server));
-                }
+                    Some(Guard::new(self.clone(), server))
+                } else {
+                    None
+                };
 
-                guard.config.checkout_timeout()
+                (
+                    guard.config.checkout_timeout(),
+                    guard.config.healthcheck_timeout(),
+                    guard.config.healthcheck_interval(),
+                    conn,
+                )
             };
+
+            if let Some(server) = server {
+                return self
+                    .maybe_healthcheck(server, healthcheck_timeout, healthcheck_interval)
+                    .await;
+            }
 
             // Slow path, pool is empty, will create new connection
             // or wait for one to be returned if the pool is maxed out.
@@ -167,16 +189,42 @@ impl Pool {
 
                 // Waited too long, return an error.
                 _ = sleep(checkout_timeout) => {
-                    self.ban(Error::CheckoutTimeout);
+                    self.lock()
+                        .maybe_ban(Instant::now(), Error::CheckoutTimeout);
                     return Err(Error::CheckoutTimeout);
                 }
             }
         }
     }
 
+    /// Perform a healtcheck on the connection if one is needed.
+    async fn maybe_healthcheck(
+        &self,
+        mut conn: Guard,
+        healtcheck_timeout: Duration,
+        healthckeck_interval: Duration,
+    ) -> Result<Guard, Error> {
+        if conn.healthcheck_age(Instant::now()) >= healthckeck_interval {
+            match timeout(healtcheck_timeout, conn.healthcheck(";")).await {
+                Ok(Ok(())) => return Ok(conn),
+                Ok(Err(err)) => {
+                    error!("server error: {} [{}]", err, self.addr());
+                    self.ban(Error::HealtcheckError);
+                    return Err(Error::HealtcheckError);
+                }
+                Err(_) => {
+                    self.ban(Error::HealtcheckTimeout);
+                    return Err(Error::HealtcheckTimeout);
+                }
+            }
+        }
+        Ok(conn)
+    }
+
     /// Create new identical connection pool.
     pub fn duplicate(&self) -> Pool {
-        Pool::new(&self.addr)
+        let config = self.lock().config;
+        Pool::new(&self.addr, config)
     }
 
     /// Check the connection back into the pool.
@@ -190,7 +238,7 @@ impl Pool {
         let banned = self.lock().maybe_check_in(server, now);
 
         if banned {
-            error!("pool banned [{}]", self.addr());
+            error!("pool banned: {} [{}]", Error::ServerError, self.addr());
         }
 
         // Notify clients that a connection may be available
@@ -218,26 +266,28 @@ impl Pool {
 
     /// Is this pool banned?
     pub fn banned(&self) -> bool {
-        self.lock().ban.is_some()
+        self.lock().banned()
     }
 
     /// Pool is available to serve connections.
     pub fn available(&self) -> bool {
         let guard = self.lock();
-        !guard.paused && guard.online && guard.ban.is_none()
+        !guard.paused && guard.online
     }
 
     /// Ban this connection pool from serving traffic.
     pub fn ban(&self, reason: Error) {
-        self.lock().ban = Some(Ban {
-            created_at: Instant::now(),
-            reason,
-        });
+        let now = Instant::now();
+        let banned = self.lock().maybe_ban(now, reason);
+
+        if banned {
+            error!("pool banned: {} [{}]", reason, self.addr());
+        }
     }
 
     /// Unban this pool from serving traffic.
     pub fn unban(&self) {
-        self.lock().ban = None;
+        self.lock().maybe_unban();
     }
 
     /// Pause pool, closing all open connections.
@@ -289,6 +339,8 @@ impl Pool {
             config: guard.config,
             paused: guard.paused,
             waiting: guard.waiting,
+            ban: guard.ban,
+            banned: guard.ban.is_some(),
         }
     }
 }

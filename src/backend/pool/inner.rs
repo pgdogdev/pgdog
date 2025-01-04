@@ -150,12 +150,7 @@ impl Inner {
 
         // Ban the pool from serving more clients.
         if server.error() {
-            self.ban = Some(Ban {
-                created_at: now,
-                reason: Error::ServerError,
-            });
-
-            return true;
+            return self.maybe_ban(now, Error::ServerError);
         }
 
         // Pool is offline or paused, connection should be closed.
@@ -175,5 +170,42 @@ impl Inner {
         }
 
         false
+    }
+
+    /// Ban the pool from serving traffic if that's allowed
+    /// per configuration.
+    #[inline]
+    pub fn maybe_ban(&mut self, now: Instant, reason: Error) -> bool {
+        if self.config.bannable || reason == Error::ManualBan {
+            self.ban = Some(Ban {
+                created_at: now,
+                reason,
+            });
+
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Remove the pool ban unless it' been manually banned.
+    #[inline]
+    pub fn maybe_unban(&mut self) -> bool {
+        let mut unbanned = false;
+        if let Some(ban) = self.ban.take() {
+            if ban.reason == Error::ManualBan {
+                self.ban = Some(ban);
+            }
+
+            unbanned = true;
+        }
+
+        unbanned
+    }
+
+    /// Pool is banned from serving connections.
+    #[inline]
+    pub fn banned(&self) -> bool {
+        self.ban.is_some()
     }
 }

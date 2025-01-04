@@ -35,6 +35,7 @@ pub struct Server {
     state: State,
     created_at: Instant,
     last_used_at: Instant,
+    last_healthcheck: Option<Instant>,
     stats: ConnStats,
 }
 
@@ -126,6 +127,7 @@ impl Server {
             state: State::Idle,
             created_at: Instant::now(),
             last_used_at: Instant::now(),
+            last_healthcheck: None,
             stats: ConnStats::default(),
         })
     }
@@ -253,11 +255,21 @@ impl Server {
 
         let mut messages = vec![];
 
-        while !matches!(self.state, State::Idle | State::Error) {
+        while !self.in_sync() {
             messages.push(self.read().await?);
         }
 
         Ok(messages)
+    }
+
+    /// Perform a healthcheck on this connection using the provided query.
+    pub async fn healthcheck(&mut self, query: &str) -> Result<(), Error> {
+        debug!("running healthcheck \"{}\" [{}]", query, self.addr);
+
+        self.execute(query).await?;
+        self.last_healthcheck = Some(Instant::now());
+
+        Ok(())
     }
 
     /// Attempt to rollback the transaction on this server, if any has been started.
@@ -289,6 +301,16 @@ impl Server {
     #[inline]
     pub fn idle_for(&self, instant: Instant) -> Duration {
         instant.duration_since(self.last_used_at)
+    }
+
+    /// How long has it been since the last connection healthcheck.
+    #[inline]
+    pub fn healthcheck_age(&self, instant: Instant) -> Duration {
+        if let Some(last_healthcheck) = self.last_healthcheck {
+            instant.duration_since(last_healthcheck)
+        } else {
+            Duration::MAX
+        }
     }
 
     /// Get server address.

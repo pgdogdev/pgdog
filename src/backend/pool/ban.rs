@@ -4,8 +4,8 @@ use std::time::{Duration, Instant};
 use super::Error;
 
 /// Pool ban.
-#[derive(Debug)]
-pub(super) struct Ban {
+#[derive(Debug, Copy, Clone)]
+pub struct Ban {
     /// When the banw as created.
     pub(super) created_at: Instant,
     /// Why it was created.

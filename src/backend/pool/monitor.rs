@@ -3,7 +3,7 @@
 use std::time::{Duration, Instant};
 
 use super::Pool;
-use crate::backend::Server;
+use crate::backend::{Error, Server};
 
 use tokio::time::{sleep, timeout};
 use tokio::{select, task::spawn};
@@ -28,10 +28,20 @@ impl Monitor {
 
     /// Run the connection pool.
     async fn spawn(self) {
-        debug!("Maintenance loop is running [{}]", self.pool.addr());
+        debug!("maintenance loop is running [{}]", self.pool.addr());
 
         loop {
             let comms = self.pool.comms();
+
+            // If the pool is banned, don't try to create new connections
+            // more often than once a second. Otherwise, perform maintenance
+            // on the pool ~3 times per second.
+            let maintenance_interval = if self.pool.lock().banned() {
+                Duration::from_secs(1)
+            } else {
+                Duration::from_millis(333)
+            };
+
             let mut unbanned = false;
 
             select! {
@@ -43,7 +53,7 @@ impl Monitor {
                         can_create,
                         connect_timeout,
                         paused,
-                        banned,
+                        _banned,
                     ) = {
                         let guard = self.pool.lock();
 
@@ -52,12 +62,12 @@ impl Monitor {
                             guard.can_create(),
                             guard.config().connect_timeout(),
                             guard.paused,
-                            guard.ban.is_some(),
+                            guard.banned(),
                         )
                     };
 
                     // If the pool is paused, don't open new connections.
-                    if paused || banned {
+                    if paused {
                         continue;
                     }
 
@@ -66,22 +76,10 @@ impl Monitor {
                         comms.ready.notify_one();
                     } else if can_create {
                         // No idle connections, but we are allowed to create a new one.
+                        let ok = self.replenish(connect_timeout).await;
 
-                        match timeout(connect_timeout, Server::connect(self.pool.addr())).await {
-                            Ok(Ok(conn)) => {
-                                let mut guard = self.pool.lock();
-
-                                guard.conns.push_front(conn);
-                                comms.ready.notify_one();
-                            }
-
-                            Ok(Err(err)) => {
-                                error!("error connecting to server: {:?}", err);
-                            }
-
-                            Err(_) => {
-                                error!("server connection timeout");
-                            }
+                        if ok {
+                            comms.ready.notify_one();
                         }
                     }
                 }
@@ -92,8 +90,8 @@ impl Monitor {
                     break;
                 }
 
-                // Perform maintenance ~3 times per second.
-                _ = sleep(Duration::from_millis(333)) => {
+                // Perform maintenance.
+                _ = sleep(maintenance_interval) => {
                     let now = Instant::now();
 
                     let mut guard = self.pool.lock();
@@ -119,6 +117,27 @@ impl Monitor {
             }
         }
 
-        debug!("Maintenance loop is shut down [{}]", self.pool.addr());
+        debug!("maintenance loop is shut down [{}]", self.pool.addr());
+    }
+
+    async fn replenish(&self, connect_timeout: Duration) -> bool {
+        let mut ok = false;
+
+        match timeout(connect_timeout, Server::connect(self.pool.addr())).await {
+            Ok(Ok(conn)) => {
+                ok = true;
+                self.pool.lock().conns.push_front(conn);
+            }
+
+            Ok(Err(err)) => {
+                error!("error connecting to server: {} [{}]", err, self.pool.addr());
+            }
+
+            Err(_) => {
+                error!("server connection timeout [{}]", self.pool.addr());
+            }
+        }
+
+        ok
     }
 }

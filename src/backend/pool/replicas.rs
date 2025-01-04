@@ -8,7 +8,7 @@ use tracing::error;
 
 use crate::net::messages::BackendKeyData;
 
-use super::{Address, Error, Guard, Pool};
+use super::{Address, Config, Error, Guard, Pool};
 
 /// Replicas pools.
 #[derive(Clone)]
@@ -21,7 +21,10 @@ impl Replicas {
     /// Create new replicas pools.
     pub fn new(addrs: &[&Address]) -> Replicas {
         Self {
-            pools: addrs.iter().map(|p| Pool::new(p)).collect(),
+            pools: addrs
+                .iter()
+                .map(|p| Pool::new(p, Config::default()))
+                .collect(),
             checkout_timeout: Duration::from_millis(5_000),
         }
     }
@@ -80,12 +83,25 @@ impl Replicas {
 
         candidates.shuffle(&mut rand::thread_rng());
 
-        for candidate in candidates {
+        let mut banned = 0;
+
+        for candidate in &candidates {
             match candidate.get(id).await {
                 Ok(conn) => return Ok(conn),
-                Err(err) => {
-                    error!("{}", err);
+                Err(Error::Banned) => {
+                    banned += 1;
+                    continue;
                 }
+                Err(err) => {
+                    error!("{} [{}]", err, candidate.addr());
+                }
+            }
+        }
+
+        // All replicas are banned, clear the ban and try again later.
+        if banned == candidates.len() {
+            for candidate in candidates {
+                candidate.unban();
             }
         }
 

@@ -1,7 +1,7 @@
 //! Connection pool errors.
 use thiserror::Error;
 
-#[derive(Debug, Error, PartialEq)]
+#[derive(Debug, Error, PartialEq, Copy, Clone)]
 pub enum Error {
     #[error("checkout timeout")]
     CheckoutTimeout,
@@ -17,4 +17,13 @@ pub enum Error {
 
     #[error("no such shard: {0}")]
     NoShard(usize),
+
+    #[error("pool is banned")]
+    Banned,
+
+    #[error("healtcheck timeout")]
+    HealtcheckTimeout,
+
+    #[error("healtcheck error")]
+    HealtcheckError,
 }
