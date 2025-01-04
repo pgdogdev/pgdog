@@ -49,4 +49,9 @@ impl Cluster {
 
         Ok(())
     }
+
+    /// Get all shards.
+    pub fn shards(&self) -> &[Shard] {
+        &self.shards
+    }
 }

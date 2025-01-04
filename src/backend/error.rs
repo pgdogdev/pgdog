@@ -36,6 +36,9 @@ pub enum Error {
     #[error("{0}")]
     Pool(#[from] crate::backend::pool::Error),
 
+    #[error("{0}")]
+    Admin(#[from] crate::admin::Error),
+
     #[error("no such user/database: {0}")]
     NoDatabase(User),
 

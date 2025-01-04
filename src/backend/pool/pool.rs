@@ -5,7 +5,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
-use once_cell::sync::OnceCell;
 use parking_lot::lock_api::MutexGuard;
 use parking_lot::{Mutex, RawMutex};
 use tokio::select;
@@ -16,19 +15,6 @@ use crate::backend::Server;
 use crate::net::messages::BackendKeyData;
 
 use super::{Address, Ban, Config, Error, Guard, Inner, Monitor};
-
-static POOL: OnceCell<Pool> = OnceCell::new();
-
-/// Get a connection pool handle.
-pub fn pool() -> Pool {
-    POOL.get_or_init(|| {
-        Pool::new(&Address {
-            host: "127.0.0.1".into(),
-            port: 5432,
-        })
-    })
-    .clone()
-}
 
 /// Mapping between a client and a server.
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -80,14 +66,14 @@ struct Waiting {
 
 impl Waiting {
     fn new(pool: Pool) -> Self {
-        pool.inner.lock().waiting += 1;
+        pool.lock().waiting += 1;
         Self { pool }
     }
 }
 
 impl Drop for Waiting {
     fn drop(&mut self) {
-        self.pool.inner.lock().waiting -= 1;
+        self.pool.lock().waiting -= 1;
     }
 }
 
@@ -248,9 +234,12 @@ impl Pool {
         self.lock().ban = None;
     }
 
-    /// Pause pool.
+    /// Pause pool, closing all open connections.
     pub fn pause(&self) {
-        self.lock().paused = true;
+        let mut guard = self.lock();
+
+        guard.paused = true;
+        guard.conns.clear();
     }
 
     /// Resume the pool.

@@ -38,10 +38,19 @@ impl Shard {
         }
     }
 
+    /// Cancel a query if one is running.
     pub async fn cancel(&self, id: &BackendKeyData) -> Result<(), super::super::Error> {
         self.primary.cancel(id).await?;
         self.replicas.cancel(id).await?;
 
         Ok(())
+    }
+
+    /// Get all pools. Used for administrative tasks.
+    pub fn pools(&self) -> Vec<Pool> {
+        let mut pools = vec![self.primary.clone()];
+        pools.extend(self.replicas.pools().to_vec());
+
+        pools
     }
 }

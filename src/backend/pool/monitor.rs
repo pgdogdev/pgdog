@@ -110,5 +110,7 @@ impl Monitor {
                 }
             }
         }
+
+        debug!("Maintenance loop is shut down [{}]", self.pool.addr());
     }
 }

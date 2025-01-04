@@ -1,6 +1,7 @@
 use frontend::listener::Listener;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
+pub mod admin;
 pub mod auth;
 pub mod backend;
 pub mod channel;

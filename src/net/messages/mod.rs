@@ -1,4 +1,5 @@
 //! PostgreSQL wire protocol messages.
+pub mod command_complete;
 pub mod hello;
 pub use hello::Startup;
 
@@ -52,6 +53,11 @@ pub trait FromBytes: Sized {
 pub trait Protocol: ToBytes + FromBytes {
     /// 99% of messages have a letter code.
     fn code(&self) -> char;
+
+    /// Convert to message.
+    fn message(&self) -> Result<Message, Error> {
+        Ok(Message::new(self.to_bytes()?))
+    }
 }
 
 /// PostgreSQL protocol message.

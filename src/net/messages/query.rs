@@ -7,7 +7,8 @@ use super::prelude::*;
 /// Query (F) message.
 #[derive(Debug)]
 pub struct Query {
-    query: String,
+    /// Query string.
+    pub query: String,
 }
 
 impl Query {

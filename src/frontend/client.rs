@@ -4,9 +4,7 @@ use tokio::select;
 
 use super::{Buffer, Error};
 use crate::backend::pool::Connection;
-use crate::net::messages::{
-    Authentication, BackendKeyData, ParameterStatus, Protocol, ReadyForQuery,
-};
+use crate::net::messages::{Authentication, BackendKeyData, Protocol, ReadyForQuery};
 use crate::net::{parameter::Parameters, Stream};
 use crate::state::State;
 use crate::stats::ConnStats;
@@ -27,6 +25,7 @@ impl Client {
         // TODO: perform authentication.
         let user = params.get_required("user")?;
         let database = params.get_default("database", user);
+        let admin = database == "admin";
 
         stream.send(Authentication::Ok).await?;
 
@@ -34,7 +33,7 @@ impl Client {
 
         // Get server parameters and send them to the client.
         {
-            let mut conn = Connection::new(user, database)?;
+            let mut conn = Connection::new(user, database, admin)?;
             for param in conn.parameters(&id).await? {
                 stream.send(param).await?;
             }
@@ -61,8 +60,10 @@ impl Client {
     pub async fn spawn(mut self) -> Result<Self, Error> {
         let user = self.params.get_required("user")?;
         let database = self.params.get_default("database", user);
+        let admin = database == "admin";
 
-        let mut server = Connection::new(user, database)?;
+        let mut backend = Connection::new(user, database, admin)?;
+
         let mut flush = false;
 
         loop {
@@ -70,34 +71,24 @@ impl Client {
 
             select! {
                 buffer = self.buffer() => {
-                    let buffer = match buffer {
-                        Ok(buffer) => if buffer.is_empty() {
-                            self.state = State::Disconnected;
-                            break;
-                        } else { buffer },
-                        Err(_) => {
-                            // IO error typically means the client disconnected
-                            // abruptly.
-                            self.state = State::Disconnected;
-                            break;
-                        },
-                    };
+                    if buffer.is_empty() {
+                        break;
+                    }
 
                     flush = buffer.flush();
 
-                    if !server.connected() {
+                    if !backend.connected() {
                         self.state = State::Waiting;
-                        server.connect(&self.id).await?;
+                        backend.connect(&self.id).await?;
                         self.state = State::Active;
                     }
 
-                    server.send(buffer.into()).await?;
+                    backend.send(buffer.into()).await?;
                 }
 
-                message = server.read() => {
+                message = backend.read() => {
                     let message = message?;
-
-                    self.stats.bytes_sent += message.len();
+                    let len = message.len();
 
                     // ReadyForQuery (B) | CopyInResponse (B)
                     if matches!(message.code(), 'Z' | 'G') || flush {
@@ -108,10 +99,12 @@ impl Client {
                         self.stream.send(message).await?;
                     }
 
-                    if server.done() {
+                    if backend.done() {
                         self.stats.transactions += 1;
-                        server.disconnect();
+                        backend.disconnect();
                     }
+
+                    self.stats.bytes_sent += len;
                 }
             }
         }
@@ -123,21 +116,30 @@ impl Client {
     ///
     /// This ensures we don't check out a connection from the pool until the client
     /// sent a complete request.
-    async fn buffer(&mut self) -> Result<Buffer, Error> {
+    async fn buffer(&mut self) -> Buffer {
         let mut buffer = Buffer::new();
 
         while !buffer.full() {
-            let message = self.stream.read().await?;
+            let message = match self.stream.read().await {
+                Ok(message) => message,
+                Err(_) => {
+                    self.state = State::Disconnected;
+                    return vec![].into();
+                }
+            };
 
             self.stats.bytes_received += message.len();
 
             match message.code() {
                 // Terminate (F)
-                'X' => return Ok(vec![].into()),
+                'X' => {
+                    self.state = State::Disconnected;
+                    return vec![].into();
+                }
                 _ => buffer.push(message),
             }
         }
 
-        Ok(buffer)
+        buffer
     }
 }

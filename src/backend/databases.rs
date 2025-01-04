@@ -33,8 +33,10 @@ pub fn reconnect() {
 /// Database/user pair that identifies a database cluster pool.
 #[derive(Debug, PartialEq, Hash, Eq, Clone)]
 pub struct User {
-    user: String,
-    database: String,
+    /// User name.
+    pub user: String,
+    /// Database name.
+    pub database: String,
 }
 
 impl std::fmt::Display for User {
@@ -101,6 +103,11 @@ impl Databases {
         } else {
             Err(Error::NoDatabase(user.clone()))
         }
+    }
+
+    /// Get all clusters and databases.
+    pub fn all(&self) -> &HashMap<User, Cluster> {
+        &self.databases
     }
 
     /// Cancel a query running on one of the databases proxied by the pooler.

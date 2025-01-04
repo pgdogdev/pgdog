@@ -61,6 +61,11 @@ impl Replicas {
         Ok(())
     }
 
+    /// Pools handle.
+    pub fn pools(&self) -> &[Pool] {
+        &self.pools
+    }
+
     async fn get_internal(&self, id: &BackendKeyData) -> Result<Guard, Error> {
         loop {
             if self.is_empty() {
