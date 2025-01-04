@@ -7,6 +7,7 @@ use crate::backend::Server;
 
 use tokio::time::{sleep, timeout};
 use tokio::{select, task::spawn};
+use tracing::info;
 
 use tracing::{debug, error};
 
@@ -31,6 +32,7 @@ impl Monitor {
 
         loop {
             let comms = self.pool.comms();
+            let mut unbanned = false;
 
             select! {
                 // A client is requesting a connection and no idle
@@ -41,6 +43,7 @@ impl Monitor {
                         can_create,
                         connect_timeout,
                         paused,
+                        banned,
                     ) = {
                         let guard = self.pool.lock();
 
@@ -49,11 +52,12 @@ impl Monitor {
                             guard.can_create(),
                             guard.config().connect_timeout(),
                             guard.paused,
+                            guard.ban.is_some(),
                         )
                     };
 
                     // If the pool is paused, don't open new connections.
-                    if paused {
+                    if paused || banned {
                         continue;
                     }
 
@@ -96,7 +100,7 @@ impl Monitor {
 
                     guard.close_idle(now);
                     guard.close_old(now);
-                    guard.check_ban(now);
+                    unbanned = guard.check_ban(now);
 
                     // If we have clients waiting still, try to open a connection again.
                     // This prevents a thundering herd.
@@ -108,6 +112,10 @@ impl Monitor {
                         comms.request.notify_one();
                     }
                 }
+            }
+
+            if unbanned {
+                info!("pool unbanned [{}]", self.pool.addr());
             }
         }
 

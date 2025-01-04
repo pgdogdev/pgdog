@@ -28,7 +28,7 @@ use crate::{
 
 /// PostgreSQL server connection.
 pub struct Server {
-    addr: String,
+    addr: Address,
     stream: Option<Stream>,
     id: BackendKeyData,
     params: Parameters,
@@ -119,7 +119,7 @@ impl Server {
         info!("new server connection [{}]", addr);
 
         Ok(Server {
-            addr: addr.to_string(),
+            addr: addr.clone(),
             stream: Some(stream),
             id,
             params,
@@ -289,6 +289,12 @@ impl Server {
     #[inline]
     pub fn idle_for(&self, instant: Instant) -> Duration {
         instant.duration_since(self.last_used_at)
+    }
+
+    /// Get server address.
+    #[inline]
+    pub fn addr(&self) -> &Address {
+        &self.addr
     }
 
     #[inline]

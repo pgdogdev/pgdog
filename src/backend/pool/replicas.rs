@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use rand::seq::IteratorRandom;
+use rand::seq::SliceRandom;
 use tokio::time::timeout;
 use tracing::error;
 
@@ -28,7 +28,12 @@ impl Replicas {
 
     /// Get a live connection from the pool.
     pub async fn get(&self, id: &BackendKeyData) -> Result<Guard, Error> {
-        match timeout(self.checkout_timeout, self.get_internal(id)).await {
+        match timeout(
+            self.checkout_timeout * self.pools.len() as u32,
+            self.get_internal(id),
+        )
+        .await
+        {
             Ok(Ok(conn)) => Ok(conn),
             _ => Err(Error::CheckoutTimeout),
         }
@@ -67,28 +72,23 @@ impl Replicas {
     }
 
     async fn get_internal(&self, id: &BackendKeyData) -> Result<Guard, Error> {
-        loop {
-            if self.is_empty() {
-                return Err(Error::NoReplicas);
-            }
+        let mut candidates = self
+            .pools
+            .iter()
+            .filter(|pool| pool.available())
+            .collect::<Vec<_>>();
 
-            let candidate = self
-                .pools
-                .iter()
-                .filter(|pool| pool.available())
-                .choose(&mut rand::thread_rng());
+        candidates.shuffle(&mut rand::thread_rng());
 
-            if let Some(candidate) = candidate {
-                match candidate.get(id).await {
-                    Ok(conn) => return Ok(conn),
-                    Err(err) => {
-                        candidate.ban();
-                        error!("{}", err);
-                    }
+        for candidate in candidates {
+            match candidate.get(id).await {
+                Ok(conn) => return Ok(conn),
+                Err(err) => {
+                    error!("{}", err);
                 }
-            } else {
-                self.pools.iter().for_each(|p| p.unban());
             }
         }
+
+        Err(Error::NoReplicas)
     }
 }

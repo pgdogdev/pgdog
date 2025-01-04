@@ -82,12 +82,17 @@ impl Inner {
 
     /// Check if the pool ban should be removed.
     #[inline]
-    pub(super) fn check_ban(&mut self, now: Instant) {
+    pub(super) fn check_ban(&mut self, now: Instant) -> bool {
+        let mut unbanned = false;
         if let Some(ban) = self.ban.take() {
             if !ban.expired(now) {
                 self.ban = Some(ban);
+            } else {
+                unbanned = true;
             }
         }
+
+        unbanned
     }
 
     /// Close connections that have exceeded the max age.
@@ -129,7 +134,7 @@ impl Inner {
     #[inline]
     /// Check a connection back into the pool if it's ok to do so.
     /// Otherwise, drop the connection and close it.
-    pub(super) fn maybe_check_in(&mut self, server: Server, now: Instant) {
+    pub(super) fn maybe_check_in(&mut self, server: Server, now: Instant) -> bool {
         let id = *server.id();
 
         let index = self
@@ -149,17 +154,18 @@ impl Inner {
                 created_at: now,
                 reason: Error::ServerError,
             });
-            return;
+
+            return true;
         }
 
         // Pool is offline or paused, connection should be closed.
         if !self.online || self.paused {
-            return;
+            return false;
         }
 
         // Close connections exceeding max age.
         if server.age(now) >= self.config.max_age() {
-            return;
+            return false;
         }
 
         // Finally, if the server is ok,
@@ -167,5 +173,7 @@ impl Inner {
         if server.done() {
             self.conns.push_back(server);
         }
+
+        false
     }
 }

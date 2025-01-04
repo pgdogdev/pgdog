@@ -1,3 +1,4 @@
+use backend::databases::databases;
 use frontend::listener::Listener;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
@@ -19,6 +20,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Preload TLS.
     net::tls::load()?;
+
+    // Load databases and connect if needed.
+    databases();
 
     let mut listener = Listener::new("0.0.0.0:6432");
     listener.listen().await?;

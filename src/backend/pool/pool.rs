@@ -10,6 +10,7 @@ use parking_lot::{Mutex, RawMutex};
 use tokio::select;
 use tokio::sync::Notify;
 use tokio::time::sleep;
+use tracing::error;
 
 use crate::backend::Server;
 use crate::net::messages::BackendKeyData;
@@ -166,6 +167,7 @@ impl Pool {
 
                 // Waited too long, return an error.
                 _ = sleep(checkout_timeout) => {
+                    self.ban(Error::CheckoutTimeout);
                     return Err(Error::CheckoutTimeout);
                 }
             }
@@ -185,7 +187,11 @@ impl Pool {
 
         // Check everything and maybe check the connection
         // into the idle pool.
-        self.lock().maybe_check_in(server, now);
+        let banned = self.lock().maybe_check_in(server, now);
+
+        if banned {
+            error!("pool banned [{}]", self.addr());
+        }
 
         // Notify clients that a connection may be available
         // or at least they should request a new one from the pool again.
@@ -222,10 +228,10 @@ impl Pool {
     }
 
     /// Ban this connection pool from serving traffic.
-    pub fn ban(&self) {
+    pub fn ban(&self, reason: Error) {
         self.lock().ban = Some(Ban {
             created_at: Instant::now(),
-            reason: Error::ManualBan,
+            reason,
         });
     }
 

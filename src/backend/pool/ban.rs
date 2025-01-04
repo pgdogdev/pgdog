@@ -15,6 +15,10 @@ pub(super) struct Ban {
 impl Ban {
     /// Check if the ban has expired.
     pub(super) fn expired(&self, now: Instant) -> bool {
-        now.duration_since(self.created_at) > Duration::from_secs(300)
+        if self.reason == Error::ManualBan {
+            false
+        } else {
+            now.duration_since(self.created_at) > Duration::from_secs(300)
+        }
     }
 }
