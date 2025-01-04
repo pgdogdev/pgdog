@@ -4,10 +4,12 @@ use tokio::select;
 
 use super::{Buffer, Error};
 use crate::backend::pool::Connection;
-use crate::net::messages::{
-    Authentication, BackendKeyData, ParameterStatus, Protocol, ReadyForQuery,
-};
+use crate::net::parameter::Parameters;
 use crate::net::Stream;
+use crate::net::{
+    messages::{Authentication, BackendKeyData, ParameterStatus, Protocol, ReadyForQuery},
+    Parameter,
+};
 use crate::state::State;
 use crate::stats::ConnStats;
 
@@ -17,13 +19,13 @@ pub struct Client {
     stream: Stream,
     id: BackendKeyData,
     state: State,
-    params: Vec<(String, String)>,
+    params: Parameters,
     stats: ConnStats,
 }
 
 impl Client {
     /// Create new frontend client from the given TCP stream.
-    pub async fn new(mut stream: Stream, params: Vec<(String, String)>) -> Result<Self, Error> {
+    pub async fn new(mut stream: Stream, params: Parameters) -> Result<Self, Error> {
         // TODO: perform authentication.
         stream.send(Authentication::Ok).await?;
 
@@ -54,7 +56,10 @@ impl Client {
 
     /// Run the client.
     pub async fn spawn(mut self) -> Result<Self, Error> {
-        let mut server = Connection::new();
+        let user = self.params.get_required("user")?;
+        let database = self.params.get_default("database", user);
+
+        let mut server = Connection::new(user, database)?;
         let mut flush = false;
 
         loop {
@@ -73,7 +78,7 @@ impl Client {
 
                     if !server.connected() {
                         self.state = State::Waiting;
-                        server.get(&self.id).await?;
+                        server.connect(&self.id).await?;
                         self.state = State::Active;
                     }
 
@@ -125,5 +130,24 @@ impl Client {
         }
 
         Ok(buffer)
+    }
+
+    /// Find a paramaeter by name.
+    fn parameter(&self, name: &str) -> Option<&str> {
+        self.params
+            .iter()
+            .filter(|p| p.name == name)
+            .next()
+            .map(|p| p.value.as_str())
+    }
+
+    /// Get parameter value or returned an error.
+    fn required_parameter(&self, name: &str) -> Result<&str, Error> {
+        self.parameter(name).ok_or(Error::Parameter(name.into()))
+    }
+
+    /// Get parameter value or returned a default value if it doesn't exist.
+    fn default_parameter<'a>(&'a self, name: &str, default_value: &'a str) -> &str {
+        self.parameter(name).map_or(default_value, |p| p)
     }
 }

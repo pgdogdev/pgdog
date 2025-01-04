@@ -34,4 +34,7 @@ pub enum Error {
 
     #[error("{0}")]
     Rustls(#[from] rustls::Error),
+
+    #[error("\"{0}\" parameter is missing")]
+    MissingParameter(String),
 }

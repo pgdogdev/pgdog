@@ -4,12 +4,14 @@ use std::time::Duration;
 
 use rand::seq::IteratorRandom;
 use tokio::time::timeout;
+use tracing::error;
 
 use crate::net::messages::BackendKeyData;
 
-use super::{Error, Guard, Pool};
+use super::{Address, Error, Guard, Pool};
 
 /// Replicas pools.
+#[derive(Clone)]
 pub struct Replicas {
     pools: Vec<Pool>,
     checkout_timeout: Duration,
@@ -17,7 +19,7 @@ pub struct Replicas {
 
 impl Replicas {
     /// Create new replicas pools.
-    pub fn new(addrs: &[&str]) -> Replicas {
+    pub fn new(addrs: &[&Address]) -> Replicas {
         Self {
             pools: addrs.iter().map(|p| Pool::new(p)).collect(),
             checkout_timeout: Duration::from_millis(5_000),
@@ -56,17 +58,18 @@ impl Replicas {
                 return Err(Error::NoReplicas);
             }
 
-            let clear = self
+            let candidate = self
                 .pools
                 .iter()
-                .filter(|p| p.available())
+                .filter(|pool| pool.available())
                 .choose(&mut rand::thread_rng());
 
-            if let Some(clear) = clear {
-                match clear.get(id).await {
+            if let Some(candidate) = candidate {
+                match candidate.get(id).await {
                     Ok(conn) => return Ok(conn),
-                    Err(_err) => {
-                        clear.ban();
+                    Err(err) => {
+                        candidate.ban();
+                        error!("{}", err);
                     }
                 }
             } else {

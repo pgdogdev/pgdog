@@ -44,12 +44,8 @@ impl Listener {
 
         // Init the pool early in case we need to spin up some
         // connections.
-        let _pool = pool();
 
         let listener = TcpListener::bind(&self.addr).await?;
-
-        // Load TLS cert, if any.
-        let _ = acceptor().await?;
 
         loop {
             select! {
@@ -80,7 +76,7 @@ impl Listener {
         info!("client connected [{}]", addr);
 
         let mut stream = Stream::plain(stream);
-        let tls = acceptor().await?;
+        let tls = acceptor()?;
 
         loop {
             let startup = Startup::from_stream(&mut stream).await?;
@@ -105,7 +101,7 @@ impl Listener {
 
                     match client.spawn().await {
                         Ok(_) => info!("client disconnected [{}]", addr),
-                        Err(err) => error!("client disconnected with error [{}]: {:?}", addr, err),
+                        Err(err) => error!("client disconnected with error [{}]: {}", addr, err),
                     }
 
                     clients.lock().remove(&id);
@@ -114,7 +110,7 @@ impl Listener {
 
                 Startup::Cancel { pid, secret } => {
                     let id = BackendKeyData { pid, secret };
-                    pool().cancel(&id).await?;
+                    // pool().cancel(&id).await?;
                 }
             }
         }

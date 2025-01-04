@@ -6,7 +6,7 @@ use std::sync::Arc;
 use arc_swap::ArcSwap;
 use once_cell::sync::Lazy;
 
-use super::{Cluster, Error};
+use super::{pool::Address, Cluster, Error};
 
 static DATABASES: Lazy<ArcSwap<Databases>> =
     Lazy::new(|| ArcSwap::from_pointee(Databases::default()));
@@ -66,17 +66,36 @@ impl ToUser for (&str, Option<&str>) {
 }
 
 /// Databases.
-#[derive(Default)]
 pub struct Databases {
     databases: HashMap<User, Cluster>,
 }
 
+impl Default for Databases {
+    fn default() -> Self {
+        Databases {
+            databases: HashMap::from([(
+                User {
+                    user: "pgdog".into(),
+                    database: "pgdog".into(),
+                },
+                Cluster::new(&[(
+                    &Address {
+                        host: "127.0.0.1".into(),
+                        port: 5432,
+                    },
+                    &[],
+                )]),
+            )]),
+        }
+    }
+}
+
 impl Databases {
     /// Get a cluster for the user/database pair if it's configured.
-    pub fn cluster(&self, user: impl ToUser) -> Result<&Cluster, Error> {
+    pub fn cluster(&self, user: impl ToUser) -> Result<Cluster, Error> {
         let user = user.to_user();
         if let Some(cluster) = self.databases.get(&user) {
-            Ok(cluster)
+            Ok(cluster.clone())
         } else {
             Err(Error::NoDatabase(user.clone()))
         }

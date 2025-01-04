@@ -16,6 +16,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with(EnvFilter::from_default_env())
         .init();
 
+    // Preload TLS.
+    net::tls::load()?;
+
     let mut listener = Listener::new("0.0.0.0:6432");
     listener.listen().await?;
 

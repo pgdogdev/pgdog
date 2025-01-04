@@ -1,4 +1,4 @@
-//! Backend key data.
+//! BackendKeyData (B) message.
 
 use crate::net::messages::code;
 use crate::net::messages::prelude::*;
@@ -42,7 +42,7 @@ impl ToBytes for BackendKeyData {
 
 impl FromBytes for BackendKeyData {
     fn from_bytes(mut bytes: Bytes) -> Result<Self, Error> {
-        code!(bytes.get_u8() as char, 'K');
+        code!(bytes, 'K');
 
         let _len = bytes.get_i32();
 

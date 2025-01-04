@@ -1,5 +1,4 @@
-//! ReadyForQuery message, indicating that the backend server
-//! is ready to receive the next query.
+//! ReadyForQuery (B) message.
 
 use crate::net::messages::{code, prelude::*};
 
@@ -32,7 +31,7 @@ impl ToBytes for ReadyForQuery {
 
 impl FromBytes for ReadyForQuery {
     fn from_bytes(mut bytes: Bytes) -> Result<Self, Error> {
-        code!(bytes.get_u8() as char, 'Z');
+        code!(bytes, 'Z');
 
         let _len = bytes.get_i32();
         let status = bytes.get_u8() as char;

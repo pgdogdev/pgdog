@@ -7,7 +7,7 @@ pub struct Terminate;
 
 impl FromBytes for Terminate {
     fn from_bytes(mut bytes: Bytes) -> Result<Self, Error> {
-        code!('X', bytes.get_u8() as char);
+        code!(bytes, 'X');
         let _len = bytes.get_i32();
 
         Ok(Terminate)

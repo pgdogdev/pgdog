@@ -47,7 +47,7 @@ impl ToBytes for ParameterStatus {
 
 impl FromBytes for ParameterStatus {
     fn from_bytes(mut bytes: Bytes) -> Result<Self, Error> {
-        code!(bytes.get_u8() as char, 'S');
+        code!(bytes, 'S');
 
         let _len = bytes.get_i32();
 

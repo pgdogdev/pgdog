@@ -20,7 +20,7 @@ static ACCEPTOR: OnceCell<TlsAcceptor> = OnceCell::new();
 static CONNECTOR: OnceCell<TlsConnector> = OnceCell::new();
 
 /// Create a new TLS acceptor from the cert and key.
-pub async fn acceptor() -> Result<Option<TlsAcceptor>, Error> {
+pub fn acceptor() -> Result<Option<TlsAcceptor>, Error> {
     if let Some(acceptor) = ACCEPTOR.get() {
         return Ok(Some(acceptor.clone()));
     }
@@ -72,6 +72,14 @@ pub fn connector() -> Result<TlsConnector, Error> {
     let _ = CONNECTOR.set(connector.clone());
 
     Ok(connector)
+}
+
+/// Preload TLS at startup.
+pub fn load() -> Result<(), Error> {
+    let _ = acceptor()?;
+    let _ = connector()?;
+
+    Ok(())
 }
 
 #[derive(Debug)]

@@ -3,7 +3,7 @@
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use once_cell::sync::OnceCell;
 use parking_lot::lock_api::MutexGuard;
@@ -15,13 +15,19 @@ use tokio::time::sleep;
 use crate::backend::Server;
 use crate::net::messages::BackendKeyData;
 
-use super::{Config, Error, Guard, Inner, Monitor};
+use super::{Address, Ban, Config, Error, Guard, Inner, Monitor};
 
 static POOL: OnceCell<Pool> = OnceCell::new();
 
 /// Get a connection pool handle.
 pub fn pool() -> Pool {
-    POOL.get_or_init(|| Pool::new("127.0.0.1:5432")).clone()
+    POOL.get_or_init(|| {
+        Pool::new(&Address {
+            host: "127.0.0.1".into(),
+            port: 5432,
+        })
+    })
+    .clone()
 }
 
 /// Mapping between a client and a server.
@@ -42,8 +48,6 @@ pub(super) struct Comms {
     pub(super) request: Notify,
     /// Pool is shutting down.
     pub(super) shutdown: Notify,
-    /// Pool is resumed from a pause.
-    pub(super) resume: Notify,
     /// Number of references (clones) of this pool.
     /// When this number reaches 0, the maintenance loop is stopped
     /// and the pool is dropped.
@@ -87,25 +91,11 @@ impl Drop for Waiting {
     }
 }
 
-#[derive(Debug)]
-pub(super) struct Ban {
-    /// When the banw as created.
-    pub(super) created_at: Instant,
-    /// Why it was created.
-    pub(super) reason: Error,
-}
-
-impl Ban {
-    pub(super) fn expired(&self, now: Instant) -> bool {
-        now.duration_since(self.created_at) > Duration::from_secs(300)
-    }
-}
-
 /// Connection pool.
 pub struct Pool {
     inner: Arc<Mutex<Inner>>,
     comms: Arc<Comms>,
-    addr: String,
+    addr: Address,
 }
 
 impl Clone for Pool {
@@ -133,7 +123,7 @@ impl Drop for Pool {
 
 impl Pool {
     /// Create new connection pool.
-    pub fn new(addr: &str) -> Self {
+    pub fn new(addr: &Address) -> Self {
         let pool = Self {
             inner: Arc::new(Mutex::new(Inner {
                 conns: VecDeque::new(),
@@ -148,10 +138,9 @@ impl Pool {
                 ready: Notify::new(),
                 request: Notify::new(),
                 shutdown: Notify::new(),
-                resume: Notify::new(),
                 ref_count: AtomicUsize::new(0),
             }),
-            addr: addr.to_owned(),
+            addr: addr.clone(),
         };
 
         // Launch the maintenance loop.
@@ -264,13 +253,6 @@ impl Pool {
         self.lock().paused = true;
     }
 
-    /// Wait for pool to resume if it's paused.
-    pub async fn wait_resume(&self) {
-        if self.inner.lock().paused {
-            self.comms().resume.notified().await;
-        }
-    }
-
     /// Resume the pool.
     pub fn resume(&self) {
         {
@@ -279,7 +261,7 @@ impl Pool {
             guard.ban = None;
         }
 
-        self.comms().resume.notify_waiters();
+        self.comms().ready.notify_waiters();
     }
 
     /// Pool exclusive lock.
@@ -295,7 +277,7 @@ impl Pool {
     }
 
     /// Pool address.
-    pub(crate) fn addr(&self) -> &str {
+    pub(crate) fn addr(&self) -> &Address {
         &self.addr
     }
 

@@ -21,7 +21,7 @@ impl Query {
 
 impl FromBytes for Query {
     fn from_bytes(mut bytes: Bytes) -> Result<Self, Error> {
-        code!('Q', bytes.get_u8() as char);
+        code!(bytes, 'Q');
         let _len = bytes.get_i32();
 
         let query = c_string_buf(&mut bytes);

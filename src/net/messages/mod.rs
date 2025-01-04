@@ -26,6 +26,8 @@ pub use query::Query;
 pub mod terminate;
 pub use terminate::Terminate;
 
+pub mod parse;
+
 pub mod prelude;
 
 use crate::net::Error;
@@ -96,11 +98,13 @@ impl Message {
 /// Check that the message we received is what we expected.
 /// Return an error otherwise.
 macro_rules! code {
-    ($code: expr, $expected: expr) => {
-        if $code != $expected {
-            return Err(crate::net::Error::UnexpectedMessage($expected, $code));
+    ($code: expr, $expected: expr) => {{
+        let code = $code.get_u8() as char;
+        let expected = $expected as char;
+        if code != expected {
+            return Err(crate::net::Error::UnexpectedMessage(expected, code));
         }
-    };
+    }};
 }
 
 pub(crate) use code;

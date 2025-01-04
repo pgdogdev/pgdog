@@ -1,13 +1,13 @@
-//! Client/server connection startup messages.
+//! Startup, SSLRequest messages.
 
-use crate::net::{c_string, Error};
+use crate::net::{c_string, parameter::Parameters, Error};
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tracing::debug;
 
-use std::marker::Unpin;
+use std::{marker::Unpin, ops::Deref};
 
-use super::{FromBytes, Payload, Protocol, ToBytes};
+use super::{super::Parameter, FromBytes, Payload, Protocol, ToBytes};
 
 /// First message a client sends to the server
 /// and a server expects from a client.
@@ -18,7 +18,7 @@ pub enum Startup {
     /// SSLRequest (F)
     Ssl,
     /// StartupMessage (F)
-    Startup { params: Vec<(String, String)> },
+    Startup { params: Parameters },
     /// CancelRequet (F)
     Cancel { pid: i32, secret: i32 },
 }
@@ -36,16 +36,16 @@ impl Startup {
             80877103 => Ok(Startup::Ssl),
             // StartupMessage (F)
             196608 => {
-                let mut params = vec![];
+                let mut params = Parameters::default();
                 loop {
-                    let key = c_string(stream).await?;
+                    let name = c_string(stream).await?;
 
-                    if key.is_empty() {
+                    if name.is_empty() {
                         break;
                     }
 
                     let value = c_string(stream).await?;
-                    params.push((key, value));
+                    params.push(Parameter { name, value });
                 }
 
                 Ok(Startup::Startup { params })
@@ -70,8 +70,8 @@ impl Startup {
             Startup::Ssl | Startup::Cancel { .. } => None,
             Startup::Startup { params } => params
                 .iter()
-                .find(|pair| pair.0 == name)
-                .map(|pair| pair.1.as_str()),
+                .find(|pair| pair.name == name)
+                .map(|pair| pair.value.as_str()),
         }
     }
 
@@ -79,9 +79,16 @@ impl Startup {
     pub fn new() -> Self {
         Self::Startup {
             params: vec![
-                ("user".into(), "pgdog".into()),
-                ("database".into(), "pgdog".into()),
-            ],
+                Parameter {
+                    name: "user".into(),
+                    value: "pgdog".into(),
+                },
+                Parameter {
+                    name: "database".into(),
+                    value: "pgdog".into(),
+                },
+            ]
+            .into(),
         }
     }
 
@@ -116,11 +123,11 @@ impl super::ToBytes for Startup {
             Startup::Startup { params } => {
                 let mut params_buf = BytesMut::new();
 
-                for pair in params {
-                    params_buf.put_slice(pair.0.as_bytes());
+                for pair in params.deref() {
+                    params_buf.put_slice(pair.name.as_bytes());
                     params_buf.put_u8(0);
 
-                    params_buf.put_slice(pair.1.as_bytes());
+                    params_buf.put_slice(pair.value.as_bytes());
                     params_buf.put_u8(0);
                 }
 
@@ -205,9 +212,16 @@ mod test {
     async fn test_startup() {
         let startup = Startup::Startup {
             params: vec![
-                ("user".into(), "postgres".into()),
-                ("database".into(), "postgres".into()),
-            ],
+                Parameter {
+                    name: "user".into(),
+                    value: "postgres".into(),
+                },
+                Parameter {
+                    name: "database".into(),
+                    value: "postgres".into(),
+                },
+            ]
+            .into(),
         };
 
         let bytes = startup.to_bytes().unwrap();

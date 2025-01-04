@@ -13,4 +13,7 @@ pub enum Error {
 
     #[error("{0}")]
     Backend(#[from] crate::backend::Error),
+
+    #[error("\"{0}\" parameter is missing")]
+    Parameter(String),
 }

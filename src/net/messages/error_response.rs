@@ -1,3 +1,4 @@
+//! ErrorResponse (B) message.
 use std::fmt::Display;
 
 use crate::net::{c_string_buf, messages::code};
@@ -20,7 +21,7 @@ impl Display for ErrorResponse {
 
 impl FromBytes for ErrorResponse {
     fn from_bytes(mut bytes: Bytes) -> Result<Self, Error> {
-        code!('E', bytes.get_u8() as char);
+        code!(bytes, 'E');
         let _len = bytes.get_i32();
 
         let mut error_response = ErrorResponse::default();

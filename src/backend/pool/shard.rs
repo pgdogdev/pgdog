@@ -2,9 +2,10 @@
 
 use crate::net::messages::BackendKeyData;
 
-use super::{Error, Guard, Pool, Replicas};
+use super::{Address, Error, Guard, Pool, Replicas};
 
 /// Primary and replicas.
+#[derive(Clone)]
 pub struct Shard {
     primary: Pool,
     replicas: Replicas,
@@ -12,8 +13,11 @@ pub struct Shard {
 
 impl Shard {
     /// Create new shard connection pool.
-    pub fn new() -> Self {
-        todo!()
+    pub fn new(primary: &Address, replicas: &[&Address]) -> Self {
+        let primary = Pool::new(primary);
+        let replicas = Replicas::new(replicas);
+
+        Self { primary, replicas }
     }
 
     /// Get a connection to the shard primary database.

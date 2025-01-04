@@ -38,4 +38,7 @@ pub enum Error {
 
     #[error("no such user/database: {0}")]
     NoDatabase(User),
+
+    #[error("no cluster connected")]
+    NoCluster,
 }

@@ -13,7 +13,7 @@ pub enum Authentication {
 
 impl FromBytes for Authentication {
     fn from_bytes(mut bytes: Bytes) -> Result<Self, Error> {
-        code!(bytes.get_u8() as char, 'R');
+        code!(bytes, 'R');
 
         let _len = bytes.get_i32();
 

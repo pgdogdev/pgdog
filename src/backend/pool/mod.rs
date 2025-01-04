@@ -1,31 +1,30 @@
-pub mod connection;
-pub use connection::Connection;
+//! Manage connections to the servers.
 
-pub mod pool;
-pub use pool::{pool, Pool};
-use pool::{Ban, Mapping};
-
+pub mod address;
+pub mod ban;
+pub mod cluster;
 pub mod config;
-pub use config::Config;
-
-pub mod guard;
-pub use guard::Guard;
-
+pub mod connection;
 pub mod error;
-pub use error::Error;
-
+pub mod guard;
+pub mod inner;
+pub mod monitor;
+pub mod pool;
 pub mod replicas;
-pub use replicas::Replicas;
-
 pub mod shard;
+pub mod stats;
+
+pub use address::Address;
+pub use cluster::Cluster;
+pub use config::Config;
+pub use connection::Connection;
+pub use error::Error;
+pub use guard::Guard;
+pub use monitor::Monitor;
+pub use pool::Pool;
+pub use replicas::Replicas;
 pub use shard::Shard;
 
-pub mod cluster;
-pub use cluster::Cluster;
-
-pub mod ban;
-pub mod monitor;
-pub use monitor::Monitor;
-pub mod inner;
-pub mod stats;
+use ban::Ban;
 use inner::Inner;
+use pool::Mapping;

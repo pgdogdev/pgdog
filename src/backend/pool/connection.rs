@@ -2,29 +2,39 @@
 
 use tokio::time::sleep;
 
-use crate::net::messages::{BackendKeyData, Message, Protocol};
+use crate::{
+    backend::databases::databases,
+    net::messages::{BackendKeyData, Message, Protocol},
+};
 
-use super::super::{
-    pool::{pool, Guard},
-    Error, Server,
+use super::{
+    super::{pool::Guard, Error, Server},
+    Cluster,
 };
 use std::{ops::Deref, time::Duration};
 
 /// Wrapper around a server connection.
+#[derive(Default)]
 pub struct Connection {
+    user: String,
+    database: String,
     server: Option<Guard>,
-}
-
-impl Default for Connection {
-    fn default() -> Self {
-        Self::new()
-    }
+    cluster: Option<Cluster>,
 }
 
 impl Connection {
     /// Create new server connection handler.
-    pub fn new() -> Self {
-        Self { server: None }
+    pub fn new(user: &str, database: &str) -> Result<Self, Error> {
+        let mut conn = Self {
+            server: None,
+            cluster: None,
+            user: user.to_owned(),
+            database: database.to_owned(),
+        };
+
+        conn.reload()?;
+
+        Ok(conn)
     }
 
     /// Check if the connection is available.
@@ -33,9 +43,9 @@ impl Connection {
     }
 
     /// Create a server connection if one doesn't exist already.
-    pub async fn get(&mut self, id: &BackendKeyData) -> Result<(), Error> {
+    pub async fn connect(&mut self, id: &BackendKeyData) -> Result<(), Error> {
         if self.server.is_none() {
-            let server = pool().get(id).await?;
+            let server = self.cluster()?.primary(0, id).await?;
             self.server = Some(server);
         }
 
@@ -67,6 +77,19 @@ impl Connection {
         } else {
             Err(Error::NotConnected)
         }
+    }
+
+    /// Fetch the cluster from the global database store.
+    pub fn reload(&mut self) -> Result<(), Error> {
+        let cluster = databases().cluster((self.user.as_str(), self.database.as_str()))?;
+        self.cluster = Some(cluster);
+
+        Ok(())
+    }
+
+    #[inline]
+    fn cluster(&self) -> Result<&Cluster, Error> {
+        Ok(self.cluster.as_ref().ok_or(Error::NotConnected)?)
     }
 }
 
