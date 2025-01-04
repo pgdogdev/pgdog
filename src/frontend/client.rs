@@ -63,12 +63,11 @@ impl Client {
         let admin = database == "admin";
 
         let mut backend = Connection::new(user, database, admin)?;
-
         let mut flush = false;
 
-        loop {
-            self.state = State::Idle;
+        self.state = State::Idle;
 
+        loop {
             select! {
                 buffer = self.buffer() => {
                     if buffer.is_empty() {
@@ -100,8 +99,9 @@ impl Client {
                     }
 
                     if backend.done() {
-                        self.stats.transactions += 1;
                         backend.disconnect();
+                        self.stats.transactions += 1;
+                        self.state = State::Idle;
                     }
 
                     self.stats.bytes_sent += len;
