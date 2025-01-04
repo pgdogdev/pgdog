@@ -206,11 +206,13 @@ impl Server {
     }
 
     /// Server sent everything.
+    #[inline]
     pub fn done(&self) -> bool {
         self.state == State::Idle
     }
 
     /// Server connection is synchronized and can receive more messages.
+    #[inline]
     pub fn in_sync(&self) -> bool {
         matches!(
             self.state,
@@ -219,6 +221,7 @@ impl Server {
     }
 
     /// Server is still inside a transaction.
+    #[inline]
     pub fn in_transaction(&self) -> bool {
         matches!(
             self.state,
@@ -227,11 +230,13 @@ impl Server {
     }
 
     /// The server connection permanently failed.
+    #[inline]
     pub fn error(&self) -> bool {
         self.state == State::Error
     }
 
     /// Server parameters.
+    #[inline]
     pub fn params(&self) -> &Vec<(String, String)> {
         &self.params
     }
@@ -267,20 +272,24 @@ impl Server {
     }
 
     /// Server connection unique identifier.
+    #[inline]
     pub fn id(&self) -> &BackendKeyData {
         &self.id
     }
 
     /// How old this connection is.
+    #[inline]
     pub fn age(&self, instant: Instant) -> Duration {
         instant.duration_since(self.created_at)
     }
 
     /// How long this connection has been idle.
+    #[inline]
     pub fn idle_for(&self, instant: Instant) -> Duration {
         instant.duration_since(self.last_used_at)
     }
 
+    #[inline]
     fn stream(&mut self) -> &mut Stream {
         self.stream.as_mut().unwrap()
     }
