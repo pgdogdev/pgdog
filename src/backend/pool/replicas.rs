@@ -92,6 +92,7 @@ impl Replicas {
                     banned += 1;
                     continue;
                 }
+                Err(Error::ShutDown) => continue,
                 Err(err) => {
                     error!("{} [{}]", err, candidate.addr());
                 }
@@ -105,6 +106,6 @@ impl Replicas {
             }
         }
 
-        Err(Error::NoReplicas)
+        Err(Error::ShutDown)
     }
 }

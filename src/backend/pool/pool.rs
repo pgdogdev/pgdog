@@ -9,13 +9,13 @@ use parking_lot::lock_api::MutexGuard;
 use parking_lot::{Mutex, RawMutex};
 use tokio::select;
 use tokio::sync::Notify;
-use tokio::time::{sleep, timeout};
-use tracing::error;
+use tokio::time::sleep;
+use tracing::{error, info};
 
 use crate::backend::Server;
 use crate::net::messages::BackendKeyData;
 
-use super::{Address, Ban, Config, Error, Guard, Inner, Monitor};
+use super::{Address, Ban, Config, Error, Guard, Healtcheck, Inner, Monitor};
 
 /// Mapping between a client and a server.
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -103,15 +103,6 @@ impl Clone for Pool {
     }
 }
 
-impl Drop for Pool {
-    fn drop(&mut self) {
-        let remaining = self.comms.ref_count.fetch_sub(1, Ordering::Relaxed);
-        if remaining == 1 {
-            self.comms.shutdown.notify_one();
-        }
-    }
-}
-
 impl Pool {
     /// Create new connection pool.
     pub fn new(addr: &Address, config: Config) -> Self {
@@ -149,6 +140,10 @@ impl Pool {
 
                 if guard.banned() {
                     return Err(Error::Banned);
+                }
+
+                if !guard.online {
+                    return Err(Error::ShutDown);
                 }
 
                 let conn = if let Some(server) = guard.conns.pop_back() {
@@ -200,25 +195,18 @@ impl Pool {
     /// Perform a healtcheck on the connection if one is needed.
     async fn maybe_healthcheck(
         &self,
-        mut conn: Guard,
-        healtcheck_timeout: Duration,
-        healthckeck_interval: Duration,
+        conn: Guard,
+        healthcheck_timeout: Duration,
+        healthcheck_interval: Duration,
     ) -> Result<Guard, Error> {
-        if conn.healthcheck_age(Instant::now()) >= healthckeck_interval {
-            match timeout(healtcheck_timeout, conn.healthcheck(";")).await {
-                Ok(Ok(())) => return Ok(conn),
-                Ok(Err(err)) => {
-                    error!("server error: {} [{}]", err, self.addr());
-                    self.ban(Error::HealtcheckError);
-                    return Err(Error::HealtcheckError);
-                }
-                Err(_) => {
-                    self.ban(Error::HealtcheckTimeout);
-                    return Err(Error::HealtcheckTimeout);
-                }
-            }
-        }
-        Ok(conn)
+        let healthcheck = Healtcheck::conditional(
+            conn,
+            self.clone(),
+            healthcheck_interval,
+            healthcheck_timeout,
+        );
+
+        healthcheck.healtcheck().await
     }
 
     /// Create new identical connection pool.
@@ -287,7 +275,10 @@ impl Pool {
 
     /// Unban this pool from serving traffic.
     pub fn unban(&self) {
-        self.lock().maybe_unban();
+        let unbanned = self.lock().maybe_unban();
+        if unbanned {
+            info!("pool unbanned [{}]", self.addr());
+        }
     }
 
     /// Pause pool, closing all open connections.
@@ -307,6 +298,14 @@ impl Pool {
         }
 
         self.comms().ready.notify_waiters();
+    }
+
+    /// Shutdown the pool.
+    pub fn shutdown(&self) {
+        let mut guard = self.lock();
+        guard.online = false;
+        guard.conns.clear();
+        self.comms().shutdown.notify_waiters();
     }
 
     /// Pool exclusive lock.

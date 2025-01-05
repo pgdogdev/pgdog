@@ -25,6 +25,10 @@ pub struct Config {
     pub healthcheck_timeout: u64, // ms
     /// Healtcheck interval.
     pub healthcheck_interval: u64, // ms
+    /// Idle healthcheck interval.
+    pub idle_healthcheck_interval: u64, // ms
+    /// Idle healthcheck delay.
+    pub idle_healthcheck_delay: u64, // ms
 }
 
 impl Config {
@@ -58,6 +62,16 @@ impl Config {
         Duration::from_millis(self.healthcheck_interval)
     }
 
+    /// Idle healtcheck interval.
+    pub fn idle_healthcheck_interval(&self) -> Duration {
+        Duration::from_millis(self.idle_healthcheck_interval)
+    }
+
+    /// Idle healtcheck delay.
+    pub fn idle_healtcheck_delay(&self) -> Duration {
+        Duration::from_millis(self.idle_healthcheck_delay)
+    }
+
     /// Default config for a primary.
     pub fn default_primary() -> Self {
         Self {
@@ -79,6 +93,8 @@ impl Default for Config {
             bannable: true,
             healthcheck_timeout: 5_000,
             healthcheck_interval: 30_000,
+            idle_healthcheck_interval: 5_000,
+            idle_healthcheck_delay: 5_000,
         }
     }
 }

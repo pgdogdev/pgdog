@@ -21,8 +21,9 @@ pub fn databases() -> Arc<Databases> {
 }
 
 /// Replace databases pooler-wide.
-pub fn replace_databases(databases: Databases) {
-    DATABASES.store(Arc::new(databases));
+pub fn replace_databases(new_databases: Databases) {
+    databases().shutdown();
+    DATABASES.store(Arc::new(new_databases));
 }
 
 /// Re-create all connections.
@@ -87,7 +88,16 @@ impl Default for Databases {
                         host: "127.0.0.1".into(),
                         port: 5432,
                     },
-                    &[],
+                    &[
+                        &Address {
+                            host: "127.0.0.1".into(),
+                            port: 5433,
+                        },
+                        &Address {
+                            host: "127.0.0.1".into(),
+                            port: 5434,
+                        },
+                    ],
                 )]),
             )]),
         }
@@ -127,6 +137,17 @@ impl Databases {
                 .iter()
                 .map(|(k, v)| (k.clone(), v.duplicate()))
                 .collect(),
+        }
+    }
+
+    /// Shutdown all pools.
+    fn shutdown(&self) {
+        for (_, cluster) in self.all() {
+            for shard in cluster.shards() {
+                for pool in shard.pools() {
+                    pool.shutdown();
+                }
+            }
         }
     }
 }

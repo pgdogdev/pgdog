@@ -50,9 +50,22 @@ impl Connection {
     /// Create a server connection if one doesn't exist already.
     pub async fn connect(&mut self, id: &BackendKeyData) -> Result<(), Error> {
         if self.server.is_none() && self.admin.is_none() {
-            let server = self.cluster()?.primary(0, id).await?;
-            self.server = Some(server);
+            match self.try_conn(id).await {
+                Ok(()) => (),
+                Err(Error::Pool(super::Error::ShutDown)) => {
+                    self.reload()?;
+                    return Ok(self.try_conn(id).await?);
+                }
+                Err(err) => return Err(err.into()),
+            }
         }
+
+        Ok(())
+    }
+
+    async fn try_conn(&mut self, id: &BackendKeyData) -> Result<(), Error> {
+        let server = self.cluster()?.primary(0, id).await?;
+        self.server = Some(server);
 
         Ok(())
     }

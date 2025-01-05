@@ -2,10 +2,10 @@
 
 use std::time::{Duration, Instant};
 
-use super::Pool;
-use crate::backend::{Error, Server};
+use super::{Error, Guard, Healtcheck, Pool};
+use crate::backend::Server;
 
-use tokio::time::{sleep, timeout};
+use tokio::time::{interval, sleep, timeout};
 use tokio::{select, task::spawn};
 use tracing::info;
 
@@ -30,19 +30,17 @@ impl Monitor {
     async fn spawn(self) {
         debug!("maintenance loop is running [{}]", self.pool.addr());
 
+        let pool = self.pool.clone();
+        spawn(async move { Self::maintenance(pool).await });
+        let pool = self.pool.clone();
+        let delay = { pool.lock().config().idle_healtcheck_delay() };
+        spawn(async move {
+            sleep(delay).await;
+            Self::healthchecks(pool).await
+        });
+
         loop {
             let comms = self.pool.comms();
-
-            // If the pool is banned, don't try to create new connections
-            // more often than once a second. Otherwise, perform maintenance
-            // on the pool ~3 times per second.
-            let maintenance_interval = if self.pool.lock().banned() {
-                Duration::from_secs(1)
-            } else {
-                Duration::from_millis(333)
-            };
-
-            let mut unbanned = false;
 
             select! {
                 // A client is requesting a connection and no idle
@@ -53,7 +51,7 @@ impl Monitor {
                         can_create,
                         connect_timeout,
                         paused,
-                        _banned,
+                        banned,
                     ) = {
                         let guard = self.pool.lock();
 
@@ -74,7 +72,7 @@ impl Monitor {
                     // An idle connection is available.
                     if !empty {
                         comms.ready.notify_one();
-                    } else if can_create {
+                    } else if can_create && !banned {
                         // No idle connections, but we are allowed to create a new one.
                         let ok = self.replenish(connect_timeout).await;
 
@@ -89,16 +87,68 @@ impl Monitor {
                     self.pool.lock().online = false;
                     break;
                 }
+            }
+        }
 
-                // Perform maintenance.
-                _ = sleep(maintenance_interval) => {
+        debug!("maintenance loop is shut down [{}]", self.pool.addr());
+    }
+
+    async fn healthchecks(pool: Pool) {
+        let mut tick = interval(pool.lock().config().idle_healthcheck_interval());
+        let comms = pool.comms();
+
+        debug!("healtchecks running [{}]", pool.addr());
+
+        loop {
+            let mut unbanned = false;
+            select! {
+                _ = tick.tick() => {
+                    // Skip healtcheck if offline or paused.
+                    if !pool.available() {
+                        continue;
+                    }
+
+                    if Self::healthcheck(&pool).await.is_ok() {
+                        let mut guard = pool.lock();
+                        unbanned = guard.maybe_unban();
+                    }
+                }
+
+
+                _ = comms.shutdown.notified() => break,
+            }
+
+            if unbanned {
+                info!("pool unbanned [{}]", pool.addr());
+            }
+        }
+
+        debug!("healthchecks stopped [{}]", pool.addr());
+    }
+
+    /// Perform maintenance on the pool periodically.
+    async fn maintenance(pool: Pool) {
+        let maintenance_interval = if pool.lock().banned() {
+            Duration::from_secs(1)
+        } else {
+            Duration::from_millis(333)
+        };
+
+        let mut tick = interval(maintenance_interval);
+        let comms = pool.comms();
+
+        debug!("maintenance started [{}]", pool.addr());
+
+        loop {
+            select! {
+                _ = tick.tick() => {
                     let now = Instant::now();
 
-                    let mut guard = self.pool.lock();
+                    let mut guard = pool.lock();
 
                     guard.close_idle(now);
                     guard.close_old(now);
-                    unbanned = guard.check_ban(now);
+                    let unbanned = guard.check_ban(now);
 
                     // If we have clients waiting still, try to open a connection again.
                     // This prevents a thundering herd.
@@ -109,17 +159,20 @@ impl Monitor {
                     if guard.should_create() {
                         comms.request.notify_one();
                     }
-                }
-            }
 
-            if unbanned {
-                info!("pool unbanned [{}]", self.pool.addr());
+                    if unbanned {
+                        info!("pool unbanned [{}]", pool.addr());
+                    }
+                }
+
+                _ = comms.shutdown.notified() => break,
             }
         }
 
-        debug!("maintenance loop is shut down [{}]", self.pool.addr());
+        debug!("maintenance shut down [{}]", pool.addr());
     }
 
+    /// Replenish pool with one new connection.
     async fn replenish(&self, connect_timeout: Duration) -> bool {
         let mut ok = false;
 
@@ -139,5 +192,45 @@ impl Monitor {
         }
 
         ok
+    }
+
+    /// Perform a periodic healthcheck on the pool.
+    async fn healthcheck(pool: &Pool) -> Result<(), Error> {
+        let (conn, healthcheck_timeout) = {
+            let mut guard = pool.lock();
+            if !guard.online {
+                return Ok(());
+            }
+            (guard.conns.pop_front(), guard.config.healthcheck_timeout())
+        };
+
+        // Have an idle connection, use that for the healtcheck.
+        if let Some(conn) = conn {
+            Healtcheck::mandatory(
+                Guard::new(pool.clone(), conn),
+                pool.clone(),
+                healthcheck_timeout,
+            )
+            .healtcheck()
+            .await?;
+
+            Ok(())
+        } else {
+            // Create a new one and close it. once done.
+            debug!("creating new healthcheck connection [{}]", pool.addr());
+            match Server::connect(pool.addr()).await {
+                Ok(mut server) => {
+                    if let Ok(()) = server.healthcheck(";").await {
+                        return Ok(());
+                    }
+                }
+
+                Err(err) => {
+                    error!("healthcheck error: {} [{}]", err, pool.addr());
+                }
+            }
+
+            Err(Error::HealtcheckError)
+        }
     }
 }

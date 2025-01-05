@@ -26,4 +26,7 @@ pub enum Error {
 
     #[error("healtcheck error")]
     HealtcheckError,
+
+    #[error("pool is shut down")]
+    ShutDown,
 }
