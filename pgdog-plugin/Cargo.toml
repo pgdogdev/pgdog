@@ -7,7 +7,7 @@ edition = "2021"
 crate-type = ["rlib", "cdylib"]
 
 [dependencies]
-libloading = "*"
+libloading = "0.8"
 
 [build-dependencies]
 bindgen = "0.71.0"
