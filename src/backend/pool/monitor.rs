@@ -183,10 +183,12 @@ impl Monitor {
             }
 
             Ok(Err(err)) => {
+                self.pool.ban(Error::ServerError);
                 error!("error connecting to server: {} [{}]", err, self.pool.addr());
             }
 
             Err(_) => {
+                self.pool.ban(Error::ServerError);
                 error!("server connection timeout [{}]", self.pool.addr());
             }
         }

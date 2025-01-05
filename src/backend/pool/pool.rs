@@ -35,10 +35,6 @@ pub(super) struct Comms {
     pub(super) request: Notify,
     /// Pool is shutting down.
     pub(super) shutdown: Notify,
-    /// Number of references (clones) of this pool.
-    /// When this number reaches 0, the maintenance loop is stopped
-    /// and the pool is dropped.
-    pub(super) ref_count: AtomicUsize,
 }
 
 /// Pool state.
@@ -91,15 +87,11 @@ pub struct Pool {
 
 impl Clone for Pool {
     fn clone(&self) -> Self {
-        let clone = Self {
+        Self {
             inner: self.inner.clone(),
             comms: self.comms.clone(),
             addr: self.addr.clone(),
-        };
-
-        self.comms.ref_count.fetch_add(1, Ordering::Relaxed);
-
-        clone
+        }
     }
 }
 
@@ -120,7 +112,6 @@ impl Pool {
                 ready: Notify::new(),
                 request: Notify::new(),
                 shutdown: Notify::new(),
-                ref_count: AtomicUsize::new(0),
             }),
             addr: addr.clone(),
         };
