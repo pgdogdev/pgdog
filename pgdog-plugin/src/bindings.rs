@@ -4,7 +4,7 @@
 #[derive(Debug, Copy, Clone)]
 pub struct Query {
     pub len: ::std::os::raw::c_int,
-    pub query: *mut ::std::os::raw::c_char,
+    pub query: *const ::std::os::raw::c_char,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
@@ -28,4 +28,63 @@ const _: () = {
     ["Alignment of Route"][::std::mem::align_of::<Route>() - 4usize];
     ["Offset of field: Route::affinity"][::std::mem::offset_of!(Route, affinity) - 0usize];
     ["Offset of field: Route::shard"][::std::mem::offset_of!(Route, shard) - 4usize];
+};
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct RowColumn {
+    pub length: ::std::os::raw::c_int,
+    pub data: *mut ::std::os::raw::c_char,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of RowColumn"][::std::mem::size_of::<RowColumn>() - 16usize];
+    ["Alignment of RowColumn"][::std::mem::align_of::<RowColumn>() - 8usize];
+    ["Offset of field: RowColumn::length"][::std::mem::offset_of!(RowColumn, length) - 0usize];
+    ["Offset of field: RowColumn::data"][::std::mem::offset_of!(RowColumn, data) - 8usize];
+};
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct Row {
+    pub num_columns: ::std::os::raw::c_int,
+    pub columns: *mut RowColumn,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of Row"][::std::mem::size_of::<Row>() - 16usize];
+    ["Alignment of Row"][::std::mem::align_of::<Row>() - 8usize];
+    ["Offset of field: Row::num_columns"][::std::mem::offset_of!(Row, num_columns) - 0usize];
+    ["Offset of field: Row::columns"][::std::mem::offset_of!(Row, columns) - 8usize];
+};
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct RowDescriptionColumn {
+    pub len: ::std::os::raw::c_int,
+    pub name: *mut ::std::os::raw::c_char,
+    pub oid: ::std::os::raw::c_int,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of RowDescriptionColumn"][::std::mem::size_of::<RowDescriptionColumn>() - 24usize];
+    ["Alignment of RowDescriptionColumn"][::std::mem::align_of::<RowDescriptionColumn>() - 8usize];
+    ["Offset of field: RowDescriptionColumn::len"]
+        [::std::mem::offset_of!(RowDescriptionColumn, len) - 0usize];
+    ["Offset of field: RowDescriptionColumn::name"]
+        [::std::mem::offset_of!(RowDescriptionColumn, name) - 8usize];
+    ["Offset of field: RowDescriptionColumn::oid"]
+        [::std::mem::offset_of!(RowDescriptionColumn, oid) - 16usize];
+};
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct RowDescription {
+    pub num_columns: ::std::os::raw::c_int,
+    pub columns: *mut RowDescriptionColumn,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of RowDescription"][::std::mem::size_of::<RowDescription>() - 16usize];
+    ["Alignment of RowDescription"][::std::mem::align_of::<RowDescription>() - 8usize];
+    ["Offset of field: RowDescription::num_columns"]
+        [::std::mem::offset_of!(RowDescription, num_columns) - 0usize];
+    ["Offset of field: RowDescription::columns"]
+        [::std::mem::offset_of!(RowDescription, columns) - 8usize];
 };

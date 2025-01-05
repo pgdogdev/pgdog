@@ -1,13 +1,12 @@
 [package]
-name = "pgdog-plugin"
+name = "pgdog-plugin-sys"
 version = "0.1.0"
 edition = "2021"
 
+[dependencies]
+
 [lib]
 crate-type = ["rlib", "cdylib"]
-
-[dependencies]
-libloading = "*"
 
 [build-dependencies]
 bindgen = "0.71.0"

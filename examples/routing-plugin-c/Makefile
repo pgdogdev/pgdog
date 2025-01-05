@@ -1,6 +1,6 @@
 UNAME := $(shell uname)
 
 all:
-	gcc plugin.c -O2 -shared -o librouting_plugin_c.so
+	gcc -L"../../target/debug" -lpgdog_plugin plugin.c -O2 -shared -o librouting_plugin_c.so
 	cp librouting_plugin_c.so ../../target/debug
 	cp librouting_plugin_c.so ../../target/debug/librouting_plugin_c.dylib

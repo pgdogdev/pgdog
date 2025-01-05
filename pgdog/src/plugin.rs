@@ -4,7 +4,7 @@ use once_cell::sync::OnceCell;
 use pgdog_plugin::libloading;
 use pgdog_plugin::libloading::Library;
 use pgdog_plugin::Plugin;
-use tracing::info;
+use tracing::{error, info};
 
 static LIBS: OnceCell<Vec<Library>> = OnceCell::new();
 pub static PLUGINS: OnceCell<Vec<Plugin>> = OnceCell::new();
@@ -21,17 +21,23 @@ pub fn load(names: &[&str]) -> Result<(), libloading::Error> {
 
     let mut libs = vec![];
     for plugin in names.iter() {
-        let library = Plugin::library(plugin)?;
-        libs.push(library);
+        match Plugin::library(plugin) {
+            Ok(plugin) => libs.push(plugin),
+            Err(err) => {
+                error!("plugin \"{}\" failed to load: {:#?}", plugin, err);
+            }
+        }
     }
 
     let _ = LIBS.set(libs);
 
     let mut plugins = vec![];
     for (i, name) in names.iter().enumerate() {
-        let plugin = Plugin::load(name, LIBS.get().unwrap().get(i).unwrap());
-        plugins.push(plugin);
-        info!("Loaded \"{}\" plugin", name);
+        if let Some(lib) = LIBS.get().unwrap().get(i) {
+            let plugin = Plugin::load(name, lib);
+            plugins.push(plugin);
+            info!("Loaded \"{}\" plugin", name);
+        }
     }
 
     let _ = PLUGINS.set(plugins);
@@ -58,6 +64,12 @@ mod test {
 
     #[test]
     fn test_plugin() {
+        use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+        let _ = tracing_subscriber::registry()
+            .with(fmt::layer())
+            .with(EnvFilter::from_default_env())
+            .try_init();
+
         load(&["routing_plugin", "routing_plugin_c"]).unwrap();
         let query = FfiQuery::new("SELECT 1").unwrap();
         let plug = plugin("routing_plugin_c").unwrap();

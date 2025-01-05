@@ -1,7 +1,6 @@
 //! Admin command parser.
 
 use super::{pause::Pause, prelude::Message, reconnect::Reconnect, Command, Error};
-use std::sync::Arc;
 
 /// Parser result.
 pub enum ParseResult {

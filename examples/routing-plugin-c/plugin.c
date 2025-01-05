@@ -3,9 +3,9 @@
 #include <string.h>
 #include <ctype.h>
 #include <stdlib.h>
-#include "../../pgdog-plugin/src/plugin.h"
+#include "../../pgdog-plugin/include/plugin.h"
 
-Route route(Query query) {
+Route pgdog_route_query(Query query) {
     Route route;
     char *lowercase = strdup(query.query);
 
@@ -20,6 +20,9 @@ Route route(Query query) {
     }
 
     free(lowercase);
+
+    // Row row = pgdog_row_new(5);
+    // pgdog_row_free(row);
 
     route.shard = -1;
 

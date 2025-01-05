@@ -1,0 +1,4 @@
+src/bindings.rs
+*.a
+*.so
+*.dylib
