@@ -1,8 +1,10 @@
 //! pgDog plugin interface.
 
+mod bindings;
+
 use libloading::{library_filename, Library, Symbol};
 use std::{
-    ffi::{CStr, CString, NulError},
+    ffi::{c_int, CStr, CString, NulError},
     fmt::Debug,
     marker::PhantomData,
     os::raw::c_char,
@@ -46,22 +48,41 @@ impl<'a> Query<'a> {
     }
 }
 
-/// Route the query should take.
+#[derive(Debug, PartialEq)]
+#[repr(C)]
+pub struct Route {
+    /// Does it want a read or a write?
+    pub affinity: Affinity,
+    /// Which shard, if any. -1 = any shard.
+    pub shard: c_int,
+}
+
+impl Route {
+    /// Is this a read?
+    pub fn read(&self) -> bool {
+        self.affinity == Affinity::Read
+    }
+
+    /// Is this a write?
+    pub fn write(&self) -> bool {
+        self.affinity == Affinity::Write
+    }
+
+    /// Which shard, if any.
+    pub fn shard(&self) -> Option<usize> {
+        if self.shard < 0 {
+            None
+        } else {
+            Some(self.shard as usize)
+        }
+    }
+}
+
 #[derive(Debug, Copy, Clone, PartialEq)]
 #[repr(C)]
-pub enum Route {
-    /// Query is a read that should go to this shard.
-    Read(usize),
-    /// Query is a write that should go to this shard.
-    Write(usize),
-    /// Query is a read that can go to any shard, or we
-    /// don't know which shard it should go to.
-    ReadAny,
-    /// Query is a write that cann go to any shard, or we
-    /// don't know which shard it should go to.
-    WriteAny,
-    /// We don't know what to do with this query.
-    Unknown,
+pub enum Affinity {
+    Read = 1,
+    Write = 2,
 }
 
 /// FFI-safe Rust query.

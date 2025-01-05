@@ -52,15 +52,17 @@ pub fn plugin(name: &str) -> Option<&Plugin> {
 
 #[cfg(test)]
 mod test {
-    use pgdog_plugin::{FfiQuery, Route};
+    use pgdog_plugin::FfiQuery;
 
     use super::*;
 
     #[test]
     fn test_plugin() {
-        load(&["routing_plugin"]).unwrap();
+        load(&["routing_plugin", "routing_plugin_c"]).unwrap();
         let query = FfiQuery::new("SELECT 1").unwrap();
-        let plug = plugin("routing_plugin").unwrap();
-        assert_eq!(Some(Route::ReadAny), plug.route(query.query()));
+        let plug = plugin("routing_plugin_c").unwrap();
+        let route = plug.route(query.query()).unwrap();
+        assert!(route.read());
+        assert_eq!(route.shard(), None);
     }
 }

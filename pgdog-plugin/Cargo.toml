@@ -5,3 +5,6 @@ edition = "2021"
 
 [dependencies]
 libloading = "*"
+
+[build-dependencies]
+bindgen = "0.71.0"
