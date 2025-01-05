@@ -1,18 +1,18 @@
-use pgdog_plugin::{Affinity, Query, Route};
+use pgdog_plugin::{bindings, Affinity_READ, Affinity_WRITE, Query, Route};
 
 /// Route query.
 #[no_mangle]
-pub unsafe extern "C" fn route(query: Query) -> Route {
-    let query = query.query();
-    if query.to_lowercase().starts_with("select") {
+pub unsafe extern "C" fn route(query: bindings::Query) -> Route {
+    let query = Query::from(query);
+    if query.query().to_lowercase().starts_with("select") {
         Route {
             shard: -1,
-            affinity: Affinity::Read,
+            affinity: Affinity_READ,
         }
     } else {
         Route {
             shard: -1,
-            affinity: Affinity::Write,
+            affinity: Affinity_WRITE,
         }
     }
 }

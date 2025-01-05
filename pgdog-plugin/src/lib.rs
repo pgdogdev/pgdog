@@ -1,10 +1,10 @@
 //! pgDog plugin interface.
 
-mod bindings;
-
+pub mod bindings;
+pub use bindings::{Affinity_READ, Affinity_WRITE};
 use libloading::{library_filename, Library, Symbol};
 use std::{
-    ffi::{c_int, CStr, CString, NulError},
+    ffi::{CStr, CString, NulError},
     fmt::Debug,
     marker::PhantomData,
     os::raw::c_char,
@@ -31,6 +31,25 @@ impl Debug for Query<'_> {
     }
 }
 
+impl From<Query<'_>> for bindings::Query {
+    fn from(value: Query<'_>) -> Self {
+        Self {
+            len: value.len as i32,
+            query: value.query as *mut i8,
+        }
+    }
+}
+
+impl From<bindings::Query> for Query<'_> {
+    fn from(value: bindings::Query) -> Self {
+        Self {
+            len: value.len as usize,
+            query: value.query as *const c_char,
+            _lifetime: PhantomData,
+        }
+    }
+}
+
 impl<'a> Query<'a> {
     /// Get query text.
     pub fn query(&self) -> &str {
@@ -46,26 +65,24 @@ impl<'a> Query<'a> {
             _lifetime: PhantomData,
         }
     }
+
+    /// Pass the query over FFI.
+    pub fn ffi(&self) -> bindings::Query {
+        self.clone().into()
+    }
 }
 
-#[derive(Debug, PartialEq)]
-#[repr(C)]
-pub struct Route {
-    /// Does it want a read or a write?
-    pub affinity: Affinity,
-    /// Which shard, if any. -1 = any shard.
-    pub shard: c_int,
-}
+pub use bindings::Route;
 
 impl Route {
     /// Is this a read?
     pub fn read(&self) -> bool {
-        self.affinity == Affinity::Read
+        self.affinity == Affinity_READ
     }
 
     /// Is this a write?
     pub fn write(&self) -> bool {
-        self.affinity == Affinity::Write
+        self.affinity == Affinity_WRITE
     }
 
     /// Which shard, if any.
@@ -108,7 +125,7 @@ impl FfiQuery {
 #[derive(Debug)]
 pub struct Plugin<'a> {
     name: String,
-    route: Option<Symbol<'a, unsafe extern "C" fn(Query) -> Route>>,
+    route: Option<Symbol<'a, unsafe extern "C" fn(bindings::Query) -> Route>>,
 }
 
 impl<'a> Plugin<'a> {
@@ -135,7 +152,7 @@ impl<'a> Plugin<'a> {
     /// Route query.
     pub fn route(&self, query: Query) -> Option<Route> {
         if let Some(route) = &self.route {
-            unsafe { Some(route(query)) }
+            unsafe { Some(route(query.into())) }
         } else {
             None
         }
