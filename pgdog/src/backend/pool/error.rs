@@ -28,5 +28,5 @@ pub enum Error {
     HealtcheckError,
 
     #[error("pool is shut down")]
-    ShutDown,
+    Offline,
 }

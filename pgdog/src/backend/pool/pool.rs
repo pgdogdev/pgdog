@@ -134,7 +134,7 @@ impl Pool {
                 }
 
                 if !guard.online {
-                    return Err(Error::ShutDown);
+                    return Err(Error::Offline);
                 }
 
                 let conn = if let Some(server) = guard.conns.pop_back() {

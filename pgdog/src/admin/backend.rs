@@ -10,7 +10,7 @@ use crate::net::messages::{FromBytes, Protocol, Query, ReadyForQuery};
 
 use super::parser::Parser;
 use super::prelude::Message;
-use super::{Command, Error};
+use super::Error;
 
 /// Admin backend.
 pub struct Backend {

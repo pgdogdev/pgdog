@@ -4,6 +4,7 @@ pub mod buffer;
 pub mod client;
 pub mod error;
 pub mod listener;
+pub mod router;
 
 pub use buffer::Buffer;
 pub use client::Client;

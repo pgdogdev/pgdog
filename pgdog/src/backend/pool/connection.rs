@@ -52,7 +52,7 @@ impl Connection {
         if self.server.is_none() && self.admin.is_none() {
             match self.try_conn(id).await {
                 Ok(()) => (),
-                Err(Error::Pool(super::Error::ShutDown)) => {
+                Err(Error::Pool(super::Error::Offline)) => {
                     self.reload()?;
                     return Ok(self.try_conn(id).await?);
                 }

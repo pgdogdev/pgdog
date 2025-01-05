@@ -52,6 +52,7 @@ impl Monitor {
                         connect_timeout,
                         paused,
                         banned,
+                        online,
                     ) = {
                         let guard = self.pool.lock();
 
@@ -61,8 +62,13 @@ impl Monitor {
                             guard.config().connect_timeout(),
                             guard.paused,
                             guard.banned(),
+                            guard.online,
                         )
                     };
+
+                    if !online {
+                        break;
+                    }
 
                     // If the pool is paused, don't open new connections.
                     if paused {
@@ -103,9 +109,19 @@ impl Monitor {
             let mut unbanned = false;
             select! {
                 _ = tick.tick() => {
-                    // Skip healtcheck if offline or paused.
-                    if !pool.available() {
-                        continue;
+                    {
+                        let guard = pool.lock();
+
+                        // Pool is offline, exit.
+                        if !guard.online {
+                            break;
+                        }
+
+                        // Pool is paused, skip healtcheck.
+                        if guard.paused {
+                            continue;
+                        }
+
                     }
 
                     if Self::healthcheck(&pool).await.is_ok() {
@@ -145,6 +161,10 @@ impl Monitor {
                     let now = Instant::now();
 
                     let mut guard = pool.lock();
+
+                    if !guard.online {
+                        break;
+                    }
 
                     guard.close_idle(now);
                     guard.close_old(now);
