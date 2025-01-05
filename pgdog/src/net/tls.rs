@@ -16,17 +16,28 @@ use tracing::info;
 
 use super::Error;
 
-static ACCEPTOR: OnceCell<TlsAcceptor> = OnceCell::new();
+static ACCEPTOR: OnceCell<Option<TlsAcceptor>> = OnceCell::new();
 static CONNECTOR: OnceCell<TlsConnector> = OnceCell::new();
 
 /// Create a new TLS acceptor from the cert and key.
 pub fn acceptor() -> Result<Option<TlsAcceptor>, Error> {
     if let Some(acceptor) = ACCEPTOR.get() {
-        return Ok(Some(acceptor.clone()));
+        return Ok(acceptor.clone());
     }
 
-    let pem = CertificateDer::from_pem_file("tests/cert.pem")?;
-    let key = PrivateKeyDer::from_pem_file("tests/key.pem")?;
+    let pem = if let Ok(pem) = CertificateDer::from_pem_file("tests/cert.pem") {
+        pem
+    } else {
+        let _ = ACCEPTOR.set(None);
+        return Ok(None);
+    };
+
+    let key = if let Ok(key) = PrivateKeyDer::from_pem_file("tests/key.pem") {
+        key
+    } else {
+        let _ = ACCEPTOR.set(None);
+        return Ok(None);
+    };
 
     let config = rustls::ServerConfig::builder()
         .with_no_client_auth()
@@ -38,7 +49,7 @@ pub fn acceptor() -> Result<Option<TlsAcceptor>, Error> {
 
     // A bit of a race, but it's not a big deal unless this is called
     // with different certificate/secret key.
-    let _ = ACCEPTOR.set(acceptor.clone());
+    let _ = ACCEPTOR.set(Some(acceptor.clone()));
 
     Ok(Some(acceptor))
 }

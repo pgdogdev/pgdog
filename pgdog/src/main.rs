@@ -1,3 +1,5 @@
+//! pgDog, modern PostgreSQL proxy, pooler and query router.
+
 use backend::databases::databases;
 use config::load;
 use frontend::listener::Listener;
@@ -12,6 +14,7 @@ pub mod channel;
 pub mod config;
 pub mod frontend;
 pub mod net;
+pub mod plugin;
 pub mod state;
 pub mod stats;
 

@@ -23,3 +23,4 @@ rustls-native-certs = "0.8"
 rustls-pki-types = "*"
 arc-swap = "1"
 toml = "0.8"
+pgdog-plugin = { path = "../pgdog-plugin" }
