@@ -4,7 +4,7 @@ use once_cell::sync::OnceCell;
 use pgdog_plugin::libloading;
 use pgdog_plugin::libloading::Library;
 use pgdog_plugin::Plugin;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 static LIBS: OnceCell<Vec<Library>> = OnceCell::new();
 pub static PLUGINS: OnceCell<Vec<Plugin>> = OnceCell::new();
@@ -35,8 +35,13 @@ pub fn load(names: &[&str]) -> Result<(), libloading::Error> {
     for (i, name) in names.iter().enumerate() {
         if let Some(lib) = LIBS.get().unwrap().get(i) {
             let plugin = Plugin::load(name, lib);
-            plugins.push(plugin);
-            info!("Loaded \"{}\" plugin", name);
+
+            if !plugin.valid() {
+                warn!("plugin \"{}\" is missing required symbols, skipping", name);
+            } else {
+                plugins.push(plugin);
+                info!("Loaded \"{}\" plugin", name);
+            }
         }
     }
 
@@ -54,6 +59,25 @@ pub fn plugin(name: &str) -> Option<&Plugin> {
     }
 
     None
+}
+
+/// Get all loaded plugins.
+pub fn plugins() -> &'static Vec<Plugin<'static>> {
+    PLUGINS.get().unwrap()
+}
+
+/// Load plugins from config.
+pub fn load_from_config() -> Result<(), libloading::Error> {
+    let config = crate::config::config();
+
+    let plugins = &config
+        .general
+        .plugins
+        .iter()
+        .map(|s| s.as_str())
+        .collect::<Vec<_>>();
+
+    load(plugins)
 }
 
 #[cfg(test)]

@@ -54,8 +54,12 @@ impl Listener {
                    let clients = self.clients.clone();
 
                    tokio::spawn(async move {
-                       Self::handle_client(stream, addr, clients).await?;
-                       Ok::<(), Error>(())
+                       match Self::handle_client(stream, addr, clients).await {
+                           Ok(_) => (),
+                           Err(err) => {
+                               error!("client crashed: {:?}", err);
+                           }
+                       }
                    });
                 }
 

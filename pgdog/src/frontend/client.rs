@@ -1,8 +1,9 @@
 //! Frontend client.
 
 use tokio::select;
+use tracing::debug;
 
-use super::{Buffer, Error};
+use super::{Buffer, Error, Router};
 use crate::backend::pool::Connection;
 use crate::net::messages::{Authentication, BackendKeyData, Protocol, ReadyForQuery};
 use crate::net::{parameter::Parameters, Stream};
@@ -63,6 +64,7 @@ impl Client {
         let admin = database == "admin";
 
         let mut backend = Connection::new(user, database, admin)?;
+        let mut router = Router::new();
         let mut flush = false;
 
         self.state = State::Idle;
@@ -77,9 +79,13 @@ impl Client {
                     flush = buffer.flush();
 
                     if !backend.connected() {
+                        router.query(&buffer)?;
+
                         self.state = State::Waiting;
-                        backend.connect(&self.id).await?;
+                        backend.connect(&self.id, router.route()).await?;
                         self.state = State::Active;
+
+                        debug!("client paired with {}", backend.addr()?);
                     }
 
                     backend.send(buffer.into()).await?;

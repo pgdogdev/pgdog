@@ -35,7 +35,7 @@ impl Parameters {
     }
 
     /// Get parameter value or returned a default value if it doesn't exist.
-    pub fn get_default<'a>(&'a self, name: &str, default_value: &'a str) -> &str {
+    pub fn get_default<'a>(&'a self, name: &str, default_value: &'a str) -> &'a str {
         self.get(name).map_or(default_value, |p| p)
     }
 }

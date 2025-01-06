@@ -2,7 +2,10 @@
 
 use std::ops::{Deref, DerefMut};
 
-use crate::net::messages::{Message, Protocol};
+use crate::net::{
+    messages::{parse::Parse, FromBytes, Message, Protocol, Query, ToBytes},
+    Error,
+};
 
 /// Message buffer.
 pub struct Buffer {
@@ -56,6 +59,21 @@ impl Buffer {
     /// Number of bytes in the buffer.
     pub fn len(&self) -> usize {
         self.buffer.iter().map(|b| b.len()).sum()
+    }
+
+    /// If this buffer contains a query, retrive it.
+    pub fn query(&self) -> Result<Option<String>, Error> {
+        for message in &self.buffer {
+            if message.code() == 'Q' {
+                let query = Query::from_bytes(message.to_bytes()?)?;
+                return Ok(Some(query.query));
+            } else if message.code() == 'P' {
+                let parse = Parse::from_bytes(message.to_bytes()?)?;
+                return Ok(Some(parse.query));
+            }
+        }
+
+        Ok(None)
     }
 }
 

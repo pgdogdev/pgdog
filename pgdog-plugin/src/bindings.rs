@@ -2,20 +2,43 @@
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
-pub struct Query {
+pub struct Value {
     pub len: ::std::os::raw::c_int,
-    pub query: *const ::std::os::raw::c_char,
+    pub data: *const ::std::os::raw::c_char,
+    pub oid: ::std::os::raw::c_int,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
-    ["Size of Query"][::std::mem::size_of::<Query>() - 16usize];
+    ["Size of Value"][::std::mem::size_of::<Value>() - 24usize];
+    ["Alignment of Value"][::std::mem::align_of::<Value>() - 8usize];
+    ["Offset of field: Value::len"][::std::mem::offset_of!(Value, len) - 0usize];
+    ["Offset of field: Value::data"][::std::mem::offset_of!(Value, data) - 8usize];
+    ["Offset of field: Value::oid"][::std::mem::offset_of!(Value, oid) - 16usize];
+};
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct Query {
+    pub len: ::std::os::raw::c_int,
+    pub query: *const ::std::os::raw::c_char,
+    pub num_values: ::std::os::raw::c_int,
+    pub values: *const Value,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of Query"][::std::mem::size_of::<Query>() - 32usize];
     ["Alignment of Query"][::std::mem::align_of::<Query>() - 8usize];
     ["Offset of field: Query::len"][::std::mem::offset_of!(Query, len) - 0usize];
     ["Offset of field: Query::query"][::std::mem::offset_of!(Query, query) - 8usize];
+    ["Offset of field: Query::num_values"][::std::mem::offset_of!(Query, num_values) - 16usize];
+    ["Offset of field: Query::values"][::std::mem::offset_of!(Query, values) - 24usize];
 };
 pub const Affinity_READ: Affinity = 1;
 pub const Affinity_WRITE: Affinity = 2;
+pub const Affinity_UNKNOWN: Affinity = 3;
 pub type Affinity = ::std::os::raw::c_uint;
+pub const Shard_ANY: Shard = -1;
+pub const Shard_ALL: Shard = -2;
+pub type Shard = ::std::os::raw::c_int;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct Route {

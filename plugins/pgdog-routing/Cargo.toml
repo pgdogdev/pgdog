@@ -1,0 +1,12 @@
+[package]
+name = "pgdog-routing"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+pgdog-plugin = { path = "../../pgdog-plugin" }
+pg_query = "6.0"
+tracing = "*"
+
+[lib]
+crate-type = ["rlib", "cdylib"]

@@ -16,4 +16,7 @@ pub enum Error {
 
     #[error("\"{0}\" parameter is missing")]
     Parameter(String),
+
+    #[error("{0}")]
+    Router(#[from] super::router::Error),
 }

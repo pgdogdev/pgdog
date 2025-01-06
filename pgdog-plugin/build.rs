@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 
 fn main() {
+    println!("cargo:rerun-if-changed=include/types.h");
+
     let bindings = bindgen::Builder::default()
         .header("include/wrapper.h")
         // Tell cargo to invalidate the built crate whenever any of the

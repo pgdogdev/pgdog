@@ -4,7 +4,7 @@ use bytes::{BufMut, BytesMut};
 use pin_project::pin_project;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufStream, ReadBuf};
 use tokio::net::TcpStream;
-use tracing::debug;
+use tracing::{debug, trace};
 
 use std::io::Error;
 use std::pin::Pin;
@@ -87,7 +87,7 @@ impl Stream {
     /// This is fast because the stream is buffered. Make sure to call [`Stream::send_flush`]
     /// for the last message in the exchange.
     pub async fn send(&mut self, message: impl Protocol) -> Result<usize, crate::net::Error> {
-        debug!("📡 <= {}", message.code());
+        trace!("📡 <= {}", message.code());
 
         let bytes = message.to_bytes()?;
         match self {
@@ -152,7 +152,7 @@ impl Stream {
 
         let message = Message::new(bytes.freeze());
 
-        debug!("📡 => {}", message.code());
+        trace!("📡 => {}", message.code());
 
         Ok(message)
     }

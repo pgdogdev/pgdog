@@ -1,6 +1,14 @@
 use crate::bindings::*;
 
 impl Route {
+    ///
+    pub fn unknown() -> Route {
+        Route {
+            shard: Shard_ANY,
+            affinity: Affinity_UNKNOWN,
+        }
+    }
+
     /// Is this a read?
     pub fn read(&self) -> bool {
         self.affinity == Affinity_READ
@@ -20,8 +28,12 @@ impl Route {
         }
     }
 
+    pub fn any_shard(&self) -> bool {
+        self.shard == Shard_ANY
+    }
+
     /// Query should go across all shards.
     pub fn cross_shard(&self) -> bool {
-        self.shard == -2
+        self.shard == Shard_ALL
     }
 }

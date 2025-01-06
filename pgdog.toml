@@ -1,0 +1,4 @@
+
+[general]
+
+plugins = ["pgdog_routing"]

@@ -43,4 +43,9 @@ impl<'a> Plugin<'a> {
     pub fn name(&self) -> &str {
         &self.name
     }
+
+    /// Check that we have the required methods.
+    pub fn valid(&self) -> bool {
+        self.route.is_some()
+    }
 }

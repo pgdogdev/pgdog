@@ -25,9 +25,13 @@ impl Shard {
         self.primary.get(id).await
     }
 
-    /// Get a connection to a shard replica.
+    /// Get a connection to a shard replica, if any.
     pub async fn replica(&self, id: &BackendKeyData) -> Result<Guard, Error> {
-        self.replicas.get(id).await
+        if self.replicas.is_empty() {
+            self.primary.get(id).await
+        } else {
+            self.replicas.get(id).await
+        }
     }
 
     /// Create new identical connection pool.

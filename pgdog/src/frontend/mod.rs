@@ -9,3 +9,4 @@ pub mod router;
 pub use buffer::Buffer;
 pub use client::Client;
 pub use error::Error;
+pub use router::Router;

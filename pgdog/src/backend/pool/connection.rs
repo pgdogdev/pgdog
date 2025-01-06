@@ -1,5 +1,6 @@
 //! Server connection.
 
+use pgdog_plugin::Route;
 use tokio::time::sleep;
 
 use crate::{
@@ -10,8 +11,9 @@ use crate::{
 
 use super::{
     super::{pool::Guard, Error},
-    Cluster,
+    Address, Cluster,
 };
+
 use std::time::Duration;
 
 /// Wrapper around a server connection.
@@ -48,13 +50,13 @@ impl Connection {
     }
 
     /// Create a server connection if one doesn't exist already.
-    pub async fn connect(&mut self, id: &BackendKeyData) -> Result<(), Error> {
+    pub async fn connect(&mut self, id: &BackendKeyData, route: &Route) -> Result<(), Error> {
         if self.server.is_none() && self.admin.is_none() {
-            match self.try_conn(id).await {
+            match self.try_conn(id, route).await {
                 Ok(()) => (),
                 Err(Error::Pool(super::Error::Offline)) => {
                     self.reload()?;
-                    return Ok(self.try_conn(id).await?);
+                    return Ok(self.try_conn(id, route).await?);
                 }
                 Err(err) => return Err(err.into()),
             }
@@ -63,8 +65,15 @@ impl Connection {
         Ok(())
     }
 
-    async fn try_conn(&mut self, id: &BackendKeyData) -> Result<(), Error> {
-        let server = self.cluster()?.primary(0, id).await?;
+    async fn try_conn(&mut self, id: &BackendKeyData, route: &Route) -> Result<(), Error> {
+        let shard = route.shard().unwrap_or(0);
+
+        let server = if route.read() {
+            self.cluster()?.replica(shard, id).await?
+        } else {
+            self.cluster()?.primary(shard, id).await?
+        };
+
         self.server = Some(server);
 
         Ok(())
@@ -75,7 +84,7 @@ impl Connection {
         if self.admin.is_some() {
             Ok(ParameterStatus::fake())
         } else {
-            self.connect(id).await?;
+            self.connect(id, &Route::unknown()).await?;
             let params = self
                 .server()?
                 .params()
@@ -131,6 +140,11 @@ impl Connection {
         } else {
             true
         }
+    }
+
+    /// Get connected server address.
+    pub fn addr(&mut self) -> Result<&Address, Error> {
+        Ok(self.server()?.addr())
     }
 
     #[inline]

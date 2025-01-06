@@ -28,6 +28,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let config = load()?;
 
+    plugin::load_from_config()?;
+
     let runtime = match config.general.workers {
         0 => {
             let mut binding = Builder::new_current_thread();

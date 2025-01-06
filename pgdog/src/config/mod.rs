@@ -22,8 +22,10 @@ pub fn config() -> Arc<Config> {
 /// Load the configuration file from disk.
 pub fn load() -> Result<Config, Error> {
     if let Ok(config) = read_to_string("pgdog.toml") {
-        info!("Loading pgdog.toml");
-        Ok(toml::from_str(&config)?)
+        let config: Config = toml::from_str(&config)?;
+        CONFIG.store(Arc::new(config.clone()));
+        info!("Loaded pgdog.toml");
+        Ok(config)
     } else {
         info!("Loading default configuration");
         Ok(Config::default())
@@ -52,6 +54,8 @@ pub struct General {
     pub port: u16,
     #[serde(default = "General::workers")]
     pub workers: usize,
+    #[serde(default)]
+    pub plugins: Vec<String>,
 }
 
 impl General {

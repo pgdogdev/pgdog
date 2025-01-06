@@ -1,4 +1,4 @@
-use crate::bindings;
+use crate::bindings::{self};
 
 use std::ffi::{c_char, CStr, CString, NulError};
 use std::marker::PhantomData;
@@ -12,7 +12,11 @@ pub struct Query<'a> {
     len: usize,
     /// Query string.
     query: *const c_char,
-    /// Lifetime marker.
+    /// Number of parameters if any.
+    num_values: usize,
+    values: *const bindings::Value,
+    /// Lifetime marker ensuring that the CString
+    /// from which this query is created is not deallocated too soon.
     _lifetime: PhantomData<&'a ()>,
 }
 
@@ -27,6 +31,8 @@ impl From<Query<'_>> for bindings::Query {
         Self {
             len: value.len as i32,
             query: value.query as *mut i8,
+            num_values: 0,
+            values: null(),
         }
     }
 }
@@ -36,6 +42,8 @@ impl From<bindings::Query> for Query<'_> {
         Self {
             len: value.len as usize,
             query: value.query as *const c_char,
+            num_values: 0,
+            values: null(),
             _lifetime: PhantomData,
         }
     }
@@ -53,6 +61,8 @@ impl<'a> Query<'a> {
         Self {
             len: query.as_bytes().len(),
             query: query.as_ptr() as *const c_char,
+            num_values: 0,
+            values: null(),
             _lifetime: PhantomData,
         }
     }
