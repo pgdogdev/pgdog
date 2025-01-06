@@ -73,9 +73,15 @@ impl Config {
     }
 
     /// Default config for a primary.
+    ///
+    /// The ban is ignored by the shard router
+    /// if the primary is used for writes.
+    ///
+    /// The ban is taken into account if the primary
+    /// is used for reads.
     pub fn default_primary() -> Self {
         Self {
-            bannable: false,
+            bannable: true,
             ..Default::default()
         }
     }

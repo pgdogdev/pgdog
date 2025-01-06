@@ -30,7 +30,7 @@ impl Shard {
         if self.replicas.is_empty() {
             self.primary.get(id).await
         } else {
-            self.replicas.get(id).await
+            self.replicas.get(id, &self.primary).await
         }
     }
 
