@@ -10,7 +10,7 @@ use std::io::Error;
 use std::pin::Pin;
 use std::task::Context;
 
-use super::messages::{FromBytes, Message, Protocol};
+use super::messages::{ErrorResponse, FromBytes, Message, Protocol, ReadyForQuery, Terminate};
 
 /// A network socket.
 #[pin_project(project = StreamProjection)]
@@ -166,6 +166,23 @@ impl Stream {
     pub async fn read_message<T: Protocol + FromBytes>(&mut self) -> Result<T, crate::net::Error> {
         let message = self.read().await?;
         T::from_bytes(message.payload())
+    }
+
+    /// Send an error to the client and disconnect gracefully.
+    pub async fn fatal(&mut self, error: ErrorResponse) -> Result<(), crate::net::Error> {
+        self.send(error).await?;
+        self.send_flush(Terminate).await?;
+
+        Ok(())
+    }
+
+    /// Send an error to the client and let them know we are ready
+    /// for more queries.
+    pub async fn error(&mut self, error: ErrorResponse) -> Result<(), crate::net::Error> {
+        self.send(error).await?;
+        self.send_flush(ReadyForQuery::idle()).await?;
+
+        Ok(())
     }
 
     /// Get the wrapped TCP stream back.

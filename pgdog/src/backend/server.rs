@@ -198,7 +198,10 @@ impl Server {
                     self.last_used_at = Instant::now();
                 }
                 'T' => self.state = State::IdleInTransaction,
-                'E' => self.state = State::TransactionError,
+                'E' => {
+                    self.state = State::TransactionError;
+                    self.stats.transactions += 1;
+                }
                 status => {
                     self.state = State::Error;
                     return Err(Error::UnexpectedTransactionStatus(status));

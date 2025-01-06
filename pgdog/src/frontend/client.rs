@@ -6,7 +6,7 @@ use tracing::{debug, error};
 use super::{Buffer, Error, Router};
 use crate::backend::pool::Connection;
 use crate::net::messages::{
-    Authentication, BackendKeyData, ErrorResponse, Protocol, ReadyForQuery, Terminate,
+    Authentication, BackendKeyData, ErrorResponse, Protocol, ReadyForQuery,
 };
 use crate::net::{parameter::Parameters, Stream};
 use crate::state::State;
@@ -37,7 +37,8 @@ impl Client {
             let mut conn = match Connection::new(user, database, admin) {
                 Ok(conn) => conn,
                 Err(_) => {
-                    return Self::auth_error(stream, user, database).await;
+                    stream.fatal(ErrorResponse::auth(user, database)).await?;
+                    return Self::disconnected(stream);
                 }
             };
 
@@ -48,8 +49,8 @@ impl Client {
                 Err(err) => {
                     if err.checkout_timeout() {
                         error!("connection pool is down");
-                        stream.send(ErrorResponse::connection()).await?;
-                        return Self::disconnect(stream).await;
+                        stream.fatal(ErrorResponse::connection()).await?;
+                        return Self::disconnected(stream);
                     } else {
                         return Err(err.into());
                     }
@@ -73,9 +74,8 @@ impl Client {
         })
     }
 
-    async fn disconnect(mut stream: Stream) -> Result<Self, Error> {
-        stream.send_flush(Terminate).await?;
-
+    /// Disconnect user gracefully.
+    fn disconnected(stream: Stream) -> Result<Self, Error> {
         Ok(Self {
             stream,
             state: State::Disconnected,
@@ -83,11 +83,6 @@ impl Client {
             params: Parameters::default(),
             stats: ConnStats::default(),
         })
-    }
-
-    async fn auth_error(mut stream: Stream, user: &str, database: &str) -> Result<Self, Error> {
-        stream.send(ErrorResponse::auth(user, database)).await?;
-        Self::disconnect(stream).await
     }
 
     /// Get client's identifier.
@@ -117,27 +112,27 @@ impl Client {
                     flush = buffer.flush();
 
                     if !backend.connected() {
+                        // Figure out where the query should go.
                         router.query(&buffer)?;
 
+                        // Grab a connection from the right pool.
                         self.state = State::Waiting;
-
                         match backend.connect(&self.id, router.route()).await {
                             Ok(()) => (),
                             Err(err) => if err.checkout_timeout() {
                                 error!("connection pool is down");
-                                self.stream.send(ErrorResponse::connection()).await?;
-                                self.stream.send_flush(ReadyForQuery::idle()).await?;
+                                self.stream.error(ErrorResponse::connection()).await?;
+                                self.state = State::Idle;
                                 continue;
                             } else {
                                 return Err(err.into());
                             }
                         };
-
                         self.state = State::Active;
-
                         debug!("client paired with {}", backend.addr()?);
                     }
 
+                    // Send query to server.
                     backend.send(buffer.into()).await?;
                 }
 
