@@ -1,11 +1,13 @@
 //! Frontend client.
 
 use tokio::select;
-use tracing::debug;
+use tracing::{debug, error};
 
 use super::{Buffer, Error, Router};
 use crate::backend::pool::Connection;
-use crate::net::messages::{Authentication, BackendKeyData, Protocol, ReadyForQuery};
+use crate::net::messages::{
+    Authentication, BackendKeyData, ErrorResponse, Protocol, ReadyForQuery, Terminate,
+};
 use crate::net::{parameter::Parameters, Stream};
 use crate::state::State;
 use crate::stats::ConnStats;
@@ -24,18 +26,37 @@ impl Client {
     /// Create new frontend client from the given TCP stream.
     pub async fn new(mut stream: Stream, params: Parameters) -> Result<Self, Error> {
         // TODO: perform authentication.
-        let user = params.get_required("user")?;
+        let user = params.get_default("user", "postgres");
         let database = params.get_default("database", user);
         let admin = database == "admin";
-
-        stream.send(Authentication::Ok).await?;
 
         let id = BackendKeyData::new();
 
         // Get server parameters and send them to the client.
         {
-            let mut conn = Connection::new(user, database, admin)?;
-            for param in conn.parameters(&id).await? {
+            let mut conn = match Connection::new(user, database, admin) {
+                Ok(conn) => conn,
+                Err(_) => {
+                    return Self::auth_error(stream, user, database).await;
+                }
+            };
+
+            stream.send(Authentication::Ok).await?;
+
+            let params = match conn.parameters(&id).await {
+                Ok(params) => params,
+                Err(err) => {
+                    if err.checkout_timeout() {
+                        error!("connection pool is down");
+                        stream.send(ErrorResponse::connection()).await?;
+                        return Self::disconnect(stream).await;
+                    } else {
+                        return Err(err.into());
+                    }
+                }
+            };
+
+            for param in params {
                 stream.send(param).await?;
             }
         }
@@ -50,6 +71,23 @@ impl Client {
             params,
             stats: ConnStats::default(),
         })
+    }
+
+    async fn disconnect(mut stream: Stream) -> Result<Self, Error> {
+        stream.send_flush(Terminate).await?;
+
+        Ok(Self {
+            stream,
+            state: State::Disconnected,
+            id: BackendKeyData::default(),
+            params: Parameters::default(),
+            stats: ConnStats::default(),
+        })
+    }
+
+    async fn auth_error(mut stream: Stream, user: &str, database: &str) -> Result<Self, Error> {
+        stream.send(ErrorResponse::auth(user, database)).await?;
+        Self::disconnect(stream).await
     }
 
     /// Get client's identifier.
@@ -82,7 +120,19 @@ impl Client {
                         router.query(&buffer)?;
 
                         self.state = State::Waiting;
-                        backend.connect(&self.id, router.route()).await?;
+
+                        match backend.connect(&self.id, router.route()).await {
+                            Ok(()) => (),
+                            Err(err) => if err.checkout_timeout() {
+                                error!("connection pool is down");
+                                self.stream.send(ErrorResponse::connection()).await?;
+                                self.stream.send_flush(ReadyForQuery::idle()).await?;
+                                continue;
+                            } else {
+                                return Err(err.into());
+                            }
+                        };
+
                         self.state = State::Active;
 
                         debug!("client paired with {}", backend.addr()?);

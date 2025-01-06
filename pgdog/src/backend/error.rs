@@ -45,3 +45,13 @@ pub enum Error {
     #[error("no cluster connected")]
     NoCluster,
 }
+
+impl Error {
+    /// Checkout timeout.
+    pub fn checkout_timeout(&self) -> bool {
+        match self {
+            Error::Pool(crate::backend::pool::Error::CheckoutTimeout) => true,
+            _ => false,
+        }
+    }
+}

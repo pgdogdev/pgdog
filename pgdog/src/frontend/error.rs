@@ -19,4 +19,20 @@ pub enum Error {
 
     #[error("{0}")]
     Router(#[from] super::router::Error),
+
+    #[error("authentication error")]
+    Auth,
+}
+
+impl Error {
+    /// Checkout timeout.
+    pub fn checkout_timeout(&self) -> bool {
+        use crate::backend::pool::Error as PoolError;
+        use crate::backend::Error as BackendError;
+
+        match self {
+            &Error::Backend(BackendError::Pool(PoolError::CheckoutTimeout)) => true,
+            _ => false,
+        }
+    }
 }

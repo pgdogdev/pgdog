@@ -5,12 +5,38 @@ use crate::net::{c_string_buf, messages::code};
 
 use super::prelude::*;
 
+/// ErrorResponse (B) message.
 #[derive(Debug, Default)]
 pub struct ErrorResponse {
     severity: String,
     code: String,
     message: String,
     detail: Option<String>,
+}
+
+impl ErrorResponse {
+    /// Authentication error.
+    pub fn auth(user: &str, database: &str) -> ErrorResponse {
+        ErrorResponse {
+            severity: "FATAL".into(),
+            code: "28000".into(),
+            message: format!(
+                "password for user \"{}\" and database \"{}\" is wrong, or the database does not exist",
+                user, database
+            ),
+            detail: None,
+        }
+    }
+
+    /// Connection error.
+    pub fn connection() -> ErrorResponse {
+        ErrorResponse {
+            severity: "ERROR".into(),
+            code: "58000".into(),
+            message: "connection pool is down".into(),
+            detail: None,
+        }
+    }
 }
 
 impl Display for ErrorResponse {
@@ -60,6 +86,8 @@ impl ToBytes for ErrorResponse {
             payload.put_u8(b'D');
             payload.put_string(detail);
         }
+
+        payload.put_u8(0);
 
         Ok(payload.freeze())
     }

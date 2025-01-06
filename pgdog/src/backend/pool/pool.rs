@@ -128,10 +128,6 @@ impl Pool {
             let (checkout_timeout, healthcheck_timeout, healthcheck_interval, server) = {
                 let mut guard = self.lock();
 
-                if guard.banned() {
-                    return Err(Error::Banned);
-                }
-
                 if !guard.online {
                     return Err(Error::Offline);
                 }
