@@ -5,6 +5,10 @@
 #include <stdlib.h>
 #include "../../pgdog-plugin/include/plugin.h"
 
+void pgdog_init() {
+    printf("pgDog routing in C initialized\n");
+}
+
 Route pgdog_route_query(Query query) {
     Route route;
     char *lowercase = strdup(query.query);
@@ -20,9 +24,6 @@ Route pgdog_route_query(Query query) {
     }
 
     free(lowercase);
-
-    // Row row = pgdog_row_new(5);
-    // pgdog_row_free(row);
 
     route.shard = -1;
 

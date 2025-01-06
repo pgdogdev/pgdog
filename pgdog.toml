@@ -1,4 +1,18 @@
-
+#
+# Example pgdog.toml configuration file.
+#
 [general]
+host = "0.0.0.0"
+port = 6432
 
-plugins = ["pgdog_routing"]
+[[databases]]
+name = "pgdog"
+role = "primary"
+host = "127.0.0.1"
+port = 5432
+database_name = "pgdog"
+
+
+[[plugins]]
+name = "pgdog_routing"
+

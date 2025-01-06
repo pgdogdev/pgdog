@@ -36,4 +36,9 @@ impl Route {
     pub fn cross_shard(&self) -> bool {
         self.shard == Shard_ALL
     }
+
+    /// The plugin has no idea where to route this query.
+    pub fn is_unknown(&self) -> bool {
+        self.shard == Shard_ANY && self.affinity == Affinity_UNKNOWN
+    }
 }

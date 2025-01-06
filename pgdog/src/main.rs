@@ -1,7 +1,6 @@
 //! pgDog, modern PostgreSQL proxy, pooler and query router.
 
-use backend::databases::databases;
-use config::load;
+use backend::databases;
 use frontend::listener::Listener;
 use tokio::runtime::Builder;
 use tracing::info;
@@ -26,11 +25,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("🐕 pgDog {}", env!("CARGO_PKG_VERSION"));
 
-    let config = load()?;
+    let config = config::load()?;
 
     plugin::load_from_config()?;
 
-    let runtime = match config.general.workers {
+    let runtime = match config.config.general.workers {
         0 => {
             let mut binding = Builder::new_current_thread();
             binding.enable_all();
@@ -55,7 +54,8 @@ async fn pgdog() -> Result<(), Box<dyn std::error::Error>> {
     net::tls::load()?;
 
     // Load databases and connect if needed.
-    databases();
+    let config = config::config();
+    databases::from_config(&config);
 
     let mut listener = Listener::new("0.0.0.0:6432");
     listener.listen().await?;

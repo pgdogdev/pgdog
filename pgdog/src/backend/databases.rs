@@ -6,7 +6,10 @@ use std::sync::Arc;
 use arc_swap::ArcSwap;
 use once_cell::sync::Lazy;
 
-use crate::net::messages::BackendKeyData;
+use crate::{
+    config::{ConfigAndUsers, Role},
+    net::messages::BackendKeyData,
+};
 
 use super::{pool::Address, Cluster, Error};
 
@@ -78,28 +81,7 @@ pub struct Databases {
 impl Default for Databases {
     fn default() -> Self {
         Databases {
-            databases: HashMap::from([(
-                User {
-                    user: "pgdog".into(),
-                    database: "pgdog".into(),
-                },
-                Cluster::new(&[(
-                    &Address {
-                        host: "127.0.0.1".into(),
-                        port: 5432,
-                    },
-                    &[
-                        // &Address {
-                            // host: "127.0.0.1".into(),
-                            // port: 5433,
-                        // },
-                        // &Address {
-                            // host: "127.0.0.1".into(),
-                            // port: 5434,
-                        // },
-                    ],
-                )]),
-            )]),
+            databases: HashMap::new(),
         }
     }
 }
@@ -150,4 +132,39 @@ impl Databases {
             }
         }
     }
+}
+
+/// Load databases from config.
+pub fn from_config(config: &ConfigAndUsers) -> Arc<Databases> {
+    let mut databases = HashMap::new();
+    let config_databases = config.config.databases();
+
+    for user in &config.users.users {
+        if let Some(user_databases) = config_databases.get(&user.database) {
+            let primary = user_databases
+                .iter()
+                .find(|d| d.role == Role::Primary)
+                .map(|primary| Address::new(primary, user));
+            let replicas = user_databases
+                .iter()
+                .filter(|d| d.role == Role::Replica)
+                .map(|replica| Address::new(replica, user))
+                .collect::<Vec<_>>();
+            let replicas_ref = replicas.iter().map(|replica| replica).collect::<Vec<_>>();
+
+            databases.insert(
+                User {
+                    user: user.name.clone(),
+                    database: user.database.clone(),
+                },
+                Cluster::new(&[(primary.map(|primary| primary).as_ref(), &replicas_ref)]),
+            );
+        }
+    }
+
+    let databases = Arc::new(Databases { databases });
+
+    DATABASES.store(databases.clone());
+
+    databases
 }

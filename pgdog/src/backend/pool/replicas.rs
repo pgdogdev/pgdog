@@ -30,7 +30,7 @@ impl Replicas {
     }
 
     /// Get a live connection from the pool.
-    pub async fn get(&self, id: &BackendKeyData, primary: &Pool) -> Result<Guard, Error> {
+    pub async fn get(&self, id: &BackendKeyData, primary: &Option<Pool>) -> Result<Guard, Error> {
         match timeout(
             self.checkout_timeout * self.pools.len() as u32,
             self.get_internal(id, primary),
@@ -74,14 +74,20 @@ impl Replicas {
         &self.pools
     }
 
-    async fn get_internal(&self, id: &BackendKeyData, primary: &Pool) -> Result<Guard, Error> {
+    async fn get_internal(
+        &self,
+        id: &BackendKeyData,
+        primary: &Option<Pool>,
+    ) -> Result<Guard, Error> {
         let mut candidates = self
             .pools
             .iter()
             .filter(|pool| pool.available())
             .collect::<Vec<_>>();
 
-        candidates.push(primary);
+        if let Some(primary) = primary {
+            candidates.push(primary);
+        }
         candidates.shuffle(&mut rand::thread_rng());
 
         let mut banned = 0;

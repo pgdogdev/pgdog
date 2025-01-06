@@ -7,14 +7,14 @@ use super::{Address, Config, Error, Guard, Pool, Replicas};
 /// Primary and replicas.
 #[derive(Clone)]
 pub struct Shard {
-    primary: Pool,
+    primary: Option<Pool>,
     replicas: Replicas,
 }
 
 impl Shard {
     /// Create new shard connection pool.
-    pub fn new(primary: &Address, replicas: &[&Address]) -> Self {
-        let primary = Pool::new(primary, Config::default_primary());
+    pub fn new(primary: Option<&Address>, replicas: &[&Address]) -> Self {
+        let primary = primary.map(|primary| Pool::new(primary, Config::default_primary()));
         let replicas = Replicas::new(replicas);
 
         Self { primary, replicas }
@@ -22,13 +22,17 @@ impl Shard {
 
     /// Get a connection to the shard primary database.
     pub async fn primary(&self, id: &BackendKeyData) -> Result<Guard, Error> {
-        self.primary.get(id).await
+        self.primary.as_ref().ok_or(Error::NoPrimary)?.get(id).await
     }
 
     /// Get a connection to a shard replica, if any.
     pub async fn replica(&self, id: &BackendKeyData) -> Result<Guard, Error> {
         if self.replicas.is_empty() {
-            self.primary.get(id).await
+            self.primary
+                .as_ref()
+                .ok_or(Error::NoDatabases)?
+                .get(id)
+                .await
         } else {
             self.replicas.get(id, &self.primary).await
         }
@@ -37,14 +41,16 @@ impl Shard {
     /// Create new identical connection pool.
     pub fn duplicate(&self) -> Self {
         Self {
-            primary: self.primary.duplicate(),
+            primary: self.primary.as_ref().map(|primary| primary.duplicate()),
             replicas: self.replicas.duplicate(),
         }
     }
 
     /// Cancel a query if one is running.
     pub async fn cancel(&self, id: &BackendKeyData) -> Result<(), super::super::Error> {
-        self.primary.cancel(id).await?;
+        if let Some(ref primary) = self.primary {
+            primary.cancel(id).await?;
+        }
         self.replicas.cancel(id).await?;
 
         Ok(())
@@ -52,7 +58,10 @@ impl Shard {
 
     /// Get all pools. Used for administrative tasks.
     pub fn pools(&self) -> Vec<Pool> {
-        let mut pools = vec![self.primary.clone()];
+        let mut pools = vec![];
+        if let Some(primary) = self.primary.clone() {
+            pools.push(primary);
+        }
         pools.extend(self.replicas.pools().to_vec());
 
         pools

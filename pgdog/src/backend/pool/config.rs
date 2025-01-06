@@ -4,6 +4,8 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+use crate::config::{Database, User};
+
 /// Pool configuration.
 #[derive(Debug, Serialize, Deserialize, Clone, Copy)]
 pub struct Config {
@@ -29,6 +31,12 @@ pub struct Config {
     pub idle_healthcheck_interval: u64, // ms
     /// Idle healthcheck delay.
     pub idle_healthcheck_delay: u64, // ms
+    /// Read timeout (dangerous).
+    pub read_timeout: u64, // ms
+    /// Write timeout (dangerous).
+    pub write_timeout: u64, // ms
+    /// Query timeout (dangerous).
+    pub query_timeout: u64, // ms
 }
 
 impl Config {
@@ -85,6 +93,11 @@ impl Config {
             ..Default::default()
         }
     }
+
+    /// Create from database/user configuration.
+    pub fn new(database: &Database, user: &User) -> Self {
+        todo!()
+    }
 }
 
 impl Default for Config {
@@ -101,6 +114,9 @@ impl Default for Config {
             healthcheck_interval: 30_000,
             idle_healthcheck_interval: 5_000,
             idle_healthcheck_delay: 5_000,
+            read_timeout: Duration::MAX.as_millis() as u64,
+            write_timeout: Duration::MAX.as_millis() as u64,
+            query_timeout: Duration::MAX.as_millis() as u64,
         }
     }
 }

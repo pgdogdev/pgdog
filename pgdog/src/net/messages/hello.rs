@@ -76,16 +76,16 @@ impl Startup {
     }
 
     /// Create new startup message from config.
-    pub fn new() -> Self {
+    pub fn new(user: &str, database: &str) -> Self {
         Self::Startup {
             params: vec![
                 Parameter {
                     name: "user".into(),
-                    value: "pgdog".into(),
+                    value: user.into(),
                 },
                 Parameter {
                     name: "database".into(),
-                    value: "pgdog".into(),
+                    value: database.into(),
                 },
             ]
             .into(),

@@ -7,7 +7,7 @@
 ## Getting started
 
 pgDog is easily compiled from source. Before proceeding, make sure you have the latest version of the Rust
-programming language compiler, available from [rust-lang.org](https://rust-lang.org).
+compiler, available from [rust-lang.org](https://rust-lang.org).
 
 ### Checkout the code
 
@@ -37,7 +37,7 @@ The passwords are stored in a separate file to simplify deployments in environme
 secrets can be safely encrypted, like Kubernetes or AWS EC2.
 
 Both files need to be placed in the current working directory (CWD) for pgDog to detect them. Alternatively,
-you can pass the `--config` and `--secrets` arguments when starting the pooler.
+you can pass the `--config` and `--secrets` arguments with their locations when starting the pooler.
 
 #### Example `pgdog.toml`
 
@@ -47,15 +47,15 @@ Most pgDog configuration options have sensible defaults. This allows a basic pri
 [general]
 host = "0.0.0.0"
 port = 6432
-
-[databases]
 default_pool_size = 10
-pooler_mode = transaction
+pooler_mode = "transaction"
 
-[databases.production.primary]
+[[databases]]
+name = "production"
+role = "primary"
 host = "127.0.0.1"
 port = 5432
-database_name = "postgres"
+database_name = "postgres" 
 ```
 
 #### Example `users.toml`
@@ -64,7 +64,9 @@ This configuration file contains a mapping between databases, users and password
 won't be able to connect to the pooler.
 
 ```toml
-[production.alice]
+[[users]]
+name = "alice"
+database = "production"
 password = "hunter2"
 ```
 
@@ -91,6 +93,6 @@ Starting the pooler can be done by executing the binary or with Cargo:
 ## Next steps
 
 * [Features](features/index.md)
-* [Architecture](architecture/index.md)
-* [Configuration](configuration/index.md)
+* [Architecture](arch/index.md)
+* [Configuration](config/index.md)
 

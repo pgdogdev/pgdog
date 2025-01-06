@@ -29,4 +29,10 @@ pub enum Error {
 
     #[error("pool is shut down")]
     Offline,
+
+    #[error("no primary")]
+    NoPrimary,
+
+    #[error("no databases")]
+    NoDatabases,
 }

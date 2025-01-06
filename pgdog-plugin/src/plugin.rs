@@ -6,6 +6,9 @@ use libloading::{library_filename, Library, Symbol};
 #[derive(Debug)]
 pub struct Plugin<'a> {
     name: String,
+    /// Initialization routine.
+    init: Option<Symbol<'a, unsafe extern "C" fn()>>,
+    /// Route query to a shard.
     route: Option<Symbol<'a, unsafe extern "C" fn(bindings::Query) -> Route>>,
 }
 
@@ -24,9 +27,16 @@ impl<'a> Plugin<'a> {
             None
         };
 
+        let init = if let Ok(init) = unsafe { library.get(b"pgdog_init\0") } {
+            Some(init)
+        } else {
+            None
+        };
+
         Self {
             name: name.to_owned(),
             route,
+            init,
         }
     }
 
@@ -36,6 +46,18 @@ impl<'a> Plugin<'a> {
             unsafe { Some(route(query.into())) }
         } else {
             None
+        }
+    }
+
+    /// Perform initialization.
+    pub fn init(&self) -> bool {
+        if let Some(init) = &self.init {
+            unsafe {
+                init();
+            }
+            true
+        } else {
+            false
         }
     }
 

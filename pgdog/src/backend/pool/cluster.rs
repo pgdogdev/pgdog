@@ -13,7 +13,7 @@ pub struct Cluster {
 
 impl Cluster {
     /// Create new cluster of shards.
-    pub fn new(shards: &[(&Address, &[&Address])]) -> Self {
+    pub fn new(shards: &[(Option<&Address>, &[&Address])]) -> Self {
         Self {
             shards: shards
                 .iter()

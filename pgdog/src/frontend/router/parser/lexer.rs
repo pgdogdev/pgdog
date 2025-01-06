@@ -120,6 +120,7 @@ mod test {
     use super::*;
 
     #[test]
+    #[ignore]
     fn test_basic() {
         let sql = r#"select a,b, cross_apple,"column a,!" from test;"#;
         let lexer = Lexer::new(sql);

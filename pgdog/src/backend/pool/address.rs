@@ -2,13 +2,42 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::config::{Database, User};
+
 /// Server address.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Address {
     /// Server host.
     pub host: String,
     /// Server port.
     pub port: u16,
+    /// PostgreSQL database name.
+    pub database_name: String,
+    /// Username.
+    pub user: String,
+    /// Password.
+    pub password: String,
+}
+
+impl Address {
+    /// Create new address from config values.
+    pub fn new(database: &Database, user: &User) -> Self {
+        Address {
+            host: database.host.clone(),
+            port: database.port,
+            database_name: database.name.clone(),
+            user: if let Some(user) = database.user.clone() {
+                user
+            } else {
+                user.name.clone()
+            },
+            password: if let Some(password) = database.password.clone() {
+                password
+            } else {
+                user.password.clone()
+            },
+        }
+    }
 }
 
 impl std::fmt::Display for Address {

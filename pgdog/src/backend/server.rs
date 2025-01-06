@@ -65,7 +65,9 @@ impl Server {
             stream = Stream::tls(cipher);
         }
 
-        stream.write_all(&Startup::new().to_bytes()?).await?;
+        stream
+            .write_all(&Startup::new(&addr.user, &addr.database_name).to_bytes()?)
+            .await?;
         stream.flush().await?;
 
         // Perform authentication.
@@ -117,7 +119,7 @@ impl Server {
 
         let id = key_data.ok_or(Error::NoBackendKeyData)?;
 
-        info!("new server connection [{}]", addr);
+        info!("New server connection [{}]", addr);
 
         Ok(Server {
             addr: addr.clone(),

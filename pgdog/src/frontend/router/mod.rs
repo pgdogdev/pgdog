@@ -27,6 +27,11 @@ impl Router {
     }
 
     /// Route a query to a shard.
+    ///
+    /// If the router can't determine the route for the query to take,
+    /// previous route is preserved. This is useful in case the client
+    /// doesn't supply enough information in the buffer, e.g. just issued
+    /// a Describe request to a previously submitted Parse.
     pub fn query(&mut self, buffer: &Buffer) -> Result<Route, Error> {
         let query = buffer
             .query()
@@ -39,6 +44,10 @@ impl Router {
             match plugin.route(query.query()) {
                 None => continue,
                 Some(route) => {
+                    if route.is_unknown() {
+                        continue;
+                    }
+
                     self.route = route;
 
                     debug!(
@@ -54,7 +63,7 @@ impl Router {
             }
         }
 
-        Ok(Route::unknown())
+        Ok(self.route)
     }
 
     /// Get current route.
