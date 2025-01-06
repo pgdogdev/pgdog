@@ -7,8 +7,28 @@
  * implements it, the query router will use its decision
  * to route the query.
  *
+ * ## Thread safety
+ *
+ * This function is not synchronized and can be called
+ * for multiple queries at a time. If accessing global state,
+ * make sure to protect access with a mutex.
+ *
+ * ## Performance
+ *
+ * This function is called for every transaction. It's a hot path,
+ * so make sure to optimize for performance in the implementation.
+ *
 */
 Route pgdog_route_query(Query query);
+
+/*
+ * Perform initialization at plugin loading time.
+ *
+ * Executed only once and execution is synchronized,
+ * so it's safe to initialize sychroniziation primitives
+ * like mutexes in this method.
+ */
+void pgdog_init();
 
 /* Create new row.
 *

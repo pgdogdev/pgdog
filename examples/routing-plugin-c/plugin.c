@@ -11,6 +11,8 @@ void pgdog_init() {
 
 Route pgdog_route_query(Query query) {
     Route route;
+    route.shard = ANY; /* No sharding */
+
     char *lowercase = strdup(query.query);
 
     for (int i = 0; i < strlen(lowercase); i++) {
