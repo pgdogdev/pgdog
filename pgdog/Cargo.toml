@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 description = "Modern PostgreSQL proxy and pooler."
 authors = ["Lev Kokotov <lev.kokotov@gmail.com>"]
+license = "AGPL-3.0"
 
 [dependencies]
 pin-project = "1"
