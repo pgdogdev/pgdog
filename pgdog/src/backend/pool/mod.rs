@@ -16,7 +16,7 @@ pub mod shard;
 pub mod stats;
 
 pub use address::Address;
-pub use cluster::Cluster;
+pub use cluster::{Cluster, DatabaseConfig};
 pub use config::Config;
 pub use connection::Connection;
 pub use error::Error;

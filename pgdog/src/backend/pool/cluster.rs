@@ -2,7 +2,16 @@
 
 use crate::net::messages::BackendKeyData;
 
-use super::{Address, Error, Guard, Shard};
+use super::{Address, Config, Error, Guard, Shard};
+
+#[derive(Clone, Debug)]
+/// Database configuration.
+pub struct DatabaseConfig {
+    /// Database address.
+    pub(crate) address: Address,
+    /// Pool settings.
+    pub(crate) config: Config,
+}
 
 /// A collection of sharded replicas and primaries
 /// belonging to the same database cluster.
@@ -13,11 +22,11 @@ pub struct Cluster {
 
 impl Cluster {
     /// Create new cluster of shards.
-    pub fn new(shards: &[(Option<&Address>, &[&Address])]) -> Self {
+    pub fn new(shards: &[(Option<DatabaseConfig>, &[DatabaseConfig])]) -> Self {
         Self {
             shards: shards
                 .iter()
-                .map(|addr| Shard::new(addr.0, addr.1))
+                .map(|addr| Shard::new(addr.0.clone(), addr.1))
                 .collect(),
         }
     }

@@ -8,7 +8,7 @@ use tracing::error;
 
 use crate::net::messages::BackendKeyData;
 
-use super::{Address, Config, Error, Guard, Pool};
+use super::{Address, Config, DatabaseConfig, Error, Guard, Pool};
 
 /// Replicas pools.
 #[derive(Clone)]
@@ -19,12 +19,9 @@ pub struct Replicas {
 
 impl Replicas {
     /// Create new replicas pools.
-    pub fn new(addrs: &[&Address]) -> Replicas {
+    pub fn new(addrs: &[DatabaseConfig]) -> Replicas {
         Self {
-            pools: addrs
-                .iter()
-                .map(|p| Pool::new(p, Config::default()))
-                .collect(),
+            pools: addrs.iter().map(|p| Pool::new(p.clone())).collect(),
             checkout_timeout: Duration::from_millis(5_000),
         }
     }

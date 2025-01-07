@@ -23,6 +23,8 @@ pub(super) struct Inner {
     pub(super) online: bool,
     /// Pool is paused.
     pub(super) paused: bool,
+    /// Connections being created.
+    pub(super) creating: usize,
 }
 
 impl Inner {
@@ -77,7 +79,7 @@ impl Inner {
     /// connection requirement.
     #[inline]
     pub(super) fn should_create(&self) -> bool {
-        self.total() < self.min()
+        self.total() + self.creating < self.min()
     }
 
     /// Check if the pool ban should be removed.
@@ -207,5 +209,22 @@ impl Inner {
     #[inline]
     pub fn banned(&self) -> bool {
         self.ban.is_some()
+    }
+
+    /// Consume a create permit if there is one.
+    #[inline]
+    pub fn create_permit(&mut self) -> bool {
+        if self.creating > 0 {
+            self.creating -= 1;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Create a create permit.
+    #[inline]
+    pub fn create(&mut self) {
+        self.creating += 1;
     }
 }

@@ -7,11 +7,15 @@ use arc_swap::ArcSwap;
 use once_cell::sync::Lazy;
 
 use crate::{
+    backend::pool::DatabaseConfig,
     config::{ConfigAndUsers, Role},
     net::messages::BackendKeyData,
 };
 
-use super::{pool::Address, Cluster, Error};
+use super::{
+    pool::{Address, Config},
+    Cluster, Error,
+};
 
 static DATABASES: Lazy<ArcSwap<Databases>> =
     Lazy::new(|| ArcSwap::from_pointee(Databases::default()));
@@ -144,20 +148,25 @@ pub fn from_config(config: &ConfigAndUsers) -> Arc<Databases> {
             let primary = user_databases
                 .iter()
                 .find(|d| d.role == Role::Primary)
-                .map(|primary| Address::new(primary, user));
+                .map(|primary| DatabaseConfig {
+                    address: Address::new(&config.config.general, primary, user),
+                    config: Config::new(&config.config.general, primary, user),
+                });
             let replicas = user_databases
                 .iter()
                 .filter(|d| d.role == Role::Replica)
-                .map(|replica| Address::new(replica, user))
+                .map(|replica| DatabaseConfig {
+                    address: Address::new(&config.config.general, replica, user),
+                    config: Config::new(&config.config.general, replica, user),
+                })
                 .collect::<Vec<_>>();
-            let replicas_ref = replicas.iter().map(|replica| replica).collect::<Vec<_>>();
 
             databases.insert(
                 User {
                     user: user.name.clone(),
                     database: user.database.clone(),
                 },
-                Cluster::new(&[(primary.map(|primary| primary).as_ref(), &replicas_ref)]),
+                Cluster::new(&[(primary.map(|primary| primary), &replicas)]),
             );
         }
     }

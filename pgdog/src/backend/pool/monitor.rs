@@ -53,8 +53,9 @@ impl Monitor {
                         paused,
                         banned,
                         online,
+                        create_permit,
                     ) = {
-                        let guard = self.pool.lock();
+                        let mut guard = self.pool.lock();
 
                         (
                             guard.empty(),
@@ -63,6 +64,7 @@ impl Monitor {
                             guard.paused,
                             guard.banned(),
                             guard.online,
+                            guard.create_permit(),
                         )
                     };
 
@@ -75,10 +77,10 @@ impl Monitor {
                         continue;
                     }
 
-                    // An idle connection is available.
-                    if !empty {
+                    // An idle connection is available and we don't have a create permit.
+                    if !empty && !create_permit {
                         comms.ready.notify_one();
-                    } else if can_create && !banned {
+                    } else if can_create && !banned || create_permit {
                         // No idle connections, but we are allowed to create a new one.
                         let ok = self.replenish(connect_timeout).await;
 
@@ -166,6 +168,10 @@ impl Monitor {
                         break;
                     }
 
+                    if guard.paused {
+                        continue;
+                    }
+
                     guard.close_idle(now);
                     guard.close_old(now);
                     let unbanned = guard.check_ban(now);
@@ -177,6 +183,7 @@ impl Monitor {
                     }
 
                     if guard.should_create() {
+                        guard.create();
                         comms.request.notify_one();
                     }
 

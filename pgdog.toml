@@ -4,6 +4,7 @@
 [general]
 host = "0.0.0.0"
 port = 6432
+min_pool_size = 1
 
 [[databases]]
 name = "pgdog"

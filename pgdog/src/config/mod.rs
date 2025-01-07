@@ -112,6 +112,15 @@ pub struct General {
     /// Pooler mode, e.g. transaction.
     #[serde(default)]
     pub pooler_mode: PoolerMode,
+    /// How often to check a connection.
+    #[serde(default = "General::healthcheck_interval")]
+    pub healthcheck_interval: u64,
+    /// How often to issue a healthcheck via an idle connection.
+    #[serde(default = "General::idle_healthcheck_interval")]
+    pub idle_healthcheck_interval: u64,
+    /// Delay idle healthchecks by this time at startup.
+    #[serde(default = "General::idle_healthcheck_delay")]
+    pub idle_healthcheck_delay: u64,
 }
 
 impl General {
@@ -133,6 +142,18 @@ impl General {
 
     fn min_pool_size() -> usize {
         1
+    }
+
+    fn healthcheck_interval() -> u64 {
+        30_000
+    }
+
+    fn idle_healthcheck_interval() -> u64 {
+        30_000
+    }
+
+    fn idle_healthcheck_delay() -> u64 {
+        5_000
     }
 }
 
@@ -190,8 +211,8 @@ impl Database {
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum Role {
-    Primary,
     #[default]
+    Primary,
     Replica,
 }
 
@@ -233,18 +254,13 @@ pub struct User {
     pub database: String,
     /// User's password.
     pub password: String,
-    /// Pool size.
-    #[serde(default = "User::pool_size")]
-    pub pool_size: usize,
+    /// Pool size for this user pool, overriding `default_pool_size`.
+    pub pool_size: Option<usize>,
     /// Pooler mode.
     pub pooler_mode: Option<PoolerMode>,
 }
 
-impl User {
-    fn pool_size() -> usize {
-        10
-    }
-}
+impl User {}
 
 #[cfg(test)]
 mod test {

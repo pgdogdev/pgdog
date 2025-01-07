@@ -4,10 +4,10 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::config::{Database, User};
+use crate::config::{Database, General, User};
 
 /// Pool configuration.
-#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq)]
 pub struct Config {
     /// Minimum connections that should be in the pool.
     pub min: usize,
@@ -95,8 +95,15 @@ impl Config {
     }
 
     /// Create from database/user configuration.
-    pub fn new(database: &Database, user: &User) -> Self {
-        todo!()
+    pub fn new(general: &General, _database: &Database, user: &User) -> Self {
+        Config {
+            min: general.min_pool_size,
+            max: user.pool_size.unwrap_or(general.default_pool_size),
+            healthcheck_interval: general.healthcheck_interval,
+            idle_healthcheck_interval: general.idle_healthcheck_interval,
+            idle_healthcheck_delay: general.idle_healthcheck_delay,
+            ..Default::default()
+        }
     }
 }
 

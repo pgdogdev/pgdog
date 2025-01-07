@@ -14,7 +14,7 @@ use tracing::{error, info};
 use crate::backend::Server;
 use crate::net::messages::BackendKeyData;
 
-use super::{Address, Ban, Config, Error, Guard, Healtcheck, Inner, Monitor};
+use super::{Address, Ban, Config, DatabaseConfig, Error, Guard, Healtcheck, Inner, Monitor};
 
 /// Mapping between a client and a server.
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -96,23 +96,24 @@ impl Clone for Pool {
 
 impl Pool {
     /// Create new connection pool.
-    pub fn new(addr: &Address, config: Config) -> Self {
+    pub fn new(config: DatabaseConfig) -> Self {
         let pool = Self {
             inner: Arc::new(Mutex::new(Inner {
                 conns: VecDeque::new(),
                 taken: Vec::new(),
-                config,
+                config: config.config,
                 waiting: 0,
                 ban: None,
                 online: true,
                 paused: false,
+                creating: 0,
             })),
             comms: Arc::new(Comms {
                 ready: Notify::new(),
                 request: Notify::new(),
                 shutdown: Notify::new(),
             }),
-            addr: addr.clone(),
+            addr: config.address,
         };
 
         // Launch the maintenance loop.
@@ -197,8 +198,10 @@ impl Pool {
 
     /// Create new identical connection pool.
     pub fn duplicate(&self) -> Pool {
-        let config = self.lock().config;
-        Pool::new(&self.addr, config)
+        Pool::new(DatabaseConfig {
+            address: self.addr().clone(),
+            config: self.lock().config().clone(),
+        })
     }
 
     /// Check the connection back into the pool.
