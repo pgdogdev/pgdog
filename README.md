@@ -138,8 +138,8 @@ pgDog is free and open source, licensed under the AGPL v3. While often misunders
 * Internal use
 * Private modifications for internal use without sharing any source code
 
-> You can freely use pgDog to power your PostgreSQL databases without having to worry about
-sharing any source code, including your proprietary work product.
+**You can freely use pgDog to power your PostgreSQL databases without having to worry about
+sharing any source code, including your proprietary work product.**
 
 AGPL was written specifically for organizations that offer pgDog _as a service_ and require
 those organizations to share any modifications they make to pgDog, including new features and bug fixes.
