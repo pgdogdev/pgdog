@@ -2,7 +2,7 @@
 
 use crate::net::messages::BackendKeyData;
 
-use super::{Address, Config, DatabaseConfig, Error, Guard, Pool, Replicas};
+use super::{DatabaseConfig, Error, Guard, Pool, Replicas};
 
 /// Primary and replicas.
 #[derive(Clone)]

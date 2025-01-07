@@ -8,7 +8,7 @@ use tracing::error;
 
 use crate::net::messages::BackendKeyData;
 
-use super::{Address, Config, DatabaseConfig, Error, Guard, Pool};
+use super::{DatabaseConfig, Error, Guard, Pool};
 
 /// Replicas pools.
 #[derive(Clone)]
