@@ -42,11 +42,7 @@ impl<'a> Plugin<'a> {
 
     /// Route query.
     pub fn route(&self, query: Query) -> Option<Route> {
-        if let Some(route) = &self.route {
-            unsafe { Some(route(query.into())) }
-        } else {
-            None
-        }
+        self.route.as_ref().map(|route| unsafe { route(query.into()) })
     }
 
     /// Perform initialization.

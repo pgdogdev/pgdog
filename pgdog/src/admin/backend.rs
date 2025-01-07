@@ -17,6 +17,12 @@ pub struct Backend {
     messages: VecDeque<Message>,
 }
 
+impl Default for Backend {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Backend {
     /// New admin backend handler.
     pub fn new() -> Self {

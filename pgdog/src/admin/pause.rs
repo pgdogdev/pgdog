@@ -38,7 +38,7 @@ impl Command for Pause {
                 resume: cmd == "resume",
             }),
 
-            _ => return Err(Error::Syntax),
+            _ => Err(Error::Syntax),
         }
     }
 

@@ -56,9 +56,9 @@ impl Connection {
                 Ok(()) => (),
                 Err(Error::Pool(super::Error::Offline)) => {
                     self.reload()?;
-                    return Ok(self.try_conn(id, route).await?);
+                    return self.try_conn(id, route).await;
                 }
-                Err(err) => return Err(err.into()),
+                Err(err) => return Err(err),
             }
         }
 
@@ -149,7 +149,7 @@ impl Connection {
 
     #[inline]
     fn cluster(&self) -> Result<&Cluster, Error> {
-        Ok(self.cluster.as_ref().ok_or(Error::NotConnected)?)
+        self.cluster.as_ref().ok_or(Error::NotConnected)
     }
 
     /// Get server connection if we are connected, return an error

@@ -78,17 +78,11 @@ impl ToUser for (&str, Option<&str>) {
 }
 
 /// Databases.
+#[derive(Default)]
 pub struct Databases {
     databases: HashMap<User, Cluster>,
 }
 
-impl Default for Databases {
-    fn default() -> Self {
-        Databases {
-            databases: HashMap::new(),
-        }
-    }
-}
 
 impl Databases {
     /// Get a cluster for the user/database pair if it's configured.
@@ -108,7 +102,7 @@ impl Databases {
 
     /// Cancel a query running on one of the databases proxied by the pooler.
     pub async fn cancel(&self, id: &BackendKeyData) -> Result<(), Error> {
-        for (_, cluster) in &self.databases {
+        for cluster in self.databases.values() {
             cluster.cancel(id).await?;
         }
 
@@ -128,7 +122,7 @@ impl Databases {
 
     /// Shutdown all pools.
     fn shutdown(&self) {
-        for (_, cluster) in self.all() {
+        for cluster in self.all().values() {
             for shard in cluster.shards() {
                 for pool in shard.pools() {
                     pool.shutdown();
@@ -166,7 +160,7 @@ pub fn from_config(config: &ConfigAndUsers) -> Arc<Databases> {
                     user: user.name.clone(),
                     database: user.database.clone(),
                 },
-                Cluster::new(&[(primary.map(|primary| primary), &replicas)]),
+                Cluster::new(&[(primary, &replicas)]),
             );
         }
     }

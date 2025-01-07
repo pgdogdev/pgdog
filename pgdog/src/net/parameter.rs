@@ -23,9 +23,7 @@ impl Parameters {
     /// Find a paramaeter by name.
     pub fn get(&self, name: &str) -> Option<&str> {
         self.params
-            .iter()
-            .filter(|p| p.name == name)
-            .next()
+            .iter().find(|p| p.name == name)
             .map(|p| p.value.as_str())
     }
 

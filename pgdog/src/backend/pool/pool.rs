@@ -200,7 +200,7 @@ impl Pool {
     pub fn duplicate(&self) -> Pool {
         Pool::new(DatabaseConfig {
             address: self.addr().clone(),
-            config: self.lock().config().clone(),
+            config: *self.lock().config(),
         })
     }
 
@@ -299,7 +299,7 @@ impl Pool {
 
     /// Pool exclusive lock.
     #[inline]
-    pub(super) fn lock<'a>(&'a self) -> MutexGuard<'a, RawMutex, Inner> {
+    pub(super) fn lock(&self) -> MutexGuard<'_, RawMutex, Inner> {
         self.inner.lock()
     }
 

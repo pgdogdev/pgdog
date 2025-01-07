@@ -18,6 +18,12 @@ pub struct Router {
     route: Route,
 }
 
+impl Default for Router {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Router {
     /// Create new router.
     pub fn new() -> Router {

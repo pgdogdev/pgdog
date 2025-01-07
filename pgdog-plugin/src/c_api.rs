@@ -11,12 +11,12 @@ pub extern "C" fn pgdog_row_new(num_columns: c_int) -> Row {
         std::mem::align_of::<RowColumn>(),
     )
     .unwrap();
-    let row = Row {
+    
+
+    Row {
         num_columns,
         columns: unsafe { alloc_zeroed(layout) as *mut RowColumn },
-    };
-
-    row
+    }
 }
 
 #[no_mangle]

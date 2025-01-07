@@ -14,7 +14,7 @@ pub struct Shard {
 impl Shard {
     /// Create new shard connection pool.
     pub fn new(primary: Option<DatabaseConfig>, replicas: &[DatabaseConfig]) -> Self {
-        let primary = primary.map(|primary| Pool::new(primary));
+        let primary = primary.map(Pool::new);
         let replicas = Replicas::new(replicas);
 
         Self { primary, replicas }
