@@ -133,7 +133,7 @@ Status on features stability will be [updated regularly](https://pgdog.dev/featu
 
 ## License
 
-pgDog is free and open source, licensed under the AGPL v3. While often misunderstood, this license allows the following without any additional requirements from you or your organization:
+pgDog is free and open source software, licensed under the AGPL v3. While often misunderstood, this license allows the following without any additional requirements from you or your organization:
 
 * Internal use
 * Private modifications for internal use without sharing any source code
