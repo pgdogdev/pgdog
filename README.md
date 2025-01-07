@@ -25,13 +25,13 @@ go as far as block or intercept queries and return custom results to the client.
 
 Examples of plugins can be found in [examples](https://github.com/levkk/pgdog/tree/main/examples) and [plugins](https://github.com/levkk/pgdog/tree/main/plugins).
 
-&#128216; **[Plugins documentation](https://pgdog.dev/features/plugins/)**
+&#128216; **[Plugins](https://pgdog.dev/features/plugins/)**
 
 ### Load balancer
 
 pgDog is an application layer (OSI Level 7) load balancer for PostgreSQL. It can proxy multiple replicas (and primary) and distribute query workloads. It comes with support for multiple strategies, including round robin and random.
 
-&#128216; **[Load balancer documentation](https://pgdog.dev/features/load-balancer)**
+&#128216; **[Load balancer](https://pgdog.dev/features/load-balancer)**
 
 ### Healthchecks and query re-routing
 
@@ -40,17 +40,17 @@ When a host becomes unhealthy due to a healthcheck failure, it's removed from ac
 and all query traffic is rerouted to other healthy databases. This is analogous to modern HTTP
 load balancing, except it's at the database layer.
 
-In the presence of multiple replicas, query re-routing maximize database availability and
-protect against intermittent issues like spotty network connectivity and other temporary hardware issues.
+In the presence of multiple replicas, query re-routing maximizes database availability and
+protects against intermittent issues like spotty network connectivity and other temporary hardware issues.
 
-&#128216; **[Healthchecks documentation](https://pgdog.dev/features/healthchecks)**
+&#128216; **[Healthchecks](https://pgdog.dev/features/healthchecks)**
 
 ### Transaction pooling
 
 Like other PostgreSQL poolers, pgDog supports transaction-level connection pooling, allowing
 thousands (if not hundreds of thousands) of clients to re-use a handful of PostgreSQL server connections.
 
-&#128216; **[Healthchecks documentation](https://pgdog.dev/features/transactions)**
+&#128216; **[Transactions](https://pgdog.dev/features/transactions)**
 
 ## Getting started
 

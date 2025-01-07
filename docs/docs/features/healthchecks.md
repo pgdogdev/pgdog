@@ -37,7 +37,7 @@ and the ban time are configurable.
 ```toml
 [global]
 healthcheck_timeout = 5_000 # 5 seconds
-ban_time = 60_000 # 1 minute
+ban_timeout = 60_000 # 1 minute
 ```
 
 ### Ban expiration
