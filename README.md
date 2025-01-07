@@ -130,3 +130,16 @@ Note that you're connecting to port `6432` where pgDog is running, not directly 
 While a lot of "classic" features of pgDog, like load balancing and healthchecks, have been well tested in production and at scale, the current codebase has not. This project is just getting started and early adopters are welcome to try pgDog internally.
 
 Status on features stability will be [updated regularly](https://pgdog.dev/features/).
+
+## License
+
+pgDog is free and open source, licensed under the AGPL v3. While often misunderstood, this license allows the following without any additional requirements from you or your organization:
+
+* Internal use
+* Private modifications for internal use without sharing any source code
+
+> You can freely use pgDog to power your PostgreSQL databases without having to worry about
+sharing any source code, including your proprietary work product.
+
+AGPL was written specifically for organizations that offer pgDog _as a service_ and require
+those organizations to share any modifications they make to pgDog, including new features and bug fixes.
