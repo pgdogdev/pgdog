@@ -7,6 +7,8 @@ use tokio::runtime::Builder;
 use tracing::info;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
+use std::io::IsTerminal;
+
 pub mod admin;
 pub mod auth;
 pub mod backend;
@@ -20,16 +22,20 @@ pub mod state;
 pub mod stats;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args = cli::Cli::parse();
+
+    let format = fmt::layer()
+        .with_ansi(std::io::stderr().is_terminal())
+        .with_file(false);
+
     tracing_subscriber::registry()
-        .with(fmt::layer())
+        .with(format)
         .with(EnvFilter::from_default_env())
         .init();
 
-    let args = cli::Cli::parse();
-
     info!("🐕 pgDog {}", env!("CARGO_PKG_VERSION"));
 
-    let config = config::load()?;
+    let config = config::load(&args.config, &args.users)?;
 
     plugin::load_from_config()?;
 

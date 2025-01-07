@@ -22,7 +22,7 @@ pub use connection::Connection;
 pub use error::Error;
 pub use guard::Guard;
 pub use healthcheck::Healtcheck;
-pub use monitor::Monitor;
+use monitor::Monitor;
 pub use pool::Pool;
 pub use replicas::Replicas;
 pub use shard::Shard;

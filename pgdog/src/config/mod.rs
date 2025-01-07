@@ -4,9 +4,9 @@ pub mod error;
 
 use error::Error;
 
-use std::collections::HashMap;
 use std::fs::read_to_string;
 use std::sync::Arc;
+use std::{collections::HashMap, path::PathBuf};
 
 use arc_swap::ArcSwap;
 use once_cell::sync::Lazy;
@@ -22,8 +22,8 @@ pub fn config() -> Arc<ConfigAndUsers> {
 }
 
 /// Load the configuration file from disk.
-pub fn load() -> Result<ConfigAndUsers, Error> {
-    let config = ConfigAndUsers::load()?;
+pub fn load(config: &PathBuf, users: &PathBuf) -> Result<ConfigAndUsers, Error> {
+    let config = ConfigAndUsers::load(config, users)?;
     CONFIG.store(Arc::new(config.clone()));
     Ok(config)
 }
@@ -38,8 +38,8 @@ pub struct ConfigAndUsers {
 
 impl ConfigAndUsers {
     /// Load configuration from disk or use defaults.
-    pub fn load() -> Result<Self, Error> {
-        let config: Config = if let Ok(config) = read_to_string("pgdog.toml") {
+    pub fn load(config: &PathBuf, users: &PathBuf) -> Result<Self, Error> {
+        let config: Config = if let Ok(config) = read_to_string(config) {
             let config = match toml::from_str(&config) {
                 Ok(config) => config,
                 Err(err) => return Err(Error::config(&config, err)),
@@ -50,7 +50,7 @@ impl ConfigAndUsers {
             Config::default()
         };
 
-        let users: Users = if let Ok(users) = read_to_string("users.toml") {
+        let users: Users = if let Ok(users) = read_to_string(users) {
             let users = toml::from_str(&users)?;
             info!("Loaded users.toml");
             users

@@ -44,13 +44,18 @@ use tracing::info;
 use tracing::{debug, error};
 
 /// Pool maintenance.
-pub struct Monitor {
+///
+/// See [`crate::backend::pool::monitor`] module documentation
+/// for more details.
+pub(super) struct Monitor {
     pool: Pool,
 }
 
 impl Monitor {
     /// Launch the pool maintenance loop.
-    pub fn new(pool: &Pool) {
+    ///
+    /// This is done automatically when the pool is created.
+    pub(super) fn new(pool: &Pool) {
         let monitor = Self { pool: pool.clone() };
 
         spawn(async move {
@@ -140,6 +145,9 @@ impl Monitor {
         debug!("maintenance loop is shut down [{}]", self.pool.addr());
     }
 
+    /// The healthcheck loop.
+    ///
+    /// Runs regularly and ensures the pool triggers healthchecks on idle connections.
     async fn healthchecks(pool: Pool) {
         let mut tick = interval(pool.lock().config().idle_healthcheck_interval());
         let comms = pool.comms();

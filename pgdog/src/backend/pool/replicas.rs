@@ -79,17 +79,17 @@ impl Replicas {
         let mut candidates = self
             .pools
             .iter()
-            .map(|pool| (pool.state(), pool))
+            .map(|pool| (pool.banned(), pool))
             .collect::<Vec<_>>();
 
         if let Some(primary) = primary {
-            candidates.push((primary.state(), primary));
+            candidates.push((primary.banned(), primary));
         }
 
         candidates.shuffle(&mut rand::thread_rng());
 
         // All replicas are banned, unban everyone.
-        let banned = candidates.iter().all(|(state, _)| state.banned);
+        let banned = candidates.iter().all(|(banned, _)| *banned);
         if banned {
             candidates
                 .iter()
