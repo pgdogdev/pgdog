@@ -2,10 +2,10 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::config::{Database, General, User};
+use crate::config::{Database, User};
 
 /// Server address.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct Address {
     /// Server host.
     pub host: String,
@@ -42,15 +42,46 @@ impl Address {
             },
         }
     }
-
-    /// Pool needs to be re-created on configuration reload.
-    pub fn need_recreate(&self, other: &Address) -> bool {
-        self.host != other.host || self.port != other.port
-    }
 }
 
 impl std::fmt::Display for Address {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}:{}", self.host, self.port)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_defaults() {
+        let mut database = Database::default();
+        database.name = "pgdog".into();
+        database.host = "127.0.0.1".into();
+        database.port = 6432;
+
+        let mut user = User::default();
+        user.name = "pgdog".into();
+        user.password = "hunter2".into();
+        user.database = "pgdog".into();
+
+        let address = Address::new(&database, &user);
+
+        assert_eq!(address.host, "127.0.0.1");
+        assert_eq!(address.port, 6432);
+        assert_eq!(address.database_name, "pgdog");
+        assert_eq!(address.user, "pgdog");
+        assert_eq!(address.password, "hunter2");
+
+        database.database_name = Some("not_pgdog".into());
+        database.password = Some("hunter3".into());
+        database.user = Some("alice".into());
+
+        let address = Address::new(&database, &user);
+
+        assert_eq!(address.database_name, "not_pgdog");
+        assert_eq!(address.user, "alice");
+        assert_eq!(address.password, "hunter3");
     }
 }

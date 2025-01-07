@@ -332,14 +332,59 @@ impl Server {
 
 impl Drop for Server {
     fn drop(&mut self) {
-        let mut stream = self.stream.take().unwrap();
+        if let Some(mut stream) = self.stream.take() {
+            info!("closing server connection [{}]", self.addr,);
 
-        info!("closing server connection [{}]", self.addr,);
+            spawn(async move {
+                stream.write_all(&Terminate.to_bytes()?).await?;
+                stream.flush().await?;
+                Ok::<(), Error>(())
+            });
+        }
+    }
+}
 
-        spawn(async move {
-            stream.write_all(&Terminate.to_bytes()?).await?;
-            stream.flush().await?;
-            Ok::<(), Error>(())
-        });
+// Used for testing.
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    impl Default for Server {
+        fn default() -> Self {
+            Self {
+                addr: Address::default(),
+                stream: None,
+                id: BackendKeyData::default(),
+                params: Parameters::default(),
+                state: State::Idle,
+                created_at: Instant::now(),
+                last_used_at: Instant::now(),
+                last_healthcheck: None,
+                stats: ConnStats::default(),
+            }
+        }
+    }
+
+    impl Server {
+        pub fn new_error() -> Server {
+            let mut server = Server::default();
+            server.state = State::Error;
+
+            server
+        }
+
+        // pub(super) fn new_in_transaction() -> Server {
+        //     let mut server = Server::default();
+        //     server.state = State::IdleInTransaction;
+
+        //     server
+        // }
+
+        // pub(super) fn new_active() -> Server {
+        //     let mut server = Server::default();
+        //     server.state = State::Active;
+
+        //     server
+        // }
     }
 }

@@ -8,6 +8,7 @@ use crate::backend::Server;
 use super::{Ban, Config, Error, Mapping};
 
 /// Pool internals protected by a mutex.
+#[derive(Default)]
 pub(super) struct Inner {
     /// Idle server connections.
     pub(super) conns: VecDeque<Server>,
@@ -63,7 +64,7 @@ impl Inner {
 
     /// How many connections should be removed from the pool.
     #[inline]
-    pub(super) fn should_remove(&self) -> usize {
+    pub(super) fn can_remove(&self) -> usize {
         let total = self.total() as i64;
         let min = self.min() as i64;
 
@@ -113,7 +114,7 @@ impl Inner {
     /// without affecting the minimum pool size requirement.
     #[inline]
     pub(crate) fn close_idle(&mut self, now: Instant) {
-        let mut remove = self.should_remove();
+        let mut remove = self.can_remove();
         let idle_timeout = self.config.idle_timeout();
 
         self.conns.retain(|c| {
@@ -137,6 +138,8 @@ impl Inner {
     #[inline]
     /// Check a connection back into the pool if it's ok to do so.
     /// Otherwise, drop the connection and close it.
+    ///
+    /// Return: true if the pool should be banned, false otherwise.
     pub(super) fn maybe_check_in(&mut self, server: Server, now: Instant) -> bool {
         let id = *server.id();
 
@@ -183,6 +186,7 @@ impl Inner {
             self.ban = Some(Ban {
                 created_at: now,
                 reason,
+                ban_timeout: self.config.ban_timeout(),
             });
 
             true
@@ -198,9 +202,9 @@ impl Inner {
         if let Some(ban) = self.ban.take() {
             if ban.reason == Error::ManualBan {
                 self.ban = Some(ban);
+            } else {
+                unbanned = true;
             }
-
-            unbanned = true;
         }
 
         unbanned
@@ -227,5 +231,146 @@ impl Inner {
     #[inline]
     pub fn create(&mut self) {
         self.creating += 1;
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use std::time::Duration;
+
+    use crate::net::messages::BackendKeyData;
+
+    use super::*;
+
+    #[test]
+    fn test_invariants() {
+        let mut inner = Inner::default();
+
+        // Defaults.
+        assert!(!inner.banned());
+        assert!(inner.empty());
+        assert_eq!(inner.idle(), 0);
+        assert!(!inner.online);
+        assert!(!inner.paused);
+
+        // Create permits.
+        inner.create();
+        assert_eq!(inner.creating, 1);
+        assert!(inner.create_permit());
+        assert_eq!(inner.creating, 0);
+
+        // The ban list.
+        let banned = inner.maybe_ban(Instant::now(), Error::CheckoutTimeout);
+        assert!(banned);
+        let unbanned = inner.check_ban(Instant::now() + Duration::from_secs(100));
+        assert!(!unbanned);
+        assert!(inner.banned());
+        let unbanned = inner.check_ban(Instant::now() + Duration::from_secs(301));
+        assert!(unbanned);
+        assert!(!inner.banned());
+        let unbanned = inner.maybe_unban();
+        assert!(!unbanned);
+        assert!(!inner.banned());
+        let banned = inner.maybe_ban(Instant::now(), Error::ManualBan);
+        assert!(banned);
+        assert!(!inner.maybe_unban());
+        assert!(inner.banned());
+        let banned = inner.maybe_ban(Instant::now(), Error::ServerError);
+        assert!(banned);
+
+        // Testing check-in server.
+        let banned = inner.maybe_check_in(Server::default(), Instant::now());
+        assert!(!banned);
+        assert_eq!(inner.idle(), 0); // pool offline
+
+        inner.online = true;
+        inner.paused = true;
+        inner.maybe_check_in(Server::default(), Instant::now());
+        assert_eq!(inner.total(), 0); // pool paused;
+        inner.paused = false;
+        assert!(!inner.maybe_check_in(Server::default(), Instant::now()));
+        assert!(!inner.empty());
+        assert_eq!(inner.idle(), 1);
+
+        let server = Server::new_error();
+
+        assert_eq!(inner.checked_out(), 0);
+        inner.taken.push(Mapping {
+            client: BackendKeyData::new(),
+            server: server.id().clone(),
+        });
+        assert_eq!(inner.checked_out(), 1);
+
+        let banned = inner.maybe_check_in(server, Instant::now());
+        assert!(banned);
+        assert_eq!(inner.ban.unwrap().reason, Error::ServerError);
+        assert!(inner.taken.is_empty());
+
+        inner.config.max = 5;
+        assert!(inner.can_create());
+
+        assert_eq!(inner.config.min, 1);
+        assert_eq!(inner.idle(), 1);
+        assert!(!inner.should_create());
+
+        inner.config.min = 2;
+        assert!(inner.should_create());
+
+        inner.config.max = 1;
+        assert!(!inner.can_create());
+
+        inner.config.max = 3;
+        inner.create();
+        inner.create();
+        assert!(!inner.should_create());
+        // Consume permits but connections weren't created.
+        assert!(inner.can_create());
+        inner.create_permit();
+        inner.create_permit();
+        assert!(inner.should_create());
+        // Consume permits and create connections successfully.
+        inner.create();
+        inner.create();
+        inner.create_permit();
+        inner.create_permit();
+        inner.conns.push_back(Server::default());
+        inner.conns.push_back(Server::default());
+        assert!(!inner.should_create());
+        assert!(!inner.can_create()); // pool is full of idle connections.
+
+        // Close idle connections.
+        inner.config.idle_timeout = 5_000; // 5 seconds.
+        inner.close_idle(Instant::now());
+        assert_eq!(inner.idle(), inner.config.max); // Didn't close any.
+        for _ in 0..10 {
+            inner.close_idle(Instant::now() + Duration::from_secs(6));
+        }
+        assert_eq!(inner.idle(), inner.config.min);
+        inner.config.min = 1;
+        inner.close_idle(Instant::now() + Duration::from_secs(6));
+        assert_eq!(inner.idle(), inner.config.min);
+
+        // Close old connections.
+        inner.config.max_age = 60_000;
+        inner.close_old(Instant::now() + Duration::from_secs(59));
+        assert_eq!(inner.idle(), 1);
+        inner.close_old(Instant::now() + Duration::from_secs(61));
+        assert_eq!(inner.idle(), 0); // This ignores the min setting!
+
+        assert!(inner.should_create());
+        assert!(inner.can_create());
+
+        assert_eq!(inner.total(), 0);
+        inner.taken.push(Mapping::default());
+        assert_eq!(inner.total(), 1);
+        inner.taken.clear();
+        assert_eq!(inner.total(), 0);
+
+        let server = Server::default();
+        let banned = inner.maybe_check_in(server, Instant::now() + Duration::from_secs(61));
+
+        assert!(!banned);
+        // Not checked in because of max age.
+        assert_eq!(inner.total(), 0);
     }
 }

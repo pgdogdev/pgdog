@@ -37,6 +37,8 @@ pub struct Config {
     pub write_timeout: u64, // ms
     /// Query timeout (dangerous).
     pub query_timeout: u64, // ms
+    /// Max ban duration.
+    pub ban_timeout: u64, // ms
 }
 
 impl Config {
@@ -80,6 +82,11 @@ impl Config {
         Duration::from_millis(self.idle_healthcheck_delay)
     }
 
+    /// Ban timeout.
+    pub fn ban_timeout(&self) -> Duration {
+        Duration::from_millis(self.ban_timeout)
+    }
+
     /// Default config for a primary.
     ///
     /// The ban is ignored by the shard router
@@ -102,6 +109,7 @@ impl Config {
             healthcheck_interval: general.healthcheck_interval,
             idle_healthcheck_interval: general.idle_healthcheck_interval,
             idle_healthcheck_delay: general.idle_healthcheck_delay,
+            ban_timeout: general.ban_timeout,
             ..Default::default()
         }
     }
@@ -124,6 +132,7 @@ impl Default for Config {
             read_timeout: Duration::MAX.as_millis() as u64,
             write_timeout: Duration::MAX.as_millis() as u64,
             query_timeout: Duration::MAX.as_millis() as u64,
+            ban_timeout: Duration::from_secs(300).as_millis() as u64,
         }
     }
 }

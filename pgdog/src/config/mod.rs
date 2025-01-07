@@ -121,6 +121,9 @@ pub struct General {
     /// Delay idle healthchecks by this time at startup.
     #[serde(default = "General::idle_healthcheck_delay")]
     pub idle_healthcheck_delay: u64,
+    /// Maximum duration of a ban.
+    #[serde(default = "General::ban_timeout")]
+    pub ban_timeout: u64,
 }
 
 impl General {
@@ -154,6 +157,10 @@ impl General {
 
     fn idle_healthcheck_delay() -> u64 {
         5_000
+    }
+
+    fn ban_timeout() -> u64 {
+        5 * 60_000
     }
 }
 

@@ -16,7 +16,7 @@ use crate::net::messages::BackendKeyData;
 use super::{Address, Ban, Config, Error, Guard, Healtcheck, Inner, Monitor, PoolConfig};
 
 /// Mapping between a client and a server.
-#[derive(Debug, Copy, Clone, PartialEq)]
+#[derive(Debug, Copy, Clone, PartialEq, Default)]
 pub(super) struct Mapping {
     /// Client ID.
     pub(super) client: BackendKeyData,

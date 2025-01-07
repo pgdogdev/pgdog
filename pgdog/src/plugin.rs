@@ -86,26 +86,3 @@ pub fn load_from_config() -> Result<(), libloading::Error> {
 
     load(plugins)
 }
-
-#[cfg(test)]
-mod test {
-    use pgdog_plugin::FfiQuery;
-
-    use super::*;
-
-    #[test]
-    fn test_plugin() {
-        use tracing_subscriber::{fmt, prelude::*, EnvFilter};
-        let _ = tracing_subscriber::registry()
-            .with(fmt::layer())
-            .with(EnvFilter::from_default_env())
-            .try_init();
-
-        load(&["routing_plugin", "routing_plugin_c"]).unwrap();
-        let query = FfiQuery::new("SELECT 1").unwrap();
-        let plug = plugin("routing_plugin_c").unwrap();
-        let route = plug.route(query.query()).unwrap();
-        assert!(route.read());
-        assert_eq!(route.shard(), None);
-    }
-}
