@@ -25,7 +25,7 @@ go as far as block or intercept queries and return custom results to the client.
 
 Examples of plugins can be found in [examples](https://github.com/levkk/pgdog/tree/main/examples) and [plugins](https://github.com/levkk/pgdog/tree/main/plugins).
 
-&#128216; [Plugins documentation](https://pgdog.dev/features/plugins/).
+&#128216; **[Plugins documentation](https://pgdog.dev/features/plugins/)**
 
 ### Load balancer
 
