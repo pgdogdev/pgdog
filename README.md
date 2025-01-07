@@ -45,6 +45,13 @@ protect against intermittent issues like spotty network connectivity and other t
 
 &#128216; **[Healthchecks documentation](https://pgdog.dev/features/healthchecks)**
 
+### Transaction pooling
+
+Like other PostgreSQL poolers, pgDog supports transaction-level connection pooling, allowing
+thousands (if not hundreds of thousands) of clients to re-use a handful of PostgreSQL server connections.
+
+&#128216; **[Healthchecks documentation](https://pgdog.dev/features/transactions)**
+
 ## Getting started
 
 Install the latest version of the Rust compiler from [rust-lang.org](https://rust-lang.org).
