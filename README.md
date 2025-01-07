@@ -1,4 +1,4 @@
-# pgDog - PostgreSQL pooler and load balancer
+# pgDog - PostgreSQL Pooler and Load Balancer
 
 [![Documentation](https://img.shields.io/badge/documentation-blue?style=flat)](https://pgdog.dev)
 [![Latest crate](https://img.shields.io/crates/v/pgdog.svg)](https://crates.io/crates/pgdog)
@@ -31,7 +31,7 @@ Examples of plugins can be found in [examples](https://github.com/levkk/pgdog/tr
 
 pgDog is an application layer (OSI Level 7) load balancer for PostgreSQL. It can proxy multiple replicas (and primary) and distribute query workloads. It comes with support for multiple strategies, including round robin and random.
 
-&#128216; [Load balancer documentation](https://pgdog.dev/features/load-balancer).
+&#128216; **[Load balancer documentation](https://pgdog.dev/features/load-balancer)**
 
 ### Healthchecks and query re-routing
 
@@ -43,7 +43,7 @@ load balancing, except it's at the database layer.
 In the presence of multiple replicas, query re-routing maximize database availability and
 protect against intermittent issues like spotty network connectivity and other temporary hardware issues.
 
-&#128216; [Healthchecks documentation](https://pgdog.dev/features/healthchecks).
+&#128216; **[Healthchecks documentation](https://pgdog.dev/features/healthchecks)**
 
 ## Getting started
 
@@ -116,10 +116,10 @@ Connecting to the pooler can be done with psql or any other PostgreSQL client:
 psql postgres://pgdog:pgdog@127.0.0.1:6432/pgdog
 ```
 
-Note that you're connecting to port `6432` where pgDog is running, not directly Postgres.
+Note that you're connecting to port `6432` where pgDog is running, not directly to Postgres.
 
 ## &#128678; Status &#128678;
 
-While a lot of "classic" features of pgDog, like load balancing and healthchecks, have been well tested in production and at scale, the current code base has not. This project is just getting started and early adopters are welcome to try pgDog internally.
+While a lot of "classic" features of pgDog, like load balancing and healthchecks, have been well tested in production and at scale, the current codebase has not. This project is just getting started and early adopters are welcome to try pgDog internally.
 
 Status on features stability will be [updated regularly](https://pgdog.dev/features/).
