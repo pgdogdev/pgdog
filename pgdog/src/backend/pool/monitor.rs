@@ -5,7 +5,7 @@
 //! The monitor has three (3) loops running in different Tokio tasks:
 //!
 //! * the maintenance loop which runs ~3 times per second,
-//! * the healthcheck loop which runs every `idle_healtcheck_interval`
+//! * the healthcheck loop which runs every `idle_healthcheck_interval`
 //! * the new connection loop which runs every time a client asks
 //!   for a new connection to be created
 //!
