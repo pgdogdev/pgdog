@@ -301,6 +301,7 @@ impl Pool {
         guard.online = false;
         guard.conns.clear();
         self.comms().shutdown.notify_waiters();
+        self.comms().ready.notify_waiters();
     }
 
     /// Pool exclusive lock.

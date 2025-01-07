@@ -65,6 +65,7 @@ impl Connection {
         Ok(())
     }
 
+    /// Try to get a connection for the given route.
     async fn try_conn(&mut self, id: &BackendKeyData, route: &Route) -> Result<(), Error> {
         let shard = route.shard().unwrap_or(0);
 
