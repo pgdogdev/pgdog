@@ -7,16 +7,20 @@ more than a few thousand concurrently open connections.
 ## Enable transaction mode
 
 Transaction mode is **enabled** by default. This is controllable via configuration, at the global
-and database level.
+and user level:
 
-```toml
-[general]
-pooler_mode = "transaction"
-
-[[databases]]
-name = "prod"
-pooler_mode = "transaction"
-```
+=== "pgdog.toml"
+    ```toml
+    [general]
+    pooler_mode = "transaction"
+    ```
+=== "users.toml"
+    ```toml
+    [[users]]
+    name = "alice"
+    database = "prod"
+    pooler_mode = "transaction"
+    ```
 
 ## Session state
 

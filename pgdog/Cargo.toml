@@ -15,6 +15,7 @@ parking_lot = "0.12"
 thiserror = "2"
 bytes = "1"
 # mlua = "0.10"
+clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 async-trait = "*"
 rand = "*"

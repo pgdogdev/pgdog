@@ -139,7 +139,7 @@ impl General {
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Stats {}
 
-#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum PoolerMode {
     #[default]
@@ -225,7 +225,7 @@ impl Users {
 }
 
 /// User allowed to connect to pgDog.
-#[derive(Serialize, Deserialize, Debug, Clone, Default, Hash, Eq, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
 pub struct User {
     /// User name.
     pub name: String,
@@ -236,6 +236,8 @@ pub struct User {
     /// Pool size.
     #[serde(default = "User::pool_size")]
     pub pool_size: usize,
+    /// Pooler mode.
+    pub pooler_mode: Option<PoolerMode>,
 }
 
 impl User {
@@ -262,7 +264,7 @@ name = "production"
 role = "primary"
 host = "127.0.0.1"
 port = 5432
-database_name = "postgres" 
+database_name = "postgres"
 
 [[plugins]]
 name = "pgdog_routing"

@@ -1,4 +1,4 @@
-# Plugins
+# Plugins overview
 
 One of features that make pgDog particularly powerful is its plugin system. Users of pgDog can write plugins
 in any language and inject them inside the query router to direct query traffic, to rewrite queries, or to block

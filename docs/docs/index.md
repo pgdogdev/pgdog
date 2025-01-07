@@ -1,8 +1,10 @@
 # pgDog
 
 [pgDog](https://github.com/levkk/pgdog) is a PostgreSQL query router, pooler, proxy and load balancer written in Rust. Spiritual successor to
-[pgcat](https://github.com/levkk/pgcat), pgDog comes with many similar features, better performance,
- and introduces new features like plugins.
+[pgcat](https://github.com/levkk/pgcat), pgDog comes with a lot of similar features, better performance,
+and introduces new features like plugins.
+
+PostgreSQL deployments of any size can be proxied by pgDog, ranging from a single database to hundreds of primaries and replicas in a sharded configuration.
 
 ## Getting started
 
@@ -55,7 +57,7 @@ name = "production"
 role = "primary"
 host = "127.0.0.1"
 port = 5432
-database_name = "postgres" 
+database_name = "postgres"
 ```
 
 #### Example `users.toml`
@@ -77,7 +79,7 @@ Starting the pooler can be done by executing the binary or with Cargo:
 
 === "Command"
     ```bash
-    cargo run --release
+    cargo run --release --bin pgdog
     ```
 
 === "Output"
@@ -95,4 +97,3 @@ Starting the pooler can be done by executing the binary or with Cargo:
 * [Features](features/index.md)
 * [Architecture](architecture/index.md)
 * [Configuration](configuration/index.md)
-

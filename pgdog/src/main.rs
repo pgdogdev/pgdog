@@ -1,6 +1,7 @@
 //! pgDog, modern PostgreSQL proxy, pooler and query router.
 
 use backend::databases;
+use clap::Parser;
 use frontend::listener::Listener;
 use tokio::runtime::Builder;
 use tracing::info;
@@ -10,6 +11,7 @@ pub mod admin;
 pub mod auth;
 pub mod backend;
 pub mod channel;
+pub mod cli;
 pub mod config;
 pub mod frontend;
 pub mod net;
@@ -22,6 +24,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with(fmt::layer())
         .with(EnvFilter::from_default_env())
         .init();
+
+    let args = cli::Cli::parse();
 
     info!("🐕 pgDog {}", env!("CARGO_PKG_VERSION"));
 
