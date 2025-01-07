@@ -153,12 +153,15 @@ pub struct Database {
     /// Database name visible to the clients.
     pub name: String,
     /// Database role, e.g. primary.
+    #[serde(default)]
     pub role: Role,
     /// Database host or IP address, e.g. 127.0.0.1.
     pub host: String,
     /// Database port, e.g. 5432.
+    #[serde(default = "Database::port")]
     pub port: u16,
     /// PostgreSQL database name, e.g. "postgres".
+    #[serde(default = "Database::database_name")]
     pub database_name: String,
     /// Use this user to connect to the database, overriding the userlist.
     pub user: Option<String>,
@@ -174,13 +177,21 @@ impl Database {
     fn max_connections() -> usize {
         usize::MAX
     }
+
+    fn port() -> u16 {
+        5432
+    }
+
+    fn database_name() -> String {
+        "postgres".into()
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum Role {
-    #[default]
     Primary,
+    #[default]
     Replica,
 }
 

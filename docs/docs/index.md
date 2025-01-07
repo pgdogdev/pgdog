@@ -93,6 +93,6 @@ Starting the pooler can be done by executing the binary or with Cargo:
 ## Next steps
 
 * [Features](features/index.md)
-* [Architecture](arch/index.md)
-* [Configuration](config/index.md)
+* [Architecture](architecture/index.md)
+* [Configuration](configuration/index.md)
 
