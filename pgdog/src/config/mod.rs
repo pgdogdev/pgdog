@@ -182,8 +182,7 @@ pub struct Database {
     #[serde(default = "Database::port")]
     pub port: u16,
     /// PostgreSQL database name, e.g. "postgres".
-    #[serde(default = "Database::database_name")]
-    pub database_name: String,
+    pub database_name: Option<String>,
     /// Use this user to connect to the database, overriding the userlist.
     pub user: Option<String>,
     /// Use this password to login, overriding the userlist.
@@ -201,10 +200,6 @@ impl Database {
 
     fn port() -> u16 {
         5432
-    }
-
-    fn database_name() -> String {
-        "postgres".into()
     }
 }
 

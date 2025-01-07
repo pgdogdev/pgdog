@@ -25,7 +25,11 @@ impl Address {
         Address {
             host: database.host.clone(),
             port: database.port,
-            database_name: database.name.clone(),
+            database_name: if let Some(database_name) = database.database_name.clone() {
+                database_name
+            } else {
+                database.name.clone()
+            },
             user: if let Some(user) = database.user.clone() {
                 user
             } else {
