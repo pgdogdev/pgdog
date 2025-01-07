@@ -11,7 +11,6 @@ pub extern "C" fn pgdog_row_new(num_columns: c_int) -> Row {
         std::mem::align_of::<RowColumn>(),
     )
     .unwrap();
-    
 
     Row {
         num_columns,

@@ -61,7 +61,11 @@ pub fn load(names: &[&str]) -> Result<(), libloading::Error> {
 
 /// Get plugin by name.
 pub fn plugin(name: &str) -> Option<&Plugin> {
-    PLUGINS.get().unwrap().iter().find(|&plugin| plugin.name() == name)
+    PLUGINS
+        .get()
+        .unwrap()
+        .iter()
+        .find(|&plugin| plugin.name() == name)
 }
 
 /// Get all loaded plugins.

@@ -17,18 +17,22 @@ pub extern "C" fn pgdog_route_query(query: bindings::Query) -> Route {
 fn route_internal(query: &str) -> Result<Route, pg_query::Error> {
     let ast = parse(query)?;
 
-    if let Some(query) = ast.protobuf.stmts.first() { if let Some(ref node) = query.stmt { match node.node {
-        Some(NodeEnum::SelectStmt(ref _stmt)) => {
-            return Ok(Route {
-                affinity: Affinity_READ,
-                shard: Shard_ANY,
-            });
+    if let Some(query) = ast.protobuf.stmts.first() {
+        if let Some(ref node) = query.stmt {
+            match node.node {
+                Some(NodeEnum::SelectStmt(ref _stmt)) => {
+                    return Ok(Route {
+                        affinity: Affinity_READ,
+                        shard: Shard_ANY,
+                    });
+                }
+
+                Some(_) => (),
+
+                None => (),
+            }
         }
-
-        Some(_) => (),
-
-        None => (),
-    } } }
+    }
 
     Ok(Route {
         affinity: Affinity_WRITE,

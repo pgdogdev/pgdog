@@ -23,9 +23,7 @@ impl FromBytes for Parse {
         let name = c_string_buf(&mut bytes);
         let query = c_string_buf(&mut bytes);
         let params = bytes.get_i16() as usize;
-        let data_types = (0..params)
-            .map(|_| bytes.get_i32())
-            .collect::<Vec<_>>();
+        let data_types = (0..params).map(|_| bytes.get_i32()).collect::<Vec<_>>();
 
         Ok(Self {
             name,

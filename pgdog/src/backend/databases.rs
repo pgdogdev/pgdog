@@ -83,7 +83,6 @@ pub struct Databases {
     databases: HashMap<User, Cluster>,
 }
 
-
 impl Databases {
     /// Get a cluster for the user/database pair if it's configured.
     pub fn cluster(&self, user: impl ToUser) -> Result<Cluster, Error> {
