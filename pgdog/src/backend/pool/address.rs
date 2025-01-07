@@ -2,7 +2,6 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::Config;
 use crate::config::{Database, General, User};
 
 /// Server address.
@@ -18,13 +17,11 @@ pub struct Address {
     pub user: String,
     /// Password.
     pub password: String,
-    /// Pool configuration.
-    pub config: Config,
 }
 
 impl Address {
     /// Create new address from config values.
-    pub fn new(general: &General, database: &Database, user: &User) -> Self {
+    pub fn new(database: &Database, user: &User) -> Self {
         Address {
             host: database.host.clone(),
             port: database.port,
@@ -38,14 +35,6 @@ impl Address {
                 password
             } else {
                 user.password.clone()
-            },
-            config: Config {
-                min: general.min_pool_size,
-                max: general.default_pool_size,
-                healthcheck_interval: general.healthcheck_interval,
-                idle_healthcheck_interval: general.idle_healthcheck_interval,
-                idle_healthcheck_delay: general.idle_healthcheck_delay,
-                ..Default::default()
             },
         }
     }

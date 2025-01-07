@@ -4,8 +4,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use parking_lot::lock_api::MutexGuard;
-use parking_lot::{Mutex, RawMutex};
+use parking_lot::{lock_api::MutexGuard, Mutex, RawMutex};
 use tokio::select;
 use tokio::sync::Notify;
 use tokio::time::sleep;
@@ -14,7 +13,7 @@ use tracing::{error, info};
 use crate::backend::Server;
 use crate::net::messages::BackendKeyData;
 
-use super::{Address, Ban, Config, DatabaseConfig, Error, Guard, Healtcheck, Inner, Monitor};
+use super::{Address, Ban, Config, Error, Guard, Healtcheck, Inner, Monitor, PoolConfig};
 
 /// Mapping between a client and a server.
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -34,6 +33,17 @@ pub(super) struct Comms {
     pub(super) request: Notify,
     /// Pool is shutting down.
     pub(super) shutdown: Notify,
+}
+
+impl Comms {
+    /// Create new comms.
+    pub(super) fn new() -> Self {
+        Self {
+            ready: Notify::new(),
+            request: Notify::new(),
+            shutdown: Notify::new(),
+        }
+    }
 }
 
 /// Pool state.
@@ -96,7 +106,7 @@ impl Clone for Pool {
 
 impl Pool {
     /// Create new connection pool.
-    pub fn new(config: DatabaseConfig) -> Self {
+    pub fn new(config: PoolConfig) -> Self {
         let pool = Self {
             inner: Arc::new(Mutex::new(Inner {
                 conns: VecDeque::new(),
@@ -108,11 +118,7 @@ impl Pool {
                 paused: false,
                 creating: 0,
             })),
-            comms: Arc::new(Comms {
-                ready: Notify::new(),
-                request: Notify::new(),
-                shutdown: Notify::new(),
-            }),
+            comms: Arc::new(Comms::new()),
             addr: config.address,
         };
 
@@ -198,7 +204,7 @@ impl Pool {
 
     /// Create new identical connection pool.
     pub fn duplicate(&self) -> Pool {
-        Pool::new(DatabaseConfig {
+        Pool::new(PoolConfig {
             address: self.addr().clone(),
             config: *self.lock().config(),
         })

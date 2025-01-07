@@ -6,7 +6,7 @@ use super::{Address, Config, Error, Guard, Shard};
 
 #[derive(Clone, Debug)]
 /// Database configuration.
-pub struct DatabaseConfig {
+pub struct PoolConfig {
     /// Database address.
     pub(crate) address: Address,
     /// Pool settings.
@@ -22,7 +22,7 @@ pub struct Cluster {
 
 impl Cluster {
     /// Create new cluster of shards.
-    pub fn new(shards: &[(Option<DatabaseConfig>, &[DatabaseConfig])]) -> Self {
+    pub fn new(shards: &[(Option<PoolConfig>, &[PoolConfig])]) -> Self {
         Self {
             shards: shards
                 .iter()

@@ -8,7 +8,7 @@ use tracing::error;
 
 use crate::net::messages::BackendKeyData;
 
-use super::{DatabaseConfig, Error, Guard, Pool};
+use super::{Error, Guard, Pool, PoolConfig};
 
 /// Replicas pools.
 #[derive(Clone)]
@@ -19,7 +19,7 @@ pub struct Replicas {
 
 impl Replicas {
     /// Create new replicas pools.
-    pub fn new(addrs: &[DatabaseConfig]) -> Replicas {
+    pub fn new(addrs: &[PoolConfig]) -> Replicas {
         Self {
             pools: addrs.iter().map(|p| Pool::new(p.clone())).collect(),
             checkout_timeout: Duration::from_millis(5_000),
@@ -79,34 +79,30 @@ impl Replicas {
         let mut candidates = self
             .pools
             .iter()
-            .filter(|pool| pool.available())
+            .map(|pool| (pool.state(), pool))
             .collect::<Vec<_>>();
 
         if let Some(primary) = primary {
-            candidates.push(primary);
+            candidates.push((primary.state(), primary));
         }
+
         candidates.shuffle(&mut rand::thread_rng());
 
-        let mut banned = 0;
+        // All replicas are banned, unban everyone.
+        let banned = candidates.iter().all(|(state, _)| state.banned);
+        if banned {
+            candidates
+                .iter()
+                .for_each(|(_, candidate)| candidate.unban());
+        }
 
-        for candidate in &candidates {
+        for (_, candidate) in &candidates {
             match candidate.get(id).await {
                 Ok(conn) => return Ok(conn),
-                Err(Error::Banned) => {
-                    banned += 1;
-                    continue;
-                }
                 Err(Error::Offline) => continue,
                 Err(err) => {
                     error!("{} [{}]", err, candidate.addr());
                 }
-            }
-        }
-
-        // All replicas are banned, clear the ban and try again later.
-        if banned == candidates.len() {
-            for candidate in candidates {
-                candidate.unban();
             }
         }
 

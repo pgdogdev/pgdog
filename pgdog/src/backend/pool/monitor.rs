@@ -1,4 +1,36 @@
 //! Pool monitor and maintenance.
+//!
+//! # Summary
+//!
+//! The monitor has three (3) loops running in different Tokio tasks:
+//!
+//! * the maintenance loop which runs ~3 times per second,
+//! * the healthcheck loop which runs every `idle_healtcheck_interval`
+//! * the new connection loop which runs every time a client asks
+//!   for a new connection to be created
+//!
+//! ## Maintenance loop
+//!
+//! The maintenance loop runs every 333ms and removes connections that
+//! have been idle for longer than `idle_timeout` and are older than `max_age`.
+//!
+//! Additionally, the maintenance loop checks the number of clients waiting and
+//! triggers the new connection loop to run if there are. This mechanism makes sure
+//! that only one connection is created at a time (due to [`tokio::sync::Notify`] storing
+//! only a single permit) and prevents the thundering herd problem when many clients request
+//! a connection from the pool.
+//!
+//! ## New connection loop
+//!
+//! The new connection loop runs every time a client or the maintenance loop request
+//! a new connection to be created. This happens when there are no more idle connections
+//! in the pool & there are clients waiting for a connection.
+//!
+//! Only one iteration of this loop can run at a time, so the pool will create one connection
+//! at a time and re-evaluate the need for more when it's done creating the connection. Since opening
+//! a connection to the server can take ~100ms even inside datacenters, other clients may have returned
+//! connections back to the idle pool in that amount of time, and new connections are no longer needed even
+//! if clients requested ones to be created ~100ms ago.
 
 use std::time::{Duration, Instant};
 
@@ -47,7 +79,7 @@ impl Monitor {
                 // connections are availble.
                 _ = comms.request.notified() => {
                     let (
-                        empty,
+                        idle,
                         can_create,
                         connect_timeout,
                         paused,
@@ -58,7 +90,7 @@ impl Monitor {
                         let mut guard = self.pool.lock();
 
                         (
-                            guard.empty(),
+                            guard.idle(),
                             guard.can_create(),
                             guard.config().connect_timeout(),
                             guard.paused,
@@ -78,14 +110,21 @@ impl Monitor {
                     }
 
                     // An idle connection is available and we don't have a create permit.
-                    if !empty && !create_permit {
-                        comms.ready.notify_one();
+                    if idle > 0 && !create_permit {
+                        match idle {
+                            // Only one connection available, notify one client.
+                            1 => comms.ready.notify_one(),
+                            // Many connections are available, notify everyone.
+                            _ => comms.ready.notify_waiters(),
+                        }
                     } else if can_create && !banned || create_permit {
                         // No idle connections, but we are allowed to create a new one.
                         let ok = self.replenish(connect_timeout).await;
 
                         if ok {
-                            comms.ready.notify_one();
+                            // Notify all clients we have a connection
+                            // available.
+                            comms.ready.notify_waiters();
                         }
                     }
                 }
@@ -126,9 +165,9 @@ impl Monitor {
 
                     }
 
+                    // If the server is okay, remove the ban if it had one.
                     if Self::healthcheck(&pool).await.is_ok() {
-                        let mut guard = pool.lock();
-                        unbanned = guard.maybe_unban();
+                        unbanned = pool.lock().maybe_unban();
                     }
                 }
 
@@ -172,8 +211,11 @@ impl Monitor {
                         continue;
                     }
 
+                    // Close idle connections.
                     guard.close_idle(now);
+                    // Close old connections (max age).
                     guard.close_old(now);
+                    // Check and remove old bans.
                     let unbanned = guard.check_ban(now);
 
                     // If we have clients waiting still, try to open a connection again.
@@ -182,6 +224,8 @@ impl Monitor {
                         comms.request.notify_one();
                     }
 
+                    // Maintain a minimum number of connections
+                    // in the pool.
                     if guard.should_create() {
                         guard.create();
                         comms.request.notify_one();

@@ -7,7 +7,7 @@ use arc_swap::ArcSwap;
 use once_cell::sync::Lazy;
 
 use crate::{
-    backend::pool::DatabaseConfig,
+    backend::pool::PoolConfig,
     config::{ConfigAndUsers, Role},
     net::messages::BackendKeyData,
 };
@@ -135,22 +135,23 @@ impl Databases {
 pub fn from_config(config: &ConfigAndUsers) -> Arc<Databases> {
     let mut databases = HashMap::new();
     let config_databases = config.config.databases();
+    let general = &config.config.general;
 
     for user in &config.users.users {
         if let Some(user_databases) = config_databases.get(&user.database) {
             let primary = user_databases
                 .iter()
                 .find(|d| d.role == Role::Primary)
-                .map(|primary| DatabaseConfig {
-                    address: Address::new(&config.config.general, primary, user),
-                    config: Config::new(&config.config.general, primary, user),
+                .map(|primary| PoolConfig {
+                    address: Address::new(primary, user),
+                    config: Config::new(general, primary, user),
                 });
             let replicas = user_databases
                 .iter()
                 .filter(|d| d.role == Role::Replica)
-                .map(|replica| DatabaseConfig {
-                    address: Address::new(&config.config.general, replica, user),
-                    config: Config::new(&config.config.general, replica, user),
+                .map(|replica| PoolConfig {
+                    address: Address::new(replica, user),
+                    config: Config::new(general, replica, user),
                 })
                 .collect::<Vec<_>>();
 

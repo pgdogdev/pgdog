@@ -42,6 +42,7 @@ impl Inner {
 
     /// The pool is currently empty of idle connections.
     #[inline]
+    #[allow(dead_code)]
     pub(super) fn empty(&self) -> bool {
         self.idle() == 0
     }
