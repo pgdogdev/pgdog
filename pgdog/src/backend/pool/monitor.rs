@@ -152,7 +152,7 @@ impl Monitor {
         let mut tick = interval(pool.lock().config().idle_healthcheck_interval());
         let comms = pool.comms();
 
-        debug!("healtchecks running [{}]", pool.addr());
+        debug!("healthchecks running [{}]", pool.addr());
 
         loop {
             let mut unbanned = false;

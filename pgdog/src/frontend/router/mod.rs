@@ -49,22 +49,23 @@ impl Router {
         for plugin in plugins() {
             match plugin.route(query.query()) {
                 None => continue,
-                Some(route) => {
-                    if route.is_unknown() {
-                        continue;
+                Some(output) => {
+                    if let Some(route) = output.route() {
+                        if route.is_unknown() {
+                            continue;
+                        }
+                        self.route = route;
+
+                        debug!(
+                            "routing {} to shard {} [{}, {:.3}ms]",
+                            if route.read() { "read" } else { "write" },
+                            route.shard().unwrap_or(0),
+                            plugin.name(),
+                            now.elapsed().as_secs_f64() * 1000.0,
+                        );
+
+                        return Ok(route);
                     }
-
-                    self.route = route;
-
-                    debug!(
-                        "routing {} to shard {} [{}, {:.3}ms]",
-                        if route.read() { "read" } else { "write" },
-                        route.shard().unwrap_or(0),
-                        plugin.name(),
-                        now.elapsed().as_secs_f64() * 1000.0,
-                    );
-
-                    return Ok(route);
                 }
             }
         }

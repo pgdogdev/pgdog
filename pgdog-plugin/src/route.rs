@@ -1,4 +1,33 @@
+#![allow(non_upper_case_globals)]
+
 use crate::bindings::*;
+
+impl RoutingOutput {
+    /// Create new route.
+    pub fn new_route(route: Route) -> RoutingOutput {
+        RoutingOutput { route }
+    }
+}
+
+impl Output {
+    /// Create new forward output.
+    ///
+    /// This means the query will be forwarded as-is to a destination
+    /// specified in the route.
+    pub fn forward(route: Route) -> Output {
+        Output {
+            decision: RoutingDecision_FORWARD,
+            output: RoutingOutput::new_route(route),
+        }
+    }
+
+    pub fn route(&self) -> Option<Route> {
+        match self.decision {
+            RoutingDecision_FORWARD => Some(unsafe { self.output.route }),
+            _ => None,
+        }
+    }
+}
 
 impl Route {
     ///

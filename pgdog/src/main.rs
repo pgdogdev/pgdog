@@ -4,7 +4,7 @@ use backend::databases;
 use clap::Parser;
 use frontend::listener::Listener;
 use tokio::runtime::Builder;
-use tracing::info;
+use tracing::{info, level_filters::LevelFilter};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 use std::io::IsTerminal;
@@ -28,9 +28,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_ansi(std::io::stderr().is_terminal())
         .with_file(false);
 
+    let filter = EnvFilter::builder()
+        .with_default_directive(LevelFilter::INFO.into())
+        .from_env_lossy();
+
     tracing_subscriber::registry()
         .with(format)
-        .with(EnvFilter::from_default_env())
+        .with(filter)
         .init();
 
     info!("🐕 pgDog {}", env!("CARGO_PKG_VERSION"));

@@ -52,6 +52,29 @@ const _: () = {
     ["Offset of field: Route::affinity"][::std::mem::offset_of!(Route, affinity) - 0usize];
     ["Offset of field: Route::shard"][::std::mem::offset_of!(Route, shard) - 4usize];
 };
+pub const RoutingDecision_FORWARD: RoutingDecision = 1;
+pub const RoutingDecision_REWRITE: RoutingDecision = 2;
+pub const RoutingDecision_BLOCK: RoutingDecision = 3;
+pub const RoutingDecision_INTERCEPT: RoutingDecision = 4;
+pub const RoutingDecision_NO_DECISION: RoutingDecision = 5;
+pub type RoutingDecision = ::std::os::raw::c_uint;
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct Error {
+    pub severity: *mut ::std::os::raw::c_char,
+    pub code: *mut ::std::os::raw::c_char,
+    pub message: *mut ::std::os::raw::c_char,
+    pub detail: *mut ::std::os::raw::c_char,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of Error"][::std::mem::size_of::<Error>() - 32usize];
+    ["Alignment of Error"][::std::mem::align_of::<Error>() - 8usize];
+    ["Offset of field: Error::severity"][::std::mem::offset_of!(Error, severity) - 0usize];
+    ["Offset of field: Error::code"][::std::mem::offset_of!(Error, code) - 8usize];
+    ["Offset of field: Error::message"][::std::mem::offset_of!(Error, message) - 16usize];
+    ["Offset of field: Error::detail"][::std::mem::offset_of!(Error, detail) - 24usize];
+};
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct RowColumn {
@@ -110,4 +133,51 @@ const _: () = {
         [::std::mem::offset_of!(RowDescription, num_columns) - 0usize];
     ["Offset of field: RowDescription::columns"]
         [::std::mem::offset_of!(RowDescription, columns) - 8usize];
+};
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct Intercept {
+    pub row_description: RowDescription,
+    pub num_rows: ::std::os::raw::c_int,
+    pub rows: *mut Row,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of Intercept"][::std::mem::size_of::<Intercept>() - 32usize];
+    ["Alignment of Intercept"][::std::mem::align_of::<Intercept>() - 8usize];
+    ["Offset of field: Intercept::row_description"]
+        [::std::mem::offset_of!(Intercept, row_description) - 0usize];
+    ["Offset of field: Intercept::num_rows"][::std::mem::offset_of!(Intercept, num_rows) - 16usize];
+    ["Offset of field: Intercept::rows"][::std::mem::offset_of!(Intercept, rows) - 24usize];
+};
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub union RoutingOutput {
+    pub route: Route,
+    pub error: Error,
+    pub intercept: Intercept,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of RoutingOutput"][::std::mem::size_of::<RoutingOutput>() - 32usize];
+    ["Alignment of RoutingOutput"][::std::mem::align_of::<RoutingOutput>() - 8usize];
+    ["Offset of field: RoutingOutput::route"]
+        [::std::mem::offset_of!(RoutingOutput, route) - 0usize];
+    ["Offset of field: RoutingOutput::error"]
+        [::std::mem::offset_of!(RoutingOutput, error) - 0usize];
+    ["Offset of field: RoutingOutput::intercept"]
+        [::std::mem::offset_of!(RoutingOutput, intercept) - 0usize];
+};
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct Output {
+    pub decision: RoutingDecision,
+    pub output: RoutingOutput,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of Output"][::std::mem::size_of::<Output>() - 40usize];
+    ["Alignment of Output"][::std::mem::align_of::<Output>() - 8usize];
+    ["Offset of field: Output::decision"][::std::mem::offset_of!(Output, decision) - 0usize];
+    ["Offset of field: Output::output"][::std::mem::offset_of!(Output, output) - 8usize];
 };

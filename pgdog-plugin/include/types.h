@@ -30,6 +30,26 @@ typedef struct Route {
     int shard;
 } Route;
 
+typedef enum RoutingDecision {
+    FORWARD = 1,
+    REWRITE = 2,
+    BLOCK = 3,
+    INTERCEPT = 4,
+    NO_DECISION = 5, /* The plugin doesn't want to make a decision. We'll try
+                 the next plugin in the chain. */
+} RoutingDecision;
+
+/*
+ * Error returned by the router plugin.
+ * This will be sent to the client and the transaction will be aborted.
+*/
+typedef struct Error {
+    char *severity;
+    char *code;
+    char *message;
+    char *detail;
+} Error;
+
 typedef struct RowColumn {
     int length;
     char *data;
@@ -50,3 +70,20 @@ typedef struct RowDescription {
     int num_columns;
     RowDescriptionColumn *columns;
 } RowDescription;
+
+typedef struct Intercept {
+    RowDescription row_description;
+    int num_rows;
+    Row *rows;
+} Intercept;
+
+typedef union RoutingOutput {
+    Route route;
+    Error error;
+    Intercept intercept;
+} RoutingOutput;
+
+typedef struct Output {
+    RoutingDecision decision;
+    RoutingOutput output;
+} Output;
