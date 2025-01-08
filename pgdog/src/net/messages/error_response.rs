@@ -37,6 +37,10 @@ impl ErrorResponse {
             detail: None,
         }
     }
+
+    pub fn shutting_down() -> ErrorResponse {
+        todo!()
+    }
 }
 
 impl Display for ErrorResponse {

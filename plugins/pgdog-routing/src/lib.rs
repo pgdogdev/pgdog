@@ -78,3 +78,11 @@ fn route_internal(query: &str, config: Config) -> Result<Route, pg_query::Error>
 
     Ok(Route::write_any())
 }
+
+#[no_mangle]
+pub extern "C" fn pgdog_fini() {
+    debug!(
+        "🐕 pgDog routing plugin v{} shutting down",
+        env!("CARGO_PKG_VERSION")
+    );
+}

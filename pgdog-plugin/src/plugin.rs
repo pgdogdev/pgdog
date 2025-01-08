@@ -8,6 +8,8 @@ pub struct Plugin<'a> {
     name: String,
     /// Initialization routine.
     init: Option<Symbol<'a, unsafe extern "C" fn()>>,
+    /// Shutdown routine.
+    fini: Option<Symbol<'a, unsafe extern "C" fn()>>,
     /// Route query to a shard.
     route: Option<Symbol<'a, unsafe extern "C" fn(bindings::Input) -> Output>>,
 }
@@ -21,22 +23,16 @@ impl<'a> Plugin<'a> {
 
     /// Load standard methods from the plugin library.
     pub fn load(name: &str, library: &'a Library) -> Self {
-        let route = if let Ok(route) = unsafe { library.get(b"pgdog_route_query\0") } {
-            Some(route)
-        } else {
-            None
-        };
-
-        let init = if let Ok(init) = unsafe { library.get(b"pgdog_init\0") } {
-            Some(init)
-        } else {
-            None
-        };
+        let route =
+            unsafe { library.get(b"pgdog_route_query\0") }.map_or(None, |route| Some(route));
+        let init = unsafe { library.get(b"pgdog_init\0") }.map_or(None, |init| Some(init));
+        let fini = unsafe { library.get(b"pgdog_fini\0") }.map_or(None, |fini| Some(fini));
 
         Self {
             name: name.to_owned(),
             route,
             init,
+            fini,
         }
     }
 
@@ -54,6 +50,12 @@ impl<'a> Plugin<'a> {
             true
         } else {
             false
+        }
+    }
+
+    pub fn fini(&self) {
+        if let Some(ref fini) = &self.fini {
+            unsafe { fini() }
         }
     }
 

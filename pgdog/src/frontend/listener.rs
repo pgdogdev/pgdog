@@ -1,13 +1,11 @@
 //! Connection listener. Handles all client connections.
 
-use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::Arc;
 
-use parking_lot::Mutex;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::select;
 use tokio::signal::ctrl_c;
+use tokio_util::task::TaskTracker;
 
 use crate::backend::databases::databases;
 use crate::net::messages::BackendKeyData;
@@ -17,16 +15,13 @@ use crate::net::Stream;
 
 use tracing::{error, info};
 
-use super::{Client, Error};
-
-/// Connected clients.
-type Clients = Arc<Mutex<HashMap<BackendKeyData, ()>>>;
+use super::{Client, Comms, Error};
 
 /// Client connections listener and handler.
 #[derive(Debug)]
 pub struct Listener {
     addr: String,
-    clients: Clients,
+    clients: TaskTracker,
 }
 
 impl Listener {
@@ -34,27 +29,24 @@ impl Listener {
     pub fn new(addr: impl ToString) -> Self {
         Self {
             addr: addr.to_string(),
-            clients: Arc::new(Mutex::new(HashMap::new())),
+            clients: TaskTracker::new(),
         }
     }
 
     /// Listen for client connections and handle them.
     pub async fn listen(&mut self) -> Result<(), Error> {
+        let listener = TcpListener::bind(&self.addr).await?;
+        let comms = Comms::new();
         info!("🐕 pgDog listening on {}", self.addr);
 
-        // Init the pool early in case we need to spin up some
-        // connections.
-
-        let listener = TcpListener::bind(&self.addr).await?;
-
         loop {
+            let comms = comms.clone();
             select! {
                 connection = listener.accept() => {
                    let (stream, addr) = connection?;
-                   let clients = self.clients.clone();
 
-                   tokio::spawn(async move {
-                       match Self::handle_client(stream, addr, clients).await {
+                   self.clients.spawn(async move {
+                       match Self::handle_client(stream, addr, comms).await {
                            Ok(_) => (),
                            Err(err) => {
                                error!("client crashed: {:?}", err);
@@ -64,6 +56,10 @@ impl Listener {
                 }
 
                 _ = ctrl_c() => {
+                    self.clients.close();
+                    comms.shutdown();
+                    info!("Waiting for clients to finish transactions...");
+                    self.clients.wait().await;
                     break;
                 }
             }
@@ -72,11 +68,7 @@ impl Listener {
         Ok(())
     }
 
-    async fn handle_client(
-        stream: TcpStream,
-        addr: SocketAddr,
-        clients: Clients,
-    ) -> Result<(), Error> {
+    async fn handle_client(stream: TcpStream, addr: SocketAddr, comms: Comms) -> Result<(), Error> {
         info!("client connected [{}]", addr);
 
         let mut stream = Stream::plain(stream);
@@ -98,17 +90,8 @@ impl Listener {
                 }
 
                 Startup::Startup { params } => {
-                    let client = Client::new(stream, params).await?;
-                    let id = client.id();
-
-                    clients.lock().insert(id, ());
-
-                    match client.spawn().await {
-                        Ok(_) => info!("client disconnected [{}]", addr),
-                        Err(err) => error!("client disconnected with error [{}]: {}", addr, err),
-                    }
-
-                    clients.lock().remove(&id);
+                    let client = Client::new(stream, params, addr, comms).await?;
+                    client.spawn().await;
                     break;
                 }
 

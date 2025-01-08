@@ -26,3 +26,4 @@ rustls-pki-types = "*"
 arc-swap = "1"
 toml = "0.8"
 pgdog-plugin = { path = "../pgdog-plugin" }
+tokio-util = { version = "0.7", features = ["rt"] }

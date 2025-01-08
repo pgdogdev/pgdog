@@ -45,7 +45,7 @@ impl DatabaseConfig {
     ///
     /// SAFETY: This is not to be used by plugins.
     /// This is for internal pgDog usage only.
-    pub unsafe fn drop(&self) {
+    pub(crate) unsafe fn drop(&self) {
         drop(unsafe { CString::from_raw(self.host) })
     }
 }
@@ -93,7 +93,7 @@ impl Config {
     ///
     /// SAFETY: This is not to be used by plugins.
     /// This is for internal pgDog usage only.
-    pub unsafe fn drop(&self) {
+    pub(crate) unsafe fn drop(&self) {
         self.databases().into_iter().for_each(|d| d.drop());
 
         let layout = Layout::array::<DatabaseConfig>(self.num_databases as usize).unwrap();

@@ -2,11 +2,13 @@
 
 pub mod buffer;
 pub mod client;
+pub mod comms;
 pub mod error;
 pub mod listener;
 pub mod router;
 
 pub use buffer::Buffer;
 pub use client::Client;
+pub use comms::Comms;
 pub use error::Error;
 pub use router::Router;

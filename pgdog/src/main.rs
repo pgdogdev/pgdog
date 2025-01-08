@@ -4,6 +4,8 @@ use backend::databases;
 use clap::Parser;
 use frontend::listener::Listener;
 use tokio::runtime::Builder;
+use tokio::select;
+use tokio::signal::ctrl_c;
 use tracing::{info, level_filters::LevelFilter};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
@@ -14,6 +16,7 @@ pub mod auth;
 pub mod backend;
 pub mod channel;
 pub mod cli;
+pub mod comms;
 pub mod config;
 pub mod frontend;
 pub mod net;
@@ -73,6 +76,7 @@ async fn pgdog() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut listener = Listener::new("0.0.0.0:6432");
     listener.listen().await?;
+    plugin::shutdown();
 
     Ok(())
 }

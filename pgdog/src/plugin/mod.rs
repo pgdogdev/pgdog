@@ -7,9 +7,6 @@ use pgdog_plugin::Plugin;
 use tokio::time::Instant;
 use tracing::{debug, error, info, warn};
 
-pub mod api;
-pub mod types;
-
 static LIBS: OnceCell<Vec<Library>> = OnceCell::new();
 pub static PLUGINS: OnceCell<Vec<Plugin>> = OnceCell::new();
 
@@ -18,6 +15,7 @@ pub static PLUGINS: OnceCell<Vec<Plugin>> = OnceCell::new();
 /// # Safety
 ///
 /// This should be run before Tokio is loaded since this is not thread-safe.
+///
 pub fn load(names: &[&str]) -> Result<(), libloading::Error> {
     if LIBS.get().is_some() {
         return Ok(());
@@ -60,6 +58,13 @@ pub fn load(names: &[&str]) -> Result<(), libloading::Error> {
     let _ = PLUGINS.set(plugins);
 
     Ok(())
+}
+
+/// Shutdown plugins.
+pub fn shutdown() {
+    for plugin in plugins() {
+        plugin.fini();
+    }
 }
 
 /// Get plugin by name.
