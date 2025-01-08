@@ -16,7 +16,7 @@ similar features, better performance, and introduces new features like plugins.
 
 ### Plugins
 
-pgDog comes with its own plugin system which allows plugins to be loaded at runtime using a shared library interface. As long as the plugin can expose a predefined C API, it can be written in any language, including Rust, C/C++, Zig, Go, Python, Ruby, Java, and many more.
+pgDog comes with its own plugin system which allows plugins to be loaded at runtime using a shared library interface. As long as the plugin can expose a predefined C API, it can be written in any language, including C/C++, Rust, Zig, Go, Python, Ruby, Java, and many more.
 
 Plugins can be used to route queries to specific databases in a sharded configuration, or to
 split traffic between writes and reads in a mixed (primary & replicas) deployment. The plugin
