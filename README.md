@@ -29,7 +29,7 @@ Examples of plugins can be found in [examples](https://github.com/levkk/pgdog/tr
 
 ### Load balancer
 
-pgDog is an application layer (OSI Level 7) load balancer for PostgreSQL. It can proxy multiple replicas (and primary) and distribute query workloads. It comes with support for multiple strategies, including round robin and random.
+pgDog is an application layer (OSI Level 7) load balancer for PostgreSQL. It can proxy multiple replicas (and primary) and distribute transactions. It comes with support for multiple strategies, including round robin and random.
 
 &#128216; **[Load balancer](https://pgdog.dev/features/load-balancer)**
 
@@ -142,5 +142,5 @@ and allows the following without any additional requirements from you or your or
 You can freely use pgDog to power your PostgreSQL databases without having to
 share any source code, including proprietary work product or any pgDog modifications you make.
 
-AGPL was written specifically for organizations that offer pgDog _as a service_ and require
+AGPL was written specifically for organizations that offer pgDog _as a public service_ (e.g. database cloud providers) and require
 those organizations to share any modifications they make to pgDog, including new features and bug fixes.
