@@ -112,6 +112,6 @@ impl Cluster {
             }
         }
 
-        Ok(Config::new(name, &databases))
+        Ok(Config::new(name, &databases, self.shards.len()))
     }
 }

@@ -12,18 +12,11 @@ pub mod plugin;
 pub mod query;
 pub mod route;
 
+pub use bindings::*;
 pub use c_api::*;
 pub use plugin::*;
-pub use query::*;
-
-/// Routing decision returned by a plugin.
-pub use bindings::Route;
 
 pub use libloading;
-
-pub use bindings::{
-    Affinity_READ, Affinity_WRITE, Row, RowColumn, RowDescription, RowDescriptionColumn,
-};
 
 #[cfg(test)]
 mod test {
@@ -33,7 +26,7 @@ mod test {
     #[test]
     fn test_query() {
         let query = CString::new("SELECT 1").unwrap();
-        let query = Query::new(&query);
+        let query = Query::new(query);
         assert_eq!(query.query(), "SELECT 1");
     }
 }

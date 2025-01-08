@@ -4,10 +4,7 @@ use std::ffi::CString;
 
 use crate::{backend::Cluster, plugin::plugins};
 
-use pgdog_plugin::{
-    bindings::{Input, RoutingInput},
-    Query, Route,
-};
+use pgdog_plugin::{Input, Query, Route, RoutingInput};
 use tokio::time::Instant;
 use tracing::debug;
 
@@ -48,9 +45,8 @@ impl Router {
             .query()
             .map_err(|_| Error::NoQueryInBuffer)?
             .ok_or(Error::NoQueryInBuffer)?;
-        let c_query = CString::new(query.as_str())?;
 
-        let mut query = Query::new(&c_query);
+        let mut query = Query::new(CString::new(query.as_str())?);
 
         // SAFETY: query has not allocated memory for parameters yet.
         if let Ok(Some(bind)) = buffer.parameters() {
@@ -91,8 +87,8 @@ impl Router {
             }
         }
 
-        unsafe { input.drop() };
-        query.drop();
+        unsafe { input.drop() }
+        unsafe { query.drop() }
         Ok(self.route)
     }
 

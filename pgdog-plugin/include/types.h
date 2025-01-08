@@ -166,6 +166,7 @@ typedef struct Config {
     DatabaseConfig *databases;
     /* Database name from pgdog.toml. */
     char *name;
+    int shards;
 } Config;
 
 /*

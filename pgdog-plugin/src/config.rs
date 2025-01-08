@@ -43,16 +43,16 @@ impl DatabaseConfig {
 
     /// Deallocate this structure after use.
     ///
-    /// SAFETY: Do this or we'll have leaks. We can't write a Drop impl because
-    /// this structure is repr C and impl Copy (as it should).
-    pub fn drop(&self) {
+    /// SAFETY: This is not to be used by plugins.
+    /// This is for internal pgDog usage only.
+    pub unsafe fn drop(&self) {
         drop(unsafe { CString::from_raw(self.host) })
     }
 }
 
 impl Config {
     /// Create new config structure.
-    pub fn new(name: CString, databases: &[DatabaseConfig]) -> Self {
+    pub fn new(name: CString, databases: &[DatabaseConfig], shards: usize) -> Self {
         let layout = Layout::array::<DatabaseConfig>(databases.len()).unwrap();
         let ptr = unsafe {
             let ptr = alloc(layout) as *mut DatabaseConfig;
@@ -64,6 +64,7 @@ impl Config {
             num_databases: databases.len() as i32,
             databases: ptr,
             name: name.into_raw(),
+            shards: shards as i32,
         }
     }
 
@@ -83,10 +84,16 @@ impl Config {
             .collect()
     }
 
+    /// Number of shards.
+    pub fn shards(&self) -> usize {
+        self.shards as usize
+    }
+
     /// Deallocate this structure.
     ///
-    /// SAFETY: Do this when you're done with this structure, or we have memory leaks.
-    pub fn drop(&self) {
+    /// SAFETY: This is not to be used by plugins.
+    /// This is for internal pgDog usage only.
+    pub unsafe fn drop(&self) {
         self.databases().into_iter().for_each(|d| d.drop());
 
         let layout = Layout::array::<DatabaseConfig>(self.num_databases as usize).unwrap();

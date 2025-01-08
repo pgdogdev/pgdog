@@ -214,15 +214,17 @@ pub struct Config {
     pub num_databases: ::std::os::raw::c_int,
     pub databases: *mut DatabaseConfig,
     pub name: *mut ::std::os::raw::c_char,
+    pub shards: ::std::os::raw::c_int,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
-    ["Size of Config"][::std::mem::size_of::<Config>() - 24usize];
+    ["Size of Config"][::std::mem::size_of::<Config>() - 32usize];
     ["Alignment of Config"][::std::mem::align_of::<Config>() - 8usize];
     ["Offset of field: Config::num_databases"]
         [::std::mem::offset_of!(Config, num_databases) - 0usize];
     ["Offset of field: Config::databases"][::std::mem::offset_of!(Config, databases) - 8usize];
     ["Offset of field: Config::name"][::std::mem::offset_of!(Config, name) - 16usize];
+    ["Offset of field: Config::shards"][::std::mem::offset_of!(Config, shards) - 24usize];
 };
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -246,9 +248,9 @@ pub struct Input {
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
-    ["Size of Input"][::std::mem::size_of::<Input>() - 64usize];
+    ["Size of Input"][::std::mem::size_of::<Input>() - 72usize];
     ["Alignment of Input"][::std::mem::align_of::<Input>() - 8usize];
     ["Offset of field: Input::config"][::std::mem::offset_of!(Input, config) - 0usize];
-    ["Offset of field: Input::input_type"][::std::mem::offset_of!(Input, input_type) - 24usize];
-    ["Offset of field: Input::input"][::std::mem::offset_of!(Input, input) - 32usize];
+    ["Offset of field: Input::input_type"][::std::mem::offset_of!(Input, input_type) - 32usize];
+    ["Offset of field: Input::input"][::std::mem::offset_of!(Input, input) - 40usize];
 };
