@@ -1,35 +1,28 @@
 //! PostgreSQL wire protocol messages.
-pub mod command_complete;
-pub mod hello;
-pub use hello::Startup;
-
-pub mod payload;
-pub use payload::Payload;
-
 pub mod auth;
-pub use auth::Authentication;
-
-pub mod rfq;
-pub use rfq::ReadyForQuery;
-
 pub mod backend_key;
-pub use backend_key::BackendKeyData;
-
-pub mod parameter_status;
-pub use parameter_status::ParameterStatus;
-
+pub mod bind;
+pub mod command_complete;
 pub mod error_response;
-pub use error_response::ErrorResponse;
-
-pub mod query;
-pub use query::Query;
-
-pub mod terminate;
-pub use terminate::Terminate;
-
+pub mod hello;
+pub mod parameter_status;
 pub mod parse;
-
+pub mod payload;
 pub mod prelude;
+pub mod query;
+pub mod rfq;
+pub mod terminate;
+
+pub use auth::Authentication;
+pub use backend_key::BackendKeyData;
+pub use bind::Bind;
+pub use error_response::ErrorResponse;
+pub use hello::Startup;
+pub use parameter_status::ParameterStatus;
+pub use payload::Payload;
+pub use query::Query;
+pub use rfq::ReadyForQuery;
+pub use terminate::Terminate;
 
 use crate::net::Error;
 
@@ -61,7 +54,7 @@ pub trait Protocol: ToBytes + FromBytes {
 }
 
 /// PostgreSQL protocol message.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Message {
     payload: Bytes,
 }

@@ -1,7 +1,9 @@
 //! Frontend client.
 
+use std::time::Instant;
+
 use tokio::select;
-use tracing::{debug, error};
+use tracing::{debug, error, trace};
 
 use super::{Buffer, Error, Router};
 use crate::backend::pool::Connection;
@@ -98,7 +100,7 @@ impl Client {
 
         let mut backend = Connection::new(user, database, admin)?;
         let mut router = Router::new();
-        let mut flush = false;
+        let mut timer = Instant::now();
 
         self.state = State::Idle;
 
@@ -109,9 +111,8 @@ impl Client {
                         break;
                     }
 
-                    flush = buffer.flush();
-
                     if !backend.connected() {
+                        timer = Instant::now();
                         // Figure out where the query should go.
                         router.query(&buffer)?;
 
@@ -129,7 +130,7 @@ impl Client {
                             }
                         };
                         self.state = State::Active;
-                        debug!("client paired with {}", backend.addr()?);
+                        debug!("client paired with {} [{}ms]", backend.addr()?, timer.elapsed().as_secs_f64() * 1000.0);
                     }
 
                     // Send query to server.
@@ -141,9 +142,8 @@ impl Client {
                     let len = message.len();
 
                     // ReadyForQuery (B) | CopyInResponse (B)
-                    if matches!(message.code(), 'Z' | 'G') || flush {
+                    if matches!(message.code(), 'Z' | 'G') {
                         self.stream.send_flush(message).await?;
-                        flush = false;
                         self.stats.queries += 1;
                     }  else {
                         self.stream.send(message).await?;
@@ -153,6 +153,7 @@ impl Client {
                         backend.disconnect();
                         self.stats.transactions += 1;
                         self.state = State::Idle;
+                        trace!("transaction finished [{}ms]", timer.elapsed().as_secs_f64() * 1000.0);
                     }
 
                     self.stats.bytes_sent += len;
@@ -169,6 +170,7 @@ impl Client {
     /// sent a complete request.
     async fn buffer(&mut self) -> Buffer {
         let mut buffer = Buffer::new();
+        let timer = Instant::now();
 
         while !buffer.full() {
             let message = match self.stream.read().await {
@@ -190,6 +192,11 @@ impl Client {
                 _ => buffer.push(message),
             }
         }
+
+        trace!(
+            "request buffered [{:.4}ms]",
+            timer.elapsed().as_secs_f64() * 1000.0
+        );
 
         buffer
     }

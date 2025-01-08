@@ -7,6 +7,8 @@ use pgdog_plugin::Plugin;
 use tokio::time::Instant;
 use tracing::{debug, error, info, warn};
 
+pub mod types;
+
 static LIBS: OnceCell<Vec<Library>> = OnceCell::new();
 pub static PLUGINS: OnceCell<Vec<Plugin>> = OnceCell::new();
 

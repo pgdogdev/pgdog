@@ -3,11 +3,12 @@
 use std::ops::{Deref, DerefMut};
 
 use crate::net::{
-    messages::{parse::Parse, FromBytes, Message, Protocol, Query, ToBytes},
+    messages::{parse::Parse, Bind, FromBytes, Message, Protocol, Query, ToBytes},
     Error,
 };
 
 /// Message buffer.
+#[derive(Debug, Clone)]
 pub struct Buffer {
     buffer: Vec<Message>,
 }
@@ -24,24 +25,11 @@ impl Buffer {
         Self { buffer: vec![] }
     }
 
-    /// The client expects a response immediately
-    /// to a specific message which isn't a query.
-    pub fn flush(&self) -> bool {
-        for message in &self.buffer {
-            // Describe (F) | Flush (F)
-            if matches!(message.code(), 'D' | 'H') {
-                return true;
-            }
-        }
-
-        false
-    }
-
     /// The buffer is full and the client won't send any more messages
     /// until it gets a reply, or we don't want to buffer the data in memory.
     pub fn full(&self) -> bool {
         if let Some(message) = self.buffer.last() {
-            // Flush (F) | Sync (F) | Query (F) | CopyDone (F)
+            // Flush (F) | Sync (F) | Query (F) | CopyDone (F) | Describe (F)
             if matches!(message.code(), 'H' | 'S' | 'Q' | 'c') {
                 return true;
             }
@@ -70,6 +58,18 @@ impl Buffer {
             } else if message.code() == 'P' {
                 let parse = Parse::from_bytes(message.to_bytes()?)?;
                 return Ok(Some(parse.query));
+            }
+        }
+
+        Ok(None)
+    }
+
+    /// If this buffer contains bound parameters, retrieve them.
+    pub fn parameters(&self) -> Result<Option<Bind>, Error> {
+        for message in &self.buffer {
+            if message.code() == 'B' {
+                let bind = Bind::from_bytes(message.to_bytes()?)?;
+                return Ok(Some(bind));
             }
         }
 

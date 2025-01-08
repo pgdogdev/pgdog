@@ -117,16 +117,11 @@ impl Stream {
         &mut self,
         messages: Vec<impl Protocol>,
     ) -> Result<usize, crate::net::Error> {
-        let len = messages.len();
         let mut sent = 0;
-        for (i, message) in messages.into_iter().enumerate() {
-            if i == len - 1 {
-                sent += self.send_flush(message).await?;
-            } else {
-                sent += self.send(message).await?;
-            }
+        for message in messages {
+            sent += self.send(message).await?;
         }
-
+        self.flush().await?;
         Ok(sent)
     }
 

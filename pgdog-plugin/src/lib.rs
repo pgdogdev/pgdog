@@ -4,6 +4,7 @@
 pub mod bindings;
 
 pub mod c_api;
+pub mod parameter;
 pub mod plugin;
 pub mod query;
 pub mod route;

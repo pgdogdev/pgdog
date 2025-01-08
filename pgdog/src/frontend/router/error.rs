@@ -10,4 +10,7 @@ pub enum Error {
 
     #[error("no query in buffer")]
     NoQueryInBuffer,
+
+    #[error("{0}")]
+    Net(#[from] crate::net::Error),
 }

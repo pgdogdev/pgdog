@@ -37,4 +37,7 @@ pub enum Error {
 
     #[error("\"{0}\" parameter is missing")]
     MissingParameter(String),
+
+    #[error("incorrect parameter format code: {0}")]
+    IncorrectParameterFormatCode(i16),
 }

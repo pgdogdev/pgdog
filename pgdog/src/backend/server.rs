@@ -8,7 +8,7 @@ use tokio::{
     net::TcpStream,
     spawn,
 };
-use tracing::{debug, info};
+use tracing::{debug, info, trace};
 
 use super::{pool::Address, Error};
 use crate::net::{
@@ -154,16 +154,21 @@ impl Server {
     /// Send messages to the server.
     pub async fn send(&mut self, messages: Vec<impl Protocol>) -> Result<(), Error> {
         self.state = State::Active;
+        let timer = Instant::now();
         match self.stream().send_many(messages).await {
             Ok(sent) => {
                 self.stats.bytes_sent += sent;
-                Ok(())
             }
             Err(err) => {
                 self.state = State::Error;
-                Err(err.into())
+                return Err(err.into());
             }
-        }
+        };
+        trace!(
+            "request sent to server [{:.4}ms]",
+            timer.elapsed().as_secs_f64() * 1000.0
+        );
+        Ok(())
     }
 
     /// Flush all pending messages making sure they are sent to the server immediately.

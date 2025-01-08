@@ -2,26 +2,26 @@
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
-pub struct Value {
+pub struct Parameter {
     pub len: ::std::os::raw::c_int,
     pub data: *const ::std::os::raw::c_char,
-    pub oid: ::std::os::raw::c_int,
+    pub format: ::std::os::raw::c_int,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
-    ["Size of Value"][::std::mem::size_of::<Value>() - 24usize];
-    ["Alignment of Value"][::std::mem::align_of::<Value>() - 8usize];
-    ["Offset of field: Value::len"][::std::mem::offset_of!(Value, len) - 0usize];
-    ["Offset of field: Value::data"][::std::mem::offset_of!(Value, data) - 8usize];
-    ["Offset of field: Value::oid"][::std::mem::offset_of!(Value, oid) - 16usize];
+    ["Size of Parameter"][::std::mem::size_of::<Parameter>() - 24usize];
+    ["Alignment of Parameter"][::std::mem::align_of::<Parameter>() - 8usize];
+    ["Offset of field: Parameter::len"][::std::mem::offset_of!(Parameter, len) - 0usize];
+    ["Offset of field: Parameter::data"][::std::mem::offset_of!(Parameter, data) - 8usize];
+    ["Offset of field: Parameter::format"][::std::mem::offset_of!(Parameter, format) - 16usize];
 };
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct Query {
     pub len: ::std::os::raw::c_int,
     pub query: *const ::std::os::raw::c_char,
-    pub num_values: ::std::os::raw::c_int,
-    pub values: *const Value,
+    pub num_parameters: ::std::os::raw::c_int,
+    pub parameters: *const Parameter,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
@@ -29,8 +29,9 @@ const _: () = {
     ["Alignment of Query"][::std::mem::align_of::<Query>() - 8usize];
     ["Offset of field: Query::len"][::std::mem::offset_of!(Query, len) - 0usize];
     ["Offset of field: Query::query"][::std::mem::offset_of!(Query, query) - 8usize];
-    ["Offset of field: Query::num_values"][::std::mem::offset_of!(Query, num_values) - 16usize];
-    ["Offset of field: Query::values"][::std::mem::offset_of!(Query, values) - 24usize];
+    ["Offset of field: Query::num_parameters"]
+        [::std::mem::offset_of!(Query, num_parameters) - 16usize];
+    ["Offset of field: Query::parameters"][::std::mem::offset_of!(Query, parameters) - 24usize];
 };
 pub const Affinity_READ: Affinity = 1;
 pub const Affinity_WRITE: Affinity = 2;
@@ -54,7 +55,7 @@ const _: () = {
 };
 pub const RoutingDecision_FORWARD: RoutingDecision = 1;
 pub const RoutingDecision_REWRITE: RoutingDecision = 2;
-pub const RoutingDecision_BLOCK: RoutingDecision = 3;
+pub const RoutingDecision_ERROR: RoutingDecision = 3;
 pub const RoutingDecision_INTERCEPT: RoutingDecision = 4;
 pub const RoutingDecision_NO_DECISION: RoutingDecision = 5;
 pub type RoutingDecision = ::std::os::raw::c_uint;
