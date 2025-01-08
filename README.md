@@ -1,4 +1,4 @@
-# pgDog - PostgreSQL Pooler and Load Balancer
+# pgDog - PostgreSQL Load Balancer
 
 [![Documentation](https://img.shields.io/badge/documentation-blue?style=flat)](https://pgdog.dev)
 [![Latest crate](https://img.shields.io/crates/v/pgdog.svg)](https://crates.io/crates/pgdog)
@@ -16,7 +16,7 @@ similar features, better performance, and introduces new features like plugins.
 
 ### Plugins
 
-pgDog comes with its own plugin system which allows plugins to be loaded at runtime using a shared library interface. As long as the plugin can expose a predefined C API, it can be written in any language, including C/C++, Rust, Java, or Go.
+pgDog comes with its own plugin system which allows plugins to be loaded at runtime using a shared library interface. As long as the plugin can expose a predefined C API, it can be written in any language, including Rust, C/C++, Zig, Go, Python, Ruby, Java, and many more.
 
 Plugins can be used to route queries to specific databases in a sharded configuration, or to
 split traffic between writes and reads in a mixed (primary & replicas) deployment. The plugin
@@ -133,13 +133,14 @@ Status on features stability will be [updated regularly](https://pgdog.dev/featu
 
 ## License
 
-pgDog is free and open source software, licensed under the AGPL v3. While often misunderstood, this license allows the following without any additional requirements from you or your organization:
+pgDog is free and open source software, licensed under the AGPL v3. While often misunderstood, this license is very permissive
+and allows the following without any additional requirements from you or your organization:
 
 * Internal use
 * Private modifications for internal use without sharing any source code
 
-**You can freely use pgDog to power your PostgreSQL databases without having to worry about
-sharing any source code, including your proprietary work product or any pgDog modifications you make.**
+You can freely use pgDog to power your PostgreSQL databases without having to
+share any source code, including proprietary work product or any pgDog modifications you make.
 
 AGPL was written specifically for organizations that offer pgDog _as a service_ and require
 those organizations to share any modifications they make to pgDog, including new features and bug fixes.
