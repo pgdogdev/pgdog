@@ -317,7 +317,7 @@ impl Pool {
     }
 
     /// Pool address.
-    pub(crate) fn addr(&self) -> &Address {
+    pub fn addr(&self) -> &Address {
         &self.addr
     }
 

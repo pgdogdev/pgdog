@@ -9,11 +9,15 @@ void pgdog_init() {
     printf("pgDog routing in C initialized\n");
 }
 
-Route pgdog_route_query(Query query) {
+Output pgdog_route_query(Input input) {
+    Output plugin_output;
+    RoutingOutput routing_output;
     Route route;
+    char *lowercase;
+
     route.shard = ANY; /* No sharding */
 
-    char *lowercase = strdup(query.query);
+    lowercase = strdup(input.input.query.query);
 
     for (int i = 0; i < strlen(lowercase); i++) {
         lowercase[i] = tolower(lowercase[i]);
@@ -27,7 +31,9 @@ Route pgdog_route_query(Query query) {
 
     free(lowercase);
 
-    route.shard = -1;
+    routing_output.route = route;
+    plugin_output.decision = FORWARD;
+    plugin_output.output = routing_output;
 
-    return route;
+    return plugin_output;
 }

@@ -2,32 +2,71 @@
 //! to replicas. All other queries are routed to a primary.
 
 use pg_query::{parse, NodeEnum};
-use pgdog_plugin::bindings::{Output, Shard_ANY};
-use pgdog_plugin::{bindings, Affinity_READ, Affinity_WRITE};
+use pgdog_plugin::bindings::{Config, Input, Output};
 use pgdog_plugin::{Query, Route};
 
-#[no_mangle]
-pub extern "C" fn pgdog_route_query(query: bindings::Query) -> Output {
-    let query = Query::from(query);
-    let route = match route_internal(query.query()) {
-        Ok(route) => route,
-        Err(_) => Route::unknown(),
-    };
+use tracing::{debug, level_filters::LevelFilter};
+use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
-    Output::forward(route)
+use std::io::IsTerminal;
+
+#[no_mangle]
+pub extern "C" fn pgdog_init() {
+    let format = fmt::layer()
+        .with_ansi(std::io::stderr().is_terminal())
+        .with_file(false);
+
+    let filter = EnvFilter::builder()
+        .with_default_directive(LevelFilter::INFO.into())
+        .from_env_lossy();
+
+    tracing_subscriber::registry()
+        .with(format)
+        .with(filter)
+        .init();
+
+    // TODO: This is more for fun/demo, but in prod, we want
+    // this logger to respect options passed to pgDog proper, e.g.
+    // use JSON output.
+    debug!("🐕 pgDog routing plugin v{}", env!("CARGO_PKG_VERSION"));
 }
 
-fn route_internal(query: &str) -> Result<Route, pg_query::Error> {
+#[no_mangle]
+pub extern "C" fn pgdog_route_query(input: Input) -> Output {
+    if let Some(query) = input.query() {
+        let query = Query::from(query);
+        let route = match route_internal(query.query(), input.config) {
+            Ok(route) => route,
+            Err(_) => Route::unknown(),
+        };
+        Output::forward(route)
+    } else {
+        Output::skip()
+    }
+}
+
+fn route_internal(query: &str, config: Config) -> Result<Route, pg_query::Error> {
     let ast = parse(query)?;
+
+    for database in config.databases() {
+        debug!(
+            "{}:{} [shard: {}][role: {}]",
+            database.host(),
+            database.port(),
+            database.shard(),
+            if database.replica() {
+                "replica"
+            } else {
+                "primary"
+            }
+        );
+    }
 
     if let Some(query) = ast.protobuf.stmts.first() {
         if let Some(ref node) = query.stmt {
             match node.node {
                 Some(NodeEnum::SelectStmt(ref _stmt)) => {
-                    return Ok(Route {
-                        affinity: Affinity_READ,
-                        shard: Shard_ANY,
-                    });
+                    return Ok(Route::read_any());
                 }
 
                 Some(_) => (),
@@ -37,8 +76,5 @@ fn route_internal(query: &str) -> Result<Route, pg_query::Error> {
         }
     }
 
-    Ok(Route {
-        affinity: Affinity_WRITE,
-        shard: Shard_ANY,
-    })
+    Ok(Route::write_any())
 }

@@ -7,6 +7,7 @@ edition = "2021"
 pgdog-plugin = { path = "../../pgdog-plugin" }
 pg_query = "6.0"
 tracing = "*"
+tracing-subscriber = "*"
 
 [lib]
 crate-type = ["rlib", "cdylib"]

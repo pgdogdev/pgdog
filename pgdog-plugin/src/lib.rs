@@ -4,6 +4,9 @@
 pub mod bindings;
 
 pub mod c_api;
+pub mod config;
+pub mod input;
+pub mod output;
 pub mod parameter;
 pub mod plugin;
 pub mod query;

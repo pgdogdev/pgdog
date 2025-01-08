@@ -35,4 +35,7 @@ pub enum Error {
 
     #[error("no databases")]
     NoDatabases,
+
+    #[error("config values contain null bytes")]
+    NullBytes,
 }

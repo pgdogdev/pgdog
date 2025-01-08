@@ -19,7 +19,7 @@
  * so make sure to optimize for performance in the implementation.
  *
 */
-Route pgdog_route_query(Query query);
+Output pgdog_route_query(Input input);
 
 /*
  * Perform initialization at plugin loading time.

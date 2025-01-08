@@ -2,9 +2,12 @@
 
 use std::ffi::CString;
 
-use crate::plugin::plugins;
+use crate::{backend::Cluster, plugin::plugins};
 
-use pgdog_plugin::{Query, Route};
+use pgdog_plugin::{
+    bindings::{Input, RoutingInput},
+    Query, Route,
+};
 use tokio::time::Instant;
 use tracing::debug;
 
@@ -40,12 +43,13 @@ impl Router {
     /// previous route is preserved. This is useful in case the client
     /// doesn't supply enough information in the buffer, e.g. just issued
     /// a Describe request to a previously submitted Parse.
-    pub fn query(&mut self, buffer: &Buffer) -> Result<Route, Error> {
+    pub fn query(&mut self, buffer: &Buffer, cluster: &Cluster) -> Result<Route, Error> {
         let query = buffer
             .query()
             .map_err(|_| Error::NoQueryInBuffer)?
             .ok_or(Error::NoQueryInBuffer)?;
         let c_query = CString::new(query.as_str())?;
+
         let mut query = Query::new(&c_query);
 
         // SAFETY: query has not allocated memory for parameters yet.
@@ -56,32 +60,38 @@ impl Router {
             query.parameters(&params);
         }
 
+        // SAFETY: deallocated below.
+        let config = unsafe { cluster.plugin_config()? };
+        let input = Input::new(config, RoutingInput::query(query.into()));
+
         let now = Instant::now();
 
         for plugin in plugins() {
-            match plugin.route(query) {
+            match plugin.route(input) {
                 None => continue,
                 Some(output) => {
                     if let Some(route) = output.route() {
                         if route.is_unknown() {
                             continue;
                         }
+
                         self.route = route;
 
                         debug!(
                             "routing {} to shard {} [{}, {:.3}ms]",
-                            if route.read() { "read" } else { "write" },
+                            if route.is_read() { "read" } else { "write" },
                             route.shard().unwrap_or(0),
                             plugin.name(),
                             now.elapsed().as_secs_f64() * 1000.0,
                         );
-                        query.drop();
-                        return Ok(route);
+
+                        break;
                     }
                 }
             }
         }
 
+        unsafe { input.drop() };
         query.drop();
         Ok(self.route)
     }

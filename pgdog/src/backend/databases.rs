@@ -160,7 +160,7 @@ pub fn from_config(config: &ConfigAndUsers) -> Arc<Databases> {
                     user: user.name.clone(),
                     database: user.database.clone(),
                 },
-                Cluster::new(&[(primary, &replicas)]),
+                Cluster::new(&user.database, &[(primary, &replicas)]),
             );
         }
     }

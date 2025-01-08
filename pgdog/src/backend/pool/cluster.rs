@@ -4,6 +4,8 @@ use crate::net::messages::BackendKeyData;
 
 use super::{Address, Config, Error, Guard, Shard};
 
+use std::ffi::CString;
+
 #[derive(Clone, Debug)]
 /// Database configuration.
 pub struct PoolConfig {
@@ -17,17 +19,19 @@ pub struct PoolConfig {
 /// belonging to the same database cluster.
 #[derive(Clone)]
 pub struct Cluster {
+    name: String,
     shards: Vec<Shard>,
 }
 
 impl Cluster {
     /// Create new cluster of shards.
-    pub fn new(shards: &[(Option<PoolConfig>, &[PoolConfig])]) -> Self {
+    pub fn new(name: &str, shards: &[(Option<PoolConfig>, &[PoolConfig])]) -> Self {
         Self {
             shards: shards
                 .iter()
                 .map(|addr| Shard::new(addr.0.clone(), addr.1))
                 .collect(),
+            name: name.to_owned(),
         }
     }
 
@@ -44,9 +48,13 @@ impl Cluster {
     }
 
     /// Create new identical cluster connection pool.
+    ///
+    /// This will allocate new server connections. Use when reloading configuration
+    /// and you expect to drop the current Cluster entirely.
     pub fn duplicate(&self) -> Self {
         Self {
             shards: self.shards.iter().map(|s| s.duplicate()).collect(),
+            name: self.name.clone(),
         }
     }
 
@@ -62,5 +70,48 @@ impl Cluster {
     /// Get all shards.
     pub fn shards(&self) -> &[Shard] {
         &self.shards
+    }
+
+    /// Plugin input.
+    ///
+    /// SAFETY: This allocates, so make sure to call `Config::drop` when you're done.
+    pub unsafe fn plugin_config(&self) -> Result<pgdog_plugin::bindings::Config, Error> {
+        use pgdog_plugin::bindings::{Config, DatabaseConfig, Role_PRIMARY, Role_REPLICA};
+        let mut databases: Vec<DatabaseConfig> = vec![];
+        let name = CString::new(self.name.as_str()).map_err(|_| Error::NullBytes)?;
+
+        for (index, shard) in self.shards.iter().enumerate() {
+            if let Some(ref primary) = shard.primary {
+                // Ignore hosts with null bytes.
+                let host = if let Ok(host) = CString::new(primary.addr().host.as_str()) {
+                    host
+                } else {
+                    continue;
+                };
+                databases.push(DatabaseConfig::new(
+                    host,
+                    primary.addr().port,
+                    Role_PRIMARY,
+                    index,
+                ));
+            }
+
+            for replica in shard.replicas.pools() {
+                // Ignore hosts with null bytes.
+                let host = if let Ok(host) = CString::new(replica.addr().host.as_str()) {
+                    host
+                } else {
+                    continue;
+                };
+                databases.push(DatabaseConfig::new(
+                    host,
+                    replica.addr().port,
+                    Role_REPLICA,
+                    index,
+                ));
+            }
+        }
+
+        Ok(Config::new(name, &databases))
     }
 }

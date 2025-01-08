@@ -1,5 +1,5 @@
-use super::Query;
-use crate::bindings::{self, Output};
+//! Plugin interface.
+use crate::bindings::{self, Input, Output};
 use libloading::{library_filename, Library, Symbol};
 
 /// Plugin interface.
@@ -9,7 +9,7 @@ pub struct Plugin<'a> {
     /// Initialization routine.
     init: Option<Symbol<'a, unsafe extern "C" fn()>>,
     /// Route query to a shard.
-    route: Option<Symbol<'a, unsafe extern "C" fn(bindings::Query) -> Output>>,
+    route: Option<Symbol<'a, unsafe extern "C" fn(bindings::Input) -> Output>>,
 }
 
 impl<'a> Plugin<'a> {
@@ -41,10 +41,8 @@ impl<'a> Plugin<'a> {
     }
 
     /// Route query.
-    pub fn route(&self, query: Query) -> Option<Output> {
-        self.route
-            .as_ref()
-            .map(|route| unsafe { route(query.into()) })
+    pub fn route(&self, input: Input) -> Option<Output> {
+        self.route.as_ref().map(|route| unsafe { route(input) })
     }
 
     /// Perform initialization.

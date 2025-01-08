@@ -1,14 +1,17 @@
 use crate::bindings::Parameter;
 
-use libc::{c_char, c_void};
+use libc::c_char;
+use std::alloc::{alloc, dealloc, Layout};
 use std::ptr::copy;
+use std::slice::from_raw_parts;
 use std::str::from_utf8;
 
 impl Parameter {
     /// Create new parameter from format code and raw data.
     pub fn new(format: i16, data: &[u8]) -> Self {
         let len = data.len() as i32;
-        let ptr = unsafe { libc::malloc(len as usize) as *mut u8 };
+        let layout = Layout::array::<u8>(len as usize).unwrap();
+        let ptr = unsafe { alloc(layout) };
         unsafe {
             copy::<u8>(data.as_ptr(), ptr, len as usize);
         }
@@ -24,8 +27,9 @@ impl Parameter {
     ///
     /// SAFETY: call this after plugin finished executing to avoid memory leaks.
     pub fn drop(&mut self) {
+        let layout = Layout::array::<u8>(self.len as usize).unwrap();
         unsafe {
-            libc::free(self.data as *mut c_void);
+            dealloc(self.data as *mut u8, layout);
         }
     }
 
@@ -44,8 +48,7 @@ impl Parameter {
 
     /// Get parameter value as bytes.
     pub fn as_bytes(&self) -> &[u8] {
-        let slice =
-            unsafe { core::slice::from_raw_parts(self.data as *const u8, self.len as usize) };
+        let slice = unsafe { from_raw_parts(self.data as *const u8, self.len as usize) };
 
         slice
     }

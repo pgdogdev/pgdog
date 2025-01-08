@@ -35,8 +35,10 @@ const _: () = {
 };
 pub const Affinity_READ: Affinity = 1;
 pub const Affinity_WRITE: Affinity = 2;
-pub const Affinity_UNKNOWN: Affinity = 3;
-pub type Affinity = ::std::os::raw::c_uint;
+pub const Affinity_TRANSACTION_START: Affinity = 3;
+pub const Affinity_TRANSACTION_END: Affinity = 4;
+pub const Affinity_UNKNOWN: Affinity = -1;
+pub type Affinity = ::std::os::raw::c_int;
 pub const Shard_ANY: Shard = -1;
 pub const Shard_ALL: Shard = -2;
 pub type Shard = ::std::os::raw::c_int;
@@ -181,4 +183,72 @@ const _: () = {
     ["Alignment of Output"][::std::mem::align_of::<Output>() - 8usize];
     ["Offset of field: Output::decision"][::std::mem::offset_of!(Output, decision) - 0usize];
     ["Offset of field: Output::output"][::std::mem::offset_of!(Output, output) - 8usize];
+};
+pub const Role_PRIMARY: Role = 1;
+pub const Role_REPLICA: Role = 2;
+pub type Role = ::std::os::raw::c_uint;
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct DatabaseConfig {
+    pub shard: ::std::os::raw::c_int,
+    pub role: Role,
+    pub host: *mut ::std::os::raw::c_char,
+    pub port: ::std::os::raw::c_int,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of DatabaseConfig"][::std::mem::size_of::<DatabaseConfig>() - 24usize];
+    ["Alignment of DatabaseConfig"][::std::mem::align_of::<DatabaseConfig>() - 8usize];
+    ["Offset of field: DatabaseConfig::shard"]
+        [::std::mem::offset_of!(DatabaseConfig, shard) - 0usize];
+    ["Offset of field: DatabaseConfig::role"]
+        [::std::mem::offset_of!(DatabaseConfig, role) - 4usize];
+    ["Offset of field: DatabaseConfig::host"]
+        [::std::mem::offset_of!(DatabaseConfig, host) - 8usize];
+    ["Offset of field: DatabaseConfig::port"]
+        [::std::mem::offset_of!(DatabaseConfig, port) - 16usize];
+};
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct Config {
+    pub num_databases: ::std::os::raw::c_int,
+    pub databases: *mut DatabaseConfig,
+    pub name: *mut ::std::os::raw::c_char,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of Config"][::std::mem::size_of::<Config>() - 24usize];
+    ["Alignment of Config"][::std::mem::align_of::<Config>() - 8usize];
+    ["Offset of field: Config::num_databases"]
+        [::std::mem::offset_of!(Config, num_databases) - 0usize];
+    ["Offset of field: Config::databases"][::std::mem::offset_of!(Config, databases) - 8usize];
+    ["Offset of field: Config::name"][::std::mem::offset_of!(Config, name) - 16usize];
+};
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub union RoutingInput {
+    pub query: Query,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of RoutingInput"][::std::mem::size_of::<RoutingInput>() - 32usize];
+    ["Alignment of RoutingInput"][::std::mem::align_of::<RoutingInput>() - 8usize];
+    ["Offset of field: RoutingInput::query"][::std::mem::offset_of!(RoutingInput, query) - 0usize];
+};
+pub const InputType_ROUTING_INPUT: InputType = 1;
+pub type InputType = ::std::os::raw::c_uint;
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct Input {
+    pub config: Config,
+    pub input_type: InputType,
+    pub input: RoutingInput,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of Input"][::std::mem::size_of::<Input>() - 64usize];
+    ["Alignment of Input"][::std::mem::align_of::<Input>() - 8usize];
+    ["Offset of field: Input::config"][::std::mem::offset_of!(Input, config) - 0usize];
+    ["Offset of field: Input::input_type"][::std::mem::offset_of!(Input, input_type) - 24usize];
+    ["Offset of field: Input::input"][::std::mem::offset_of!(Input, input) - 32usize];
 };

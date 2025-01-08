@@ -13,4 +13,13 @@ pub enum Error {
 
     #[error("{0}")]
     Net(#[from] crate::net::Error),
+
+    #[error("{0}")]
+    Backend(#[from] crate::backend::Error),
+
+    #[error("{0}")]
+    Pool(#[from] crate::backend::pool::Error),
+
+    #[error("null bytes in input")]
+    NullBytes,
 }

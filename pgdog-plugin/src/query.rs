@@ -56,7 +56,7 @@ impl From<bindings::Query> for Query<'_> {
 impl<'a> Query<'a> {
     /// Get query text.
     pub fn query(&self) -> &str {
-        assert!(self.query != null());
+        debug_assert!(self.query != null());
         unsafe { CStr::from_ptr(self.query) }.to_str().unwrap()
     }
 
@@ -87,7 +87,7 @@ impl<'a> Query<'a> {
     /// Get parameter at offset if one exists.
     pub fn parameter(&self, index: usize) -> Option<Parameter> {
         if index < self.num_parameters {
-            unsafe { Some(*(self.parameters)) }
+            unsafe { Some(*(self.parameters.offset(index as isize))) }
         } else {
             None
         }
@@ -96,6 +96,11 @@ impl<'a> Query<'a> {
     /// Free memory allocated for parameters, if any.
     pub fn drop(&mut self) {
         if !self.parameters.is_null() {
+            for index in 0..self.num_parameters {
+                if let Some(mut param) = self.parameter(index) {
+                    param.drop();
+                }
+            }
             let layout = Layout::array::<Parameter>(self.num_parameters).unwrap();
             unsafe {
                 dealloc(self.parameters as *mut u8, layout);

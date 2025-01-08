@@ -2,13 +2,13 @@
 
 use crate::net::messages::BackendKeyData;
 
-use super::{PoolConfig, Error, Guard, Pool, Replicas};
+use super::{Error, Guard, Pool, PoolConfig, Replicas};
 
 /// Primary and replicas.
 #[derive(Clone)]
 pub struct Shard {
-    primary: Option<Pool>,
-    replicas: Replicas,
+    pub(super) primary: Option<Pool>,
+    pub(super) replicas: Replicas,
 }
 
 impl Shard {

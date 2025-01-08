@@ -1,9 +1,12 @@
 use crate::bindings::*;
-use std::ffi::{c_int, c_void};
+use std::alloc::{alloc, dealloc, Layout};
+use std::ffi::c_int;
 
+/// Create new row.
 #[no_mangle]
 pub extern "C" fn pgdog_row_new(num_columns: c_int) -> Row {
-    let columns = unsafe { libc::malloc(std::mem::size_of::<RowColumn>() * num_columns as usize) };
+    let layout = Layout::array::<RowColumn>(num_columns as usize).unwrap();
+    let columns = unsafe { alloc(layout) };
 
     Row {
         num_columns,
@@ -11,9 +14,11 @@ pub extern "C" fn pgdog_row_new(num_columns: c_int) -> Row {
     }
 }
 
+/// Delete a row.
 #[no_mangle]
 pub extern "C" fn pgdog_row_free(row: Row) {
+    let layout = Layout::array::<RowColumn>(row.num_columns as usize).unwrap();
     unsafe {
-        libc::free(row.columns as *mut c_void);
+        dealloc(row.columns as *mut u8, layout);
     }
 }

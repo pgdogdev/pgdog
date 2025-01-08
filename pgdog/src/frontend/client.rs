@@ -113,8 +113,11 @@ impl Client {
 
                     if !backend.connected() {
                         timer = Instant::now();
+
                         // Figure out where the query should go.
-                        router.query(&buffer)?;
+                        if let Ok(cluster) = backend.cluster() {
+                            router.query(&buffer, cluster)?;
+                        }
 
                         // Grab a connection from the right pool.
                         self.state = State::Waiting;
@@ -130,7 +133,7 @@ impl Client {
                             }
                         };
                         self.state = State::Active;
-                        debug!("client paired with {} [{}ms]", backend.addr()?, timer.elapsed().as_secs_f64() * 1000.0);
+                        debug!("client paired with {} [{:.4}ms]", backend.addr()?, timer.elapsed().as_secs_f64() * 1000.0);
                     }
 
                     // Send query to server.

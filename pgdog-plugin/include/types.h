@@ -1,6 +1,6 @@
 
 /*
- * Parameter value.
+ * Query parameter value.
  */
 typedef struct Parameter {
     int len;
@@ -29,7 +29,9 @@ typedef struct Query {
 typedef enum Affinity {
     READ = 1,
     WRITE = 2,
-    UNKNOWN = 3,
+    TRANSACTION_START = 3,
+    TRANSACTION_END = 4,
+    UNKNOWN = -1,
 } Affinity;
 
 /*
@@ -113,13 +115,78 @@ typedef struct Intercept {
     Row *rows;
 } Intercept;
 
+/*
+ * Union of results a plugin can return.
+ *
+ * Route: FORWARD
+ * Error: ERROR
+ * Intercept: INTERCEPT
+ *
+ */
 typedef union RoutingOutput {
     Route route;
     Error error;
     Intercept intercept;
 } RoutingOutput;
 
+/*
+ * Plugin output.
+ *
+ * This is returned by a plugin to communicate its routing decision.
+ */
 typedef struct Output {
     RoutingDecision decision;
     RoutingOutput output;
 } Output;
+
+/*
+ * Database role, e.g. primary or replica.
+*/
+typedef enum Role {
+    PRIMARY = 1,
+    REPLICA = 2,
+} Role;
+
+/*
+ * Database configuration entry.
+*/
+typedef struct DatabaseConfig {
+    int shard;
+    Role role;
+    char *host;
+    int port;
+} DatabaseConfig;
+
+/*
+ * Configuration for a database cluster
+ * used to the serve a query passed to the plugin.
+*/
+typedef struct Config {
+    int num_databases;
+    DatabaseConfig *databases;
+    /* Database name from pgdog.toml. */
+    char *name;
+} Config;
+
+/*
+* Routing input union passed to the plugin.
+*/
+typedef union RoutingInput {
+    Query query;
+} RoutingInput;
+
+/*
+ * Input type.
+*/
+typedef enum InputType {
+    ROUTING_INPUT = 1,
+} InputType;
+
+/*
+ * Plugin input.
+*/
+typedef struct Input {
+    Config config;
+    InputType input_type;
+    RoutingInput input;
+} Input;

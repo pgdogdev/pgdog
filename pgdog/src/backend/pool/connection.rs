@@ -69,7 +69,7 @@ impl Connection {
     async fn try_conn(&mut self, id: &BackendKeyData, route: &Route) -> Result<(), Error> {
         let shard = route.shard().unwrap_or(0);
 
-        let server = if route.read() {
+        let server = if route.is_read() {
             self.cluster()?.replica(shard, id).await?
         } else {
             self.cluster()?.primary(shard, id).await?
@@ -148,9 +148,16 @@ impl Connection {
         Ok(self.server()?.addr())
     }
 
+    /// Get cluster if any.
     #[inline]
-    fn cluster(&self) -> Result<&Cluster, Error> {
+    pub fn cluster(&self) -> Result<&Cluster, Error> {
         self.cluster.as_ref().ok_or(Error::NotConnected)
+    }
+
+    /// This is an admin database connection.
+    #[inline]
+    pub fn admin(&self) -> bool {
+        self.admin.is_some()
     }
 
     /// Get server connection if we are connected, return an error

@@ -1,3 +1,4 @@
+//! Query routing helpers.
 #![allow(non_upper_case_globals)]
 
 use crate::bindings::*;
@@ -21,6 +22,7 @@ impl Output {
         }
     }
 
+    /// Get route determined by the plugin.
     pub fn route(&self) -> Option<Route> {
         match self.decision {
             RoutingDecision_FORWARD => Some(unsafe { self.output.route }),
@@ -30,7 +32,8 @@ impl Output {
 }
 
 impl Route {
-    ///
+    /// The plugin has no idea what to do with this query.
+    /// The router will ignore this and try another way.
     pub fn unknown() -> Route {
         Route {
             shard: Shard_ANY,
@@ -38,14 +41,40 @@ impl Route {
         }
     }
 
+    /// Read from any shard.
+    pub fn read_any() -> Self {
+        Self {
+            affinity: Affinity_READ,
+            shard: Shard_ANY,
+        }
+    }
+
+    /// Read from any shard.
+    pub fn write_any() -> Self {
+        Self {
+            affinity: Affinity_WRITE,
+            shard: Shard_ANY,
+        }
+    }
+
     /// Is this a read?
-    pub fn read(&self) -> bool {
+    pub fn is_read(&self) -> bool {
         self.affinity == Affinity_READ
     }
 
     /// Is this a write?
-    pub fn write(&self) -> bool {
+    pub fn is_write(&self) -> bool {
         self.affinity == Affinity_WRITE
+    }
+
+    /// This query indicates a transaction a starting, e.g. BEGIN.
+    pub fn is_transaction_start(&self) -> bool {
+        self.affinity == Affinity_TRANSACTION_START
+    }
+
+    /// This query indicates a transaction is ending, e.g. COMMIT/ROLLBACK.
+    pub fn is_transaction_end(&self) -> bool {
+        self.affinity == Affinity_TRANSACTION_END
     }
 
     /// Which shard, if any.
@@ -57,12 +86,12 @@ impl Route {
         }
     }
 
-    pub fn any_shard(&self) -> bool {
+    pub fn is_any_shard(&self) -> bool {
         self.shard == Shard_ANY
     }
 
     /// Query should go across all shards.
-    pub fn cross_shard(&self) -> bool {
+    pub fn is_cross_shard(&self) -> bool {
         self.shard == Shard_ALL
     }
 
