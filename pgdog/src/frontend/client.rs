@@ -18,7 +18,6 @@ use crate::net::{parameter::Parameters, Stream};
 pub struct Client {
     addr: SocketAddr,
     stream: Stream,
-    comms: Comms,
     id: BackendKeyData,
     params: Parameters,
 }
@@ -31,11 +30,9 @@ impl Client {
         addr: SocketAddr,
         mut comms: Comms,
     ) -> Result<(), Error> {
-        // TODO: perform authentication.
         let user = params.get_default("user", "postgres");
         let database = params.get_default("database", user);
         let admin = database == "admin";
-
         let id = BackendKeyData::new();
 
         // Get server parameters and send them to the client.
@@ -48,6 +45,7 @@ impl Client {
                 }
             };
 
+            // TODO: perform authentication.
             stream.send(Authentication::Ok).await?;
 
             let params = match conn.parameters(&id).await {
@@ -77,7 +75,6 @@ impl Client {
         let mut client = Self {
             addr,
             stream,
-            comms,
             id,
             params,
         };
@@ -85,10 +82,10 @@ impl Client {
         if client.admin() {
             // Admin clients are not waited on during shutdown.
             spawn(async move {
-                client.spawn_internal().await;
+                client.spawn_internal(comms).await;
             });
         } else {
-            client.spawn_internal().await;
+            client.spawn_internal(comms).await;
         }
 
         Ok(())
@@ -100,15 +97,15 @@ impl Client {
     }
 
     /// Run the client and log disconnect.
-    async fn spawn_internal(&mut self) {
-        match self.run().await {
+    async fn spawn_internal(&mut self, comms: Comms) {
+        match self.run(comms).await {
             Ok(_) => info!("Client disconnected [{}]", self.addr),
             Err(err) => error!("Client disconnected with error [{}]: {}", self.addr, err),
         }
     }
 
     /// Run the client.
-    async fn run(&mut self) -> Result<(), Error> {
+    async fn run(&mut self, mut comms: Comms) -> Result<(), Error> {
         let user = self.params.get_required("user")?;
         let database = self.params.get_default("database", user);
 
@@ -116,8 +113,6 @@ impl Client {
         let mut router = Router::new();
         let mut timer = Instant::now();
         let mut stats = Stats::new();
-
-        let comms = self.comms.clone();
 
         loop {
             select! {
@@ -143,13 +138,13 @@ impl Client {
                         }
 
                         // Grab a connection from the right pool.
-                        self.comms.stats(stats.waiting());
+                        comms.stats(stats.waiting());
                         match backend.connect(&self.id, router.route()).await {
                             Ok(()) => (),
                             Err(err) => if err.checkout_timeout() {
                                 error!("Connection pool is down");
                                 self.stream.error(ErrorResponse::connection()).await?;
-                                stats.error();
+                                comms.stats(stats.error());
                                 continue;
                             } else {
                                 return Err(err.into());
@@ -195,7 +190,7 @@ impl Client {
                 .await?;
         }
 
-        self.comms.disconnect();
+        comms.disconnect();
 
         Ok(())
     }
