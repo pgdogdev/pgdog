@@ -52,6 +52,17 @@ This function has the following signature:
     ```
 
 
+##### Data structures
+
+This function expects an input of type `Input` and must return a struct of type `Output`. The input contains
+the query pgDog received and the current database configuration, e.g. number of shards, replicas, and if there
+is a primary database that can serve writes.
+
+The output structure contains the routing decision (e.g. query should go to a replica) and any additional information that the plugin wants to communicate, which depends on the routing decision. For example,
+if the plugin wants pgDog to intercept this query and return a custom result, rows of that result will be
+included in the output.
+
+
 #### `pgdog_fini`
 
 This function is called before the pooler is shut down. This allows plugins to perform any tasks, like saving

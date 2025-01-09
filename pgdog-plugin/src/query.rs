@@ -21,8 +21,9 @@ impl Query {
         }
     }
 
-    /// Add parameters.
-    pub fn parameters(&mut self, params: &[Parameter]) {
+    /// Set parameters on this query. This is used internally
+    /// by pgDog to construct this structure.
+    pub fn set_parameters(&mut self, params: &[Parameter]) {
         let layout = Layout::array::<Parameter>(params.len()).unwrap();
         let parameters = unsafe { alloc(layout) };
 
@@ -31,6 +32,13 @@ impl Query {
         }
         self.parameters = parameters as *const Parameter;
         self.num_parameters = params.len() as i32;
+    }
+
+    /// Get query parameters, if any.
+    pub fn parameters(&self) -> Vec<Parameter> {
+        (0..self.num_parameters)
+            .map(|i| self.parameter(i as usize).unwrap())
+            .collect()
     }
 
     /// Get parameter at offset if one exists.

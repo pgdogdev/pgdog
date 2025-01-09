@@ -53,7 +53,7 @@ impl Router {
             let params = bind.plugin_parameters()?;
 
             // SAFETY: memory for parameters is owned by Query.
-            query.parameters(&params);
+            query.set_parameters(&params);
         }
 
         // SAFETY: deallocated below.

@@ -46,9 +46,8 @@ cargo add pgdog-plugin
 
 ### Implement the API
 
-The [plugin API](../plugins/index.md) is pretty simple. For this tutorial, we'll implement the query routing function `pgdog_route_query`, which is called for every transaction pgDog receives.
+The [plugin API](../plugins/index.md) is pretty simple. For this tutorial, we'll implement the query routing function `pgdog_route_query`, which is called for the first query in every transaction pgDog receives.
 
-#### `pgdog_route_query`
 
 This function has the following signature:
 
@@ -56,9 +55,107 @@ This function has the following signature:
 use pgdog_plugin::*;
 
 pub extern "C" fn pgdog_route_query(input: Input) -> Output {
-  todo()
+  todo!()
 }
 ```
+
+The [`Input`](https://docs.rs/pgdog-plugin/latest/pgdog_plugin/input/index.html) structure contains the query pgDog received and the current state of the pooler configuration, like
+the number of shards, the number of replicas and their addresses, and other information which the plugin can use
+to determine where the query should go. 
+
+The plugin is expected to return an [`Output`](https://docs.rs/pgdog-plugin/latest/pgdog_plugin/output/index.html) structure which contains its routing decision and any additional data
+the plugin wants pgDog to use, like an error it wants pgDog to return to the client instead, for example.
+
+Both structures have Rust implementations which can help us avoid having to write C-like initialization code.
+
+### Parse the input
+
+You can get the query pgDog received from the input structure like so:
+
+```rust
+if let Some(query) = input.query() {
+  // Parse the query.
+}
+```
+
+The query is a Rust string, so your routing algorithm can be as simple as:
+
+```rust
+let route = if query.starts_with("SELECT") {
+  // Route this to any replica.
+  Route::read_any()
+} else {
+  // Send the query to a primary.
+  Route::write_any()
+}
+```
+
+Both `read_any` and `write_any` are typically used in a single shard configuration and tell pgDog
+that the shard number is not important. pgDog will send the query to the first shard in the configuration.
+
+### Return the output
+
+The `Output` structure contains the routing decision and any additional metadata. Since our plugin parsed the query and decided to forward this query to a database without modifications, the return value for `Output` should be:
+
+```rust
+return Output::forward(route)
+```
+
+Not all plugins have to make a routing decision. For example, if your plugin just wants to count how many queries of a certain type your database receives but doesn't care about routing, you can tell pgDog to skip your plugin's routing decision:
+
+```rust
+return Output::skip()
+```
+
+pgDog will ignore this output and pass the query to the next plugin in the chain.
+
+### Parsing query parameters
+
+PostgreSQL protocol has two ways to send queries to the database: using the simple query method with the parameters
+included in the query text, and the extended protocol which sends parameters separately to prevent SQL injection attacks and allow for query re-use (prepared statements).
+
+The extended protocol is widely used, so queries your plugins will see will typically look like this:
+
+```postgresql
+SELECT * FROM users WHERE id = $1
+```
+
+If your plugin is sharding requests based on a hash (or some other function) of the `"users"."id"` column, you need
+to see the value of `$1` before your plugin can make a decision.
+
+pgDog supports parsing the extended protocol and provides the full query text and parameters to its plugins. You can access a specific parameter by calling `Query::parameter`:
+
+```rust
+if let Some(id) = query.parameter(0) {
+  // Parse the parameter.
+}
+```
+
+!!! note
+    PostgreSQL uses a lot of 1-based indexing, e.g. parameters and arrays
+    start at 1. pgDog is more "rusty" and uses 0-based indexing. To access the first
+    parameter in a query, index it by `0`, not `1`.
+
+Parameters are encoded using PostgreSQL wire protocol, so they can be either UTF-8 text or binary. If they are text,
+which is often the case, you can access it like so:
+
+```rust
+if let Some(id) = id.as_str() {
+  let id = id.parse::<i64>();
+}
+```
+
+In the case of binary encoding, `as_str()` will return `None` and you can parse the binary encoding instead:
+
+```rust
+if let Ok(id) = id.as_bytes().try_into() {
+  let id = i64::from_be_bytes(id);
+}
+```
+
+While this may seem tedious at first, this provides the highest flexibility for parsing parameters. A plugin
+can use any kind of field for routing, e.g. cosine similarity of a vector column (to another), which requires
+parsing vector-encoded fields.
 
 ## Learn more
 

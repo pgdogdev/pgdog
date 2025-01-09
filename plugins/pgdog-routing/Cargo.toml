@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies]
 pgdog-plugin = { path = "../../pgdog-plugin" }
 pg_query = "6.0"
-tracing = "*"
+tracing = "0.1"
 tracing-subscriber = "*"
 
 [lib]

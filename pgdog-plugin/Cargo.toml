@@ -16,6 +16,7 @@ crate-type = ["rlib", "cdylib"]
 [dependencies]
 libloading = "0.8"
 libc = "0.2"
+tracing = "0.1"
 
 [build-dependencies]
 bindgen = "0.71.0"
