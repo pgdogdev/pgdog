@@ -3,6 +3,8 @@ name = "pgdog-plugin"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
+authors = ["Lev Kokotov <lev.kokotov@gmail.com>"]
+readme = "README.md"
 
 [lib]
 crate-type = ["rlib", "cdylib"]
