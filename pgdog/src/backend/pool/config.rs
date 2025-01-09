@@ -39,6 +39,8 @@ pub struct Config {
     pub query_timeout: u64, // ms
     /// Max ban duration.
     pub ban_timeout: u64, // ms
+    /// Rollback timeout for dirty connections.
+    pub rollback_timeout: u64,
 }
 
 impl Config {
@@ -87,6 +89,11 @@ impl Config {
         Duration::from_millis(self.ban_timeout)
     }
 
+    /// Rollback timeout.
+    pub fn rollback_timeout(&self) -> Duration {
+        Duration::from_millis(self.rollback_timeout)
+    }
+
     /// Default config for a primary.
     ///
     /// The ban is ignored by the shard router
@@ -110,6 +117,7 @@ impl Config {
             idle_healthcheck_interval: general.idle_healthcheck_interval,
             idle_healthcheck_delay: general.idle_healthcheck_delay,
             ban_timeout: general.ban_timeout,
+            rollback_timeout: general.rollback_timeout,
             ..Default::default()
         }
     }
@@ -133,6 +141,7 @@ impl Default for Config {
             write_timeout: Duration::MAX.as_millis() as u64,
             query_timeout: Duration::MAX.as_millis() as u64,
             ban_timeout: Duration::from_secs(300).as_millis() as u64,
+            rollback_timeout: Duration::from_secs(5).as_millis() as u64,
         }
     }
 }

@@ -124,6 +124,9 @@ pub struct General {
     /// Maximum duration of a ban.
     #[serde(default = "General::ban_timeout")]
     pub ban_timeout: u64,
+    /// Rollback timeout.
+    #[serde(default = "General::rollback_timeout")]
+    pub rollback_timeout: u64,
 }
 
 impl General {
@@ -161,6 +164,10 @@ impl General {
 
     fn ban_timeout() -> u64 {
         5 * 60_000
+    }
+
+    fn rollback_timeout() -> u64 {
+        5_000
     }
 }
 

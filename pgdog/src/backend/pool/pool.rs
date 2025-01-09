@@ -151,7 +151,11 @@ impl Pool {
                 };
 
                 (
-                    guard.config.checkout_timeout(),
+                    if guard.paused {
+                        Duration::MAX // Wait forever if the pool is paused.
+                    } else {
+                        guard.config.checkout_timeout()
+                    },
                     guard.config.healthcheck_timeout(),
                     guard.config.healthcheck_interval(),
                     conn,

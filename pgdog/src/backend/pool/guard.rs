@@ -3,6 +3,8 @@
 use std::ops::{Deref, DerefMut};
 
 use tokio::spawn;
+use tokio::time::timeout;
+use tracing::error;
 
 use crate::backend::Server;
 
@@ -46,7 +48,15 @@ impl Guard {
 
         if let Some(mut server) = server {
             spawn(async move {
-                server.rollback().await;
+                // Rollback any unfinished transactions,
+                // but only if the server is in sync (protocol-wise).
+                if server.in_transaction() {
+                    let rollback_timeout = pool.lock().config.rollback_timeout();
+                    if let Err(_) = timeout(rollback_timeout, server.rollback()).await {
+                        error!("rollback timeout [{}]", server.addr());
+                    }
+                }
+
                 pool.checkin(server);
             });
         }

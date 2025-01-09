@@ -67,8 +67,12 @@ impl Monitor {
     async fn spawn(self) {
         debug!("maintenance loop is running [{}]", self.pool.addr());
 
+        // Maintenance loop.
         let pool = self.pool.clone();
         spawn(async move { Self::maintenance(pool).await });
+
+        // Delay starting healthchecks to give
+        // time for the pool to spin up.
         let pool = self.pool.clone();
         let delay = { pool.lock().config().idle_healtcheck_delay() };
         spawn(async move {
@@ -136,7 +140,6 @@ impl Monitor {
 
                 // Pool is shutting down.
                 _ = comms.shutdown.notified() => {
-                    self.pool.lock().online = false;
                     break;
                 }
             }
