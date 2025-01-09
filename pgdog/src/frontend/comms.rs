@@ -27,6 +27,12 @@ pub struct Comms {
     id: Option<BackendKeyData>,
 }
 
+impl Default for Comms {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Comms {
     /// Create new communications channel between a client and pgDog.
     pub fn new() -> Self {

@@ -58,7 +58,7 @@ impl Router {
 
         // SAFETY: deallocated below.
         let config = unsafe { cluster.plugin_config()? };
-        let input = Input::new(config, RoutingInput::query(query.into()));
+        let input = Input::new(config, RoutingInput::query(query));
 
         let now = Instant::now();
 

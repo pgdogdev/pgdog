@@ -18,7 +18,7 @@ fn pool() -> Pool {
     config.max = 1;
     config.min = 1;
 
-    let pool = Pool::new(PoolConfig {
+    Pool::new(PoolConfig {
         address: Address {
             host: "127.0.0.1".into(),
             port: 5432,
@@ -27,9 +27,7 @@ fn pool() -> Pool {
             password: "pgdog".into(),
         },
         config,
-    });
-
-    pool
+    })
 }
 
 #[tokio::test(flavor = "current_thread")]

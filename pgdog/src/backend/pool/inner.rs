@@ -311,7 +311,7 @@ mod test {
         assert_eq!(inner.checked_out(), 0);
         inner.taken.push(Mapping {
             client: BackendKeyData::new(),
-            server: server.id().clone(),
+            server: *server.id(),
         });
         assert_eq!(inner.checked_out(), 1);
 

@@ -14,9 +14,9 @@ pub enum Format {
     Binary,
 }
 
-impl Into<i16> for Format {
-    fn into(self) -> i16 {
-        match self {
+impl From<Format> for i16 {
+    fn from(val: Format) -> Self {
+        match val {
             Format::Text => 0,
             Format::Binary => 1,
         }
