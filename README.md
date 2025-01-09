@@ -1,8 +1,6 @@
 # pgDog - PostgreSQL Load Balancer
 
 [![Documentation](https://img.shields.io/badge/documentation-blue?style=flat)](https://pgdog.dev)
-[![Latest crate](https://img.shields.io/crates/v/pgdog.svg)](https://crates.io/crates/pgdog)
-[![Reference docs](https://img.shields.io/docsrs/pgdog)](https://docs.rs/rwf/latest/pgdog/)
 
 pgDog is a PostgreSQL pooler, load balancer and sharding proxy, written in Rust.
 Spiritual successor to [pgcat](https://github.com/levkk/pgcat), pgDog comes with a lot of

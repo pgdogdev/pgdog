@@ -1,5 +1,7 @@
 # pgDog plugins
 
+[![Latest crate](https://img.shields.io/crates/v/pgdog-plugin.svg)](https://crates.io/crates/pgdog-plugin)
+
 pgDog plugin system is based around shared libraries loaded at runtime.
 These libraries can be written in any language as long as they are compiled to `.so` (or `.dylib` on Mac),
 and can expose predefined C ABI functions.
