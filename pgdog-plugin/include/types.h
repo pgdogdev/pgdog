@@ -1,5 +1,5 @@
 
-/*
+/**
  * Query parameter value.
  */
 typedef struct Parameter {
@@ -8,20 +8,26 @@ typedef struct Parameter {
     int format;
 } Parameter;
 
-/*
- * Query and parameters received by pgDog.
+/* Query and parameters received by pgDog.
  *
  * The plugin is expected to parse the query and based on its
  * contents and the parameters, make a routing decision.
-*/
+ */
 typedef struct Query {
+    /* Length of the query */
     int len;
+  
+    /* The query text. */
     const char *query;
+
+    /* Number of parameters. */
     int num_parameters;
+
+    /* List of parameters. */
     const Parameter *parameters;
 } Query;
 
-/*
+/**
  * The query is a read or a write.
  * In case the plugin isn't able to figure it out, it can return UNKNOWN and
  * pgDog will ignore the plugin's decision.
@@ -34,7 +40,7 @@ typedef enum Affinity {
     UNKNOWN = -1,
 } Affinity;
 
-/*
+/**
  * In case the plugin doesn't know which shard to route the
  * the query, it can decide to route it to any shard or to all
  * shards. All shard queries return a result assembled by pgDog.
@@ -45,7 +51,7 @@ typedef enum Shard {
     ALL = -2,
 } Shard;
 
-/*
+/**
  * Route the query should take.
  *
 */
