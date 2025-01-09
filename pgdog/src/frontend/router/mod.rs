@@ -89,6 +89,7 @@ impl Router {
 
         unsafe { input.drop() }
         unsafe { query.drop() }
+
         Ok(self.route)
     }
 

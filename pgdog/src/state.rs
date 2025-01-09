@@ -1,7 +1,7 @@
 //! Connection state.
 
 /// Client/server state.
-#[derive(Debug, PartialEq, Default)]
+#[derive(Debug, PartialEq, Default, Copy, Clone)]
 pub enum State {
     /// Waiting for work.
     #[default]

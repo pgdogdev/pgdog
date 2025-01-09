@@ -69,8 +69,6 @@ impl Listener {
     }
 
     async fn handle_client(stream: TcpStream, addr: SocketAddr, comms: Comms) -> Result<(), Error> {
-        info!("client connected [{}]", addr);
-
         let mut stream = Stream::plain(stream);
         let tls = acceptor()?;
 
@@ -90,8 +88,7 @@ impl Listener {
                 }
 
                 Startup::Startup { params } => {
-                    let client = Client::new(stream, params, addr, comms).await?;
-                    client.spawn().await;
+                    Client::spawn(stream, params, addr, comms).await?;
                     break;
                 }
 
