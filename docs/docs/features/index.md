@@ -1,4 +1,4 @@
-# Features
+# Features overview
 
 pgDog contains multiple foundational and unique features which make it a great choice
 for modern PostgreSQL deployments.
@@ -8,6 +8,12 @@ as such, and users are advised to test them before deploying to production. Most
 load balancing, healthchecks, and query routing have been battle-tested and work well in production.
 
 ## Summary
+
+
+!!! note
+    pgDog is just getting started and most features are incomplete. The documentation
+    is sometimes written to reflect the desired state. In the case where the feature is not
+    complete, a note is added to that effect.
 
 | Feature | Description | State |
 |---------|-------------|-------|

@@ -171,6 +171,18 @@ parser. This ensures all valid PostgreSQL queries are recognized and parsed corr
 Other SQL parsers in the Rust community include [sqlparser](https://docs.rs/sqlparser/latest/sqlparser/) which
 can parse many dialects, including other databases like MySQL, if you wanted to rewrite MySQL queries to PostgreSQL queries transparently for example.
 
+## Handling errors
+
+Since plugins use the C ABI, pgDog is not able to catch panics inside plugins. Therefore, if a plugin panics, this will cause an abort and shutdown the pooler.
+
+The vast majority of the Rust standard library and crates avoid panicking and return errors instead. Plugin code must check for error conditions and handle them internally. Notably, don't use `unwrap()` on `Option` or `Result` types and handle each case instead.
+
+!!! note
+    Better error handling is on the roadmap, e.g. by using macros
+    that wrap plugin code into a panic handler. That being said, since
+    plugins do expose `extern "C"` functions, this limitation should be
+    explicitely stated to plugin authors.
+
 ## Learn more
 
 pgDog plugins are in their infancy and many more features will be added over time. For now, the API
