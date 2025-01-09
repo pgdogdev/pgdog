@@ -2,9 +2,11 @@
 name = "pgdog"
 version = "0.1.0"
 edition = "2021"
-description = "Modern PostgreSQL proxy and pooler."
+description = "Modern PostgreSQL proxy, pooler and load balancer."
 authors = ["Lev Kokotov <lev.kokotov@gmail.com>"]
 license = "AGPL-3.0"
+homepage = "https://pgdog.dev"
+repository = "https://github.com/levkk/pgdog"
 
 [dependencies]
 pin-project = "1"
@@ -14,17 +16,16 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "std"] }
 parking_lot = "0.12"
 thiserror = "2"
 bytes = "1"
-# mlua = "0.10"
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
-async-trait = "*"
-rand = "*"
+async-trait = "0.1"
+rand = "0.8"
 once_cell = "1"
 tokio-rustls = "0.26"
 rustls-native-certs = "0.8"
-rustls-pki-types = "*"
+rustls-pki-types = "1"
 arc-swap = "1"
 toml = "0.8"
 pgdog-plugin = { path = "../pgdog-plugin" }
 tokio-util = { version = "0.7", features = ["rt"] }
-fnv = "*"
+fnv = "1"
