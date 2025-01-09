@@ -7,6 +7,7 @@ authors = ["Lev Kokotov <lev.kokotov@gmail.com>"]
 license = "AGPL-3.0"
 homepage = "https://pgdog.dev"
 repository = "https://github.com/levkk/pgdog"
+readme = "README.md"
 
 [dependencies]
 pin-project = "1"
