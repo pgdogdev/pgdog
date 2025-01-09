@@ -13,6 +13,7 @@ load balancing, healthchecks, and query routing have been battle-tested and work
 |---------|-------------|-------|
 | [Transaction mode](transaction-mode.md) | Multiplex transactions and servers, allowing for high reuse of PostgreSQL server connections. | ✔️ Good |
 | [Load balancer](load-balancer.md) | Splits query traffic evenly across multiple databases. | 🔨 Work in progress |
-| [Healthcheks](healthchecks.md) | Periodically checks databases to ensure they can serve queries. | ✔️ Stable |
+| [Healthcheks](healthchecks.md) | Periodically checks databases to ensure they can serve queries. | ✔️ Good |
 | [Live configuration reloading](../configuration/index.md) | Pooler configuration and users can be changed at runtime without restarting the pooler or breaking connections. | 🔨 Work in progress |
 | [Sharding](sharding/index.md) | Automatic routing of queries using a sharding key to scale writes horizontally. | 🔨 Work in progress |
+| [Plugins](plugins/index.md) | Pluggable libraries to parse and route queries, loaded at runtime. | ✔️ Good |

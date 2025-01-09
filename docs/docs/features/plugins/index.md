@@ -2,7 +2,7 @@
 
 One of features that make pgDog particularly powerful is its plugin system. Users of pgDog can write plugins
 in any language and inject them inside the query router to direct query traffic, to rewrite queries, or to block
-them entirely and return a custom result.
+them entirely and return custom results.
 
 ## API
 
@@ -20,13 +20,13 @@ functions or initialize synchronization primitives, like mutexes.
 
 This function has the following signature:
 
-=== "C/C++"
-    ```c
-    void pgdog_init();
-    ```
 === "Rust"
     ```rust
     pub extern "C" fn pgdog_init() {}
+    ```
+=== "C/C++"
+    ```c
+    void pgdog_init();
     ```
 
 
@@ -38,17 +38,34 @@ expects the plugin to parse the query and provide a route.
 
 This function has the following signature:
 
+=== "Rust"
+    ```rust
+    use pgdog_plugin::*;
+
+    pub extern "C" fn pgdog_route_query(Input query) -> Output {
+        Route::unknown()
+    }
+    ```
 === "C/C++"
     ```c
     Route pgdog_route_query(Query query);
     ```
+
+
+#### `pgdog_fini`
+
+This function is called before the pooler is shut down. This allows plugins to perform any tasks, like saving
+some internal state to a durable medium.
+
+This function has the following signature:
+
 === "Rust"
     ```rust
-    use pgdog_plugin::bindings;
-
-    pub extern "C" fn pgdog_route_query(bindings::Query query) -> Route {
-        Route::unknown()
-    }
+    pub extern "C" fn pgdog_fini() {}
+    ```
+=== "C/C++"
+    ```c
+    void pgdog_fini();
     ```
 
 ## Examples
