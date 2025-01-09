@@ -38,8 +38,14 @@ impl ErrorResponse {
         }
     }
 
+    /// Pooler is shutting down.
     pub fn shutting_down() -> ErrorResponse {
-        todo!()
+        ErrorResponse {
+            severity: "FATAL".into(),
+            code: "57P01".into(),
+            message: "pgDog is shutting down".into(),
+            detail: None,
+        }
     }
 }
 

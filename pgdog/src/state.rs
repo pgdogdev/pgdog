@@ -1,9 +1,10 @@
 //! Connection state.
 
 /// Client/server state.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Default)]
 pub enum State {
     /// Waiting for work.
+    #[default]
     Idle,
     /// Reading/writing data from/to the network.
     Active,

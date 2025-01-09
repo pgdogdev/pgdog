@@ -6,7 +6,7 @@ use std::time::Instant;
 use tokio::{select, spawn};
 use tracing::{debug, error, info, trace};
 
-use super::{Buffer, Comms, Error, Router};
+use super::{Buffer, Comms, Error, Router, Stats};
 use crate::backend::pool::Connection;
 use crate::net::messages::{
     Authentication, BackendKeyData, ErrorResponse, Protocol, ReadyForQuery,
@@ -22,9 +22,8 @@ pub struct Client {
     stream: Stream,
     comms: Comms,
     id: BackendKeyData,
-    state: State,
     params: Parameters,
-    stats: ConnStats,
+    stats: Stats,
 }
 
 impl Client {
@@ -80,9 +79,8 @@ impl Client {
             stream,
             comms,
             id,
-            state: State::Idle,
             params,
-            stats: ConnStats::default(),
+            stats: Stats::default(),
         })
     }
 
@@ -92,10 +90,9 @@ impl Client {
             addr,
             stream,
             comms,
-            state: State::Disconnected,
             id: BackendKeyData::default(),
             params: Parameters::default(),
-            stats: ConnStats::default(),
+            stats: Stats::default(),
         })
     }
 
@@ -106,7 +103,7 @@ impl Client {
 
     /// Handle the client.
     pub async fn spawn(mut self) {
-        if self.state == State::Disconnected {
+        if self.stats.disconnected() {
             return;
         }
 
@@ -130,14 +127,12 @@ impl Client {
     async fn run(&mut self) -> Result<(), Error> {
         let user = self.params.get_required("user")?;
         let database = self.params.get_default("database", user);
-        let admin = database == "admin";
 
-        let mut backend = Connection::new(user, database, admin)?;
+        let mut backend = Connection::new(user, database, self.admin())?;
         let mut router = Router::new();
         let mut timer = Instant::now();
-        let comms = self.comms.clone();
 
-        self.state = State::Idle;
+        let comms = self.comms.clone();
 
         loop {
             select! {
@@ -161,19 +156,19 @@ impl Client {
                         }
 
                         // Grab a connection from the right pool.
-                        self.state = State::Waiting;
+                        self.stats.waiting();
                         match backend.connect(&self.id, router.route()).await {
                             Ok(()) => (),
                             Err(err) => if err.checkout_timeout() {
                                 error!("connection pool is down");
                                 self.stream.error(ErrorResponse::connection()).await?;
-                                self.state = State::Idle;
+                                self.stats.error();
                                 continue;
                             } else {
                                 return Err(err.into());
                             }
                         };
-                        self.state = State::Active;
+                        self.stats.connected();
                         debug!("client paired with {} [{:.4}ms]", backend.addr()?, timer.elapsed().as_secs_f64() * 1000.0);
                     }
 
@@ -188,15 +183,14 @@ impl Client {
                     // ReadyForQuery (B) | CopyInResponse (B)
                     if matches!(message.code(), 'Z' | 'G') {
                         self.stream.send_flush(message).await?;
-                        self.stats.queries += 1;
+                        self.stats.query();
                     }  else {
                         self.stream.send(message).await?;
                     }
 
                     if backend.done() {
                         backend.disconnect();
-                        self.stats.transactions += 1;
-                        self.state = State::Idle;
+                        self.stats.transaction();
                         trace!("transaction finished [{}ms]", timer.elapsed().as_secs_f64() * 1000.0);
                         if comms.offline() {
                             break;
@@ -207,6 +201,14 @@ impl Client {
                 }
             }
         }
+
+        if comms.offline() {
+            self.stream
+                .send_flush(ErrorResponse::shutting_down())
+                .await?;
+        }
+
+        self.stats.disconnect();
 
         Ok(())
     }
@@ -223,7 +225,6 @@ impl Client {
             let message = match self.stream.read().await {
                 Ok(message) => message,
                 Err(_) => {
-                    self.state = State::Disconnected;
                     return vec![].into();
                 }
             };
@@ -232,10 +233,7 @@ impl Client {
 
             match message.code() {
                 // Terminate (F)
-                'X' => {
-                    self.state = State::Disconnected;
-                    return vec![].into();
-                }
+                'X' => return vec![].into(),
                 _ => buffer.push(message),
             }
         }
