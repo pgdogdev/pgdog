@@ -5,7 +5,7 @@ as a bridge between plugins and pgDog internals, and provides safe methods for c
 
 ## How it works
 
-For plugins to be trully dynamic, they have to be compiled into shared libraries (`.so` on Linux, `.dylib` on Mac). This way you can load arbitrary plugins into pgDog at runtime without having to recompile it. Since Rust doesn't have a stable [ABI](https://en.wikipedia.org/wiki/Application_binary_interface), we have to use the only stable ABI available to all programming languages: C.
+For plugins to be truly dynamic, they have to be compiled into shared libraries (`.so` on Linux, `.dylib` on Mac). This way you can load arbitrary plugins into pgDog at runtime without having to recompile it. Since Rust doesn't have a stable [ABI](https://en.wikipedia.org/wiki/Application_binary_interface), we have to use the only stable ABI available to all programming languages: C.
 
 ### C ABI
 

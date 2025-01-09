@@ -1,6 +1,6 @@
 # Healthchecks
 
-Databases proxied by pgDog are regularly checked with healtchecks. A healtcheck is a simple query, e.g.
+Databases proxied by pgDog are regularly checked with healthchecks. A healthcheck is a simple query, e.g.
 `SELECT 1`, which ensures the database is reachable and able to answer requests.
 
 If a database fails a healthcheck, it's placed in a list of banned hosts. Banned databases are removed
@@ -48,7 +48,7 @@ issues, like network connectivity, to resolve themselves without manual interven
 
 ### Failsafe
 
-If all databases in a cluster are banned due to a healthcheck failure, pgDog assumes that healtchecks
+If all databases in a cluster are banned due to a healthcheck failure, pgDog assumes that Healthchecks
 are returning incorrect information and unbans all databases in the cluster. This protects against false positives
 and ensures the cluster continues to serve traffic.
 

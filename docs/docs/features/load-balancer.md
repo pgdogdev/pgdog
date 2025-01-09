@@ -9,7 +9,7 @@ multiple PostgreSQL databases.
 
 ## Strategies
 
-The load balancer is configurable and can route querie
+The load balancer is configurable and can route queries
 using one of several strategies:
 
 * Random (default)

@@ -5,7 +5,7 @@
     reflects a future state of the feature.
 
 Sharding PostgreSQL databases involves splitting the database between multiple machines and routing read
-and write queries to the correct machines using a sharding function. Like its [predecessor](https://github.com/levkk/pgcat), pgDog supports sharded PostgreSQL deployments and can route queries to the corrent shards automatically using a routing [plugin](../plugins/index.md).
+and write queries to the correct machines using a sharding function. Like its [predecessor](https://github.com/levkk/pgcat), pgDog supports sharded PostgreSQL deployments and can route queries to the correct shards automatically using a routing [plugin](../plugins/index.md).
 
 <center style="margin-top: 2rem;">
     <img src="/images/sharding.png" width="70%" alt="Sharding" />

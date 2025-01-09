@@ -32,7 +32,7 @@ virtual CPU. The value `0` means to spawn no threads and use the main single-thr
 
 **`default_pool_size`**
 
-Default maximum number of server connections per database pool. The pooler will not open more than this many PostgreSQL database onnections when serving clients. Default value is **`10`**.
+Default maximum number of server connections per database pool. The pooler will not open more than this many PostgreSQL database connections when serving clients. Default value is **`10`**.
 
 **`min_pool_size`**
 
