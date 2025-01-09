@@ -7,6 +7,7 @@ authors = ["Lev Kokotov <lev.kokotov@gmail.com>"]
 readme = "README.md"
 repository = "https://github.com/levkk/pgdog"
 homepage = "https://pgdog.dev"
+description = "pgDog plugin interface and helpers"
 
 [lib]
 crate-type = ["rlib", "cdylib"]
