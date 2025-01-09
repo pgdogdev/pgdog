@@ -338,4 +338,11 @@ impl Pool {
             banned: guard.ban.is_some(),
         }
     }
+
+    /// Update pool configuration.
+    ///
+    /// This takes effect immediately.
+    pub fn update_config(&self, config: Config) {
+        self.lock().config = config;
+    }
 }

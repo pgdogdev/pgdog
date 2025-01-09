@@ -30,3 +30,6 @@ pub use shard::Shard;
 use ban::Ban;
 use inner::Inner;
 use pool::Mapping;
+
+#[cfg(test)]
+mod test;

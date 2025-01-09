@@ -21,9 +21,7 @@ pub mod plugin;
 pub mod state;
 pub mod stats;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let args = cli::Cli::parse();
-
+fn logger() {
     let format = fmt::layer()
         .with_ansi(std::io::stderr().is_terminal())
         .with_file(false);
@@ -32,10 +30,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_default_directive(LevelFilter::INFO.into())
         .from_env_lossy();
 
-    tracing_subscriber::registry()
+    let _ = tracing_subscriber::registry()
         .with(format)
         .with(filter)
-        .init();
+        .try_init();
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args = cli::Cli::parse();
+
+    logger();
 
     info!("🐕 pgDog {}", env!("CARGO_PKG_VERSION"));
 

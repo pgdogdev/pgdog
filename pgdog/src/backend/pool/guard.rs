@@ -14,6 +14,21 @@ pub struct Guard {
     pool: Pool,
 }
 
+impl std::fmt::Debug for Guard {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Guard")
+            .field(
+                "connected",
+                if self.server.is_some() {
+                    &"true"
+                } else {
+                    &"false"
+                },
+            )
+            .finish()
+    }
+}
+
 impl Guard {
     /// Create new connection guard.
     pub fn new(pool: Pool, server: Server) -> Self {

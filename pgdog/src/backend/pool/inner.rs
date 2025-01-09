@@ -28,6 +28,19 @@ pub(super) struct Inner {
     pub(super) creating: usize,
 }
 
+impl std::fmt::Debug for Inner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Inner")
+            .field("creating", &self.creating)
+            .field("paused", &self.paused)
+            .field("taken", &self.taken.len())
+            .field("conns", &self.conns.len())
+            .field("waiting", &self.waiting)
+            .field("online", &self.online)
+            .finish()
+    }
+}
+
 impl Inner {
     /// Total number of connections managed by the pool.
     #[inline]
@@ -221,7 +234,8 @@ impl Inner {
     pub fn create_permit(&mut self) -> bool {
         if self.creating > 0 {
             self.creating -= 1;
-            true
+            self.can_create() // Assert that a necessary connection
+                              // hasn't been created since the permit was issued.
         } else {
             false
         }
