@@ -24,3 +24,5 @@ Cargo.lock
 
 /target
 /target*
+
+*.md.bak
