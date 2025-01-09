@@ -14,7 +14,6 @@ pub mod auth;
 pub mod backend;
 pub mod channel;
 pub mod cli;
-pub mod comms;
 pub mod config;
 pub mod frontend;
 pub mod net;

@@ -7,7 +7,7 @@ use std::sync::{
 };
 
 use parking_lot::Mutex;
-use tokio::sync::{watch::Sender, Notify};
+use tokio::sync::Notify;
 
 use crate::net::messages::BackendKeyData;
 
