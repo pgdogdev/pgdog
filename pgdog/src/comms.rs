@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use tokio::sync::{mpsc, watch};
+use tokio::sync::watch;
 
 use crate::net::messages::BackendKeyData;
 

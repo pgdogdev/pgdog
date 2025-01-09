@@ -4,8 +4,6 @@ use backend::databases;
 use clap::Parser;
 use frontend::listener::Listener;
 use tokio::runtime::Builder;
-use tokio::select;
-use tokio::signal::ctrl_c;
 use tracing::{info, level_filters::LevelFilter};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 

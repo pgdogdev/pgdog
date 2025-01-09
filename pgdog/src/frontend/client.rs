@@ -12,8 +12,6 @@ use crate::net::messages::{
     Authentication, BackendKeyData, ErrorResponse, Protocol, ReadyForQuery,
 };
 use crate::net::{parameter::Parameters, Stream};
-use crate::state::State;
-use crate::stats::ConnStats;
 
 /// Frontend client.
 #[allow(dead_code)]
