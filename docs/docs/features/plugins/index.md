@@ -48,7 +48,7 @@ This function has the following signature:
     ```
 === "C/C++"
     ```c
-    Route pgdog_route_query(Query query);
+    Output pgdog_route_query(Input query);
     ```
 
 
