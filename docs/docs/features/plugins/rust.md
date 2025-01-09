@@ -157,6 +157,24 @@ While this may seem tedious at first, this provides the highest flexibility for 
 can use any kind of field for routing, e.g. cosine similarity of a vector column (to another), which requires
 parsing vector-encoded fields.
 
+!!! note
+    As the project evolves, I expect we'll add
+    more helpers to the `pgdog-plugin` crate to help parse
+    parameters automatically.
+
+
+## SQL parsers
+
+Parsing SQL manually can be error-prone, and there are multiple great SQL parsers you can pick off the shelf. The [pgdog-routing](https://github.com/levkk/pgdog/tree/main/plugins/pgdog-routing) plugin which ships with pgDog uses `pg_query.rs`, which in turn uses the internal PostgreSQL query
+parser. This ensures all valid PostgreSQL queries are recognized and parsed correctly.
+
+Other SQL parsers in the Rust community include [sqlparser](https://docs.rs/sqlparser/latest/sqlparser/) which
+can parse many dialects, including other databases like MySQL, if you wanted to rewrite MySQL queries to PostgreSQL queries transparently for example.
+
 ## Learn more
 
-- [pgdog-routing](https://github.com/levkk/pgdog/tree/main/plugins/pgdog-routing) plugin
+pgDog plugins are in their infancy and many more features will be added over time. For now, the API
+is pretty bare bones but can already do useful things. Our bundled plugin we use for routing is called
+[pgdog-routing](https://github.com/levkk/pgdog/tree/main/plugins/pgdog-routing) and it can be used
+as the basis for your plugin development.
+

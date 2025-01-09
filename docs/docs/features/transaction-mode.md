@@ -4,6 +4,12 @@ In transaction mode, pgDog is able to multiplex client transactions with several
 allows the pooler to serve thousands of clients using only dozens of actual server connections. This feature is essential for at-scale PostgreSQL deployments since Postgres is not able to maintain
 more than a few thousand concurrently open connections.
 
+<center>
+  <img src="/images/transaction-mode.png" width="65%" alt="Load balancer" />
+  <p><i>In transaction mode, multiple clients reuse one Postgres connection.</i></p>
+</center>
+
+
 ## Enable transaction mode
 
 Transaction mode is **enabled** by default. This is controllable via configuration, at the global
