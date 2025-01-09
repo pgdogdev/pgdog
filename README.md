@@ -48,7 +48,7 @@ protects against intermittent issues like spotty network connectivity and other 
 Like other PostgreSQL poolers, pgDog supports transaction-level connection pooling, allowing
 thousands (if not hundreds of thousands) of clients to re-use a handful of PostgreSQL server connections.
 
-&#128216; **[Transactions](https://pgdog.dev/features/transactions)**
+&#128216; **[Transactions](https://pgdog.dev/features/transaction-mode)**
 
 ## Getting started
 
