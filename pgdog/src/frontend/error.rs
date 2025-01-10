@@ -22,6 +22,12 @@ pub enum Error {
 
     #[error("authentication error")]
     Auth,
+
+    #[error("unexpected message: {0}")]
+    UnexpectedMessage(char),
+
+    #[error("scram error")]
+    Scram(#[from] scram::Error),
 }
 
 impl Error {

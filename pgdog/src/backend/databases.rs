@@ -164,6 +164,7 @@ pub fn from_config(config: &ConfigAndUsers) -> Arc<Databases> {
                     &user.database,
                     &[(primary, &replicas)],
                     general.load_balancing_strategy,
+                    &user.password,
                 ),
             );
         }

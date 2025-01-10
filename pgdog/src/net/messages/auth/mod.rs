@@ -22,6 +22,13 @@ pub enum Authentication {
     AuthenticationSASLFinal(String),
 }
 
+impl Authentication {
+    /// Request SCRAM-SHA-256 auth.
+    pub fn scram() -> Authentication {
+        Authentication::AuthenticationSASL("SCRAM-SHA-256".to_string())
+    }
+}
+
 impl FromBytes for Authentication {
     fn from_bytes(mut bytes: Bytes) -> Result<Self, Error> {
         code!(bytes, 'R');
@@ -69,20 +76,21 @@ impl ToBytes for Authentication {
             Authentication::AuthenticationSASL(mechanism) => {
                 payload.put_i32(10);
                 payload.put_string(&mechanism);
+                payload.put_u8(0);
 
                 Ok(payload.freeze())
             }
 
             Authentication::AuthenticationSASLContinue(data) => {
                 payload.put_i32(11);
-                payload.put_string(&data);
+                payload.put(Bytes::copy_from_slice(data.as_bytes()));
 
                 Ok(payload.freeze())
             }
 
             Authentication::AuthenticationSASLFinal(data) => {
                 payload.put_i32(12);
-                payload.put_string(&data);
+                payload.put(Bytes::copy_from_slice(data.as_bytes()));
 
                 Ok(payload.freeze())
             }

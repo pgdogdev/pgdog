@@ -22,6 +22,7 @@ pub struct PoolConfig {
 pub struct Cluster {
     name: String,
     shards: Vec<Shard>,
+    password: String,
 }
 
 impl Cluster {
@@ -30,6 +31,7 @@ impl Cluster {
         name: &str,
         shards: &[(Option<PoolConfig>, &[PoolConfig])],
         lb_strategy: LoadBalancingStrategy,
+        password: &str,
     ) -> Self {
         Self {
             shards: shards
@@ -37,6 +39,7 @@ impl Cluster {
                 .map(|addr| Shard::new(addr.0.clone(), addr.1, lb_strategy))
                 .collect(),
             name: name.to_owned(),
+            password: password.to_owned(),
         }
     }
 
@@ -60,6 +63,7 @@ impl Cluster {
         Self {
             shards: self.shards.iter().map(|s| s.duplicate()).collect(),
             name: self.name.clone(),
+            password: self.password.clone(),
         }
     }
 
@@ -118,5 +122,10 @@ impl Cluster {
         }
 
         Ok(Config::new(name, &databases, self.shards.len()))
+    }
+
+    /// Get the password the user should use to connect to the database.
+    pub fn password(&self) -> &str {
+        &self.password
     }
 }

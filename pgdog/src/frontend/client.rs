@@ -7,6 +7,7 @@ use tokio::{select, spawn};
 use tracing::{debug, error, info, trace};
 
 use super::{Buffer, Comms, Error, Router, Stats};
+use crate::auth::scram::Server;
 use crate::backend::pool::Connection;
 use crate::net::messages::{
     Authentication, BackendKeyData, ErrorResponse, Protocol, ReadyForQuery,
@@ -46,9 +47,6 @@ impl Client {
                 }
             };
 
-            // TODO: perform authentication.
-            stream.send(Authentication::Ok).await?;
-
             let params = match conn.parameters(&id).await {
                 Ok(params) => params,
                 Err(err) => {
@@ -61,6 +59,16 @@ impl Client {
                     }
                 }
             };
+
+            stream.send_flush(Authentication::scram()).await?;
+
+            let scram = Server::new(conn.cluster()?.password());
+            if let Ok(true) = scram.handle(&mut stream).await {
+                stream.send(Authentication::Ok).await?;
+            } else {
+                stream.fatal(ErrorResponse::auth(user, database)).await?;
+                return Ok(());
+            }
 
             for param in params {
                 stream.send(param).await?;
