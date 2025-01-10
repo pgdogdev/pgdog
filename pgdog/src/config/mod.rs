@@ -28,6 +28,7 @@ pub fn load(config: &PathBuf, users: &PathBuf) -> Result<ConfigAndUsers, Error> 
     Ok(config)
 }
 
+/// pgdog.toml and users.toml.
 #[derive(Debug, Clone, Default)]
 pub struct ConfigAndUsers {
     /// pgdog.toml

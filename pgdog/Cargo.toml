@@ -30,3 +30,4 @@ toml = "0.8"
 pgdog-plugin = { path = "../pgdog-plugin", version = "0.1.0" }
 tokio-util = { version = "0.7", features = ["rt"] }
 fnv = "1"
+scram = "0.6"

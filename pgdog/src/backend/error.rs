@@ -44,6 +44,9 @@ pub enum Error {
 
     #[error("no cluster connected")]
     NoCluster,
+
+    #[error("scram auth failed")]
+    ScramAuth(#[from] crate::auth::scram::Error),
 }
 
 impl Error {

@@ -11,17 +11,13 @@ use tokio::{
 use tracing::{debug, info, trace};
 
 use super::{pool::Address, Error};
-use crate::net::{
-    messages::{hello::SslReply, FromBytes, Protocol, Startup, ToBytes},
-    parameter::Parameters,
-    tls::connector,
-    Parameter, Stream,
-};
+use crate::net::{parameter::Parameters, tls::connector, Parameter, Stream};
 use crate::state::State;
 use crate::{
+    auth::scram::Client,
     net::messages::{
-        Authentication, BackendKeyData, ErrorResponse, Message, ParameterStatus, Query,
-        ReadyForQuery, Terminate,
+        hello::SslReply, Authentication, BackendKeyData, ErrorResponse, FromBytes, Message,
+        ParameterStatus, Password, Protocol, Query, ReadyForQuery, Startup, Terminate, ToBytes,
     },
     stats::ConnStats,
 };
@@ -71,6 +67,7 @@ impl Server {
         stream.flush().await?;
 
         // Perform authentication.
+        let mut scram = Client::new(&addr.user, &addr.password);
         loop {
             let message = stream.read().await?;
 
@@ -84,6 +81,20 @@ impl Server {
 
                     match auth {
                         Authentication::Ok => break,
+                        Authentication::AuthenticationSASL(_) => {
+                            let initial = Password::sasl_initial(&scram.first()?);
+                            stream.send_flush(initial).await?;
+                        }
+                        Authentication::AuthenticationSASLContinue(data) => {
+                            scram.server_first(&data)?;
+                            let response = Password::SASLResponse {
+                                response: scram.last()?,
+                            };
+                            stream.send_flush(response).await?;
+                        }
+                        Authentication::AuthenticationSASLFinal(data) => {
+                            scram.server_last(&data)?;
+                        }
                     }
                 }
 

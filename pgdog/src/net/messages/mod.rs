@@ -15,7 +15,7 @@ pub mod rfq;
 pub mod row_description;
 pub mod terminate;
 
-pub use auth::Authentication;
+pub use auth::{Authentication, Password};
 pub use backend_key::BackendKeyData;
 pub use bind::Bind;
 pub use data_row::{DataRow, ToDataRowColumn};
