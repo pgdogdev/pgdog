@@ -20,6 +20,7 @@ pub struct Client {
     stream: Stream,
     id: BackendKeyData,
     params: Parameters,
+    comms: Comms,
 }
 
 impl Client {
@@ -51,7 +52,7 @@ impl Client {
             let params = match conn.parameters(&id).await {
                 Ok(params) => params,
                 Err(err) => {
-                    if err.checkout_timeout() {
+                    if err.no_server() {
                         error!("Connection pool is down");
                         stream.fatal(ErrorResponse::connection()).await?;
                         return Ok(());
@@ -68,7 +69,7 @@ impl Client {
 
         stream.send(id).await?;
         stream.send_flush(ReadyForQuery::idle()).await?;
-        comms.connect(&id);
+        comms.connect(&id, addr);
 
         info!("Client connected [{}]", addr);
 
@@ -77,15 +78,16 @@ impl Client {
             stream,
             id,
             params,
+            comms,
         };
 
         if client.admin() {
             // Admin clients are not waited on during shutdown.
             spawn(async move {
-                client.spawn_internal(comms).await;
+                client.spawn_internal().await;
             });
         } else {
-            client.spawn_internal(comms).await;
+            client.spawn_internal().await;
         }
 
         Ok(())
@@ -97,15 +99,15 @@ impl Client {
     }
 
     /// Run the client and log disconnect.
-    async fn spawn_internal(&mut self, comms: Comms) {
-        match self.run(comms).await {
+    async fn spawn_internal(&mut self) {
+        match self.run().await {
             Ok(_) => info!("Client disconnected [{}]", self.addr),
             Err(err) => error!("Client disconnected with error [{}]: {}", self.addr, err),
         }
     }
 
     /// Run the client.
-    async fn run(&mut self, mut comms: Comms) -> Result<(), Error> {
+    async fn run(&mut self) -> Result<(), Error> {
         let user = self.params.get_required("user")?;
         let database = self.params.get_default("database", user);
 
@@ -113,6 +115,7 @@ impl Client {
         let mut router = Router::new();
         let mut timer = Instant::now();
         let mut stats = Stats::new();
+        let comms = self.comms.clone();
 
         loop {
             select! {
@@ -141,7 +144,7 @@ impl Client {
                         comms.stats(stats.waiting());
                         match backend.connect(&self.id, router.route()).await {
                             Ok(()) => (),
-                            Err(err) => if err.checkout_timeout() {
+                            Err(err) => if err.no_server() {
                                 error!("Connection pool is down");
                                 self.stream.error(ErrorResponse::connection()).await?;
                                 comms.stats(stats.error());
@@ -151,7 +154,9 @@ impl Client {
                             }
                         };
                         comms.stats(stats.connected());
-                        debug!("client paired with {} [{:.4}ms]", backend.addr()?, timer.elapsed().as_secs_f64() * 1000.0);
+                        if let Ok(addr) = backend.addr() {
+                            debug!("client paired with {} [{:.4}ms]", addr, timer.elapsed().as_secs_f64() * 1000.0);
+                        }
                     }
 
                     // Send query to server.
@@ -190,8 +195,6 @@ impl Client {
                 .await?;
         }
 
-        comms.disconnect();
-
         Ok(())
     }
 
@@ -201,7 +204,7 @@ impl Client {
     /// sent a complete request.
     async fn buffer(&mut self) -> Buffer {
         let mut buffer = Buffer::new();
-        let timer = Instant::now();
+        let mut timer = None;
 
         while !buffer.full() {
             let message = match self.stream.read().await {
@@ -210,6 +213,10 @@ impl Client {
                     return vec![].into();
                 }
             };
+
+            if timer.is_none() {
+                timer = Some(Instant::now());
+            }
 
             match message.code() {
                 // Terminate (F)
@@ -220,7 +227,7 @@ impl Client {
 
         trace!(
             "request buffered [{:.4}ms]",
-            timer.elapsed().as_secs_f64() * 1000.0
+            timer.unwrap().elapsed().as_secs_f64() * 1000.0
         );
 
         buffer
@@ -228,5 +235,11 @@ impl Client {
 
     fn admin(&self) -> bool {
         self.params.get_default("database", "") == "admin"
+    }
+}
+
+impl Drop for Client {
+    fn drop(&mut self) {
+        self.comms.disconnect();
     }
 }

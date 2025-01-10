@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use crate::state::State;
 
 /// Client statistics.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub struct Stats {
     /// Bytes sent over network.
     pub bytes_sent: usize,
@@ -74,6 +74,15 @@ impl Stats {
         self.state = State::Waiting;
         self.wait_timer = Instant::now();
         *self
+    }
+
+    /// Get wait time if waiting.
+    pub fn wait_time(&self) -> Duration {
+        if self.state == State::Waiting {
+            self.wait_timer.elapsed()
+        } else {
+            Duration::from_secs(0)
+        }
     }
 
     pub(super) fn connected(&mut self) -> Self {

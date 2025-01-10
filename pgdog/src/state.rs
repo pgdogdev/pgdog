@@ -19,3 +19,18 @@ pub enum State {
     /// An error occurered.
     Error,
 }
+
+impl std::fmt::Display for State {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use State::*;
+        match self {
+            Idle => write!(f, "idle"),
+            Active => write!(f, "active"),
+            IdleInTransaction => write!(f, "idle in transaction"),
+            TransactionError => write!(f, "transaction error"),
+            Waiting => write!(f, "waiting"),
+            Disconnected => write!(f, "disconnected"),
+            Error => write!(f, "error"),
+        }
+    }
+}

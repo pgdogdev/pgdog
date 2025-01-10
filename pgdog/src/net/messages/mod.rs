@@ -3,6 +3,7 @@ pub mod auth;
 pub mod backend_key;
 pub mod bind;
 pub mod command_complete;
+pub mod data_row;
 pub mod error_response;
 pub mod hello;
 pub mod parameter_status;
@@ -11,17 +12,20 @@ pub mod payload;
 pub mod prelude;
 pub mod query;
 pub mod rfq;
+pub mod row_description;
 pub mod terminate;
 
 pub use auth::Authentication;
 pub use backend_key::BackendKeyData;
 pub use bind::Bind;
+pub use data_row::{DataRow, ToDataRowColumn};
 pub use error_response::ErrorResponse;
 pub use hello::Startup;
 pub use parameter_status::ParameterStatus;
 pub use payload::Payload;
 pub use query::Query;
 pub use rfq::ReadyForQuery;
+pub use row_description::{Field, RowDescription};
 pub use terminate::Terminate;
 
 use crate::net::Error;

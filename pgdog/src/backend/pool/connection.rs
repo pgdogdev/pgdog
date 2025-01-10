@@ -24,6 +24,7 @@ pub struct Connection {
     server: Option<Guard>,
     cluster: Option<Cluster>,
     admin: Option<Backend>,
+    is_admin: bool,
 }
 
 impl Connection {
@@ -34,7 +35,8 @@ impl Connection {
             cluster: None,
             user: user.to_owned(),
             database: database.to_owned(),
-            admin: if admin { Some(Backend::new()) } else { None },
+            admin: None,
+            is_admin: admin,
         };
 
         if !admin {
@@ -51,7 +53,9 @@ impl Connection {
 
     /// Create a server connection if one doesn't exist already.
     pub async fn connect(&mut self, id: &BackendKeyData, route: &Route) -> Result<(), Error> {
-        if self.server.is_none() && self.admin.is_none() {
+        if self.is_admin {
+            self.admin = Some(Backend::new());
+        } else if self.server.is_none() {
             match self.try_conn(id, route).await {
                 Ok(()) => (),
                 Err(Error::Pool(super::Error::Offline)) => {
@@ -82,7 +86,7 @@ impl Connection {
 
     /// Get server parameters.
     pub async fn parameters(&mut self, id: &BackendKeyData) -> Result<Vec<ParameterStatus>, Error> {
-        if self.admin.is_some() {
+        if self.is_admin {
             Ok(ParameterStatus::fake())
         } else {
             self.connect(id, &Route::unknown()).await?;
@@ -100,6 +104,7 @@ impl Connection {
     /// Disconnect from a server.
     pub fn disconnect(&mut self) {
         self.server = None;
+        self.admin = None;
     }
 
     /// Read a message from the server connection.
@@ -128,8 +133,10 @@ impl Connection {
 
     /// Fetch the cluster from the global database store.
     pub fn reload(&mut self) -> Result<(), Error> {
-        let cluster = databases().cluster((self.user.as_str(), self.database.as_str()))?;
-        self.cluster = Some(cluster);
+        if !self.is_admin {
+            let cluster = databases().cluster((self.user.as_str(), self.database.as_str()))?;
+            self.cluster = Some(cluster);
+        }
 
         Ok(())
     }
@@ -138,6 +145,8 @@ impl Connection {
     pub fn done(&self) -> bool {
         if let Some(ref server) = self.server {
             server.done()
+        } else if let Some(ref admin) = self.admin {
+            admin.done()
         } else {
             true
         }

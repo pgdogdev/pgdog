@@ -48,9 +48,12 @@ pub enum Error {
 
 impl Error {
     /// Checkout timeout.
-    pub fn checkout_timeout(&self) -> bool {
+    pub fn no_server(&self) -> bool {
+        use crate::backend::pool::Error as PoolError;
         match self {
-            Error::Pool(crate::backend::pool::Error::CheckoutTimeout) => true,
+            // These are recoverable errors.
+            Error::Pool(PoolError::CheckoutTimeout) => true,
+            Error::Pool(PoolError::AllReplicasDown) => true,
             _ => false,
         }
     }

@@ -43,7 +43,7 @@ impl Backend {
 
         let command = Parser::parse(&query.query.to_lowercase())?;
 
-        command.execute().await?;
+        self.messages.extend(command.execute().await?);
 
         self.messages.push_back(
             CommandComplete {
@@ -65,5 +65,9 @@ impl Backend {
                 sleep(Duration::MAX).await;
             }
         }
+    }
+
+    pub fn done(&self) -> bool {
+        self.messages.is_empty()
     }
 }

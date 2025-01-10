@@ -15,7 +15,10 @@ use crate::net::Stream;
 
 use tracing::{error, info};
 
-use super::{Client, Comms, Error};
+use super::{
+    comms::{comms, Comms},
+    Client, Error,
+};
 
 /// Client connections listener and handler.
 #[derive(Debug)]
@@ -36,7 +39,7 @@ impl Listener {
     /// Listen for client connections and handle them.
     pub async fn listen(&mut self) -> Result<(), Error> {
         let listener = TcpListener::bind(&self.addr).await?;
-        let comms = Comms::new();
+        let comms = comms();
         info!("🐕 pgDog listening on {}", self.addr);
 
         loop {
