@@ -15,17 +15,17 @@ pub enum Authentication {
     /// AuthenticationOk (F)
     Ok,
     /// AuthenticationSASL (B)
-    AuthenticationSASL(String),
+    Sasl(String),
     /// AuthenticationSASLContinue (B)
-    AuthenticationSASLContinue(String),
+    SaslContinue(String),
     /// AuthenticationSASLFinal (B)
-    AuthenticationSASLFinal(String),
+    SaslFinal(String),
 }
 
 impl Authentication {
     /// Request SCRAM-SHA-256 auth.
     pub fn scram() -> Authentication {
-        Authentication::AuthenticationSASL("SCRAM-SHA-256".to_string())
+        Authentication::Sasl("SCRAM-SHA-256".to_string())
     }
 }
 
@@ -41,15 +41,15 @@ impl FromBytes for Authentication {
             0 => Ok(Authentication::Ok),
             10 => {
                 let mechanism = c_string_buf(&mut bytes);
-                Ok(Authentication::AuthenticationSASL(mechanism))
+                Ok(Authentication::Sasl(mechanism))
             }
             11 => {
                 let data = c_string_buf(&mut bytes);
-                Ok(Authentication::AuthenticationSASLContinue(data))
+                Ok(Authentication::SaslContinue(data))
             }
             12 => {
                 let data = c_string_buf(&mut bytes);
-                Ok(Authentication::AuthenticationSASLFinal(data))
+                Ok(Authentication::SaslFinal(data))
             }
             status => Err(Error::UnsupportedAuthentication(status)),
         }
@@ -73,7 +73,7 @@ impl ToBytes for Authentication {
                 Ok(payload.freeze())
             }
 
-            Authentication::AuthenticationSASL(mechanism) => {
+            Authentication::Sasl(mechanism) => {
                 payload.put_i32(10);
                 payload.put_string(&mechanism);
                 payload.put_u8(0);
@@ -81,14 +81,14 @@ impl ToBytes for Authentication {
                 Ok(payload.freeze())
             }
 
-            Authentication::AuthenticationSASLContinue(data) => {
+            Authentication::SaslContinue(data) => {
                 payload.put_i32(11);
                 payload.put(Bytes::copy_from_slice(data.as_bytes()));
 
                 Ok(payload.freeze())
             }
 
-            Authentication::AuthenticationSASLFinal(data) => {
+            Authentication::SaslFinal(data) => {
                 payload.put_i32(12);
                 payload.put(Bytes::copy_from_slice(data.as_bytes()));
 

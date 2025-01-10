@@ -81,18 +81,18 @@ impl Server {
 
                     match auth {
                         Authentication::Ok => break,
-                        Authentication::AuthenticationSASL(_) => {
+                        Authentication::Sasl(_) => {
                             let initial = Password::sasl_initial(&scram.first()?);
                             stream.send_flush(initial).await?;
                         }
-                        Authentication::AuthenticationSASLContinue(data) => {
+                        Authentication::SaslContinue(data) => {
                             scram.server_first(&data)?;
                             let response = Password::SASLResponse {
                                 response: scram.last()?,
                             };
                             stream.send_flush(response).await?;
                         }
-                        Authentication::AuthenticationSASLFinal(data) => {
+                        Authentication::SaslFinal(data) => {
                             scram.server_last(&data)?;
                         }
                     }

@@ -18,22 +18,30 @@ enum Provider {
     Hashed(HashedPassword),
 }
 
+/// Derive the SCRAM-SHA-256 auth
+/// from a plain text password.
 #[derive(Clone)]
-struct UserPassword {
+pub struct UserPassword {
     password: String,
 }
 
+/// Used a prehashed password obtained from
+/// pg_shadow. This allows operators not to store
+/// passwords in plain text in the config.
+///
+/// TODO: Doesn't work yet. I'm not sure how to actually
+/// implement this.
 #[derive(Clone)]
-struct HashedPassword {
+pub struct HashedPassword {
     hash: String,
 }
 
-enum DynamicServer {
+enum Scram {
     Plain(ScramServer<UserPassword>),
     Hashed(ScramServer<HashedPassword>),
 }
 
-enum DynamicClientFinal<'a> {
+enum ScramFinal<'a> {
     Plain(ClientFinal<'a, UserPassword>),
     Hashed(ClientFinal<'a, HashedPassword>),
 }
@@ -78,8 +86,8 @@ impl AuthenticationProvider for HashedPassword {
         let hashes = parts.next().map(|hashes| hashes.split(":"));
 
         if let Some(hashes) = hashes {
-            if let Some(first) = hashes.last() {
-                if let Ok(hash) = BASE64_STANDARD.decode(first) {
+            if let Some(last) = hashes.last() {
+                if let Ok(hash) = BASE64_STANDARD.decode(last) {
                     if let Some(iter) = iter {
                         if let Some(salt) = salt {
                             return Some(PasswordInfo::new(hash, iter, salt));
@@ -123,8 +131,8 @@ impl Server {
     /// Handle authentication.
     pub async fn handle(mut self, stream: &mut Stream) -> Result<bool, Error> {
         let scram = match self.provider {
-            Provider::Plain(plain) => DynamicServer::Plain(ScramServer::new(plain)),
-            Provider::Hashed(hashed) => DynamicServer::Hashed(ScramServer::new(hashed)),
+            Provider::Plain(plain) => Scram::Plain(ScramServer::new(plain)),
+            Provider::Hashed(hashed) => Scram::Hashed(ScramServer::new(hashed)),
         };
 
         let mut scram_client = None;
@@ -139,32 +147,32 @@ impl Server {
                         Password::SASLInitialResponse { response, .. } => {
                             self.client_response = response;
                             let reply = match scram {
-                                DynamicServer::Plain(ref plain) => {
+                                Scram::Plain(ref plain) => {
                                     let server =
                                         plain.handle_client_first(&self.client_response)?;
                                     let (client, reply) = server.server_first();
-                                    scram_client = Some(DynamicClientFinal::Plain(client));
+                                    scram_client = Some(ScramFinal::Plain(client));
                                     reply
                                 }
-                                DynamicServer::Hashed(ref hashed) => {
+                                Scram::Hashed(ref hashed) => {
                                     let server =
                                         hashed.handle_client_first(&self.client_response)?;
                                     let (client, reply) = server.server_first();
-                                    scram_client = Some(DynamicClientFinal::Hashed(client));
+                                    scram_client = Some(ScramFinal::Hashed(client));
                                     reply
                                 }
                             };
-                            let reply = Authentication::AuthenticationSASLContinue(reply);
+                            let reply = Authentication::SaslContinue(reply);
                             stream.send_flush(reply).await?;
                         }
 
                         Password::SASLResponse { response } => {
                             if let Some(scram_client) = scram_client {
                                 let server_final = match scram_client {
-                                    DynamicClientFinal::Plain(plain) => {
+                                    ScramFinal::Plain(plain) => {
                                         plain.handle_client_final(&response)?
                                     }
-                                    DynamicClientFinal::Hashed(hashed) => {
+                                    ScramFinal::Hashed(hashed) => {
                                         hashed.handle_client_final(&response)?
                                     }
                                 };
@@ -172,9 +180,7 @@ impl Server {
 
                                 match status {
                                     AuthenticationStatus::Authenticated => {
-                                        stream
-                                            .send(Authentication::AuthenticationSASLFinal(reply))
-                                            .await?;
+                                        stream.send(Authentication::SaslFinal(reply)).await?;
                                         return Ok(true);
                                     }
 

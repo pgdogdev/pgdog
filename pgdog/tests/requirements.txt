@@ -1,0 +1,2 @@
+asyncpg
+psycopg2
