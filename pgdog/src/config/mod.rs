@@ -284,6 +284,10 @@ pub struct User {
     pub pool_size: Option<usize>,
     /// Pooler mode.
     pub pooler_mode: Option<PoolerMode>,
+    /// Server username.
+    pub server_user: Option<String>,
+    /// Server password.
+    pub server_password: Option<String>,
 }
 
 impl User {}

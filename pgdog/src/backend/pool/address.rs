@@ -32,10 +32,14 @@ impl Address {
             },
             user: if let Some(user) = database.user.clone() {
                 user
+            } else if let Some(user) = user.server_user.clone() {
+                user
             } else {
                 user.name.clone()
             },
             password: if let Some(password) = database.password.clone() {
+                password
+            } else if let Some(password) = user.server_password.clone() {
                 password
             } else {
                 user.password.clone()

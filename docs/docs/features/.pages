@@ -1,4 +1,7 @@
 nav:
   - 'index.md'
   - 'load-balancer.md'
+  - 'healthchecks.md'
+  - 'plugins'
+  - 'transaction-mode.md'
   - '...'
