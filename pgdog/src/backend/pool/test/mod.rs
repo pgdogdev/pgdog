@@ -13,6 +13,8 @@ use crate::net::messages::BackendKeyData;
 
 use super::*;
 
+mod replica;
+
 fn pool() -> Pool {
     let mut config = Config::default();
     config.max = 1;

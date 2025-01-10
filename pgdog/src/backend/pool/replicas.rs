@@ -13,8 +13,8 @@ use super::{Error, Guard, Pool, PoolConfig};
 /// Replicas pools.
 #[derive(Clone)]
 pub struct Replicas {
-    pools: Vec<Pool>,
-    checkout_timeout: Duration,
+    pub(super) pools: Vec<Pool>,
+    pub(super) checkout_timeout: Duration,
 }
 
 impl Replicas {
@@ -35,7 +35,7 @@ impl Replicas {
         .await
         {
             Ok(Ok(conn)) => Ok(conn),
-            _ => Err(Error::CheckoutTimeout),
+            _ => Err(Error::ReplicaCheckoutTimeout),
         }
     }
 
@@ -90,13 +90,19 @@ impl Replicas {
 
         // All replicas are banned, unban everyone.
         let banned = candidates.iter().all(|(banned, _)| *banned);
+        let mut unbanned = false;
         if banned {
             candidates
                 .iter()
                 .for_each(|(_, candidate)| candidate.unban());
+            unbanned = true;
         }
 
-        for (_, candidate) in &candidates {
+        for (banned, candidate) in candidates {
+            if banned && !unbanned {
+                continue;
+            }
+
             match candidate.get(id).await {
                 Ok(conn) => return Ok(conn),
                 Err(Error::Offline) => continue,
@@ -106,6 +112,6 @@ impl Replicas {
             }
         }
 
-        Err(Error::Offline)
+        Err(Error::AllReplicasDown)
     }
 }

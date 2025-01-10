@@ -6,6 +6,9 @@ pub enum Error {
     #[error("checkout timeout")]
     CheckoutTimeout,
 
+    #[error("replica checkout timeout")]
+    ReplicaCheckoutTimeout,
+
     #[error("server error")]
     ServerError,
 
@@ -38,4 +41,7 @@ pub enum Error {
 
     #[error("config values contain null bytes")]
     NullBytes,
+
+    #[error("all replicas down")]
+    AllReplicasDown,
 }

@@ -13,7 +13,7 @@ use super::Pool;
 /// Connection guard.
 pub struct Guard {
     server: Option<Server>,
-    pool: Pool,
+    pub(super) pool: Pool,
 }
 
 impl std::fmt::Debug for Guard {
