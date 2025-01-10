@@ -195,7 +195,7 @@ pub enum LoadBalancingStrategy {
     #[default]
     Random,
     RoundRobin,
-    LeastConnections,
+    LeastActiveConnections,
 }
 
 /// Database server proxied by pgDog.

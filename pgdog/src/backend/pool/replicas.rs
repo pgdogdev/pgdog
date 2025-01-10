@@ -108,7 +108,7 @@ impl Replicas {
                 reshuffled.extend_from_slice(&candidates[..first]);
                 candidates = reshuffled;
             }
-            LoadBalancingStrategy::LeastConnections => {
+            LoadBalancingStrategy::LeastActiveConnections => {
                 candidates.sort_by_cached_key(|(_, pool)| pool.lock().idle());
             }
         }
