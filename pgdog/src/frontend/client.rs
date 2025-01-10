@@ -121,8 +121,8 @@ impl Client {
 
         let mut backend = Connection::new(user, database, self.admin())?;
         let mut router = Router::new();
-        let mut timer = Instant::now();
         let mut stats = Stats::new();
+        let mut async_ = false;
         let comms = self.comms.clone();
 
         loop {
@@ -138,11 +138,10 @@ impl Client {
                         break;
                     }
 
+                    async_ = buffer.async_();
                     comms.stats(stats.received(buffer.len()));
 
                     if !backend.connected() {
-                        timer = Instant::now();
-
                         // Figure out where the query should go.
                         if let Ok(cluster) = backend.cluster() {
                             router.query(&buffer, cluster)?;
@@ -163,7 +162,7 @@ impl Client {
                         };
                         comms.stats(stats.connected());
                         if let Ok(addr) = backend.addr() {
-                            debug!("client paired with {} [{:.4}ms]", addr, timer.elapsed().as_secs_f64() * 1000.0);
+                            debug!("client paired with {} [{:.4}ms]", addr, stats.wait_time.as_secs_f64() * 1000.0);
                         }
                     }
 
@@ -174,11 +173,13 @@ impl Client {
                 message = backend.read() => {
                     let message = message?;
                     let len = message.len();
+                    let code = message.code();
 
-                    // ReadyForQuery (B) | CopyInResponse (B)
-                    if matches!(message.code(), 'Z' | 'G') {
+                    // ReadyForQuery (B) | CopyInResponse (B) || RowDescription (B)
+                    if matches!(code, 'Z' | 'G') || code == 'T' && async_ {
                         self.stream.send_flush(message).await?;
                         comms.stats(stats.query());
+                        async_ = false;
                     }  else {
                         self.stream.send(message).await?;
                     }
@@ -186,7 +187,7 @@ impl Client {
                     if backend.done() {
                         backend.disconnect();
                         comms.stats(stats.transaction());
-                        trace!("transaction finished [{}ms]", timer.elapsed().as_secs_f64() * 1000.0);
+                        trace!("transaction finished [{}ms]", stats.transaction_time.as_secs_f64() * 1000.0);
                         if comms.offline() {
                             break;
                         }

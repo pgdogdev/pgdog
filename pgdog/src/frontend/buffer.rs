@@ -25,6 +25,11 @@ impl Buffer {
         Self { buffer: vec![] }
     }
 
+    /// Client likely wants to communicate asyncrhonously.
+    pub fn async_(&self) -> bool {
+        self.buffer.last().map(|m| m.code() == 'H').unwrap_or(false)
+    }
+
     /// The buffer is full and the client won't send any more messages
     /// until it gets a reply, or we don't want to buffer the data in memory.
     pub fn full(&self) -> bool {
