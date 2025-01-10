@@ -127,6 +127,9 @@ pub struct General {
     /// Rollback timeout.
     #[serde(default = "General::rollback_timeout")]
     pub rollback_timeout: u64,
+    /// Load balancing strategy.
+    #[serde(default = "General::load_balancing_strategy")]
+    pub load_balancing_strategy: LoadBalancingStrategy,
 }
 
 impl General {
@@ -169,6 +172,10 @@ impl General {
     fn rollback_timeout() -> u64 {
         5_000
     }
+
+    fn load_balancing_strategy() -> LoadBalancingStrategy {
+        LoadBalancingStrategy::Random
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -180,6 +187,15 @@ pub enum PoolerMode {
     #[default]
     Transaction,
     Session,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Copy)]
+#[serde(rename_all = "snake_case")]
+pub enum LoadBalancingStrategy {
+    #[default]
+    Random,
+    RoundRobin,
+    LeastConnections,
 }
 
 /// Database server proxied by pgDog.

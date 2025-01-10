@@ -1,6 +1,6 @@
 //! A shard is a collection of replicas and a primary.
 
-use crate::net::messages::BackendKeyData;
+use crate::{config::LoadBalancingStrategy, net::messages::BackendKeyData};
 
 use super::{Error, Guard, Pool, PoolConfig, Replicas};
 
@@ -13,9 +13,13 @@ pub struct Shard {
 
 impl Shard {
     /// Create new shard connection pool.
-    pub fn new(primary: Option<PoolConfig>, replicas: &[PoolConfig]) -> Self {
+    pub fn new(
+        primary: Option<PoolConfig>,
+        replicas: &[PoolConfig],
+        lb_strategy: LoadBalancingStrategy,
+    ) -> Self {
         let primary = primary.map(Pool::new);
-        let replicas = Replicas::new(replicas);
+        let replicas = Replicas::new(replicas, lb_strategy);
 
         Self { primary, replicas }
     }

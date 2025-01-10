@@ -1,7 +1,7 @@
 //! `SHOW CLIENTS` command implementation.
 
 use super::prelude::*;
-use crate::frontend::comms::{comms, Comms};
+use crate::frontend::comms::comms;
 use crate::net::messages::*;
 
 /// Show clients command.

@@ -3,6 +3,7 @@
 use crate::net::messages::BackendKeyData;
 
 use super::{Address, Config, Error, Guard, Shard};
+use crate::config::LoadBalancingStrategy;
 
 use std::ffi::CString;
 
@@ -25,11 +26,15 @@ pub struct Cluster {
 
 impl Cluster {
     /// Create new cluster of shards.
-    pub fn new(name: &str, shards: &[(Option<PoolConfig>, &[PoolConfig])]) -> Self {
+    pub fn new(
+        name: &str,
+        shards: &[(Option<PoolConfig>, &[PoolConfig])],
+        lb_strategy: LoadBalancingStrategy,
+    ) -> Self {
         Self {
             shards: shards
                 .iter()
-                .map(|addr| Shard::new(addr.0.clone(), addr.1))
+                .map(|addr| Shard::new(addr.0.clone(), addr.1, lb_strategy))
                 .collect(),
             name: name.to_owned(),
         }

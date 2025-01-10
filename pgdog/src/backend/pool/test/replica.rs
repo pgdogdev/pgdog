@@ -1,3 +1,5 @@
+use crate::config::LoadBalancingStrategy;
+
 // use super::pool;
 use super::*;
 use tokio::spawn;
@@ -19,7 +21,7 @@ fn replicas() -> Replicas {
     };
     let mut two = one.clone();
     two.address.host = "localhost".into();
-    Replicas::new(&[one, two])
+    Replicas::new(&[one, two], LoadBalancingStrategy::Random)
 }
 
 #[tokio::test]

@@ -1,11 +1,18 @@
 //! Replicas pool.
 
-use std::time::Duration;
+use std::{
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 
 use rand::seq::SliceRandom;
 use tokio::time::timeout;
 use tracing::error;
 
+use crate::config::LoadBalancingStrategy;
 use crate::net::messages::BackendKeyData;
 
 use super::{Error, Guard, Pool, PoolConfig};
@@ -15,14 +22,18 @@ use super::{Error, Guard, Pool, PoolConfig};
 pub struct Replicas {
     pub(super) pools: Vec<Pool>,
     pub(super) checkout_timeout: Duration,
+    pub(super) round_robin: Arc<AtomicUsize>,
+    pub(super) lb_strategy: LoadBalancingStrategy,
 }
 
 impl Replicas {
     /// Create new replicas pools.
-    pub fn new(addrs: &[PoolConfig]) -> Replicas {
+    pub fn new(addrs: &[PoolConfig], lb_strategy: LoadBalancingStrategy) -> Replicas {
         Self {
             pools: addrs.iter().map(|p| Pool::new(p.clone())).collect(),
             checkout_timeout: Duration::from_millis(5_000),
+            round_robin: Arc::new(AtomicUsize::new(0)),
+            lb_strategy,
         }
     }
 
@@ -54,6 +65,8 @@ impl Replicas {
         Self {
             pools: self.pools.iter().map(|p| p.duplicate()).collect(),
             checkout_timeout: self.checkout_timeout,
+            round_robin: Arc::new(AtomicUsize::new(0)),
+            lb_strategy: self.lb_strategy,
         }
     }
 
@@ -86,7 +99,19 @@ impl Replicas {
             candidates.push((primary.banned(), primary));
         }
 
-        candidates.shuffle(&mut rand::thread_rng());
+        match self.lb_strategy {
+            LoadBalancingStrategy::Random => candidates.shuffle(&mut rand::thread_rng()),
+            LoadBalancingStrategy::RoundRobin => {
+                let first = self.round_robin.fetch_add(1, Ordering::Relaxed) % candidates.len();
+                let mut reshuffled = vec![];
+                reshuffled.extend_from_slice(&candidates[first..]);
+                reshuffled.extend_from_slice(&candidates[..first]);
+                candidates = reshuffled;
+            }
+            LoadBalancingStrategy::LeastConnections => {
+                candidates.sort_by_cached_key(|(_, pool)| pool.lock().idle());
+            }
+        }
 
         // All replicas are banned, unban everyone.
         let banned = candidates.iter().all(|(banned, _)| *banned);
