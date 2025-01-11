@@ -118,7 +118,7 @@ async fn test_concurrency_with_gas() {
 #[tokio::test]
 async fn test_bans() {
     let pool = pool();
-    let mut config = pool.lock().config().clone();
+    let mut config = *pool.lock().config();
     config.checkout_timeout = 100;
     pool.update_config(config);
 

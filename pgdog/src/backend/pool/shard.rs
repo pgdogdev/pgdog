@@ -18,7 +18,7 @@ impl Shard {
         replicas: &[PoolConfig],
         lb_strategy: LoadBalancingStrategy,
     ) -> Self {
-        let primary = primary.map(|p| Pool::new(p));
+        let primary = primary.map(Pool::new);
         let replicas = Replicas::new(replicas, lb_strategy);
 
         Self { primary, replicas }

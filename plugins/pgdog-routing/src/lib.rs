@@ -3,7 +3,7 @@
 
 use pg_query::{parse, NodeEnum};
 use pgdog_plugin::bindings::{Config, Input, Output};
-use pgdog_plugin::{Query, Route};
+use pgdog_plugin::Route;
 
 use tracing::{debug, level_filters::LevelFilter};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
@@ -34,7 +34,7 @@ pub extern "C" fn pgdog_init() {
 #[no_mangle]
 pub extern "C" fn pgdog_route_query(input: Input) -> Output {
     if let Some(query) = input.query() {
-        let query = Query::from(query);
+        let query = query;
         let route = match route_internal(query.query(), input.config) {
             Ok(route) => route,
             Err(_) => Route::unknown(),

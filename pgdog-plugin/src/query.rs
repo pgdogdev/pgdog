@@ -44,7 +44,7 @@ impl Query {
     /// Get parameter at offset if one exists.
     pub fn parameter(&self, index: usize) -> Option<Parameter> {
         if index < self.num_parameters as usize {
-            unsafe { Some(*(self.parameters.offset(index as isize))) }
+            unsafe { Some(*self.parameters.add(index)) }
         } else {
             None
         }

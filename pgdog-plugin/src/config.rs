@@ -71,7 +71,7 @@ impl Config {
     /// Get database at index.
     pub fn database(&self, index: usize) -> Option<DatabaseConfig> {
         if index < self.num_databases as usize {
-            Some(unsafe { *(self.databases.offset(index as isize)) })
+            Some(unsafe { *self.databases.add(index) })
         } else {
             None
         }

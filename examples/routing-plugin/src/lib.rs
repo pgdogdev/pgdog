@@ -20,7 +20,6 @@ pub extern "C" fn pgdog_route_query(input: Input) -> Output {
                     parameter
                         .as_bytes()
                         .try_into()
-                        .map(|bytes| bytes)
                         .unwrap_or([0u8; 8]),
                 ),
             }

@@ -75,7 +75,7 @@ impl ToBytes for Authentication {
 
             Authentication::Sasl(mechanism) => {
                 payload.put_i32(10);
-                payload.put_string(&mechanism);
+                payload.put_string(mechanism);
                 payload.put_u8(0);
 
                 Ok(payload.freeze())
