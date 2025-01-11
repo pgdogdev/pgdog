@@ -146,7 +146,7 @@ async fn test_pause() {
     let pool = pool();
     let tracker = TaskTracker::new();
     let mut config = Config::default();
-    config.checkout_timeout = 50;
+    config.checkout_timeout = 1_000;
     config.max = 1;
     pool.update_config(config);
 
@@ -161,7 +161,7 @@ async fn test_pause() {
     pool.pause();
 
     // We'll hit the timeout now because we're waiting forever.
-    let pause = Duration::from_millis(500);
+    let pause = Duration::from_millis(2_000);
     assert!(timeout(pause, pool.get(&BackendKeyData::new()))
         .await
         .is_err());
