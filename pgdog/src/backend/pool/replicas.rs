@@ -131,6 +131,7 @@ impl Replicas {
             match candidate.get(id).await {
                 Ok(conn) => return Ok(conn),
                 Err(Error::Offline) => continue,
+                Err(Error::Banned) => continue,
                 Err(err) => {
                     error!("{} [{}]", err, candidate.addr());
                 }

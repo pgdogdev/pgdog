@@ -1,7 +1,5 @@
 //! Admin command parser.
 
-use crate::admin::show_pools;
-
 use super::{
     pause::Pause, prelude::Message, reconnect::Reconnect, reload::Reload,
     show_clients::ShowClients, show_pools::ShowPools, Command, Error,

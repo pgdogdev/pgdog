@@ -30,6 +30,8 @@ impl Command for ShowPools {
             Field::numeric("clients_waiting"),
             Field::numeric("paused"),
             Field::numeric("banned"),
+            Field::numeric("errors"),
+            Field::numeric("out_of_sync"),
         ]);
         let mut messages = vec![rd.message()?];
         for (user, cluster) in databases().all() {
@@ -47,7 +49,9 @@ impl Command for ShowPools {
                         .add(state.total)
                         .add(state.waiting)
                         .add(state.paused)
-                        .add(state.banned);
+                        .add(state.banned)
+                        .add(state.errors)
+                        .add(state.out_of_sync);
                     messages.push(row.message()?);
                 }
             }

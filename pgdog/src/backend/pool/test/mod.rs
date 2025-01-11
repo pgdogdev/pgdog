@@ -49,7 +49,6 @@ async fn test_pool_checkout() {
 
     assert_eq!(pool.lock().idle(), 0);
     assert_eq!(pool.lock().total(), 1);
-    assert!(!pool.lock().can_create());
     assert!(!pool.lock().should_create());
 
     let err = timeout(Duration::from_millis(100), pool.get(&BackendKeyData::new())).await;
@@ -119,12 +118,16 @@ async fn test_concurrency_with_gas() {
 #[tokio::test]
 async fn test_bans() {
     let pool = pool();
+    let mut config = pool.lock().config().clone();
+    config.checkout_timeout = 100;
+    pool.update_config(config);
 
     pool.ban(Error::CheckoutTimeout);
     assert!(pool.banned());
 
-    // Can still get a connection from the pool.
-    let _conn = pool.get(&BackendKeyData::new()).await.unwrap();
+    // Will timeout getting a connection from a banned pool.
+    let conn = pool.get(&BackendKeyData::new()).await;
+    assert!(conn.is_err());
 }
 
 #[tokio::test]
@@ -154,6 +157,7 @@ async fn test_pause() {
     pool.get(&BackendKeyData::new())
         .await
         .expect_err("checkout timeout");
+    pool.unban();
     drop(hold);
     // Make sure we're not blocked still.
     drop(pool.get(&BackendKeyData::new()).await.unwrap());
