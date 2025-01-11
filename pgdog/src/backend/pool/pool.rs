@@ -116,8 +116,6 @@ impl Clone for Pool {
 impl Pool {
     /// Create new connection pool.
     pub fn new(config: PoolConfig) -> Self {
-        
-
         Self {
             inner: Arc::new(Mutex::new(Inner::new(config.config))),
             comms: Arc::new(Comms::new()),
@@ -142,7 +140,9 @@ impl Pool {
                     return Err(Error::Offline);
                 }
 
-                let conn = guard.take(id).map(|server| Guard::new(self.clone(), server));
+                let conn = guard
+                    .take(id)
+                    .map(|server| Guard::new(self.clone(), server));
 
                 (
                     if guard.paused {

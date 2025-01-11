@@ -16,12 +16,7 @@ pub extern "C" fn pgdog_route_query(input: Input) -> Output {
             let id = parameter.as_str().map(|str| str.parse::<i64>());
             match id {
                 Some(Ok(id)) => id,
-                _ => i64::from_be_bytes(
-                    parameter
-                        .as_bytes()
-                        .try_into()
-                        .unwrap_or([0u8; 8]),
-                ),
+                _ => i64::from_be_bytes(parameter.as_bytes().try_into().unwrap_or([0u8; 8])),
             }
         })
     });

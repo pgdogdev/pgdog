@@ -23,8 +23,7 @@ impl<'a> Plugin<'a> {
 
     /// Load standard methods from the plugin library.
     pub fn load(name: &str, library: &'a Library) -> Self {
-        let route =
-            unsafe { library.get(b"pgdog_route_query\0") }.ok();
+        let route = unsafe { library.get(b"pgdog_route_query\0") }.ok();
         let init = unsafe { library.get(b"pgdog_init\0") }.ok();
         let fini = unsafe { library.get(b"pgdog_fini\0") }.ok();
 
