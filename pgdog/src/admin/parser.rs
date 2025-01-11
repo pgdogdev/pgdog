@@ -2,7 +2,7 @@
 
 use super::{
     pause::Pause, prelude::Message, reconnect::Reconnect, reload::Reload,
-    show_clients::ShowClients, Command, Error,
+    show_clients::ShowClients, show_pools::ShowPools, Command, Error,
 };
 
 use tracing::debug;
@@ -13,6 +13,7 @@ pub enum ParseResult {
     Reconnect(Reconnect),
     ShowClients(ShowClients),
     Reload(Reload),
+    ShowPools(ShowPools),
 }
 
 impl ParseResult {
@@ -25,6 +26,7 @@ impl ParseResult {
             Reconnect(reconnect) => reconnect.execute().await,
             ShowClients(show_clients) => show_clients.execute().await,
             Reload(reload) => reload.execute().await,
+            ShowPools(show_pools) => show_pools.execute().await,
         }
     }
 
@@ -37,6 +39,7 @@ impl ParseResult {
             Reconnect(reconnect) => reconnect.name(),
             ShowClients(show_clients) => show_clients.name(),
             Reload(reload) => reload.name(),
+            ShowPools(show_pools) => show_pools.name(),
         }
     }
 }
@@ -56,6 +59,7 @@ impl Parser {
             "reload" => ParseResult::Reload(Reload::parse(&sql)?),
             "show" => match iter.next().ok_or(Error::Syntax)?.trim() {
                 "clients" => ParseResult::ShowClients(ShowClients::parse(&sql)?),
+                "pools" => ParseResult::ShowPools(ShowPools::parse(&sql)?),
                 command => {
                     debug!("unknown admin show command: '{}'", command);
                     return Err(Error::Syntax);

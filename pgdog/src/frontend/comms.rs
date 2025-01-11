@@ -15,7 +15,7 @@ use crate::net::messages::BackendKeyData;
 
 use super::{ConnectedClient, Stats};
 
-static COMMS: Lazy<Comms> = Lazy::new(|| Comms::new());
+static COMMS: Lazy<Comms> = Lazy::new(Comms::new);
 
 /// Get global communication channel.
 pub fn comms() -> Comms {

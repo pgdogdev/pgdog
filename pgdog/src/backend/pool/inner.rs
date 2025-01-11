@@ -4,6 +4,7 @@ use std::collections::VecDeque;
 use std::{cmp::max, time::Instant};
 
 use crate::backend::Server;
+use crate::net::messages::BackendKeyData;
 
 use super::{Ban, Config, Error, Mapping};
 
@@ -11,7 +12,7 @@ use super::{Ban, Config, Error, Mapping};
 #[derive(Default)]
 pub(super) struct Inner {
     /// Idle server connections.
-    pub(super) conns: VecDeque<Server>,
+    conns: VecDeque<Server>,
     /// Server connectios currently checked out.
     pub(super) taken: Vec<Mapping>,
     /// Pool configuration.
@@ -26,6 +27,10 @@ pub(super) struct Inner {
     pub(super) paused: bool,
     /// Connections being created.
     pub(super) creating: usize,
+    /// Track out of sync terminations.
+    pub(super) out_of_sync: usize,
+    /// Track connections closed with errors.
+    pub(super) errors: usize,
 }
 
 impl std::fmt::Debug for Inner {
@@ -42,6 +47,21 @@ impl std::fmt::Debug for Inner {
 }
 
 impl Inner {
+    /// New inner structure.
+    pub(super) fn new(config: Config) -> Self {
+        Self {
+            conns: VecDeque::new(),
+            taken: Vec::new(),
+            config,
+            waiting: 0,
+            ban: None,
+            online: false,
+            paused: false,
+            creating: 0,
+            out_of_sync: 0,
+            errors: 0,
+        }
+    }
     /// Total number of connections managed by the pool.
     #[inline]
     pub(super) fn total(&self) -> usize {
@@ -59,13 +79,6 @@ impl Inner {
     #[allow(dead_code)]
     pub(super) fn empty(&self) -> bool {
         self.idle() == 0
-    }
-
-    /// The pool can create more connections if they are needed
-    /// without breaking the maximum number of connections requirement.
-    #[inline]
-    pub(super) fn can_create(&self) -> bool {
-        self.total() < self.config.max
     }
 
     /// Number of connections checked out of the pool
@@ -90,11 +103,22 @@ impl Inner {
         self.config.min
     }
 
-    /// The pool should create more connections to satisfy the minimum
-    /// connection requirement.
+    /// Maximum number of connections in the pool.
+    #[inline]
+    pub(super) fn max(&self) -> usize {
+        self.config.max
+    }
+
+    /// The pool should create more connections now.
     #[inline]
     pub(super) fn should_create(&self) -> bool {
-        self.total() + self.creating < self.min()
+        let below_min = self.total() < self.min();
+        let below_max = self.total() < self.max();
+        let maintain_min = below_min && below_max;
+        let client_needs = below_max && self.waiting > 0 && self.conns.is_empty();
+        let maintenance_on = self.online && !self.paused;
+
+        !self.banned() && maintenance_on && (maintain_min || client_needs)
     }
 
     /// Check if the pool ban should be removed.
@@ -114,20 +138,27 @@ impl Inner {
 
     /// Close connections that have exceeded the max age.
     #[inline]
-    pub(crate) fn close_old(&mut self, now: Instant) {
+    pub(crate) fn close_old(&mut self, now: Instant) -> usize {
         let max_age = self.config.max_age();
+        let mut removed = 0;
 
         self.conns.retain(|c| {
             let age = c.age(now);
-            age < max_age
+            let keep = age < max_age;
+            if !keep {
+                removed += 1;
+            }
+            keep
         });
+
+        removed
     }
 
     /// Close connections that have been idle for too long
     /// without affecting the minimum pool size requirement.
     #[inline]
-    pub(crate) fn close_idle(&mut self, now: Instant) {
-        let mut remove = self.can_remove();
+    pub(crate) fn close_idle(&mut self, now: Instant) -> usize {
+        let (mut remove, mut removed) = (self.can_remove(), 0);
         let idle_timeout = self.config.idle_timeout();
 
         self.conns.retain(|c| {
@@ -135,17 +166,46 @@ impl Inner {
 
             if remove > 0 && idle_for >= idle_timeout {
                 remove -= 1;
+                removed += 1;
                 false
             } else {
                 true
             }
         });
+
+        removed
     }
 
     /// Pool configuration options.
     #[inline]
     pub(super) fn config(&self) -> &Config {
         &self.config
+    }
+
+    /// Take connection from the idle pool.
+    pub(super) fn take(&mut self, id: &BackendKeyData) -> Option<Server> {
+        if let Some(conn) = self.conns.pop_back() {
+            self.taken.push(Mapping {
+                client: *id,
+                server: *(conn.id()),
+            });
+
+            Some(conn)
+        } else {
+            None
+        }
+    }
+
+    /// Place connection back into the pool.
+    #[inline]
+    pub(super) fn put(&mut self, conn: Server) {
+        self.conns.push_back(conn);
+    }
+
+    /// Dump all idle connections.
+    #[inline]
+    pub(super) fn dump_idle(&mut self) {
+        self.conns.clear();
     }
 
     #[inline]
@@ -169,6 +229,7 @@ impl Inner {
 
         // Ban the pool from serving more clients.
         if server.error() {
+            self.errors += 1;
             return self.maybe_ban(now, Error::ServerError);
         }
 
@@ -185,7 +246,9 @@ impl Inner {
         // Finally, if the server is ok,
         // place the connection back into the idle list.
         if server.done() {
-            self.conns.push_back(server);
+            self.put(server);
+        } else {
+            self.out_of_sync += 1;
         }
 
         false
@@ -223,27 +286,19 @@ impl Inner {
         unbanned
     }
 
-    /// Pool is banned from serving connections.
     #[inline]
     pub fn banned(&self) -> bool {
         self.ban.is_some()
     }
 
-    /// Consume a create permit if there is one.
     #[inline]
-    pub fn create_permit(&mut self) -> bool {
-        if self.creating > 0 {
-            self.creating -= 1;
-            self.can_create() // Assert that a necessary connection
-                              // hasn't been created since the permit was issued.
-        } else {
-            false
-        }
+    pub fn created(&mut self) {
+        self.creating -= 1;
     }
 
     /// Create a create permit.
     #[inline]
-    pub fn create(&mut self) {
+    pub fn creating(&mut self) {
         self.creating += 1;
     }
 }
@@ -266,12 +321,6 @@ mod test {
         assert_eq!(inner.idle(), 0);
         assert!(!inner.online);
         assert!(!inner.paused);
-
-        // Create permits.
-        inner.create();
-        assert_eq!(inner.creating, 1);
-        assert!(inner.create_permit());
-        assert_eq!(inner.creating, 0);
 
         // The ban list.
         let banned = inner.maybe_ban(Instant::now(), Error::CheckoutTimeout);
@@ -319,38 +368,34 @@ mod test {
         assert!(banned);
         assert_eq!(inner.ban.unwrap().reason, Error::ServerError);
         assert!(inner.taken.is_empty());
+        inner.ban = None;
 
         inner.config.max = 5;
-        assert!(inner.can_create());
+        inner.waiting = 1;
+        assert_eq!(inner.idle(), 1);
+        assert!(!inner.should_create());
 
         assert_eq!(inner.config.min, 1);
         assert_eq!(inner.idle(), 1);
         assert!(!inner.should_create());
 
         inner.config.min = 2;
+        assert_eq!(inner.config.max, 5);
+        assert!(inner.total() < inner.min());
+        assert!(inner.total() < inner.max());
+        assert!(!inner.banned() && inner.online);
         assert!(inner.should_create());
 
         inner.config.max = 1;
-        assert!(!inner.can_create());
+        assert!(!inner.should_create());
 
         inner.config.max = 3;
-        inner.create();
-        inner.create();
-        assert!(!inner.should_create());
-        // Consume permits but connections weren't created.
-        assert!(inner.can_create());
-        inner.create_permit();
-        inner.create_permit();
+
         assert!(inner.should_create());
-        // Consume permits and create connections successfully.
-        inner.create();
-        inner.create();
-        inner.create_permit();
-        inner.create_permit();
+
         inner.conns.push_back(Server::default());
         inner.conns.push_back(Server::default());
         assert!(!inner.should_create());
-        assert!(!inner.can_create()); // pool is full of idle connections.
 
         // Close idle connections.
         inner.config.idle_timeout = 5_000; // 5 seconds.
@@ -372,7 +417,6 @@ mod test {
         assert_eq!(inner.idle(), 0); // This ignores the min setting!
 
         assert!(inner.should_create());
-        assert!(inner.can_create());
 
         assert_eq!(inner.total(), 0);
         inner.taken.push(Mapping::default());

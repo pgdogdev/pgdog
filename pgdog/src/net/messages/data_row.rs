@@ -53,6 +53,12 @@ impl ToDataRowColumn for f64 {
     }
 }
 
+impl Default for DataRow {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DataRow {
     /// New data row.
     pub fn new() -> Self {

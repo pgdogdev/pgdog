@@ -23,10 +23,9 @@ impl<'a> Plugin<'a> {
 
     /// Load standard methods from the plugin library.
     pub fn load(name: &str, library: &'a Library) -> Self {
-        let route =
-            unsafe { library.get(b"pgdog_route_query\0") }.map_or(None, |route| Some(route));
-        let init = unsafe { library.get(b"pgdog_init\0") }.map_or(None, |init| Some(init));
-        let fini = unsafe { library.get(b"pgdog_fini\0") }.map_or(None, |fini| Some(fini));
+        let route = unsafe { library.get(b"pgdog_route_query\0") }.ok();
+        let init = unsafe { library.get(b"pgdog_init\0") }.ok();
+        let fini = unsafe { library.get(b"pgdog_fini\0") }.ok();
 
         Self {
             name: name.to_owned(),

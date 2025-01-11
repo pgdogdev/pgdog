@@ -36,6 +36,7 @@ use std::time::{Duration, Instant};
 
 use super::{Error, Guard, Healtcheck, Pool};
 use crate::backend::Server;
+use crate::net::messages::BackendKeyData;
 
 use tokio::time::{interval, sleep, timeout};
 use tokio::{select, task::spawn};
@@ -89,23 +90,18 @@ impl Monitor {
                 _ = comms.request.notified() => {
                     let (
                         idle,
-                        can_create,
+                        should_create,
                         connect_timeout,
-                        paused,
-                        banned,
                         online,
-                        create_permit,
                     ) = {
-                        let mut guard = self.pool.lock();
+                        let guard = self.pool.lock();
 
                         (
                             guard.idle(),
-                            guard.can_create(),
+                            guard.should_create(),
                             guard.config().connect_timeout(),
-                            guard.paused,
-                            guard.banned(),
                             guard.online,
-                            guard.create_permit(),
+
                         )
                     };
 
@@ -113,26 +109,15 @@ impl Monitor {
                         break;
                     }
 
-                    // If the pool is paused, don't open new connections.
-                    if paused {
-                        continue;
-                    }
-
-                    // An idle connection is available and we don't have a create permit.
-                    if idle > 0 && !create_permit {
-                        match idle {
-                            // Only one connection available, notify one client.
-                            1 => comms.ready.notify_one(),
-                            // Many connections are available, notify everyone.
-                            _ => comms.ready.notify_waiters(),
-                        }
-                    } else if can_create && !banned || create_permit {
-                        // No idle connections, but we are allowed to create a new one.
+                    if idle > 0 {
+                        comms.ready.notify_waiters();
+                    } else if should_create {
+                        self.pool.lock().creating();
                         let ok = self.replenish(connect_timeout).await;
-
                         if ok {
                             // Notify all clients we have a connection
                             // available.
+                            self.pool.lock().created();
                             comms.ready.notify_waiters();
                         }
                     }
@@ -222,23 +207,11 @@ impl Monitor {
                         continue;
                     }
 
-                    // Close idle connections.
                     guard.close_idle(now);
-                    // Close old connections (max age).
                     guard.close_old(now);
-                    // Check and remove old bans.
                     let unbanned = guard.check_ban(now);
 
-                    // If we have clients waiting still, try to open a connection again.
-                    // This prevents a thundering herd.
-                    if guard.waiting > 0 {
-                        comms.request.notify_one();
-                    }
-
-                    // Maintain a minimum number of connections
-                    // in the pool.
                     if guard.should_create() {
-                        guard.create();
                         comms.request.notify_one();
                     }
 
@@ -261,7 +234,7 @@ impl Monitor {
         match timeout(connect_timeout, Server::connect(self.pool.addr())).await {
             Ok(Ok(conn)) => {
                 ok = true;
-                self.pool.lock().conns.push_front(conn);
+                self.pool.lock().put(conn);
             }
 
             Ok(Err(err)) => {
@@ -285,7 +258,10 @@ impl Monitor {
             if !guard.online {
                 return Ok(());
             }
-            (guard.conns.pop_front(), guard.config.healthcheck_timeout())
+            (
+                guard.take(&BackendKeyData::new()),
+                guard.config.healthcheck_timeout(),
+            )
         };
 
         // Have an idle connection, use that for the healtcheck.

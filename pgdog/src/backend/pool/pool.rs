@@ -1,6 +1,5 @@
 //! Connection pool.
 
-use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -68,6 +67,10 @@ pub struct State {
     pub ban: Option<Ban>,
     /// Pool is banned.
     pub banned: bool,
+    /// Errors.
+    pub errors: usize,
+    /// Out of sync
+    pub out_of_sync: usize,
 }
 
 struct Waiting {
@@ -113,22 +116,11 @@ impl Clone for Pool {
 impl Pool {
     /// Create new connection pool.
     pub fn new(config: PoolConfig) -> Self {
-        let pool = Self {
-            inner: Arc::new(Mutex::new(Inner {
-                conns: VecDeque::new(),
-                taken: Vec::new(),
-                config: config.config,
-                waiting: 0,
-                ban: None,
-                online: false,
-                paused: false,
-                creating: 0,
-            })),
+        Self {
+            inner: Arc::new(Mutex::new(Inner::new(config.config))),
             comms: Arc::new(Comms::new()),
             addr: config.address,
-        };
-
-        pool
+        }
     }
 
     /// Launch the maintenance loop, bringing the pool online.
@@ -148,16 +140,9 @@ impl Pool {
                     return Err(Error::Offline);
                 }
 
-                let conn = if let Some(server) = guard.conns.pop_back() {
-                    guard.taken.push(Mapping {
-                        client: *id,
-                        server: *server.id(),
-                    });
-
-                    Some(Guard::new(self.clone(), server))
-                } else {
-                    None
-                };
+                let conn = guard
+                    .take(id)
+                    .map(|server| Guard::new(self.clone(), server));
 
                 (
                     if guard.paused {
@@ -294,7 +279,7 @@ impl Pool {
         let mut guard = self.lock();
 
         guard.paused = true;
-        guard.conns.clear();
+        guard.dump_idle();
     }
 
     /// Resume the pool.
@@ -312,7 +297,7 @@ impl Pool {
     pub fn shutdown(&self) {
         let mut guard = self.lock();
         guard.online = false;
-        guard.conns.clear();
+        guard.dump_idle();
         self.comms().shutdown.notify_waiters();
         self.comms().ready.notify_waiters();
     }
@@ -349,6 +334,8 @@ impl Pool {
             waiting: guard.waiting,
             ban: guard.ban,
             banned: guard.ban.is_some(),
+            errors: guard.errors,
+            out_of_sync: guard.out_of_sync,
         }
     }
 
