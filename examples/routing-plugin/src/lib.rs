@@ -4,19 +4,32 @@ use pgdog_plugin::*;
 /// Route query.
 #[no_mangle]
 pub extern "C" fn pgdog_route_query(input: Input) -> Output {
-    if let Some(query) = input.query() {
-        let _id = if let Some(id) = query.parameter(0) {
-            if let Some(id) = id.as_str() {
-                id.parse::<i64>().ok()
-            } else if let Ok(id) = id.as_bytes().try_into() {
-                Some(i64::from_be_bytes(id))
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-    }
+    let is_read = input
+        .query()
+        .map(|query| query.query().to_lowercase().trim().starts_with("select"))
+        .unwrap_or(false);
 
-    Output::skip()
+    // This is just an example of extracing a parameter from
+    // the query. In the future, we'll use this to shard transactions.
+    let _parameter = input.query().map(|query| {
+        query.parameter(0).map(|parameter| {
+            let id = parameter.as_str().map(|str| str.parse::<i64>());
+            match id {
+                Some(Ok(id)) => id,
+                _ => i64::from_be_bytes(
+                    parameter
+                        .as_bytes()
+                        .try_into()
+                        .map(|bytes| bytes)
+                        .unwrap_or([0u8; 8]),
+                ),
+            }
+        })
+    });
+
+    if is_read {
+        Output::forward(Route::read_any())
+    } else {
+        Output::forward(Route::write_any())
+    }
 }
