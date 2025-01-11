@@ -73,14 +73,14 @@ impl Listener {
 
     async fn handle_client(stream: TcpStream, addr: SocketAddr, comms: Comms) -> Result<(), Error> {
         let mut stream = Stream::plain(stream);
-        let tls = acceptor()?;
+        let tls = acceptor();
 
         loop {
             let startup = Startup::from_stream(&mut stream).await?;
 
             match startup {
                 Startup::Ssl => {
-                    if let Some(ref tls) = tls {
+                    if let Some(tls) = tls {
                         stream.send_flush(SslReply::Yes).await?;
                         let plain = stream.take()?;
                         let cipher = tls.accept(plain).await?;

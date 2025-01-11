@@ -14,6 +14,7 @@ use super::Pool;
 pub struct Guard {
     server: Option<Server>,
     pub(super) pool: Pool,
+    pub(super) reset: bool,
 }
 
 impl std::fmt::Debug for Guard {
@@ -37,6 +38,7 @@ impl Guard {
         Self {
             server: Some(server),
             pool,
+            reset: false,
         }
     }
 
@@ -47,13 +49,24 @@ impl Guard {
         let pool = self.pool.clone();
 
         if let Some(mut server) = server {
-            if server.in_transaction() {
+            let rollback = server.in_transaction();
+            let reset = self.reset;
+
+            if rollback || reset {
+                let rollback_timeout = pool.lock().config.rollback_timeout();
                 spawn(async move {
                     // Rollback any unfinished transactions,
                     // but only if the server is in sync (protocol-wise).
-                    let rollback_timeout = pool.lock().config.rollback_timeout();
-                    if let Err(_) = timeout(rollback_timeout, server.rollback()).await {
-                        error!("rollback timeout [{}]", server.addr());
+                    if rollback {
+                        if let Err(_) = timeout(rollback_timeout, server.rollback()).await {
+                            error!("rollback timeout [{}]", server.addr());
+                        }
+                    }
+
+                    if reset {
+                        if let Err(_) = timeout(rollback_timeout, server.reset()).await {
+                            error!("reset timeout [{}]", server.addr());
+                        }
                     }
 
                     pool.checkin(server);

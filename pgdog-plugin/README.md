@@ -16,3 +16,7 @@ This crate is a C (and Rust) library that should be linked at compile time again
 ## Writing plugins
 
 Examples of plugins written in C and Rust are available [here](https://github.com/levkk/pgdog/tree/main/examples).
+
+## License
+
+This library is distributed under the MIT license. See [LICENSE](LICENSE) for details.

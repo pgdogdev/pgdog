@@ -2,12 +2,15 @@
 name = "pgdog-routing"
 version = "0.1.0"
 edition = "2021"
+license = "AGPL-3.0"
+authors = ["Lev Kokotov <lev.kokotov@gmail.com>"]
+description = "De facto pgDog plugin for routing queries"
 
 [dependencies]
-pgdog-plugin = { path = "../../pgdog-plugin" }
+pgdog-plugin = { path = "../../pgdog-plugin", version = "0.1.1" }
 pg_query = "6.0"
 tracing = "0.1"
-tracing-subscriber = "*"
+tracing-subscriber = "0.3"
 
 [lib]
 crate-type = ["rlib", "cdylib"]

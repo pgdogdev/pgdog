@@ -1,6 +1,6 @@
 //! TLS configuration.
 
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
 
 use once_cell::sync::OnceCell;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
@@ -14,25 +14,38 @@ use tokio_rustls::rustls::{
 use tokio_rustls::{TlsAcceptor, TlsConnector};
 use tracing::info;
 
+use crate::config::config;
+
 use super::Error;
 
 static ACCEPTOR: OnceCell<Option<TlsAcceptor>> = OnceCell::new();
 static CONNECTOR: OnceCell<TlsConnector> = OnceCell::new();
 
+/// Get preloaded TLS acceptor.
+pub fn acceptor() -> Option<&'static TlsAcceptor> {
+    if let Some(Some(acceptor)) = ACCEPTOR.get() {
+        return Some(acceptor);
+    }
+
+    None
+}
+
 /// Create a new TLS acceptor from the cert and key.
-pub fn acceptor() -> Result<Option<TlsAcceptor>, Error> {
+///
+/// This is not atomic, so call it on startup only.
+pub fn load_acceptor(cert: &PathBuf, key: &PathBuf) -> Result<Option<TlsAcceptor>, Error> {
     if let Some(acceptor) = ACCEPTOR.get() {
         return Ok(acceptor.clone());
     }
 
-    let pem = if let Ok(pem) = CertificateDer::from_pem_file("tests/cert.pem") {
+    let pem = if let Ok(pem) = CertificateDer::from_pem_file(cert) {
         pem
     } else {
         let _ = ACCEPTOR.set(None);
         return Ok(None);
     };
 
-    let key = if let Ok(key) = PrivateKeyDer::from_pem_file("tests/key.pem") {
+    let key = if let Ok(key) = PrivateKeyDer::from_pem_file(key) {
         key
     } else {
         let _ = ACCEPTOR.set(None);
@@ -87,7 +100,12 @@ pub fn connector() -> Result<TlsConnector, Error> {
 
 /// Preload TLS at startup.
 pub fn load() -> Result<(), Error> {
-    let _ = acceptor()?;
+    let config = config();
+
+    if let Some((cert, key)) = config.config.general.tls() {
+        let _ = load_acceptor(cert, key)?;
+    }
+
     let _ = connector()?;
 
     Ok(())

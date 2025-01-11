@@ -43,6 +43,12 @@ pub fn reconnect() {
     replace_databases(databases().duplicate());
 }
 
+/// Iniitialize the databases for the first time.
+pub fn init() {
+    let config = config();
+    replace_databases(from_config(&config));
+}
+
 /// Re-create pools from config.
 ///
 /// TODO: Avoid creating new pools if they haven't changed at all
@@ -191,6 +197,7 @@ pub fn from_config(config: &ConfigAndUsers) -> Databases {
                     &[(primary, &replicas)],
                     general.load_balancing_strategy,
                     &user.password,
+                    user.pooler_mode.unwrap_or(general.pooler_mode),
                 ),
             );
         }

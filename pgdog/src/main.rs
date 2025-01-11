@@ -21,10 +21,17 @@ pub mod plugin;
 pub mod state;
 pub mod stats;
 
+/// Setup the logger, so `info!`, `debug!`
+/// and other macros actually output something.
+///
+/// Using try_init and ignoring errors to allow
+/// for use in tests (setting up multiple times).
 fn logger() {
     let format = fmt::layer()
         .with_ansi(std::io::stderr().is_terminal())
         .with_file(false);
+    #[cfg(not(debug_assertions))]
+    let format = format.with_target(false);
 
     let filter = EnvFilter::builder()
         .with_default_directive(LevelFilter::INFO.into())
@@ -40,7 +47,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = cli::Cli::parse();
 
     logger();
-
     info!("🐕 pgDog {}", env!("CARGO_PKG_VERSION"));
 
     let config = config::load(&args.config, &args.users)?;
@@ -68,15 +74,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn pgdog() -> Result<(), Box<dyn std::error::Error>> {
-    // Preload TLS.
+    // Preload TLS. Resulting primitives
+    // are async, so doing this after Tokio launched seems prudent.
     net::tls::load()?;
 
     // Load databases and connect if needed.
-    config::config();
-    databases::reload()?;
+    databases::init();
 
     let mut listener = Listener::new("0.0.0.0:6432");
     listener.listen().await?;
+
+    info!("🐕 pgDog is shutting down");
+
+    // Any shutdown routines go below.
     plugin::shutdown();
 
     Ok(())

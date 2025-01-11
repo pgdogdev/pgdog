@@ -6,6 +6,7 @@ use tokio::time::sleep;
 use crate::{
     admin::backend::Backend,
     backend::databases::databases,
+    config::PoolerMode,
     net::messages::{BackendKeyData, Message, ParameterStatus, Protocol},
 };
 
@@ -73,11 +74,17 @@ impl Connection {
     async fn try_conn(&mut self, id: &BackendKeyData, route: &Route) -> Result<(), Error> {
         let shard = route.shard().unwrap_or(0);
 
-        let server = if route.is_read() {
+        let mut server = if route.is_read() {
             self.cluster()?.replica(shard, id).await?
         } else {
             self.cluster()?.primary(shard, id).await?
         };
+
+        // Cleanup session mode connections when
+        // they are done.
+        if self.session_mode() {
+            server.reset = true;
+        }
 
         self.server = Some(server);
 
@@ -178,5 +185,19 @@ impl Connection {
         } else {
             Err(Error::NotConnected)
         }
+    }
+
+    /// Transaction mode pooling.
+    #[inline]
+    pub fn transaction_mode(&self) -> bool {
+        self.cluster()
+            .map(|c| c.pooler_mode() == PoolerMode::Transaction)
+            .unwrap_or(true)
+    }
+
+    /// Pooler is in session mod
+    #[inline]
+    pub fn session_mode(&self) -> bool {
+        !self.transaction_mode()
     }
 }

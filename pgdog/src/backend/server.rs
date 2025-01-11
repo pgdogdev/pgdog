@@ -266,21 +266,36 @@ impl Server {
         &self.params
     }
 
-    /// Execute a query on the server and return the result.
-    pub async fn execute(&mut self, query: &str) -> Result<Vec<Message>, Error> {
+    /// Execute a batch of queries and return all results.
+    pub async fn execute_batch(&mut self, queries: &[&str]) -> Result<Vec<Message>, Error> {
         if !self.in_sync() {
             return Err(Error::NotInSync);
         }
 
-        self.send(vec![Query::new(query)]).await?;
-
         let mut messages = vec![];
+        let queries = queries
+            .iter()
+            .map(|query| Query::new(query))
+            .collect::<Vec<Query>>();
+        let expected = queries.len();
 
-        while !self.in_sync() {
-            messages.push(self.read().await?);
+        self.send(queries).await?;
+
+        let mut zs = 0;
+        while zs < expected {
+            let message = self.read().await?;
+            if message.code() == 'Z' {
+                zs += 1;
+            }
+            messages.push(message);
         }
 
         Ok(messages)
+    }
+
+    /// Execute a query on the server and return the result.
+    pub async fn execute(&mut self, query: &str) -> Result<Vec<Message>, Error> {
+        self.execute_batch(&[query]).await
     }
 
     /// Perform a healthcheck on this connection using the provided query.
@@ -303,6 +318,16 @@ impl Server {
 
         if !self.in_sync() {
             self.state = State::Error;
+        }
+    }
+
+    /// Reset all server parameters and session state.
+    pub async fn reset(&mut self) {
+        if self.done() {
+            if let Err(_err) = self.execute_batch(&["RESET ALL", "DISCARD ALL"]).await {
+                self.state = State::Error;
+            }
+            debug!("connection reset [{}]", self.addr());
         }
     }
 
@@ -349,7 +374,11 @@ impl Server {
 impl Drop for Server {
     fn drop(&mut self) {
         if let Some(mut stream) = self.stream.take() {
-            info!("closing server connection [{}]", self.addr,);
+            // If you see a lot of these, tell your clients
+            // to not send queries unless they are willing to stick
+            // around for results.
+            let out_of_sync = if self.done() { " " } else { " out of sync " };
+            info!("closing{}server connection [{}]", out_of_sync, self.addr,);
 
             spawn(async move {
                 stream.write_all(&Terminate.to_bytes()?).await?;

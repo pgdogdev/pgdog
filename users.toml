@@ -2,3 +2,10 @@
 name = "pgdog"
 database = "pgdog"
 password = "pgdog"
+
+[[users]]
+name = "pgdog_session"
+database = "pgdog"
+password = "pgdog"
+server_user = "pgdog"
+pooler_mode = "session"

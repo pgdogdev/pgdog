@@ -125,8 +125,11 @@ impl Pool {
 
     /// Launch the maintenance loop, bringing the pool online.
     pub fn launch(&self) {
-        self.lock().online = true;
-        Monitor::new(self);
+        let mut guard = self.lock();
+        if !guard.online {
+            guard.online = true;
+            Monitor::new(self);
+        }
     }
 
     /// Get a connetion from the pool.

@@ -1,6 +1,6 @@
 //! A collection of replicas and a primary.
 
-use crate::net::messages::BackendKeyData;
+use crate::{config::PoolerMode, net::messages::BackendKeyData};
 
 use super::{Address, Config, Error, Guard, Shard};
 use crate::config::LoadBalancingStrategy;
@@ -23,6 +23,7 @@ pub struct Cluster {
     name: String,
     shards: Vec<Shard>,
     password: String,
+    pooler_mode: PoolerMode,
 }
 
 impl Cluster {
@@ -32,6 +33,7 @@ impl Cluster {
         shards: &[(Option<PoolConfig>, &[PoolConfig])],
         lb_strategy: LoadBalancingStrategy,
         password: &str,
+        pooler_mode: PoolerMode,
     ) -> Self {
         Self {
             shards: shards
@@ -40,6 +42,7 @@ impl Cluster {
                 .collect(),
             name: name.to_owned(),
             password: password.to_owned(),
+            pooler_mode,
         }
     }
 
@@ -64,6 +67,7 @@ impl Cluster {
             shards: self.shards.iter().map(|s| s.duplicate()).collect(),
             name: self.name.clone(),
             password: self.password.clone(),
+            pooler_mode: self.pooler_mode,
         }
     }
 
@@ -127,5 +131,10 @@ impl Cluster {
     /// Get the password the user should use to connect to the database.
     pub fn password(&self) -> &str {
         &self.password
+    }
+
+    /// Get pooler mode.
+    pub fn pooler_mode(&self) -> PoolerMode {
+        self.pooler_mode
     }
 }

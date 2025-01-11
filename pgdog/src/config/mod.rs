@@ -140,6 +140,10 @@ pub struct General {
     /// Load balancing strategy.
     #[serde(default = "General::load_balancing_strategy")]
     pub load_balancing_strategy: LoadBalancingStrategy,
+    /// TLS certificate.
+    pub tls_certificate: Option<PathBuf>,
+    /// TLS private key.
+    pub tls_private_key: Option<PathBuf>,
 }
 
 impl General {
@@ -186,12 +190,23 @@ impl General {
     fn load_balancing_strategy() -> LoadBalancingStrategy {
         LoadBalancingStrategy::Random
     }
+
+    /// Get TLS config, if any.
+    pub fn tls(&self) -> Option<(&PathBuf, &PathBuf)> {
+        if let Some(cert) = &self.tls_certificate {
+            if let Some(key) = &self.tls_private_key {
+                return Some((cert, key));
+            }
+        }
+
+        None
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Stats {}
 
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Copy)]
 #[serde(rename_all = "snake_case")]
 pub enum PoolerMode {
     #[default]

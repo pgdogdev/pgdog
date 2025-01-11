@@ -9,6 +9,7 @@ use tracing::{debug, error, info, trace};
 use super::{Buffer, Comms, Error, Router, Stats};
 use crate::auth::scram::Server;
 use crate::backend::pool::Connection;
+use crate::config::PoolerMode;
 use crate::net::messages::{
     Authentication, BackendKeyData, ErrorResponse, Protocol, ReadyForQuery,
 };
@@ -42,47 +43,45 @@ impl Client {
         let id = BackendKeyData::new();
 
         // Get server parameters and send them to the client.
-        {
-            let mut conn = match Connection::new(user, database, admin) {
-                Ok(conn) => conn,
-                Err(_) => {
-                    stream.fatal(ErrorResponse::auth(user, database)).await?;
-                    return Ok(());
-                }
-            };
-
-            let params = match conn.parameters(&id).await {
-                Ok(params) => params,
-                Err(err) => {
-                    if err.no_server() {
-                        error!("Connection pool is down");
-                        stream.fatal(ErrorResponse::connection()).await?;
-                        return Ok(());
-                    } else {
-                        return Err(err.into());
-                    }
-                }
-            };
-
-            let password = if admin {
-                admin_password
-            } else {
-                conn.cluster()?.password()
-            };
-
-            stream.send_flush(Authentication::scram()).await?;
-
-            let scram = Server::new(password);
-            if let Ok(true) = scram.handle(&mut stream).await {
-                stream.send(Authentication::Ok).await?;
-            } else {
+        let mut conn = match Connection::new(user, database, admin) {
+            Ok(conn) => conn,
+            Err(_) => {
                 stream.fatal(ErrorResponse::auth(user, database)).await?;
                 return Ok(());
             }
+        };
 
-            for param in params {
-                stream.send(param).await?;
+        let server_params = match conn.parameters(&id).await {
+            Ok(params) => params,
+            Err(err) => {
+                if err.no_server() {
+                    error!("Connection pool is down");
+                    stream.fatal(ErrorResponse::connection()).await?;
+                    return Ok(());
+                } else {
+                    return Err(err.into());
+                }
             }
+        };
+
+        let password = if admin {
+            admin_password
+        } else {
+            conn.cluster()?.password()
+        };
+
+        stream.send_flush(Authentication::scram()).await?;
+
+        let scram = Server::new(password);
+        if let Ok(true) = scram.handle(&mut stream).await {
+            stream.send(Authentication::Ok).await?;
+        } else {
+            stream.fatal(ErrorResponse::auth(user, database)).await?;
+            return Ok(());
+        }
+
+        for param in server_params {
+            stream.send(param).await?;
         }
 
         stream.send(id).await?;
@@ -195,7 +194,9 @@ impl Client {
                     }
 
                     if backend.done() {
-                        backend.disconnect();
+                        if backend.transaction_mode() {
+                            backend.disconnect();
+                        }
                         comms.stats(stats.transaction());
                         trace!("transaction finished [{}ms]", stats.transaction_time.as_secs_f64() * 1000.0);
                         if comms.offline() {

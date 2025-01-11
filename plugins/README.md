@@ -1,12 +1,12 @@
 # pgDog plugins
 
-pgDog plugin system is based around shared libraries loaded at runtime. These libraries can be written in any language as long as they are compiled to `.so` (or `.dylib` on Mac), and can expose predefined C ABI functions.
+This directory contains (now and in the future) plugins that ship with pgDog and are built by original author(s)
+or the community. You can use these as-is or modify them to your needs.
 
-This crate implements the bridge between the C ABI and pgDog, defines common C types and interface to use, and exposes internal pgDog functionality to plugins to query pooler state and
-create objects that can be shared between the two.
+## Plugins
 
-This crate is a C (and Rust) library that should be linked at compile time against your plugins.
+### `pgdog-routing`
 
-## Writing plugins
-
-Examples of plugins written in C and Rust are available [here](https://github.com/levkk/pgdog/tree/main/examples).
+The only plugin in here right now and the catch-all for routing traffic through pgDog. This plugin uses `pg_query.rs` (Rust bindings to `pg_query`)
+to parse queries using the PostgreSQL parser, and splits traffic between primary and replicas. This allows users of this plugin to deploy
+primaries and replicas in one pgDog configuration.
