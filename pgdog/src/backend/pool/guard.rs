@@ -47,18 +47,20 @@ impl Guard {
         let pool = self.pool.clone();
 
         if let Some(mut server) = server {
-            spawn(async move {
-                // Rollback any unfinished transactions,
-                // but only if the server is in sync (protocol-wise).
-                if server.in_transaction() {
+            if server.in_transaction() {
+                spawn(async move {
+                    // Rollback any unfinished transactions,
+                    // but only if the server is in sync (protocol-wise).
                     let rollback_timeout = pool.lock().config.rollback_timeout();
                     if let Err(_) = timeout(rollback_timeout, server.rollback()).await {
                         error!("rollback timeout [{}]", server.addr());
                     }
-                }
 
+                    pool.checkin(server);
+                });
+            } else {
                 pool.checkin(server);
-            });
+            }
         }
     }
 }

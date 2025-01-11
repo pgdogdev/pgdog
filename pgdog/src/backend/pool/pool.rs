@@ -123,6 +123,7 @@ impl Pool {
                 online: false,
                 paused: false,
                 creating: 0,
+                create: 0,
             })),
             comms: Arc::new(Comms::new()),
             addr: config.address,

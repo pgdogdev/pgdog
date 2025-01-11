@@ -127,8 +127,10 @@ impl Monitor {
                             _ => comms.ready.notify_waiters(),
                         }
                     } else if can_create && !banned || create_permit {
+                        println!("{} && {} || {}", can_create, !banned, create_permit);
                         // No idle connections, but we are allowed to create a new one.
                         let ok = self.replenish(connect_timeout).await;
+                        self.pool.lock().created();
 
                         if ok {
                             // Notify all clients we have a connection

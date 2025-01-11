@@ -26,6 +26,8 @@ pub(super) struct Inner {
     pub(super) paused: bool,
     /// Connections being created.
     pub(super) creating: usize,
+    /// Creating connections as we speak.
+    pub(super) create: usize,
 }
 
 impl std::fmt::Debug for Inner {
@@ -65,6 +67,7 @@ impl Inner {
     /// without breaking the maximum number of connections requirement.
     #[inline]
     pub(super) fn can_create(&self) -> bool {
+        println!("{} < {}", self.total(), self.config.max);
         self.total() < self.config.max
     }
 
@@ -94,7 +97,7 @@ impl Inner {
     /// connection requirement.
     #[inline]
     pub(super) fn should_create(&self) -> bool {
-        self.total() + self.creating < self.min()
+        self.total() + self.creating < self.min() + self.create
     }
 
     /// Check if the pool ban should be removed.
@@ -114,20 +117,27 @@ impl Inner {
 
     /// Close connections that have exceeded the max age.
     #[inline]
-    pub(crate) fn close_old(&mut self, now: Instant) {
+    pub(crate) fn close_old(&mut self, now: Instant) -> usize {
         let max_age = self.config.max_age();
+        let mut removed = 0;
 
         self.conns.retain(|c| {
             let age = c.age(now);
-            age < max_age
+            let keep = age < max_age;
+            if !keep {
+                removed += 1;
+            }
+            keep
         });
+
+        removed
     }
 
     /// Close connections that have been idle for too long
     /// without affecting the minimum pool size requirement.
     #[inline]
-    pub(crate) fn close_idle(&mut self, now: Instant) {
-        let mut remove = self.can_remove();
+    pub(crate) fn close_idle(&mut self, now: Instant) -> usize {
+        let (mut remove, mut removed) = (self.can_remove(), 0);
         let idle_timeout = self.config.idle_timeout();
 
         self.conns.retain(|c| {
@@ -135,11 +145,14 @@ impl Inner {
 
             if remove > 0 && idle_for >= idle_timeout {
                 remove -= 1;
+                removed += 1;
                 false
             } else {
                 true
             }
         });
+
+        removed
     }
 
     /// Pool configuration options.
@@ -232,10 +245,15 @@ impl Inner {
     /// Consume a create permit if there is one.
     #[inline]
     pub fn create_permit(&mut self) -> bool {
-        if self.creating > 0 {
-            self.creating -= 1;
-            self.can_create() // Assert that a necessary connection
-                              // hasn't been created since the permit was issued.
+        if self.create > 0 {
+            self.create -= 1;
+            if self.can_create() {
+                self.creating += 1;
+                true
+            } else {
+                false
+            } // Assert that a necessary connection
+              // hasn't been created since the permit was issued.
         } else {
             false
         }
@@ -244,6 +262,12 @@ impl Inner {
     /// Create a create permit.
     #[inline]
     pub fn create(&mut self) {
+        self.create += 1;
+    }
+
+    /// Created the connection.
+    #[inline]
+    pub fn created(&mut self) {
         self.creating += 1;
     }
 }
