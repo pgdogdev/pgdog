@@ -143,3 +143,17 @@ share any source code, including proprietary work product or any pgDog modificat
 
 AGPL was written specifically for organizations that offer pgDog _as a public service_ (e.g. database cloud providers) and require
 those organizations to share any modifications they make to pgDog, including new features and bug fixes.
+
+## Contributions
+
+Contributions are welcome. If you see a bug, feel free to submit a PR with a fix or an issue to discuss. For any features,
+please open an issue to discuss first.
+
+The code has tests, make sure they pass first with:
+
+```
+cargo nextest run && \
+cargo fmt --check --all
+```
+
+`cargo-nextest` is better because it runs tests in parallel and can help surface concurrency bugs.
