@@ -28,3 +28,15 @@ only 15 clients will be able to connect and use the database at any given moment
 
 !!! note
     In session mode, when the connection pool reaches full capacity, a client has to disconnect before another one can connect to pgDog.
+
+
+### Benefits of session mode
+
+Using pgDog in session mode is still an improvement over connecting to PostgreSQL directly. Since the proxy maintains a pool of open server connections,
+when a client disconnects, the PostgreSQL server connection remains intact and can be reused by another client.
+
+#### Lazy connections
+Until a client issues their first query, pgDog doesn't attach it to a server connection. This allows one set of clients to connect before the previous set disconnects,
+which is common when using zero-downtime deployment strategies like blue/green[^1].
+
+[^1]: [https://docs.aws.amazon.com/whitepapers/latest/overview-deployment-options/bluegreen-deployments.html](https://docs.aws.amazon.com/whitepapers/latest/overview-deployment-options/bluegreen-deployments.html)
