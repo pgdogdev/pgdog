@@ -1,0 +1,48 @@
+name: ci
+on:
+  push:
+
+jobs:
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+      - name: Format
+        run: cargo fmt --all -- --check
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+      - name: Build
+        run: cargo build
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup PostgreSQL
+        run: |
+          sudo service postgresql start
+          sudo -u postgres createuser --superuser --login $USER
+          sudo -u postgres createdb $USER
+          createdb pgdog
+          psql -c "CREATE USER pgdog PASSWORD 'pgdog' LOGIN; GRANT ALL ON SCHEMA public TO pgdog;"
+          psql postgres://pgdog:pgdog@127.0.0.1:5432/pgdog -c "SELECT 1" > /dev/null
+      - uses: actions/checkout@v4
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+      - uses: Swatinem/rust-cache@v2
+      - name: Install test dependencies
+        run: cargo install cargo-nextest
+      - name: Run tests
+        run: cargo nextest run
+      - name: Run documentation tests
+        run: cargo test --doc
