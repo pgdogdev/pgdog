@@ -6,7 +6,7 @@ more than a few thousand concurrently open connections.
 
 <center>
   <img src="/images/transaction-mode.png" width="65%" alt="Load balancer" />
-  <p><i>In transaction mode, multiple clients reuse one Postgres connection.</i></p>
+  <p><i>In transaction mode, multiple clients can reuse one Postgres connection.</i></p>
 </center>
 
 

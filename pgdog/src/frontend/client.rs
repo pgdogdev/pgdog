@@ -9,7 +9,6 @@ use tracing::{debug, error, info, trace};
 use super::{Buffer, Comms, Error, Router, Stats};
 use crate::auth::scram::Server;
 use crate::backend::pool::Connection;
-use crate::config::PoolerMode;
 use crate::net::messages::{
     Authentication, BackendKeyData, ErrorResponse, Protocol, ReadyForQuery,
 };
@@ -55,7 +54,7 @@ impl Client {
             Ok(params) => params,
             Err(err) => {
                 if err.no_server() {
-                    error!("Connection pool is down");
+                    error!("connection pool is down");
                     stream.fatal(ErrorResponse::connection()).await?;
                     return Ok(());
                 } else {
@@ -161,7 +160,7 @@ impl Client {
                         match backend.connect(&self.id, router.route()).await {
                             Ok(()) => (),
                             Err(err) => if err.no_server() {
-                                error!("Connection pool is down");
+                                error!("connection pool is down");
                                 self.stream.error(ErrorResponse::connection()).await?;
                                 comms.stats(stats.error());
                                 continue;
