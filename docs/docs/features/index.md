@@ -23,3 +23,4 @@ load balancing, healthchecks, and query routing have been battle-tested and work
 | [Live configuration reloading](../configuration/index.md) | Pooler configuration and users can be changed at runtime without restarting the pooler or breaking connections. | 🔨 Work in progress |
 | [Sharding](sharding/index.md) | Automatic routing of queries using a sharding key to scale writes horizontally. | 🔨 Work in progress |
 | [Plugins](plugins/index.md) | Pluggable libraries to parse and route queries, loaded at runtime. | ✔️ Good |
+| [Authentication](authentication.md) | Support for various PostgreSQL authentication mechanisms, e.g. `SCRAM-SHA-256`. | 🔨 Work in progress |

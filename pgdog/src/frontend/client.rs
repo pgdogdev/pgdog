@@ -34,7 +34,11 @@ impl Client {
     ) -> Result<(), Error> {
         let user = params.get_default("user", "postgres");
         let database = params.get_default("database", user);
+
+        // TODO: remove hardcoding
         let admin = database == "admin";
+        let admin_password = "pgdog";
+
         let id = BackendKeyData::new();
 
         // Get server parameters and send them to the client.
@@ -60,9 +64,15 @@ impl Client {
                 }
             };
 
+            let password = if admin {
+                admin_password
+            } else {
+                conn.cluster()?.password()
+            };
+
             stream.send_flush(Authentication::scram()).await?;
 
-            let scram = Server::new(conn.cluster()?.password());
+            let scram = Server::new(password);
             if let Ok(true) = scram.handle(&mut stream).await {
                 stream.send(Authentication::Ok).await?;
             } else {
@@ -79,7 +89,7 @@ impl Client {
         stream.send_flush(ReadyForQuery::idle()).await?;
         comms.connect(&id, addr);
 
-        info!("Client connected [{}]", addr);
+        info!("client connected [{}]", addr);
 
         let mut client = Self {
             addr,
@@ -109,8 +119,8 @@ impl Client {
     /// Run the client and log disconnect.
     async fn spawn_internal(&mut self) {
         match self.run().await {
-            Ok(_) => info!("Client disconnected [{}]", self.addr),
-            Err(err) => error!("Client disconnected with error [{}]: {}", self.addr, err),
+            Ok(_) => info!("client disconnected [{}]", self.addr),
+            Err(err) => error!("client disconnected with error [{}]: {}", self.addr, err),
         }
     }
 

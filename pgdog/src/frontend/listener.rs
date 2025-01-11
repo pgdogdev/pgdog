@@ -61,7 +61,7 @@ impl Listener {
                 _ = ctrl_c() => {
                     self.clients.close();
                     comms.shutdown();
-                    info!("Waiting for clients to finish transactions...");
+                    info!("waiting for clients to finish transactions...");
                     self.clients.wait().await;
                     break;
                 }

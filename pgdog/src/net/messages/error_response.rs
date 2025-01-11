@@ -47,6 +47,15 @@ impl ErrorResponse {
             detail: None,
         }
     }
+
+    pub fn syntax(err: &str) -> ErrorResponse {
+        Self {
+            severity: "ERROR".into(),
+            code: "42601".into(),
+            message: err.into(),
+            detail: None,
+        }
+    }
 }
 
 impl Display for ErrorResponse {

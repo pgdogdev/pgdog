@@ -4,7 +4,7 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("syntax error")]
+    #[error("syntax error in admin command")]
     Syntax,
 
     #[error("empty request")]

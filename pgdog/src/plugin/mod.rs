@@ -47,7 +47,7 @@ pub fn load(names: &[&str]) -> Result<(), libloading::Error> {
                 }
                 plugins.push(plugin);
                 info!(
-                    "Loaded \"{}\" plugin [{:.4}ms]",
+                    "loaded \"{}\" plugin [{:.4}ms]",
                     name,
                     now.elapsed().as_secs_f64() * 1000.0
                 );

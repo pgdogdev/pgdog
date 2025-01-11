@@ -120,7 +120,7 @@ impl Pool {
                 config: config.config,
                 waiting: 0,
                 ban: None,
-                online: true,
+                online: false,
                 paused: false,
                 creating: 0,
             })),
@@ -128,10 +128,13 @@ impl Pool {
             addr: config.address,
         };
 
-        // Launch the maintenance loop.
-        Monitor::new(&pool);
-
         pool
+    }
+
+    /// Launch the maintenance loop, bringing the pool online.
+    pub fn launch(&self) {
+        self.lock().online = true;
+        Monitor::new(self);
     }
 
     /// Get a connetion from the pool.

@@ -130,7 +130,7 @@ impl Server {
 
         let id = key_data.ok_or(Error::NoBackendKeyData)?;
 
-        info!("New server connection [{}]", addr);
+        info!("new server connection [{}]", addr);
 
         Ok(Server {
             addr: addr.clone(),

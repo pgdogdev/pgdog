@@ -54,7 +54,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             binding
         }
         workers => {
-            info!("Spawning {} workers", workers);
+            info!("spawning {} workers", workers);
             let mut builder = Builder::new_multi_thread();
             builder.worker_threads(workers).enable_all();
             builder
@@ -72,8 +72,8 @@ async fn pgdog() -> Result<(), Box<dyn std::error::Error>> {
     net::tls::load()?;
 
     // Load databases and connect if needed.
-    let config = config::config();
-    databases::from_config(&config);
+    config::config();
+    databases::reload()?;
 
     let mut listener = Listener::new("0.0.0.0:6432");
     listener.listen().await?;

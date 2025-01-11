@@ -35,31 +35,40 @@ pub struct ConfigAndUsers {
     pub config: Config,
     /// users.toml
     pub users: Users,
+    /// Path to pgdog.toml.
+    pub config_path: PathBuf,
+    /// Path to users.toml.
+    pub users_path: PathBuf,
 }
 
 impl ConfigAndUsers {
     /// Load configuration from disk or use defaults.
-    pub fn load(config: &PathBuf, users: &PathBuf) -> Result<Self, Error> {
-        let config: Config = if let Ok(config) = read_to_string(config) {
+    pub fn load(config_path: &PathBuf, users_path: &PathBuf) -> Result<Self, Error> {
+        let config: Config = if let Ok(config) = read_to_string(config_path) {
             let config = match toml::from_str(&config) {
                 Ok(config) => config,
                 Err(err) => return Err(Error::config(&config, err)),
             };
-            info!("Loaded pgdog.toml");
+            info!("loaded pgdog.toml");
             config
         } else {
             Config::default()
         };
 
-        let users: Users = if let Ok(users) = read_to_string(users) {
+        let users: Users = if let Ok(users) = read_to_string(users_path) {
             let users = toml::from_str(&users)?;
-            info!("Loaded users.toml");
+            info!("loaded users.toml");
             users
         } else {
             Users::default()
         };
 
-        Ok(ConfigAndUsers { config, users })
+        Ok(ConfigAndUsers {
+            config,
+            users,
+            config_path: config_path.to_owned(),
+            users_path: users_path.to_owned(),
+        })
     }
 }
 

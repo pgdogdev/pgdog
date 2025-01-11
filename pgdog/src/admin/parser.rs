@@ -1,7 +1,8 @@
 //! Admin command parser.
 
 use super::{
-    pause::Pause, prelude::Message, reconnect::Reconnect, show_clients::ShowClients, Command, Error,
+    pause::Pause, prelude::Message, reconnect::Reconnect, reload::Reload,
+    show_clients::ShowClients, Command, Error,
 };
 
 use tracing::debug;
@@ -11,6 +12,7 @@ pub enum ParseResult {
     Pause(Pause),
     Reconnect(Reconnect),
     ShowClients(ShowClients),
+    Reload(Reload),
 }
 
 impl ParseResult {
@@ -22,6 +24,7 @@ impl ParseResult {
             Pause(pause) => pause.execute().await,
             Reconnect(reconnect) => reconnect.execute().await,
             ShowClients(show_clients) => show_clients.execute().await,
+            Reload(reload) => reload.execute().await,
         }
     }
 
@@ -33,6 +36,7 @@ impl ParseResult {
             Pause(pause) => pause.name(),
             Reconnect(reconnect) => reconnect.name(),
             ShowClients(show_clients) => show_clients.name(),
+            Reload(reload) => reload.name(),
         }
     }
 }
@@ -49,6 +53,7 @@ impl Parser {
         Ok(match iter.next().ok_or(Error::Syntax)?.trim() {
             "pause" | "resume" => ParseResult::Pause(Pause::parse(&sql)?),
             "reconnect" => ParseResult::Reconnect(Reconnect::parse(&sql)?),
+            "reload" => ParseResult::Reload(Reload::parse(&sql)?),
             "show" => match iter.next().ok_or(Error::Syntax)?.trim() {
                 "clients" => ParseResult::ShowClients(ShowClients::parse(&sql)?),
                 command => {

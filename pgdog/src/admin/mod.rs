@@ -10,6 +10,7 @@ pub mod parser;
 pub mod pause;
 pub mod prelude;
 pub mod reconnect;
+pub mod reload;
 pub mod show_clients;
 
 pub use error::Error;

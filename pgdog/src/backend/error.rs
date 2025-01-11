@@ -47,6 +47,9 @@ pub enum Error {
 
     #[error("scram auth failed")]
     ScramAuth(#[from] crate::auth::scram::Error),
+
+    #[error("config error")]
+    Config(#[from] crate::config::error::Error),
 }
 
 impl Error {

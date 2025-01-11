@@ -21,7 +21,9 @@ fn replicas() -> Replicas {
     };
     let mut two = one.clone();
     two.address.host = "localhost".into();
-    Replicas::new(&[one, two], LoadBalancingStrategy::Random)
+    let replicas = Replicas::new(&[one, two], LoadBalancingStrategy::Random);
+    replicas.pools().iter().for_each(|p| p.launch());
+    replicas
 }
 
 #[tokio::test]

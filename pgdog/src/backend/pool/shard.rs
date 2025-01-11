@@ -18,7 +18,7 @@ impl Shard {
         replicas: &[PoolConfig],
         lb_strategy: LoadBalancingStrategy,
     ) -> Self {
-        let primary = primary.map(Pool::new);
+        let primary = primary.map(|p| Pool::new(p));
         let replicas = Replicas::new(replicas, lb_strategy);
 
         Self { primary, replicas }
@@ -69,5 +69,15 @@ impl Shard {
         pools.extend(self.replicas.pools().to_vec());
 
         pools
+    }
+
+    /// Launch the shard, bringing all pools online.
+    pub fn launch(&self) {
+        self.pools().iter().for_each(|pool| pool.launch());
+    }
+
+    /// Shutdown all pools, taking the shard offline.
+    pub fn shutdown(&self) {
+        self.pools().iter().for_each(|pool| pool.shutdown());
     }
 }

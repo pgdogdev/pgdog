@@ -8,7 +8,7 @@ use once_cell::sync::Lazy;
 
 use crate::{
     backend::pool::PoolConfig,
-    config::{ConfigAndUsers, Role},
+    config::{config, load, ConfigAndUsers, Role},
     net::messages::BackendKeyData,
 };
 
@@ -29,13 +29,32 @@ pub fn databases() -> Arc<Databases> {
 
 /// Replace databases pooler-wide.
 pub fn replace_databases(new_databases: Databases) {
-    databases().shutdown();
-    DATABASES.store(Arc::new(new_databases));
+    // Order of operations is important
+    // to ensure zero downtime for clients.
+    let old_databases = databases();
+    let new_databases = Arc::new(new_databases);
+    new_databases.launch();
+    DATABASES.store(new_databases);
+    old_databases.shutdown();
 }
 
 /// Re-create all connections.
 pub fn reconnect() {
     replace_databases(databases().duplicate());
+}
+
+/// Re-create pools from config.
+///
+/// TODO: Avoid creating new pools if they haven't changed at all
+/// or the configuration between the two is compatible.
+pub fn reload() -> Result<(), Error> {
+    let old_config = config();
+    let new_config = load(&old_config.config_path, &old_config.users_path)?;
+    let databases = from_config(&new_config);
+
+    replace_databases(databases);
+
+    Ok(())
 }
 
 /// Database/user pair that identifies a database cluster pool.
@@ -123,16 +142,23 @@ impl Databases {
     fn shutdown(&self) {
         for cluster in self.all().values() {
             for shard in cluster.shards() {
-                for pool in shard.pools() {
-                    pool.shutdown();
-                }
+                shard.shutdown();
+            }
+        }
+    }
+
+    /// Launch all pools.
+    pub fn launch(&self) {
+        for cluster in self.all().values() {
+            for shard in cluster.shards() {
+                shard.launch();
             }
         }
     }
 }
 
 /// Load databases from config.
-pub fn from_config(config: &ConfigAndUsers) -> Arc<Databases> {
+pub fn from_config(config: &ConfigAndUsers) -> Databases {
     let mut databases = HashMap::new();
     let config_databases = config.config.databases();
     let general = &config.config.general;
@@ -170,9 +196,5 @@ pub fn from_config(config: &ConfigAndUsers) -> Arc<Databases> {
         }
     }
 
-    let databases = Arc::new(Databases { databases });
-
-    DATABASES.store(databases.clone());
-
-    databases
+    Databases { databases }
 }
