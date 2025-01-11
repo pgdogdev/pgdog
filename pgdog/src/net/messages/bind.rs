@@ -63,7 +63,9 @@ impl Bind {
     }
 
     /// Convert bind parameters to plugin parameters.
-    pub fn plugin_parameters(&self) -> Result<Vec<PluginParameter>, Error> {
+    ///
+    /// SAFETY: This function allocates memory the caller has to deallocate.
+    pub unsafe fn plugin_parameters(&self) -> Result<Vec<PluginParameter>, Error> {
         let mut params = vec![];
 
         for (index, param) in self.params.iter().enumerate() {

@@ -1,15 +1,16 @@
 //! Query router.
 
-use std::ffi::CString;
-
 use crate::{backend::Cluster, plugin::plugins};
 
-use pgdog_plugin::{Input, Query, Route, RoutingInput};
+use pgdog_plugin::{Input, Route, RoutingInput};
 use tokio::time::Instant;
 use tracing::debug;
 
 pub mod error;
 pub mod parser;
+pub mod request;
+
+use request::Request;
 
 pub use error::Error;
 
@@ -46,19 +47,20 @@ impl Router {
             .map_err(|_| Error::NoQueryInBuffer)?
             .ok_or(Error::NoQueryInBuffer)?;
 
-        let mut query = Query::new(CString::new(query.as_str())?);
+        let mut request = Request::new(query.as_str())?;
 
-        // SAFETY: query has not allocated memory for parameters yet.
         if let Ok(Some(bind)) = buffer.parameters() {
-            let params = bind.plugin_parameters()?;
+            // SAFETY: memory for parameters is owned by Request.
+            // If this errors out, Request will drop and deallocate all
+            // previously set parameters.
+            let params = unsafe { bind.plugin_parameters()? };
 
-            // SAFETY: memory for parameters is owned by Query.
-            query.set_parameters(&params);
+            request.set_parameters(&params);
         }
 
-        // SAFETY: deallocated below.
+        // SAFETY: deallocated by Input below.
         let config = unsafe { cluster.plugin_config()? };
-        let input = Input::new(config, RoutingInput::query(query));
+        let input = Input::new(config, RoutingInput::query(request.query()));
 
         let now = Instant::now();
 
@@ -88,7 +90,6 @@ impl Router {
         }
 
         unsafe { input.drop() }
-        unsafe { query.drop() }
 
         Ok(self.route)
     }
