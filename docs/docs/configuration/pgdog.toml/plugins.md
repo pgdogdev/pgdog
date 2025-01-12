@@ -15,7 +15,7 @@ name = "alice_router"
 
 !!! note
     Plugins can only be configured at pgDog startup. They cannot be changed after
-    the proxy is running.
+    the process is running.
 
 ### **`name`**
 

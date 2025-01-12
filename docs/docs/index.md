@@ -1,4 +1,4 @@
-# Getting started
+# pgDog
 
 [pgDog](https://github.com/levkk/pgdog) is a PostgreSQL query router, pooler, proxy and load balancer written in Rust. Spiritual successor to
 [pgcat](https://github.com/levkk/pgcat), pgDog comes with a lot of similar features, better performance,
