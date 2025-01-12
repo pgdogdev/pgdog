@@ -49,6 +49,11 @@ pub fn init() {
     replace_databases(from_config(&config));
 }
 
+/// Shutdown all databases.
+pub fn shutdown() {
+    databases().shutdown();
+}
+
 /// Re-create pools from config.
 ///
 /// TODO: Avoid creating new pools if they haven't changed at all

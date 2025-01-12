@@ -232,11 +232,7 @@ impl Pool {
 
     /// Server connection used by the client.
     pub fn peer(&self, id: &BackendKeyData) -> Option<BackendKeyData> {
-        self.lock()
-            .taken
-            .iter()
-            .find(|p| p.client == *id)
-            .map(|p| p.server)
+        self.lock().peer(id)
     }
 
     /// Send a cancellation request if the client is connected to a server.

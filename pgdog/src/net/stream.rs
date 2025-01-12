@@ -7,6 +7,8 @@ use tokio::net::TcpStream;
 use tracing::trace;
 
 use std::io::Error;
+use std::net::SocketAddr;
+use std::ops::Deref;
 use std::pin::Pin;
 use std::task::Context;
 
@@ -80,6 +82,15 @@ impl Stream {
         Self::Tls(BufStream::new(stream))
     }
 
+    /// Get peer address if any. We're not using UNIX sockets (yet)
+    /// so the peer address should always be available.
+    pub fn peer_addr(&self) -> PeerAddr {
+        match self {
+            Self::Plain(stream) => stream.get_ref().peer_addr().ok().into(),
+            Self::Tls(stream) => stream.get_ref().get_ref().0.peer_addr().ok().into(),
+        }
+    }
+
     /// Send data via the stream.
     ///
     /// # Performance
@@ -108,6 +119,7 @@ impl Stream {
     pub async fn send_flush(&mut self, message: impl Protocol) -> Result<usize, crate::net::Error> {
         let sent = self.send(message).await?;
         self.flush().await?;
+        trace!("😳");
 
         Ok(sent)
     }
@@ -122,6 +134,7 @@ impl Stream {
             sent += self.send(message).await?;
         }
         self.flush().await?;
+        trace!("😳");
         Ok(sent)
     }
 
@@ -185,6 +198,36 @@ impl Stream {
         match self {
             Self::Plain(stream) => Ok(stream.into_inner()),
             _ => Err(crate::net::Error::UnexpectedTlsRequest),
+        }
+    }
+}
+
+/// Wrapper around SocketAddr
+/// to make it easier to debug.
+pub struct PeerAddr {
+    addr: Option<SocketAddr>,
+}
+
+impl Deref for PeerAddr {
+    type Target = Option<SocketAddr>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.addr
+    }
+}
+
+impl From<Option<SocketAddr>> for PeerAddr {
+    fn from(value: Option<SocketAddr>) -> Self {
+        Self { addr: value }
+    }
+}
+
+impl std::fmt::Debug for PeerAddr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(addr) = &self.addr {
+            write!(f, "[{}]", addr)
+        } else {
+            write!(f, "")
         }
     }
 }

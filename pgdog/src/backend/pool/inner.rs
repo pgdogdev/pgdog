@@ -14,7 +14,7 @@ pub(super) struct Inner {
     /// Idle server connections.
     conns: VecDeque<Server>,
     /// Server connectios currently checked out.
-    pub(super) taken: Vec<Mapping>,
+    taken: Vec<Mapping>,
     /// Pool configuration.
     pub(super) config: Config,
     /// Number of clients waiting for a connection.
@@ -74,13 +74,6 @@ impl Inner {
         self.conns.len()
     }
 
-    /// The pool is currently empty of idle connections.
-    #[inline]
-    #[allow(dead_code)]
-    pub(super) fn empty(&self) -> bool {
-        self.idle() == 0
-    }
-
     /// Number of connections checked out of the pool
     /// by clients.
     #[inline]
@@ -88,7 +81,17 @@ impl Inner {
         self.taken.len()
     }
 
-    /// How many connections should be removed from the pool.
+    /// Find the server currently linked to this client, if any.
+    #[inline]
+    pub(super) fn peer(&self, id: &BackendKeyData) -> Option<BackendKeyData> {
+        self.taken
+            .iter()
+            .find(|p| p.client == *id)
+            .map(|p| p.server)
+    }
+
+    /// How many connections can be removed from the pool
+    /// without affecting the minimum connection requirement.
     #[inline]
     pub(super) fn can_remove(&self) -> usize {
         let total = self.total() as i64;
@@ -317,7 +320,7 @@ mod test {
 
         // Defaults.
         assert!(!inner.banned());
-        assert!(inner.empty());
+        assert!(inner.idle() == 0);
         assert_eq!(inner.idle(), 0);
         assert!(!inner.online);
         assert!(!inner.paused);
@@ -352,7 +355,7 @@ mod test {
         assert_eq!(inner.total(), 0); // pool paused;
         inner.paused = false;
         assert!(!inner.maybe_check_in(Server::default(), Instant::now()));
-        assert!(!inner.empty());
+        assert!(inner.idle() > 0);
         assert_eq!(inner.idle(), 1);
 
         let server = Server::new_error();

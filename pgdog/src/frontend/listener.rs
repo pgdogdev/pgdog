@@ -5,15 +5,17 @@ use std::net::SocketAddr;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::select;
 use tokio::signal::ctrl_c;
+use tokio::time::timeout;
 use tokio_util::task::TaskTracker;
 
-use crate::backend::databases::databases;
+use crate::backend::databases::{databases, shutdown};
+use crate::config::config;
 use crate::net::messages::BackendKeyData;
 use crate::net::messages::{hello::SslReply, Startup};
 use crate::net::tls::acceptor;
 use crate::net::Stream;
 
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use super::{
     comms::{comms, Comms},
@@ -54,18 +56,36 @@ impl Listener {
                            Err(err) => {
                                error!("client crashed: {:?}", err);
                            }
-                       }
+                       };
                    });
                 }
 
                 _ = ctrl_c() => {
                     self.clients.close();
                     comms.shutdown();
-                    info!("waiting for clients to finish transactions...");
-                    self.clients.wait().await;
+                    shutdown();
                     break;
                 }
             }
+        }
+
+        // Close the listener before
+        // we wait for clients to shut down.
+        //
+        // TODO: allow admin connections here anyway
+        // to debug clients refusing to shut down.
+        drop(listener);
+
+        let shutdown_timeout = config().config.general.shutdown_timeout();
+        info!(
+            "waiting up to {:.3}s for clients to finish transactions",
+            shutdown_timeout.as_secs_f64()
+        );
+        if let Err(_) = timeout(shutdown_timeout, self.clients.wait()).await {
+            warn!(
+                "terminating {} client connections due to shutdown timeout",
+                self.clients.len()
+            );
         }
 
         Ok(())
@@ -97,7 +117,8 @@ impl Listener {
 
                 Startup::Cancel { pid, secret } => {
                     let id = BackendKeyData { pid, secret };
-                    if let Err(_) = databases().cancel(&id).await {}
+                    let _ = databases().cancel(&id).await;
+                    break;
                 }
             }
         }

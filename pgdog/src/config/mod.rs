@@ -6,6 +6,7 @@ use error::Error;
 
 use std::fs::read_to_string;
 use std::sync::Arc;
+use std::time::Duration;
 use std::{collections::HashMap, path::PathBuf};
 
 use arc_swap::ArcSwap;
@@ -144,6 +145,9 @@ pub struct General {
     pub tls_certificate: Option<PathBuf>,
     /// TLS private key.
     pub tls_private_key: Option<PathBuf>,
+    /// Shutdown timeout.
+    #[serde(default = "General::default_shutdown_timeout")]
+    pub shutdown_timeout: u64,
 }
 
 impl General {
@@ -189,6 +193,15 @@ impl General {
 
     fn load_balancing_strategy() -> LoadBalancingStrategy {
         LoadBalancingStrategy::Random
+    }
+
+    fn default_shutdown_timeout() -> u64 {
+        60_000
+    }
+
+    /// Get shutdown timeout as a duration.
+    pub fn shutdown_timeout(&self) -> Duration {
+        Duration::from_millis(self.shutdown_timeout)
     }
 
     /// Get TLS config, if any.
