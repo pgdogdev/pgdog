@@ -70,6 +70,15 @@ impl DataRow {
         self.columns.push(value.to_data_row_column());
         self
     }
+
+    /// Create data row from columns.
+    pub fn from_columns(columns: Vec<impl ToDataRowColumn>) -> Self {
+        let mut dr = Self::new();
+        for column in columns {
+            dr.add(column);
+        }
+        dr
+    }
 }
 
 impl FromBytes for DataRow {

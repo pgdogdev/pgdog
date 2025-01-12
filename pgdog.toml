@@ -1,18 +1,15 @@
 #
-# Example pgdog.toml configuration file.
+# minimal pgDog configuration for a single user, single
+# primary database running on the same host.
 #
 [general]
 host = "0.0.0.0"
 port = 6432
-min_pool_size = 1
 shutdown_timeout = 5_000
 
 [[databases]]
 name = "pgdog"
-role = "primary"
 host = "127.0.0.1"
-port = 5432
-database_name = "pgdog"
 
 [[plugins]]
 name = "pgdog_routing"

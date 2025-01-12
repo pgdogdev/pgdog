@@ -12,6 +12,7 @@ pub mod prelude;
 pub mod reconnect;
 pub mod reload;
 pub mod show_clients;
+pub mod show_config;
 pub mod show_pools;
 
 pub use error::Error;

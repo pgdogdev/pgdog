@@ -1,3 +1,10 @@
+# Basic users configuration.
+#
+# Two users:
+#
+# - pgdog: in transaction mode, default settings
+# - pgdog_session: in session mode, other settings are default
+#
 [[users]]
 name = "pgdog"
 database = "pgdog"
