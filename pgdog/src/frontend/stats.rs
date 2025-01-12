@@ -19,6 +19,8 @@ pub struct Stats {
     pub errors: usize,
     /// Total transaction time.
     pub transaction_time: Duration,
+    /// Last transaction time.
+    pub last_transaction_time: Duration,
     /// Total query time.
     pub query_time: Duration,
     /// Total wait time.
@@ -40,6 +42,7 @@ impl Stats {
             queries: 0,
             errors: 0,
             transaction_time: Duration::from_secs(0),
+            last_transaction_time: Duration::from_secs(0),
             query_time: Duration::from_secs(0),
             wait_time: Duration::from_secs(0),
             state: State::Idle,
@@ -50,8 +53,9 @@ impl Stats {
     }
 
     pub(super) fn transaction(&mut self) -> Self {
+        self.last_transaction_time = self.transaction_timer.elapsed();
         self.transactions += 1;
-        self.transaction_time += self.transaction_timer.elapsed();
+        self.transaction_time += self.last_transaction_time;
         self.state = State::Idle;
         *self
     }
@@ -101,6 +105,14 @@ impl Stats {
 
     pub(super) fn received(&mut self, bytes: usize) -> Self {
         self.bytes_received += bytes;
+        // In session mode, we stay connected to the server
+        // until client disconnects, so we need to reset timers every time
+        // client is activated from idle state.
+        if self.state == State::Idle {
+            let now = Instant::now();
+            self.transaction_timer = now;
+            self.query_timer = now;
+        }
         *self
     }
 }

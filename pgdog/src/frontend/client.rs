@@ -197,7 +197,7 @@ impl Client {
                             backend.disconnect();
                         }
                         comms.stats(stats.transaction());
-                        trace!("transaction finished [{}ms]", stats.transaction_time.as_secs_f64() * 1000.0);
+                        trace!("transaction finished [{}ms]", stats.last_transaction_time.as_secs_f64() * 1000.0);
                         if comms.offline() {
                             break;
                         }
