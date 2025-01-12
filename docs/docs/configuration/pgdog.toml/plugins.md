@@ -1,6 +1,6 @@
 # Plugin settings
 
-[Plugins](../../features/plugins/index.md) are dynamically loaded at pooler startup. These settins control which plugins are loaded. In the future, more
+[Plugins](../../features/plugins/index.md) are dynamically loaded at pooler startup. These settings control which plugins are loaded. In the future, more
 options will be available to configure plugin behavior.
 
 Plugins are a TOML list, so for each plugin you want to enable, add a `[[plugins]]` entry to `pgdog.toml`. For example:

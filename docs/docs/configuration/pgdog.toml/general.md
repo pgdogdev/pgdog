@@ -17,7 +17,7 @@ Default: **`6432`**
 
 ### `workers`
 
-Number of Tokio threads to spawn at pooler startup. In multicore systems, the recommended setting is two (2) per
+Number of Tokio threads to spawn at pooler startup. In multi-core systems, the recommended setting is two (2) per
 virtual CPU. The value `0` means to spawn no threads and use the current thread runtime (single-threaded). The latter option is better on IO-bound systems where multi-threading is not necessary and could even hamper performance.
 
 ### `default_pool_size`
@@ -64,14 +64,14 @@ Default: **`30s`**
 
 ### `idle_healthcheck_interval`
 
-Frequency of healtchecks performed by pgDog on idle connections. This ensures the database is checked for health periodically when
+Frequency of healthchecks performed by pgDog on idle connections. This ensures the database is checked for health periodically when
 pgDog receives little to no client requests.
 
 Default: **`30s`**
 
 #### Note on `min_pool_size`
 
-Idle [healthchecks](../../features/healthchecks.md) try to use existing idle connections to validate the database is up and running. If there are no idle connections available, pgDog will create an ephemeral connection to perform the healthcheck. If you want to avoid creating healtcheck connections, make sure to have `min_pool_size` to be at least `1`.
+Idle [healthchecks](../../features/healthchecks.md) try to use existing idle connections to validate the database is up and running. If there are no idle connections available, pgDog will create an ephemeral connection to perform the healthcheck. If you want to avoid creating healthcheck connections, make sure to have `min_pool_size` to be at least `1`.
 
 ### `idle_healthcheck_delay`
 
