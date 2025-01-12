@@ -13,6 +13,10 @@ name = "bob_router"
 name = "alice_router"
 ```
 
+!!! note
+    Plugins can only be configured at pgDog startup. They cannot be changed after
+    the proxy is running.
+
 ### **`name`**
 
 Name of the plugin to load. This is used by pgDog to look up the shared library object in [`LD_LIBRARY_PATH`](https://tldp.org/HOWTO/Program-Library-HOWTO/shared-libraries.html). For example, if your plugin

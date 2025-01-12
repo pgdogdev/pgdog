@@ -2,7 +2,7 @@
 
 PostgreSQL servers support many authentication mechanisms. pgDog supports a subset of those, with the aim to support all of them over time. Since PostgreSQL 14, `scram-sha-256` is widely used to encrypt passwords and pgDog supports this algorithm for both client and server connections.
 
-Authentication is **enabled** by default. Applications connecting to pgDog must provide a username and password which is [configured](../configuration.md) in `users.toml`. For connecting to PostgreSQL databases,
+Authentication is **enabled** by default. Applications connecting to pgDog must provide a username and password which is [configured](../configuration/users.toml/users.md) in `users.toml`. For connecting to PostgreSQL databases,
 pgDog currently supports only `scram-sha-256`.
 
 

@@ -20,7 +20,7 @@ load balancing, healthchecks, and query routing have been battle-tested and work
 | [Transaction mode](transaction-mode.md) | Multiplex transactions and servers for busy PostgreSQL deployments. | ✔️ Good |
 | [Load balancer](load-balancer.md) | Split query traffic evenly across multiple databases. | 🔨 Work in progress |
 | [Healthchecks](healthchecks.md) | Periodically check databases to ensure they are up and can serve queries. | ✔️ Good |
-| [Live configuration reloading](../configuration.md) | Update configuration at runtime without having to restart pgDog. | 🔨 Work in progress |
+| [Live configuration reloading](../configuration/index.md) | Update configuration at runtime without having to restart pgDog. | 🔨 Work in progress |
 | [Sharding](sharding/index.md) | Automatic query routing using a sharding key to scale writes horizontally. | 🔨 Work in progress |
 | [Plugins](plugins/index.md) | Pluggable libraries to parse and route queries, loaded at runtime. | ✔️ Good |
 | [Authentication](authentication.md) | Support for various PostgreSQL authentication mechanisms, e.g. `SCRAM-SHA-256`. | 🔨 Work in progress |

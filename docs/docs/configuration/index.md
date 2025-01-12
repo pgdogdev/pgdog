@@ -5,6 +5,10 @@ pgDog uses the [TOML](https://toml.io/en/) configuration language for its two co
 By default, pgDog looks for both configuration files in the current working directory. Alternatively, you can pass
 `--config=<path>` and `--users=<path>` arguments to pgDog on startup.
 
+### Hot reload
+
+Most settings can be reloaded without restarting pgDog. This allows to tweak them at runtime without breaking client or server connections. For settings that can't be changed at runtime, a note is added to the documentation.
+
 ## Overview
 
 | Name | Description |

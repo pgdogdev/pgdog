@@ -56,10 +56,10 @@ Default: **none** (defaults to `name`)
 
 Name of the PostgreSQL user to connect with when creating backend connections from pgDog to Postgres. If not set, this defaults to `name` in [`users.toml`](../users.toml/users.md). This setting is used to override `users.toml` configuration values.
 
-Default: **none** (see [`uesrs.toml`](../users.toml/users.md))
+Default: **none** (see [`users.toml`](../users.toml/users.md))
 
 ### `password`
 
 Password to use when creating backend connections to PostgreSQL. If not set, this defaults to `password` in [`users.toml`](../users.toml/users.md). This setting is used to override `users.toml` configuration values.
 
-Default: **none** (see [`uesrs.toml`](../users.toml/users.md))
+Default: **none** (see [`users.toml`](../users.toml/users.md))

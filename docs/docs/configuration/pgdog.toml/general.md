@@ -7,6 +7,9 @@ General settings are relevant to the operations of the pooler itself, or apply t
 
 The IP address of the local network interface pgDog will bind to listen for connections.
 
+!!! note
+    This setting cannot be changed at runtime.
+
 Default: **`0.0.0.0`** (all interfaces)
 
 ### `port`
@@ -15,10 +18,18 @@ The TCP port pgDog will bind to listen for connections.
 
 Default: **`6432`**
 
+!!! note
+    This setting cannot be changed at runtime.
+
 ### `workers`
 
 Number of Tokio threads to spawn at pooler startup. In multi-core systems, the recommended setting is two (2) per
 virtual CPU. The value `0` means to spawn no threads and use the current thread runtime (single-threaded). The latter option is better on IO-bound systems where multi-threading is not necessary and could even hamper performance.
+
+Default: **`0`** (current thread runtime)
+
+!!! note
+    This setting cannot be changed at runtime.
 
 ### `default_pool_size`
 
@@ -48,11 +59,17 @@ Path to the TLS certificate pgDog will use to setup TLS connections with clients
 
 Default: **none**
 
+!!! note
+    This setting cannot be changed at runtime.
+
 ### `tls_private_key`
 
 Path to the TLS private key pgDog will use to setup TLS connections with clients. If none is provided, TLS will be disabled.
 
 Default: **none**
+
+!!! note
+    This setting cannot be changed at runtime.
 
 ## Healthchecks
 
@@ -87,6 +104,8 @@ from abnormal conditions like hardware failure.
 ### `rollback_timeout`
 
 How long to allow for `ROLLBACK` queries to run on server connections with unfinished transactions. See [transaction mode](../../features/transaction-mode.md) for more details.
+
+Default: **`5s`**
 
 ### `ban_timeout`
 
