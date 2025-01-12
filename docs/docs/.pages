@@ -1,4 +1,5 @@
 nav:
   - 'index.md'
   - 'features'
+  - 'configuration'
   - '...'

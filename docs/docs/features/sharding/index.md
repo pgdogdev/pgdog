@@ -15,5 +15,3 @@ and write queries to the correct machines using a sharding function. Like its [p
 ## Routing queries
 
 There are two ways for database clients to retrieve data from sharded databases: by querying an individual shard, or by querying all shards and aggregating the results. The former is commonly used in OLTP (transactional) systems, e.g. real time applications, and the latter is more commonly used in OLAP (analytical) databases, e.g. batch reports generation.
-
-pgDog has good support for querying individual shards using a sharding key extracted automatically from queries.

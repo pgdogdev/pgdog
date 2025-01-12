@@ -17,10 +17,11 @@ load balancing, healthchecks, and query routing have been battle-tested and work
 
 | Feature | Description | State |
 |---------|-------------|-------|
-| [Transaction mode](transaction-mode.md) | Multiplex transactions and servers, allowing for high reuse of PostgreSQL server connections. | ✔️ Good |
-| [Load balancer](load-balancer.md) | Splits query traffic evenly across multiple databases. | 🔨 Work in progress |
-| [Healthchecks](healthchecks.md) | Periodically checks databases to ensure they can serve queries. | ✔️ Good |
-| [Live configuration reloading](../configuration/index.md) | Pooler configuration and users can be changed at runtime without restarting the pooler or breaking connections. | 🔨 Work in progress |
-| [Sharding](sharding/index.md) | Automatic routing of queries using a sharding key to scale writes horizontally. | 🔨 Work in progress |
+| [Transaction mode](transaction-mode.md) | Multiplex transactions and servers for busy PostgreSQL deployments. | ✔️ Good |
+| [Load balancer](load-balancer.md) | Split query traffic evenly across multiple databases. | 🔨 Work in progress |
+| [Healthchecks](healthchecks.md) | Periodically check databases to ensure they are up and can serve queries. | ✔️ Good |
+| [Live configuration reloading](../configuration.md) | Update configuration at runtime without having to restart pgDog. | 🔨 Work in progress |
+| [Sharding](sharding/index.md) | Automatic query routing using a sharding key to scale writes horizontally. | 🔨 Work in progress |
 | [Plugins](plugins/index.md) | Pluggable libraries to parse and route queries, loaded at runtime. | ✔️ Good |
 | [Authentication](authentication.md) | Support for various PostgreSQL authentication mechanisms, e.g. `SCRAM-SHA-256`. | 🔨 Work in progress |
+| [Session mode](session-mode.md) | Compatibility mode with direct Postgres connections. | 🔨 Work in progress |
