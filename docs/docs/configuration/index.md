@@ -43,6 +43,17 @@ open minimizes cold start time when clients connect to the pooler for the first 
 
 Default pooler mode to use for database pools. See [Transaction mode](../features/transaction-mode.md) for more details on how this works. Default value is **`transaction`**.
 
+#### Timeouts
+
+These settings control timeouts for various events like network activity and administrative commands. Tuning these will help make pgDog more responsive to abnormal events like hardware
+failures.
+
+**`shutdown_timeout`**
+
+When pgDog is shutting down, it will wait this long for clients to finish active transactions. At the end of this timeout, all idle in transaction clients will be disconnected.
+
+In session mode, this timer waits for clients to disconnect, so it's good to have this setting reasonably high to avoid client-facing errors.
+
 #### Example
 
 ```toml
