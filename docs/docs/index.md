@@ -1,4 +1,4 @@
-# pgDog
+# Getting started
 
 [pgDog](https://github.com/levkk/pgdog) is a PostgreSQL query router, pooler, proxy and load balancer written in Rust. Spiritual successor to
 [pgcat](https://github.com/levkk/pgcat), pgDog comes with a lot of similar features, better performance,
@@ -6,7 +6,7 @@ and introduces new features like plugins.
 
 PostgreSQL deployments of any size can be proxied by pgDog, ranging from a single database to hundreds of primaries and replicas in a sharded configuration.
 
-## Getting started
+## Installation
 
 pgDog is easily compiled from source. Before proceeding, make sure you have the latest version of the Rust
 compiler, available from [rust-lang.org](https://rust-lang.org).
@@ -30,70 +30,65 @@ cargo build --release
 
 ### Configuration
 
-pgDog is configured via two configuration files:
+pgDog is [configured](configuration/index.md) via two files:
 
-* `pgdog.toml` which contains general pooler settings and PostgreSQL server information
-* `users.toml` which contains passwords for users allowed to connect to the pooler
+* [`pgdog.toml`](configuration/index.md) which contains general pooler settings and PostgreSQL server information
+* [`users.toml`](configuration/users.toml/users.md) which contains passwords for users allowed to connect to the pooler
 
 The passwords are stored in a separate file to simplify deployments in environments where
 secrets can be safely encrypted, like Kubernetes or AWS EC2.
 
-Both files need to be placed in the current working directory (CWD) for pgDog to detect them. Alternatively,
-you can pass the `--config` and `--secrets` arguments with their locations when starting the pooler.
+Both files can to be placed in the current working directory (CWD) for pgDog to detect them. Alternatively,
+you can pass the `--config` and `--secrets` arguments with their locations when starting pgDog.
 
 #### Example `pgdog.toml`
 
-Most pgDog configuration options have sensible defaults. This allows a basic primary-only configuration to be pretty short.
+Most pgDog configuration options have sensible defaults. This allows a basic primary-only configuration to be pretty short:
 
 ```toml
 [general]
 host = "0.0.0.0"
 port = 6432
-default_pool_size = 10
-pooler_mode = "transaction"
 
 [[databases]]
-name = "production"
-role = "primary"
+name = "postgres"
 host = "127.0.0.1"
-port = 5432
-database_name = "postgres"
 ```
 
 #### Example `users.toml`
 
 This configuration file contains a mapping between databases, users and passwords. Users not specified in this file
-won't be able to connect to the pooler.
+won't be able to connect to pgDog:
 
 ```toml
 [[users]]
 name = "alice"
-database = "production"
+database = "postgres"
 password = "hunter2"
 ```
 
 ### Launch the pooler
 
-Starting the pooler can be done by executing the binary or with Cargo:
+Starting the pooler can be done by running the binary in `target/release` folder or with Cargo:
 
 
 === "Command"
     ```bash
-    cargo run --release --bin pgdog
+    cargo run --release
     ```
 
 === "Output"
-
     ```
-    🐕 pgDog 0.1.0
-    Loaded pgdog.toml
-    Loaded "pgdog_routing" plugin
-    Listening on 0.0.0.0:6432
-    New server connection [127.0.0.1:5432]
+    INFO 🐕 pgDog 0.1.0
+    INFO loaded pgdog.toml
+    INFO loaded users.toml
+    INFO loaded "pgdog_routing" plugin [1.0461ms]
+    INFO 🐕 pgDog listening on 0.0.0.0:6432
+    INFO new server connection [127.0.0.1:5432]
     ```
 
 ## Next steps
 
 * [Features](features/index.md)
-* [Architecture](architecture/index.md)
 * [Configuration](configuration/index.md)
+* [Architecture](architecture/index.md)

@@ -1,13 +1,21 @@
-# Architecture
+# Architecture overview
 
-pgDog is written in async Rust, using the Tokio runtime. This allows the pooler to take advantage of multiple
-CPU cores, when available.
+pgDog is written in the [Rust](https://rust-lang.org) programming language. It is also asynchronous, powered by the [Tokio](https://tokio.rs) runtime. This allows pgDog to serve hundreds of thousands of connections on one machine and to take advantage of multiple CPUs.
 
-[Plugins](../features/plugins/index.md) are written as shared libraries
-and are loaded into the executable at runtime.
+## Plugins
 
+[Plugins](../features/plugins/index.md) are shared libraries (`.so` on Linux, `.dylib` on Mac, `.dll` on Windows) loaded at startup. This allows to
+change many aspects of pgDog functionality without altering or recompiling internal source code.
+
+## PostgreSQL protocol
+
+pgDog speaks the PostgreSQL [frontend/backend](https://www.postgresql.org/docs/current/protocol.html) protocol. This allows it to act as an
+application layer (OSI Level 7) proxy and multiplex client/server connections. It can also alter connection state
+to suit operational needs, e.g. rolling back unfinished transactions, changing server settings, clearing session variables.
 
 
 ## Learn more
 
-- [Benchmarks](performance.md)
+- [Features](../features/index.md)
+- [Configuration](../configuration/index.md)
+- [Benchmarks](benchmarks.md)
