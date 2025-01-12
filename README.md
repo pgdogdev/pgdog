@@ -137,6 +137,14 @@ While a lot of "classic" features of pgDog, like load balancing and healthchecks
 
 Status on features stability will be [updated regularly](https://pgdog.dev/features/).
 
+## Performance
+
+pgDog does its best to minimize its impact on overall database performance. Using Rust and Tokio is a great start for a fast network proxy, but additional
+care is also taken to perform as few operations as possible while moving data between client and server sockets. Some benchmarks are provided
+to help set a baseline.
+
+&#128216; **[Architecture & benchmarks](https://pgdog.dev/architecture/)**
+
 ## License
 
 pgDog is free and open source software, licensed under the AGPL v3. While often misunderstood, this license is very permissive
