@@ -36,6 +36,8 @@ protects against intermittent issues like spotty network connectivity and other 
 Like other PostgreSQL poolers, pgDog supports transaction-level connection pooling, allowing
 thousands (if not hundreds of thousands) of clients to re-use a handful of PostgreSQL server connections.
 
+&#128216; **[Transactions](https://pgdog.dev/features/transaction-mode)**
+
 ### Plugins
 
 pgDog comes with its own plugin system which allows them to be loaded at runtime using a shared library interface.
@@ -49,9 +51,6 @@ go as far as block or intercept queries and return custom results to the client.
 Examples of plugins can be found in [examples](https://github.com/levkk/pgdog/tree/main/examples) and [plugins](https://github.com/levkk/pgdog/tree/main/plugins).
 
 &#128216; **[Plugins](https://pgdog.dev/features/plugins/)**
-
-
-&#128216; **[Transactions](https://pgdog.dev/features/transaction-mode)**
 
 ### Configuration
 
