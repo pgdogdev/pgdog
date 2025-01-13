@@ -4,7 +4,7 @@ pgDog does its best to minimize its impact on database performance. Great care i
 when passing data between clients and servers. All benchmarks listed below were done on my local system and should be taken with a grain of salt.
 Real world performance is impacted by factors like network speed, query complexity and especially by hardware used for running pgDog and PostgreSQL servers.
 
-## pgBench
+## pgbench
 
 The simplest way to test PostgreSQL performance is with `pgbench`. It comes standard with all PostgreSQL installations (Mac and Linux):
 
@@ -19,47 +19,56 @@ This benchmark can be reproduced by passing the `-S` flag to `pgbench`. The resu
 
 ### Results
 
-| Clients | Transactions | Throughput (/s) | Average latency |
-|---------|--------------|------------|-----------------|
-| 1 | 1,000 | 8633.93 | 0.116 ms |
-| 1 | 10,000 | 13698.08| 0.073 ms |
-| 1 | 100,000 | 12902.98 | 0.077 ms |
-| 10 | 1,000 | 31397.46 | 0.307 ms |
-| 10 | 10,000 | 35500.05 | 0.272 ms |
-| 10 | 100,000 | 35861.21 | 0.269 ms |
-| 100 | 1,000 | 2916.22 | 2.725 ms |
-| 100 | 10,000 | 33181.99 | 2.718 ms |
-| 100 | 100,000 | 32982.90 | 2.733 ms |
+Numbers below are for a single primary benchmark in transaction mode. No plugins are in use.
+
+| Clients | Transactions | Throughput (/s) | Latency |
+|---------|--------------|-----------------|---------|
+| 1 | 100,000 | 17,865.08 | 0.056 ms |
+| 10 | 100,000 | 70,770.09 | 0.136 ms |
+| 100 | 100,000 | 54,649.23 | 1.686 ms |
+
+#### With `pgdog-routing` enabled
+
+These results are with `pgdog_routing` plugin enabled and parsing all queries with `pg_query.rs`. Parsing queries
+has some noticeable overhead. Enabling multi-threading improved performance by over 50% in some cases.
+
+| Clients | Transactions | Throughput (/s) | Average latency | Workers |
+|---------|--------------|-----------------|-----------------|---------|
+| 1 | 100,000 | 12,902.98 | 0.077 ms | 0 |
+| 10 | 100,000 | 35,861.21 | 0.269 ms | 0 |
+| 100 | 100,000 | 32,982.90 | 2.733 ms | 0 |
+| 1| 100,000 | 14229.39 | 0.070 ms | 2 |
+| 10 | 100,000 | 52379.48 | 0.136 ms | 2 |
+| 100 | 100,000 | 57657.4 | 1.723 ms | 4 |
 
 
 ### Interpretation
 
 #### 1 client
 
-The first 3 tests were performed with a 1 client connection (`-c 1` pgBench option). This test was meant to demonstrate
-the a best case scenario performance, with no resource contention. We increased the number of transactions in each test to average out outliers and to show that performance stays consistent (or improves) as more queries are executed.
+Benchmarks with `-c 1` (1 client) are a good baseline for what's possible under the best possible circumstances. There is no contention on resources
+and pgDog effectively receives data in one socket and pushes it out the other.
 
 #### 10 clients
 
-The next 3 tests were performed with 10 clients (`-c 10`) to demonstrate what happens when the connection pool is at full capacity. Result
-of note is the average latency which increased from 0.073 ms to 0.272 ms. It's a bit hard to interpret this as-is since it can be attributed
-to PostgreSQL itself having to serve more concurrent transactions (and that's why all benchmarks are flawed).
-
-In either case, this shows the expected performance when using pgDog on the same machine as PostgreSQL.
+With 10 clients actively querying the database, the connection pool is at full capacity. While there are no clients waiting for connections, the pool
+has to serve clients without any slack in the system. This benchmark should produce the highest throughput numbers.
 
 #### 100 clients
 
-The last 3 tests were performed with 100 clients, which is 10 times more than there are server connections
-in the  pool. This demonstrates what happens to pgDog when clients are fighting for scarce resources and impact that has on query throughput and latency. While latency increased, overall throughput remained roughly the same.
+With over 10x more clients connected than available servers, connections are fighting for resources and pgDog has to make sure everyone gets served in a fair way. Consistent throughput in this benchmark demonstrates our ability to timeshare server connections effectively.
 
-This is a good indicator that transaction pooling is working well
-and pgDog can handle peak load gracefully.
+### In the real world
 
-##### In the real world
+In production, PostgreSQL clients are expected to be mostly idle. For example, web applications spend a lot of their time parsing HTTP requests, running code and waiting on network I/O. This leaves plenty of time for pgDog (and PostgreSQL) to serve queries for thousands of clients.
 
-In production, it's expected that PostgreSQL clients will be idle the majority of the time. For example, web applications spend a lot of their time parsing HTTP requests, running code and waiting on network I/O. This leaves a lot of time for pgDog (and PostgreSQL) to serve queries and allows to share resources
-between thousands of clients.
+#### Hardware impact
 
-### Hardware impact
+Benchmark results will vary widely with hardware. For example, these numbers will be better on new Apple M chips and slower on older Intel CPUs. This benchmark was ran on the Apple M1 chip. Expect yours to vary, but the overall trend to be directionally similar.
 
-Benchmark results will vary widely with hardware. For example, these numbers will be greater on new Apple M chips and slower on older Intel CPUs. This benchmark ran on the Apple M1 chip. Expect yours to vary, but the overall trend to be directionally similar.
+### pgbench configuration
+
+```bash
+exoprt PGPASSWORD=pgdog
+pgbench -P 1 -h 127.0.0.1 -p 6432 -U pgdog pgdog -c 10 -t 100000 -S
+```

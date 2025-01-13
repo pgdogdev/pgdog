@@ -50,6 +50,9 @@ impl Listener {
                 connection = listener.accept() => {
                    let (stream, addr) = connection?;
 
+                   // Disable the Nagle algorithm.
+                   stream.set_nodelay(true)?;
+
                    self.clients.spawn(async move {
                        match Self::handle_client(stream, addr, comms).await {
                            Ok(_) => (),

@@ -39,7 +39,12 @@ impl Server {
     /// Create new PostgreSQL server connection.
     pub async fn connect(addr: &Address) -> Result<Self, Error> {
         debug!("=> {}", addr);
-        let mut stream = Stream::plain(TcpStream::connect(addr.to_string()).await?);
+        let stream = TcpStream::connect(addr.to_string()).await?;
+
+        // Disable the Nagle algorithm.
+        stream.set_nodelay(true)?;
+
+        let mut stream = Stream::plain(stream);
 
         // Request TLS.
         stream.write_all(&Startup::tls().to_bytes()?).await?;

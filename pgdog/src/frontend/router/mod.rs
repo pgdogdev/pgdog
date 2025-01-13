@@ -7,7 +7,6 @@ use tokio::time::Instant;
 use tracing::debug;
 
 pub mod error;
-pub mod parser;
 pub mod request;
 
 use request::Request;
@@ -42,6 +41,8 @@ impl Router {
     /// doesn't supply enough information in the buffer, e.g. just issued
     /// a Describe request to a previously submitted Parse.
     pub fn query(&mut self, buffer: &Buffer, cluster: &Cluster) -> Result<Route, Error> {
+        // TODO: avoid allocating a String
+        // and pass a raw ptr from Bytes.
         let query = buffer
             .query()
             .map_err(|_| Error::NoQueryInBuffer)?

@@ -6,6 +6,7 @@
 host = "0.0.0.0"
 port = 6432
 shutdown_timeout = 5_000
+workers = 2
 
 [[databases]]
 name = "pgdog"
