@@ -19,27 +19,27 @@ This benchmark can be reproduced by passing the `-S` flag to `pgbench`. The resu
 
 ### Results
 
-Numbers below are for a single primary benchmark in transaction mode. No plugins are in use.
+Numbers below are for a single primary benchmark in transaction mode. No plugins are in use and pgDog is configured to use only 1 CPU core (`workers = 0`).
 
-| Clients | Transactions | Throughput (/s) | Latency |
-|---------|--------------|-----------------|---------|
-| 1 | 100,000 | 17,865.08 | 0.056 ms |
-| 10 | 100,000 | 70,770.09 | 0.136 ms |
-| 100 | 100,000 | 54,649.23 | 1.686 ms |
+| Clients | Throughput (/s) | Latency |
+|---------|--------------|------------|
+| 1 | 17,865.08 | 0.056 ms |
+| 10 | 70,770.09 | 0.136 ms |
+| 100 | 54,649.23 | 1.686 ms |
 
 #### With `pgdog-routing` enabled
 
 These results are with `pgdog_routing` plugin enabled and parsing all queries with `pg_query.rs`. Parsing queries
 has some noticeable overhead. Enabling multi-threading improved performance by over 50% in some cases.
 
-| Clients | Transactions | Throughput (/s) | Average latency | Workers |
-|---------|--------------|-----------------|-----------------|---------|
-| 1 | 100,000 | 12,902.98 | 0.077 ms | 0 |
-| 10 | 100,000 | 35,861.21 | 0.269 ms | 0 |
-| 100 | 100,000 | 32,982.90 | 2.733 ms | 0 |
-| 1| 100,000 | 14229.39 | 0.070 ms | 2 |
-| 10 | 100,000 | 52379.48 | 0.136 ms | 2 |
-| 100 | 100,000 | 57657.4 | 1.723 ms | 4 |
+| Clients | Throughput (/s) | Average latency | Workers |
+|---------|-----------------|-----------------|---------|
+| 1 | 12,902.98 | 0.077 ms | 0 |
+| 10 | 35,861.21 | 0.269 ms | 0 |
+| 100 | 32,982.90 | 2.733 ms | 0 |
+| 1 | 14229.39 | 0.070 ms | 2 |
+| 10 | 52379.48 | 0.136 ms | 2 |
+| 100 | 57657.4 | 1.723 ms | 4 |
 
 
 ### Interpretation
