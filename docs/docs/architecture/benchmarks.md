@@ -8,7 +8,7 @@ Real world performance is impacted by factors like network speed, query complexi
 
 The simplest way to test PostgreSQL performance is with `pgbench`. It comes standard with all PostgreSQL installations (Mac and Linux):
 
-```bash
+```
 $ pgbench --version
 pgbench (PostgreSQL) 16.4 (Postgres.app)
 ```
