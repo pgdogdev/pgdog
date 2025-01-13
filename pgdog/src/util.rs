@@ -1,6 +1,7 @@
 //! What's a project without a util module.
 
-use std::time::Duration;
+use rand::{distributions::Alphanumeric, Rng};
+use std::time::Duration; // 0.8
 
 /// Get a human-readable duration for amounts that
 /// a human would use.
@@ -34,6 +35,15 @@ pub fn human_duration(duration: Duration) -> String {
     } else {
         ms_fmt(ms, 1, "ms")
     }
+}
+
+/// Generate a random string of length n.
+pub fn random_string(n: usize) -> String {
+    rand::thread_rng()
+        .sample_iter(&Alphanumeric)
+        .take(n)
+        .map(char::from)
+        .collect()
 }
 
 #[cfg(test)]

@@ -13,6 +13,10 @@ use arc_swap::ArcSwap;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use tracing::info;
+#[cfg(not(debug_assertions))]
+use tracing::warn;
+
+use crate::util::random_string;
 
 static CONFIG: Lazy<ArcSwap<ConfigAndUsers>> =
     Lazy::new(|| ArcSwap::from_pointee(ConfigAndUsers::default()));
@@ -56,6 +60,13 @@ impl ConfigAndUsers {
             Config::default()
         };
 
+        if config.admin.random() {
+            #[cfg(debug_assertions)]
+            info!("[debug only] admin password: {}", config.admin.password);
+            #[cfg(not(debug_assertions))]
+            warn!("admin password has been randomly generated");
+        }
+
         let users: Users = if let Ok(users) = read_to_string(users_path) {
             let users = toml::from_str(&users)?;
             info!("loaded users.toml");
@@ -87,6 +98,8 @@ pub struct Config {
     pub databases: Vec<Database>,
     #[serde(default)]
     pub plugins: Vec<Plugin>,
+    #[serde(default)]
+    pub admin: Admin,
 }
 
 impl Config {
@@ -327,7 +340,51 @@ pub struct User {
     pub server_password: Option<String>,
 }
 
-impl User {}
+/// Admin database settings.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct Admin {
+    #[serde(default = "Admin::name")]
+    name: String,
+    #[serde(default = "Admin::user")]
+    user: String,
+    #[serde(default = "Admin::password")]
+    password: String,
+}
+
+impl Default for Admin {
+    fn default() -> Self {
+        Self {
+            name: Self::name(),
+            user: Self::user(),
+            password: admin_password(),
+        }
+    }
+}
+
+impl Admin {
+    fn name() -> String {
+        "admin".into()
+    }
+
+    fn user() -> String {
+        "admin".into()
+    }
+
+    fn password() -> String {
+        admin_password()
+    }
+
+    /// The password has been randomly generated.
+    pub fn random(&self) -> bool {
+        let prefix = "_pgdog_";
+        self.password.starts_with(prefix) && self.password.len() == prefix.len() + 12
+    }
+}
+
+fn admin_password() -> String {
+    let pw = random_string(12);
+    format!("_pgdog_{}", pw)
+}
 
 #[cfg(test)]
 mod test {

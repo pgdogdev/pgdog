@@ -14,3 +14,6 @@ host = "127.0.0.1"
 
 [[plugins]]
 name = "pgdog_routing"
+
+[admin]
+password = "pgdog"

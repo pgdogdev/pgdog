@@ -17,3 +17,4 @@ Most settings can be reloaded without restarting pgDog. This allows to tweak the
 | [Databases](pgdog.toml/databases.md) | PostgreSQL databases proxied by pgDog. |
 | [Plugins](pgdog.toml/plugins.md) | Plugins configuration. |
 | [Users](users.toml/users.md) | List of users (with passwords) that are allowed to connect to pgDog. |
+| [Admin](pgdog.toml/admin.md) | Admin database settings like admin password. |
