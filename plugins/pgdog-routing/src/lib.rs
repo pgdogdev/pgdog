@@ -1,8 +1,7 @@
 //! Parse queries using pg_query and route all SELECT queries
 //! to replicas. All other queries are routed to a primary.
 
-use pg_query::protobuf::SelectStmt;
-use pg_query::{parse, protobuf::ColumnRef, NodeEnum};
+use pg_query::{parse, NodeEnum};
 use pgdog_plugin::bindings::{Config, Input, Output};
 use pgdog_plugin::Route;
 

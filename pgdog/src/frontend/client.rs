@@ -9,6 +9,7 @@ use tracing::{debug, error, info, trace};
 use super::{Buffer, Comms, Error, Router, Stats};
 use crate::auth::scram::Server;
 use crate::backend::pool::Connection;
+use crate::config::config;
 use crate::net::messages::{
     Authentication, BackendKeyData, ErrorResponse, Protocol, ReadyForQuery,
 };
@@ -22,6 +23,7 @@ pub struct Client {
     id: BackendKeyData,
     params: Parameters,
     comms: Comms,
+    admin: bool,
 }
 
 impl Client {
@@ -34,10 +36,10 @@ impl Client {
     ) -> Result<(), Error> {
         let user = params.get_default("user", "postgres");
         let database = params.get_default("database", user);
+        let config = config();
 
-        // TODO: remove hardcoding
-        let admin = database == "admin";
-        let admin_password = "pgdog";
+        let admin = database == &config.config.admin.name;
+        let admin_password = &config.config.admin.password;
 
         let id = BackendKeyData::new();
 
@@ -95,9 +97,10 @@ impl Client {
             id,
             params,
             comms,
+            admin,
         };
 
-        if client.admin() {
+        if client.admin {
             // Admin clients are not waited on during shutdown.
             spawn(async move {
                 client.spawn_internal().await;
@@ -127,7 +130,7 @@ impl Client {
         let user = self.params.get_required("user")?;
         let database = self.params.get_default("database", user);
 
-        let mut backend = Connection::new(user, database, self.admin())?;
+        let mut backend = Connection::new(user, database, self.admin)?;
         let mut router = Router::new();
         let mut stats = Stats::new();
         let mut async_ = false;
@@ -250,10 +253,6 @@ impl Client {
         );
 
         buffer
-    }
-
-    fn admin(&self) -> bool {
-        self.params.get_default("database", "") == "admin"
     }
 }
 

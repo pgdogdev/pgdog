@@ -343,12 +343,15 @@ pub struct User {
 /// Admin database settings.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Admin {
+    /// Admin database name.
     #[serde(default = "Admin::name")]
-    name: String,
+    pub name: String,
+    /// Admin user name.
     #[serde(default = "Admin::user")]
-    user: String,
+    pub user: String,
+    /// Admin user's password.
     #[serde(default = "Admin::password")]
-    password: String,
+    pub password: String,
 }
 
 impl Default for Admin {
