@@ -6,7 +6,7 @@ use super::code;
 use super::prelude::*;
 
 /// Parse (F) message.
-#[derive(Debug)]
+#[derive(Debug, Clone, Hash, Eq, PartialEq)]
 pub struct Parse {
     /// Prepared statement name.
     pub name: String,

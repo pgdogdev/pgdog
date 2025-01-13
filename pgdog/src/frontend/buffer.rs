@@ -34,7 +34,7 @@ impl Buffer {
     /// until it gets a reply, or we don't want to buffer the data in memory.
     pub fn full(&self) -> bool {
         if let Some(message) = self.buffer.last() {
-            // Flush (F) | Sync (F) | Query (F) | CopyDone (F) | Describe (F)
+            // Flush (F) | Sync (F) | Query (F) | CopyDone (F)
             if matches!(message.code(), 'H' | 'S' | 'Q' | 'c') {
                 return true;
             }

@@ -50,6 +50,9 @@ pub enum Error {
 
     #[error("config error")]
     Config(#[from] crate::config::error::Error),
+
+    #[error("expected '1', got '{0}")]
+    ExpectedParseComplete(char),
 }
 
 impl Error {

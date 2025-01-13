@@ -1,5 +1,8 @@
 //! PostgreSQL serer connection.
-use std::time::{Duration, Instant};
+use std::{
+    collections::HashSet,
+    time::{Duration, Instant},
+};
 
 use bytes::{BufMut, BytesMut};
 use rustls_pki_types::ServerName;
@@ -11,7 +14,12 @@ use tokio::{
 use tracing::{debug, info, trace};
 
 use super::{pool::Address, Error};
-use crate::net::{parameter::Parameters, tls::connector, Parameter, Stream};
+use crate::net::{
+    messages::{parse::Parse, Flush},
+    parameter::Parameters,
+    tls::connector,
+    Parameter, Stream,
+};
 use crate::state::State;
 use crate::{
     auth::scram::Client,
@@ -33,6 +41,7 @@ pub struct Server {
     last_used_at: Instant,
     last_healthcheck: Option<Instant>,
     stats: ConnStats,
+    prepared_statements: HashSet<String>,
 }
 
 impl Server {
@@ -147,6 +156,7 @@ impl Server {
             last_used_at: Instant::now(),
             last_healthcheck: None,
             stats: ConnStats::default(),
+            prepared_statements: HashSet::new(),
         })
     }
 
@@ -230,6 +240,8 @@ impl Server {
                     return Err(Error::UnexpectedTransactionStatus(status));
                 }
             }
+        } else if message.code() == '1' {
+            self.state = State::ParseComplete;
         }
 
         Ok(message)
@@ -246,7 +258,7 @@ impl Server {
     pub fn in_sync(&self) -> bool {
         matches!(
             self.state,
-            State::IdleInTransaction | State::TransactionError | State::Idle
+            State::IdleInTransaction | State::TransactionError | State::Idle | State::ParseComplete
         )
     }
 
@@ -336,6 +348,26 @@ impl Server {
         }
     }
 
+    /// Prepare a statement on this connection if it doesn't exist already.
+    pub async fn prepare(&mut self, parse: &Parse) -> Result<bool, Error> {
+        if let Some(_) = self.prepared_statements.get(&parse.name) {
+            return Ok(false);
+        }
+
+        if !self.in_sync() {
+            return Err(Error::NotInSync);
+        }
+
+        self.send(vec![parse.message()?, Flush.message()?]).await?;
+        let parse_complete = self.read().await?;
+
+        if parse_complete.code() != '1' {
+            return Err(Error::ExpectedParseComplete(parse_complete.code()));
+        }
+
+        Ok(true)
+    }
+
     /// Server connection unique identifier.
     #[inline]
     pub fn id(&self) -> &BackendKeyData {
@@ -411,6 +443,7 @@ mod test {
                 last_used_at: Instant::now(),
                 last_healthcheck: None,
                 stats: ConnStats::default(),
+                prepared_statements: HashSet::new(),
             }
         }
     }
