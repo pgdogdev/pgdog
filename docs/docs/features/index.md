@@ -25,3 +25,7 @@ load balancing, healthchecks, and query routing have been battle-tested and work
 | [Plugins](plugins/index.md) | Pluggable libraries to parse and route queries, loaded at runtime. | ✔️ Good |
 | [Authentication](authentication.md) | Support for various PostgreSQL authentication mechanisms, e.g. `SCRAM-SHA-256`. | 🔨 Work in progress |
 | [Session mode](session-mode.md) | Compatibility mode with direct Postgres connections. | 🔨 Work in progress |
+
+## OS support
+
+pgDog doesn't use any OS-specific features and should run on all systems supported by the Rust compiler, e.g. Linux (x86 and ARM64), Mac OS, and Windows.

@@ -22,3 +22,16 @@ The admin database name is [configurable](../configuration/pgdog.toml/admin.md).
 | `RECONNECT` | Re-create all server connections using existing configuration. |
 | `PAUSE` | Pause all pools. Clients will wait for connections until pools are resumed. Can be used for gracefully restarting PostgreSQL servers. |
 | `RESUME` | Resume all pools. Clients are able to check out connections again. |
+
+## Shutting down pgDog
+
+When you need to shutdown pgDog, e.g. to deploy a new version, you can do so gracefully by issuing `SIGINT` (e.g. Ctrl-C) to the `pgdog` process.
+pgDog will stop listening for new connections and give connected clients some time to finish their transactions and disconnect.
+
+The amount of time pgDog will wait is [configurable](../configuration/pgdog.toml/general.md#shutdown_timeout). By default, pgDog will wait 60 seconds.
+
+#### Example
+
+```
+$ pkill pgdog -SIGINT
+```
