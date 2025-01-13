@@ -20,6 +20,7 @@ pub mod net;
 pub mod plugin;
 pub mod state;
 pub mod stats;
+pub mod util;
 
 /// Setup the logger, so `info!`, `debug!`
 /// and other macros actually output something.

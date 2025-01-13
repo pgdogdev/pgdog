@@ -13,7 +13,7 @@ use tokio::{
 };
 use tracing::{debug, info, trace};
 
-use super::{pool::Address, Error};
+use super::{pool::Address, Error, Stats};
 use crate::net::{
     messages::{parse::Parse, Flush},
     parameter::Parameters,
@@ -27,7 +27,6 @@ use crate::{
         hello::SslReply, Authentication, BackendKeyData, ErrorResponse, FromBytes, Message,
         ParameterStatus, Password, Protocol, Query, ReadyForQuery, Startup, Terminate, ToBytes,
     },
-    stats::ConnStats,
 };
 
 /// PostgreSQL server connection.
@@ -36,11 +35,7 @@ pub struct Server {
     stream: Option<Stream>,
     id: BackendKeyData,
     params: Parameters,
-    state: State,
-    created_at: Instant,
-    last_used_at: Instant,
-    last_healthcheck: Option<Instant>,
-    stats: ConnStats,
+    stats: Stats,
     prepared_statements: HashSet<String>,
 }
 
@@ -151,11 +146,7 @@ impl Server {
             stream: Some(stream),
             id,
             params,
-            state: State::Idle,
-            created_at: Instant::now(),
-            last_used_at: Instant::now(),
-            last_healthcheck: None,
-            stats: ConnStats::default(),
+            stats: Stats::connect(id, addr),
             prepared_statements: HashSet::new(),
         })
     }
@@ -179,14 +170,14 @@ impl Server {
 
     /// Send messages to the server.
     pub async fn send(&mut self, messages: Vec<impl Protocol>) -> Result<(), Error> {
-        self.state = State::Active;
+        self.stats.state(State::Active);
         let timer = Instant::now();
         match self.stream().send_many(messages).await {
             Ok(sent) => {
-                self.stats.bytes_sent += sent;
+                self.stats.send(sent);
             }
             Err(err) => {
-                self.state = State::Error;
+                self.stats.state(State::Error);
                 return Err(err.into());
             }
         };
@@ -200,7 +191,7 @@ impl Server {
     /// Flush all pending messages making sure they are sent to the server immediately.
     pub async fn flush(&mut self) -> Result<(), Error> {
         if let Err(err) = self.stream().flush().await {
-            self.state = State::Error;
+            self.stats.state(State::Error);
             Err(err.into())
         } else {
             Ok(())
@@ -212,36 +203,31 @@ impl Server {
         let message = match self.stream().read().await {
             Ok(message) => message,
             Err(err) => {
-                self.state = State::Error;
+                self.stats.state(State::Error);
                 return Err(err.into());
             }
         };
 
-        self.stats.bytes_received += message.len();
+        self.stats.receive(message.len());
 
         if message.code() == 'Z' {
-            self.stats.queries += 1;
+            self.stats.query();
 
             let rfq = ReadyForQuery::from_bytes(message.payload())?;
 
             match rfq.status {
-                'I' => {
-                    self.state = State::Idle;
-                    self.stats.transactions += 1;
-                    self.last_used_at = Instant::now();
-                }
-                'T' => self.state = State::IdleInTransaction,
-                'E' => {
-                    self.state = State::TransactionError;
-                    self.stats.transactions += 1;
-                }
+                'I' => self.stats.transaction(),
+                'T' => self.stats.state(State::IdleInTransaction),
+                'E' => self.stats.transaction_error(),
                 status => {
-                    self.state = State::Error;
+                    self.stats.state(State::Error);
                     return Err(Error::UnexpectedTransactionStatus(status));
                 }
             }
         } else if message.code() == '1' {
-            self.state = State::ParseComplete;
+            self.stats.prepared_statement()
+        } else if message.code() == 'E' {
+            self.stats.error();
         }
 
         Ok(message)
@@ -250,14 +236,14 @@ impl Server {
     /// Server sent everything.
     #[inline]
     pub fn done(&self) -> bool {
-        self.state == State::Idle
+        self.stats.state == State::Idle
     }
 
     /// Server connection is synchronized and can receive more messages.
     #[inline]
     pub fn in_sync(&self) -> bool {
         matches!(
-            self.state,
+            self.stats.state,
             State::IdleInTransaction | State::TransactionError | State::Idle | State::ParseComplete
         )
     }
@@ -266,7 +252,7 @@ impl Server {
     #[inline]
     pub fn in_transaction(&self) -> bool {
         matches!(
-            self.state,
+            self.stats.state,
             State::IdleInTransaction | State::TransactionError
         )
     }
@@ -274,7 +260,7 @@ impl Server {
     /// The server connection permanently failed.
     #[inline]
     pub fn error(&self) -> bool {
-        self.state == State::Error
+        self.stats.state == State::Error
     }
 
     /// Server parameters.
@@ -320,7 +306,7 @@ impl Server {
         debug!("running healthcheck \"{}\" [{}]", query, self.addr);
 
         self.execute(query).await?;
-        self.last_healthcheck = Some(Instant::now());
+        self.stats.healthcheck();
 
         Ok(())
     }
@@ -329,12 +315,13 @@ impl Server {
     pub async fn rollback(&mut self) {
         if self.in_transaction() {
             if let Err(_err) = self.execute("ROLLBACK").await {
-                self.state = State::Error;
+                self.stats.state(State::Error);
             }
+            self.stats.rollback();
         }
 
         if !self.in_sync() {
-            self.state = State::Error;
+            self.stats.state(State::Error);
         }
     }
 
@@ -342,7 +329,7 @@ impl Server {
     pub async fn reset(&mut self) {
         if self.done() {
             if let Err(_err) = self.execute_batch(&["RESET ALL", "DISCARD ALL"]).await {
-                self.state = State::Error;
+                self.stats.state(State::Error);
             }
             debug!("connection reset [{}]", self.addr());
         }
@@ -377,19 +364,19 @@ impl Server {
     /// How old this connection is.
     #[inline]
     pub fn age(&self, instant: Instant) -> Duration {
-        instant.duration_since(self.created_at)
+        instant.duration_since(self.stats.created_at)
     }
 
     /// How long this connection has been idle.
     #[inline]
     pub fn idle_for(&self, instant: Instant) -> Duration {
-        instant.duration_since(self.last_used_at)
+        instant.duration_since(self.stats.last_used)
     }
 
     /// How long has it been since the last connection healthcheck.
     #[inline]
     pub fn healthcheck_age(&self, instant: Instant) -> Duration {
-        if let Some(last_healthcheck) = self.last_healthcheck {
+        if let Some(last_healthcheck) = self.stats.last_healthcheck {
             instant.duration_since(last_healthcheck)
         } else {
             Duration::MAX
@@ -410,6 +397,7 @@ impl Server {
 
 impl Drop for Server {
     fn drop(&mut self) {
+        self.stats.disconnect();
         if let Some(mut stream) = self.stream.take() {
             // If you see a lot of these, tell your clients
             // to not send queries unless they are willing to stick
@@ -433,17 +421,15 @@ mod test {
 
     impl Default for Server {
         fn default() -> Self {
+            let id = BackendKeyData::default();
+            let addr = Address::default();
             Self {
-                addr: Address::default(),
                 stream: None,
-                id: BackendKeyData::default(),
+                id,
                 params: Parameters::default(),
-                state: State::Idle,
-                created_at: Instant::now(),
-                last_used_at: Instant::now(),
-                last_healthcheck: None,
-                stats: ConnStats::default(),
+                stats: Stats::connect(id, &addr),
                 prepared_statements: HashSet::new(),
+                addr,
             }
         }
     }
@@ -451,23 +437,9 @@ mod test {
     impl Server {
         pub fn new_error() -> Server {
             let mut server = Server::default();
-            server.state = State::Error;
+            server.stats.state(State::Error);
 
             server
         }
-
-        // pub(super) fn new_in_transaction() -> Server {
-        //     let mut server = Server::default();
-        //     server.state = State::IdleInTransaction;
-
-        //     server
-        // }
-
-        // pub(super) fn new_active() -> Server {
-        //     let mut server = Server::default();
-        //     server.state = State::Active;
-
-        //     server
-        // }
     }
 }
