@@ -1,10 +1,12 @@
 //! Parse queries using pg_query and route all SELECT queries
 //! to replicas. All other queries are routed to a primary.
 
-use pg_query::{parse, NodeEnum};
+use pg_query::protobuf::SelectStmt;
+use pg_query::{parse, protobuf::ColumnRef, NodeEnum};
 use pgdog_plugin::bindings::{Config, Input, Output};
 use pgdog_plugin::Route;
 
+use tracing::trace;
 use tracing::{debug, level_filters::LevelFilter};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
@@ -66,6 +68,7 @@ fn route_internal(query: &str, config: Config) -> Result<Route, pg_query::Error>
         if let Some(ref node) = query.stmt {
             match node.node {
                 Some(NodeEnum::SelectStmt(ref _stmt)) => {
+                    trace!("{:#?}", _stmt);
                     return Ok(Route::read_any());
                 }
 
