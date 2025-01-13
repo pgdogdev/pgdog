@@ -13,19 +13,6 @@ similar features, better performance, and introduces new features like plugins.
 
 ## Features
 
-### Plugins
-
-pgDog comes with its own plugin system which allows plugins to be loaded at runtime using a shared library interface. As long as the plugin can expose a predefined C API, it can be written in any language, including C/C++, Rust, Zig, Go, Python, Ruby, Java, and many more.
-
-Plugins can be used to route queries to specific databases in a sharded configuration, or to
-split traffic between writes and reads in a mixed (primary & replicas) deployment. The plugin
-interface allows code execution at multiple stages of the request/response lifecycle, and can
-go as far as block or intercept queries and return custom results to the client.
-
-Examples of plugins can be found in [examples](https://github.com/levkk/pgdog/tree/main/examples) and [plugins](https://github.com/levkk/pgdog/tree/main/plugins).
-
-&#128216; **[Plugins](https://pgdog.dev/features/plugins/)**
-
 ### Load balancer
 
 pgDog is an application layer (OSI Level 7) load balancer for PostgreSQL. It can proxy multiple replicas (and primary) and distribute transactions. It comes with support for multiple strategies, including round robin and random.
@@ -48,6 +35,21 @@ protects against intermittent issues like spotty network connectivity and other 
 
 Like other PostgreSQL poolers, pgDog supports transaction-level connection pooling, allowing
 thousands (if not hundreds of thousands) of clients to re-use a handful of PostgreSQL server connections.
+
+### Plugins
+
+pgDog comes with its own plugin system which allows them to be loaded at runtime using a shared library interface.
+As long as the plugin can expose a predefined C API, it can be written in any language, including C/C++, Rust, Zig, Go, Python, Ruby, Java, and many more.
+
+Plugins can be used to route queries to specific databases in a sharded configuration, or to
+split traffic between writes and reads in a mixed (primary & replicas) deployment. The plugin
+interface allows code execution at multiple stages of the request/response lifecycle, and can
+go as far as block or intercept queries and return custom results to the client.
+
+Examples of plugins can be found in [examples](https://github.com/levkk/pgdog/tree/main/examples) and [plugins](https://github.com/levkk/pgdog/tree/main/plugins).
+
+&#128216; **[Plugins](https://pgdog.dev/features/plugins/)**
+
 
 &#128216; **[Transactions](https://pgdog.dev/features/transaction-mode)**
 
