@@ -166,7 +166,7 @@ impl Server {
                             stream.send_flush(reply).await?;
                         }
 
-                        Password::SASLResponse { response } => {
+                        Password::PasswordMessage { response } => {
                             if let Some(scram_client) = scram_client {
                                 let server_final = match scram_client {
                                     ScramFinal::Plain(plain) => {

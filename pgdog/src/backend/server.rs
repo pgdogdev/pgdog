@@ -96,7 +96,7 @@ impl Server {
                         }
                         Authentication::SaslContinue(data) => {
                             scram.server_first(&data)?;
-                            let response = Password::SASLResponse {
+                            let response = Password::PasswordMessage {
                                 response: scram.last()?,
                             };
                             stream.send_flush(response).await?;
@@ -104,6 +104,7 @@ impl Server {
                         Authentication::SaslFinal(data) => {
                             scram.server_last(&data)?;
                         }
+                        Authentication::Md5(_) => return Err(Error::UnsupportedAuth),
                     }
                 }
 

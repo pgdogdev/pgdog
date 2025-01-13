@@ -10,8 +10,8 @@ use super::super::prelude::*;
 pub enum Password {
     /// SASLInitialResponse (F)
     SASLInitialResponse { name: String, response: String },
-    /// SASLResponse (F)
-    SASLResponse { response: String },
+    /// PasswordMessage (F) or SASLResponse (F)
+    PasswordMessage { response: String },
 }
 
 impl Password {
@@ -43,7 +43,7 @@ impl FromBytes for Password {
                 response,
             })
         } else {
-            Ok(Password::SASLResponse { response: content })
+            Ok(Password::PasswordMessage { response: content })
         }
     }
 }
@@ -58,7 +58,7 @@ impl ToBytes for Password {
                 payload.put(Bytes::copy_from_slice(response.as_bytes()));
             }
 
-            Password::SASLResponse { response } => {
+            Password::PasswordMessage { response } => {
                 payload.put(Bytes::copy_from_slice(response.as_bytes()));
             }
         }

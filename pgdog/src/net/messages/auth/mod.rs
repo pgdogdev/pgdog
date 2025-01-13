@@ -20,6 +20,8 @@ pub enum Authentication {
     SaslContinue(String),
     /// AuthenticationSASLFinal (B)
     SaslFinal(String),
+    /// Md5 authentication challenge (B).
+    Md5(Bytes),
 }
 
 impl Authentication {
@@ -39,6 +41,11 @@ impl FromBytes for Authentication {
 
         match status {
             0 => Ok(Authentication::Ok),
+            5 => {
+                let mut salt = vec![0u8; 4];
+                bytes.copy_to_slice(&mut salt);
+                Ok(Authentication::Md5(Bytes::from(salt)))
+            }
             10 => {
                 let mechanism = c_string_buf(&mut bytes);
                 Ok(Authentication::Sasl(mechanism))
@@ -69,6 +76,13 @@ impl ToBytes for Authentication {
         match self {
             Authentication::Ok => {
                 payload.put_i32(0);
+
+                Ok(payload.freeze())
+            }
+
+            Authentication::Md5(salt) => {
+                payload.put_i32(5);
+                payload.put(salt.clone());
 
                 Ok(payload.freeze())
             }

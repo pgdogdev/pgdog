@@ -33,3 +33,4 @@ tokio-util = { version = "0.7", features = ["rt"] }
 fnv = "1"
 scram = "0.6"
 base64 = "0.22"
+md5 = "0.7"
