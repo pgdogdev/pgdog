@@ -57,10 +57,12 @@ one database. For example:
 ```toml
 [[databases]]
 name = "prod"
+role = "replica"
 host = "10.0.0.1"
 
 [[databases]]
 name = "prod"
+role = "replica"
 host = "10.0.0.2"
 ```
 
