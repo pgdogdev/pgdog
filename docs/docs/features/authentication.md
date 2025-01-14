@@ -8,7 +8,7 @@ pgDog currently supports only `SCRAM-SHA-256`.
 
 ## Add users
 
-`users.toml` follows a simple TOML list structure. To add users, simply add another `[[users]] section, e.g.:
+`users.toml` follows a simple TOML list structure. To add users, simply add another `[[users]]` section, e.g.:
 
 ```toml
 [[users]]
