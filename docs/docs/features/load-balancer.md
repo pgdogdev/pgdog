@@ -27,9 +27,6 @@ This strategy is used by **default**.
 
 ### Least active connections
 
-!!! note
-    This feature is still under development.
-
 pgDog keeps track of how many active connections each database has and can route queries to databases
 which are least busy executing requests. This allows to "bin pack" the cluster based on how seemingly active
 (or inactive) the databases are.
@@ -38,9 +35,6 @@ This strategy is useful when all databases have identical resources and all quer
 cost and runtime.
 
 ### Round robin
-
-!!! note
-    This feature is still under development.
 
 This strategy is often used in HTTP load balancers like nginx to route requests to hosts in the
 same order they appear in the configuration. Each database receives exactly one query before the next
