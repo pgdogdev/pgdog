@@ -277,10 +277,7 @@ impl Server {
         }
 
         let mut messages = vec![];
-        let queries = queries
-            .iter()
-            .map(Query::new)
-            .collect::<Vec<Query>>();
+        let queries = queries.iter().map(Query::new).collect::<Vec<Query>>();
         let expected = queries.len();
 
         self.send(queries).await?;
