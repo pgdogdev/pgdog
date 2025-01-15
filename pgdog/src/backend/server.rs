@@ -279,7 +279,7 @@ impl Server {
         let mut messages = vec![];
         let queries = queries
             .iter()
-            .map(|query| Query::new(query))
+            .map(Query::new)
             .collect::<Vec<Query>>();
         let expected = queries.len();
 
@@ -338,7 +338,7 @@ impl Server {
 
     /// Prepare a statement on this connection if it doesn't exist already.
     pub async fn prepare(&mut self, parse: &Parse) -> Result<bool, Error> {
-        if let Some(_) = self.prepared_statements.get(&parse.name) {
+        if self.prepared_statements.get(&parse.name).is_some() {
             return Ok(false);
         }
 
