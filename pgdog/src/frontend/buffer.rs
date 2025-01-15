@@ -25,7 +25,7 @@ impl Buffer {
         Self { buffer: vec![] }
     }
 
-    /// Client likely wants to communicate asyncrhonously.
+    /// Client likely wants to communicate asynchronously.
     pub fn async_(&self) -> bool {
         self.buffer.last().map(|m| m.code() == 'H').unwrap_or(false)
     }
