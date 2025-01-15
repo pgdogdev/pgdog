@@ -12,7 +12,6 @@ use std::io::IsTerminal;
 pub mod admin;
 pub mod auth;
 pub mod backend;
-pub mod channel;
 pub mod cli;
 pub mod config;
 pub mod frontend;

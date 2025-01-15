@@ -1,11 +1,9 @@
-pub mod bidirectional;
 pub mod error;
 pub mod messages;
 pub mod parameter;
 pub mod stream;
 pub mod tls;
 
-pub use bidirectional::Bidirectional;
 pub use error::Error;
 pub use parameter::Parameter;
 pub use stream::Stream;

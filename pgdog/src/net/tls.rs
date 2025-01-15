@@ -103,10 +103,10 @@ pub fn load() -> Result<(), Error> {
     let config = config();
 
     if let Some((cert, key)) = config.config.general.tls() {
-        let _ = load_acceptor(cert, key)?;
+        load_acceptor(cert, key)?;
     }
 
-    let _ = connector()?;
+    connector()?;
 
     Ok(())
 }
@@ -125,6 +125,8 @@ impl ServerCertVerifier for CertificateVerifyer {
         _ocsp_response: &[u8],
         _now: rustls::pki_types::UnixTime,
     ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        // Accept self-signed certs or certs signed by any CA.
+        // Doesn't protect against MITM attacks.
         Ok(ServerCertVerified::assertion())
     }
 
