@@ -186,8 +186,8 @@ impl Client {
                     let len = message.len();
                     let code = message.code();
 
-                    // ReadyForQuery (B) | CopyInResponse (B) || RowDescription (B)
-                    if matches!(code, 'Z' | 'G') || code == 'T' && async_ {
+                    // ReadyForQuery (B) | CopyInResponse (B) || RowDescription (B) | ErrorResponse (B)
+                    if matches!(code, 'Z' | 'G') || matches!(code, 'T' | 'E')  && async_ {
                         self.stream.send_flush(message).await?;
                         comms.stats(stats.query());
                         async_ = false;

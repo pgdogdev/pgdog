@@ -54,7 +54,7 @@ impl Buffer {
         self.buffer.iter().map(|b| b.len()).sum()
     }
 
-    /// If this buffer contains a query, retrive it.
+    /// If this buffer contains a query, retrieve it.
     pub fn query(&self) -> Result<Option<String>, Error> {
         for message in &self.buffer {
             if message.code() == 'Q' {

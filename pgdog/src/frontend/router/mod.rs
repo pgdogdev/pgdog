@@ -40,13 +40,14 @@ impl Router {
     /// previous route is preserved. This is useful in case the client
     /// doesn't supply enough information in the buffer, e.g. just issued
     /// a Describe request to a previously submitted Parse.
-    pub fn query(&mut self, buffer: &Buffer, cluster: &Cluster) -> Result<Route, Error> {
+    pub fn query(&mut self, buffer: &Buffer, cluster: &Cluster) -> Result<(), Error> {
         // TODO: avoid allocating a String
-        // and pass a raw ptr from Bytes.
-        let query = buffer
-            .query()
-            .map_err(|_| Error::NoQueryInBuffer)?
-            .ok_or(Error::NoQueryInBuffer)?;
+        // and pass a raw pointer from Bytes.
+        let query = if let Ok(Some(query)) = buffer.query() {
+            query
+        } else {
+            return Ok(());
+        };
 
         let mut request = Request::new(query.as_str())?;
 
@@ -92,7 +93,7 @@ impl Router {
 
         unsafe { input.drop() }
 
-        Ok(self.route)
+        Ok(())
     }
 
     /// Get current route.
