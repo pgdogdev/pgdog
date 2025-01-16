@@ -41,6 +41,8 @@ pub struct Config {
     pub ban_timeout: u64, // ms
     /// Rollback timeout for dirty connections.
     pub rollback_timeout: u64,
+    /// Statement timeout
+    pub statement_timeout: Option<u64>,
 }
 
 impl Config {
@@ -118,6 +120,7 @@ impl Config {
             idle_healthcheck_delay: general.idle_healthcheck_delay,
             ban_timeout: general.ban_timeout,
             rollback_timeout: general.rollback_timeout,
+            statement_timeout: user.statement_timeout,
             ..Default::default()
         }
     }
@@ -142,6 +145,7 @@ impl Default for Config {
             query_timeout: Duration::MAX.as_millis() as u64,
             ban_timeout: Duration::from_secs(300).as_millis() as u64,
             rollback_timeout: Duration::from_secs(5).as_millis() as u64,
+            statement_timeout: None,
         }
     }
 }

@@ -230,8 +230,9 @@ impl Monitor {
     /// Replenish pool with one new connection.
     async fn replenish(&self, connect_timeout: Duration) -> bool {
         let mut ok = false;
+        let params = self.pool.startup_parameters();
 
-        match timeout(connect_timeout, Server::connect(self.pool.addr())).await {
+        match timeout(connect_timeout, Server::connect(self.pool.addr(), params)).await {
             Ok(Ok(conn)) => {
                 ok = true;
                 self.pool.lock().put(conn);
@@ -278,7 +279,7 @@ impl Monitor {
         } else {
             // Create a new one and close it. once done.
             debug!("creating new healthcheck connection [{}]", pool.addr());
-            match Server::connect(pool.addr()).await {
+            match Server::connect(pool.addr(), pool.startup_parameters()).await {
                 Ok(mut server) => {
                     if let Ok(()) = server.healthcheck(";").await {
                         return Ok(());

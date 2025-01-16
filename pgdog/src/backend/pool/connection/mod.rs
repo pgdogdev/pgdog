@@ -1,4 +1,4 @@
-//! Server connection.
+//! Server connection requested by a frontend.
 
 use pgdog_plugin::Route;
 use tokio::time::sleep;
@@ -17,27 +17,32 @@ use super::{
 
 use std::time::Duration;
 
+mod binding;
+mod multi_shard;
+use binding::Binding;
+use multi_shard::MultiShard;
+
 /// Wrapper around a server connection.
 #[derive(Default)]
 pub struct Connection {
     user: String,
     database: String,
-    server: Option<Guard>,
+    binding: Binding,
     cluster: Option<Cluster>,
-    admin: Option<Backend>,
-    is_admin: bool,
 }
 
 impl Connection {
     /// Create new server connection handler.
     pub fn new(user: &str, database: &str, admin: bool) -> Result<Self, Error> {
         let mut conn = Self {
-            server: None,
+            binding: if admin {
+                Binding::Admin(Backend::new())
+            } else {
+                Binding::Server(None)
+            },
             cluster: None,
             user: user.to_owned(),
             database: database.to_owned(),
-            admin: None,
-            is_admin: admin,
         };
 
         if !admin {
@@ -49,14 +54,18 @@ impl Connection {
 
     /// Check if the connection is available.
     pub fn connected(&self) -> bool {
-        self.server.is_some() || self.admin.is_some()
+        self.binding.connected()
     }
 
     /// Create a server connection if one doesn't exist already.
     pub async fn connect(&mut self, id: &BackendKeyData, route: &Route) -> Result<(), Error> {
-        if self.is_admin {
-            self.admin = Some(Backend::new());
-        } else if self.server.is_none() {
+        let connect = match &self.binding {
+            Binding::Server(None) => true,
+            Binding::MultiShard(shards, _) => shards.is_empty(),
+            _ => false,
+        };
+
+        if connect {
             match self.try_conn(id, route).await {
                 Ok(()) => (),
                 Err(Error::Pool(super::Error::Offline)) => {
@@ -86,63 +95,57 @@ impl Connection {
             server.reset = true;
         }
 
-        self.server = Some(server);
+        self.binding = Binding::Server(Some(server));
 
         Ok(())
     }
 
     /// Get server parameters.
     pub async fn parameters(&mut self, id: &BackendKeyData) -> Result<Vec<ParameterStatus>, Error> {
-        if self.is_admin {
-            Ok(ParameterStatus::fake())
-        } else {
-            self.connect(id, &Route::unknown()).await?;
-            let params = self
-                .server()?
-                .params()
-                .iter()
-                .map(|p| ParameterStatus::from(p.clone()))
-                .collect();
-            self.disconnect();
-            Ok(params)
+        match &self.binding {
+            Binding::Admin(_) => Ok(ParameterStatus::fake()),
+            Binding::Server(_) | Binding::MultiShard(_, _) => {
+                self.connect(id, &Route::unknown()).await?;
+                let params = self
+                    .server()?
+                    .params()
+                    .iter()
+                    .map(|p| ParameterStatus::from(p.clone()))
+                    .collect();
+                self.disconnect();
+                Ok(params)
+            }
         }
     }
 
     /// Disconnect from a server.
     pub fn disconnect(&mut self) {
-        self.server = None;
-        self.admin = None;
+        self.binding.disconnect();
     }
 
     /// Read a message from the server connection.
+    ///
+    /// Only await this future inside a `select!`. One of the conditions
+    /// suspends this loop indefinitely and expects another `select!` branch
+    /// to cancel it.
     pub async fn read(&mut self) -> Result<Message, Error> {
-        match (self.server.as_mut(), self.admin.as_mut()) {
-            (Some(server), None) => Ok(server.read().await?),
-            (None, Some(admin)) => Ok(admin.read().await?),
-            (None, None) => {
-                // Suspend the future until select! cancels it.
-                loop {
-                    sleep(Duration::MAX).await;
-                }
-            }
-            (Some(_), Some(_)) => Err(Error::NotConnected),
-        }
+        self.binding.read().await
     }
 
     /// Send messages to the server.
     pub async fn send(&mut self, messages: Vec<impl Protocol>) -> Result<(), Error> {
-        match (self.server.as_mut(), self.admin.as_mut()) {
-            (Some(server), None) => server.send(messages).await,
-            (None, Some(admin)) => Ok(admin.send(messages).await?),
-            (None, None) | (Some(_), Some(_)) => Err(Error::NotConnected),
-        }
+        self.binding.send(messages).await
     }
 
     /// Fetch the cluster from the global database store.
     pub fn reload(&mut self) -> Result<(), Error> {
-        if !self.is_admin {
-            let cluster = databases().cluster((self.user.as_str(), self.database.as_str()))?;
-            self.cluster = Some(cluster);
+        match self.binding {
+            Binding::Server(_) | Binding::MultiShard(_, _) => {
+                let cluster = databases().cluster((self.user.as_str(), self.database.as_str()))?;
+                self.cluster = Some(cluster);
+            }
+
+            _ => (),
         }
 
         Ok(())
@@ -150,18 +153,28 @@ impl Connection {
 
     /// We are done and can disconnect from this server.
     pub fn done(&self) -> bool {
-        if let Some(ref server) = self.server {
-            server.done()
-        } else if let Some(ref admin) = self.admin {
-            admin.done()
-        } else {
-            true
-        }
+        self.binding.done()
     }
 
-    /// Get connected server address.
-    pub fn addr(&mut self) -> Result<&Address, Error> {
-        Ok(self.server()?.addr())
+    /// Get connected servers addresses.
+    pub fn addr(&mut self) -> Result<Vec<&Address>, Error> {
+        Ok(match self.binding {
+            Binding::Server(Some(ref server)) => vec![server.addr()],
+            Binding::MultiShard(ref servers, _) => servers.iter().map(|s| s.addr()).collect(),
+            _ => return Err(Error::NotConnected),
+        })
+    }
+
+    /// Get a connected server, if any. If multi-shard, get the first one.
+    #[inline]
+    fn server(&mut self) -> Result<&mut Guard, Error> {
+        Ok(match self.binding {
+            Binding::Server(ref mut server) => server.as_mut().ok_or(Error::NotConnected)?,
+            Binding::MultiShard(ref mut servers, _) => {
+                servers.first_mut().ok_or(Error::NotConnected)?
+            }
+            _ => return Err(Error::NotConnected),
+        })
     }
 
     /// Get cluster if any.
@@ -173,17 +186,9 @@ impl Connection {
     /// This is an admin database connection.
     #[inline]
     pub fn admin(&self) -> bool {
-        self.admin.is_some()
-    }
-
-    /// Get server connection if we are connected, return an error
-    /// otherwise.
-    #[inline]
-    pub fn server(&mut self) -> Result<&mut Guard, Error> {
-        if let Some(ref mut server) = self.server {
-            Ok(server)
-        } else {
-            Err(Error::NotConnected)
+        match self.binding {
+            Binding::Admin(_) => true,
+            _ => false,
         }
     }
 

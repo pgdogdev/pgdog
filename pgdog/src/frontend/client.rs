@@ -173,7 +173,8 @@ impl Client {
                         };
                         comms.stats(stats.connected());
                         if let Ok(addr) = backend.addr() {
-                            debug!("client paired with {} [{:.4}ms]", addr, stats.wait_time.as_secs_f64() * 1000.0);
+                            let addrs = addr.into_iter().map(|a| a.to_string()).collect::<Vec<_>>().join(",");
+                            debug!("client paired with {} [{:.4}ms]", addrs, stats.wait_time.as_secs_f64() * 1000.0);
                         }
                     }
 

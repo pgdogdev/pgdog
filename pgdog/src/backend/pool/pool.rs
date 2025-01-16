@@ -11,6 +11,7 @@ use tracing::{error, info};
 
 use crate::backend::Server;
 use crate::net::messages::BackendKeyData;
+use crate::net::Parameter;
 
 use super::{Address, Ban, Config, Error, Guard, Healtcheck, Inner, Monitor, PoolConfig};
 
@@ -316,6 +317,25 @@ impl Pool {
     /// Pool address.
     pub fn addr(&self) -> &Address {
         &self.addr
+    }
+
+    /// Get startup parameters for new server connections.
+    pub(super) fn startup_parameters(&self) -> Vec<Parameter> {
+        let mut params = vec![Parameter {
+            name: "application_name".into(),
+            value: "pgDog".into(),
+        }];
+
+        let config = self.lock().config().clone();
+
+        if let Some(statement_timeout) = config.statement_timeout {
+            params.push(Parameter {
+                name: "statement_timeout".into(),
+                value: statement_timeout.to_string(),
+            });
+        }
+
+        params
     }
 
     /// Pool state.

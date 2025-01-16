@@ -338,6 +338,8 @@ pub struct User {
     pub server_user: Option<String>,
     /// Server password.
     pub server_password: Option<String>,
+    /// Statement timeout.
+    pub statement_timeout: Option<u64>,
 }
 
 /// Admin database settings.

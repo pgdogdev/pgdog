@@ -4,11 +4,11 @@ use std::ops::{Deref, DerefMut};
 
 use tokio::spawn;
 use tokio::time::timeout;
-use tracing::error;
+use tracing::{debug, error};
 
 use crate::backend::Server;
 
-use super::Pool;
+use super::{cleanup::Cleanup, Pool};
 
 /// Connection guard.
 pub struct Guard {
@@ -44,14 +44,16 @@ impl Guard {
 
     /// Rollback any unfinished transactions and check the connection
     /// back into the pool.
-    fn rollback(&mut self) {
+    fn cleanup(&mut self) {
         let server = self.server.take();
         let pool = self.pool.clone();
 
         if let Some(mut server) = server {
             let rollback = server.in_transaction();
-            let reset = self.reset;
+            let cleanup = Cleanup::new(self, &server);
+            let reset = cleanup.needed();
 
+            // No need to delay checkin unless we have to.
             if rollback || reset {
                 let rollback_timeout = pool.lock().config.rollback_timeout();
                 spawn(async move {
@@ -63,9 +65,14 @@ impl Guard {
                         }
                     }
 
-                    if reset {
-                        if let Err(_) = timeout(rollback_timeout, server.reset()).await {
+                    if cleanup.needed() {
+                        if let Err(_) =
+                            timeout(rollback_timeout, server.execute_batch(cleanup.queries())).await
+                        {
                             error!("reset timeout [{}]", server.addr());
+                        } else {
+                            debug!("{} [{}]", cleanup, server.addr());
+                            server.cleaned();
                         }
                     }
 
@@ -94,6 +101,6 @@ impl DerefMut for Guard {
 
 impl Drop for Guard {
     fn drop(&mut self) {
-        self.rollback();
+        self.cleanup();
     }
 }

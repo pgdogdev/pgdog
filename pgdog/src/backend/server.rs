@@ -37,11 +37,12 @@ pub struct Server {
     params: Parameters,
     stats: Stats,
     prepared_statements: HashSet<String>,
+    dirty: bool,
 }
 
 impl Server {
     /// Create new PostgreSQL server connection.
-    pub async fn connect(addr: &Address) -> Result<Self, Error> {
+    pub async fn connect(addr: &Address, params: Vec<Parameter>) -> Result<Self, Error> {
         debug!("=> {}", addr);
         let stream = TcpStream::connect(addr.to_string()).await?;
 
@@ -71,7 +72,7 @@ impl Server {
         }
 
         stream
-            .write_all(&Startup::new(&addr.user, &addr.database_name).to_bytes()?)
+            .write_all(&Startup::new(&addr.user, &addr.database_name, params).to_bytes()?)
             .await?;
         stream.flush().await?;
 
@@ -149,6 +150,7 @@ impl Server {
             params,
             stats: Stats::connect(id, addr),
             prepared_statements: HashSet::new(),
+            dirty: false,
         })
     }
 
@@ -229,6 +231,8 @@ impl Server {
             self.stats.prepared_statement()
         } else if message.code() == 'E' {
             self.stats.error();
+        } else if message.code() == 'S' {
+            self.dirty = true;
         }
 
         Ok(message)
@@ -323,16 +327,6 @@ impl Server {
         }
     }
 
-    /// Reset all server parameters and session state.
-    pub async fn reset(&mut self) {
-        if self.done() {
-            if let Err(_err) = self.execute_batch(&["RESET ALL", "DISCARD ALL"]).await {
-                self.stats.state(State::Error);
-            }
-            debug!("connection reset [{}]", self.addr());
-        }
-    }
-
     /// Prepare a statement on this connection if it doesn't exist already.
     pub async fn prepare(&mut self, parse: &Parse) -> Result<bool, Error> {
         if self.prepared_statements.get(&parse.name).is_some() {
@@ -391,6 +385,19 @@ impl Server {
     fn stream(&mut self) -> &mut Stream {
         self.stream.as_mut().unwrap()
     }
+
+    /// Server needs a cleanup because client changed a session variable
+    /// of parameter.
+    #[inline]
+    pub fn dirty(&self) -> bool {
+        self.dirty
+    }
+
+    /// Server has been cleaned.
+    #[inline]
+    pub(super) fn cleaned(&mut self) {
+        self.dirty = false;
+    }
 }
 
 impl Drop for Server {
@@ -428,6 +435,7 @@ mod test {
                 stats: Stats::connect(id, &addr),
                 prepared_statements: HashSet::new(),
                 addr,
+                dirty: false,
             }
         }
     }

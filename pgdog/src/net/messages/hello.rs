@@ -76,19 +76,19 @@ impl Startup {
     }
 
     /// Create new startup message from config.
-    pub fn new(user: &str, database: &str) -> Self {
+    pub fn new(user: &str, database: &str, mut params: Vec<Parameter>) -> Self {
+        params.extend(vec![
+            Parameter {
+                name: "user".into(),
+                value: user.into(),
+            },
+            Parameter {
+                name: "database".into(),
+                value: database.into(),
+            },
+        ]);
         Self::Startup {
-            params: vec![
-                Parameter {
-                    name: "user".into(),
-                    value: user.into(),
-                },
-                Parameter {
-                    name: "database".into(),
-                    value: database.into(),
-                },
-            ]
-            .into(),
+            params: params.into(),
         }
     }
 
