@@ -1,6 +1,8 @@
 //! Cleanup queries for servers altered by client behavior.
 use super::{super::Server, Guard};
 
+/// Queries used to clean up server connections after
+/// client modifications.
 pub struct Cleanup {
     queries: Vec<&'static str>,
 }

@@ -63,3 +63,10 @@ Default: **none** (defaults to `password`)
 
 !!! note
     Values specified in `pgdog.toml` take priority over this configuration.
+
+### `statement_timeout`
+
+Sets the `statement_timeout` on all server connections at connection creation. This allows to set a reasonable default for each user without modifying `postgresql.conf` or using `ALTER USER`.
+
+!!! note
+    Nothing is preventing the user from manually changing this setting at runtime, e.g., by running `SET statement_timeout TO 0`;
