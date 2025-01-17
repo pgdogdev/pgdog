@@ -175,22 +175,27 @@ pub fn from_config(config: &ConfigAndUsers) -> Databases {
     let general = &config.config.general;
 
     for user in &config.users.users {
-        if let Some(user_databases) = config_databases.get(&user.database) {
-            let primary = user_databases
-                .iter()
-                .find(|d| d.role == Role::Primary)
-                .map(|primary| PoolConfig {
-                    address: Address::new(primary, user),
-                    config: Config::new(general, primary, user),
-                });
-            let replicas = user_databases
-                .iter()
-                .filter(|d| d.role == Role::Replica)
-                .map(|replica| PoolConfig {
-                    address: Address::new(replica, user),
-                    config: Config::new(general, replica, user),
-                })
-                .collect::<Vec<_>>();
+        if let Some(shards) = config_databases.get(&user.database) {
+            let mut shard_configs = vec![];
+            for user_databases in shards {
+                let primary =
+                    user_databases
+                        .iter()
+                        .find(|d| d.role == Role::Primary)
+                        .map(|primary| PoolConfig {
+                            address: Address::new(primary, user),
+                            config: Config::new(general, primary, user),
+                        });
+                let replicas = user_databases
+                    .iter()
+                    .filter(|d| d.role == Role::Replica)
+                    .map(|replica| PoolConfig {
+                        address: Address::new(replica, user),
+                        config: Config::new(general, replica, user),
+                    })
+                    .collect::<Vec<_>>();
+                shard_configs.push((primary, replicas));
+            }
 
             databases.insert(
                 User {
@@ -199,7 +204,7 @@ pub fn from_config(config: &ConfigAndUsers) -> Databases {
                 },
                 Cluster::new(
                     &user.database,
-                    &[(primary, &replicas)],
+                    &shard_configs,
                     general.load_balancing_strategy,
                     &user.password,
                     user.pooler_mode.unwrap_or(general.pooler_mode),

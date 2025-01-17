@@ -48,6 +48,7 @@ pub extern "C" fn pgdog_route_query(input: Input) -> Output {
 
 fn route_internal(query: &str, config: Config) -> Result<Route, pg_query::Error> {
     let ast = parse(query)?;
+    let shards = config.shards;
 
     for database in config.databases() {
         debug!(
@@ -68,7 +69,11 @@ fn route_internal(query: &str, config: Config) -> Result<Route, pg_query::Error>
             match node.node {
                 Some(NodeEnum::SelectStmt(ref _stmt)) => {
                     trace!("{:#?}", _stmt);
-                    return Ok(Route::read_any());
+                    return Ok(if shards == 1 {
+                        Route::read(0)
+                    } else {
+                        Route::read_all()
+                    });
                 }
 
                 Some(_) => (),
@@ -78,7 +83,11 @@ fn route_internal(query: &str, config: Config) -> Result<Route, pg_query::Error>
         }
     }
 
-    Ok(Route::write_any())
+    Ok(if shards == 1 {
+        Route::write(0)
+    } else {
+        Route::write_all()
+    })
 }
 
 #[no_mangle]
