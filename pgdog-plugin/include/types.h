@@ -16,7 +16,7 @@ typedef struct Parameter {
 typedef struct Query {
     /* Length of the query */
     int len;
-  
+
     /* The query text. */
     const char *query;
 
@@ -51,6 +51,22 @@ typedef enum Shard {
     ALL = -2,
 } Shard;
 
+/*
+ * Column sort direction.
+*/
+typedef enum OrderByDirection {
+    ASCENDING,
+    DESCENDING,
+} OrderByDirection;
+
+/*
+ * Column sorting.
+*/
+typedef struct OrderBy {
+    int column;
+    OrderByDirection direction;
+} OrderBy;
+
 /**
  * Route the query should take.
  *
@@ -58,6 +74,8 @@ typedef enum Shard {
 typedef struct Route {
     Affinity affinity;
     int shard;
+    int num_order_by;
+    OrderBy *order_by;
 } Route;
 
 /*

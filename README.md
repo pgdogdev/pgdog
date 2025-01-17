@@ -52,6 +52,28 @@ Examples of plugins can be found in [examples](https://github.com/levkk/pgdog/tr
 
 &#128216; **[Plugins](https://pgdog.dev/features/plugins/)**
 
+### Sharding
+
+_This feature is a work in progress._
+
+pgDog is able to handle deployments with multiple shards by routing queries automatically to one or more shards. The `pgdog-routing` plugin parses
+queries, extracts tables and columns, and figures out which shard(s) the query should go to based on the parameters. Not all operations are supported, but
+a lot of common use cases are covered.
+
+&#128216; **[Sharding](https://pgdog.dev/features/sharding/)**
+
+#### Local testing
+
+The configuration files for a sharded database are provided in the repository. To make it work locally, setup the required databases like so:
+
+```postgresql
+CREATE DATABASE shard_0;
+CREATE DATABASE shard_1;
+
+GRANT CONNECT ON DATABASE shard_0 TO pgdog;
+GRANT CONNECT ON DATABASE shard_1 TO pgdog;
+```
+
 ### Configuration
 
 pgDog is highly configurable and many aspects of its operation can be tweaked at runtime, without having

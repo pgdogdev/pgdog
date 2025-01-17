@@ -9,10 +9,17 @@ use crate::net::messages::{
 /// Multi-shard state.
 #[derive(Default)]
 pub(super) struct MultiShard {
+    /// Number of shards we are connected to.
     shards: usize,
+    /// How many rows we received so far.
     rows: usize,
+    /// Number of ReadyForQuery messages.
     rfq: usize,
+    /// Number of CommandComplete messages.
     cc: usize,
+    /// Number of NoData messages.
+    nd: usize,
+    /// First RowDescription we received from any shard.
     rd: Option<RowDescription>,
 }
 
@@ -65,6 +72,12 @@ impl MultiShard {
                     }
                 } else {
                     self.rd = Some(rd);
+                    forward = Some(message);
+                }
+            }
+            'I' => {
+                self.nd += 1;
+                if self.nd == self.shards {
                     forward = Some(message);
                 }
             }

@@ -1,12 +1,12 @@
 //! Server connection requested by a frontend.
 
-use pgdog_plugin::Route;
 use tokio::time::sleep;
 
 use crate::{
     admin::backend::Backend,
     backend::databases::databases,
     config::PoolerMode,
+    frontend::router::Route,
     net::messages::{BackendKeyData, Message, ParameterStatus, Protocol},
 };
 

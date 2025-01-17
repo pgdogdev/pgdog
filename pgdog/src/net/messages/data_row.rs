@@ -1,8 +1,11 @@
 //! DataRow (B) message.
+
 use super::code;
 use super::prelude::*;
 
 use bytes::BytesMut;
+
+use std::str::from_utf8;
 
 /// DataRow message.
 #[derive(Debug, Clone)]
@@ -78,6 +81,52 @@ impl DataRow {
             dr.add(column);
         }
         dr
+    }
+
+    /// Get data for column at index.
+    pub fn column(&self, index: usize) -> Option<Bytes> {
+        self.columns.get(index).cloned()
+    }
+
+    /// Get integer at index with text/binary encoding.
+    pub fn get_int(&self, index: usize, text: bool) -> Option<i64> {
+        self.column(index)
+            .map(|mut column| {
+                if text {
+                    from_utf8(&column[..])
+                        .ok()
+                        .map(|s| s.parse::<i64>().ok())
+                        .flatten()
+                } else {
+                    match column.len() {
+                        2 => Some(column.get_i16() as i64),
+                        4 => Some(column.get_i32() as i64),
+                        8 => Some(column.get_i64()),
+                        _ => None,
+                    }
+                }
+            })
+            .flatten()
+    }
+
+    // Get integer at index with text/binary encoding.
+    pub fn get_float(&self, index: usize, text: bool) -> Option<f64> {
+        self.column(index)
+            .map(|mut column| {
+                if text {
+                    from_utf8(&column[..])
+                        .ok()
+                        .map(|s| s.parse::<f64>().ok())
+                        .flatten()
+                } else {
+                    match column.len() {
+                        4 => Some(column.get_f32() as f64),
+                        8 => Some(column.get_f64()),
+                        _ => None,
+                    }
+                }
+            })
+            .flatten()
     }
 }
 

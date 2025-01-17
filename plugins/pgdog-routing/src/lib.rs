@@ -1,6 +1,7 @@
 //! Parse queries using pg_query and route all SELECT queries
 //! to replicas. All other queries are routed to a primary.
 
+use once_cell::sync::Lazy;
 use pg_query::{parse, NodeEnum};
 use pgdog_plugin::bindings::{Config, Input, Output};
 use pgdog_plugin::Route;
@@ -10,6 +11,9 @@ use tracing::{debug, level_filters::LevelFilter};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 use std::io::IsTerminal;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+static SHARD_ROUND_ROBIN: Lazy<AtomicUsize> = Lazy::new(|| AtomicUsize::new(0));
 
 #[no_mangle]
 pub extern "C" fn pgdog_init() {
@@ -64,11 +68,20 @@ fn route_internal(query: &str, config: Config) -> Result<Route, pg_query::Error>
         );
     }
 
+    trace!("{:#?}", ast);
+
+    // For cases like SELECT NOW(), or SELECT 1, etc.
+    let tables = ast.tables();
+    if tables.is_empty() {
+        // Better than random for load distribution.
+        let shard_counter = SHARD_ROUND_ROBIN.fetch_add(1, Ordering::Relaxed);
+        return Ok(Route::read(shard_counter % shards as usize));
+    }
+
     if let Some(query) = ast.protobuf.stmts.first() {
         if let Some(ref node) = query.stmt {
             match node.node {
                 Some(NodeEnum::SelectStmt(ref _stmt)) => {
-                    trace!("{:#?}", _stmt);
                     return Ok(if shards == 1 {
                         Route::read(0)
                     } else {

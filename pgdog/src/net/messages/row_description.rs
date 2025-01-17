@@ -63,6 +63,26 @@ impl Field {
             format: 0, // We always use text format.
         }
     }
+
+    /// Encoded with text encoding.
+    pub fn is_text(&self) -> bool {
+        self.format == 0
+    }
+
+    /// Encoded with binary encoding.
+    pub fn is_binary(&self) -> bool {
+        !self.is_text()
+    }
+
+    /// This is an integer.
+    pub fn is_int(&self) -> bool {
+        matches!(self.type_oid, 20 | 23 | 21)
+    }
+
+    /// This is a float.
+    pub fn is_float(&self) -> bool {
+        matches!(self.type_oid, 700 | 701)
+    }
 }
 
 /// RowDescription message.
