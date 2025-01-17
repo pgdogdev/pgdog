@@ -30,7 +30,7 @@ impl Cluster {
     /// Create new cluster of shards.
     pub fn new(
         name: &str,
-        shards: &[(Option<PoolConfig>, &[PoolConfig])],
+        shards: &[(Option<PoolConfig>, Vec<PoolConfig>)],
         lb_strategy: LoadBalancingStrategy,
         password: &str,
         pooler_mode: PoolerMode,
@@ -38,7 +38,7 @@ impl Cluster {
         Self {
             shards: shards
                 .iter()
-                .map(|addr| Shard::new(addr.0.clone(), addr.1, lb_strategy))
+                .map(|addr| Shard::new(addr.0.clone(), &addr.1, lb_strategy))
                 .collect(),
             name: name.to_owned(),
             password: password.to_owned(),

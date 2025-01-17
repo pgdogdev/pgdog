@@ -1,5 +1,4 @@
 //! Binding between frontend client and a connection on the backend.
-use futures::stream::{FuturesUnordered, StreamExt};
 
 use super::*;
 
@@ -47,12 +46,34 @@ impl Binding {
             }
 
             Binding::Admin(backend) => Ok(backend.read().await?),
-            Self::MultiShard(shards, _state) => {
-                let mut futures = FuturesUnordered::from_iter(shards.iter_mut().map(|s| s.read()));
-                if let Some(result) = futures.next().await {
-                    result
+            Self::MultiShard(shards, state) => {
+                if shards.is_empty() {
+                    loop {
+                        sleep(Duration::MAX).await;
+                    }
                 } else {
-                    Err(Error::NotConnected)
+                    // Loop until we read a message from a shard
+                    // or there are no more messages to be read.
+                    loop {
+                        let pending = shards.iter_mut().filter(|s| !s.done());
+                        let mut read = false;
+
+                        for shard in pending {
+                            let message = shard.read().await?;
+                            read = true;
+                            if let Some(message) = state.forward(message)? {
+                                return Ok(message);
+                            }
+                        }
+
+                        if !read {
+                            break;
+                        }
+                    }
+
+                    loop {
+                        sleep(Duration::MAX).await;
+                    }
                 }
             }
         }

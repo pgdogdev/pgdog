@@ -81,21 +81,39 @@ impl Connection {
 
     /// Try to get a connection for the given route.
     async fn try_conn(&mut self, id: &BackendKeyData, route: &Route) -> Result<(), Error> {
-        let shard = route.shard().unwrap_or(0);
+        if let Some(shard) = route.shard() {
+            let mut server = if route.is_read() {
+                self.cluster()?.replica(shard, id).await?
+            } else {
+                self.cluster()?.primary(shard, id).await?
+            };
 
-        let mut server = if route.is_read() {
-            self.cluster()?.replica(shard, id).await?
-        } else {
-            self.cluster()?.primary(shard, id).await?
-        };
+            // Cleanup session mode connections when
+            // they are done.
+            if self.session_mode() {
+                server.reset = true;
+            }
 
-        // Cleanup session mode connections when
-        // they are done.
-        if self.session_mode() {
-            server.reset = true;
+            self.binding = Binding::Server(Some(server));
+        } else if route.is_all_shards() {
+            let mut shards = vec![];
+            for shard in self.cluster()?.shards() {
+                let mut server = if route.is_read() {
+                    shard.replica(id).await?
+                } else {
+                    shard.primary(id).await?
+                };
+
+                if self.session_mode() {
+                    server.reset = true;
+                }
+
+                shards.push(server);
+            }
+            let num_shards = shards.len();
+
+            self.binding = Binding::MultiShard(shards, MultiShard::new(num_shards));
         }
-
-        self.binding = Binding::Server(Some(server));
 
         Ok(())
     }
@@ -105,7 +123,7 @@ impl Connection {
         match &self.binding {
             Binding::Admin(_) => Ok(ParameterStatus::fake()),
             Binding::Server(_) | Binding::MultiShard(_, _) => {
-                self.connect(id, &Route::unknown()).await?;
+                self.connect(id, &Route::write(0)).await?; // Get params from primary.
                 let params = self
                     .server()?
                     .params()

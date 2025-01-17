@@ -41,6 +41,22 @@ impl Route {
         }
     }
 
+    /// Read from this shard.
+    pub fn read(shard: usize) -> Route {
+        Route {
+            shard: shard as i32,
+            affinity: Affinity_READ,
+        }
+    }
+
+    /// Write to this shard.
+    pub fn write(shard: usize) -> Route {
+        Route {
+            shard: shard as i32,
+            affinity: Affinity_WRITE,
+        }
+    }
+
     /// Read from any shard.
     pub fn read_any() -> Self {
         Self {
@@ -49,11 +65,27 @@ impl Route {
         }
     }
 
+    /// Read from all shards.
+    pub fn read_all() -> Self {
+        Self {
+            affinity: Affinity_READ,
+            shard: Shard_ALL,
+        }
+    }
+
     /// Read from any shard.
     pub fn write_any() -> Self {
         Self {
             affinity: Affinity_WRITE,
             shard: Shard_ANY,
+        }
+    }
+
+    /// Write to all shards.
+    pub fn write_all() -> Self {
+        Self {
+            affinity: Affinity_WRITE,
+            shard: Shard_ALL,
         }
     }
 
@@ -86,12 +118,13 @@ impl Route {
         }
     }
 
+    /// Can send query to any shard.
     pub fn is_any_shard(&self) -> bool {
         self.shard == Shard_ANY
     }
 
-    /// Query should go across all shards.
-    pub fn is_cross_shard(&self) -> bool {
+    /// Send queries to all shards.
+    pub fn is_all_shards(&self) -> bool {
         self.shard == Shard_ALL
     }
 

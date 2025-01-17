@@ -6,9 +6,35 @@ use super::code;
 use super::prelude::*;
 
 /// CommandComplete (B) message.
+#[derive(Clone, Debug)]
 pub struct CommandComplete {
     /// Name of the command that was executed.
     pub command: String,
+}
+
+impl CommandComplete {
+    /// Number of rows sent/received.
+    pub fn rows(&self) -> Result<Option<usize>, Error> {
+        Ok(self
+            .command
+            .split(" ")
+            .last()
+            .ok_or(Error::UnexpectedPayload)?
+            .parse()
+            .ok())
+    }
+
+    /// Rewrite the message with new number of rows.
+    pub fn rewrite(&self, rows: usize) -> Result<Self, Error> {
+        let mut parts = self.command.split(" ").collect::<Vec<_>>();
+        parts.pop();
+        let rows = rows.to_string();
+        parts.push(rows.as_str());
+
+        Ok(Self {
+            command: parts.join(" "),
+        })
+    }
 }
 
 impl ToBytes for CommandComplete {

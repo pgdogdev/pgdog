@@ -104,13 +104,19 @@ pub struct Config {
 
 impl Config {
     /// Organize all databases by name for quicker retrival.
-    pub fn databases(&self) -> HashMap<String, Vec<Database>> {
+    pub fn databases(&self) -> HashMap<String, Vec<Vec<Database>>> {
         let mut databases = HashMap::new();
         for database in &self.databases {
             let entry = databases
                 .entry(database.name.clone())
                 .or_insert_with(Vec::new);
-            entry.push(database.clone());
+            while entry.len() <= database.shard {
+                entry.push(vec![]);
+            }
+            entry
+                .get_mut(database.shard)
+                .unwrap()
+                .push(database.clone());
         }
         databases
     }
@@ -262,6 +268,9 @@ pub struct Database {
     /// Database port, e.g. 5432.
     #[serde(default = "Database::port")]
     pub port: u16,
+    /// Shard.
+    #[serde(default)]
+    pub shard: usize,
     /// PostgreSQL database name, e.g. "postgres".
     pub database_name: Option<String>,
     /// Use this user to connect to the database, overriding the userlist.

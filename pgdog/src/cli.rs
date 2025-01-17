@@ -7,9 +7,9 @@ use clap::Parser;
 #[derive(Parser, Debug)]
 pub struct Cli {
     /// Path to the configuration file. Default: "pgdog.toml"
-    #[arg(default_value = "pgdog.toml")]
+    #[arg(short, long, default_value = "pgdog.toml")]
     pub config: PathBuf,
     /// Path to the users.toml file. Default: "users.toml"
-    #[arg(default_value = "users.toml")]
+    #[arg(short, long, default_value = "users.toml")]
     pub users: PathBuf,
 }

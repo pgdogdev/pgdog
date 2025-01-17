@@ -6,7 +6,7 @@ use super::code;
 use super::prelude::*;
 
 /// Column field description.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Field {
     /// Name of the field.
     pub name: String,
@@ -66,17 +66,33 @@ impl Field {
 }
 
 /// RowDescription message.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct RowDescription {
     /// Fields.
     fields: Vec<Field>,
 }
 
 impl RowDescription {
+    /// Create new row description from fields.
     pub fn new(fields: &[Field]) -> Self {
         Self {
             fields: fields.to_vec(),
         }
+    }
+
+    /// Check if the two row descriptions are materially the same.
+    pub fn equivalent(&self, other: &RowDescription) -> bool {
+        for (a, b) in self.fields.iter().zip(other.fields.iter()) {
+            if a.name != b.name {
+                return false;
+            }
+
+            if a.type_oid != b.type_oid {
+                return false;
+            }
+        }
+
+        true
     }
 }
 
