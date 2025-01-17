@@ -28,21 +28,21 @@ impl Cleanup {
     /// Cleanup prepared statements.
     pub fn prepared_statements() -> Self {
         Self {
-            queries: vec!["DISCARD ALL".into()],
+            queries: vec!["DISCARD ALL"],
         }
     }
 
     /// Cleanup parameters.
     pub fn parameters() -> Self {
         Self {
-            queries: vec!["RESET ALL".into()],
+            queries: vec!["RESET ALL"],
         }
     }
 
     /// Cleanup everything.
     pub fn all() -> Self {
         Self {
-            queries: vec!["RESET ALL".into(), "DISCARD ALL".into()],
+            queries: vec!["RESET ALL", "DISCARD ALL"],
         }
     }
 

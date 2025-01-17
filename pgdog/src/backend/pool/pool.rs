@@ -326,7 +326,7 @@ impl Pool {
             value: "pgDog".into(),
         }];
 
-        let config = self.lock().config().clone();
+        let config = *self.lock().config();
 
         if let Some(statement_timeout) = config.statement_timeout {
             params.push(Parameter {
