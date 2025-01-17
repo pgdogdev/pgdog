@@ -33,9 +33,10 @@ impl MultiShard {
         match message.code() {
             'Z' => {
                 self.rfq += 1;
-                forward = match self.rfq == self.shards {
-                    true => Some(message),
-                    false => None,
+                forward = if self.rfq == self.shards {
+                    Some(message)
+                } else {
+                    None
                 };
             }
             'C' => {
