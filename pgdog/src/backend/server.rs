@@ -35,7 +35,7 @@ pub struct Server {
     stream: Option<Stream>,
     id: BackendKeyData,
     params: Parameters,
-    pub(super) stats: Stats,
+    stats: Stats,
     prepared_statements: HashSet<String>,
     dirty: bool,
 }
