@@ -55,6 +55,11 @@ impl Binding {
                     // Loop until we read a message from a shard
                     // or there are no more messages to be read.
                     loop {
+                        // Return all sorted data rows if any.
+                        if let Some(message) = state.message() {
+                            return Ok(message);
+                        }
+
                         let pending = shards.iter_mut().filter(|s| !s.done());
                         let mut read = false;
 

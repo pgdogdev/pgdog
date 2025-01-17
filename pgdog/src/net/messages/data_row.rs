@@ -136,8 +136,9 @@ impl FromBytes for DataRow {
         let _len = bytes.get_i32();
         let columns = (0..bytes.get_i16())
             .map(|_| {
-                let len = bytes.get_i32() as usize;
+                let len = bytes.get_i32() as isize; // NULL = -1
                 let mut column = BytesMut::new();
+
                 for _ in 0..len {
                     column.put_u8(bytes.get_u8());
                 }

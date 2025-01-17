@@ -12,6 +12,24 @@ pub enum OrderBy {
     Desc(usize),
 }
 
+impl OrderBy {
+    /// ORDER BY x ASC
+    pub fn asc(&self) -> bool {
+        match self {
+            OrderBy::Asc(_) => true,
+            _ => false,
+        }
+    }
+
+    /// Column index.
+    pub fn index(&self) -> usize {
+        match self {
+            OrderBy::Asc(column) => *column,
+            OrderBy::Desc(column) => *column,
+        }
+    }
+}
+
 /// Query route.
 #[derive(Clone, Debug)]
 pub struct Route {
@@ -19,6 +37,12 @@ pub struct Route {
     all_shards: bool,
     affinity: Affinity,
     order_by: Vec<OrderBy>,
+}
+
+impl Default for Route {
+    fn default() -> Self {
+        Route::unknown()
+    }
 }
 
 impl Route {

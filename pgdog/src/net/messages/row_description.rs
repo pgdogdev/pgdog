@@ -100,6 +100,11 @@ impl RowDescription {
         }
     }
 
+    /// Get field info.
+    pub fn field(&self, index: usize) -> Option<&Field> {
+        self.fields.get(index)
+    }
+
     /// Check if the two row descriptions are materially the same.
     pub fn equivalent(&self, other: &RowDescription) -> bool {
         for (a, b) in self.fields.iter().zip(other.fields.iter()) {
