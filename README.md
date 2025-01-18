@@ -74,6 +74,12 @@ GRANT CONNECT ON DATABASE shard_0 TO pgdog;
 GRANT CONNECT ON DATABASE shard_1 TO pgdog;
 ```
 
+Once the databases are created, you can launch pgDog with the sharded configuration:
+
+```bash
+cargo run -- --config pgdog-sharded.toml --users users-sharded.toml
+```
+
 ### Configuration
 
 pgDog is highly configurable and many aspects of its operation can be tweaked at runtime, without having
