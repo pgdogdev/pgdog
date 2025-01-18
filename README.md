@@ -1,4 +1,4 @@
-# pgDog - PostgreSQL Load Balancer
+# pgDog - Modern PostgreSQL pooler
 
 [![Documentation](https://img.shields.io/badge/documentation-blue?style=flat)](https://pgdog.dev)
 [![CI](https://github.com/levkk/pgdog/actions/workflows/ci.yml/badge.svg)](https://github.com/levkk/pgdog/actions/workflows/ci.yml)
@@ -15,7 +15,7 @@ classic features like basic sharding, load balancing and failover. In addition, 
 
 | Feature | Status | Summary |
 |---------|--------|---------|
-| [Load balancer](https://pgdog.dev/features/load-balancer) | Operational | Spread query traffic across multiple databases automatically. |
+| [Load balancer](https://pgdog.dev/features/load-balancer) | Operational | Spread `SELECT` queries across multiple replicas automatically, using algorithms like round robin. |
 | [Transaction pooling](https://pgdog.dev/features/transaction-mode) | Operational | Identical to pgbouncer, allows for thousands of clients to reuse a handful of server connections. |
 | [Session pooling](https://pgdog.dev/features/session-mode) | Operational | Exclusive use of server connections for clients needing session-level features. |
 | [Plugins](https://pgdog.dev/features/plugins/) | Operational | Control how pgDog routes queries and what results it sends to clients, through loading shared libraries at runtime. |
