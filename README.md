@@ -37,13 +37,13 @@ performance benchmarks.
 
 ### Configuration
 
-pgDog has two configuration files:multi
+pgDog has two configuration files:
 
 * `pgdog.toml` which contains general settings and PostgreSQL servers information
-* `users.toml` which contains users and passwords
+* `users.toml` for users and passwords
 
 Most options have reasonable defaults, so a basic configuration for a single user
-and database deployment is easy to setup:
+and database deployment is pretty short:
 
 **`pgdog.toml`**
 
@@ -52,7 +52,7 @@ and database deployment is easy to setup:
 host = "0.0.0.0"
 port = 6432
 
-[[servers]]
+[[databases]]
 name = "pgdog"
 host = "127.0.0.1"
 ```
@@ -61,17 +61,17 @@ host = "127.0.0.1"
 
 ```toml
 [[users]]
-database = "pgdog"
 name = "pgdog"
 password = "pgdog"
+database = "pgdog"
 ```
 
 This configuration assumes the following:
 
-* You have a PostgreSQL server running on `localhost`
+* You have a PostgreSQL server running on the same machine
 * It has a database called `pgdog`
 * You have created a user called `pgdog` with the password `pgdog`, and it can connect
-  to the server.
+  to the server
 
 If you'd like to try this out, you can set it up like so:
 
@@ -85,16 +85,14 @@ CREATE USER pgdog PASSWORD 'pgdog' LOGIN;
 Running pgDog can be done with Cargo:
 
 ```bash
-cargo run --release --bin pgdog
+cargo run --release
 ```
 
-Connecting to the pooler can be done with psql or any other PostgreSQL client:
+You can connect to pgDog with psql or any other PostgreSQL client:
 
 ```bash
 psql postgres://pgdog:pgdog@127.0.0.1:6432/pgdog
 ```
-
-Note that you're connecting to port `6432` where pgDog is running, not directly to Postgres.
 
 ## Features
 
