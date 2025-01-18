@@ -1,25 +1,32 @@
 # Sharding overview
 
 !!! note
-    This feature is under active development. It's not ready for testing or production use.
+    This feature is under active development. It's not ready production use.
 
-Sharding PostgreSQL databases involves splitting the database between multiple machines and routing read
-and write queries to the correct machines using a sharding function. Like its [predecessor](https://github.com/levkk/pgcat), pgDog plans to support sharded PostgreSQL deployments and will route queries to the correct shards automatically using a routing [plugin](../plugins/index.md).
+Sharding PostgreSQL databases involves splitting the database between multiple machines and routing queries to the right machines using a sharding function. Like its [predecessor](https://github.com/levkk/pgcat), pgDog supports sharded PostgreSQL deployments and can route queries to the correct shards automatically, implemented as a [plugin](../plugins/index.md).
 
 <center style="margin-top: 2rem;">
     <img src="/images/sharding.png" width="70%" alt="Sharding" />
-    <p><i>3 primaries in a sharded deployment</i></p>
+    <p><i>Sharded database routing.</i></p>
 </center>
 
-## Routing queries
+## Architecture
 
-There are two ways for database clients to retrieve data from sharded databases: by querying an individual shard, or by querying all shards and aggregating the results. The former is commonly used in OLTP (transactional) systems, e.g. real time applications, and the latter is more commonly used in OLAP (analytical) databases, e.g. batch reports generation.
+There are two ways for database clients to query sharded databases: by connecting to specific shard, or by querying all shards and aggregating the results. The former is commonly used in OLTP (transactional) systems, e.g. real time applications, and the latter is more commonly used in OLAP (analytical) databases, e.g. batch reports generation.
 
-pgDog plans to have good support for direct-to-shard queries first, and add limited support for aggregates later on. Aggregation can get pretty complex and require query rewriting[^1].
+pgDog has good support for single shard queries, and adding support for aggregates over time[^1].
 
-[^1]: Examples of query rewriting can be found in the PostgreSQL's [postgres_fdw](https://www.postgresql.org/docs/current/postgres-fdw.html) extension.
+[^1]: Aggregation can get pretty complex and sometimes requires query rewriting. Examples can be found in the PostgreSQL's [postgres_fdw](https://www.postgresql.org/docs/current/postgres-fdw.html) extension.
 
-### Parsing SQL
+### SQL parser
 
-[`pgdog-routing`](https://github.com/levkk/pgdog/tree/main/plugins/pgdog-routing) parses queries using [`pg_query`](https://docs.rs/pg_query/latest/pg_query/), which allows it to extract semantic meaning directly
-from query text, without the user having to provide sharding hints (like sharding hints in query comments, for example). Since the plugin can understand SQL, it can automatically extract column values from queries (and results) and re-route them accordingly.
+The [`pgdog-routing`](https://github.com/levkk/pgdog/tree/main/plugins/pgdog-routing) plugin parses queries using [`pg_query`](https://docs.rs/pg_query/latest/pg_query/) and can [calculate](automatic-routing.md) the shard based on a column value specified in the query. This allows applications to shard their databases without code modifications. For queries where this isn't possible, clients can specify the desired shard (or sharding key) in a [query comment](manual-routing.md).
+
+### Multi-shard queries
+
+When the sharding key isn't available or impossible to extract from a query, pgDog can route the query to all shards and return results combined in a [single response](multi-shard.md). Clients using this feature are not aware they are communicating with a sharded database and can treat pgDog connections like normal.
+
+## Learn more
+
+- [Multi-shard queries](multi-shard.md)
+- [Manual routing](manual-routing.md)

@@ -121,7 +121,10 @@ impl Client {
     async fn spawn_internal(&mut self) {
         match self.run().await {
             Ok(_) => info!("client disconnected [{}]", self.addr),
-            Err(err) => error!("client disconnected with error [{}]: {}", self.addr, err),
+            Err(err) => {
+                let _ = self.stream.error(ErrorResponse::from_err(&err)).await;
+                error!("client disconnected with error [{}]: {}", self.addr, err)
+            }
         }
     }
 

@@ -2,16 +2,9 @@
 //! to replicas. All other queries are routed to a primary.
 
 use once_cell::sync::Lazy;
-use pg_query::{
-    parse,
-    protobuf::{a_const::Val, SelectStmt},
-    NodeEnum,
-};
-use pgdog_plugin::{
-    bindings::{Config, Input, Output},
-    OrderByDirection_ASCENDING, OrderByDirection_DESCENDING,
-};
-use pgdog_plugin::{OrderBy, Route};
+use pg_query::{parse, NodeEnum};
+use pgdog_plugin::bindings::{Config, Input, Output};
+use pgdog_plugin::Route;
 
 use tracing::trace;
 use tracing::{debug, level_filters::LevelFilter};
@@ -21,6 +14,9 @@ use std::io::IsTerminal;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 static SHARD_ROUND_ROBIN: Lazy<AtomicUsize> = Lazy::new(|| AtomicUsize::new(0));
+
+pub mod comment;
+pub mod order_by;
 
 #[no_mangle]
 pub extern "C" fn pgdog_init() {
@@ -74,25 +70,12 @@ fn route_internal(query: &str, config: Config) -> Result<Route, pg_query::Error>
         }
     }
 
-    for database in databases {
-        debug!(
-            "{}:{} [shard: {}][role: {}]",
-            database.host(),
-            database.port(),
-            database.shard(),
-            if database.replica() {
-                "replica"
-            } else {
-                "primary"
-            }
-        );
-    }
-
     trace!("{:#?}", ast);
+    let shard = comment::shard(query)?;
 
     // For cases like SELECT NOW(), or SELECT 1, etc.
     let tables = ast.tables();
-    if tables.is_empty() {
+    if tables.is_empty() && shard.is_none() {
         // Better than random for load distribution.
         let shard_counter = SHARD_ROUND_ROBIN.fetch_add(1, Ordering::Relaxed);
         return Ok(Route::read(shard_counter % shards as usize));
@@ -102,9 +85,9 @@ fn route_internal(query: &str, config: Config) -> Result<Route, pg_query::Error>
         if let Some(ref node) = query.stmt {
             match node.node {
                 Some(NodeEnum::SelectStmt(ref stmt)) => {
-                    let order_by = order_by(stmt)?;
-                    let mut route = if shards == 1 {
-                        Route::read(0)
+                    let order_by = order_by::extract(stmt)?;
+                    let mut route = if let Some(shard) = shard {
+                        Route::read(shard)
                     } else {
                         Route::read_all()
                     };
@@ -123,64 +106,11 @@ fn route_internal(query: &str, config: Config) -> Result<Route, pg_query::Error>
         }
     }
 
-    Ok(if shards == 1 {
-        Route::write(0)
+    Ok(if let Some(shard) = shard {
+        Route::write(shard)
     } else {
         Route::write_all()
     })
-}
-
-fn order_by(stmt: &SelectStmt) -> Result<Vec<OrderBy>, pg_query::Error> {
-    let mut order_by = vec![];
-    for clause in &stmt.sort_clause {
-        if let Some(ref node) = clause.node {
-            if let NodeEnum::SortBy(sort_by) = node {
-                let asc = match sort_by.sortby_dir {
-                    0..=2 => true,
-                    _ => false,
-                };
-                if let Some(ref node) = sort_by.node {
-                    if let Some(ref node) = node.node {
-                        match node {
-                            NodeEnum::AConst(aconst) => {
-                                if let Some(ref val) = aconst.val {
-                                    if let Val::Ival(integer) = val {
-                                        order_by.push(OrderBy::column_index(
-                                            integer.ival as usize,
-                                            if asc {
-                                                OrderByDirection_ASCENDING
-                                            } else {
-                                                OrderByDirection_DESCENDING
-                                            },
-                                        ));
-                                    }
-                                }
-                            }
-
-                            NodeEnum::ColumnRef(column_ref) => {
-                                if let Some(field) = column_ref.fields.first() {
-                                    if let Some(ref node) = field.node {
-                                        if let NodeEnum::String(string) = node {
-                                            order_by.push(OrderBy::column_name(
-                                                &string.sval,
-                                                if asc {
-                                                    OrderByDirection_ASCENDING
-                                                } else {
-                                                    OrderByDirection_DESCENDING
-                                                },
-                                            ));
-                                        }
-                                    }
-                                }
-                            }
-                            _ => (),
-                        }
-                    }
-                }
-            }
-        }
-    }
-    Ok(order_by)
 }
 
 #[no_mangle]

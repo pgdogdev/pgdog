@@ -56,6 +56,16 @@ impl ErrorResponse {
             detail: None,
         }
     }
+
+    pub fn from_err(err: &impl std::error::Error) -> Self {
+        let message = err.to_string();
+        Self {
+            severity: "FATAL".into(),
+            code: "58000".into(),
+            message,
+            detail: None,
+        }
+    }
 }
 
 impl Display for ErrorResponse {

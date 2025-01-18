@@ -81,9 +81,13 @@ impl Router {
                         unsafe { output.drop() }
 
                         debug!(
-                            "routing {} to shard {} [{}, {:.3}ms]",
+                            "routing {} to {} [{}, {:.3}ms]",
                             if route.is_read() { "read" } else { "write" },
-                            route.shard().unwrap_or(0),
+                            if let Some(shard) = self.route.shard() {
+                                format!("shard {}", shard)
+                            } else {
+                                "all shards".to_string()
+                            },
                             plugin.name(),
                             now.elapsed().as_secs_f64() * 1000.0,
                         );
