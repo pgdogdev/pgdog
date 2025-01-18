@@ -20,9 +20,13 @@ use super::{Error, Guard, Pool, PoolConfig};
 /// Replicas pools.
 #[derive(Clone)]
 pub struct Replicas {
+    /// Connection pools.
     pub(super) pools: Vec<Pool>,
+    /// Checkout timeout.
     pub(super) checkout_timeout: Duration,
+    /// Round robin atomic counter.
     pub(super) round_robin: Arc<AtomicUsize>,
+    /// Chosen load balancing strategy.
     pub(super) lb_strategy: LoadBalancingStrategy,
 }
 

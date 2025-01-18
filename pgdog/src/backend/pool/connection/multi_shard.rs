@@ -79,7 +79,6 @@ impl MultiShard {
 
                     if has_rows {
                         self.command_complete = Some(cc.rewrite(self.rows)?.message()?);
-                        // forward = Some(cc.rewrite(self.rows)?.message()?);
                     } else {
                         forward = Some(cc.message()?);
                     }
