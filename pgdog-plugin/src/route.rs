@@ -1,6 +1,11 @@
 //! Query routing helpers.
 #![allow(non_upper_case_globals)]
 
+use std::{
+    alloc::{alloc, dealloc, Layout},
+    ptr::{copy, null_mut},
+};
+
 use crate::bindings::*;
 
 impl RoutingOutput {
@@ -38,6 +43,8 @@ impl Route {
         Route {
             shard: Shard_ANY,
             affinity: Affinity_UNKNOWN,
+            num_order_by: 0,
+            order_by: null_mut(),
         }
     }
 
@@ -46,6 +53,8 @@ impl Route {
         Route {
             shard: shard as i32,
             affinity: Affinity_READ,
+            num_order_by: 0,
+            order_by: null_mut(),
         }
     }
 
@@ -54,6 +63,8 @@ impl Route {
         Route {
             shard: shard as i32,
             affinity: Affinity_WRITE,
+            num_order_by: 0,
+            order_by: null_mut(),
         }
     }
 
@@ -62,6 +73,8 @@ impl Route {
         Self {
             affinity: Affinity_READ,
             shard: Shard_ANY,
+            num_order_by: 0,
+            order_by: null_mut(),
         }
     }
 
@@ -70,6 +83,8 @@ impl Route {
         Self {
             affinity: Affinity_READ,
             shard: Shard_ALL,
+            num_order_by: 0,
+            order_by: null_mut(),
         }
     }
 
@@ -78,6 +93,8 @@ impl Route {
         Self {
             affinity: Affinity_WRITE,
             shard: Shard_ANY,
+            num_order_by: 0,
+            order_by: null_mut(),
         }
     }
 
@@ -86,6 +103,8 @@ impl Route {
         Self {
             affinity: Affinity_WRITE,
             shard: Shard_ALL,
+            num_order_by: 0,
+            order_by: null_mut(),
         }
     }
 
@@ -131,5 +150,24 @@ impl Route {
     /// The plugin has no idea where to route this query.
     pub fn is_unknown(&self) -> bool {
         self.shard == Shard_ANY && self.affinity == Affinity_UNKNOWN
+    }
+
+    /// Add order by columns to the route.
+    pub fn order_by(&mut self, order_by: &[OrderBy]) {
+        let num_order_by = order_by.len();
+        let layout = Layout::array::<OrderBy>(num_order_by).unwrap();
+        let ptr = unsafe { alloc(layout) as *mut OrderBy };
+        unsafe { copy(order_by.as_ptr(), ptr, num_order_by) };
+        self.num_order_by = num_order_by as i32;
+        self.order_by = ptr;
+    }
+
+    /// Deallocate memory.
+    pub(crate) unsafe fn drop(&self) {
+        if self.num_order_by > 0 {
+            (0..self.num_order_by).for_each(|index| (*self.order_by.offset(index as isize)).drop());
+            let layout = Layout::array::<OrderBy>(self.num_order_by as usize).unwrap();
+            dealloc(self.order_by as *mut u8, layout);
+        }
     }
 }

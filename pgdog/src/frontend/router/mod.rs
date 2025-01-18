@@ -2,16 +2,18 @@
 
 use crate::{backend::Cluster, plugin::plugins};
 
-use pgdog_plugin::{Input, Route, RoutingInput};
+use pgdog_plugin::{Input, RoutingInput};
 use tokio::time::Instant;
 use tracing::debug;
 
 pub mod error;
 pub mod request;
+pub mod route;
 
 use request::Request;
 
 pub use error::Error;
+pub use route::Route;
 
 use super::Buffer;
 
@@ -75,7 +77,8 @@ impl Router {
                             continue;
                         }
 
-                        self.route = route;
+                        self.route = route.into();
+                        unsafe { output.drop() }
 
                         debug!(
                             "routing {} to shard {} [{}, {:.3}ms]",

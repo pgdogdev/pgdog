@@ -63,6 +63,26 @@ impl Field {
             format: 0, // We always use text format.
         }
     }
+
+    /// Encoded with text encoding.
+    pub fn is_text(&self) -> bool {
+        self.format == 0
+    }
+
+    /// Encoded with binary encoding.
+    pub fn is_binary(&self) -> bool {
+        !self.is_text()
+    }
+
+    /// This is an integer.
+    pub fn is_int(&self) -> bool {
+        matches!(self.type_oid, 20 | 23 | 21)
+    }
+
+    /// This is a float.
+    pub fn is_float(&self) -> bool {
+        matches!(self.type_oid, 700 | 701)
+    }
 }
 
 /// RowDescription message.
@@ -78,6 +98,22 @@ impl RowDescription {
         Self {
             fields: fields.to_vec(),
         }
+    }
+
+    /// Get field info.
+    pub fn field(&self, index: usize) -> Option<&Field> {
+        self.fields.get(index)
+    }
+
+    /// Get field index name, O(n).
+    pub fn field_index(&self, name: &str) -> Option<usize> {
+        for (index, field) in self.fields.iter().enumerate() {
+            if field.name == name {
+                return Some(index);
+            }
+        }
+
+        None
     }
 
     /// Check if the two row descriptions are materially the same.

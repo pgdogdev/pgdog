@@ -13,7 +13,6 @@ use arc_swap::ArcSwap;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use tracing::info;
-#[cfg(not(debug_assertions))]
 use tracing::warn;
 
 use crate::util::random_string;
@@ -54,9 +53,13 @@ impl ConfigAndUsers {
                 Ok(config) => config,
                 Err(err) => return Err(Error::config(&config, err)),
             };
-            info!("loaded pgdog.toml");
+            info!("loaded \"{}\"", config_path.display());
             config
         } else {
+            warn!(
+                "\"{}\" doesn't exist or not a valid, loading defaults instead",
+                config_path.display()
+            );
             Config::default()
         };
 
@@ -69,9 +72,13 @@ impl ConfigAndUsers {
 
         let users: Users = if let Ok(users) = read_to_string(users_path) {
             let users = toml::from_str(&users)?;
-            info!("loaded users.toml");
+            info!("loaded \"{}\"", users_path.display());
             users
         } else {
+            warn!(
+                "\"{}\" doesn't exist or is invalid, loading defaults instead",
+                users_path.display()
+            );
             Users::default()
         };
 

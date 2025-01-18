@@ -1,12 +1,12 @@
 //! Server connection requested by a frontend.
 
-use pgdog_plugin::Route;
 use tokio::time::sleep;
 
 use crate::{
     admin::backend::Backend,
     backend::databases::databases,
     config::PoolerMode,
+    frontend::router::Route,
     net::messages::{BackendKeyData, Message, ParameterStatus, Protocol},
 };
 
@@ -19,6 +19,8 @@ use std::time::Duration;
 
 mod binding;
 mod multi_shard;
+mod sort_buffer;
+
 use binding::Binding;
 use multi_shard::MultiShard;
 
@@ -112,7 +114,7 @@ impl Connection {
             }
             let num_shards = shards.len();
 
-            self.binding = Binding::MultiShard(shards, MultiShard::new(num_shards));
+            self.binding = Binding::MultiShard(shards, MultiShard::new(num_shards, route));
         }
 
         Ok(())

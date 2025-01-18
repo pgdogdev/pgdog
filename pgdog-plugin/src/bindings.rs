@@ -45,19 +45,43 @@ pub const Shard_ANY: Shard = -1;
 pub const Shard_ALL: Shard = -2;
 #[doc = " In case the plugin doesn't know which shard to route the\n the query, it can decide to route it to any shard or to all\n shards. All shard queries return a result assembled by pgDog."]
 pub type Shard = ::std::os::raw::c_int;
+pub const OrderByDirection_ASCENDING: OrderByDirection = 0;
+pub const OrderByDirection_DESCENDING: OrderByDirection = 1;
+pub type OrderByDirection = ::std::os::raw::c_uint;
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct OrderBy {
+    pub column_name: *mut ::std::os::raw::c_char,
+    pub column_index: ::std::os::raw::c_int,
+    pub direction: OrderByDirection,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of OrderBy"][::std::mem::size_of::<OrderBy>() - 16usize];
+    ["Alignment of OrderBy"][::std::mem::align_of::<OrderBy>() - 8usize];
+    ["Offset of field: OrderBy::column_name"]
+        [::std::mem::offset_of!(OrderBy, column_name) - 0usize];
+    ["Offset of field: OrderBy::column_index"]
+        [::std::mem::offset_of!(OrderBy, column_index) - 8usize];
+    ["Offset of field: OrderBy::direction"][::std::mem::offset_of!(OrderBy, direction) - 12usize];
+};
 #[doc = " Route the query should take."]
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct Route {
     pub affinity: Affinity,
     pub shard: ::std::os::raw::c_int,
+    pub num_order_by: ::std::os::raw::c_int,
+    pub order_by: *mut OrderBy,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
-    ["Size of Route"][::std::mem::size_of::<Route>() - 8usize];
-    ["Alignment of Route"][::std::mem::align_of::<Route>() - 4usize];
+    ["Size of Route"][::std::mem::size_of::<Route>() - 24usize];
+    ["Alignment of Route"][::std::mem::align_of::<Route>() - 8usize];
     ["Offset of field: Route::affinity"][::std::mem::offset_of!(Route, affinity) - 0usize];
     ["Offset of field: Route::shard"][::std::mem::offset_of!(Route, shard) - 4usize];
+    ["Offset of field: Route::num_order_by"][::std::mem::offset_of!(Route, num_order_by) - 8usize];
+    ["Offset of field: Route::order_by"][::std::mem::offset_of!(Route, order_by) - 16usize];
 };
 pub const RoutingDecision_FORWARD: RoutingDecision = 1;
 pub const RoutingDecision_REWRITE: RoutingDecision = 2;
