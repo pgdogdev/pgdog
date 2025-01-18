@@ -7,6 +7,7 @@ use crate::{
     net::messages::{DataRow, FromBytes, Message, Protocol, RowDescription, ToBytes},
 };
 
+/// Sort rows received from multiple shards.
 #[derive(Default)]
 pub(super) struct SortBuffer {
     buffer: VecDeque<DataRow>,
@@ -31,18 +32,28 @@ impl SortBuffer {
 
     /// Sort the buffer.
     pub(super) fn sort(&mut self, columns: &[OrderBy], rd: &RowDescription) {
+        // Calculate column indecies once since
+        // fetching indecies by name is O(n).
+        let mut cols = vec![];
+        for column in columns {
+            if let Some(index) = column.index() {
+                cols.push(Some((index, column.asc())));
+            } else if let Some(name) = column.name() {
+                if let Some(index) = rd.field_index(name) {
+                    cols.push(Some((index, column.asc())));
+                } else {
+                    cols.push(None);
+                }
+            } else {
+                cols.push(None);
+            };
+        }
+
+        // Sort rows.
         let order_by = move |a: &DataRow, b: &DataRow| -> Ordering {
-            for column in columns {
-                // TODO: move this out of the sort loop,
-                // the field_index call is O(n) number of fields in RowDescription
-                let index = if let Some(index) = column.index() {
-                    index
-                } else if let Some(name) = column.name() {
-                    if let Some(index) = rd.field_index(name) {
-                        index
-                    } else {
-                        continue;
-                    }
+            for index in &cols {
+                let (index, asc) = if let Some((index, asc)) = index {
+                    (*index, *asc)
                 } else {
                     continue;
                 };
@@ -51,7 +62,7 @@ impl SortBuffer {
                     if field.is_int() {
                         let a = a.get_int(index, text);
                         let b = b.get_int(index, text);
-                        if column.asc() {
+                        if asc {
                             a.partial_cmp(&b)
                         } else {
                             b.partial_cmp(&a)
@@ -59,7 +70,7 @@ impl SortBuffer {
                     } else if field.is_float() {
                         let a = a.get_float(index, text);
                         let b = b.get_float(index, text);
-                        if column.asc() {
+                        if asc {
                             a.partial_cmp(&b)
                         } else {
                             b.partial_cmp(&a)

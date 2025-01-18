@@ -107,12 +107,10 @@ impl Route {
 
 impl From<pgdog_plugin::OrderBy> for OrderBy {
     fn from(value: pgdog_plugin::OrderBy) -> Self {
-        if value.column_index < 0 {
+        if let Some(name) = value.name() {
             match value.direction {
-                OrderByDirection_ASCENDING => OrderBy::AscColumn(value.name().unwrap().to_string()),
-                OrderByDirection_DESCENDING => {
-                    OrderBy::DescColumn(value.name().unwrap().to_string())
-                }
+                OrderByDirection_ASCENDING => OrderBy::AscColumn(name.to_string()),
+                OrderByDirection_DESCENDING => OrderBy::DescColumn(name.to_string()),
                 _ => unreachable!("OrderByDirection enum can only be ASCENDING or DESCENDING"),
             }
         } else {

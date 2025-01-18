@@ -34,7 +34,7 @@ impl OrderBy {
 
     /// Get column name if any.
     pub fn name(&self) -> Option<&str> {
-        if self.column_name.is_null() || self.column_index < 0 {
+        if self.column_name.is_null() || self.column_index >= 0 {
             None
         } else {
             unsafe { CStr::from_ptr(self.column_name).to_str().ok() }

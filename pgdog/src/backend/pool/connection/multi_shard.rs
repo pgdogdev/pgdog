@@ -60,6 +60,7 @@ impl MultiShard {
                     None
                 };
             }
+
             'C' => {
                 let cc = CommandComplete::from_bytes(message.to_bytes()?)?;
                 let has_rows = if let Some(rows) = cc.rows()? {
@@ -84,6 +85,7 @@ impl MultiShard {
                     }
                 }
             }
+
             'T' => {
                 let rd = RowDescription::from_bytes(message.to_bytes()?)?;
                 if let Some(ref prev) = self.rd {
@@ -95,6 +97,7 @@ impl MultiShard {
                     forward = Some(message);
                 }
             }
+
             'I' => {
                 self.nd += 1;
                 if self.nd == self.shards {
