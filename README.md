@@ -13,15 +13,15 @@ classic features like basic sharding, load balancing and failover. In addition, 
 
 ## Features summary
 
-| Feature | Status |
-|---------|--------|
-| [Load balancer](https://pgdog.dev/features/load-balancer) | Operational |
-| [Transaction pooling](https://pgdog.dev/features/transaction-mode) | Operational |
-| [Session pooling](https://pgdog.dev/features/session-mode) | Operational |
-| [Plugins](https://pgdog.dev/features/plugins/) | Operational |
-| [Sharding](https://pgdog.dev/features/sharding/) | Work in progress |
-| [Authentication](https://pgdog.dev/features/authentication/) | Supports `scram-sha-256` |
-| [Configuration](https://pgdog.dev/configuration/) | Operational |
+| Feature | Status | Summary |
+|---------|--------|---------|
+| [Load balancer](https://pgdog.dev/features/load-balancer) | Operational | Spread query traffic across multiple databases automatically. |
+| [Transaction pooling](https://pgdog.dev/features/transaction-mode) | Operational | Identical to pgbouncer, allows for thousands of clients to reuse a handful of server connections. |
+| [Session pooling](https://pgdog.dev/features/session-mode) | Operational | Exclusive use of server connections for clients needing session-level features. |
+| [Plugins](https://pgdog.dev/features/plugins/) | Operational | Control how pgDog routes queries and what results it sends to clients, through loading shared libraries at runtime. |
+| [Sharding](https://pgdog.dev/features/sharding/) | Work in progress | Automatically split data and queries between multiple databases, scaling writes horizonally. |
+| [Authentication](https://pgdog.dev/features/authentication/) | Supports `scram-sha-256` | Suppport for various PostgreSQL authentication mechanisms, like SCRAM, MD5, and LDAP. |
+| [Configuration](https://pgdog.dev/configuration/) | Operational | Configure pgDog without restarting the pooler or breaking connections. |
 
 ## Getting started
 
