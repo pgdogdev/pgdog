@@ -6,10 +6,12 @@ use pgdog_plugin::{
     OrderByDirection_DESCENDING,
 };
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Clone, Debug)]
 pub enum OrderBy {
     Asc(usize),
     Desc(usize),
+    AscColumn(String),
+    DescColumn(String),
 }
 
 impl OrderBy {
@@ -17,15 +19,26 @@ impl OrderBy {
     pub fn asc(&self) -> bool {
         match self {
             OrderBy::Asc(_) => true,
+            OrderBy::AscColumn(_) => true,
             _ => false,
         }
     }
 
     /// Column index.
-    pub fn index(&self) -> usize {
+    pub fn index(&self) -> Option<usize> {
         match self {
-            OrderBy::Asc(column) => *column,
-            OrderBy::Desc(column) => *column,
+            OrderBy::Asc(column) => Some(*column),
+            OrderBy::Desc(column) => Some(*column),
+            _ => None,
+        }
+    }
+
+    /// Get column name.
+    pub fn name(&self) -> Option<&str> {
+        match self {
+            OrderBy::AscColumn(ref name) => Some(name.as_str()),
+            OrderBy::DescColumn(ref name) => Some(name.as_str()),
+            _ => None,
         }
     }
 }
@@ -94,10 +107,20 @@ impl Route {
 
 impl From<pgdog_plugin::OrderBy> for OrderBy {
     fn from(value: pgdog_plugin::OrderBy) -> Self {
-        match value.direction {
-            OrderByDirection_ASCENDING => OrderBy::Asc(value.column as usize),
-            OrderByDirection_DESCENDING => OrderBy::Desc(value.column as usize),
-            _ => unreachable!("OrderByDirection enum can only be ASCENDING or DESCENDING"),
+        if value.column_index < 0 {
+            match value.direction {
+                OrderByDirection_ASCENDING => OrderBy::AscColumn(value.name().unwrap().to_string()),
+                OrderByDirection_DESCENDING => {
+                    OrderBy::DescColumn(value.name().unwrap().to_string())
+                }
+                _ => unreachable!("OrderByDirection enum can only be ASCENDING or DESCENDING"),
+            }
+        } else {
+            match value.direction {
+                OrderByDirection_ASCENDING => OrderBy::Asc(value.column_index as usize),
+                OrderByDirection_DESCENDING => OrderBy::Desc(value.column_index as usize),
+                _ => unreachable!("OrderByDirection enum can only be ASCENDING or DESCENDING"),
+            }
         }
     }
 }

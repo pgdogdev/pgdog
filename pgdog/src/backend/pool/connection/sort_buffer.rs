@@ -33,7 +33,19 @@ impl SortBuffer {
     pub(super) fn sort(&mut self, columns: &[OrderBy], rd: &RowDescription) {
         let order_by = move |a: &DataRow, b: &DataRow| -> Ordering {
             for column in columns {
-                let index = column.index();
+                // TODO: move this out of the sort loop,
+                // the field_index call is O(n) number of fields in RowDescription
+                let index = if let Some(index) = column.index() {
+                    index
+                } else if let Some(name) = column.name() {
+                    if let Some(index) = rd.field_index(name) {
+                        index
+                    } else {
+                        continue;
+                    }
+                } else {
+                    continue;
+                };
                 let ordering = if let Some(field) = rd.field(index) {
                     let text = field.is_text();
                     if field.is_int() {

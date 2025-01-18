@@ -105,6 +105,17 @@ impl RowDescription {
         self.fields.get(index)
     }
 
+    /// Get field index name, O(n).
+    pub fn field_index(&self, name: &str) -> Option<usize> {
+        for (index, field) in self.fields.iter().enumerate() {
+            if field.name == name {
+                return Some(index);
+            }
+        }
+
+        None
+    }
+
     /// Check if the two row descriptions are materially the same.
     pub fn equivalent(&self, other: &RowDescription) -> bool {
         for (a, b) in self.fields.iter().zip(other.fields.iter()) {

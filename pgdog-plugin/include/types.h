@@ -63,7 +63,8 @@ typedef enum OrderByDirection {
  * Column sorting.
 */
 typedef struct OrderBy {
-    int column;
+    char *column_name;
+    int column_index;
     OrderByDirection direction;
 } OrderBy;
 

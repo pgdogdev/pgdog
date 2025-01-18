@@ -165,6 +165,7 @@ impl Route {
     /// Deallocate memory.
     pub(crate) unsafe fn drop(&self) {
         if self.num_order_by > 0 {
+            (0..self.num_order_by).for_each(|index| (*self.order_by.offset(index as isize)).drop());
             let layout = Layout::array::<OrderBy>(self.num_order_by as usize).unwrap();
             dealloc(self.order_by as *mut u8, layout);
         }
