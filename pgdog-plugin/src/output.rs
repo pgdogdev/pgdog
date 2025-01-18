@@ -13,12 +13,8 @@ impl Output {
 
     pub unsafe fn drop(&self) {
         #[allow(non_upper_case_globals)]
-        match self.decision {
-            RoutingDecision_FORWARD => {
-                self.output.route.drop();
-            }
-
-            _ => (),
+        if self.decision == RoutingDecision_FORWARD {
+            self.output.route.drop();
         }
     }
 }

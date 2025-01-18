@@ -126,7 +126,7 @@ impl From<pgdog_plugin::OrderBy> for OrderBy {
 impl From<pgdog_plugin::Route> for Route {
     fn from(value: pgdog_plugin::Route) -> Self {
         let all_shards = value.is_all_shards();
-        let shard = value.shard().map(|s| s as usize);
+        let shard = value.shard();
         let affinity = value.affinity;
         let mut order_by = vec![];
 

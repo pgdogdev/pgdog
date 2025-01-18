@@ -90,43 +90,37 @@ impl DataRow {
 
     /// Get integer at index with text/binary encoding.
     pub fn get_int(&self, index: usize, text: bool) -> Option<i64> {
-        self.column(index)
-            .map(|mut column| {
-                if text {
-                    from_utf8(&column[..])
-                        .ok()
-                        .map(|s| s.parse::<i64>().ok())
-                        .flatten()
-                } else {
-                    match column.len() {
-                        2 => Some(column.get_i16() as i64),
-                        4 => Some(column.get_i32() as i64),
-                        8 => Some(column.get_i64()),
-                        _ => None,
-                    }
+        self.column(index).and_then(|mut column| {
+            if text {
+                from_utf8(&column[..])
+                    .ok()
+                    .and_then(|s| s.parse::<i64>().ok())
+            } else {
+                match column.len() {
+                    2 => Some(column.get_i16() as i64),
+                    4 => Some(column.get_i32() as i64),
+                    8 => Some(column.get_i64()),
+                    _ => None,
                 }
-            })
-            .flatten()
+            }
+        })
     }
 
     // Get integer at index with text/binary encoding.
     pub fn get_float(&self, index: usize, text: bool) -> Option<f64> {
-        self.column(index)
-            .map(|mut column| {
-                if text {
-                    from_utf8(&column[..])
-                        .ok()
-                        .map(|s| s.parse::<f64>().ok())
-                        .flatten()
-                } else {
-                    match column.len() {
-                        4 => Some(column.get_f32() as f64),
-                        8 => Some(column.get_f64()),
-                        _ => None,
-                    }
+        self.column(index).and_then(|mut column| {
+            if text {
+                from_utf8(&column[..])
+                    .ok()
+                    .and_then(|s| s.parse::<f64>().ok())
+            } else {
+                match column.len() {
+                    4 => Some(column.get_f32() as f64),
+                    8 => Some(column.get_f64()),
+                    _ => None,
                 }
-            })
-            .flatten()
+            }
+        })
     }
 }
 
