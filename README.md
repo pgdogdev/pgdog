@@ -3,13 +3,98 @@
 [![Documentation](https://img.shields.io/badge/documentation-blue?style=flat)](https://pgdog.dev)
 [![CI](https://github.com/levkk/pgdog/actions/workflows/ci.yml/badge.svg)](https://github.com/levkk/pgdog/actions/workflows/ci.yml)
 
-pgDog is a PostgreSQL pooler, load balancer and sharding proxy, written in Rust.
+pgDog is a PostgreSQL proxy and transaction pooler written in Rust.
 Spiritual successor to [pgcat](https://github.com/levkk/pgcat), pgDog comes with a lot of
-similar features, better performance, and introduces new features like plugins.
+classic features like basic sharding, load balancing and failover. In addition, pgDog makes improvements to query performance, and adds new features like plugins, cross-shard queries, and async protocol support.
 
 ## Documentation
 
 &#128216; pgDog documentation can be **[found here](https://pgdog.dev).**
+
+## Features summary
+
+| Feature | Status |
+|---------|--------|
+| [Load balancer](https://pgdog.dev/features/load-balancer) | Operational |
+| [Transaction pooling](https://pgdog.dev/features/transaction-mode) | Operational |
+| [Session pooling](https://pgdog.dev/features/session-mode) | Operational |
+| [Plugins](https://pgdog.dev/features/plugins/) | Operational |
+| [Sharding](https://pgdog.dev/features/sharding/) | Work in progress |
+| [Authentication](https://pgdog.dev/features/authentication/) | Supports `scram-sha-256` |
+| [Configuration](https://pgdog.dev/configuration/) | Operational |
+
+## Getting started
+
+Install the latest version of the Rust compiler from [rust-lang.org](https://rust-lang.org).
+Once you have Rust installed, clone this repository and build the project in release mode:
+
+```bash
+cargo build --release
+```
+
+It's important to use the release profile if you're deploying to production or want to run
+performance benchmarks.
+
+### Configuration
+
+pgDog has two configuration files:multi
+
+* `pgdog.toml` which contains general settings and PostgreSQL servers information
+* `users.toml` which contains users and passwords
+
+Most options have reasonable defaults, so a basic configuration for a single user
+and database deployment is easy to setup:
+
+**`pgdog.toml`**
+
+```toml
+[general]
+host = "0.0.0.0"
+port = 6432
+
+[[servers]]
+name = "pgdog"
+host = "127.0.0.1"
+```
+
+**`users.toml`**
+
+```toml
+[[users]]
+database = "pgdog"
+name = "pgdog"
+password = "pgdog"
+```
+
+This configuration assumes the following:
+
+* You have a PostgreSQL server running on `localhost`
+* It has a database called `pgdog`
+* You have created a user called `pgdog` with the password `pgdog`, and it can connect
+  to the server.
+
+If you'd like to try this out, you can set it up like so:
+
+```postgresql
+CREATE DATABASE pgdog;
+CREATE USER pgdog PASSWORD 'pgdog' LOGIN;
+```
+
+### Running pgDog
+
+Running pgDog can be done with Cargo:
+
+```bash
+cargo run --release --bin pgdog
+```
+
+Connecting to the pooler can be done with psql or any other PostgreSQL client:
+
+```bash
+psql postgres://pgdog:pgdog@127.0.0.1:6432/pgdog
+```
+
+Note that you're connecting to port `6432` where pgDog is running, not directly to Postgres.
 
 ## Features
 
@@ -19,7 +104,7 @@ pgDog is an application layer (OSI Level 7) load balancer for PostgreSQL. It can
 
 &#128216; **[Load balancer](https://pgdog.dev/features/load-balancer)**
 
-### Healthchecks and query re-routing
+#### Healthchecks and failover
 
 pgDog maintains a real time list of healthy and unhealthy hosts in its database configuration.
 When a host becomes unhealthy due to a healthcheck failure, it's removed from active rotation
@@ -86,79 +171,6 @@ pgDog is highly configurable and many aspects of its operation can be tweaked at
 to restart the proxy or break PostgreSQL connections.
 
 &#128216; **[Configuration](https://pgdog.dev/configuration/)**
-
-## Getting started
-
-Install the latest version of the Rust compiler from [rust-lang.org](https://rust-lang.org).
-Once you have Rust installed, clone this repository and build the project in release mode:
-
-```bash
-cargo build --release
-```
-
-It's important to use the release profile if you're deploying to production or want to run
-performance benchmarks.
-
-## Configuration
-
-pgDog has two configuration files:
-
-* `pgdog.toml` which contains general settings and PostgreSQL servers information
-* `users.toml` which contains users and passwords
-
-Most options have reasonable defaults, so a basic configuration for a single user
-and database deployment is easy to setup:
-
-**`pgdog.toml`**
-
-```toml
-[general]
-host = "0.0.0.0"
-port = 6432
-
-[[servers]]
-name = "pgdog"
-host = "127.0.0.1"
-```
-
-**`users.toml`**
-
-```toml
-[[users]]
-database = "pgdog"
-name = "pgdog"
-password = "pgdog"
-```
-
-This configuration assumes the following:
-
-* You have a PostgreSQL server running on `localhost`
-* It has a database called `pgdog`
-* You have created a user called `pgdog` with the password `pgdog`, and it can connect
-  to the server.
-
-If you'd like to try this out, you can set it up like so:
-
-```postgresql
-CREATE DATABASE pgdog;
-CREATE USER pgdog PASSWORD 'pgdog' LOGIN;
-```
-
-## Running pgDog
-
-Running pgDog can be done with Cargo:
-
-```bash
-cargo run --release --bin pgdog
-```
-
-Connecting to the pooler can be done with psql or any other PostgreSQL client:
-
-```bash
-psql postgres://pgdog:pgdog@127.0.0.1:6432/pgdog
-```
-
-Note that you're connecting to port `6432` where pgDog is running, not directly to Postgres.
 
 ## &#128678; Status &#128678;
 

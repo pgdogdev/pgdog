@@ -2,7 +2,7 @@ nav:
   - 'index.md'
   - 'automatic-routing.md'
   - 'manual-routing.md'
-  - 'multi-shard.md'
+  - 'cross-shard.md'
   - 'sharding-functions.md'
   - 'copy.md'
   - '...'

@@ -5,5 +5,5 @@
 
 ## Learn more
 
-- [Multi-shard queries](multi-shard.md)
+- [Multi-shard queries](cross-shard.md)
 - [Manual routing](manual-routing.md)

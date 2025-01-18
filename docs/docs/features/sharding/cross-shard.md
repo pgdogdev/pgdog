@@ -1,4 +1,4 @@
-# Multi-shard queries
+# Cross-shard queries
 
 If a client can't or chooses not to provide a sharding key, pgDog can route the query to all shards and combine the results transparently. To the client, this feels like the query executed against a single database.
 

@@ -24,9 +24,9 @@ The [`pgdog-routing`](https://github.com/levkk/pgdog/tree/main/plugins/pgdog-rou
 
 ### Multi-shard queries
 
-When the sharding key isn't available or impossible to extract from a query, pgDog can route the query to all shards and return results combined in a [single response](multi-shard.md). Clients using this feature are not aware they are communicating with a sharded database and can treat pgDog connections like normal.
+When the sharding key isn't available or impossible to extract from a query, pgDog can route the query to all shards and return results combined in a [single response](cross-shard.md). Clients using this feature are not aware they are communicating with a sharded database and can treat pgDog connections like normal.
 
 ## Learn more
 
-- [Multi-shard queries](multi-shard.md)
+- [Multi-shard queries](cross-shard.md)
 - [Manual routing](manual-routing.md)
