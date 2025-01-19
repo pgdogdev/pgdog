@@ -15,8 +15,8 @@ impl bindings::Input {
     ///
     /// SAFETY: This is not to be used by plugins.
     /// This is for internal pgDog usage only.
-    pub unsafe fn drop(&self) {
-        self.config.drop();
+    pub unsafe fn deallocate(&self) {
+        self.config.deallocate();
     }
 
     /// Get query if this is a routing input.

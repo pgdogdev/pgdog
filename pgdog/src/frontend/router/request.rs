@@ -41,6 +41,6 @@ impl Request {
 
 impl Drop for Request {
     fn drop(&mut self) {
-        unsafe { self.query.drop() }
+        unsafe { self.query.deallocate() }
     }
 }

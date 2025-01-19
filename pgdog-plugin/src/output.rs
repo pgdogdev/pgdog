@@ -11,7 +11,7 @@ impl Output {
         }
     }
 
-    pub unsafe fn drop(&self) {
+    pub unsafe fn deallocate(&self) {
         #[allow(non_upper_case_globals)]
         if self.decision == RoutingDecision_FORWARD {
             self.output.route.drop();

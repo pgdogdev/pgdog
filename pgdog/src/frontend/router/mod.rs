@@ -78,7 +78,7 @@ impl Router {
                         }
 
                         self.route = route.into();
-                        unsafe { output.drop() }
+                        unsafe { output.deallocate() }
 
                         debug!(
                             "routing {} to {} [{}, {:.3}ms]",
@@ -98,7 +98,7 @@ impl Router {
             }
         }
 
-        unsafe { input.drop() }
+        unsafe { input.deallocate() }
 
         Ok(())
     }
