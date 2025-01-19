@@ -77,24 +77,24 @@ Default: **none**
 
 Frequency of healthchecks performed by pgDog to ensure connections provided to clients from the pool are working.
 
-Default: **`30s`**
+Default: **`30_000`** (30s)
 
 ### `idle_healthcheck_interval`
 
 Frequency of healthchecks performed by pgDog on idle connections. This ensures the database is checked for health periodically when
 pgDog receives little to no client requests.
 
-Default: **`30s`**
+Default: **`30_000`** (30s)
 
 #### Note on `min_pool_size`
 
-Idle [healthchecks](../../features/healthchecks.md) try to use existing idle connections to validate the database is up and running. If there are no idle connections available, pgDog will create an ephemeral connection to perform the healthcheck. If you want to avoid creating healthcheck connections, make sure to have `min_pool_size` to be at least `1`.
+[Healthchecks](../../features/healthchecks.md) try to use existing idle connections to validate the database is up and running. If there are no idle connections available, pgDog will create an ephemeral connection to perform the healthcheck. If you want to avoid this, make sure to have `min_pool_size` to be at least `1`.
 
 ### `idle_healthcheck_delay`
 
 Delay running idle healthchecks at pgDog startup to give databases (and pools) time to spin up.
 
-Default: **`5s`**
+Default: **`5_000`** (5s)
 
 ## Timeouts
 
@@ -105,21 +105,21 @@ from abnormal conditions like hardware failure.
 
 How long to allow for `ROLLBACK` queries to run on server connections with unfinished transactions. See [transaction mode](../../features/transaction-mode.md) for more details.
 
-Default: **`5s`**
+Default: **`5_000`** (5s)
 
 ### `ban_timeout`
 
-Pools blocked from serving traffic due to an error will be placed back into active rotation after this long. This ensures
+Connectionn pools blocked from serving traffic due to an error will be placed back into active rotation after this long. This ensures
 that servers don't stay blocked forever due to healthcheck false positives.
 
-Default: **`300s`** (5 minutes)
+Default: **`300_000`** (5 minutes)
 
 ### `shutdown_timeout`
 
 How long to wait for active clients to finish transactions when shutting down. This ensures that pgDog redeployments disrupt as few
 queries as possible.
 
-Default: **`60s`**
+Default: **`60_000`** (60s)
 
 ## Load balancer
 

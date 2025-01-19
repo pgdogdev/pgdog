@@ -48,7 +48,7 @@ issues, like network connectivity, to resolve themselves without manual interven
 
 ### Failsafe
 
-If all databases in a cluster are banned due to a healthcheck failure, pgDog assumes that Healthchecks
+If all databases in a cluster are banned due to a healthcheck failure, pgDog assumes that healthchecks
 are returning incorrect information and unbans all databases in the cluster. This protects against false positives
 and ensures the cluster continues to serve traffic.
 

@@ -5,9 +5,19 @@ pgDog uses the [TOML](https://toml.io/en/) configuration language for its two co
 By default, pgDog looks for both configuration files in the current working directory. Alternatively, you can pass
 `--config=<path>` and `--users=<path>` arguments to pgDog on startup.
 
-### Hot reload
+## Hot reload
 
-Most settings can be reloaded without restarting pgDog. This allows to tweak them at runtime without breaking client or server connections. For settings that can't be changed at runtime, a note is added to the documentation.
+Most settings can be reloaded without restarting pgDog. This allows to tweak them at runtime without breaking client or server connections. For settings that require a restart, a note is added to the documentation.
+
+## Units
+
+To make things simpler, all units of time are in milliseconds. For example, if you want to set the pool checkout timeout to 5 seconds, convert it to 5000ms instead:
+
+```toml
+checkout_timeout = 5_000
+```
+
+Since pgDog uses TOML, both `5000` and `5_000` are valid numbers. Configuration will fail to load if non-integer values are used, e.g. "5s" or "53.5".
 
 ## Overview
 
