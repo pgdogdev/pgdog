@@ -60,15 +60,19 @@ mod test {
 
     #[test]
     fn test_defaults() {
-        let mut database = Database::default();
-        database.name = "pgdog".into();
-        database.host = "127.0.0.1".into();
-        database.port = 6432;
+        let mut database = Database {
+            name: "pgdog".into(),
+            host: "127.0.0.1".into(),
+            port: 6432,
+            ..Default::default()
+        };
 
-        let mut user = User::default();
-        user.name = "pgdog".into();
-        user.password = "hunter2".into();
-        user.database = "pgdog".into();
+        let user = User {
+            name: "pgdog".into(),
+            password: "hunter2".into(),
+            database: "pgdog".into(),
+            ..Default::default()
+        };
 
         let address = Address::new(&database, &user);
 

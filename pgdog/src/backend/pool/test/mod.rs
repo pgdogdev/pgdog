@@ -16,9 +16,11 @@ use super::*;
 mod replica;
 
 fn pool() -> Pool {
-    let mut config = Config::default();
-    config.max = 1;
-    config.min = 1;
+    let config = Config {
+        max: 1,
+        min: 1,
+        ..Default::default()
+    };
 
     let pool = Pool::new(PoolConfig {
         address: Address {
@@ -94,8 +96,10 @@ async fn test_concurrency_with_gas() {
     let pool = pool();
     let tracker = TaskTracker::new();
 
-    let mut config = Config::default();
-    config.max = 10;
+    let config = Config {
+        max: 10,
+        ..Default::default()
+    };
     pool.update_config(config);
 
     for _ in 0..10000 {
