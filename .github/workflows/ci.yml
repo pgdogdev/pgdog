@@ -11,8 +11,7 @@ jobs:
         with:
           toolchain: stable
           override: true
-      - name: Install Clippy
-        run: rustup component add clippy
+      - uses: Swatinem/rust-cache@v2
       - name: Format
         run: cargo fmt --all -- --check
       - name: Clippy
