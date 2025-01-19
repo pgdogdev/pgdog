@@ -1,15 +1,22 @@
-// PostgreSQL hash function.
+//! PostgreSQL hash functions.
+//!
+//! This module delegates most of the hashing work directly
+//! to PostgreSQL internal functions that we copied in `postgres_hash` C library.
+//!
 
 use uuid::Uuid;
 
 #[link(name = "postgres_hash")]
 extern "C" {
-    #[allow(dead_code)]
+    /// Hash any size data using its bytes representation.
     fn hash_bytes_extended(k: *const u8, keylen: i64) -> u64;
+    /// Special hashing function for BIGINT (i64).
     fn hashint8extended(k: i64) -> u64;
+    /// Combine multiple hashes into one in the case of multi-column hashing keys.
     fn hash_combine64(a: u64, b: u64) -> u64;
 }
 
+/// Safe wrapper around `hash_bytes_extended`.
 fn hash_slice(k: &[u8]) -> u64 {
     unsafe { hash_bytes_extended(k.as_ptr(), k.len() as i64) }
 }

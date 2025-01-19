@@ -16,7 +16,7 @@ static SHARDING_KEY: Lazy<Regex> =
 /// Comment style uses the C-style comments (not SQL comments!)
 /// as to allow the comment to appear anywhere in the query.
 ///
-/// See [`SHARD`] for the style of comment we expect.
+/// See [`SHARD`] and [`SHARDING_KEY`] for the style of comment we expect.
 ///
 pub fn shard(query: &str, shards: usize) -> Result<Option<usize>, Error> {
     let tokens = scan(query)?;
