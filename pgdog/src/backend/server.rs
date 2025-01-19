@@ -44,7 +44,7 @@ impl Server {
     /// Create new PostgreSQL server connection.
     pub async fn connect(addr: &Address, params: Vec<Parameter>) -> Result<Self, Error> {
         debug!("=> {}", addr);
-        let stream = TcpStream::connect(addr.to_string()).await?;
+        let stream = TcpStream::connect(addr.addr()).await?;
 
         // Disable the Nagle algorithm.
         stream.set_nodelay(true)?;

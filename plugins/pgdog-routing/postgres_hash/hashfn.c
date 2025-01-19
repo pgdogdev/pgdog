@@ -28,6 +28,7 @@
 
 #define uint64 uint64_t
 #define uint32 uint32_t
+#define int64 int64_t
 
 /*----------
  * mix -- mix 3 32-bit values reversibly.
@@ -358,4 +359,45 @@ hash_bytes_extended(const unsigned char *k, int keylen)
 
 	/* report the result */
 	return ((uint64) b << 32) | c;
+}
+
+/*
+ * Both the seed and the magic number added at the end are from
+ * https://stackoverflow.com/a/67189122
+*/
+
+static uint64
+hash_bytes_uint32_extended(uint32 k)
+{
+	uint32		a,
+				b,
+				c;
+	uint64 seed = 8816678312871386365;
+
+	a = b = c = 0x9e3779b9 + (uint32) sizeof(uint32) + 3923095;
+
+	if (seed != 0)
+	{
+		a += (uint32) (seed >> 32);
+		b += (uint32) seed;
+		mix(a, b, c);
+	}
+
+	a += k;
+
+	final(a, b, c);
+
+	/* report the result */
+	return ((uint64) b << 32) | c;
+}
+
+uint64 hashint8extended(int64 val)
+{
+	/* Same approach as hashint8 */
+	uint32		lohalf = (uint32) val;
+	uint32		hihalf = (uint32) (val >> 32);
+
+	lohalf ^= (val >= 0) ? hihalf : ~hihalf;
+
+	return hash_bytes_uint32_extended(lohalf) + 5305509591434766563;
 }

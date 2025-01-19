@@ -71,7 +71,7 @@ fn route_internal(query: &str, config: Config) -> Result<Route, pg_query::Error>
     }
 
     trace!("{:#?}", ast);
-    let shard = comment::shard(query)?;
+    let shard = comment::shard(query, shards as usize)?;
 
     // For cases like SELECT NOW(), or SELECT 1, etc.
     let tables = ast.tables();

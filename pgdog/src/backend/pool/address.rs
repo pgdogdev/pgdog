@@ -46,11 +46,16 @@ impl Address {
             },
         }
     }
+
+    /// Get address for `TCPStream`.
+    pub fn addr(&self) -> String {
+        format!("{}:{}", self.host, self.port)
+    }
 }
 
 impl std::fmt::Display for Address {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}:{}", self.host, self.port)
+        write!(f, "{}:{}, {}", self.host, self.port, self.database_name)
     }
 }
 
