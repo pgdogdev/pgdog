@@ -36,9 +36,9 @@ impl Error {
         use crate::backend::pool::Error as PoolError;
         use crate::backend::Error as BackendError;
 
-        match self {
-            &Error::Backend(BackendError::Pool(PoolError::CheckoutTimeout)) => true,
-            _ => false,
-        }
+        matches!(
+            self,
+            &Error::Backend(BackendError::Pool(PoolError::CheckoutTimeout))
+        )
     }
 }

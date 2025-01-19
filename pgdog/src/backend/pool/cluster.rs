@@ -87,7 +87,10 @@ impl Cluster {
 
     /// Plugin input.
     ///
-    /// SAFETY: This allocates, so make sure to call `Config::drop` when you're done.
+    /// # Safety
+    ///
+    /// This allocates, so make sure to call `Config::drop` when you're done.
+    ///
     pub unsafe fn plugin_config(&self) -> Result<pgdog_plugin::bindings::Config, Error> {
         use pgdog_plugin::bindings::{Config, DatabaseConfig, Role_PRIMARY, Role_REPLICA};
         let mut databases: Vec<DatabaseConfig> = vec![];

@@ -54,6 +54,11 @@ impl Buffer {
         self.buffer.iter().map(|b| b.len()).sum()
     }
 
+    /// Check if the buffer is empty.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     /// If this buffer contains a query, retrieve it.
     pub fn query(&self) -> Result<Option<String>, Error> {
         for message in &self.buffer {

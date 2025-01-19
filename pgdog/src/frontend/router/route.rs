@@ -17,11 +17,7 @@ pub enum OrderBy {
 impl OrderBy {
     /// ORDER BY x ASC
     pub fn asc(&self) -> bool {
-        match self {
-            OrderBy::Asc(_) => true,
-            OrderBy::AscColumn(_) => true,
-            _ => false,
-        }
+        matches!(self, OrderBy::Asc(_) | OrderBy::AscColumn(_))
     }
 
     /// Column index.

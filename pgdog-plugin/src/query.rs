@@ -52,7 +52,9 @@ impl Query {
 
     /// Free memory allocated for parameters, if any.
     ///
-    /// SAFETY: This is not to be used by plugins.
+    /// # Safety
+    ///
+    /// This is not to be used by plugins.
     /// This is for internal pgDog usage only.
     pub unsafe fn drop(&mut self) {
         if !self.parameters.is_null() {

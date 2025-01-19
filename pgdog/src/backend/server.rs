@@ -329,7 +329,7 @@ impl Server {
 
     /// Prepare a statement on this connection if it doesn't exist already.
     pub async fn prepare(&mut self, parse: &Parse) -> Result<bool, Error> {
-        if self.prepared_statements.get(&parse.name).is_some() {
+        if self.prepared_statements.contains(&parse.name) {
             return Ok(false);
         }
 

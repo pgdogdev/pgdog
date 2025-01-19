@@ -16,41 +16,34 @@ pub fn extract(stmt: &SelectStmt) -> Result<Vec<OrderBy>, Error> {
     for clause in &stmt.sort_clause {
         if let Some(ref node) = clause.node {
             if let NodeEnum::SortBy(sort_by) = node {
-                let asc = match sort_by.sortby_dir {
-                    0..=2 => true,
-                    _ => false,
-                };
+                let asc = matches!(sort_by.sortby_dir, 0..=2);
                 if let Some(ref node) = sort_by.node {
                     if let Some(ref node) = node.node {
                         match node {
                             NodeEnum::AConst(aconst) => {
-                                if let Some(ref val) = aconst.val {
-                                    if let Val::Ival(integer) = val {
-                                        order_by.push(OrderBy::column_index(
-                                            integer.ival as usize,
+                                if let Some(Val::Ival(ref integer)) = aconst.val {
+                                    order_by.push(OrderBy::column_index(
+                                        integer.ival as usize,
+                                        if asc {
+                                            OrderByDirection_ASCENDING
+                                        } else {
+                                            OrderByDirection_DESCENDING
+                                        },
+                                    ));
+                                }
+                            }
+
+                            NodeEnum::ColumnRef(column_ref) => {
+                                if let Some(field) = column_ref.fields.first() {
+                                    if let Some(NodeEnum::String(ref string)) = field.node {
+                                        order_by.push(OrderBy::column_name(
+                                            &string.sval,
                                             if asc {
                                                 OrderByDirection_ASCENDING
                                             } else {
                                                 OrderByDirection_DESCENDING
                                             },
                                         ));
-                                    }
-                                }
-                            }
-
-                            NodeEnum::ColumnRef(column_ref) => {
-                                if let Some(field) = column_ref.fields.first() {
-                                    if let Some(ref node) = field.node {
-                                        if let NodeEnum::String(string) = node {
-                                            order_by.push(OrderBy::column_name(
-                                                &string.sval,
-                                                if asc {
-                                                    OrderByDirection_ASCENDING
-                                                } else {
-                                                    OrderByDirection_DESCENDING
-                                                },
-                                            ));
-                                        }
                                     }
                                 }
                             }

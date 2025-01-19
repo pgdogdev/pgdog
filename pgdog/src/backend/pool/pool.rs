@@ -129,7 +129,7 @@ impl Pool {
         let mut guard = self.lock();
         if !guard.online {
             guard.online = true;
-            Monitor::new(self);
+            Monitor::run(self);
         }
     }
 

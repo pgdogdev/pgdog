@@ -206,10 +206,7 @@ impl Connection {
     /// This is an admin database connection.
     #[inline]
     pub fn admin(&self) -> bool {
-        match self.binding {
-            Binding::Admin(_) => true,
-            _ => false,
-        }
+        matches!(self.binding, Binding::Admin(_))
     }
 
     /// Transaction mode pooling.

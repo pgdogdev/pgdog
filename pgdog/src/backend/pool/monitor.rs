@@ -56,7 +56,7 @@ impl Monitor {
     /// Launch the pool maintenance loop.
     ///
     /// This is done automatically when the pool is created.
-    pub(super) fn new(pool: &Pool) {
+    pub(super) fn run(pool: &Pool) {
         let monitor = Self { pool: pool.clone() };
 
         spawn(async move {

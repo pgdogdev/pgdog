@@ -42,7 +42,6 @@ pub extern "C" fn pgdog_init() {
 #[no_mangle]
 pub extern "C" fn pgdog_route_query(input: Input) -> Output {
     if let Some(query) = input.query() {
-        let query = query;
         let route = match route_internal(query.query(), input.config) {
             Ok(route) => route,
             Err(_) => Route::unknown(),

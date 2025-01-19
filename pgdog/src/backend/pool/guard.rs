@@ -60,14 +60,15 @@ impl Guard {
                     // Rollback any unfinished transactions,
                     // but only if the server is in sync (protocol-wise).
                     if rollback {
-                        if let Err(_) = timeout(rollback_timeout, server.rollback()).await {
+                        if timeout(rollback_timeout, server.rollback()).await.is_err() {
                             error!("rollback timeout [{}]", server.addr());
                         }
                     }
 
                     if cleanup.needed() {
-                        if let Err(_) =
-                            timeout(rollback_timeout, server.execute_batch(cleanup.queries())).await
+                        if timeout(rollback_timeout, server.execute_batch(cleanup.queries()))
+                            .await
+                            .is_err()
                         {
                             error!("reset timeout [{}]", server.addr());
                         } else {

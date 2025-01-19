@@ -17,15 +17,11 @@ pub fn shard(query: &str) -> Result<Option<usize>, Error> {
     let tokens = scan(query)?;
 
     for token in tokens.tokens.iter() {
-        match token.token {
-            kind => {
-                if kind == Token::CComment as i32 {
-                    let comment = &query[token.start as usize..token.end as usize];
-                    if let Some(cap) = SHARD_REGEX.captures(comment) {
-                        if let Some(shard) = cap.get(1) {
-                            return Ok(shard.as_str().parse::<usize>().ok());
-                        }
-                    }
+        if token.token == Token::CComment as i32 {
+            let comment = &query[token.start as usize..token.end as usize];
+            if let Some(cap) = SHARD_REGEX.captures(comment) {
+                if let Some(shard) = cap.get(1) {
+                    return Ok(shard.as_str().parse::<usize>().ok());
                 }
             }
         }

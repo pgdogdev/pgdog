@@ -38,7 +38,7 @@ impl Client {
         let database = params.get_default("database", user);
         let config = config();
 
-        let admin = database == &config.config.admin.name;
+        let admin = database == config.config.admin.name;
         let admin_password = &config.config.admin.password;
 
         let id = BackendKeyData::new();
@@ -73,7 +73,7 @@ impl Client {
 
         stream.send_flush(Authentication::scram()).await?;
 
-        let scram = Server::new(password);
+        let scram = Server::new(&password);
         if let Ok(true) = scram.handle(&mut stream).await {
             stream.send(Authentication::Ok).await?;
         } else {
