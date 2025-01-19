@@ -372,7 +372,7 @@ hash_bytes_uint32_extended(uint32 k)
 	uint32		a,
 				b,
 				c;
-	uint64 seed = 8816678312871386365;
+	uint64 seed = HASH_PARTITION_SEED;
 
 	a = b = c = 0x9e3779b9 + (uint32) sizeof(uint32) + 3923095;
 
