@@ -25,8 +25,10 @@ impl Parameter {
 
     /// Manually free memory allocated for this parameter.
     ///
-    /// SAFETY: call this after plugin finished executing to avoid memory leaks.
-    pub fn drop(&mut self) {
+    /// # Safety
+    ///
+    /// Call this after plugin finished executing to avoid memory leaks.
+    pub unsafe fn deallocate(&mut self) {
         let layout = Layout::array::<u8>(self.len as usize).unwrap();
         unsafe {
             dealloc(self.data as *mut u8, layout);

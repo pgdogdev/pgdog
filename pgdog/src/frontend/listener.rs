@@ -84,7 +84,10 @@ impl Listener {
             "waiting up to {:.3}s for clients to finish transactions",
             shutdown_timeout.as_secs_f64()
         );
-        if let Err(_) = timeout(shutdown_timeout, self.clients.wait()).await {
+        if timeout(shutdown_timeout, self.clients.wait())
+            .await
+            .is_err()
+        {
             warn!(
                 "terminating {} client connections due to shutdown timeout",
                 self.clients.len()

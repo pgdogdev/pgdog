@@ -73,7 +73,7 @@ impl Client {
 
         stream.send_flush(Authentication::scram()).await?;
 
-        let scram = Server::new(&password);
+        let scram = Server::new(password);
         if let Ok(true) = scram.handle(&mut stream).await {
             stream.send(Authentication::Ok).await?;
         } else {

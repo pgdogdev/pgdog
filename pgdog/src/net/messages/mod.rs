@@ -98,6 +98,11 @@ impl Message {
     pub fn len(&self) -> usize {
         self.payload.len()
     }
+
+    /// Is the message empty?
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 
 /// Check that the message we received is what we expected.

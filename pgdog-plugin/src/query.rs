@@ -7,7 +7,7 @@ use std::ptr::{copy, null};
 impl Query {
     /// Get query text.
     pub fn query(&self) -> &str {
-        debug_assert!(self.query != null());
+        debug_assert!(!self.query.is_null());
         unsafe { CStr::from_ptr(self.query) }.to_str().unwrap()
     }
 
@@ -60,7 +60,7 @@ impl Query {
         if !self.parameters.is_null() {
             for index in 0..self.num_parameters {
                 if let Some(mut param) = self.parameter(index as usize) {
-                    param.drop();
+                    param.deallocate();
                 }
             }
             let layout = Layout::array::<Parameter>(self.num_parameters as usize).unwrap();

@@ -64,7 +64,9 @@ impl Bind {
 
     /// Convert bind parameters to plugin parameters.
     ///
-    /// SAFETY: This function allocates memory the caller has to deallocate.
+    /// # Safety
+    ///
+    /// This function allocates memory the caller has to deallocate.
     pub unsafe fn plugin_parameters(&self) -> Result<Vec<PluginParameter>, Error> {
         let mut params = vec![];
 

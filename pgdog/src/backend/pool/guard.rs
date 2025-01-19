@@ -59,10 +59,8 @@ impl Guard {
                 spawn(async move {
                     // Rollback any unfinished transactions,
                     // but only if the server is in sync (protocol-wise).
-                    if rollback {
-                        if timeout(rollback_timeout, server.rollback()).await.is_err() {
-                            error!("rollback timeout [{}]", server.addr());
-                        }
+                    if rollback && timeout(rollback_timeout, server.rollback()).await.is_err() {
+                        error!("rollback timeout [{}]", server.addr());
                     }
 
                     if cleanup.needed() {
