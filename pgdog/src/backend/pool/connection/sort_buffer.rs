@@ -7,6 +7,13 @@ use crate::{
     net::messages::{DataRow, FromBytes, Message, Protocol, RowDescription, ToBytes},
 };
 
+#[derive(PartialEq, PartialOrd)]
+enum SortableValue {
+    String(Option<String>),
+    Int(Option<i64>),
+    Float(Option<f64>),
+}
+
 /// Sort rows received from multiple shards.
 #[derive(Default)]
 pub(super) struct SortBuffer {
@@ -58,25 +65,29 @@ impl SortBuffer {
                     continue;
                 };
                 let ordering = if let Some(field) = rd.field(index) {
-                    let text = field.is_text();
-                    if field.is_int() {
-                        let a = a.get_int(index, text);
-                        let b = b.get_int(index, text);
-                        if asc {
-                            a.partial_cmp(&b)
-                        } else {
-                            b.partial_cmp(&a)
-                        }
+                    let text = field.is_text_encoding();
+                    let (left, right) = if field.is_int() {
+                        (
+                            SortableValue::Int(a.get_int(index, text)),
+                            SortableValue::Int(b.get_int(index, text)),
+                        )
                     } else if field.is_float() {
-                        let a = a.get_float(index, text);
-                        let b = b.get_float(index, text);
-                        if asc {
-                            a.partial_cmp(&b)
-                        } else {
-                            b.partial_cmp(&a)
-                        }
+                        (
+                            SortableValue::Float(a.get_float(index, text)),
+                            SortableValue::Float(b.get_float(index, text)),
+                        )
+                    } else if field.is_varchar() {
+                        (
+                            SortableValue::String(a.get_text(index)),
+                            SortableValue::String(b.get_text(index)),
+                        )
                     } else {
                         continue;
+                    };
+                    if asc {
+                        left.partial_cmp(&right)
+                    } else {
+                        right.partial_cmp(&left)
                     }
                 } else {
                     continue;

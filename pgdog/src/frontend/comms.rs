@@ -89,8 +89,8 @@ impl Comms {
 
     /// Notify clients pgDog is shutting down.
     pub fn shutdown(&self) {
-        self.global.shutdown.notify_waiters();
         self.global.offline.store(true, Ordering::Relaxed);
+        self.global.shutdown.notify_waiters();
     }
 
     /// Wait for shutdown signal.

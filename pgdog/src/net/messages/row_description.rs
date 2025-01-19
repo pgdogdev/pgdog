@@ -65,13 +65,13 @@ impl Field {
     }
 
     /// Encoded with text encoding.
-    pub fn is_text(&self) -> bool {
+    pub fn is_text_encoding(&self) -> bool {
         self.format == 0
     }
 
     /// Encoded with binary encoding.
-    pub fn is_binary(&self) -> bool {
-        !self.is_text()
+    pub fn is_binary_encoding(&self) -> bool {
+        !self.is_text_encoding()
     }
 
     /// This is an integer.
@@ -82,6 +82,11 @@ impl Field {
     /// This is a float.
     pub fn is_float(&self) -> bool {
         matches!(self.type_oid, 700 | 701)
+    }
+
+    /// This is a varchar.
+    pub fn is_varchar(&self) -> bool {
+        matches!(self.type_oid, 1043 | 25)
     }
 }
 

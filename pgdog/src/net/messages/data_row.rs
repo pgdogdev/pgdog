@@ -122,6 +122,12 @@ impl DataRow {
             }
         })
     }
+
+    /// Get text value at index.
+    pub fn get_text(&self, index: usize) -> Option<String> {
+        self.column(index)
+            .and_then(|column| from_utf8(&column[..]).ok().map(|s| s.to_string()))
+    }
 }
 
 impl FromBytes for DataRow {
