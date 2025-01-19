@@ -17,6 +17,7 @@ static SHARD_ROUND_ROBIN: Lazy<AtomicUsize> = Lazy::new(|| AtomicUsize::new(0));
 
 pub mod comment;
 pub mod order_by;
+pub mod sharding_function;
 
 #[no_mangle]
 pub extern "C" fn pgdog_init() {
