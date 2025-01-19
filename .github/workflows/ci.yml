@@ -11,8 +11,12 @@ jobs:
         with:
           toolchain: stable
           override: true
+      - name: Install Clippy
+        run: rustup component add clippy
       - name: Format
         run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy
   build:
     runs-on: ubuntu-latest
     steps:
