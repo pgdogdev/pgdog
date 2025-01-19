@@ -152,9 +152,11 @@ async fn test_offline() {
 async fn test_pause() {
     let pool = pool();
     let tracker = TaskTracker::new();
-    let mut config = Config::default();
-    config.checkout_timeout = 1_000;
-    config.max = 1;
+    let config = Config {
+        checkout_timeout: 1_000,
+        max: 1,
+        ..Default::default()
+    };
     pool.update_config(config);
 
     let hold = pool.get(&BackendKeyData::new()).await.unwrap();
