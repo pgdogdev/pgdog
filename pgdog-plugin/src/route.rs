@@ -163,6 +163,10 @@ impl Route {
     }
 
     /// Deallocate memory.
+    ///
+    /// # Safety
+    ///
+    /// Don't use this unless you're cleaning up plugin output.
     pub(crate) unsafe fn drop(&self) {
         if self.num_order_by > 0 {
             (0..self.num_order_by).for_each(|index| (*self.order_by.offset(index as isize)).drop());

@@ -43,7 +43,9 @@ impl DatabaseConfig {
 
     /// Deallocate this structure after use.
     ///
-    /// SAFETY: This is not to be used by plugins.
+    /// # Safety
+    ///
+    /// This is not to be used by plugins.
     /// This is for internal pgDog usage only.
     pub(crate) unsafe fn deallocate(&self) {
         drop(unsafe { CString::from_raw(self.host) })
@@ -92,6 +94,8 @@ impl Config {
     /// Deallocate this structure.
     ///
     /// SAFETY: This is not to be used by plugins.
+    /// # Safety
+    ///
     /// This is for internal pgDog usage only.
     pub(crate) unsafe fn deallocate(&self) {
         self.databases().into_iter().for_each(|d| d.deallocate());

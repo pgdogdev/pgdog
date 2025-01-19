@@ -13,7 +13,11 @@ impl bindings::Input {
 
     /// Deallocate memory.
     ///
-    /// SAFETY: This is not to be used by plugins.
+    /// # Safety
+    ///
+    /// This is not to be used by plugins.
+    /// # Safety
+    ///
     /// This is for internal pgDog usage only.
     pub unsafe fn deallocate(&self) {
         self.config.deallocate();

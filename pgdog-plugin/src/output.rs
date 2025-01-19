@@ -11,6 +11,10 @@ impl Output {
         }
     }
 
+    /// # Safety
+    ///
+    /// Don't use this function unless you're cleaning up plugin
+    /// output.
     pub unsafe fn deallocate(&self) {
         #[allow(non_upper_case_globals)]
         if self.decision == RoutingDecision_FORWARD {
