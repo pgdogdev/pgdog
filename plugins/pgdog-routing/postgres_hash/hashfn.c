@@ -121,6 +121,19 @@ pg_rotate_left32(uint32 word, int n)
 #define HASH_PARTITION_SEED UINT64CONST(0x7A5B22367996DCFD)
 
 /*
+ * Combine two 64-bit hash values, resulting in another hash value, using the
+ * same kind of technique as hash_combine().  Testing shows that this also
+ * produces good bit mixing.
+ */
+uint64
+hash_combine64(uint64 a, uint64 b)
+{
+	/* 0x49a0f4dd15e5a8e3 is 64bit random data */
+	a ^= b + UINT64CONST(0x49a0f4dd15e5a8e3) + (a << 54) + (a >> 7);
+	return a;
+}
+
+/*
  * hash_bytes_extended() -- hash into a 64-bit value, using an optional seed
  *		k		: the key (the unaligned variable-length array of bytes)
  *		len		: the length of the key, counting by bytes
@@ -399,5 +412,5 @@ uint64 hashint8extended(int64 val)
 
 	lohalf ^= (val >= 0) ? hihalf : ~hihalf;
 
-	return hash_bytes_uint32_extended(lohalf) + 5305509591434766563;
+	return hash_bytes_uint32_extended(lohalf);
 }

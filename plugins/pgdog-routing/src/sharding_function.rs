@@ -1,20 +1,33 @@
 // PostgreSQL hash function.
 
+use uuid::Uuid;
+
 #[link(name = "postgres_hash")]
 extern "C" {
     #[allow(dead_code)]
     fn hash_bytes_extended(k: *const u8, keylen: i64) -> u64;
     fn hashint8extended(k: i64) -> u64;
+    fn hash_combine64(a: u64, b: u64) -> u64;
 }
 
-#[allow(dead_code)]
-fn hash(k: &[u8]) -> u64 {
+fn hash_slice(k: &[u8]) -> u64 {
     unsafe { hash_bytes_extended(k.as_ptr(), k.len() as i64) }
 }
 
 /// Calculate shard for a BIGINT value.
 pub fn bigint(value: i64, shards: usize) -> usize {
-    unsafe { hashint8extended(value) as usize % shards }
+    let hash = unsafe { hashint8extended(value) };
+    let combined = unsafe { hash_combine64(0, hash as u64) };
+
+    combined as usize % shards
+}
+
+/// Calculate shard for a UUID value.
+pub fn uuid(value: Uuid, shards: usize) -> usize {
+    let hash = hash_slice(value.as_bytes().as_slice());
+    let combined = unsafe { hash_combine64(0, hash) };
+
+    combined as usize % shards
 }
 
 #[cfg(test)]
@@ -66,6 +79,55 @@ mod test {
             // Check that Postgres did the same thing.
             // Note: we are inserting directly into the subtable.
             let table = format!("sharding_func_{}", shard);
+            client
+                .query(&format!("INSERT INTO {} (id) VALUES ($1)", table), &[&v])
+                .expect("insert");
+        }
+    }
+
+    #[test]
+    fn test_uuid() {
+        let tables = r#"
+        BEGIN;
+
+        DROP TABLE IF EXISTS sharding_func_uuid CASCADE;
+
+        CREATE TABLE sharding_func_uuid (id UUID)
+        PARTITION BY HASH(id);
+
+        CREATE TABLE sharding_func_uuid_0
+        PARTITION OF sharding_func_uuid
+        FOR VALUES WITH (modulus 4, remainder 0);
+
+        CREATE TABLE sharding_func_uuid_1
+        PARTITION OF sharding_func_uuid
+        FOR VALUES WITH (modulus 4, remainder 1);
+
+        CREATE TABLE sharding_func_uuid_2
+        PARTITION OF sharding_func_uuid
+        FOR VALUES WITH (modulus 4, remainder 2);
+
+        CREATE TABLE sharding_func_uuid_3
+        PARTITION OF sharding_func_uuid
+        FOR VALUES WITH (modulus 4, remainder 3);
+        "#;
+
+        let mut client = Client::connect(
+            "host=localhost user=pgdog password=pgdog dbname=pgdog",
+            NoTls,
+        )
+        .expect("client to connect");
+
+        client.batch_execute(tables).expect("create tables");
+
+        for _ in 0..4096 {
+            let v = Uuid::new_v4();
+            // Our hashing function.
+            let shard = uuid(v, 4);
+
+            // Check that Postgres did the same thing.
+            // Note: we are inserting directly into the subtable.
+            let table = format!("sharding_func_uuid_{}", shard);
             client
                 .query(&format!("INSERT INTO {} (id) VALUES ($1)", table), &[&v])
                 .expect("insert");
