@@ -16,6 +16,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 static SHARD_ROUND_ROBIN: Lazy<AtomicUsize> = Lazy::new(|| AtomicUsize::new(0));
 
 pub mod comment;
+pub mod copy;
 pub mod order_by;
 pub mod sharding_function;
 

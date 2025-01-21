@@ -348,6 +348,8 @@ pub struct User {
     pub password: String,
     /// Pool size for this user pool, overriding `default_pool_size`.
     pub pool_size: Option<usize>,
+    /// Minimum pool size for this user pool, overriding `min_pool_size`.
+    pub min_pool_size: Option<usize>,
     /// Pooler mode.
     pub pooler_mode: Option<PoolerMode>,
     /// Server username.

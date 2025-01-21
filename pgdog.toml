@@ -11,6 +11,18 @@ shutdown_timeout = 5_000
 name = "pgdog"
 host = "127.0.0.1"
 
+[[databases]]
+name = "pgdog_sharded"
+host = "127.0.0.1"
+database_name = "shard_0"
+shard = 0
+
+[[databases]]
+name = "pgdog_sharded"
+host = "127.0.0.1"
+database_name = "shard_1"
+shard = 1
+
 [[plugins]]
 name = "pgdog_routing"
 

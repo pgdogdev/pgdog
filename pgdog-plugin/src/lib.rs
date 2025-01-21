@@ -5,6 +5,7 @@ pub mod bindings;
 
 pub mod c_api;
 pub mod config;
+pub mod copy;
 pub mod input;
 pub mod order_by;
 pub mod output;

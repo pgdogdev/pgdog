@@ -16,3 +16,9 @@ database = "pgdog"
 password = "pgdog"
 server_user = "pgdog"
 pooler_mode = "session"
+
+[[users]]
+name = "pgdog"
+database = "pgdog_sharded"
+password = "pgdog"
+min_pool_size = 0

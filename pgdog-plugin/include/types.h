@@ -164,7 +164,7 @@ typedef struct Output {
     RoutingOutput output;
 } Output;
 
-/*
+/**
  * Database role, e.g. primary or replica.
 */
 typedef enum Role {
@@ -172,7 +172,7 @@ typedef enum Role {
     REPLICA = 2,
 } Role;
 
-/*
+/**
  * Database configuration entry.
 */
 typedef struct DatabaseConfig {
@@ -182,7 +182,7 @@ typedef struct DatabaseConfig {
     int port;
 } DatabaseConfig;
 
-/*
+/**
  * Configuration for a database cluster
  * used to the serve a query passed to the plugin.
 */
@@ -194,21 +194,21 @@ typedef struct Config {
     int shards;
 } Config;
 
-/*
+/**
 * Routing input union passed to the plugin.
 */
 typedef union RoutingInput {
     Query query;
 } RoutingInput;
 
-/*
+/**
  * Input type.
 */
 typedef enum InputType {
     ROUTING_INPUT = 1,
 } InputType;
 
-/*
+/**
  * Plugin input.
 */
 typedef struct Input {
@@ -216,3 +216,37 @@ typedef struct Input {
     InputType input_type;
     RoutingInput input;
 } Input;
+
+/**
+ * Copy input.
+*/
+typedef struct CopyInput {
+    int len;
+    const char* data;
+    int sharding_column;
+    int num_shards;
+    int headers;
+} CopyInput;
+
+/**
+ * A copy row extracted from input,
+ * with the shard it should go to.
+ *
+ * <div rustbindgen nodebug></div>
+*/
+typedef struct CopyRow {
+    int len;
+    char *data;
+    int shard;
+} CopyRow;
+
+/**
+ * Copy output.
+ *
+ * <div rustbindgen nodebug></div>
+*/
+typedef struct CopyOutput {
+    int num_rows;
+    CopyRow *rows;
+    char *header;
+} CopyOutput;

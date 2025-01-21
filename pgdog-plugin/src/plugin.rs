@@ -12,6 +12,8 @@ pub struct Plugin<'a> {
     fini: Option<Symbol<'a, unsafe extern "C" fn()>>,
     /// Route query to a shard.
     route: Option<Symbol<'a, unsafe extern "C" fn(bindings::Input) -> Output>>,
+    /// Route copy message.
+    copy: Option<Symbol<'a, unsafe extern "C" fn()>>,
 }
 
 impl<'a> Plugin<'a> {
@@ -26,12 +28,14 @@ impl<'a> Plugin<'a> {
         let route = unsafe { library.get(b"pgdog_route_query\0") }.ok();
         let init = unsafe { library.get(b"pgdog_init\0") }.ok();
         let fini = unsafe { library.get(b"pgdog_fini\0") }.ok();
+        let copy = unsafe { library.get(b"pgdog_copy\0") }.ok();
 
         Self {
             name: name.to_owned(),
             route,
             init,
             fini,
+            copy,
         }
     }
 

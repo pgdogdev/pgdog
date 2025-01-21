@@ -214,7 +214,9 @@ const _: () = {
 };
 pub const Role_PRIMARY: Role = 1;
 pub const Role_REPLICA: Role = 2;
+#[doc = " Database role, e.g. primary or replica."]
 pub type Role = ::std::os::raw::c_uint;
+#[doc = " Database configuration entry."]
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct DatabaseConfig {
@@ -236,6 +238,7 @@ const _: () = {
     ["Offset of field: DatabaseConfig::port"]
         [::std::mem::offset_of!(DatabaseConfig, port) - 16usize];
 };
+#[doc = " Configuration for a database cluster\n used to the serve a query passed to the plugin."]
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct Config {
@@ -254,6 +257,7 @@ const _: () = {
     ["Offset of field: Config::name"][::std::mem::offset_of!(Config, name) - 16usize];
     ["Offset of field: Config::shards"][::std::mem::offset_of!(Config, shards) - 24usize];
 };
+#[doc = " Routing input union passed to the plugin."]
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub union RoutingInput {
@@ -266,7 +270,9 @@ const _: () = {
     ["Offset of field: RoutingInput::query"][::std::mem::offset_of!(RoutingInput, query) - 0usize];
 };
 pub const InputType_ROUTING_INPUT: InputType = 1;
+#[doc = " Input type."]
 pub type InputType = ::std::os::raw::c_uint;
+#[doc = " Plugin input."]
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct Input {
@@ -281,4 +287,59 @@ const _: () = {
     ["Offset of field: Input::config"][::std::mem::offset_of!(Input, config) - 0usize];
     ["Offset of field: Input::input_type"][::std::mem::offset_of!(Input, input_type) - 32usize];
     ["Offset of field: Input::input"][::std::mem::offset_of!(Input, input) - 40usize];
+};
+#[doc = " Copy input."]
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct CopyInput {
+    pub len: ::std::os::raw::c_int,
+    pub data: *const ::std::os::raw::c_char,
+    pub sharding_column: ::std::os::raw::c_int,
+    pub num_shards: ::std::os::raw::c_int,
+    pub headers: ::std::os::raw::c_int,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of CopyInput"][::std::mem::size_of::<CopyInput>() - 32usize];
+    ["Alignment of CopyInput"][::std::mem::align_of::<CopyInput>() - 8usize];
+    ["Offset of field: CopyInput::len"][::std::mem::offset_of!(CopyInput, len) - 0usize];
+    ["Offset of field: CopyInput::data"][::std::mem::offset_of!(CopyInput, data) - 8usize];
+    ["Offset of field: CopyInput::sharding_column"]
+        [::std::mem::offset_of!(CopyInput, sharding_column) - 16usize];
+    ["Offset of field: CopyInput::num_shards"]
+        [::std::mem::offset_of!(CopyInput, num_shards) - 20usize];
+    ["Offset of field: CopyInput::headers"][::std::mem::offset_of!(CopyInput, headers) - 24usize];
+};
+#[doc = " A copy row extracted from input,\n with the shard it should go to.\n\n <div rustbindgen nodebug></div>"]
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct CopyRow {
+    pub len: ::std::os::raw::c_int,
+    pub data: *mut ::std::os::raw::c_char,
+    pub shard: ::std::os::raw::c_int,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of CopyRow"][::std::mem::size_of::<CopyRow>() - 24usize];
+    ["Alignment of CopyRow"][::std::mem::align_of::<CopyRow>() - 8usize];
+    ["Offset of field: CopyRow::len"][::std::mem::offset_of!(CopyRow, len) - 0usize];
+    ["Offset of field: CopyRow::data"][::std::mem::offset_of!(CopyRow, data) - 8usize];
+    ["Offset of field: CopyRow::shard"][::std::mem::offset_of!(CopyRow, shard) - 16usize];
+};
+#[doc = " Copy output.\n\n <div rustbindgen nodebug></div>"]
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct CopyOutput {
+    pub num_rows: ::std::os::raw::c_int,
+    pub rows: *mut CopyRow,
+    pub header: *mut ::std::os::raw::c_char,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of CopyOutput"][::std::mem::size_of::<CopyOutput>() - 24usize];
+    ["Alignment of CopyOutput"][::std::mem::align_of::<CopyOutput>() - 8usize];
+    ["Offset of field: CopyOutput::num_rows"]
+        [::std::mem::offset_of!(CopyOutput, num_rows) - 0usize];
+    ["Offset of field: CopyOutput::rows"][::std::mem::offset_of!(CopyOutput, rows) - 8usize];
+    ["Offset of field: CopyOutput::header"][::std::mem::offset_of!(CopyOutput, header) - 16usize];
 };

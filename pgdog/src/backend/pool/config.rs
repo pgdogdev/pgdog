@@ -113,7 +113,7 @@ impl Config {
     /// Create from database/user configuration.
     pub fn new(general: &General, _database: &Database, user: &User) -> Self {
         Config {
-            min: general.min_pool_size,
+            min: user.min_pool_size.unwrap_or(general.min_pool_size),
             max: user.pool_size.unwrap_or(general.default_pool_size),
             healthcheck_interval: general.healthcheck_interval,
             idle_healthcheck_interval: general.idle_healthcheck_interval,
