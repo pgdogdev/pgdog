@@ -202,12 +202,16 @@ impl Client {
                     let code = message.code();
 
                     // ReadyForQuery (B) | CopyInResponse (B) || RowDescription (B) | ErrorResponse (B)
-                    if matches!(code, 'Z' | 'G') || matches!(code, 'T' | 'E')  && async_ {
+                    let flush = matches!(code, 'Z' | 'G') || matches!(code, 'T' | 'E')  && async_;
+                    if flush {
                         self.stream.send_flush(message).await?;
-                        comms.stats(stats.query());
                         async_ = false;
-                    }  else {
+                    } else {
                         self.stream.send(message).await?;
+                    }
+
+                    if code == 'Z' {
+                        comms.stats(stats.query());
                     }
 
                     if backend.done() {
