@@ -210,6 +210,8 @@ impl Client {
                         self.stream.send(message).await?;
                     }
 
+                    comms.stats(stats.sent(len));
+
                     if code == 'Z' {
                         comms.stats(stats.query());
                     }
@@ -224,8 +226,6 @@ impl Client {
                             break;
                         }
                     }
-
-                    comms.stats(stats.sent(len));
                 }
             }
         }

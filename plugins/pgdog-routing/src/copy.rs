@@ -125,7 +125,7 @@ mod test {
         let mut rows = output.rows().iter();
         assert_eq!(rows.next().unwrap().shard, bigint(1, 4) as i32);
         assert_eq!(rows.next().unwrap().shard, bigint(2, 4) as i32);
-        assert_eq!(output.header(), Some("id;email"));
+        assert_eq!(output.header(), Some("id;email\n"));
 
         unsafe {
             copy.deallocate();
