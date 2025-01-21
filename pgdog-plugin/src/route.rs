@@ -18,6 +18,11 @@ impl RoutingOutput {
     pub fn new_copy(copy: Copy) -> RoutingOutput {
         RoutingOutput { copy }
     }
+
+    /// Create new copy rows output.
+    pub fn new_copy_rows(copy_rows: CopyOutput) -> RoutingOutput {
+        RoutingOutput { copy_rows }
+    }
 }
 
 impl Route {

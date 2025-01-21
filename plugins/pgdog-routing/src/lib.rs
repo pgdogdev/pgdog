@@ -6,8 +6,8 @@ use pg_query::{parse, NodeEnum};
 use pgdog_plugin::bindings::{Config, Input, Output};
 use pgdog_plugin::Route;
 
-use tracing::trace;
 use tracing::{debug, level_filters::LevelFilter};
+use tracing::{error, trace};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 use std::io::IsTerminal;
@@ -48,6 +48,14 @@ pub extern "C" fn pgdog_route_query(input: Input) -> Output {
             Ok(output) => output,
             Err(_) => Output::new_forward(Route::unknown()),
         }
+    } else if let Some(copy_input) = input.copy() {
+        match copy::copy_data(copy_input, input.config.shards as usize) {
+            Ok(output) => Output::new_copy_rows(output),
+            Err(err) => {
+                error!("{:?}", err);
+                Output::skip()
+            }
+        }
     } else {
         Output::skip()
     }
@@ -56,9 +64,6 @@ pub extern "C" fn pgdog_route_query(input: Input) -> Output {
 fn route_internal(query: &str, config: Config) -> Result<Output, pg_query::Error> {
     let shards = config.shards;
     let databases = config.databases();
-
-    let ast = parse(query)?;
-    trace!("{:#?}", ast);
 
     // Shortcut for typical single shard replicas-only/primary-only deployments.
     if shards == 1 {
@@ -71,6 +76,9 @@ fn route_internal(query: &str, config: Config) -> Result<Output, pg_query::Error
             return Ok(Output::new_forward(Route::read(0)));
         }
     }
+
+    let ast = parse(query)?;
+    trace!("{:#?}", ast);
 
     let shard = comment::shard(query, shards as usize)?;
 

@@ -1,5 +1,7 @@
 //! Handle COPY commands.
 
+use libc::c_char;
+
 use crate::{
     bindings::{Copy, CopyInput, CopyOutput, CopyRow},
     CopyFormat_CSV, CopyFormat_INVALID,
@@ -17,20 +19,35 @@ impl Copy {
     pub fn invalid() -> Self {
         Self {
             copy_format: CopyFormat_INVALID,
-            has_headers: 0,
             table_name: null_mut(),
-            column_names: null_mut(),
+            has_headers: 0,
+            delimiter: ',' as c_char,
         }
     }
 
     /// Create new copy command.
-    pub fn new(table_name: &str, headers: bool) -> Self {
+    pub fn new(table_name: &str, headers: bool, delimiter: char) -> Self {
         Self {
             table_name: CString::new(table_name).unwrap().into_raw(),
             has_headers: if headers { 1 } else { 0 },
-            column_names: null_mut(),
             copy_format: CopyFormat_CSV,
+            delimiter: delimiter as c_char,
         }
+    }
+
+    /// Get table name.
+    pub fn table_name(&self) -> &str {
+        unsafe { CStr::from_ptr(self.table_name).to_str().unwrap() }
+    }
+
+    /// Does this COPY statement say to expect headers?
+    pub fn has_headers(&self) -> bool {
+        self.has_headers != 0
+    }
+
+    /// Get CSV delimiter.
+    pub fn delimiter(&self) -> char {
+        self.delimiter as u8 as char
     }
 
     /// Deallocate this structure.
@@ -46,19 +63,34 @@ impl Copy {
 
 impl CopyInput {
     /// Create new copy input.
-    pub fn new(data: &[u8], sharding_column: usize, shards: usize, headers: bool) -> Self {
+    pub fn new(data: &[u8], sharding_column: usize, headers: bool, delimiter: char) -> Self {
         Self {
             len: data.len() as i32,
             data: data.as_ptr() as *const i8,
             sharding_column: sharding_column as i32,
-            num_shards: shards as i32,
-            headers: if headers { 1 } else { 0 },
+            has_headers: if headers { 1 } else { 0 },
+            delimiter: delimiter as c_char,
         }
     }
 
     /// Get data as slice.
     pub fn data(&self) -> &[u8] {
         unsafe { from_raw_parts(self.data as *const u8, self.len as usize) }
+    }
+
+    /// CSV delimiter.
+    pub fn delimiter(&self) -> char {
+        self.delimiter as u8 as char
+    }
+
+    /// Sharding column offset.
+    pub fn sharding_column(&self) -> usize {
+        self.sharding_column as usize
+    }
+
+    /// Does this input contain headers? Only the first one will.
+    pub fn headers(&self) -> bool {
+        self.has_headers != 0
     }
 }
 
@@ -70,6 +102,11 @@ impl CopyRow {
             data: data.as_ptr() as *mut i8,
             shard,
         }
+    }
+
+    /// Shard this row should go to.
+    pub fn shard(&self) -> usize {
+        self.shard as usize
     }
 
     /// Get data.

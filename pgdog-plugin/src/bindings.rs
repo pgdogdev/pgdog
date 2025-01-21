@@ -193,18 +193,18 @@ pub type CopyFormat = ::std::os::raw::c_uint;
 #[derive(Debug, Copy, Clone)]
 pub struct Copy {
     pub copy_format: CopyFormat,
-    pub has_headers: ::std::os::raw::c_int,
     pub table_name: *mut ::std::os::raw::c_char,
-    pub column_names: *mut *mut ::std::os::raw::c_char,
+    pub has_headers: ::std::os::raw::c_int,
+    pub delimiter: ::std::os::raw::c_char,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
     ["Size of Copy"][::std::mem::size_of::<Copy>() - 24usize];
     ["Alignment of Copy"][::std::mem::align_of::<Copy>() - 8usize];
     ["Offset of field: Copy::copy_format"][::std::mem::offset_of!(Copy, copy_format) - 0usize];
-    ["Offset of field: Copy::has_headers"][::std::mem::offset_of!(Copy, has_headers) - 4usize];
     ["Offset of field: Copy::table_name"][::std::mem::offset_of!(Copy, table_name) - 8usize];
-    ["Offset of field: Copy::column_names"][::std::mem::offset_of!(Copy, column_names) - 16usize];
+    ["Offset of field: Copy::has_headers"][::std::mem::offset_of!(Copy, has_headers) - 16usize];
+    ["Offset of field: Copy::delimiter"][::std::mem::offset_of!(Copy, delimiter) - 20usize];
 };
 #[doc = " A copy row extracted from input,\n with the shard it should go to.\n\n <div rustbindgen nodebug></div>"]
 #[repr(C)]
@@ -326,9 +326,9 @@ const _: () = {
 pub struct CopyInput {
     pub len: ::std::os::raw::c_int,
     pub data: *const ::std::os::raw::c_char,
+    pub delimiter: ::std::os::raw::c_char,
+    pub has_headers: ::std::os::raw::c_int,
     pub sharding_column: ::std::os::raw::c_int,
-    pub num_shards: ::std::os::raw::c_int,
-    pub headers: ::std::os::raw::c_int,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
@@ -336,11 +336,12 @@ const _: () = {
     ["Alignment of CopyInput"][::std::mem::align_of::<CopyInput>() - 8usize];
     ["Offset of field: CopyInput::len"][::std::mem::offset_of!(CopyInput, len) - 0usize];
     ["Offset of field: CopyInput::data"][::std::mem::offset_of!(CopyInput, data) - 8usize];
+    ["Offset of field: CopyInput::delimiter"]
+        [::std::mem::offset_of!(CopyInput, delimiter) - 16usize];
+    ["Offset of field: CopyInput::has_headers"]
+        [::std::mem::offset_of!(CopyInput, has_headers) - 20usize];
     ["Offset of field: CopyInput::sharding_column"]
-        [::std::mem::offset_of!(CopyInput, sharding_column) - 16usize];
-    ["Offset of field: CopyInput::num_shards"]
-        [::std::mem::offset_of!(CopyInput, num_shards) - 20usize];
-    ["Offset of field: CopyInput::headers"][::std::mem::offset_of!(CopyInput, headers) - 24usize];
+        [::std::mem::offset_of!(CopyInput, sharding_column) - 24usize];
 };
 #[doc = " Routing input union passed to the plugin."]
 #[repr(C)]

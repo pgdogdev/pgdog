@@ -157,9 +157,9 @@ typedef enum CopyFormat {
 */
 typedef struct Copy {
     CopyFormat copy_format;
-    int has_headers;
     char *table_name;
-    char **column_names;
+    int has_headers;
+    char delimiter;
 } Copy;
 
 /**
@@ -247,9 +247,9 @@ typedef struct Config {
 typedef struct CopyInput {
     int len;
     const char* data;
+    char delimiter;
+    int has_headers;
     int sharding_column;
-    int num_shards;
-    int headers;
 } CopyInput;
 
 /**

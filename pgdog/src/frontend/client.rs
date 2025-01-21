@@ -181,8 +181,18 @@ impl Client {
                         }
                     }
 
-                    // Send query to server.
-                    backend.send(buffer.into()).await?;
+                    // Handle COPY subprotocol in a potentially sharded context.
+                    if buffer.copy() {
+                        let rows = router.copy_data(&buffer, backend.cluster()?)?;
+                        if !rows.is_empty() {
+                            backend.send_copy(rows).await?;
+                        } else {
+                            backend.send(buffer.into()).await?;
+                        }
+                    } else {
+                        // Send query to server.
+                        backend.send(buffer.into()).await?;
+                    }
                 }
 
                 message = backend.read() => {

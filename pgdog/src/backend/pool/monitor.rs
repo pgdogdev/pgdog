@@ -278,7 +278,7 @@ impl Monitor {
             Ok(())
         } else {
             // Create a new one and close it. once done.
-            debug!("creating new healthcheck connection [{}]", pool.addr());
+            info!("creating new healthcheck connection [{}]", pool.addr());
             match Server::connect(pool.addr(), pool.startup_parameters()).await {
                 Ok(mut server) => {
                     if let Ok(()) = server.healthcheck(";").await {

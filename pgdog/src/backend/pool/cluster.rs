@@ -141,3 +141,15 @@ impl Cluster {
         self.pooler_mode
     }
 }
+
+// pub struct PluginConfig {
+//     config: pgdog_plugin::bindings::Config,
+// }
+
+// impl Drop for PluginConfig {
+//     fn drop(&mut self) {
+//         unsafe {
+//             self.config.deallocate();
+//         }
+//     }
+// }

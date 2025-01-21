@@ -6,7 +6,6 @@ use super::*;
 pub(super) enum Binding {
     Server(Option<Guard>),
     Admin(Backend),
-    #[allow(dead_code)]
     MultiShard(Vec<Guard>, MultiShard),
 }
 
@@ -103,6 +102,28 @@ impl Binding {
 
                 Ok(())
             }
+        }
+    }
+
+    /// Send copy messages to shards they are destined to go.
+    pub(super) async fn send_copy(&mut self, rows: Vec<CopyRow>) -> Result<(), Error> {
+        match self {
+            Binding::MultiShard(servers, _state) => {
+                for row in rows {
+                    for (shard, server) in servers.iter_mut().enumerate() {
+                        if let Some(row_shard) = row.shard() {
+                            if shard == row_shard {
+                                server.send(vec![row.message()]).await?;
+                            }
+                        } else {
+                            server.send(vec![row.message()]).await?;
+                        }
+                    }
+                }
+                Ok(())
+            }
+
+            _ => return Err(Error::NotConnected),
         }
     }
 
