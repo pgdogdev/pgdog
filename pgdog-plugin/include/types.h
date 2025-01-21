@@ -79,7 +79,7 @@ typedef struct Route {
     OrderBy *order_by;
 } Route;
 
-/*
+/**
  * The routing decision the plugin makes based on the query contents.
  *
  * FORWARD: The query is forwarded to a shard. Which shard (and whether it's a replica
@@ -91,6 +91,7 @@ typedef struct Route {
               are sent to the client and the original query is never sent to a backend server.
  * NO_DECISION: The plugin doesn't care about this query. The output is ignored by pgDog and the next
                 plugin in the chain is attempted.
+ * COPY: Client is sending over a COPY statement.
  *
 */
 typedef enum RoutingDecision {
@@ -100,6 +101,8 @@ typedef enum RoutingDecision {
     INTERCEPT = 4,
     NO_DECISION = 5, /* The plugin doesn't want to make a decision. We'll try
                  the next plugin in the chain. */
+    COPY = 6, /* COPY */
+    COPY_ROWS = 7, /* Copy rows. */
 } RoutingDecision;
 
 /*
@@ -140,6 +143,48 @@ typedef struct Intercept {
     Row *rows;
 } Intercept;
 
+/**
+ * Copy format. Currently supported:
+ *  - CSV
+*/
+typedef enum CopyFormat {
+    INVALID,
+    CSV,
+} CopyFormat;
+
+/**
+ * Client requesting a COPY.
+*/
+typedef struct Copy {
+    CopyFormat copy_format;
+    int has_headers;
+    char *table_name;
+    char **column_names;
+} Copy;
+
+/**
+ * A copy row extracted from input,
+ * with the shard it should go to.
+ *
+ * <div rustbindgen nodebug></div>
+*/
+typedef struct CopyRow {
+    int len;
+    char *data;
+    int shard;
+} CopyRow;
+
+/**
+ * Copy output.
+ *
+ * <div rustbindgen nodebug></div>
+*/
+typedef struct CopyOutput {
+    int num_rows;
+    CopyRow *rows;
+    char *header;
+} CopyOutput;
+
 /*
  * Union of results a plugin can return.
  *
@@ -152,6 +197,8 @@ typedef union RoutingOutput {
     Route route;
     Error error;
     Intercept intercept;
+    Copy copy;
+    CopyOutput copy_rows;
 } RoutingOutput;
 
 /*
@@ -195,29 +242,6 @@ typedef struct Config {
 } Config;
 
 /**
-* Routing input union passed to the plugin.
-*/
-typedef union RoutingInput {
-    Query query;
-} RoutingInput;
-
-/**
- * Input type.
-*/
-typedef enum InputType {
-    ROUTING_INPUT = 1,
-} InputType;
-
-/**
- * Plugin input.
-*/
-typedef struct Input {
-    Config config;
-    InputType input_type;
-    RoutingInput input;
-} Input;
-
-/**
  * Copy input.
 */
 typedef struct CopyInput {
@@ -229,24 +253,26 @@ typedef struct CopyInput {
 } CopyInput;
 
 /**
- * A copy row extracted from input,
- * with the shard it should go to.
- *
- * <div rustbindgen nodebug></div>
+* Routing input union passed to the plugin.
 */
-typedef struct CopyRow {
-    int len;
-    char *data;
-    int shard;
-} CopyRow;
+typedef union RoutingInput {
+    Query query;
+    CopyInput copy;
+} RoutingInput;
 
 /**
- * Copy output.
- *
- * <div rustbindgen nodebug></div>
+ * Input type.
 */
-typedef struct CopyOutput {
-    int num_rows;
-    CopyRow *rows;
-    char *header;
-} CopyOutput;
+typedef enum InputType {
+    ROUTING_INPUT = 1,
+    COPY_INPUT = 2,
+} InputType;
+
+/**
+ * Plugin input.
+*/
+typedef struct Input {
+    Config config;
+    InputType input_type;
+    RoutingInput input;
+} Input;

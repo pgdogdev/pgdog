@@ -22,8 +22,8 @@ pub extern "C" fn pgdog_route_query(input: Input) -> Output {
     });
 
     if is_read {
-        Output::forward(Route::read_any())
+        Output::new_forward(Route::read_any())
     } else {
-        Output::forward(Route::write_any())
+        Output::new_forward(Route::write_any())
     }
 }

@@ -1,13 +1,48 @@
 //! Handle COPY commands.
 
-use crate::bindings::{CopyInput, CopyOutput, CopyRow};
+use crate::{
+    bindings::{Copy, CopyInput, CopyOutput, CopyRow},
+    CopyFormat_CSV, CopyFormat_INVALID,
+};
 use std::{
     alloc::{alloc, dealloc, Layout},
-    ffi::{c_char, CStr, CString},
-    ptr::{copy, null_mut, slice_from_raw_parts},
+    ffi::{CStr, CString},
+    ptr::{copy, null_mut},
     slice::from_raw_parts,
     str::from_utf8_unchecked,
 };
+
+impl Copy {
+    /// Not a valid COPY statement. Will be ignored by the router.
+    pub fn invalid() -> Self {
+        Self {
+            copy_format: CopyFormat_INVALID,
+            has_headers: 0,
+            table_name: null_mut(),
+            column_names: null_mut(),
+        }
+    }
+
+    /// Create new copy command.
+    pub fn new(table_name: &str, headers: bool) -> Self {
+        Self {
+            table_name: CString::new(table_name).unwrap().into_raw(),
+            has_headers: if headers { 1 } else { 0 },
+            column_names: null_mut(),
+            copy_format: CopyFormat_CSV,
+        }
+    }
+
+    /// Deallocate this structure.
+    ///
+    /// # Safety
+    ///
+    /// Call this only when finished with this.
+    ///
+    pub unsafe fn deallocate(&self) {
+        unsafe { drop(CString::from_raw(self.table_name)) }
+    }
+}
 
 impl CopyInput {
     /// Create new copy input.

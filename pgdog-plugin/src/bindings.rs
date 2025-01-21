@@ -88,6 +88,9 @@ pub const RoutingDecision_REWRITE: RoutingDecision = 2;
 pub const RoutingDecision_ERROR: RoutingDecision = 3;
 pub const RoutingDecision_INTERCEPT: RoutingDecision = 4;
 pub const RoutingDecision_NO_DECISION: RoutingDecision = 5;
+pub const RoutingDecision_COPY: RoutingDecision = 6;
+pub const RoutingDecision_COPY_ROWS: RoutingDecision = 7;
+#[doc = " The routing decision the plugin makes based on the query contents.\n\n FORWARD: The query is forwarded to a shard. Which shard (and whether it's a replica\n           or a primary) is decided by the plugin output.\n REWRITE: The query text is rewritten. The plugin outputs new query text.\n ERROR: The query is denied and the plugin returns an error instead. This error is sent\n        to the client.\n INTERCEPT: The query is intercepted and the plugin returns rows instead. These rows\nare sent to the client and the original query is never sent to a backend server.\n NO_DECISION: The plugin doesn't care about this query. The output is ignored by pgDog and the next\nplugin in the chain is attempted.\n COPY: Client is sending over a COPY statement."]
 pub type RoutingDecision = ::std::os::raw::c_uint;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -181,12 +184,69 @@ const _: () = {
     ["Offset of field: Intercept::num_rows"][::std::mem::offset_of!(Intercept, num_rows) - 16usize];
     ["Offset of field: Intercept::rows"][::std::mem::offset_of!(Intercept, rows) - 24usize];
 };
+pub const CopyFormat_INVALID: CopyFormat = 0;
+pub const CopyFormat_CSV: CopyFormat = 1;
+#[doc = " Copy format. Currently supported:\n  - CSV"]
+pub type CopyFormat = ::std::os::raw::c_uint;
+#[doc = " Client requesting a COPY."]
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct Copy {
+    pub copy_format: CopyFormat,
+    pub has_headers: ::std::os::raw::c_int,
+    pub table_name: *mut ::std::os::raw::c_char,
+    pub column_names: *mut *mut ::std::os::raw::c_char,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of Copy"][::std::mem::size_of::<Copy>() - 24usize];
+    ["Alignment of Copy"][::std::mem::align_of::<Copy>() - 8usize];
+    ["Offset of field: Copy::copy_format"][::std::mem::offset_of!(Copy, copy_format) - 0usize];
+    ["Offset of field: Copy::has_headers"][::std::mem::offset_of!(Copy, has_headers) - 4usize];
+    ["Offset of field: Copy::table_name"][::std::mem::offset_of!(Copy, table_name) - 8usize];
+    ["Offset of field: Copy::column_names"][::std::mem::offset_of!(Copy, column_names) - 16usize];
+};
+#[doc = " A copy row extracted from input,\n with the shard it should go to.\n\n <div rustbindgen nodebug></div>"]
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct CopyRow {
+    pub len: ::std::os::raw::c_int,
+    pub data: *mut ::std::os::raw::c_char,
+    pub shard: ::std::os::raw::c_int,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of CopyRow"][::std::mem::size_of::<CopyRow>() - 24usize];
+    ["Alignment of CopyRow"][::std::mem::align_of::<CopyRow>() - 8usize];
+    ["Offset of field: CopyRow::len"][::std::mem::offset_of!(CopyRow, len) - 0usize];
+    ["Offset of field: CopyRow::data"][::std::mem::offset_of!(CopyRow, data) - 8usize];
+    ["Offset of field: CopyRow::shard"][::std::mem::offset_of!(CopyRow, shard) - 16usize];
+};
+#[doc = " Copy output.\n\n <div rustbindgen nodebug></div>"]
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct CopyOutput {
+    pub num_rows: ::std::os::raw::c_int,
+    pub rows: *mut CopyRow,
+    pub header: *mut ::std::os::raw::c_char,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of CopyOutput"][::std::mem::size_of::<CopyOutput>() - 24usize];
+    ["Alignment of CopyOutput"][::std::mem::align_of::<CopyOutput>() - 8usize];
+    ["Offset of field: CopyOutput::num_rows"]
+        [::std::mem::offset_of!(CopyOutput, num_rows) - 0usize];
+    ["Offset of field: CopyOutput::rows"][::std::mem::offset_of!(CopyOutput, rows) - 8usize];
+    ["Offset of field: CopyOutput::header"][::std::mem::offset_of!(CopyOutput, header) - 16usize];
+};
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub union RoutingOutput {
     pub route: Route,
     pub error: Error,
     pub intercept: Intercept,
+    pub copy: Copy,
+    pub copy_rows: CopyOutput,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
@@ -198,6 +258,9 @@ const _: () = {
         [::std::mem::offset_of!(RoutingOutput, error) - 0usize];
     ["Offset of field: RoutingOutput::intercept"]
         [::std::mem::offset_of!(RoutingOutput, intercept) - 0usize];
+    ["Offset of field: RoutingOutput::copy"][::std::mem::offset_of!(RoutingOutput, copy) - 0usize];
+    ["Offset of field: RoutingOutput::copy_rows"]
+        [::std::mem::offset_of!(RoutingOutput, copy_rows) - 0usize];
 };
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -257,37 +320,6 @@ const _: () = {
     ["Offset of field: Config::name"][::std::mem::offset_of!(Config, name) - 16usize];
     ["Offset of field: Config::shards"][::std::mem::offset_of!(Config, shards) - 24usize];
 };
-#[doc = " Routing input union passed to the plugin."]
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub union RoutingInput {
-    pub query: Query,
-}
-#[allow(clippy::unnecessary_operation, clippy::identity_op)]
-const _: () = {
-    ["Size of RoutingInput"][::std::mem::size_of::<RoutingInput>() - 32usize];
-    ["Alignment of RoutingInput"][::std::mem::align_of::<RoutingInput>() - 8usize];
-    ["Offset of field: RoutingInput::query"][::std::mem::offset_of!(RoutingInput, query) - 0usize];
-};
-pub const InputType_ROUTING_INPUT: InputType = 1;
-#[doc = " Input type."]
-pub type InputType = ::std::os::raw::c_uint;
-#[doc = " Plugin input."]
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct Input {
-    pub config: Config,
-    pub input_type: InputType,
-    pub input: RoutingInput,
-}
-#[allow(clippy::unnecessary_operation, clippy::identity_op)]
-const _: () = {
-    ["Size of Input"][::std::mem::size_of::<Input>() - 72usize];
-    ["Alignment of Input"][::std::mem::align_of::<Input>() - 8usize];
-    ["Offset of field: Input::config"][::std::mem::offset_of!(Input, config) - 0usize];
-    ["Offset of field: Input::input_type"][::std::mem::offset_of!(Input, input_type) - 32usize];
-    ["Offset of field: Input::input"][::std::mem::offset_of!(Input, input) - 40usize];
-};
 #[doc = " Copy input."]
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -310,36 +342,37 @@ const _: () = {
         [::std::mem::offset_of!(CopyInput, num_shards) - 20usize];
     ["Offset of field: CopyInput::headers"][::std::mem::offset_of!(CopyInput, headers) - 24usize];
 };
-#[doc = " A copy row extracted from input,\n with the shard it should go to.\n\n <div rustbindgen nodebug></div>"]
+#[doc = " Routing input union passed to the plugin."]
 #[repr(C)]
 #[derive(Copy, Clone)]
-pub struct CopyRow {
-    pub len: ::std::os::raw::c_int,
-    pub data: *mut ::std::os::raw::c_char,
-    pub shard: ::std::os::raw::c_int,
+pub union RoutingInput {
+    pub query: Query,
+    pub copy: CopyInput,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
-    ["Size of CopyRow"][::std::mem::size_of::<CopyRow>() - 24usize];
-    ["Alignment of CopyRow"][::std::mem::align_of::<CopyRow>() - 8usize];
-    ["Offset of field: CopyRow::len"][::std::mem::offset_of!(CopyRow, len) - 0usize];
-    ["Offset of field: CopyRow::data"][::std::mem::offset_of!(CopyRow, data) - 8usize];
-    ["Offset of field: CopyRow::shard"][::std::mem::offset_of!(CopyRow, shard) - 16usize];
+    ["Size of RoutingInput"][::std::mem::size_of::<RoutingInput>() - 32usize];
+    ["Alignment of RoutingInput"][::std::mem::align_of::<RoutingInput>() - 8usize];
+    ["Offset of field: RoutingInput::query"][::std::mem::offset_of!(RoutingInput, query) - 0usize];
+    ["Offset of field: RoutingInput::copy"][::std::mem::offset_of!(RoutingInput, copy) - 0usize];
 };
-#[doc = " Copy output.\n\n <div rustbindgen nodebug></div>"]
+pub const InputType_ROUTING_INPUT: InputType = 1;
+pub const InputType_COPY_INPUT: InputType = 2;
+#[doc = " Input type."]
+pub type InputType = ::std::os::raw::c_uint;
+#[doc = " Plugin input."]
 #[repr(C)]
 #[derive(Copy, Clone)]
-pub struct CopyOutput {
-    pub num_rows: ::std::os::raw::c_int,
-    pub rows: *mut CopyRow,
-    pub header: *mut ::std::os::raw::c_char,
+pub struct Input {
+    pub config: Config,
+    pub input_type: InputType,
+    pub input: RoutingInput,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
-    ["Size of CopyOutput"][::std::mem::size_of::<CopyOutput>() - 24usize];
-    ["Alignment of CopyOutput"][::std::mem::align_of::<CopyOutput>() - 8usize];
-    ["Offset of field: CopyOutput::num_rows"]
-        [::std::mem::offset_of!(CopyOutput, num_rows) - 0usize];
-    ["Offset of field: CopyOutput::rows"][::std::mem::offset_of!(CopyOutput, rows) - 8usize];
-    ["Offset of field: CopyOutput::header"][::std::mem::offset_of!(CopyOutput, header) - 16usize];
+    ["Size of Input"][::std::mem::size_of::<Input>() - 72usize];
+    ["Alignment of Input"][::std::mem::align_of::<Input>() - 8usize];
+    ["Offset of field: Input::config"][::std::mem::offset_of!(Input, config) - 0usize];
+    ["Offset of field: Input::input_type"][::std::mem::offset_of!(Input, input_type) - 32usize];
+    ["Offset of field: Input::input"][::std::mem::offset_of!(Input, input) - 40usize];
 };

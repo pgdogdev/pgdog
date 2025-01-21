@@ -1,5 +1,5 @@
 //! Plugin input helpers.
-use crate::bindings::{self, Config, InputType_ROUTING_INPUT, RoutingInput};
+use crate::bindings::{self, *};
 
 impl bindings::Input {
     /// Create new plugin input.
@@ -29,6 +29,15 @@ impl bindings::Input {
         match self.input_type {
             InputType_ROUTING_INPUT => Some(unsafe { self.input.query }),
             _ => None,
+        }
+    }
+
+    /// Get copy input, if any.
+    pub fn copy(&self) -> Option<CopyInput> {
+        if self.input_type == InputType_COPY_INPUT {
+            Some(unsafe { self.input.copy })
+        } else {
+            None
         }
     }
 }

@@ -1,10 +1,57 @@
 //! Handle COPY.
 
 use csv::ReaderBuilder;
+use pg_query::{protobuf::CopyStmt, NodeEnum};
 use pgdog_plugin::bindings::*;
 
 use crate::sharding_function::bigint;
 
+/// Parse COPY statement.
+pub fn parse(stmt: &CopyStmt) -> Result<Copy, pg_query::Error> {
+    if !stmt.is_from {
+        return Ok(Copy::invalid());
+    }
+
+    if let Some(ref rel) = stmt.relation {
+        let mut headers = false;
+        let mut csv = false;
+
+        for option in &stmt.options {
+            if let Some(NodeEnum::DefElem(ref elem)) = option.node {
+                match elem.defname.to_lowercase().as_str() {
+                    "format" => {
+                        if let Some(ref arg) = elem.arg {
+                            if let Some(NodeEnum::String(ref string)) = arg.node {
+                                match string.sval.to_lowercase().as_str() {
+                                    "csv" => {
+                                        csv = true;
+                                    }
+
+                                    _ => (),
+                                }
+                            }
+                        }
+                    }
+
+                    "header" => {
+                        headers = true;
+                    }
+
+                    _ => (),
+                }
+            }
+        }
+
+        if csv {
+            return Ok(Copy::new(&rel.relname, headers));
+        }
+    }
+
+    Ok(Copy::invalid())
+}
+
+/// Split copy data into individual rows
+/// and determine where each row should go.
 pub fn copy_data(input: CopyInput) -> Result<CopyOutput, csv::Error> {
     let data = input.data();
     let mut csv = ReaderBuilder::new()
