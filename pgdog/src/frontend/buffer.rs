@@ -41,7 +41,7 @@ impl Buffer {
 
             // CopyData (F)
             // Flush data to backend if we've buffered 4K.
-            if message.code() == 'd' {
+            if message.code() == 'd' && self.len() >= 4096 {
                 return true;
             }
         }
@@ -99,9 +99,19 @@ impl Buffer {
         Ok(rows)
     }
 
+    /// Remove all CopyData messages and return the rest.
+    pub fn without_copy_data(&self) -> Self {
+        let mut buffer = self.buffer.clone();
+        buffer.retain(|m| m.code() != 'd');
+        Self { buffer }
+    }
+
     /// The buffer has CopyData messages.
     pub fn copy(&self) -> bool {
-        self.buffer.last().map(|m| m.code() == 'd').unwrap_or(false)
+        self.buffer
+            .last()
+            .map(|m| m.code() == 'd' || m.code() == 'c')
+            .unwrap_or(false)
     }
 }
 

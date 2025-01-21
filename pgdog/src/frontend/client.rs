@@ -186,6 +186,7 @@ impl Client {
                         let rows = router.copy_data(&buffer, backend.cluster()?)?;
                         if !rows.is_empty() {
                             backend.send_copy(rows).await?;
+                            backend.send(buffer.without_copy_data().into()).await?;
                         } else {
                             backend.send(buffer.into()).await?;
                         }
