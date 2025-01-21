@@ -4,34 +4,27 @@ use pgdog_plugin::CopyFormat_CSV;
 
 use crate::net::messages::CopyData;
 
+/// Sharded copy initial state.
+///
+/// Indicates that rows will be split between shards by a plugin.
+///
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
-pub struct Copy {
+pub struct ShardedCopy {
     csv: bool,
     pub(super) headers: bool,
     pub(super) delimiter: char,
-    columns: Vec<String>,
-    table_name: String,
+    pub(super) sharded_column: usize,
 }
 
-impl Copy {
-    /// Assign columns obtained from CSV header.
-    pub(super) fn headers(&mut self, headers: &str) {
-        self.columns = headers
-            .split(self.delimiter)
-            .map(|col| col.to_owned())
-            .collect();
-    }
-}
-
-impl From<pgdog_plugin::Copy> for Copy {
-    fn from(value: pgdog_plugin::Copy) -> Self {
+impl ShardedCopy {
+    /// Create new sharded copy state.
+    pub fn new(copy: pgdog_plugin::Copy, sharded_column: usize) -> Self {
         Self {
-            csv: value.copy_format == CopyFormat_CSV,
-            headers: value.has_headers(),
-            delimiter: value.delimiter(),
-            table_name: value.table_name().to_string(),
-            columns: vec![],
+            csv: copy.copy_format == CopyFormat_CSV,
+            headers: copy.has_headers(),
+            delimiter: copy.delimiter(),
+            sharded_column,
         }
     }
 }
@@ -40,6 +33,7 @@ impl From<pgdog_plugin::Copy> for Copy {
 #[derive(Debug, Clone)]
 pub struct CopyRow {
     row: CopyData,
+    /// If shard is none, row should go to all shards.
     shard: Option<usize>,
 }
 

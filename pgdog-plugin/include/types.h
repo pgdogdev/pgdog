@@ -160,6 +160,8 @@ typedef struct Copy {
     char *table_name;
     int has_headers;
     char delimiter;
+    int num_columns;
+    char **columns;
 } Copy;
 
 /**

@@ -172,6 +172,7 @@ impl Databases {
 pub fn from_config(config: &ConfigAndUsers) -> Databases {
     let mut databases = HashMap::new();
     let config_databases = config.config.databases();
+    let sharded_tables = config.config.sharded_tables();
     let general = &config.config.general;
 
     for user in &config.users.users {
@@ -197,6 +198,11 @@ pub fn from_config(config: &ConfigAndUsers) -> Databases {
                 shard_configs.push((primary, replicas));
             }
 
+            let shaded_tables = sharded_tables
+                .get(&user.database)
+                .cloned()
+                .unwrap_or(vec![]);
+
             databases.insert(
                 User {
                     user: user.name.clone(),
@@ -208,6 +214,7 @@ pub fn from_config(config: &ConfigAndUsers) -> Databases {
                     general.load_balancing_strategy,
                     &user.password,
                     user.pooler_mode.unwrap_or(general.pooler_mode),
+                    shaded_tables,
                 ),
             );
         }

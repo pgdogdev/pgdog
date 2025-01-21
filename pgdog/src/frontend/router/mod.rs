@@ -2,7 +2,7 @@
 
 use crate::{backend::Cluster, plugin::plugins};
 
-use pgdog_plugin::{CopyInput, Input, RoutingInput};
+use pgdog_plugin::{CopyInput, Input, PluginInput, PluginOutput, RoutingInput};
 use tokio::time::Instant;
 use tracing::debug;
 
@@ -13,7 +13,7 @@ pub mod route;
 
 use request::Request;
 
-pub use copy::{Copy, CopyRow};
+pub use copy::{CopyRow, ShardedCopy};
 pub use error::Error;
 pub use route::Route;
 
@@ -22,7 +22,7 @@ use super::Buffer;
 /// Query router.
 pub struct Router {
     route: Route,
-    copy: Option<Copy>,
+    copy: Option<ShardedCopy>,
 }
 
 impl Default for Router {
@@ -68,17 +68,40 @@ impl Router {
 
         // SAFETY: deallocated by Input below.
         let config = unsafe { cluster.plugin_config()? };
-        let input = Input::new_query(config, RoutingInput::query(request.query()));
+        let input = PluginInput::new(Input::new_query(
+            config,
+            RoutingInput::query(request.query()),
+        ));
 
         let now = Instant::now();
 
         for plugin in plugins() {
-            match plugin.route(input) {
+            match plugin.route(*input) {
                 None => continue,
                 Some(output) => {
+                    // Protect against leaks.
+                    let output = PluginOutput::new(output);
+
                     // COPY subprotocol support.
                     if let Some(copy) = output.copy() {
-                        self.copy = Some(copy.into());
+                        if let Some(sharded_column) =
+                            cluster.sharded_column(copy.table_name(), &copy.columns())
+                        {
+                            debug!(
+                                "sharded COPY across {} shards [{:.3}ms]",
+                                cluster.shards().len(),
+                                now.elapsed().as_secs_f64() * 1000.0
+                            );
+
+                            self.copy = Some(ShardedCopy::new(copy, sharded_column));
+                        } else {
+                            debug!(
+                                "regular COPY replicated to {} shards [{:.3}ms]",
+                                cluster.shards().len(),
+                                now.elapsed().as_secs_f64() * 1000.0
+                            );
+                        }
+                        // We'll be writing to all shards no matter what.
                         self.route = pgdog_plugin::Route::write_all().into();
                         break;
                     } else if let Some(route) = output.route() {
@@ -88,7 +111,6 @@ impl Router {
                         }
 
                         self.route = route.into();
-                        unsafe { output.deallocate() }
 
                         debug!(
                             "routing {} to {} [{}, {:.3}ms]",
@@ -101,14 +123,11 @@ impl Router {
                             plugin.name(),
                             now.elapsed().as_secs_f64() * 1000.0,
                         );
-
                         break;
                     }
                 }
             }
         }
-
-        unsafe { input.deallocate() }
 
         Ok(())
     }
@@ -120,7 +139,12 @@ impl Router {
             let messages = buffer.copy_data()?;
 
             for copy_data in messages {
-                let copy_input = CopyInput::new(copy_data.data(), 0, copy.headers, copy.delimiter);
+                let copy_input = CopyInput::new(
+                    copy_data.data(),
+                    copy.sharded_column,
+                    copy.headers,
+                    copy.delimiter,
+                );
 
                 // SAFETY: deallocated by Input below.
                 let config = unsafe { cluster.plugin_config()? };
@@ -132,7 +156,6 @@ impl Router {
                         Some(output) => {
                             if let Some(copy_rows) = output.copy_rows() {
                                 if let Some(headers) = copy_rows.header() {
-                                    copy.headers(headers);
                                     rows.push(CopyRow::headers(headers));
                                 }
                                 for row in copy_rows.rows() {

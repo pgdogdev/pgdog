@@ -196,15 +196,19 @@ pub struct Copy {
     pub table_name: *mut ::std::os::raw::c_char,
     pub has_headers: ::std::os::raw::c_int,
     pub delimiter: ::std::os::raw::c_char,
+    pub num_columns: ::std::os::raw::c_int,
+    pub columns: *mut *mut ::std::os::raw::c_char,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
-    ["Size of Copy"][::std::mem::size_of::<Copy>() - 24usize];
+    ["Size of Copy"][::std::mem::size_of::<Copy>() - 40usize];
     ["Alignment of Copy"][::std::mem::align_of::<Copy>() - 8usize];
     ["Offset of field: Copy::copy_format"][::std::mem::offset_of!(Copy, copy_format) - 0usize];
     ["Offset of field: Copy::table_name"][::std::mem::offset_of!(Copy, table_name) - 8usize];
     ["Offset of field: Copy::has_headers"][::std::mem::offset_of!(Copy, has_headers) - 16usize];
     ["Offset of field: Copy::delimiter"][::std::mem::offset_of!(Copy, delimiter) - 20usize];
+    ["Offset of field: Copy::num_columns"][::std::mem::offset_of!(Copy, num_columns) - 24usize];
+    ["Offset of field: Copy::columns"][::std::mem::offset_of!(Copy, columns) - 32usize];
 };
 #[doc = " A copy row extracted from input,\n with the shard it should go to.\n\n <div rustbindgen nodebug></div>"]
 #[repr(C)]
@@ -250,7 +254,7 @@ pub union RoutingOutput {
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
-    ["Size of RoutingOutput"][::std::mem::size_of::<RoutingOutput>() - 32usize];
+    ["Size of RoutingOutput"][::std::mem::size_of::<RoutingOutput>() - 40usize];
     ["Alignment of RoutingOutput"][::std::mem::align_of::<RoutingOutput>() - 8usize];
     ["Offset of field: RoutingOutput::route"]
         [::std::mem::offset_of!(RoutingOutput, route) - 0usize];
@@ -270,7 +274,7 @@ pub struct Output {
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
-    ["Size of Output"][::std::mem::size_of::<Output>() - 40usize];
+    ["Size of Output"][::std::mem::size_of::<Output>() - 48usize];
     ["Alignment of Output"][::std::mem::align_of::<Output>() - 8usize];
     ["Offset of field: Output::decision"][::std::mem::offset_of!(Output, decision) - 0usize];
     ["Offset of field: Output::output"][::std::mem::offset_of!(Output, output) - 8usize];

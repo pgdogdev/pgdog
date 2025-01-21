@@ -57,6 +57,8 @@ impl Query {
     /// This is not to be used by plugins.
     /// This is for internal pgDog usage only.
     pub unsafe fn deallocate(&mut self) {
+        unsafe { drop(CString::from_raw(self.query as *mut i8)) }
+
         if !self.parameters.is_null() {
             for index in 0..self.num_parameters {
                 if let Some(mut param) = self.parameter(index as usize) {

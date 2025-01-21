@@ -107,6 +107,8 @@ pub struct Config {
     pub plugins: Vec<Plugin>,
     #[serde(default)]
     pub admin: Admin,
+    #[serde(default)]
+    pub sharded_tables: Vec<ShardedTable>,
 }
 
 impl Config {
@@ -126,6 +128,20 @@ impl Config {
                 .push(database.clone());
         }
         databases
+    }
+
+    /// Organize sharded tables by database name.
+    pub fn sharded_tables(&self) -> HashMap<String, Vec<ShardedTable>> {
+        let mut tables = HashMap::new();
+
+        for table in &self.sharded_tables {
+            let entry = tables
+                .entry(table.database.clone())
+                .or_insert_with(Vec::new);
+            entry.push(table.clone());
+        }
+
+        tables
     }
 }
 
@@ -402,6 +418,18 @@ impl Admin {
         let prefix = "_pgdog_";
         self.password.starts_with(prefix) && self.password.len() == prefix.len() + 12
     }
+}
+
+/// Sharded table.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct ShardedTable {
+    /// Database this table belongs to.
+    pub database: String,
+    /// Table name. If none specified, all tables with the specified
+    /// column are considered sharded.
+    pub name: Option<String>,
+    /// Table sharded on this column.
+    pub column: String,
 }
 
 fn admin_password() -> String {

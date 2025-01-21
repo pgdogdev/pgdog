@@ -123,7 +123,7 @@ impl Binding {
                 Ok(())
             }
 
-            _ => Err(Error::NotConnected),
+            _ => Err(Error::CopyNotConnected),
         }
     }
 

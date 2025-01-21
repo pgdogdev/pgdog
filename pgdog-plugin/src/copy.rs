@@ -22,16 +22,31 @@ impl Copy {
             table_name: null_mut(),
             has_headers: 0,
             delimiter: ',' as c_char,
+            num_columns: 0,
+            columns: null_mut(),
         }
     }
 
     /// Create new copy command.
-    pub fn new(table_name: &str, headers: bool, delimiter: char) -> Self {
+    pub fn new(table_name: &str, headers: bool, delimiter: char, columns: &[&str]) -> Self {
+        let mut cols = vec![];
+        for column in columns {
+            let cstr = CString::new(column.as_bytes()).unwrap();
+            cols.push(cstr.into_raw());
+        }
+        let layout = Layout::array::<*mut i8>(columns.len()).unwrap();
+        let ptr = unsafe { alloc(layout) as *mut *mut i8 };
+        unsafe {
+            copy(cols.as_ptr(), ptr, columns.len());
+        }
+
         Self {
             table_name: CString::new(table_name).unwrap().into_raw(),
             has_headers: if headers { 1 } else { 0 },
             copy_format: CopyFormat_CSV,
             delimiter: delimiter as c_char,
+            num_columns: columns.len() as i32,
+            columns: ptr,
         }
     }
 
@@ -43,6 +58,19 @@ impl Copy {
     /// Does this COPY statement say to expect headers?
     pub fn has_headers(&self) -> bool {
         self.has_headers != 0
+    }
+
+    /// Columns specified by the caller.
+    pub fn columns(&self) -> Vec<&str> {
+        unsafe {
+            (0..self.num_columns)
+                .map(|s| {
+                    CStr::from_ptr(*self.columns.offset(s as isize))
+                        .to_str()
+                        .unwrap()
+                })
+                .collect()
+        }
     }
 
     /// Get CSV delimiter.
@@ -58,6 +86,12 @@ impl Copy {
     ///
     pub unsafe fn deallocate(&self) {
         unsafe { drop(CString::from_raw(self.table_name)) }
+
+        (0..self.num_columns)
+            .for_each(|i| drop(CString::from_raw(*self.columns.offset(i as isize))));
+
+        let layout = Layout::array::<*mut i8>(self.num_columns as usize).unwrap();
+        unsafe { dealloc(self.columns as *mut u8, layout) }
     }
 }
 

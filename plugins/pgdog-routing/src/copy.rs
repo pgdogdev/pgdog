@@ -17,6 +17,14 @@ pub fn parse(stmt: &CopyStmt) -> Result<Copy, pg_query::Error> {
         let mut csv = false;
         let mut delimiter = ',';
 
+        let mut columns = vec![];
+
+        for column in &stmt.attlist {
+            if let Some(NodeEnum::String(ref column)) = column.node {
+                columns.push(column.sval.as_str());
+            }
+        }
+
         for option in &stmt.options {
             if let Some(NodeEnum::DefElem(ref elem)) = option.node {
                 match elem.defname.to_lowercase().as_str() {
@@ -48,7 +56,7 @@ pub fn parse(stmt: &CopyStmt) -> Result<Copy, pg_query::Error> {
         }
 
         if csv {
-            return Ok(Copy::new(&rel.relname, headers, delimiter));
+            return Ok(Copy::new(&rel.relname, headers, delimiter, &columns));
         }
     }
 

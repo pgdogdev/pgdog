@@ -1,6 +1,9 @@
 //! A collection of replicas and a primary.
 
-use crate::{config::PoolerMode, net::messages::BackendKeyData};
+use crate::{
+    config::{PoolerMode, ShardedTable},
+    net::messages::BackendKeyData,
+};
 
 use super::{Address, Config, Error, Guard, Shard};
 use crate::config::LoadBalancingStrategy;
@@ -24,6 +27,7 @@ pub struct Cluster {
     shards: Vec<Shard>,
     password: String,
     pooler_mode: PoolerMode,
+    sharded_tables: Vec<ShardedTable>,
 }
 
 impl Cluster {
@@ -34,6 +38,7 @@ impl Cluster {
         lb_strategy: LoadBalancingStrategy,
         password: &str,
         pooler_mode: PoolerMode,
+        sharded_tables: Vec<ShardedTable>,
     ) -> Self {
         Self {
             shards: shards
@@ -43,6 +48,7 @@ impl Cluster {
             name: name.to_owned(),
             password: password.to_owned(),
             pooler_mode,
+            sharded_tables,
         }
     }
 
@@ -68,6 +74,7 @@ impl Cluster {
             name: self.name.clone(),
             password: self.password.clone(),
             pooler_mode: self.pooler_mode,
+            sharded_tables: self.sharded_tables.clone(),
         }
     }
 
@@ -139,6 +146,27 @@ impl Cluster {
     /// Get pooler mode.
     pub fn pooler_mode(&self) -> PoolerMode {
         self.pooler_mode
+    }
+
+    // Get sharded tables if any.
+    pub fn shaded_tables(&self) -> &[ShardedTable] {
+        &self.sharded_tables
+    }
+
+    /// Find sharded column position, if the table and columns match the configuration.
+    pub fn sharded_column(&self, table: &str, columns: &[&str]) -> Option<usize> {
+        let table = self.sharded_tables.iter().find(|sharded_table| {
+            sharded_table
+                .name
+                .as_ref()
+                .map(|name| name == table)
+                .unwrap_or(true)
+                && columns.contains(&sharded_table.column.as_str())
+        });
+
+        table
+            .map(|t| columns.iter().position(|c| *c == &t.column))
+            .flatten()
     }
 }
 

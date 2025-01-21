@@ -28,3 +28,7 @@ name = "pgdog_routing"
 
 [admin]
 password = "pgdog"
+
+[[sharded_tables]]
+database = "pgdog_sharded"
+column = "id"
