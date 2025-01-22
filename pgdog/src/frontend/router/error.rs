@@ -22,4 +22,7 @@ pub enum Error {
 
     #[error("null bytes in input")]
     NullBytes,
+
+    #[error("{0}")]
+    Parser(#[from] super::parser::Error),
 }

@@ -8,8 +8,10 @@ use tracing::debug;
 
 pub mod copy;
 pub mod error;
+pub mod parser;
 pub mod request;
 pub mod route;
+pub mod sharding;
 
 use request::Request;
 

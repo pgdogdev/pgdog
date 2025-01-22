@@ -21,7 +21,7 @@ pub struct PoolConfig {
 
 /// A collection of sharded replicas and primaries
 /// belonging to the same database cluster.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct Cluster {
     name: String,
     shards: Vec<Shard>,
