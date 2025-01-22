@@ -163,7 +163,7 @@ impl Client {
 
                         // Grab a connection from the right pool.
                         comms.stats(stats.waiting());
-                        match backend.connect(&self.id, router.route()).await {
+                        match backend.connect(&self.id, &router.route()).await {
                             Ok(()) => (),
                             Err(err) => if err.no_server() {
                                 error!("connection pool is down");
@@ -183,7 +183,7 @@ impl Client {
 
                     // Handle COPY subprotocol in a potentially sharded context.
                     if buffer.copy() {
-                        let rows = router.copy_data(&buffer, backend.cluster()?)?;
+                        let rows = router.copy_data(&buffer)?;
                         if !rows.is_empty() {
                             backend.send_copy(rows).await?;
                             backend.send(buffer.without_copy_data().into()).await?;

@@ -137,24 +137,24 @@ impl CopyParser {
 
             for record in csv.records() {
                 let record = record?;
-                if let Some(sharding_column) = self.sharded_column {
+                let shard = if let Some(sharding_column) = self.sharded_column {
                     let key = record
                         .iter()
                         .nth(sharding_column)
                         .ok_or(Error::NoShardingColumn)?;
 
-                    let shard = shard_str(key, self.shards);
+                    shard_str(key, self.shards)
+                } else {
+                    None
+                };
 
-                    if let Some(shard) = shard {
-                        if let Some(pos) = record.position() {
-                            let start = pos.byte() as usize;
-                            let end = start + record.as_slice().len() + 1; // New line.
-                            let data = row.data().get(start..=end);
+                if let Some(pos) = record.position() {
+                    let start = pos.byte() as usize;
+                    let end = start + record.as_slice().len() + 1; // New line.
+                    let data = row.data().get(start..=end);
 
-                            if let Some(data) = data {
-                                rows.push(CopyRow::new(data, Some(shard)));
-                            }
-                        }
+                    if let Some(data) = data {
+                        rows.push(CopyRow::new(data, shard));
                     }
                 }
             }

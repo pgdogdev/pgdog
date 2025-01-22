@@ -15,4 +15,13 @@ pub enum Error {
 
     #[error("{0}")]
     Csv(#[from] csv::Error),
+
+    #[error("{0}")]
+    Net(#[from] crate::net::Error),
+
+    #[error("empty query")]
+    EmptyQuery,
+
+    #[error("not in sync")]
+    NotInSync,
 }

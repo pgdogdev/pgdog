@@ -168,16 +168,26 @@ impl Cluster {
             .map(|t| columns.iter().position(|c| *c == &t.column))
             .flatten()
     }
+
+    /// This cluster is read only (no primaries).
+    pub fn read_only(&self) -> bool {
+        for shard in &self.shards {
+            if shard.primary.is_some() {
+                return false;
+            }
+        }
+
+        true
+    }
+
+    ///  This cluster is write only (no replicas).
+    pub fn write_only(&self) -> bool {
+        for shard in &self.shards {
+            if !shard.replicas.is_empty() {
+                return false;
+            }
+        }
+
+        true
+    }
 }
-
-// pub struct PluginConfig {
-//     config: pgdog_plugin::bindings::Config,
-// }
-
-// impl Drop for PluginConfig {
-//     fn drop(&mut self) {
-//         unsafe {
-//             self.config.deallocate();
-//         }
-//     }
-// }

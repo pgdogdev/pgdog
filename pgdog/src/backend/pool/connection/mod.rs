@@ -125,7 +125,7 @@ impl Connection {
         match &self.binding {
             Binding::Admin(_) => Ok(ParameterStatus::fake()),
             Binding::Server(_) | Binding::MultiShard(_, _) => {
-                self.connect(id, &Route::write(0)).await?; // Get params from primary.
+                self.connect(id, &Route::write(Some(0))).await?; // Get params from primary.
                 let params = self
                     .server()?
                     .params()

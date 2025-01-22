@@ -5,7 +5,7 @@ use crate::{config::LoadBalancingStrategy, net::messages::BackendKeyData};
 use super::{Error, Guard, Pool, PoolConfig, Replicas};
 
 /// Primary and replicas.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct Shard {
     pub(super) primary: Option<Pool>,
     pub(super) replicas: Replicas,
