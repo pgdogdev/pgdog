@@ -21,6 +21,25 @@ use tracing::trace;
 pub enum Command {
     Query(Route),
     Copy(CopyParser),
+    StartTransaction,
+    CommitTransaction,
+    RollbackTransaction,
+}
+
+impl Command {
+    /// This is a BEGIN TRANSACTION command.
+    pub fn begin(&self) -> bool {
+        matches!(self, Command::StartTransaction)
+    }
+
+    /// This is a ROLLBACK command.
+    pub fn rollback(&self) -> bool {
+        matches!(self, Command::RollbackTransaction)
+    }
+
+    pub fn commit(&self) -> bool {
+        matches!(self, Command::CommitTransaction)
+    }
 }
 
 #[derive(Debug)]
@@ -58,6 +77,9 @@ impl QueryParser {
         match self.command {
             Command::Query(ref route) => route.clone(),
             Command::Copy(_) => Route::write(None),
+            Command::CommitTransaction
+            | Command::RollbackTransaction
+            | Command::StartTransaction => Route::write(None),
         }
     }
 
@@ -79,23 +101,33 @@ impl QueryParser {
 
         trace!("{:#?}", ast);
 
-        // `SELECT NOW()`, `SELECT 1`, etc.
-        if ast.tables().is_empty() && shard.is_none() {
-            return Ok(Command::Query(Route::read(Some(
-                round_robin::next() % cluster.shards().len(),
-            ))));
-        }
-
         let stmt = ast.protobuf.stmts.first().ok_or(Error::EmptyQuery)?;
         let root = stmt.stmt.as_ref().ok_or(Error::EmptyQuery)?;
 
         let mut command = match root.node {
-            Some(NodeEnum::SelectStmt(ref stmt)) => Self::select(stmt),
+            Some(NodeEnum::SelectStmt(ref stmt)) => {
+                // `SELECT NOW()`, `SELECT 1`, etc.
+                if ast.tables().is_empty() && shard.is_none() {
+                    return Ok(Command::Query(Route::read(Some(
+                        round_robin::next() % cluster.shards().len(),
+                    ))));
+                } else {
+                    Self::select(stmt)
+                }
+            }
             Some(NodeEnum::CopyStmt(ref stmt)) => Self::copy(stmt, cluster),
             Some(NodeEnum::InsertStmt(ref stmt)) => Self::insert(stmt),
             Some(NodeEnum::UpdateStmt(ref stmt)) => Self::update(stmt),
             Some(NodeEnum::DeleteStmt(ref stmt)) => Self::delete(stmt),
-            _ => todo!(),
+            Some(NodeEnum::TransactionStmt(ref stmt)) => match stmt.kind() {
+                TransactionStmtKind::TransStmtCommit => return Ok(Command::CommitTransaction),
+                TransactionStmtKind::TransStmtRollback => return Ok(Command::RollbackTransaction),
+                TransactionStmtKind::TransStmtBegin | TransactionStmtKind::TransStmtStart => {
+                    return Ok(Command::StartTransaction)
+                }
+                _ => Ok(Command::Query(Route::write(None))),
+            },
+            _ => Ok(Command::Query(Route::write(None))),
         }?;
 
         if let Some(shard) = shard {

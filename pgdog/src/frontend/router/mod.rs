@@ -2,7 +2,7 @@
 
 use crate::backend::Cluster;
 
-use parser::query::QueryParser;
+use parser::query::{Command, QueryParser};
 
 pub mod copy;
 pub mod error;
@@ -42,9 +42,8 @@ impl Router {
     /// previous route is preserved. This is useful in case the client
     /// doesn't supply enough information in the buffer, e.g. just issued
     /// a Describe request to a previously submitted Parse.
-    pub fn query(&mut self, buffer: &Buffer, cluster: &Cluster) -> Result<(), Error> {
-        self.query_parser.parse(buffer, cluster)?;
-        Ok(())
+    pub fn query(&mut self, buffer: &Buffer, cluster: &Cluster) -> Result<&Command, Error> {
+        Ok(self.query_parser.parse(buffer, cluster)?)
     }
 
     /// Parse CopyData messages and shard them.

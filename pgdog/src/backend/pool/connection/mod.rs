@@ -227,4 +227,9 @@ impl Connection {
     pub fn session_mode(&self) -> bool {
         !self.transaction_mode()
     }
+
+    /// Execute a query on the binding, if it's connected.
+    pub async fn execute(&mut self, query: &str) -> Result<(), Error> {
+        self.binding.execute(query).await
+    }
 }
