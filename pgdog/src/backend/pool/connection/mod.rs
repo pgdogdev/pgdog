@@ -125,7 +125,7 @@ impl Connection {
         match &self.binding {
             Binding::Admin(_) => Ok(ParameterStatus::fake()),
             Binding::Server(_) | Binding::MultiShard(_, _) => {
-                self.connect(id, &Route::write(0)).await?; // Get params from primary.
+                self.connect(id, &Route::write(Some(0))).await?; // Get params from primary.
                 let params = self
                     .server()?
                     .params()
@@ -226,5 +226,10 @@ impl Connection {
     #[inline]
     pub fn session_mode(&self) -> bool {
         !self.transaction_mode()
+    }
+
+    /// Execute a query on the binding, if it's connected.
+    pub async fn execute(&mut self, query: &str) -> Result<(), Error> {
+        self.binding.execute(query).await
     }
 }

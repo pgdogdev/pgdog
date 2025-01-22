@@ -38,6 +38,14 @@ pub struct CopyRow {
 }
 
 impl CopyRow {
+    /// Create new copy row for given shard.
+    pub fn new(data: &[u8], shard: Option<usize>) -> Self {
+        Self {
+            row: CopyData::new(data),
+            shard,
+        }
+    }
+
     /// Which shard it should go to.
     pub fn shard(&self) -> Option<usize> {
         self.shard

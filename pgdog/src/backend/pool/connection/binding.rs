@@ -135,4 +135,23 @@ impl Binding {
             _ => true,
         }
     }
+
+    /// Execute a query on all servers.
+    pub(super) async fn execute(&mut self, query: &str) -> Result<(), Error> {
+        match self {
+            Binding::Server(Some(ref mut server)) => {
+                server.execute(query).await?;
+            }
+
+            Binding::MultiShard(ref mut servers, _) => {
+                for server in servers {
+                    server.execute(query).await?;
+                }
+            }
+
+            _ => (),
+        }
+
+        Ok(())
+    }
 }

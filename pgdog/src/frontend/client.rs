@@ -10,6 +10,7 @@ use super::{Buffer, Comms, Error, Router, Stats};
 use crate::auth::scram::Server;
 use crate::backend::pool::Connection;
 use crate::config::config;
+use crate::net::messages::command_complete::CommandComplete;
 use crate::net::messages::{
     Authentication, BackendKeyData, ErrorResponse, Protocol, ReadyForQuery,
 };
@@ -137,6 +138,7 @@ impl Client {
         let mut router = Router::new();
         let mut stats = Stats::new();
         let mut async_ = false;
+        let mut start_transaction = false;
         let comms = self.comms.clone();
 
         loop {
@@ -158,12 +160,25 @@ impl Client {
                     if !backend.connected() {
                         // Figure out where the query should go.
                         if let Ok(cluster) = backend.cluster() {
-                            router.query(&buffer, cluster)?;
+                            let command = router.query(&buffer, cluster)?;
+                            if command.begin() {
+                                start_transaction = true;
+                                self.start_transaction().await?;
+                                continue;
+                            } else if command.commit() {
+                                start_transaction  = false;
+                                self.end_transaction(false).await?;
+                                continue;
+                            } else if command.rollback() {
+                                start_transaction = false;
+                                self.end_transaction(true).await?;
+                                continue;
+                            }
                         }
 
                         // Grab a connection from the right pool.
                         comms.stats(stats.waiting());
-                        match backend.connect(&self.id, router.route()).await {
+                        match backend.connect(&self.id, &router.route()).await {
                             Ok(()) => (),
                             Err(err) => if err.no_server() {
                                 error!("connection pool is down");
@@ -179,11 +194,19 @@ impl Client {
                             let addrs = addr.into_iter().map(|a| a.to_string()).collect::<Vec<_>>().join(",");
                             debug!("client paired with {} [{:.4}ms]", addrs, stats.wait_time.as_secs_f64() * 1000.0);
                         }
+
+                        // Simulate a transaction until the client
+                        // sends a query over. This ensures that we don't
+                        // connect to all shards for no reason.
+                        if start_transaction {
+                            backend.execute("BEGIN").await?;
+                            start_transaction = false;
+                        }
                     }
 
                     // Handle COPY subprotocol in a potentially sharded context.
                     if buffer.copy() {
-                        let rows = router.copy_data(&buffer, backend.cluster()?)?;
+                        let rows = router.copy_data(&buffer)?;
                         if !rows.is_empty() {
                             backend.send_copy(rows).await?;
                             backend.send(buffer.without_copy_data().into()).await?;
@@ -272,6 +295,38 @@ impl Client {
         );
 
         buffer
+    }
+
+    /// Tell the client we started a transaction.
+    async fn start_transaction(&mut self) -> Result<(), Error> {
+        let cmd = CommandComplete {
+            command: "BEGIN".into(),
+        };
+        let rfq = ReadyForQuery::in_transaction();
+        self.stream
+            .send_many(vec![cmd.message()?, rfq.message()?])
+            .await?;
+        debug!("transaction started");
+
+        Ok(())
+    }
+
+    async fn end_transaction(&mut self, rollback: bool) -> Result<(), Error> {
+        let cmd = if rollback {
+            CommandComplete {
+                command: "ROLLBACK".into(),
+            }
+        } else {
+            CommandComplete {
+                command: "COMMIT".into(),
+            }
+        };
+        self.stream
+            .send_many(vec![cmd.message()?, ReadyForQuery::idle().message()?])
+            .await?;
+        debug!("transaction ended");
+
+        Ok(())
     }
 }
 
