@@ -3,7 +3,7 @@
 use std::{cmp::Ordering, collections::VecDeque};
 
 use crate::{
-    frontend::router::route::OrderBy,
+    frontend::router::parser::OrderBy,
     net::messages::{DataRow, FromBytes, Message, Protocol, RowDescription, ToBytes},
 };
 

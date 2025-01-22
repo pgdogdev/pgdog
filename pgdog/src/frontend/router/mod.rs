@@ -9,7 +9,6 @@ pub mod error;
 pub mod parser;
 pub mod request;
 pub mod round_robin;
-pub mod route;
 pub mod sharding;
 
 pub use copy::{CopyRow, ShardedCopy};

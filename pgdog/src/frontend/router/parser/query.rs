@@ -1,7 +1,7 @@
 use crate::{
     backend::Cluster,
     frontend::{
-        router::{round_robin, route::OrderBy, CopyRow},
+        router::{parser::OrderBy, round_robin, CopyRow},
         Buffer,
     },
     net::messages::CopyData,

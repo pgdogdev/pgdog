@@ -1,4 +1,4 @@
-use crate::frontend::router::route::OrderBy;
+use super::OrderBy;
 
 #[derive(Debug, Clone)]
 pub struct Route {
