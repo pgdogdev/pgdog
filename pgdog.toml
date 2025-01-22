@@ -11,8 +11,40 @@ shutdown_timeout = 5_000
 name = "pgdog"
 host = "127.0.0.1"
 
+#
+# Admin database password.
+#
+[admin]
+password = "pgdog"
+
+#
+# Sharded cluster with two primaries.
+#
+[[databases]]
+name = "pgdog_sharded"
+host = "127.0.0.1"
+database_name = "shard_0"
+shard = 0
+
+[[databases]]
+name = "pgdog_sharded"
+host = "127.0.0.1"
+database_name = "shard_1"
+shard = 1
+
+#
+# Use pgdog_routing to route things around
+# the cluser.
+#
 [[plugins]]
 name = "pgdog_routing"
 
-[admin]
-password = "pgdog"
+
+#
+# Write access to this table will be automatically
+# sharded.
+#
+[[sharded_tables]]
+database = "pgdog_sharded"
+table = "copy_test"
+column = "id"

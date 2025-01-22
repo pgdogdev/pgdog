@@ -6,7 +6,7 @@ use crate::{
     admin::backend::Backend,
     backend::databases::databases,
     config::PoolerMode,
-    frontend::router::Route,
+    frontend::router::{CopyRow, Route},
     net::messages::{BackendKeyData, Message, ParameterStatus, Protocol},
 };
 
@@ -155,6 +155,11 @@ impl Connection {
     /// Send messages to the server.
     pub async fn send(&mut self, messages: Vec<impl Protocol>) -> Result<(), Error> {
         self.binding.send(messages).await
+    }
+
+    /// Send COPY subprotocol data to the right shards.
+    pub async fn send_copy(&mut self, rows: Vec<CopyRow>) -> Result<(), Error> {
+        self.binding.send_copy(rows).await
     }
 
     /// Fetch the cluster from the global database store.

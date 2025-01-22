@@ -79,7 +79,7 @@ typedef struct Route {
     OrderBy *order_by;
 } Route;
 
-/*
+/**
  * The routing decision the plugin makes based on the query contents.
  *
  * FORWARD: The query is forwarded to a shard. Which shard (and whether it's a replica
@@ -91,6 +91,7 @@ typedef struct Route {
               are sent to the client and the original query is never sent to a backend server.
  * NO_DECISION: The plugin doesn't care about this query. The output is ignored by pgDog and the next
                 plugin in the chain is attempted.
+ * COPY: Client is sending over a COPY statement.
  *
 */
 typedef enum RoutingDecision {
@@ -100,6 +101,8 @@ typedef enum RoutingDecision {
     INTERCEPT = 4,
     NO_DECISION = 5, /* The plugin doesn't want to make a decision. We'll try
                  the next plugin in the chain. */
+    COPY = 6, /* COPY */
+    COPY_ROWS = 7, /* Copy rows. */
 } RoutingDecision;
 
 /*
@@ -140,6 +143,50 @@ typedef struct Intercept {
     Row *rows;
 } Intercept;
 
+/**
+ * Copy format. Currently supported:
+ *  - CSV
+*/
+typedef enum CopyFormat {
+    INVALID,
+    CSV,
+} CopyFormat;
+
+/**
+ * Client requesting a COPY.
+*/
+typedef struct Copy {
+    CopyFormat copy_format;
+    char *table_name;
+    int has_headers;
+    char delimiter;
+    int num_columns;
+    char **columns;
+} Copy;
+
+/**
+ * A copy row extracted from input,
+ * with the shard it should go to.
+ *
+ * <div rustbindgen nodebug></div>
+*/
+typedef struct CopyRow {
+    int len;
+    char *data;
+    int shard;
+} CopyRow;
+
+/**
+ * Copy output.
+ *
+ * <div rustbindgen nodebug></div>
+*/
+typedef struct CopyOutput {
+    int num_rows;
+    CopyRow *rows;
+    char *header;
+} CopyOutput;
+
 /*
  * Union of results a plugin can return.
  *
@@ -152,6 +199,8 @@ typedef union RoutingOutput {
     Route route;
     Error error;
     Intercept intercept;
+    Copy copy;
+    CopyOutput copy_rows;
 } RoutingOutput;
 
 /*
@@ -164,7 +213,7 @@ typedef struct Output {
     RoutingOutput output;
 } Output;
 
-/*
+/**
  * Database role, e.g. primary or replica.
 */
 typedef enum Role {
@@ -172,7 +221,7 @@ typedef enum Role {
     REPLICA = 2,
 } Role;
 
-/*
+/**
  * Database configuration entry.
 */
 typedef struct DatabaseConfig {
@@ -182,7 +231,7 @@ typedef struct DatabaseConfig {
     int port;
 } DatabaseConfig;
 
-/*
+/**
  * Configuration for a database cluster
  * used to the serve a query passed to the plugin.
 */
@@ -194,21 +243,34 @@ typedef struct Config {
     int shards;
 } Config;
 
-/*
+/**
+ * Copy input.
+*/
+typedef struct CopyInput {
+    int len;
+    const char* data;
+    char delimiter;
+    int has_headers;
+    int sharding_column;
+} CopyInput;
+
+/**
 * Routing input union passed to the plugin.
 */
 typedef union RoutingInput {
     Query query;
+    CopyInput copy;
 } RoutingInput;
 
-/*
+/**
  * Input type.
 */
 typedef enum InputType {
     ROUTING_INPUT = 1,
+    COPY_INPUT = 2,
 } InputType;
 
-/*
+/**
  * Plugin input.
 */
 typedef struct Input {

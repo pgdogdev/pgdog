@@ -1,4 +1,6 @@
 //! Plugin interface.
+use std::ops::Deref;
+
 use crate::bindings::{self, Input, Output};
 use libloading::{library_filename, Library, Symbol};
 
@@ -66,5 +68,57 @@ impl<'a> Plugin<'a> {
     /// Check that we have the required methods.
     pub fn valid(&self) -> bool {
         self.route.is_some()
+    }
+}
+
+pub struct PluginOutput {
+    output: Output,
+}
+
+impl PluginOutput {
+    pub fn new(output: Output) -> Self {
+        Self { output }
+    }
+}
+
+impl Deref for PluginOutput {
+    type Target = Output;
+
+    fn deref(&self) -> &Self::Target {
+        &self.output
+    }
+}
+
+impl Drop for PluginOutput {
+    fn drop(&mut self) {
+        unsafe {
+            self.output.deallocate();
+        }
+    }
+}
+
+pub struct PluginInput {
+    input: Input,
+}
+
+impl PluginInput {
+    pub fn new(input: Input) -> Self {
+        Self { input }
+    }
+}
+
+impl Deref for PluginInput {
+    type Target = Input;
+
+    fn deref(&self) -> &Self::Target {
+        &self.input
+    }
+}
+
+impl Drop for PluginInput {
+    fn drop(&mut self) {
+        unsafe {
+            self.input.deallocate();
+        }
     }
 }

@@ -26,6 +26,8 @@ pub(super) struct MultiShard {
     cc: usize,
     /// Number of NoData messages.
     nd: usize,
+    /// Number of CopyInResponse messages.
+    ci: usize,
     /// First RowDescription we received from any shard.
     rd: Option<RowDescription>,
     /// Rewritten CommandComplete message.
@@ -109,6 +111,13 @@ impl MultiShard {
                     forward = Some(message);
                 } else {
                     self.sort_buffer.add(message)?;
+                }
+            }
+
+            'G' => {
+                self.ci += 1;
+                if self.ci == self.shards {
+                    forward = Some(message);
                 }
             }
 

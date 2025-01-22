@@ -181,8 +181,19 @@ impl Client {
                         }
                     }
 
-                    // Send query to server.
-                    backend.send(buffer.into()).await?;
+                    // Handle COPY subprotocol in a potentially sharded context.
+                    if buffer.copy() {
+                        let rows = router.copy_data(&buffer, backend.cluster()?)?;
+                        if !rows.is_empty() {
+                            backend.send_copy(rows).await?;
+                            backend.send(buffer.without_copy_data().into()).await?;
+                        } else {
+                            backend.send(buffer.into()).await?;
+                        }
+                    } else {
+                        // Send query to server.
+                        backend.send(buffer.into()).await?;
+                    }
                 }
 
                 message = backend.read() => {
@@ -191,12 +202,18 @@ impl Client {
                     let code = message.code();
 
                     // ReadyForQuery (B) | CopyInResponse (B) || RowDescription (B) | ErrorResponse (B)
-                    if matches!(code, 'Z' | 'G') || matches!(code, 'T' | 'E')  && async_ {
+                    let flush = matches!(code, 'Z' | 'G') || matches!(code, 'T' | 'E')  && async_;
+                    if flush {
                         self.stream.send_flush(message).await?;
-                        comms.stats(stats.query());
                         async_ = false;
-                    }  else {
+                    } else {
                         self.stream.send(message).await?;
+                    }
+
+                    comms.stats(stats.sent(len));
+
+                    if code == 'Z' {
+                        comms.stats(stats.query());
                     }
 
                     if backend.done() {
@@ -209,8 +226,6 @@ impl Client {
                             break;
                         }
                     }
-
-                    comms.stats(stats.sent(len));
                 }
             }
         }

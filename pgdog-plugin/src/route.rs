@@ -13,26 +13,15 @@ impl RoutingOutput {
     pub fn new_route(route: Route) -> RoutingOutput {
         RoutingOutput { route }
     }
-}
 
-impl Output {
-    /// Create new forward output.
-    ///
-    /// This means the query will be forwarded as-is to a destination
-    /// specified in the route.
-    pub fn forward(route: Route) -> Output {
-        Output {
-            decision: RoutingDecision_FORWARD,
-            output: RoutingOutput::new_route(route),
-        }
+    /// Create new copy statement.
+    pub fn new_copy(copy: Copy) -> RoutingOutput {
+        RoutingOutput { copy }
     }
 
-    /// Get route determined by the plugin.
-    pub fn route(&self) -> Option<Route> {
-        match self.decision {
-            RoutingDecision_FORWARD => Some(unsafe { self.output.route }),
-            _ => None,
-        }
+    /// Create new copy rows output.
+    pub fn new_copy_rows(copy_rows: CopyOutput) -> RoutingOutput {
+        RoutingOutput { copy_rows }
     }
 }
 
@@ -167,7 +156,7 @@ impl Route {
     /// # Safety
     ///
     /// Don't use this unless you're cleaning up plugin output.
-    pub(crate) unsafe fn drop(&self) {
+    pub(crate) unsafe fn deallocate(&self) {
         if self.num_order_by > 0 {
             (0..self.num_order_by).for_each(|index| (*self.order_by.offset(index as isize)).drop());
             let layout = Layout::array::<OrderBy>(self.num_order_by as usize).unwrap();

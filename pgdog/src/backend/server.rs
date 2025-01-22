@@ -171,23 +171,31 @@ impl Server {
         Ok(())
     }
 
-    /// Send messages to the server.
+    /// Send messages to the server and flush the buffer.
     pub async fn send(&mut self, messages: Vec<impl Protocol>) -> Result<(), Error> {
-        self.stats.state(State::Active);
         let timer = Instant::now();
-        match self.stream().send_many(messages).await {
-            Ok(sent) => {
-                self.stats.send(sent);
-            }
+        for message in messages {
+            self.send_one(message).await?;
+        }
+        self.flush().await?;
+        trace!(
+            "request flushed to server [{:.4}ms]",
+            timer.elapsed().as_secs_f64() * 1000.0
+        );
+        Ok(())
+    }
+
+    /// Send one message to the server but don't flush the buffer,
+    /// accelerating bulk transfers.
+    pub async fn send_one(&mut self, message: impl Protocol) -> Result<(), Error> {
+        self.stats.state(State::Active);
+        match self.stream().send(message).await {
+            Ok(sent) => self.stats.send(sent),
             Err(err) => {
                 self.stats.state(State::Error);
                 return Err(err.into());
             }
-        };
-        trace!(
-            "request sent to server [{:.4}ms]",
-            timer.elapsed().as_secs_f64() * 1000.0
-        );
+        }
         Ok(())
     }
 

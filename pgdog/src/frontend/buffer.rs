@@ -3,7 +3,7 @@
 use std::ops::{Deref, DerefMut};
 
 use crate::net::{
-    messages::{parse::Parse, Bind, FromBytes, Message, Protocol, Query, ToBytes},
+    messages::{parse::Parse, Bind, CopyData, FromBytes, Message, Protocol, Query, ToBytes},
     Error,
 };
 
@@ -41,7 +41,7 @@ impl Buffer {
 
             // CopyData (F)
             // Flush data to backend if we've buffered 4K.
-            if message.code() == 'd' && self.len() > 4096 {
+            if message.code() == 'd' && self.len() >= 4096 {
                 return true;
             }
         }
@@ -84,6 +84,34 @@ impl Buffer {
         }
 
         Ok(None)
+    }
+
+    /// Get all CopyData (F & B) messages.
+    pub fn copy_data(&self) -> Result<Vec<CopyData>, Error> {
+        let mut rows = vec![];
+        for message in &self.buffer {
+            if message.code() == 'd' {
+                let copy_data = CopyData::from_bytes(message.to_bytes()?)?;
+                rows.push(copy_data);
+            }
+        }
+
+        Ok(rows)
+    }
+
+    /// Remove all CopyData messages and return the rest.
+    pub fn without_copy_data(&self) -> Self {
+        let mut buffer = self.buffer.clone();
+        buffer.retain(|m| m.code() != 'd');
+        Self { buffer }
+    }
+
+    /// The buffer has CopyData messages.
+    pub fn copy(&self) -> bool {
+        self.buffer
+            .last()
+            .map(|m| m.code() == 'd' || m.code() == 'c')
+            .unwrap_or(false)
     }
 }
 

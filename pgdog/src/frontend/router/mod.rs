@@ -2,16 +2,18 @@
 
 use crate::{backend::Cluster, plugin::plugins};
 
-use pgdog_plugin::{Input, RoutingInput};
+use pgdog_plugin::{CopyInput, Input, PluginInput, PluginOutput, RoutingInput};
 use tokio::time::Instant;
 use tracing::debug;
 
+pub mod copy;
 pub mod error;
 pub mod request;
 pub mod route;
 
 use request::Request;
 
+pub use copy::{CopyRow, ShardedCopy};
 pub use error::Error;
 pub use route::Route;
 
@@ -20,6 +22,7 @@ use super::Buffer;
 /// Query router.
 pub struct Router {
     route: Route,
+    copy: Option<ShardedCopy>,
 }
 
 impl Default for Router {
@@ -33,6 +36,7 @@ impl Router {
     pub fn new() -> Router {
         Self {
             route: Route::unknown(),
+            copy: None,
         }
     }
 
@@ -64,21 +68,49 @@ impl Router {
 
         // SAFETY: deallocated by Input below.
         let config = unsafe { cluster.plugin_config()? };
-        let input = Input::new(config, RoutingInput::query(request.query()));
+        let input = PluginInput::new(Input::new_query(
+            config,
+            RoutingInput::query(request.query()),
+        ));
 
         let now = Instant::now();
 
         for plugin in plugins() {
-            match plugin.route(input) {
+            match plugin.route(*input) {
                 None => continue,
                 Some(output) => {
-                    if let Some(route) = output.route() {
+                    // Protect against leaks.
+                    let output = PluginOutput::new(output);
+
+                    // COPY subprotocol support.
+                    if let Some(copy) = output.copy() {
+                        if let Some(sharded_column) =
+                            cluster.sharded_column(copy.table_name(), &copy.columns())
+                        {
+                            debug!(
+                                "sharded COPY across {} shards [{:.3}ms]",
+                                cluster.shards().len(),
+                                now.elapsed().as_secs_f64() * 1000.0
+                            );
+
+                            self.copy = Some(ShardedCopy::new(copy, sharded_column));
+                        } else {
+                            debug!(
+                                "regular COPY replicated to {} shards [{:.3}ms]",
+                                cluster.shards().len(),
+                                now.elapsed().as_secs_f64() * 1000.0
+                            );
+                        }
+                        // We'll be writing to all shards no matter what.
+                        self.route = pgdog_plugin::Route::write_all().into();
+                        break;
+                    } else if let Some(route) = output.route() {
+                        // Don't override route unless we have one.
                         if route.is_unknown() {
                             continue;
                         }
 
                         self.route = route.into();
-                        unsafe { output.deallocate() }
 
                         debug!(
                             "routing {} to {} [{}, {:.3}ms]",
@@ -91,16 +123,68 @@ impl Router {
                             plugin.name(),
                             now.elapsed().as_secs_f64() * 1000.0,
                         );
-
                         break;
                     }
                 }
             }
         }
 
-        unsafe { input.deallocate() }
-
         Ok(())
+    }
+
+    /// Parse CopyData messages and shard them.
+    pub fn copy_data(&mut self, buffer: &Buffer, cluster: &Cluster) -> Result<Vec<CopyRow>, Error> {
+        let mut rows = vec![];
+        if let Some(ref mut copy) = self.copy {
+            let messages = buffer.copy_data()?;
+
+            for copy_data in messages {
+                let copy_input = CopyInput::new(
+                    copy_data.data(),
+                    copy.sharded_column,
+                    copy.headers,
+                    copy.delimiter,
+                );
+
+                // SAFETY: deallocated by Input below.
+                let config = unsafe { cluster.plugin_config()? };
+                let input = Input::new_copy(config, RoutingInput::copy(copy_input));
+
+                for plugin in plugins() {
+                    match plugin.route(input) {
+                        None => continue,
+                        Some(output) => {
+                            if let Some(copy_rows) = output.copy_rows() {
+                                if let Some(headers) = copy_rows.header() {
+                                    rows.push(CopyRow::headers(headers));
+                                }
+                                for row in copy_rows.rows() {
+                                    rows.push((*row).into());
+                                }
+                            }
+
+                            unsafe {
+                                output.deallocate();
+                            }
+
+                            // Allow only one plugin to remap copy data rows.
+                            if !rows.is_empty() {
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                unsafe {
+                    input.deallocate();
+                }
+            }
+
+            // Make sure we tell the plugin no more headers are expected.
+            copy.headers = false;
+        }
+
+        Ok(rows)
     }
 
     /// Get current route.
