@@ -116,8 +116,11 @@ impl Stats {
 
     /// Manual state change.
     pub fn state(&mut self, state: State) {
+        let update = self.state != state;
         self.state = state;
-        self.update();
+        if update {
+            self.update();
+        }
     }
 
     /// Send bytes to server.

@@ -113,10 +113,10 @@ impl Binding {
                     for (shard, server) in servers.iter_mut().enumerate() {
                         if let Some(row_shard) = row.shard() {
                             if shard == row_shard {
-                                server.send(vec![row.message()]).await?;
+                                server.send_one(row.message()).await?;
                             }
                         } else {
-                            server.send(vec![row.message()]).await?;
+                            server.send_one(row.message()).await?;
                         }
                     }
                 }
