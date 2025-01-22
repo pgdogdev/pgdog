@@ -9,7 +9,7 @@ use crate::{
     net::messages::CopyData,
 };
 
-use super::Error;
+use super::{CsvBuffer, Error};
 
 /// Copy information parsed from a COPY statement.
 #[derive(Debug, Clone)]
@@ -45,6 +45,10 @@ pub struct CopyParser {
     pub shards: usize,
     /// Which column is used for sharding.
     pub sharded_column: Option<usize>,
+    /// Buffer incomplete messages.
+    pub buffer: CsvBuffer,
+    /// Number of columns
+    pub columns: usize,
 }
 
 impl Default for CopyParser {
@@ -54,6 +58,8 @@ impl Default for CopyParser {
             delimiter: ',',
             sharded_column: None,
             shards: 1,
+            buffer: CsvBuffer::new(),
+            columns: 0,
         }
     }
 }
@@ -79,6 +85,7 @@ impl CopyParser {
             }
 
             parser.sharded_column = cluster.sharded_column(&rel.relname, &columns);
+            parser.columns = columns.len();
 
             for option in &stmt.options {
                 if let Some(NodeEnum::DefElem(ref elem)) = option.node {
@@ -120,10 +127,13 @@ impl CopyParser {
         let mut rows = vec![];
 
         for row in data {
+            self.buffer.add(row.data());
+            let data = self.buffer.read();
+
             let mut csv = ReaderBuilder::new()
                 .has_headers(self.headers)
                 .delimiter(self.delimiter as u8)
-                .from_reader(row.data());
+                .from_reader(data);
 
             if self.headers {
                 let headers = csv
@@ -133,10 +143,13 @@ impl CopyParser {
                     .join(self.delimiter.to_string().as_str())
                     + "\n";
                 rows.push(CopyRow::new(headers.as_bytes(), None));
+                self.headers = false;
             }
 
             for record in csv.records() {
+                // Totally broken.
                 let record = record?;
+
                 let shard = if let Some(sharding_column) = self.sharded_column {
                     let key = record
                         .iter()
@@ -150,16 +163,15 @@ impl CopyParser {
 
                 if let Some(pos) = record.position() {
                     let start = pos.byte() as usize;
-                    let end = start + record.as_slice().len() + 1; // New line.
-                    let data = row.data().get(start..=end);
+                    let record = self.buffer.record(start);
 
-                    if let Some(data) = data {
+                    if let Some(data) = record {
                         rows.push(CopyRow::new(data, shard));
                     }
                 }
             }
 
-            self.headers = false;
+            self.buffer.clear();
         }
 
         Ok(rows)
