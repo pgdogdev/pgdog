@@ -42,7 +42,7 @@ impl QueryParser {
             self.command = Self::query(&query, cluster)?;
             Ok(&self.command)
         } else {
-            return Err(Error::NotInSync);
+            Err(Error::NotInSync)
         }
     }
 
@@ -73,10 +73,9 @@ impl QueryParser {
         }
 
         // Hardcoded shard from a comment.
-        let shard = super::comment::shard(query, cluster.shards().len())
-            .map_err(|err| Error::PgQuery(err.into()))?;
+        let shard = super::comment::shard(query, cluster.shards().len()).map_err(Error::PgQuery)?;
 
-        let ast = parse(query).map_err(|err| Error::PgQuery(err.into()))?;
+        let ast = parse(query).map_err(Error::PgQuery)?;
 
         trace!("{:#?}", ast);
 
