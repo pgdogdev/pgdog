@@ -374,11 +374,6 @@ hash_bytes_extended(const unsigned char *k, int keylen)
 	return ((uint64) b << 32) | c;
 }
 
-/*
- * Both the seed and the magic number added at the end are from
- * https://stackoverflow.com/a/67189122
-*/
-
 static uint64
 hash_bytes_uint32_extended(uint32 k)
 {

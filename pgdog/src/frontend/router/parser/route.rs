@@ -1,5 +1,6 @@
 use super::OrderBy;
 
+/// Path a query should take.
 #[derive(Debug, Clone)]
 pub struct Route {
     shard: Option<usize>,

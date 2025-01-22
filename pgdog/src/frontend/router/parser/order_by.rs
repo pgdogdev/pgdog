@@ -15,8 +15,8 @@ impl OrderBy {
     /// Column index.
     pub fn index(&self) -> Option<usize> {
         match self {
-            OrderBy::Asc(column) => Some(*column),
-            OrderBy::Desc(column) => Some(*column),
+            OrderBy::Asc(column) => Some(*column - 1),
+            OrderBy::Desc(column) => Some(*column - 1),
             _ => None,
         }
     }
