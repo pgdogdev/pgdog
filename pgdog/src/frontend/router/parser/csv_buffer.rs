@@ -9,6 +9,12 @@ pub struct CsvBuffer {
     remainder: Vec<u8>,
 }
 
+impl Default for CsvBuffer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CsvBuffer {
     /// New CSV buffer.
     pub fn new() -> Self {

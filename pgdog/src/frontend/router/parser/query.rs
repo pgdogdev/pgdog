@@ -163,7 +163,7 @@ impl QueryParser {
         if let Some(where_clause) = WhereClause::new(&stmt.where_clause) {
             // Complexity: O(number of sharded tables * number of columns in the query)
             for table in sharded_tables {
-                let table_name = table.name.as_ref().map(|s| s.as_str());
+                let table_name = table.name.as_deref();
                 let keys = where_clause.keys(table_name, &table.column);
                 for key in keys {
                     match key {

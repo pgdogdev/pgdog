@@ -51,13 +51,13 @@ impl ParameterWithFormat<'_> {
     /// Get BIGINT if one is encoded in the field.
     pub fn bigin(&self) -> Option<i64> {
         match self.format {
-            Format::Text => self.text().map(|data| data.parse().ok()).flatten(),
+            Format::Text => self.text().and_then(|data| data.parse().ok()),
             Format::Binary => self
                 .parameter
                 .data
                 .as_slice()
                 .try_into()
-                .map(|slice| i64::from_be_bytes(slice))
+                .map(i64::from_be_bytes)
                 .ok(),
         }
     }
@@ -65,13 +65,13 @@ impl ParameterWithFormat<'_> {
     /// Get UUID, if one is encoded in the field.
     pub fn uuid(&self) -> Option<Uuid> {
         match self.format {
-            Format::Text => self.text().map(|uuid| Uuid::from_str(uuid).ok()).flatten(),
+            Format::Text => self.text().and_then(|uuid| Uuid::from_str(uuid).ok()),
             Format::Binary => self
                 .parameter
                 .data
                 .as_slice()
                 .try_into()
-                .map(|slice| Uuid::from_bytes(slice))
+                .map(Uuid::from_bytes)
                 .ok(),
         }
     }
@@ -108,7 +108,7 @@ impl Bind {
     }
 
     /// Get parameter at index.
-    pub fn parameter<'a>(&'a self, index: usize) -> Result<Option<ParameterWithFormat<'a>>, Error> {
+    pub fn parameter(&self, index: usize) -> Result<Option<ParameterWithFormat<'_>>, Error> {
         let format = self.parameter_format(index)?;
         Ok(self
             .params

@@ -58,14 +58,10 @@ impl WhereClause {
     }
 
     fn column_match(column: &Column, table: Option<&str>, name: &str) -> bool {
-        match (table, &column.table) {
-            (Some(table), Some(other_table)) => {
-                if table != other_table {
-                    return false;
-                }
+        if let (Some(table), Some(other_table)) = (table, &column.table) {
+            if table != other_table {
+                return false;
             }
-
-            _ => (),
         };
 
         column.name == name
@@ -83,54 +79,50 @@ impl WhereClause {
     fn search_for_keys(output: &Output, table_name: Option<&str>, column_name: &str) -> Vec<Key> {
         let mut keys = vec![];
 
-        match output {
-            Output::Filter(ref left, ref right) => {
-                let left = left.as_slice();
-                let right = right.as_slice();
+        if let Output::Filter(ref left, ref right) = output {
+            let left = left.as_slice();
+            let right = right.as_slice();
 
-                match (&left, &right) {
-                    // TODO: Handle something like
-                    // id = (SELECT 5) which is stupid but legal SQL.
-                    (&[left], &[right]) => match (left, right) {
-                        (Output::Column(ref column), output) => {
-                            if Self::column_match(column, table_name, column_name) {
-                                if let Some(key) = Self::get_key(output) {
-                                    keys.push(key);
-                                }
+            match (&left, &right) {
+                // TODO: Handle something like
+                // id = (SELECT 5) which is stupid but legal SQL.
+                (&[left], &[right]) => match (left, right) {
+                    (Output::Column(ref column), output) => {
+                        if Self::column_match(column, table_name, column_name) {
+                            if let Some(key) = Self::get_key(output) {
+                                keys.push(key);
                             }
                         }
-                        (output, Output::Column(ref column)) => {
-                            if Self::column_match(column, table_name, column_name) {
-                                if let Some(key) = Self::get_key(output) {
-                                    keys.push(key);
-                                }
+                    }
+                    (output, Output::Column(ref column)) => {
+                        if Self::column_match(column, table_name, column_name) {
+                            if let Some(key) = Self::get_key(output) {
+                                keys.push(key);
                             }
                         }
-                        _ => (),
-                    },
+                    }
+                    _ => (),
+                },
 
-                    _ => {
-                        for output in left {
-                            keys.extend(Self::search_for_keys(output, table_name, column_name));
-                        }
+                _ => {
+                    for output in left {
+                        keys.extend(Self::search_for_keys(output, table_name, column_name));
+                    }
 
-                        for output in right {
-                            keys.extend(Self::search_for_keys(output, table_name, column_name));
-                        }
+                    for output in right {
+                        keys.extend(Self::search_for_keys(output, table_name, column_name));
                     }
                 }
             }
-            _ => (),
         }
 
         keys
     }
 
     fn string(node: Option<&Node>) -> Option<String> {
-        if let Some(ref node) = node {
-            match node.node {
-                Some(NodeEnum::String(ref string)) => return Some(string.sval.clone()),
-                _ => (),
+        if let Some(node) = node {
+            if let Some(NodeEnum::String(ref string)) = node.node {
+                return Some(string.sval.clone());
             }
         }
 
