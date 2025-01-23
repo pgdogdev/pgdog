@@ -1,3 +1,5 @@
+//! Sorting columns extracted from the query.
+
 #[derive(Clone, Debug)]
 pub enum OrderBy {
     Asc(usize),
