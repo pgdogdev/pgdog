@@ -49,7 +49,7 @@ impl ParameterWithFormat<'_> {
     }
 
     /// Get BIGINT if one is encoded in the field.
-    pub fn bigin(&self) -> Option<i64> {
+    pub fn bigint(&self) -> Option<i64> {
         match self.format {
             Format::Text => self.text().and_then(|data| data.parse().ok()),
             Format::Binary => self
