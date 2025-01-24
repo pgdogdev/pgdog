@@ -1,12 +1,15 @@
 //! Bind (F) message.
 use crate::net::c_string_buf;
 use pgdog_plugin::bindings::Parameter as PluginParameter;
+use uuid::Uuid;
 
 use super::code;
 use super::prelude::*;
 use super::Error;
 
 use std::cmp::max;
+use std::str::from_utf8;
+use std::str::FromStr;
 
 #[derive(PartialEq, Debug, Copy, Clone)]
 pub enum Format {
@@ -30,6 +33,48 @@ pub struct Parameter {
     pub len: i32,
     /// Parameter data.
     pub data: Vec<u8>,
+}
+
+/// Parameter with encoded format.
+#[derive(Debug, Clone)]
+pub struct ParameterWithFormat<'a> {
+    parameter: &'a Parameter,
+    format: Format,
+}
+
+impl ParameterWithFormat<'_> {
+    /// Get text representation if it's valid UTF-8.
+    pub fn text(&self) -> Option<&str> {
+        from_utf8(&self.parameter.data).ok()
+    }
+
+    /// Get BIGINT if one is encoded in the field.
+    pub fn bigint(&self) -> Option<i64> {
+        match self.format {
+            Format::Text => self.text().and_then(|data| data.parse().ok()),
+            Format::Binary => self
+                .parameter
+                .data
+                .as_slice()
+                .try_into()
+                .map(i64::from_be_bytes)
+                .ok(),
+        }
+    }
+
+    /// Get UUID, if one is encoded in the field.
+    pub fn uuid(&self) -> Option<Uuid> {
+        match self.format {
+            Format::Text => self.text().and_then(|uuid| Uuid::from_str(uuid).ok()),
+            Format::Binary => self
+                .parameter
+                .data
+                .as_slice()
+                .try_into()
+                .map(Uuid::from_bytes)
+                .ok(),
+        }
+    }
 }
 
 /// Bind (F) message.
@@ -60,6 +105,15 @@ impl Bind {
         } else {
             Ok(Format::Text)
         }
+    }
+
+    /// Get parameter at index.
+    pub fn parameter(&self, index: usize) -> Result<Option<ParameterWithFormat<'_>>, Error> {
+        let format = self.parameter_format(index)?;
+        Ok(self
+            .params
+            .get(index)
+            .map(|parameter| ParameterWithFormat { parameter, format }))
     }
 
     /// Convert bind parameters to plugin parameters.

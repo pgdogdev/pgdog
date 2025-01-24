@@ -109,6 +109,8 @@ pub struct Config {
     pub admin: Admin,
     #[serde(default)]
     pub sharded_tables: Vec<ShardedTable>,
+    #[serde(default)]
+    pub manual_queries: Vec<ManualQuery>,
 }
 
 impl Config {
@@ -142,6 +144,17 @@ impl Config {
         }
 
         tables
+    }
+
+    /// Manual queries.
+    pub fn manual_queries(&self) -> HashMap<String, ManualQuery> {
+        let mut queries = HashMap::new();
+
+        for query in &self.manual_queries {
+            queries.insert(query.fingerprint.clone(), query.clone());
+        }
+
+        queries
     }
 }
 
@@ -420,6 +433,11 @@ impl Admin {
     }
 }
 
+fn admin_password() -> String {
+    let pw = random_string(12);
+    format!("_pgdog_{}", pw)
+}
+
 /// Sharded table.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct ShardedTable {
@@ -432,9 +450,10 @@ pub struct ShardedTable {
     pub column: String,
 }
 
-fn admin_password() -> String {
-    let pw = random_string(12);
-    format!("_pgdog_{}", pw)
+/// Queries with manual routing rules.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ManualQuery {
+    pub fingerprint: String,
 }
 
 #[cfg(test)]

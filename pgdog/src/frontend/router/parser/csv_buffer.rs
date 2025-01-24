@@ -2,10 +2,17 @@
 
 use std::mem::take;
 
+/// CSV buffer that supports partial records.
 #[derive(Debug, Clone)]
 pub struct CsvBuffer {
     buffer: Vec<u8>,
     remainder: Vec<u8>,
+}
+
+impl Default for CsvBuffer {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl CsvBuffer {
@@ -18,6 +25,9 @@ impl CsvBuffer {
     }
 
     /// Add data to buffer.
+    ///
+    /// TODO: Handle new lines escaped between double quotes.
+    ///
     pub fn add(&mut self, data: &[u8]) {
         let nl = data.iter().rev().position(|p| *p as char == '\n');
         if let Some(nl) = nl {

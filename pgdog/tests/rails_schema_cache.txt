@@ -1,0 +1,34 @@
+SELECT t.oid, t.typname
+FROM pg_type as t
+WHERE t.typname IN ('int2', 'int4', 'int8', 'oid', 'float4', 'float8', 'numeric', 'bool', 'timestamp', 'timestamptz');
+
+SELECT t.oid, t.typname, t.typelem, t.typdelim, t.typinput, r.rngsubtype, t.typtype, t.typbasetype
+FROM pg_type as t
+LEFT JOIN pg_range as r ON oid = rngtypid
+WHERE
+  t.typname IN ('int2', 'int4', 'int8', 'oid', 'float4', 'float8', 'text', 'varchar', 'char', 'name', 'bpchar', 'bool', 'bit', 'varbit', 'date', 'money', 'bytea', 'point', 'hstore', 'json', 'jsonb', 'cidr', 'inet', 'uuid', 'xml', 'tsvector', 'macaddr', 'citext', 'ltree', 'line', 'lseg', 'box', 'path', 'polygon', 'circle', 'numeric', 'interval', 'time', 'timestamp', 'timestamptz');
+
+SELECT t.oid, t.typname, t.typelem, t.typdelim, t.typinput, r.rngsubtype, t.typtype, t.typbasetype
+FROM pg_type as t
+LEFT JOIN pg_range as r ON oid = rngtypid
+WHERE
+  t.typtype IN ('r', 'e', 'd');
+
+SELECT t.oid, t.typname, t.typelem, t.typdelim, t.typinput, r.rngsubtype, t.typtype, t.typbasetype
+FROM pg_type as t
+LEFT JOIN pg_range as r ON oid = rngtypid
+WHERE
+  t.typelem IN (16, 17, 18, 19, 20, 21, 23, 25, 26, 114, 142, 600, 601, 602, 603, 604, 628, 700, 701, 718, 790, 829, 869, 650, 1042, 1043, 1082, 1083, 1114, 1184, 1186, 1560, 1562, 1700, 2950, 3614, 3802, 13279, 13282, 13284, 13290, 13292, 3904, 3906, 3908, 3910, 3912, 3926);
+
+SELECT a.attname, format_type(a.atttypid, a.atttypmod),
+       pg_get_expr(d.adbin, d.adrelid), a.attnotnull, a.atttypid, a.atttypmod,
+       c.collname, col_description(a.attrelid, a.attnum) AS comment,
+       attidentity AS identity,
+       attgenerated as attgenerated
+  FROM pg_attribute a
+  LEFT JOIN pg_attrdef d ON a.attrelid = d.adrelid AND a.attnum = d.adnum
+  LEFT JOIN pg_type t ON a.atttypid = t.oid
+  LEFT JOIN pg_collation c ON a.attcollation = c.oid AND a.attcollation <> t.typcollation
+ WHERE a.attrelid = '"sharded"'::regclass
+   AND a.attnum > 0 AND NOT a.attisdropped
+ ORDER BY a.attnum;

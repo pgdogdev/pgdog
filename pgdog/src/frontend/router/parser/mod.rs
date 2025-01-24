@@ -7,6 +7,7 @@ pub mod error;
 pub mod order_by;
 pub mod query;
 pub mod route;
+pub mod where_clause;
 
 pub use csv_buffer::CsvBuffer;
 pub use error::Error;

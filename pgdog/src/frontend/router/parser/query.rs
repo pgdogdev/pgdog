@@ -1,20 +1,27 @@
+//! Route queries to correct shards.
+use std::collections::HashSet;
+
 use crate::{
-    backend::Cluster,
+    backend::{databases::databases, Cluster},
     frontend::{
-        router::{parser::OrderBy, round_robin, CopyRow},
+        router::{parser::OrderBy, round_robin, sharding::shard_str, CopyRow},
         Buffer,
     },
-    net::messages::CopyData,
+    net::messages::{Bind, CopyData},
 };
 
-use super::{copy::CopyParser, Error, Route};
+use super::{
+    copy::CopyParser,
+    where_clause::{Key, WhereClause},
+    Error, Route,
+};
 
 use pg_query::{
-    parse,
+    fingerprint, parse,
     protobuf::{a_const::Val, *},
     NodeEnum,
 };
-use tracing::trace;
+use tracing::{debug, trace};
 
 /// Command determined by the query parser.
 #[derive(Debug, Clone)]
@@ -58,7 +65,7 @@ impl Default for QueryParser {
 impl QueryParser {
     pub fn parse(&mut self, buffer: &Buffer, cluster: &Cluster) -> Result<&Command, Error> {
         if let Some(query) = buffer.query()? {
-            self.command = Self::query(&query, cluster)?;
+            self.command = Self::query(&query, cluster, buffer.parameters()?)?;
             Ok(&self.command)
         } else {
             Err(Error::NotInSync)
@@ -83,7 +90,7 @@ impl QueryParser {
         }
     }
 
-    fn query(query: &str, cluster: &Cluster) -> Result<Command, Error> {
+    fn query(query: &str, cluster: &Cluster, params: Option<Bind>) -> Result<Command, Error> {
         // Shortcut single shard clusters that don't require read/write separation.
         if cluster.shards().len() == 1 {
             if cluster.read_only() {
@@ -97,8 +104,21 @@ impl QueryParser {
         // Hardcoded shard from a comment.
         let shard = super::comment::shard(query, cluster.shards().len()).map_err(Error::PgQuery)?;
 
+        // Cluster is read only or write only, traffic split isn't needed,
+        // so don't parse the query further.
+        if let Some(shard) = shard {
+            if cluster.read_only() {
+                return Ok(Command::Query(Route::read(Some(shard))));
+            }
+
+            if cluster.write_only() {
+                return Ok(Command::Query(Route::write(Some(shard))));
+            }
+        }
+
         let ast = parse(query).map_err(Error::PgQuery)?;
 
+        debug!("{}", query);
         trace!("{:#?}", ast);
 
         let stmt = ast.protobuf.stmts.first().ok_or(Error::EmptyQuery)?;
@@ -112,7 +132,7 @@ impl QueryParser {
                         round_robin::next() % cluster.shards().len(),
                     ))));
                 } else {
-                    Self::select(stmt)
+                    Self::select(stmt, cluster, params)
                 }
             }
             Some(NodeEnum::CopyStmt(ref stmt)) => Self::copy(stmt, cluster),
@@ -142,12 +162,83 @@ impl QueryParser {
             }
         }
 
+        if let Command::Query(ref mut route) = command {
+            if route.shard().is_none() {
+                let fingerprint = fingerprint(query).map_err(Error::PgQuery)?;
+                let manual_route = databases().manual_query(&fingerprint.hex).cloned();
+
+                // TODO: check routing logic required by config.
+                if let Some(_) = manual_route {
+                    route.overwrite_shard(round_robin::next() % cluster.shards().len());
+                }
+            }
+        }
+
+        trace!("{:#?}", command);
+
         Ok(command)
     }
 
-    fn select(stmt: &SelectStmt) -> Result<Command, Error> {
+    fn select(
+        stmt: &SelectStmt,
+        cluster: &Cluster,
+        params: Option<Bind>,
+    ) -> Result<Command, Error> {
         let order_by = Self::select_sort(&stmt.sort_clause);
-        Ok(Command::Query(Route::select(None, &order_by)))
+        let sharded_tables = cluster.shaded_tables();
+        let mut shards = HashSet::new();
+        let table_name = stmt
+            .from_clause
+            .first()
+            .map(|node| {
+                node.node.as_ref().map(|node| match node {
+                    NodeEnum::RangeVar(var) => Some(if let Some(ref alias) = var.alias {
+                        alias.aliasname.as_str()
+                    } else {
+                        var.relname.as_str()
+                    }),
+                    _ => None,
+                })
+            })
+            .flatten()
+            .flatten();
+        if let Some(where_clause) = WhereClause::new(table_name, &stmt.where_clause) {
+            // Complexity: O(number of sharded tables * number of columns in the query)
+            for table in sharded_tables {
+                let table_name = table.name.as_deref();
+                let keys = where_clause.keys(table_name, &table.column);
+                for key in keys {
+                    match key {
+                        Key::Constant(value) => {
+                            if let Some(shard) = shard_str(&value, cluster.shards().len()) {
+                                shards.insert(shard);
+                            }
+                        }
+                        Key::Parameter(param) => {
+                            if let Some(ref params) = params {
+                                if let Some(param) = params.parameter(param)? {
+                                    // TODO: Handle binary encoding.
+                                    if let Some(text) = param.text() {
+                                        if let Some(shard) = shard_str(text, cluster.shards().len())
+                                        {
+                                            shards.insert(shard);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let shard = if shards.len() == 1 {
+            shards.iter().next().cloned()
+        } else {
+            None
+        };
+
+        Ok(Command::Query(Route::select(shard, &order_by)))
     }
 
     /// Parse the `ORDER BY` clause of a `SELECT` statement.

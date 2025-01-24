@@ -8,7 +8,7 @@ use once_cell::sync::Lazy;
 
 use crate::{
     backend::pool::PoolConfig,
-    config::{config, load, ConfigAndUsers, Role},
+    config::{config, load, ConfigAndUsers, ManualQuery, Role},
     net::messages::BackendKeyData,
 };
 
@@ -111,6 +111,7 @@ impl ToUser for (&str, Option<&str>) {
 #[derive(Default)]
 pub struct Databases {
     databases: HashMap<User, Cluster>,
+    manual_queries: HashMap<String, ManualQuery>,
 }
 
 impl Databases {
@@ -138,6 +139,11 @@ impl Databases {
         Ok(())
     }
 
+    /// Get manual query, if exists.
+    pub fn manual_query(&self, fingerprint: &str) -> Option<&ManualQuery> {
+        self.manual_queries.get(fingerprint)
+    }
+
     /// Create new identical databases.
     fn duplicate(&self) -> Databases {
         Self {
@@ -146,6 +152,7 @@ impl Databases {
                 .iter()
                 .map(|(k, v)| (k.clone(), v.duplicate()))
                 .collect(),
+            manual_queries: self.manual_queries.clone(),
         }
     }
 
@@ -159,7 +166,7 @@ impl Databases {
     }
 
     /// Launch all pools.
-    pub fn launch(&self) {
+    fn launch(&self) {
         for cluster in self.all().values() {
             for shard in cluster.shards() {
                 shard.launch();
@@ -220,5 +227,8 @@ pub fn from_config(config: &ConfigAndUsers) -> Databases {
         }
     }
 
-    Databases { databases }
+    Databases {
+        databases,
+        manual_queries: config.config.manual_queries(),
+    }
 }
