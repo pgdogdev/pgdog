@@ -39,12 +39,12 @@ pub struct WhereClause {
 impl WhereClause {
     /// Parse the `WHERE` clause of a statement and extract
     /// all possible sharding keys.
-    pub fn new(where_clause: &Option<Box<Node>>) -> Option<WhereClause> {
+    pub fn new(table_name: Option<&str>, where_clause: &Option<Box<Node>>) -> Option<WhereClause> {
         let Some(ref where_clause) = where_clause else {
             return None;
         };
 
-        let output = Self::parse(where_clause);
+        let output = Self::parse(table_name, where_clause);
 
         Some(Self { output })
     }
@@ -129,7 +129,7 @@ impl WhereClause {
         None
     }
 
-    fn parse(node: &Node) -> Vec<Output> {
+    fn parse(table_name: Option<&str>, node: &Node) -> Vec<Output> {
         let mut keys = vec![];
 
         match node.node {
@@ -142,7 +142,7 @@ impl WhereClause {
                 }
 
                 for arg in &expr.args {
-                    keys.extend(Self::parse(arg));
+                    keys.extend(Self::parse(table_name, arg));
                 }
             }
 
@@ -157,8 +157,8 @@ impl WhereClause {
                 }
                 if let Some(ref left) = expr.lexpr {
                     if let Some(ref right) = expr.rexpr {
-                        let left = Self::parse(left);
-                        let right = Self::parse(right);
+                        let left = Self::parse(table_name, left);
+                        let right = Self::parse(table_name, right);
 
                         keys.push(Output::Filter(left, right));
                     }
@@ -178,6 +178,11 @@ impl WhereClause {
             Some(NodeEnum::ColumnRef(ref column)) => {
                 let name = Self::string(column.fields.last());
                 let table = Self::string(column.fields.iter().rev().nth(1));
+                let table = if let Some(table) = table {
+                    Some(table)
+                } else {
+                    table_name.map(|t| t.to_owned())
+                };
 
                 if let Some(name) = name {
                     return vec![Output::Column(Column { name, table })];
@@ -185,7 +190,7 @@ impl WhereClause {
             }
 
             Some(NodeEnum::ParamRef(ref param)) => {
-                keys.push(Output::Parameter(param.number - 1));
+                keys.push(Output::Parameter(param.number));
             }
 
             _ => (),
@@ -209,7 +214,7 @@ mod test {
         let stmt = ast.protobuf.stmts.first().cloned().unwrap().stmt.unwrap();
 
         if let Some(NodeEnum::SelectStmt(stmt)) = stmt.node {
-            let where_ = WhereClause::new(&stmt.where_clause).unwrap();
+            let where_ = WhereClause::new(Some("sharded"), &stmt.where_clause).unwrap();
             let mut keys = where_.keys(Some("sharded"), "id");
             assert_eq!(keys.pop().unwrap(), Key::Constant("5".into()));
         }

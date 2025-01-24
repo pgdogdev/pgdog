@@ -32,13 +32,6 @@ host = "127.0.0.1"
 database_name = "shard_1"
 shard = 1
 
-#
-# Use pgdog_routing to route things around
-# the cluser.
-#
-[[plugins]]
-name = "pgdog_routing"
-
 
 #
 # Write access to this table will be automatically
@@ -48,3 +41,25 @@ name = "pgdog_routing"
 database = "pgdog_sharded"
 table = "sharded"
 column = "id"
+
+#
+# ActiveRecord sends these queries
+# at startup to figure out the schema.
+#
+# This will route them to only one shard instead of issuing
+# cross-shard queries and getting incorrect results.
+#
+[[manual_queries]]
+fingerprint = "e78fe2c08de5f079" #[16685804461073231993]
+
+[[manual_queries]]
+fingerprint = "43258d068030bb3e" #[4838428433739463486]
+
+[[manual_queries]]
+fingerprint = "08aab2cee482a97d" #[624508100011010429]
+
+[[manual_queries]]
+fingerprint = "23cd60d5972d1712" #[2579824632033777426]
+
+[[manual_queries]]
+fingerprint = "bb38525ebeb46656" #[13490623250668217942]

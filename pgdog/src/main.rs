@@ -2,12 +2,13 @@
 
 use backend::databases;
 use clap::Parser;
+use cli::Commands;
 use frontend::listener::Listener;
 use tokio::runtime::Builder;
 use tracing::{info, level_filters::LevelFilter};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
-use std::io::IsTerminal;
+use std::{io::IsTerminal, process::exit};
 
 pub mod admin;
 pub mod auth;
@@ -47,6 +48,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = cli::Cli::parse();
 
     logger();
+
+    match args.command {
+        Some(Commands::Fingerprint { query, path }) => {
+            cli::fingerprint(query, path)?;
+            exit(0);
+        }
+
+        None | Some(Commands::Run) => (),
+    }
+
     info!("🐕 pgDog {}", env!("CARGO_PKG_VERSION"));
 
     let config = config::load(&args.config, &args.users)?;

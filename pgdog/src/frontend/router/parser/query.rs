@@ -2,7 +2,7 @@
 use std::collections::HashSet;
 
 use crate::{
-    backend::Cluster,
+    backend::{databases::databases, Cluster},
     frontend::{
         router::{parser::OrderBy, round_robin, sharding::shard_str, CopyRow},
         Buffer,
@@ -17,11 +17,11 @@ use super::{
 };
 
 use pg_query::{
-    parse,
+    fingerprint, parse,
     protobuf::{a_const::Val, *},
     NodeEnum,
 };
-use tracing::trace;
+use tracing::{debug, trace};
 
 /// Command determined by the query parser.
 #[derive(Debug, Clone)]
@@ -104,8 +104,21 @@ impl QueryParser {
         // Hardcoded shard from a comment.
         let shard = super::comment::shard(query, cluster.shards().len()).map_err(Error::PgQuery)?;
 
+        // Cluster is read only or write only, traffic split isn't needed,
+        // so don't parse the query further.
+        if let Some(shard) = shard {
+            if cluster.read_only() {
+                return Ok(Command::Query(Route::read(Some(shard))));
+            }
+
+            if cluster.write_only() {
+                return Ok(Command::Query(Route::write(Some(shard))));
+            }
+        }
+
         let ast = parse(query).map_err(Error::PgQuery)?;
 
+        debug!("{}", query);
         trace!("{:#?}", ast);
 
         let stmt = ast.protobuf.stmts.first().ok_or(Error::EmptyQuery)?;
@@ -149,6 +162,20 @@ impl QueryParser {
             }
         }
 
+        if let Command::Query(ref mut route) = command {
+            if route.shard().is_none() {
+                let fingerprint = fingerprint(query).map_err(Error::PgQuery)?;
+                let manual_route = databases().manual_query(&fingerprint.hex).cloned();
+
+                // TODO: check routing logic required by config.
+                if let Some(_) = manual_route {
+                    route.overwrite_shard(round_robin::next() % cluster.shards().len());
+                }
+            }
+        }
+
+        trace!("{:#?}", command);
+
         Ok(command)
     }
 
@@ -160,7 +187,22 @@ impl QueryParser {
         let order_by = Self::select_sort(&stmt.sort_clause);
         let sharded_tables = cluster.shaded_tables();
         let mut shards = HashSet::new();
-        if let Some(where_clause) = WhereClause::new(&stmt.where_clause) {
+        let table_name = stmt
+            .from_clause
+            .first()
+            .map(|node| {
+                node.node.as_ref().map(|node| match node {
+                    NodeEnum::RangeVar(var) => Some(if let Some(ref alias) = var.alias {
+                        alias.aliasname.as_str()
+                    } else {
+                        var.relname.as_str()
+                    }),
+                    _ => None,
+                })
+            })
+            .flatten()
+            .flatten();
+        if let Some(where_clause) = WhereClause::new(table_name, &stmt.where_clause) {
             // Complexity: O(number of sharded tables * number of columns in the query)
             for table in sharded_tables {
                 let table_name = table.name.as_deref();
