@@ -25,6 +25,7 @@ pub struct Client {
     params: Parameters,
     comms: Comms,
     admin: bool,
+    streaming: bool,
 }
 
 impl Client {
@@ -99,6 +100,7 @@ impl Client {
             params,
             comms,
             admin,
+            streaming: false,
         };
 
         if client.admin {
@@ -157,6 +159,11 @@ impl Client {
                     async_ = buffer.async_();
                     comms.stats(stats.received(buffer.len()));
 
+                    #[cfg(debug_assertions)]
+                    if let Some(query) = buffer.query()? {
+                        debug!("{} [{}]", query, self.addr);
+                    }
+
                     if !backend.connected() {
                         // Figure out where the query should go.
                         if let Ok(cluster) = backend.cluster() {
@@ -205,7 +212,7 @@ impl Client {
                     }
 
                     // Handle COPY subprotocol in a potentially sharded context.
-                    if buffer.copy() {
+                    if buffer.copy() && !self.streaming {
                         let rows = router.copy_data(&buffer)?;
                         if !rows.is_empty() {
                             backend.send_copy(rows).await?;
@@ -221,11 +228,12 @@ impl Client {
 
                 message = backend.read() => {
                     let message = message?;
+                    self.streaming = message.streaming();
                     let len = message.len();
                     let code = message.code();
 
                     // ReadyForQuery (B) | CopyInResponse (B) || RowDescription (B) | ErrorResponse (B)
-                    let flush = matches!(code, 'Z' | 'G') || matches!(code, 'T' | 'E')  && async_;
+                    let flush = matches!(code, 'Z' | 'G') || matches!(code, 'T' | 'E')  && async_ || message.streaming();
                     if flush {
                         self.stream.send_flush(message).await?;
                         async_ = false;
@@ -272,7 +280,7 @@ impl Client {
 
         while !buffer.full() {
             let message = match self.stream.read().await {
-                Ok(message) => message,
+                Ok(message) => message.stream(self.streaming),
                 Err(_) => {
                     return vec![].into();
                 }

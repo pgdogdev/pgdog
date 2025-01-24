@@ -40,4 +40,7 @@ pub enum Error {
 
     #[error("incorrect parameter format code: {0}")]
     IncorrectParameterFormatCode(i16),
+
+    #[error("eof")]
+    Eof,
 }

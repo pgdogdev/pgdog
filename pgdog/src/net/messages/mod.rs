@@ -59,12 +59,19 @@ pub trait Protocol: ToBytes + FromBytes {
     fn message(&self) -> Result<Message, Error> {
         Ok(Message::new(self.to_bytes()?))
     }
+
+    /// Message is part of a stream and should
+    /// not be buffered or inspected for meaningful values.
+    fn streaming(&self) -> bool {
+        false
+    }
 }
 
 /// PostgreSQL protocol message.
 #[derive(Debug, Clone)]
 pub struct Message {
     payload: Bytes,
+    stream: bool,
 }
 
 impl ToBytes for Message {
@@ -77,18 +84,34 @@ impl Protocol for Message {
     fn code(&self) -> char {
         self.payload[0] as char
     }
+
+    fn streaming(&self) -> bool {
+        self.stream
+    }
 }
 
 impl FromBytes for Message {
     fn from_bytes(bytes: Bytes) -> Result<Self, Error> {
-        Ok(Self { payload: bytes })
+        Ok(Self {
+            payload: bytes,
+            stream: false,
+        })
     }
 }
 
 impl Message {
     /// Create new message from network payload.
     pub fn new(payload: Bytes) -> Self {
-        Self { payload }
+        Self {
+            payload,
+            stream: false,
+        }
+    }
+
+    /// This message is part of a stream and should be flushed asap.
+    pub fn stream(mut self, stream: bool) -> Self {
+        self.stream = stream;
+        self
     }
 
     /// Take the message payload.

@@ -44,6 +44,11 @@ impl Buffer {
             if message.code() == 'd' && self.len() >= 4096 {
                 return true;
             }
+
+            // Don't buffer streams.
+            if message.streaming() {
+                return true;
+            }
         }
 
         false

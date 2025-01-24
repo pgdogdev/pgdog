@@ -38,6 +38,7 @@ pub struct Server {
     stats: Stats,
     prepared_statements: HashSet<String>,
     dirty: bool,
+    streaming: bool,
 }
 
 impl Server {
@@ -135,6 +136,12 @@ impl Server {
                     key_data = Some(BackendKeyData::from_bytes(message.payload())?);
                 }
 
+                'E' => {
+                    return Err(Error::ConnectionError(ErrorResponse::from_bytes(
+                        message.to_bytes()?,
+                    )?));
+                }
+
                 code => return Err(Error::UnexpectedMessage(code)),
             }
         }
@@ -151,6 +158,7 @@ impl Server {
             stats: Stats::connect(id, addr),
             prepared_statements: HashSet::new(),
             dirty: false,
+            streaming: false,
         })
     }
 
@@ -212,7 +220,7 @@ impl Server {
     /// Read a single message from the server.
     pub async fn read(&mut self) -> Result<Message, Error> {
         let message = match self.stream().read().await {
-            Ok(message) => message,
+            Ok(message) => message.stream(self.streaming),
             Err(err) => {
                 self.stats.state(State::Error);
                 return Err(err.into());
@@ -241,6 +249,9 @@ impl Server {
             self.stats.error();
         } else if message.code() == 'S' {
             self.dirty = true;
+        } else if message.code() == 'W' {
+            debug!("streaming replication on [{}]", self.addr());
+            self.streaming = true;
         }
 
         Ok(message)
@@ -258,7 +269,7 @@ impl Server {
         matches!(
             self.stats.state,
             State::IdleInTransaction | State::TransactionError | State::Idle | State::ParseComplete
-        )
+        ) && !self.streaming
     }
 
     /// Server is still inside a transaction.
@@ -406,6 +417,12 @@ impl Server {
     pub(super) fn cleaned(&mut self) {
         self.dirty = false;
     }
+
+    /// Server is streaming data.
+    #[inline]
+    pub fn streaming(&self) -> bool {
+        self.streaming
+    }
 }
 
 impl Drop for Server {
@@ -444,6 +461,7 @@ mod test {
                 prepared_statements: HashSet::new(),
                 addr,
                 dirty: false,
+                streaming: false,
             }
         }
     }

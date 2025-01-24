@@ -68,7 +68,7 @@ impl QueryParser {
             self.command = Self::query(&query, cluster, buffer.parameters()?)?;
             Ok(&self.command)
         } else {
-            Err(Error::NotInSync)
+            Err(Error::NoQueryInBuffer)
         }
     }
 
@@ -76,7 +76,7 @@ impl QueryParser {
     pub fn copy_data(&mut self, rows: Vec<CopyData>) -> Result<Vec<CopyRow>, Error> {
         match &mut self.command {
             Command::Copy(copy) => copy.shard(rows),
-            _ => Err(Error::NotInSync),
+            _ => Err(Error::CopyOutOfSync),
         }
     }
 
