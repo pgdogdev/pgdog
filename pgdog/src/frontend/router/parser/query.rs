@@ -168,7 +168,7 @@ impl QueryParser {
                 let manual_route = databases().manual_query(&fingerprint.hex).cloned();
 
                 // TODO: check routing logic required by config.
-                if let Some(_) = manual_route {
+                if manual_route.is_some() {
                     route.overwrite_shard(round_robin::next() % cluster.shards().len());
                 }
             }
@@ -190,7 +190,7 @@ impl QueryParser {
         let table_name = stmt
             .from_clause
             .first()
-            .map(|node| {
+            .and_then(|node| {
                 node.node.as_ref().map(|node| match node {
                     NodeEnum::RangeVar(var) => Some(if let Some(ref alias) = var.alias {
                         alias.aliasname.as_str()
@@ -200,7 +200,6 @@ impl QueryParser {
                     _ => None,
                 })
             })
-            .flatten()
             .flatten();
         if let Some(where_clause) = WhereClause::new(table_name, &stmt.where_clause) {
             // Complexity: O(number of sharded tables * number of columns in the query)
