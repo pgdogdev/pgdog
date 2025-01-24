@@ -164,7 +164,7 @@ impl Cluster {
                 && columns.contains(&sharded_table.column.as_str())
         });
 
-        table.and_then(|t| columns.iter().position(|c| *c == &t.column))
+        table.and_then(|t| columns.iter().position(|c| *c == t.column))
     }
 
     /// This cluster is read only (no primaries).

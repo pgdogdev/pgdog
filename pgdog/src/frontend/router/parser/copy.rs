@@ -71,8 +71,10 @@ impl CopyParser {
             return Ok(None);
         }
 
-        let mut parser = Self::default();
-        parser.shards = cluster.shards().len();
+        let mut parser = Self {
+            shards: cluster.shards().len(),
+            ..Default::default()
+        };
 
         if let Some(ref rel) = stmt.relation {
             // parser.table_name = rel.relname.clone();
