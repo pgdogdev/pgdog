@@ -24,4 +24,10 @@ pub enum Error {
 
     #[error("not in sync")]
     NotInSync,
+
+    #[error("no query in buffer")]
+    NoQueryInBuffer,
+
+    #[error("copy out of sync")]
+    CopyOutOfSync,
 }

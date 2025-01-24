@@ -387,6 +387,9 @@ pub struct User {
     pub server_password: Option<String>,
     /// Statement timeout.
     pub statement_timeout: Option<u64>,
+    /// Relication mode.
+    #[serde(default)]
+    pub replication_mode: bool,
 }
 
 /// Admin database settings.

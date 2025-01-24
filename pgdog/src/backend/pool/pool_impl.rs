@@ -335,6 +335,13 @@ impl Pool {
             });
         }
 
+        if config.replication_mode {
+            params.push(Parameter {
+                name: "replication".into(),
+                value: "database".into(),
+            });
+        }
+
         params
     }
 

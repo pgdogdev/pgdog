@@ -43,6 +43,8 @@ pub struct Config {
     pub rollback_timeout: u64,
     /// Statement timeout
     pub statement_timeout: Option<u64>,
+    /// Replication mode.
+    pub replication_mode: bool,
 }
 
 impl Config {
@@ -121,6 +123,7 @@ impl Config {
             ban_timeout: general.ban_timeout,
             rollback_timeout: general.rollback_timeout,
             statement_timeout: user.statement_timeout,
+            replication_mode: user.replication_mode,
             ..Default::default()
         }
     }
@@ -146,6 +149,7 @@ impl Default for Config {
             ban_timeout: Duration::from_secs(300).as_millis() as u64,
             rollback_timeout: Duration::from_secs(5).as_millis() as u64,
             statement_timeout: None,
+            replication_mode: false,
         }
     }
 }

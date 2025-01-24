@@ -4,7 +4,7 @@ use bytes::{BufMut, BytesMut};
 use pin_project::pin_project;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufStream, ReadBuf};
 use tokio::net::TcpStream;
-use tracing::trace;
+use tracing::{error, trace};
 
 use std::io::Error;
 use std::net::SocketAddr;
@@ -98,12 +98,21 @@ impl Stream {
     /// This is fast because the stream is buffered. Make sure to call [`Stream::send_flush`]
     /// for the last message in the exchange.
     pub async fn send(&mut self, message: impl Protocol) -> Result<usize, crate::net::Error> {
+        let bytes = message.to_bytes()?;
+
         trace!("📡 <= {}", message.code());
 
-        let bytes = message.to_bytes()?;
         match self {
             Stream::Plain(ref mut stream) => stream.write_all(&bytes).await?,
             Stream::Tls(ref mut stream) => stream.write_all(&bytes).await?,
+        }
+
+        #[cfg(debug_assertions)]
+        {
+            if message.code() == 'E' {
+                let error = ErrorResponse::from_bytes(bytes.clone())?;
+                error!("{:?} <= {}", self.peer_addr(), error)
+            }
         }
 
         Ok(bytes.len())
@@ -163,17 +172,6 @@ impl Stream {
         trace!("📡 => {}", message.code());
 
         Ok(message)
-    }
-
-    /// Read a specific message from the stream. If the message received doesn't match the expected type,
-    /// an error is returned.
-    ///
-    /// # Performance
-    ///
-    /// Same as [`Stream::read`].
-    pub async fn read_message<T: Protocol + FromBytes>(&mut self) -> Result<T, crate::net::Error> {
-        let message = self.read().await?;
-        T::from_bytes(message.payload())
     }
 
     /// Send an error to the client and disconnect gracefully.
