@@ -13,6 +13,7 @@ pub mod parse;
 pub mod payload;
 pub mod prelude;
 pub mod query;
+pub mod replication;
 pub mod rfq;
 pub mod row_description;
 pub mod terminate;

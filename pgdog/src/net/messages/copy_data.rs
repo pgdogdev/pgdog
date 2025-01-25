@@ -1,6 +1,7 @@
 //! CopyData (F & B) message.
 use super::code;
 use super::prelude::*;
+use super::replication::XLogData;
 
 /// CopyData (F & B) message.
 #[derive(Debug, Clone)]
@@ -19,6 +20,11 @@ impl CopyData {
     /// Get copy data.
     pub fn data(&self) -> &[u8] {
         &self.data[..]
+    }
+
+    /// Get XLogData message from body, if there is one.
+    pub fn xlog_data(&self) -> Option<XLogData> {
+        XLogData::from_bytes(self.data.clone()).ok()
     }
 }
 

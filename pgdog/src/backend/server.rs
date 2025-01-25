@@ -15,7 +15,7 @@ use tracing::{debug, info, trace};
 
 use super::{pool::Address, Error, Stats};
 use crate::net::{
-    messages::{parse::Parse, Flush},
+    messages::{parse::Parse, CopyData, Flush},
     parameter::Parameters,
     tls::connector,
     Parameter, Stream,
@@ -229,29 +229,40 @@ impl Server {
 
         self.stats.receive(message.len());
 
-        if message.code() == 'Z' {
-            self.stats.query();
+        match message.code() {
+            'Z' => {
+                self.stats.query();
 
-            let rfq = ReadyForQuery::from_bytes(message.payload())?;
+                let rfq = ReadyForQuery::from_bytes(message.payload())?;
 
-            match rfq.status {
-                'I' => self.stats.transaction(),
-                'T' => self.stats.state(State::IdleInTransaction),
-                'E' => self.stats.transaction_error(),
-                status => {
-                    self.stats.state(State::Error);
-                    return Err(Error::UnexpectedTransactionStatus(status));
+                match rfq.status {
+                    'I' => self.stats.transaction(),
+                    'T' => self.stats.state(State::IdleInTransaction),
+                    'E' => self.stats.transaction_error(),
+                    status => {
+                        self.stats.state(State::Error);
+                        return Err(Error::UnexpectedTransactionStatus(status));
+                    }
                 }
             }
-        } else if message.code() == '1' {
-            self.stats.prepared_statement()
-        } else if message.code() == 'E' {
-            self.stats.error();
-        } else if message.code() == 'S' {
-            self.dirty = true;
-        } else if message.code() == 'W' {
-            debug!("streaming replication on [{}]", self.addr());
-            self.streaming = true;
+            '1' => self.stats.prepared_statement(),
+            'E' => self.stats.error(),
+            'W' => {
+                debug!("streaming replication on [{}]", self.addr());
+                self.streaming = true;
+            }
+            #[cfg(debug_assertions)]
+            'd' => {
+                if self.streaming {
+                    let copy_data = CopyData::from_bytes(message.to_bytes()?)?;
+                    if let Some(xlog) = copy_data.xlog_data() {
+                        let payload = xlog.payload();
+                        debug!("{:#?}", payload);
+                    }
+                }
+            }
+
+            _ => (),
         }
 
         Ok(message)
