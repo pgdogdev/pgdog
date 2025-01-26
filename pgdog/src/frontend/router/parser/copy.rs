@@ -27,7 +27,7 @@ pub struct CopyInfo {
 impl Default for CopyInfo {
     fn default() -> Self {
         Self {
-            headers: true,
+            headers: false,
             delimiter: ',',
             columns: vec![],
             table_name: "".into(),
@@ -40,7 +40,7 @@ pub struct CopyParser {
     /// CSV contains headers.
     pub headers: bool,
     /// CSV delimiter.
-    pub delimiter: char,
+    delimiter: Option<char>,
     /// Number of shards.
     pub shards: usize,
     /// Which column is used for sharding.
@@ -54,8 +54,8 @@ pub struct CopyParser {
 impl Default for CopyParser {
     fn default() -> Self {
         Self {
-            headers: true,
-            delimiter: ',',
+            headers: false,
+            delimiter: None,
             sharded_column: None,
             shards: 1,
             buffer: CsvBuffer::new(),
@@ -95,8 +95,10 @@ impl CopyParser {
                         "format" => {
                             if let Some(ref arg) = elem.arg {
                                 if let Some(NodeEnum::String(ref string)) = arg.node {
-                                    if string.sval.to_lowercase().as_str() != "csv" {
-                                        return Ok(None);
+                                    if string.sval.to_lowercase().as_str() == "csv" {
+                                        if parser.delimiter.is_none() {
+                                            parser.delimiter = Some(',');
+                                        }
                                     }
                                 }
                             }
@@ -105,7 +107,8 @@ impl CopyParser {
                         "delimiter" => {
                             if let Some(ref arg) = elem.arg {
                                 if let Some(NodeEnum::String(ref string)) = arg.node {
-                                    parser.delimiter = string.sval.chars().next().unwrap_or(',');
+                                    parser.delimiter =
+                                        Some(string.sval.chars().next().unwrap_or(','));
                                 }
                             }
                         }
@@ -123,6 +126,11 @@ impl CopyParser {
         Ok(Some(parser))
     }
 
+    #[inline]
+    fn delimiter(&self) -> u8 {
+        self.delimiter.unwrap_or('\t') as u8
+    }
+
     /// Split CopyData (F) messages into multiple CopyData (F) messages
     /// with shard numbers.
     pub fn shard(&mut self, data: Vec<CopyData>) -> Result<Vec<CopyRow>, Error> {
@@ -134,7 +142,7 @@ impl CopyParser {
 
             let mut csv = ReaderBuilder::new()
                 .has_headers(self.headers)
-                .delimiter(self.delimiter as u8)
+                .delimiter(self.delimiter())
                 .from_reader(data);
 
             if self.headers {
@@ -142,7 +150,7 @@ impl CopyParser {
                     .headers()?
                     .into_iter()
                     .collect::<Vec<_>>()
-                    .join(self.delimiter.to_string().as_str())
+                    .join((self.delimiter() as char).to_string().as_str())
                     + "\n";
                 rows.push(CopyRow::new(headers.as_bytes(), None));
                 self.headers = false;
@@ -177,5 +185,63 @@ impl CopyParser {
         }
 
         Ok(rows)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use pg_query::parse;
+
+    use super::*;
+
+    #[test]
+    fn test_copy_text() {
+        let copy = "COPY sharded (id, value) FROM STDIN";
+        let stmt = parse(copy).unwrap();
+        let stmt = stmt.protobuf.stmts.first().clone().unwrap();
+        let copy = match stmt.stmt.clone().unwrap().node.unwrap() {
+            NodeEnum::CopyStmt(copy) => copy,
+            _ => panic!("not a copy"),
+        };
+
+        let mut copy = CopyParser::new(&copy, &Cluster::default())
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(copy.delimiter(), '\t' as u8);
+        assert!(!copy.headers);
+
+        let one = CopyData::new("5\thello world\n".as_bytes());
+        let two = CopyData::new("10\thowdy mate\n".as_bytes());
+        let sharded = copy.shard(vec![one, two]).unwrap();
+        assert_eq!(sharded[0].message().data(), b"5\thello world\n");
+        assert_eq!(sharded[1].message().data(), b"10\thowdy mate\n");
+    }
+
+    #[test]
+    fn test_copy_csv() {
+        let copy = "COPY sharded (id, value) FROM STDIN CSV HEADER";
+        let stmt = parse(copy).unwrap();
+        let stmt = stmt.protobuf.stmts.first().clone().unwrap();
+        let copy = match stmt.stmt.clone().unwrap().node.unwrap() {
+            NodeEnum::CopyStmt(copy) => copy,
+            _ => panic!("not a copy"),
+        };
+
+        let mut copy = CopyParser::new(&copy, &Cluster::default())
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(copy.delimiter(), ',' as u8);
+        assert!(copy.headers);
+
+        let header = CopyData::new("id,value\n".as_bytes());
+        let one = CopyData::new("5,hello world\n".as_bytes());
+        let two = CopyData::new("10,howdy mate\n".as_bytes());
+        let sharded = copy.shard(vec![header, one, two]).unwrap();
+
+        assert_eq!(sharded[0].message().data(), b"id,value\n");
+        assert_eq!(sharded[1].message().data(), b"5,hello world\n");
+        assert_eq!(sharded[2].message().data(), b"10,howdy mate\n");
     }
 }
