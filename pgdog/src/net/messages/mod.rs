@@ -62,27 +62,27 @@ pub trait Protocol: ToBytes + FromBytes {
         Ok(Message::new(self.to_bytes()?))
     }
 
-    fn debug(&self) -> Result<(), Error> {
+    fn debug(&self, direction: &str) -> Result<(), Error> {
         let message = self.message()?;
         match message.code() {
             'd' => {
                 let copy_data = CopyData::from_bytes(message.to_bytes()?)?;
                 if let Some(xlog) = copy_data.xlog_data() {
-                    debug!("{:#?}", xlog.payload());
+                    debug!("{} {:#?}", direction, xlog.payload());
                 }
                 if let Some(meta) = copy_data.replication_meta() {
-                    debug!("{:#?}", meta);
+                    debug!("{} {:#?}", direction, meta);
                 }
             }
 
             'D' => {
                 let data_row = DataRow::from_bytes(message.to_bytes()?)?;
-                debug!("{:#?}", data_row);
+                debug!("{} {:#?}", direction, data_row);
             }
 
             'T' => {
                 let rd = RowDescription::from_bytes(message.to_bytes()?)?;
-                debug!("{:#?}", rd);
+                debug!("{} {:#?}", direction, rd);
             }
 
             _ => (),

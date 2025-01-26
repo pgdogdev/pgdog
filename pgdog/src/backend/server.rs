@@ -199,7 +199,7 @@ impl Server {
         self.stats.state(State::Active);
 
         #[cfg(debug_assertions)]
-        message.debug()?;
+        message.debug("→")?;
 
         match self.stream().send(message).await {
             Ok(sent) => self.stats.send(sent),
@@ -259,7 +259,7 @@ impl Server {
         }
 
         #[cfg(debug_assertions)]
-        message.debug()?;
+        message.debug("←")?;
 
         Ok(message)
     }
