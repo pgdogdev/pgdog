@@ -254,12 +254,14 @@ impl Server {
             }
             'd' => {
                 if self.streaming {
-                    message.debug()?;
+                    // message.debug()?;
                 }
             }
 
             _ => (),
         }
+
+        message.debug()?;
 
         Ok(message)
     }

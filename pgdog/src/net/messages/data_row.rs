@@ -2,6 +2,7 @@
 
 use super::code;
 use super::prelude::*;
+use super::RowDescription;
 
 use bytes::BytesMut;
 
@@ -128,6 +129,28 @@ impl DataRow {
         self.column(index)
             .and_then(|column| from_utf8(&column[..]).ok().map(|s| s.to_string()))
     }
+
+    /// Render the data row.
+    pub fn into_row(&self, rd: &RowDescription) -> Result<Vec<Column>, Error> {
+        let mut row = vec![];
+
+        for (index, field) in rd.fields.iter().enumerate() {
+            if let Some(data) = self.get_text(index) {
+                row.push(Column {
+                    name: field.name.clone(),
+                    value: data,
+                });
+            }
+        }
+
+        Ok(row)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Column {
+    pub name: String,
+    pub value: String,
 }
 
 impl FromBytes for DataRow {

@@ -65,15 +65,29 @@ pub trait Protocol: ToBytes + FromBytes {
     #[cfg(debug_assertions)]
     fn debug(&self) -> Result<(), Error> {
         let message = self.message()?;
-        if message.code() == 'd' {
-            let copy_data = CopyData::from_bytes(message.to_bytes()?)?;
-            if let Some(xlog) = copy_data.xlog_data() {
-                debug!("{:#?}", xlog.payload());
+        match message.code() {
+            'd' => {
+                let copy_data = CopyData::from_bytes(message.to_bytes()?)?;
+                if let Some(xlog) = copy_data.xlog_data() {
+                    debug!("{:#?}", xlog.payload());
+                }
+                if let Some(meta) = copy_data.replication_meta() {
+                    debug!("{:#?}", meta);
+                }
             }
-            if let Some(meta) = copy_data.replication_meta() {
-                debug!("{:#?}", meta);
+
+            'D' => {
+                let data_row = DataRow::from_bytes(message.to_bytes()?)?;
+                debug!("{:#?}", data_row);
             }
-        }
+
+            'T' => {
+                let rd = RowDescription::from_bytes(message.to_bytes()?)?;
+                debug!("{:#?}", rd);
+            }
+
+            _ => (),
+        };
         Ok(())
     }
 
