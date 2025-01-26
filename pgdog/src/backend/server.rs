@@ -197,7 +197,10 @@ impl Server {
     /// accelerating bulk transfers.
     pub async fn send_one(&mut self, message: impl Protocol) -> Result<(), Error> {
         self.stats.state(State::Active);
+
+        #[cfg(debug_assertions)]
         message.debug()?;
+
         match self.stream().send(message).await {
             Ok(sent) => self.stats.send(sent),
             Err(err) => {
@@ -252,15 +255,10 @@ impl Server {
                 debug!("streaming replication on [{}]", self.addr());
                 self.streaming = true;
             }
-            'd' => {
-                if self.streaming {
-                    // message.debug()?;
-                }
-            }
-
             _ => (),
         }
 
+        #[cfg(debug_assertions)]
         message.debug()?;
 
         Ok(message)

@@ -62,7 +62,6 @@ pub trait Protocol: ToBytes + FromBytes {
         Ok(Message::new(self.to_bytes()?))
     }
 
-    #[cfg(debug_assertions)]
     fn debug(&self) -> Result<(), Error> {
         let message = self.message()?;
         match message.code() {
@@ -88,12 +87,6 @@ pub trait Protocol: ToBytes + FromBytes {
 
             _ => (),
         };
-        Ok(())
-    }
-
-    #[cfg(not(debug_assertions))]
-    #[inline]
-    fn debug(&self) -> Result<(), Error> {
         Ok(())
     }
 
