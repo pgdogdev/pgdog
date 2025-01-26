@@ -95,10 +95,10 @@ impl CopyParser {
                         "format" => {
                             if let Some(ref arg) = elem.arg {
                                 if let Some(NodeEnum::String(ref string)) = arg.node {
-                                    if string.sval.to_lowercase().as_str() == "csv" {
-                                        if parser.delimiter.is_none() {
-                                            parser.delimiter = Some(',');
-                                        }
+                                    if string.sval.to_lowercase().as_str() == "csv"
+                                        && parser.delimiter.is_none()
+                                    {
+                                        parser.delimiter = Some(',');
                                     }
                                 }
                             }
@@ -198,7 +198,7 @@ mod test {
     fn test_copy_text() {
         let copy = "COPY sharded (id, value) FROM STDIN";
         let stmt = parse(copy).unwrap();
-        let stmt = stmt.protobuf.stmts.first().clone().unwrap();
+        let stmt = stmt.protobuf.stmts.first().unwrap();
         let copy = match stmt.stmt.clone().unwrap().node.unwrap() {
             NodeEnum::CopyStmt(copy) => copy,
             _ => panic!("not a copy"),
@@ -208,7 +208,7 @@ mod test {
             .unwrap()
             .unwrap();
 
-        assert_eq!(copy.delimiter(), '\t' as u8);
+        assert_eq!(copy.delimiter(), b'\t');
         assert!(!copy.headers);
 
         let one = CopyData::new("5\thello world\n".as_bytes());
@@ -222,7 +222,7 @@ mod test {
     fn test_copy_csv() {
         let copy = "COPY sharded (id, value) FROM STDIN CSV HEADER";
         let stmt = parse(copy).unwrap();
-        let stmt = stmt.protobuf.stmts.first().clone().unwrap();
+        let stmt = stmt.protobuf.stmts.first().unwrap();
         let copy = match stmt.stmt.clone().unwrap().node.unwrap() {
             NodeEnum::CopyStmt(copy) => copy,
             _ => panic!("not a copy"),
@@ -232,7 +232,7 @@ mod test {
             .unwrap()
             .unwrap();
 
-        assert_eq!(copy.delimiter(), ',' as u8);
+        assert_eq!(copy.delimiter(), b',');
         assert!(copy.headers);
 
         let header = CopyData::new("id,value\n".as_bytes());
