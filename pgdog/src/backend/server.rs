@@ -197,6 +197,10 @@ impl Server {
     /// accelerating bulk transfers.
     pub async fn send_one(&mut self, message: impl Protocol) -> Result<(), Error> {
         self.stats.state(State::Active);
+
+        #[cfg(debug_assertions)]
+        message.debug()?;
+
         match self.stream().send(message).await {
             Ok(sent) => self.stats.send(sent),
             Err(err) => {
@@ -229,30 +233,33 @@ impl Server {
 
         self.stats.receive(message.len());
 
-        if message.code() == 'Z' {
-            self.stats.query();
+        match message.code() {
+            'Z' => {
+                self.stats.query();
 
-            let rfq = ReadyForQuery::from_bytes(message.payload())?;
+                let rfq = ReadyForQuery::from_bytes(message.payload())?;
 
-            match rfq.status {
-                'I' => self.stats.transaction(),
-                'T' => self.stats.state(State::IdleInTransaction),
-                'E' => self.stats.transaction_error(),
-                status => {
-                    self.stats.state(State::Error);
-                    return Err(Error::UnexpectedTransactionStatus(status));
+                match rfq.status {
+                    'I' => self.stats.transaction(),
+                    'T' => self.stats.state(State::IdleInTransaction),
+                    'E' => self.stats.transaction_error(),
+                    status => {
+                        self.stats.state(State::Error);
+                        return Err(Error::UnexpectedTransactionStatus(status));
+                    }
                 }
             }
-        } else if message.code() == '1' {
-            self.stats.prepared_statement()
-        } else if message.code() == 'E' {
-            self.stats.error();
-        } else if message.code() == 'S' {
-            self.dirty = true;
-        } else if message.code() == 'W' {
-            debug!("streaming replication on [{}]", self.addr());
-            self.streaming = true;
+            '1' => self.stats.prepared_statement(),
+            'E' => self.stats.error(),
+            'W' => {
+                debug!("streaming replication on [{}]", self.addr());
+                self.streaming = true;
+            }
+            _ => (),
         }
+
+        #[cfg(debug_assertions)]
+        message.debug()?;
 
         Ok(message)
     }

@@ -41,6 +41,9 @@ pub enum Error {
     #[error("incorrect parameter format code: {0}")]
     IncorrectParameterFormatCode(i16),
 
+    #[error("unknown tuple data identifier: {0}")]
+    UnknownTupleDataIdentifier(char),
+
     #[error("eof")]
     Eof,
 }

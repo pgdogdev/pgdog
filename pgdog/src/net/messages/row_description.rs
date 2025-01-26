@@ -94,7 +94,7 @@ impl Field {
 #[derive(Debug, Clone, PartialEq)]
 pub struct RowDescription {
     /// Fields.
-    fields: Vec<Field>,
+    pub fields: Vec<Field>,
 }
 
 impl RowDescription {

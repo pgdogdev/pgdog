@@ -13,6 +13,7 @@ pub mod parse;
 pub mod payload;
 pub mod prelude;
 pub mod query;
+pub mod replication;
 pub mod rfq;
 pub mod row_description;
 pub mod terminate;
@@ -35,6 +36,7 @@ pub use terminate::Terminate;
 use crate::net::Error;
 
 use bytes::Bytes;
+use tracing::debug;
 
 /// Convert a Rust struct to a PostgreSQL wire protocol message.
 pub trait ToBytes {
@@ -58,6 +60,34 @@ pub trait Protocol: ToBytes + FromBytes {
     /// Convert to message.
     fn message(&self) -> Result<Message, Error> {
         Ok(Message::new(self.to_bytes()?))
+    }
+
+    fn debug(&self) -> Result<(), Error> {
+        let message = self.message()?;
+        match message.code() {
+            'd' => {
+                let copy_data = CopyData::from_bytes(message.to_bytes()?)?;
+                if let Some(xlog) = copy_data.xlog_data() {
+                    debug!("{:#?}", xlog.payload());
+                }
+                if let Some(meta) = copy_data.replication_meta() {
+                    debug!("{:#?}", meta);
+                }
+            }
+
+            'D' => {
+                let data_row = DataRow::from_bytes(message.to_bytes()?)?;
+                debug!("{:#?}", data_row);
+            }
+
+            'T' => {
+                let rd = RowDescription::from_bytes(message.to_bytes()?)?;
+                debug!("{:#?}", rd);
+            }
+
+            _ => (),
+        };
+        Ok(())
     }
 
     /// Message is part of a stream and should
