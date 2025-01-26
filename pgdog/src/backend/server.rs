@@ -15,7 +15,7 @@ use tracing::{debug, info, trace};
 
 use super::{pool::Address, Error, Stats};
 use crate::net::{
-    messages::{parse::Parse, CopyData, Flush},
+    messages::{parse::Parse, Flush},
     parameter::Parameters,
     tls::connector,
     Parameter, Stream,
@@ -197,6 +197,7 @@ impl Server {
     /// accelerating bulk transfers.
     pub async fn send_one(&mut self, message: impl Protocol) -> Result<(), Error> {
         self.stats.state(State::Active);
+        message.debug()?;
         match self.stream().send(message).await {
             Ok(sent) => self.stats.send(sent),
             Err(err) => {
@@ -251,14 +252,9 @@ impl Server {
                 debug!("streaming replication on [{}]", self.addr());
                 self.streaming = true;
             }
-            #[cfg(debug_assertions)]
             'd' => {
                 if self.streaming {
-                    let copy_data = CopyData::from_bytes(message.to_bytes()?)?;
-                    if let Some(xlog) = copy_data.xlog_data() {
-                        let payload = xlog.payload();
-                        debug!("{:#?}", payload);
-                    }
+                    message.debug()?;
                 }
             }
 
