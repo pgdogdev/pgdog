@@ -3,6 +3,7 @@
 pub mod databases;
 pub mod error;
 pub mod pool;
+pub mod replication;
 pub mod server;
 pub mod stats;
 

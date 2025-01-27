@@ -30,9 +30,12 @@ impl FromBytes for Update {
             None
         };
 
-        code!(bytes, 'N');
-
-        let new = TupleData::from_bytes(bytes)?;
+        let new = if identifier == 'N' {
+            TupleData::from_bytes(bytes)?
+        } else {
+            code!(bytes, 'N');
+            TupleData::from_bytes(bytes)?
+        };
 
         Ok(Self { oid, key, old, new })
     }
