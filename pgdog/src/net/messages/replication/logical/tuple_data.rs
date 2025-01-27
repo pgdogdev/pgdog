@@ -1,9 +1,27 @@
+use std::str::from_utf8;
+
 use super::super::super::bind::Format;
 use super::super::super::prelude::*;
+use super::string::unescape;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct TupleData {
     pub columns: Vec<Column>,
+}
+
+impl std::fmt::Debug for TupleData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.to_sql() {
+            Ok(tuple) => f
+                .debug_struct("TupleData")
+                .field("columns", &tuple)
+                .finish(),
+            Err(_) => f
+                .debug_struct("TupleData")
+                .field("columns", &self.columns)
+                .finish(),
+        }
+    }
 }
 
 impl TupleData {
@@ -36,6 +54,16 @@ impl TupleData {
 
         Ok(Self { columns })
     }
+
+    pub fn to_sql(&self) -> Result<String, Error> {
+        let columns = self
+            .columns
+            .iter()
+            .map(|s| s.to_sql())
+            .collect::<Result<Vec<_>, Error>>()?
+            .join(", ");
+        Ok(format!("({})", columns))
+    }
 }
 
 /// Explains what's inside the column.
@@ -51,6 +79,22 @@ pub struct Column {
     pub identifier: Identifier,
     pub len: i32,
     pub data: Bytes,
+}
+
+impl Column {
+    /// Convert column to SQL representation,
+    /// if it's encoded with UTF-8 compatible encoding.
+    pub fn to_sql(&self) -> Result<String, Error> {
+        match self.identifier {
+            Identifier::Null => return Ok("NULL".into()),
+            Identifier::Format(Format::Binary) => return Err(Error::NotTextEncoding),
+            Identifier::Toasted => return Ok("NULL".into()),
+            Identifier::Format(Format::Text) => match from_utf8(&self.data[..]) {
+                Ok(text) => Ok(unescape(text)),
+                Err(_) => return Err(Error::NotTextEncoding),
+            },
+        }
+    }
 }
 
 impl FromBytes for TupleData {

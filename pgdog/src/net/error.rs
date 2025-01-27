@@ -46,4 +46,7 @@ pub enum Error {
 
     #[error("eof")]
     Eof,
+
+    #[error("not text encoding")]
+    NotTextEncoding,
 }

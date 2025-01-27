@@ -5,12 +5,17 @@ use super::super::super::prelude::*;
 
 #[derive(Debug, Clone)]
 pub struct Relation {
-    pub xid: i32,
     pub oid: i32,
     pub namespace: String,
     pub name: String,
     pub replica_identity: i8,
     pub columns: Vec<Column>,
+}
+
+impl Relation {
+    pub fn to_sql(&self) -> Result<String, Error> {
+        Ok(format!(r#""{}"."{}""#, self.namespace, self.name))
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -24,7 +29,6 @@ pub struct Column {
 impl FromBytes for Relation {
     fn from_bytes(mut bytes: Bytes) -> Result<Self, Error> {
         code!(bytes, 'R');
-        let xid = bytes.get_i32();
         let oid = bytes.get_i32();
         let namespace = c_string_buf(&mut bytes);
         let name = c_string_buf(&mut bytes);
@@ -48,7 +52,6 @@ impl FromBytes for Relation {
         }
 
         Ok(Self {
-            xid,
             oid,
             namespace,
             name,

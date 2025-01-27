@@ -1,7 +1,23 @@
+use fnv::FnvHashMap as HashMap;
 use std::mem::take;
 
-use super::Error;
+use super::{insert::InsertBuffer, Error};
 use crate::net::messages::replication::{xlog_data::XLogPayload, Begin, Commit, Relation};
+
+#[derive(Debug)]
+pub struct OperationBuffer {
+    relation: Relation,
+    insert: InsertBuffer,
+}
+
+impl OperationBuffer {
+    fn new(relation: Relation) -> Self {
+        Self {
+            relation,
+            insert: InsertBuffer::default(),
+        }
+    }
+}
 
 #[derive(Debug, Default)]
 pub struct Buffer {
@@ -9,6 +25,7 @@ pub struct Buffer {
     commit: Option<Commit>,
     relation: Option<Relation>,
     messages: Vec<XLogPayload>,
+    buffers: HashMap<i32, OperationBuffer>,
     state: State,
 }
 
@@ -24,7 +41,11 @@ impl Buffer {
                 self.state = State::Commit;
             }
             XLogPayload::Relation(relation) => {
+                self.buffers
+                    .entry(relation.oid)
+                    .or_insert_with(|| OperationBuffer::new(relation.clone()));
                 self.relation = Some(relation);
+
                 self.state = State::Buffering;
             }
             _ => {
@@ -51,6 +72,7 @@ impl Buffer {
         let mut queries = vec![];
 
         // More than one row change requires an explicit transaction.
+        //
         if self.messages.len() > 1 {
             if let Some(_) = self.begin.take() {
                 queries.push(Query {
