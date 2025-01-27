@@ -8,9 +8,12 @@ pub use hot_standby_feedback::HotStandbyFeedback;
 pub use keep_alive::KeepAlive;
 pub use logical::begin::Begin;
 pub use logical::commit::Commit;
+pub use logical::delete::Delete;
 pub use logical::insert::Insert;
 pub use logical::relation::Relation;
+pub use logical::truncate::Truncate;
 pub use logical::tuple_data::TupleData;
+pub use logical::update::Update;
 pub use status_update::StatusUpdate;
 pub use xlog_data::XLogData;
 

@@ -4,8 +4,11 @@ use super::super::code;
 use super::super::prelude::*;
 use super::logical::begin::Begin;
 use super::logical::commit::Commit;
+use super::logical::delete::Delete;
 use super::logical::insert::Insert;
 use super::logical::relation::Relation;
+use super::logical::truncate::Truncate;
+use super::logical::update::Update;
 
 /// XLogData (B) messsage.
 #[derive(Debug, Clone)]
@@ -35,6 +38,15 @@ impl XLogData {
             'B' => Begin::from_bytes(self.bytes.clone())
                 .ok()
                 .map(XLogPayload::Begin),
+            'T' => Truncate::from_bytes(self.bytes.clone())
+                .ok()
+                .map(XLogPayload::Truncate),
+            'U' => Update::from_bytes(self.bytes.clone())
+                .ok()
+                .map(XLogPayload::Update),
+            'D' => Delete::from_bytes(self.bytes.clone())
+                .ok()
+                .map(XLogPayload::Delete),
             _ => None,
         }
     }
@@ -80,4 +92,7 @@ pub enum XLogPayload {
     Commit(Commit),
     Insert(Insert),
     Relation(Relation),
+    Truncate(Truncate),
+    Update(Update),
+    Delete(Delete),
 }
