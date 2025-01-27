@@ -158,7 +158,7 @@ impl Stream {
         let code = self.read_u8().await?;
         let len = self.read_i32().await?;
 
-        let mut bytes = BytesMut::new();
+        let mut bytes = BytesMut::with_capacity(len as usize + 1);
 
         bytes.put_u8(code);
         bytes.put_i32(len);
