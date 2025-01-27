@@ -111,6 +111,8 @@ pub struct Config {
     pub sharded_tables: Vec<ShardedTable>,
     #[serde(default)]
     pub manual_queries: Vec<ManualQuery>,
+    #[serde(default)]
+    pub replications: Vec<Replication>,
 }
 
 impl Config {
@@ -457,6 +459,25 @@ pub struct ShardedTable {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ManualQuery {
     pub fingerprint: String,
+}
+
+/// Replication configuration.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct Replication {
+    /// IP/DNS of the primary.
+    pub host: String,
+    /// TCP port of the primary.
+    #[serde(default = "Database::port")]
+    pub port: u16,
+    /// PostgreSQL database to replicate from.
+    pub database_name: String,
+    /// Connect with this user. It must have REPLICATION or SUPERUSER permissions
+    /// and be in pg_hba.conf.
+    pub user: String,
+    /// Password of the user to connect with.
+    pub password: String,
+    /// Replicate into this database. It must be configured in `[[databases]]`.
+    pub database: String,
 }
 
 #[cfg(test)]

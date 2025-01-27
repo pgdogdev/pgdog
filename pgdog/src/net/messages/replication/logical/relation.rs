@@ -1,4 +1,5 @@
 use crate::net::c_string_buf;
+use crate::net::messages::replication::logical::string::escape;
 
 use super::super::super::code;
 use super::super::super::prelude::*;
@@ -14,7 +15,11 @@ pub struct Relation {
 
 impl Relation {
     pub fn to_sql(&self) -> Result<String, Error> {
-        Ok(format!(r#""{}"."{}""#, self.namespace, self.name))
+        Ok(format!(
+            r#""{}"."{}""#,
+            escape(&self.namespace, '"'),
+            escape(&self.name, '"')
+        ))
     }
 }
 
@@ -24,6 +29,12 @@ pub struct Column {
     pub name: String,
     pub oid: i32,
     pub type_modifier: i32,
+}
+
+impl Column {
+    pub fn to_sql(&self) -> Result<String, Error> {
+        Ok(format!(r#""{}""#, escape(&self.name, '"')))
+    }
 }
 
 impl FromBytes for Relation {

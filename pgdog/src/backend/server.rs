@@ -30,6 +30,7 @@ use crate::{
 };
 
 /// PostgreSQL server connection.
+#[derive(Debug)]
 pub struct Server {
     addr: Address,
     stream: Option<Stream>,
@@ -248,6 +249,8 @@ impl Server {
                         return Err(Error::UnexpectedTransactionStatus(status));
                     }
                 }
+
+                self.streaming = false;
             }
             '1' => self.stats.prepared_statement(),
             'E' => self.stats.error(),

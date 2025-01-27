@@ -16,6 +16,7 @@ use super::messages::{ErrorResponse, FromBytes, Message, Protocol, ReadyForQuery
 
 /// A network socket.
 #[pin_project(project = StreamProjection)]
+#[derive(Debug)]
 pub enum Stream {
     Plain(#[pin] BufStream<TcpStream>),
     Tls(#[pin] BufStream<tokio_rustls::TlsStream<TcpStream>>),
