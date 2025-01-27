@@ -7,10 +7,6 @@ pub struct TupleData {
 }
 
 impl TupleData {
-    pub fn len(&self) -> usize {
-        size_of::<i16>() + self.columns.iter().map(|c| c.len()).sum::<usize>()
-    }
-
     pub fn from_buffer(bytes: &mut Bytes) -> Result<Self, Error> {
         let num_columns = bytes.get_i16();
         let mut columns = vec![];
@@ -55,13 +51,6 @@ pub struct Column {
     pub identifier: Identifier,
     pub len: i32,
     pub data: Bytes,
-}
-
-impl Column {
-    /// Size of the column in the message buffer.
-    pub fn len(&self) -> usize {
-        self.data.len() + size_of::<u8>() + size_of::<i32>()
-    }
 }
 
 impl FromBytes for TupleData {
