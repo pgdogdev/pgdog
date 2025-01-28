@@ -1,6 +1,7 @@
 //! A collection of replicas and a primary.
 
 use crate::{
+    backend::ShardedTables,
     config::{PoolerMode, ShardedTable},
     net::messages::BackendKeyData,
 };
@@ -21,13 +22,13 @@ pub struct PoolConfig {
 
 /// A collection of sharded replicas and primaries
 /// belonging to the same database cluster.
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Debug)]
 pub struct Cluster {
     name: String,
     shards: Vec<Shard>,
     password: String,
     pooler_mode: PoolerMode,
-    sharded_tables: Vec<ShardedTable>,
+    sharded_tables: ShardedTables,
 }
 
 impl Cluster {
@@ -38,7 +39,7 @@ impl Cluster {
         lb_strategy: LoadBalancingStrategy,
         password: &str,
         pooler_mode: PoolerMode,
-        sharded_tables: Vec<ShardedTable>,
+        sharded_tables: ShardedTables,
     ) -> Self {
         Self {
             shards: shards
@@ -149,22 +150,13 @@ impl Cluster {
     }
 
     // Get sharded tables if any.
-    pub fn shaded_tables(&self) -> &[ShardedTable] {
-        &self.sharded_tables
+    pub fn sharded_tables(&self) -> &[ShardedTable] {
+        &self.sharded_tables.tables()
     }
 
     /// Find sharded column position, if the table and columns match the configuration.
     pub fn sharded_column(&self, table: &str, columns: &[&str]) -> Option<usize> {
-        let table = self.sharded_tables.iter().find(|sharded_table| {
-            sharded_table
-                .name
-                .as_ref()
-                .map(|name| name == table)
-                .unwrap_or(true)
-                && columns.contains(&sharded_table.column.as_str())
-        });
-
-        table.and_then(|t| columns.iter().position(|c| *c == t.column))
+        self.sharded_tables.sharded_column(table, columns)
     }
 
     /// This cluster is read only (no primaries).

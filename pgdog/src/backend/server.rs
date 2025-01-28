@@ -199,8 +199,7 @@ impl Server {
     pub async fn send_one(&mut self, message: impl Protocol) -> Result<(), Error> {
         self.stats.state(State::Active);
 
-        #[cfg(debug_assertions)]
-        message.debug("→")?;
+        debug!("→ {:#?}", message);
 
         match self.stream().send(message).await {
             Ok(sent) => self.stats.send(sent),
@@ -261,8 +260,7 @@ impl Server {
             _ => (),
         }
 
-        #[cfg(debug_assertions)]
-        message.debug("←")?;
+        debug!("← {:#?}", message);
 
         Ok(message)
     }

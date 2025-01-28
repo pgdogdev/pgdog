@@ -4,7 +4,7 @@ use tokio::time::sleep;
 
 use crate::{
     admin::backend::Backend,
-    backend::databases::databases,
+    backend::{databases::databases, replication::Buffer},
     config::PoolerMode,
     frontend::router::{CopyRow, Route},
     net::messages::{BackendKeyData, Message, ParameterStatus, Protocol},
@@ -31,6 +31,7 @@ pub struct Connection {
     database: String,
     binding: Binding,
     cluster: Option<Cluster>,
+    replication_buffer: Option<Buffer>,
 }
 
 impl Connection {
@@ -45,6 +46,7 @@ impl Connection {
             cluster: None,
             user: user.to_owned(),
             database: database.to_owned(),
+            replication_buffer: None,
         };
 
         if !admin {
@@ -78,6 +80,13 @@ impl Connection {
             }
         }
 
+        Ok(())
+    }
+
+    /// Set the connection into replication mode.
+    pub fn replication_mode(&mut self, shard: Option<usize>, database: &str) -> Result<(), Error> {
+        // self.replication_buffer = Some(Buffer::new(shard, self.cluster()?));
+        todo!()
         Ok(())
     }
 
@@ -149,7 +158,25 @@ impl Connection {
     /// suspends this loop indefinitely and expects another `select!` branch
     /// to cancel it.
     pub async fn read(&mut self) -> Result<Message, Error> {
-        self.binding.read().await
+        // Drain the replication buffer, if any.
+        if let Some(ref mut buffer) = self.replication_buffer {
+            if let Some(message) = buffer.message() {
+                return Ok(message);
+            }
+        }
+
+        loop {
+            let message = self.binding.read().await?;
+            if let Some(ref mut buffer) = self.replication_buffer {
+                buffer.handle(message)?;
+
+                if let Some(message) = buffer.message() {
+                    return Ok(message);
+                }
+            } else {
+                return Ok(message);
+            }
+        }
     }
 
     /// Send messages to the server.

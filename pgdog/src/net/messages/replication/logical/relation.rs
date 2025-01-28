@@ -1,3 +1,5 @@
+use bytes::BytesMut;
+
 use crate::net::c_string_buf;
 use crate::net::messages::replication::logical::string::escape;
 
@@ -21,6 +23,20 @@ impl Relation {
             escape(&self.name, '"')
         ))
     }
+
+    /// Columns in the order they appear in the table
+    /// (and all subsequent data messages).
+    pub fn columns(&self) -> Vec<&str> {
+        self.columns
+            .iter()
+            .map(|column| column.name.as_str())
+            .collect()
+    }
+
+    /// Table name.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -34,6 +50,26 @@ pub struct Column {
 impl Column {
     pub fn to_sql(&self) -> Result<String, Error> {
         Ok(format!(r#""{}""#, escape(&self.name, '"')))
+    }
+}
+
+impl ToBytes for Relation {
+    fn to_bytes(&self) -> Result<Bytes, Error> {
+        let mut payload = Payload::wrapped('R');
+        payload.put_i32(self.oid);
+        payload.put_string(&self.namespace);
+        payload.put_string(&self.name);
+        payload.put_i8(self.replica_identity);
+        payload.put_i16(self.columns.len() as i16);
+
+        for column in &self.columns {
+            payload.put_i8(column.flag);
+            payload.put_string(&column.name);
+            payload.put_i32(column.oid);
+            payload.put_i32(column.type_modifier);
+        }
+
+        Ok(payload.freeze())
     }
 }
 

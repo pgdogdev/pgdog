@@ -8,6 +8,7 @@ use std::ops::{Deref, DerefMut};
 pub struct Payload {
     bytes: BytesMut,
     name: Option<char>,
+    with_len: bool,
 }
 
 impl Default for Payload {
@@ -22,6 +23,7 @@ impl Payload {
         Self {
             bytes: BytesMut::new(),
             name: None,
+            with_len: true,
         }
     }
 
@@ -30,6 +32,15 @@ impl Payload {
         Self {
             bytes: BytesMut::new(),
             name: Some(name),
+            with_len: true,
+        }
+    }
+
+    pub fn wrapped(name: char) -> Self {
+        Self {
+            bytes: BytesMut::new(),
+            name: Some(name),
+            with_len: false,
         }
     }
 
@@ -64,13 +75,19 @@ impl DerefMut for Payload {
 impl super::ToBytes for Payload {
     fn to_bytes(&self) -> Result<bytes::Bytes, crate::net::Error> {
         let mut buf = BytesMut::new();
-        let len = self.bytes.len() as i32 + 4; // self
+        let len = if self.with_len {
+            Some(self.bytes.len() as i32 + 4) // self
+        } else {
+            None
+        };
 
         if let Some(name) = self.name {
             buf.put_u8(name as u8);
         }
 
-        buf.put_i32(len);
+        if let Some(len) = len {
+            buf.put_i32(len);
+        }
         buf.put_slice(&self.bytes);
 
         Ok(buf.freeze())

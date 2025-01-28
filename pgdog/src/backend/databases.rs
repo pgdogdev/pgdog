@@ -8,13 +8,14 @@ use once_cell::sync::Lazy;
 
 use crate::{
     backend::pool::PoolConfig,
-    config::{config, load, ConfigAndUsers, ManualQuery, Role},
+    config::{config, load, ConfigAndUsers, ManualQuery, Role, ShardedTable},
     net::messages::BackendKeyData,
 };
 
 use super::{
     pool::{Address, Config},
-    Cluster, Error,
+    replication::{sharded_tables, ReplicationConfig},
+    Cluster, Error, ShardedTables,
 };
 
 static DATABASES: Lazy<ArcSwap<Databases>> =
@@ -125,6 +126,20 @@ impl Databases {
         }
     }
 
+    /// Get replication configuration for the database.
+    pub fn replication(&self, database: &str) -> Option<ReplicationConfig> {
+        for (user, cluster) in &self.databases {
+            if user.database == database {
+                return Some(ReplicationConfig {
+                    shards: cluster.shards().len(),
+                    sharded_tables: cluster.sharded_tables().into(),
+                });
+            }
+        }
+
+        None
+    }
+
     /// Get all clusters and databases.
     pub fn all(&self) -> &HashMap<User, Cluster> {
         &self.databases
@@ -205,10 +220,11 @@ pub fn from_config(config: &ConfigAndUsers) -> Databases {
                 shard_configs.push((primary, replicas));
             }
 
-            let shaded_tables = sharded_tables
+            let sharded_tables = sharded_tables
                 .get(&user.database)
                 .cloned()
                 .unwrap_or(vec![]);
+            let sharded_tables = ShardedTables::new(sharded_tables);
 
             databases.insert(
                 User {
@@ -221,7 +237,7 @@ pub fn from_config(config: &ConfigAndUsers) -> Databases {
                     general.load_balancing_strategy,
                     &user.password,
                     user.pooler_mode.unwrap_or(general.pooler_mode),
-                    shaded_tables,
+                    sharded_tables,
                 ),
             );
         }

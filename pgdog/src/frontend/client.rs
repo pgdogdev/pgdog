@@ -6,7 +6,7 @@ use std::time::Instant;
 use tokio::{select, spawn};
 use tracing::{debug, error, info, trace};
 
-use super::{Buffer, Comms, Error, Router, Stats};
+use super::{Buffer, Comms, Error, Replication, Router, Stats};
 use crate::auth::scram::Server;
 use crate::backend::pool::Connection;
 use crate::config::config;
@@ -26,6 +26,7 @@ pub struct Client {
     comms: Comms,
     admin: bool,
     streaming: bool,
+    shard: Option<usize>,
 }
 
 impl Client {
@@ -90,17 +91,27 @@ impl Client {
         stream.send(id).await?;
         stream.send_flush(ReadyForQuery::idle()).await?;
         comms.connect(&id, addr);
+        let shard = params.shard();
 
-        info!("client connected [{}]", addr);
+        info!(
+            "client connected [{}]{}",
+            addr,
+            if let Some(ref shard) = shard {
+                format!(" (replication, shard {})", shard)
+            } else {
+                "".into()
+            }
+        );
 
         let mut client = Self {
             addr,
             stream,
             id,
-            params,
             comms,
             admin,
             streaming: false,
+            shard,
+            params,
         };
 
         if client.admin {
@@ -208,6 +219,10 @@ impl Client {
                         if start_transaction {
                             backend.execute("BEGIN").await?;
                             start_transaction = false;
+                        }
+
+                        if self.shard.is_some() {
+                            backend.replication_mode(self.shard)?;
                         }
                     }
 

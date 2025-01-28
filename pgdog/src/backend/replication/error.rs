@@ -7,4 +7,7 @@ pub enum Error {
 
     #[error("out of sync with unknown oid, expected Relation message first")]
     NoRelationMessage,
+
+    #[error("no message to forward")]
+    NoMessage,
 }

@@ -59,6 +59,9 @@ pub enum Error {
 
     #[error("unsupported authentication algorithm")]
     UnsupportedAuth,
+
+    #[error("{0}")]
+    Replication(#[from] crate::backend::replication::Error),
 }
 
 impl Error {

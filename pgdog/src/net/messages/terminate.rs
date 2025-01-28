@@ -3,6 +3,7 @@ use super::code;
 use super::prelude::*;
 
 /// Terminate the connection.
+#[derive(Debug)]
 pub struct Terminate;
 
 impl FromBytes for Terminate {

@@ -95,6 +95,12 @@ impl Column {
             },
         }
     }
+
+    /// Get UTF-8 representation of the data,
+    /// if data is encoded with UTF-8.
+    pub fn as_str(&self) -> Option<&str> {
+        from_utf8(&self.data[..]).ok()
+    }
 }
 
 impl FromBytes for TupleData {

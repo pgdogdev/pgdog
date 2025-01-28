@@ -1,5 +1,7 @@
 use bytes::BytesMut;
 
+use crate::net::messages::{CopyData, Message};
+
 use super::super::code;
 use super::super::prelude::*;
 use super::logical::begin::Begin;
@@ -11,15 +13,51 @@ use super::logical::truncate::Truncate;
 use super::logical::update::Update;
 
 /// XLogData (B) messsage.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct XLogData {
-    starting_point: i64,
-    current_end: i64,
-    system_clock: i64,
-    bytes: Bytes,
+    pub starting_point: i64,
+    pub current_end: i64,
+    pub system_clock: i64,
+    pub bytes: Bytes,
+}
+
+impl std::fmt::Debug for XLogData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let payload = self.payload();
+        if let Some(payload) = payload {
+            f.debug_struct("XLogData")
+                .field("starting_point", &self.starting_point)
+                .field("current_end", &self.current_end)
+                .field("system_clock", &self.system_clock)
+                .field("payload", &payload)
+                .finish()
+        } else {
+            f.debug_struct("XLogData")
+                .field("starting_point", &self.starting_point)
+                .field("current_end", &self.current_end)
+                .field("system_clock", &self.system_clock)
+                .field("bytes", &self.bytes)
+                .finish()
+        }
+    }
 }
 
 impl XLogData {
+    /// New relation message.
+    pub fn relation(system_clock: i64, relation: &Relation) -> Result<Self, Error> {
+        Ok(Self {
+            starting_point: 0,
+            current_end: 0,
+            system_clock: system_clock - 1, // simulates this to be an older message
+            bytes: relation.to_bytes()?,
+        })
+    }
+
+    /// Convert to message.
+    pub fn to_message(&self) -> Result<Message, Error> {
+        Ok(Message::new(CopyData::bytes(self.to_bytes()?).to_bytes()?))
+    }
+
     /// Extract payload.
     pub fn payload(&self) -> Option<XLogPayload> {
         if self.bytes.is_empty() {
@@ -49,6 +87,14 @@ impl XLogData {
                 .map(XLogPayload::Delete),
             _ => None,
         }
+    }
+
+    /// Get stored payload of type.
+    ///
+    /// Caller is responsible to make sure the message has the right code.
+    ///
+    pub fn get<T: FromBytes>(&self) -> Option<T> {
+        T::from_bytes(self.bytes.clone()).ok()
     }
 }
 

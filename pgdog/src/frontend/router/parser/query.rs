@@ -185,7 +185,7 @@ impl QueryParser {
         params: Option<Bind>,
     ) -> Result<Command, Error> {
         let order_by = Self::select_sort(&stmt.sort_clause);
-        let sharded_tables = cluster.shaded_tables();
+        let sharded_tables = cluster.sharded_tables();
         let mut shards = HashSet::new();
         let table_name = stmt
             .from_clause

@@ -18,7 +18,7 @@ use crate::net::messages::BackendKeyData;
 use super::{Error, Guard, Pool, PoolConfig};
 
 /// Replicas pools.
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Debug)]
 pub struct Replicas {
     /// Connection pools.
     pub(super) pools: Vec<Pool>,
