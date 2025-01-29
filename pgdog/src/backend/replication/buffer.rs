@@ -136,7 +136,7 @@ impl Buffer {
         // Make sure we send a Relation message identifying the table
         // we're sending changes for.
         let oid = self.oid.ok_or(Error::NoRelationMessage)?;
-        if self.sent_relations.get(&oid).is_none() {
+        if !self.sent_relations.contains(&oid) {
             let relation = self.relations.get(&oid).ok_or(Error::NoRelationMessage)?;
             // Rewind the clock on the Relation message to simulate
             // like Postgres sent it in this transaction.
