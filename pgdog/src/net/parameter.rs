@@ -33,14 +33,13 @@ impl Parameters {
         self.params
             .iter()
             .find(|p| p.name == "application_name" && p.value.starts_with("pgdog_shard_"))
-            .map(|param| {
+            .and_then(|param| {
                 param
                     .value
                     .replace("pgdog_shard_", "")
                     .parse::<usize>()
                     .ok()
             })
-            .flatten()
     }
 
     /// Get parameter value or returned an error.

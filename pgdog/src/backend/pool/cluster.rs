@@ -155,7 +155,7 @@ impl Cluster {
 
     // Get sharded tables if any.
     pub fn sharded_tables(&self) -> &[ShardedTable] {
-        &self.sharded_tables.tables()
+        self.sharded_tables.tables()
     }
 
     /// Find sharded column position, if the table and columns match the configuration.
@@ -189,7 +189,6 @@ impl Cluster {
     pub fn replication_sharding_config(&self) -> Option<ReplicationConfig> {
         self.replication_sharding
             .as_ref()
-            .map(|database| databases().replication(database))
-            .flatten()
+            .and_then(|database| databases().replication(database))
     }
 }

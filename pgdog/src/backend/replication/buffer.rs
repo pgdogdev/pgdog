@@ -71,10 +71,8 @@ impl Buffer {
                         let column = self
                             .replication_config
                             .sharded_column(table, &columns)
-                            .map(|column| update.column(column))
-                            .flatten()
-                            .map(|column| column.as_str())
-                            .flatten();
+                            .and_then(|column| update.column(column))
+                            .and_then(|column| column.as_str());
                         if let Some(column) = column {
                             let shard = shard_str(column, self.replication_config.shards());
                             if self.shard == shard {
@@ -91,10 +89,8 @@ impl Buffer {
                         let column = self
                             .replication_config
                             .sharded_column(table, &columns)
-                            .map(|column| insert.column(column))
-                            .flatten()
-                            .map(|column| column.as_str())
-                            .flatten();
+                            .and_then(|column| insert.column(column))
+                            .and_then(|column| column.as_str());
                         if let Some(column) = column {
                             let shard = shard_str(column, self.replication_config.shards());
                             if self.shard == shard {

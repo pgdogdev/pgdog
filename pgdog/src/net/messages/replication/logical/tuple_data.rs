@@ -86,12 +86,12 @@ impl Column {
     /// if it's encoded with UTF-8 compatible encoding.
     pub fn to_sql(&self) -> Result<String, Error> {
         match self.identifier {
-            Identifier::Null => return Ok("NULL".into()),
-            Identifier::Format(Format::Binary) => return Err(Error::NotTextEncoding),
-            Identifier::Toasted => return Ok("NULL".into()),
+            Identifier::Null => Ok("NULL".into()),
+            Identifier::Format(Format::Binary) => Err(Error::NotTextEncoding),
+            Identifier::Toasted => Ok("NULL".into()),
             Identifier::Format(Format::Text) => match from_utf8(&self.data[..]) {
                 Ok(text) => Ok(unescape(text)),
-                Err(_) => return Err(Error::NotTextEncoding),
+                Err(_) => Err(Error::NotTextEncoding),
             },
         }
     }
