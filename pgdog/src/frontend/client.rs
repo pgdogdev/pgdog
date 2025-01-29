@@ -6,7 +6,7 @@ use std::time::Instant;
 use tokio::{select, spawn};
 use tracing::{debug, error, info, trace};
 
-use super::{Buffer, Comms, Error, Replication, Router, Stats};
+use super::{Buffer, Comms, Error, Router, Stats};
 use crate::auth::scram::Server;
 use crate::backend::pool::Connection;
 use crate::config::config;
@@ -154,6 +154,13 @@ impl Client {
         let mut start_transaction = false;
         let comms = self.comms.clone();
 
+        if self.shard.is_some() {
+            if let Some(config) = backend.cluster()?.replication_sharding_config() {
+                backend.replication_mode(self.shard, &config)?;
+                debug!("logical replication sharding [{}]", self.addr);
+            }
+        }
+
         loop {
             select! {
                 _ = comms.shutting_down() => {
@@ -219,10 +226,6 @@ impl Client {
                         if start_transaction {
                             backend.execute("BEGIN").await?;
                             start_transaction = false;
-                        }
-
-                        if self.shard.is_some() {
-                            backend.replication_mode(self.shard)?;
                         }
                     }
 

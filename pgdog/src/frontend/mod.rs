@@ -7,7 +7,6 @@ pub mod connected_client;
 pub mod error;
 pub mod listener;
 pub mod prepared_statements;
-pub mod replication;
 pub mod router;
 pub mod stats;
 
@@ -16,6 +15,5 @@ pub use client::Client;
 pub use comms::Comms;
 pub use connected_client::ConnectedClient;
 pub use error::Error;
-pub use replication::Replication;
 pub use router::Router;
 pub use stats::Stats;

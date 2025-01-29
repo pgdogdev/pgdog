@@ -1,8 +1,6 @@
 pub mod buffer;
 pub mod config;
-pub mod connection;
 pub mod error;
-pub mod insert;
 pub mod sharded_tables;
 
 pub use buffer::Buffer;

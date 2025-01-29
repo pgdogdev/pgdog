@@ -64,11 +64,3 @@ fingerprint = "23cd60d5972d1712" #[2579824632033777426]
 
 [[manual_queries]]
 fingerprint = "bb38525ebeb46656" #[13490623250668217942]
-
-[[replications]]
-host = "127.0.0.1"
-port = 5433
-database_name = "pgdog"
-user = "pgdog"
-password = "pgdog"
-database = "pgdog_sharded"

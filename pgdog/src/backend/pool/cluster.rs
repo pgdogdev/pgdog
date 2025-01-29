@@ -1,7 +1,7 @@
 //! A collection of replicas and a primary.
 
 use crate::{
-    backend::ShardedTables,
+    backend::{databases::databases, replication::ReplicationConfig, ShardedTables},
     config::{PoolerMode, ShardedTable},
     net::messages::BackendKeyData,
 };
@@ -29,6 +29,7 @@ pub struct Cluster {
     password: String,
     pooler_mode: PoolerMode,
     sharded_tables: ShardedTables,
+    replication_sharding: Option<String>,
 }
 
 impl Cluster {
@@ -40,6 +41,7 @@ impl Cluster {
         password: &str,
         pooler_mode: PoolerMode,
         sharded_tables: ShardedTables,
+        replication_sharding: Option<String>,
     ) -> Self {
         Self {
             shards: shards
@@ -50,6 +52,7 @@ impl Cluster {
             password: password.to_owned(),
             pooler_mode,
             sharded_tables,
+            replication_sharding,
         }
     }
 
@@ -76,6 +79,7 @@ impl Cluster {
             password: self.password.clone(),
             pooler_mode: self.pooler_mode,
             sharded_tables: self.sharded_tables.clone(),
+            replication_sharding: self.replication_sharding.clone(),
         }
     }
 
@@ -179,5 +183,13 @@ impl Cluster {
         }
 
         true
+    }
+
+    /// Get replication configuration for this cluster.
+    pub fn replication_sharding_config(&self) -> Option<ReplicationConfig> {
+        self.replication_sharding
+            .as_ref()
+            .map(|database| databases().replication(database))
+            .flatten()
     }
 }

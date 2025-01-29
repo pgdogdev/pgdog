@@ -1,5 +1,3 @@
-use bytes::BytesMut;
-
 use crate::net::c_string_buf;
 use crate::net::messages::replication::logical::string::escape;
 

@@ -4,7 +4,10 @@ use tokio::time::sleep;
 
 use crate::{
     admin::backend::Backend,
-    backend::{databases::databases, replication::Buffer},
+    backend::{
+        databases::databases,
+        replication::{Buffer, ReplicationConfig},
+    },
     config::PoolerMode,
     frontend::router::{CopyRow, Route},
     net::messages::{BackendKeyData, Message, ParameterStatus, Protocol},
@@ -84,9 +87,12 @@ impl Connection {
     }
 
     /// Set the connection into replication mode.
-    pub fn replication_mode(&mut self, shard: Option<usize>, database: &str) -> Result<(), Error> {
-        // self.replication_buffer = Some(Buffer::new(shard, self.cluster()?));
-        todo!()
+    pub fn replication_mode(
+        &mut self,
+        shard: Option<usize>,
+        replication_config: &ReplicationConfig,
+    ) -> Result<(), Error> {
+        self.replication_buffer = Some(Buffer::new(shard, replication_config));
         Ok(())
     }
 

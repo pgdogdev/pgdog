@@ -1,5 +1,4 @@
-use std::collections::HashMap;
-
+//! Tables sharded in the database.
 use crate::config::ShardedTable;
 
 #[derive(Debug, Clone, Default)]

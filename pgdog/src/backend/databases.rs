@@ -8,13 +8,13 @@ use once_cell::sync::Lazy;
 
 use crate::{
     backend::pool::PoolConfig,
-    config::{config, load, ConfigAndUsers, ManualQuery, Role, ShardedTable},
+    config::{config, load, ConfigAndUsers, ManualQuery, Role},
     net::messages::BackendKeyData,
 };
 
 use super::{
     pool::{Address, Config},
-    replication::{sharded_tables, ReplicationConfig},
+    replication::ReplicationConfig,
     Cluster, Error, ShardedTables,
 };
 
@@ -225,7 +225,6 @@ pub fn from_config(config: &ConfigAndUsers) -> Databases {
                 .cloned()
                 .unwrap_or(vec![]);
             let sharded_tables = ShardedTables::new(sharded_tables);
-
             databases.insert(
                 User {
                     user: user.name.clone(),
@@ -238,6 +237,7 @@ pub fn from_config(config: &ConfigAndUsers) -> Databases {
                     &user.password,
                     user.pooler_mode.unwrap_or(general.pooler_mode),
                     sharded_tables,
+                    user.replication_sharding.clone(),
                 ),
             );
         }

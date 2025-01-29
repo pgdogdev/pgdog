@@ -1,6 +1,6 @@
 use super::super::super::code;
 use super::super::super::prelude::*;
-use super::tuple_data::TupleData;
+use super::tuple_data::{Column, TupleData};
 
 #[derive(Debug, Clone)]
 pub struct Update {
@@ -8,6 +8,13 @@ pub struct Update {
     pub key: Option<TupleData>,
     pub old: Option<TupleData>,
     pub new: TupleData,
+}
+
+impl Update {
+    /// Get column at index.
+    pub fn column(&self, index: usize) -> Option<&Column> {
+        self.new.columns.get(index)
+    }
 }
 
 impl FromBytes for Update {
