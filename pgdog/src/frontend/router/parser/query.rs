@@ -213,6 +213,7 @@ impl QueryParser {
                                 shards.insert(shard);
                             }
                         }
+
                         Key::Parameter(param) => {
                             if let Some(ref params) = params {
                                 if let Some(param) = params.parameter(param)? {
