@@ -18,7 +18,7 @@ use super::{
     Address, Cluster,
 };
 
-use std::time::Duration;
+use std::{mem::replace, time::Duration};
 
 mod binding;
 mod multi_shard;
@@ -34,7 +34,6 @@ pub struct Connection {
     database: String,
     binding: Binding,
     cluster: Option<Cluster>,
-    replication_buffer: Option<Buffer>,
 }
 
 impl Connection {
@@ -49,7 +48,6 @@ impl Connection {
             cluster: None,
             user: user.to_owned(),
             database: database.to_owned(),
-            replication_buffer: None,
         };
 
         if !admin {
@@ -67,7 +65,7 @@ impl Connection {
     /// Create a server connection if one doesn't exist already.
     pub async fn connect(&mut self, id: &BackendKeyData, route: &Route) -> Result<(), Error> {
         let connect = match &self.binding {
-            Binding::Server(None) => true,
+            Binding::Server(None) | Binding::Replication(None, _) => true,
             Binding::MultiShard(shards, _) => shards.is_empty(),
             _ => false,
         };
@@ -92,7 +90,7 @@ impl Connection {
         shard: Option<usize>,
         replication_config: &ReplicationConfig,
     ) -> Result<(), Error> {
-        self.replication_buffer = Some(Buffer::new(shard, replication_config));
+        self.binding = Binding::Replication(None, Buffer::new(shard, replication_config));
         Ok(())
     }
 
@@ -111,7 +109,17 @@ impl Connection {
                 server.reset = true;
             }
 
-            self.binding = Binding::Server(Some(server));
+            match &mut self.binding {
+                Binding::Server(existing) => {
+                    let _ = replace(existing, Some(server));
+                }
+
+                Binding::Replication(existing, _) => {
+                    let _ = replace(existing, Some(server));
+                }
+
+                _ => (),
+            };
         } else if route.is_all_shards() {
             let mut shards = vec![];
             for shard in self.cluster()?.shards() {
@@ -139,7 +147,7 @@ impl Connection {
     pub async fn parameters(&mut self, id: &BackendKeyData) -> Result<Vec<ParameterStatus>, Error> {
         match &self.binding {
             Binding::Admin(_) => Ok(ParameterStatus::fake()),
-            Binding::Server(_) | Binding::MultiShard(_, _) => {
+            _ => {
                 self.connect(id, &Route::write(Some(0))).await?; // Get params from primary.
                 let params = self
                     .server()?
@@ -164,25 +172,7 @@ impl Connection {
     /// suspends this loop indefinitely and expects another `select!` branch
     /// to cancel it.
     pub async fn read(&mut self) -> Result<Message, Error> {
-        // Drain the replication buffer, if any.
-        if let Some(ref mut buffer) = self.replication_buffer {
-            if let Some(message) = buffer.message() {
-                return Ok(message);
-            }
-        }
-
-        loop {
-            let message = self.binding.read().await?;
-            if let Some(ref mut buffer) = self.replication_buffer {
-                buffer.handle(message)?;
-
-                if let Some(message) = buffer.message() {
-                    return Ok(message);
-                }
-            } else {
-                return Ok(message);
-            }
-        }
+        self.binding.read().await
     }
 
     /// Send messages to the server.

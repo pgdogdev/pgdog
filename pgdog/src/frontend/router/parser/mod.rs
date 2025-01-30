@@ -12,4 +12,5 @@ pub mod where_clause;
 pub use csv_buffer::CsvBuffer;
 pub use error::Error;
 pub use order_by::OrderBy;
+pub use query::{Command, QueryParser};
 pub use route::Route;

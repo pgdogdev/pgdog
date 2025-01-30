@@ -1,6 +1,7 @@
 use super::OrderBy;
 
-/// Path a query should take.
+/// Path a query should take and any transformations
+/// that should be applied along the way.
 #[derive(Debug, Clone)]
 pub struct Route {
     shard: Option<usize>,
@@ -15,6 +16,7 @@ impl Default for Route {
 }
 
 impl Route {
+    /// SELECT query.
     pub fn select(shard: Option<usize>, order_by: &[OrderBy]) -> Self {
         Self {
             shard,
@@ -23,6 +25,7 @@ impl Route {
         }
     }
 
+    /// A query that should go to a replica.
     pub fn read(shard: Option<usize>) -> Self {
         Self {
             shard,
@@ -31,6 +34,7 @@ impl Route {
         }
     }
 
+    /// A write query.
     pub fn write(shard: Option<usize>) -> Self {
         Self {
             shard,
@@ -61,7 +65,7 @@ impl Route {
         &self.order_by
     }
 
-    pub fn overwrite_shard(&mut self, shard: usize) {
+    pub fn set_shard(&mut self, shard: usize) {
         self.shard = Some(shard);
     }
 }

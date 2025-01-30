@@ -6,7 +6,7 @@ use std::time::Instant;
 use tokio::{select, spawn};
 use tracing::{debug, error, info, trace};
 
-use super::{Buffer, Comms, Error, Router, Stats};
+use super::{Buffer, Command, Comms, Error, Router, Stats};
 use crate::auth::scram::Server;
 use crate::backend::pool::Connection;
 use crate::config::config;
@@ -157,6 +157,7 @@ impl Client {
         if self.shard.is_some() {
             if let Some(config) = backend.cluster()?.replication_sharding_config() {
                 backend.replication_mode(self.shard, &config)?;
+                router.replication_mode();
                 debug!("logical replication sharding [{}]", self.addr);
             }
         }
@@ -182,24 +183,29 @@ impl Client {
                         debug!("{} [{}]", query, self.addr);
                     }
 
+                    let command = backend.cluster().ok().map(|cluster| router.query(&buffer, cluster)).transpose()?;
+
+                    self.streaming = matches!(command, Some(Command::StartReplication));
+
                     if !backend.connected() {
-                        // Figure out where the query should go.
-                        if let Ok(cluster) = backend.cluster() {
-                            let command = router.query(&buffer, cluster)?;
-                            if command.begin() {
+                        match command {
+                            Some(Command::StartTransaction) => {
                                 start_transaction = true;
                                 self.start_transaction().await?;
                                 continue;
-                            } else if command.commit() {
+                            },
+                            Some(Command::RollbackTransaction) => {
                                 start_transaction  = false;
                                 self.end_transaction(false).await?;
                                 continue;
-                            } else if command.rollback() {
+                            },
+                            Some(Command::CommitTransaction) => {
                                 start_transaction = false;
                                 self.end_transaction(true).await?;
                                 continue;
-                            }
-                        }
+                            },
+                            _ => (),
+                        };
 
                         // Grab a connection from the right pool.
                         comms.stats(stats.waiting());
@@ -246,7 +252,6 @@ impl Client {
 
                 message = backend.read() => {
                     let message = message?;
-                    self.streaming = message.streaming();
                     let len = message.len();
                     let code = message.code();
 
