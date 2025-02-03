@@ -151,7 +151,7 @@ impl Client {
         let mut router = Router::new();
         let mut stats = Stats::new();
         let mut async_ = false;
-        let mut start_transaction = false;
+        let mut start_transaction = None;
         let comms = self.comms.clone();
 
         if self.shard.is_some() {
@@ -189,19 +189,19 @@ impl Client {
 
                     if !backend.connected() {
                         match command {
-                            Some(Command::StartTransaction) => {
-                                start_transaction = true;
+                            Some(Command::StartTransaction(query)) => {
+                                start_transaction = Some(query.clone());
                                 self.start_transaction().await?;
                                 continue;
                             },
                             Some(Command::RollbackTransaction) => {
-                                start_transaction  = false;
-                                self.end_transaction(false).await?;
+                                start_transaction  = None;
+                                self.end_transaction(true).await?;
                                 continue;
                             },
                             Some(Command::CommitTransaction) => {
-                                start_transaction = false;
-                                self.end_transaction(true).await?;
+                                start_transaction = None;
+                                self.end_transaction(false).await?;
                                 continue;
                             },
                             _ => (),
@@ -229,9 +229,8 @@ impl Client {
                         // Simulate a transaction until the client
                         // sends a query over. This ensures that we don't
                         // connect to all shards for no reason.
-                        if start_transaction {
-                            backend.execute("BEGIN").await?;
-                            start_transaction = false;
+                        if let Some(query) = start_transaction.take() {
+                            backend.execute(&query).await?;
                         }
                     }
 

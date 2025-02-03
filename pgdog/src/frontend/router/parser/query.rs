@@ -37,27 +37,11 @@ static REPLICATION_REGEX: Lazy<Regex> = Lazy::new(|| {
 pub enum Command {
     Query(Route),
     Copy(CopyParser),
-    StartTransaction,
+    StartTransaction(std::string::String),
     CommitTransaction,
     RollbackTransaction,
     StartReplication,
     ReplicationMeta,
-}
-
-impl Command {
-    /// This is a BEGIN TRANSACTION command.
-    pub fn begin(&self) -> bool {
-        matches!(self, Command::StartTransaction)
-    }
-
-    /// This is a ROLLBACK command.
-    pub fn rollback(&self) -> bool {
-        matches!(self, Command::RollbackTransaction)
-    }
-
-    pub fn commit(&self) -> bool {
-        matches!(self, Command::CommitTransaction)
-    }
 }
 
 #[derive(Debug)]
@@ -171,7 +155,7 @@ impl QueryParser {
                 TransactionStmtKind::TransStmtCommit => return Ok(Command::CommitTransaction),
                 TransactionStmtKind::TransStmtRollback => return Ok(Command::RollbackTransaction),
                 TransactionStmtKind::TransStmtBegin | TransactionStmtKind::TransStmtStart => {
-                    return Ok(Command::StartTransaction)
+                    return Ok(Command::StartTransaction(query.to_string()))
                 }
                 _ => Ok(Command::Query(Route::write(None))),
             },
