@@ -144,7 +144,7 @@ impl CopyParser {
                 .delimiter(self.delimiter())
                 .from_reader(data);
 
-            if self.headers && !self.is_from {
+            if self.headers && self.is_from {
                 let headers = csv
                     .headers()?
                     .into_iter()
@@ -230,6 +230,7 @@ mod test {
         let mut copy = CopyParser::new(&copy, &Cluster::default())
             .unwrap()
             .unwrap();
+        assert!(copy.is_from);
 
         assert_eq!(copy.delimiter(), b',');
         assert!(copy.headers);
