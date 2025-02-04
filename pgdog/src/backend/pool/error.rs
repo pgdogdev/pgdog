@@ -1,7 +1,7 @@
 //! Connection pool errors.
 use thiserror::Error;
 
-#[derive(Debug, Error, PartialEq, Copy, Clone)]
+#[derive(Debug, Error, PartialEq, Clone, Copy)]
 pub enum Error {
     #[error("checkout timeout")]
     CheckoutTimeout,

@@ -2,8 +2,6 @@
 
 use crate::backend::Cluster;
 
-use parser::query::{Command, QueryParser};
-
 pub mod copy;
 pub mod error;
 pub mod parser;
@@ -11,9 +9,9 @@ pub mod request;
 pub mod round_robin;
 pub mod sharding;
 
-pub use copy::{CopyRow, ShardedCopy};
+pub use copy::CopyRow;
 pub use error::Error;
-pub use parser::route::Route;
+pub use parser::{Command, QueryParser, Route};
 
 use super::Buffer;
 
@@ -34,6 +32,11 @@ impl Router {
         Self {
             query_parser: QueryParser::default(),
         }
+    }
+
+    /// Set into replication mode.
+    pub fn replication_mode(&mut self) {
+        self.query_parser.replication_mode();
     }
 
     /// Route a query to a shard.

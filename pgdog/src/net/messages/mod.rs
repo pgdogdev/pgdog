@@ -21,6 +21,7 @@ pub mod terminate;
 pub use auth::{Authentication, Password};
 pub use backend_key::BackendKeyData;
 pub use bind::Bind;
+use command_complete::CommandComplete;
 pub use copy_data::CopyData;
 pub use data_row::{DataRow, ToDataRowColumn};
 pub use error_response::ErrorResponse;
@@ -53,7 +54,7 @@ pub trait FromBytes: Sized {
 }
 
 /// PostgreSQL wire protocol message.
-pub trait Protocol: ToBytes + FromBytes {
+pub trait Protocol: ToBytes + FromBytes + std::fmt::Debug {
     /// 99% of messages have a letter code.
     fn code(&self) -> char;
 
@@ -98,10 +99,29 @@ pub trait Protocol: ToBytes + FromBytes {
 }
 
 /// PostgreSQL protocol message.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Message {
     payload: Bytes,
     stream: bool,
+}
+
+impl std::fmt::Debug for Message {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.code() {
+            'Q' => Query::from_bytes(self.payload()).unwrap().fmt(f),
+            'D' => DataRow::from_bytes(self.payload()).unwrap().fmt(f),
+            'T' => RowDescription::from_bytes(self.payload()).unwrap().fmt(f),
+            'Z' => ReadyForQuery::from_bytes(self.payload()).unwrap().fmt(f),
+            'C' => CommandComplete::from_bytes(self.payload()).unwrap().fmt(f),
+            'd' => CopyData::from_bytes(self.payload()).unwrap().fmt(f),
+            'W' => f.debug_struct("CopyBothResponse").finish(),
+            'I' => f.debug_struct("EmptyQueryResponse").finish(),
+            _ => f
+                .debug_struct("Message")
+                .field("payload", &self.payload())
+                .finish(),
+        }
+    }
 }
 
 impl ToBytes for Message {

@@ -7,28 +7,31 @@ pub(super) enum Binding {
     Server(Option<Guard>),
     Admin(Backend),
     MultiShard(Vec<Guard>, MultiShard),
+    Replication(Option<Guard>, Buffer),
 }
 
 impl Default for Binding {
     fn default() -> Self {
-        Self::Server(None)
+        Binding::Server(None)
     }
 }
 
 impl Binding {
     pub(super) fn disconnect(&mut self) {
         match self {
-            Self::Server(guard) => drop(guard.take()),
-            Self::Admin(_) => (),
-            Self::MultiShard(guards, _) => guards.clear(),
+            Binding::Server(guard) => drop(guard.take()),
+            Binding::Admin(_) => (),
+            Binding::MultiShard(guards, _) => guards.clear(),
+            Binding::Replication(guard, _) => drop(guard.take()),
         }
     }
 
     pub(super) fn connected(&self) -> bool {
         match self {
-            Self::Server(server) => server.is_some(),
-            Self::MultiShard(servers, _) => !servers.is_empty(),
-            Self::Admin(_) => true,
+            Binding::Server(server) => server.is_some(),
+            Binding::MultiShard(servers, _) => !servers.is_empty(),
+            Binding::Admin(_) => true,
+            Binding::Replication(server, _) => server.is_some(),
         }
     }
 
@@ -45,7 +48,7 @@ impl Binding {
             }
 
             Binding::Admin(backend) => Ok(backend.read().await?),
-            Self::MultiShard(shards, state) => {
+            Binding::MultiShard(shards, state) => {
                 if shards.is_empty() {
                     loop {
                         sleep(Duration::MAX).await;
@@ -80,6 +83,27 @@ impl Binding {
                     }
                 }
             }
+
+            Binding::Replication(guard, buffer) => {
+                if let Some(message) = buffer.message() {
+                    return Ok(message);
+                }
+
+                if let Some(server) = guard {
+                    loop {
+                        let message = server.read().await?;
+                        buffer.handle(message)?;
+
+                        if let Some(message) = buffer.message() {
+                            return Ok(message);
+                        }
+                    }
+                } else {
+                    loop {
+                        sleep(Duration::MAX).await
+                    }
+                }
+            }
         }
     }
 
@@ -101,6 +125,13 @@ impl Binding {
                 }
 
                 Ok(())
+            }
+            Binding::Replication(server, _) => {
+                if let Some(server) = server {
+                    server.send(messages).await
+                } else {
+                    Err(Error::NotConnected)
+                }
             }
         }
     }
@@ -129,9 +160,10 @@ impl Binding {
 
     pub(super) fn done(&self) -> bool {
         match self {
-            Self::Admin(_) => true,
-            Self::Server(Some(server)) => server.done(),
-            Self::MultiShard(servers, _state) => servers.iter().all(|s| s.done()),
+            Binding::Admin(_) => true,
+            Binding::Server(Some(server)) => server.done(),
+            Binding::MultiShard(servers, _state) => servers.iter().all(|s| s.done()),
+            Binding::Replication(Some(server), _) => server.done(),
             _ => true,
         }
     }
@@ -147,6 +179,10 @@ impl Binding {
                 for server in servers {
                     server.execute(query).await?;
                 }
+            }
+
+            Binding::Replication(Some(ref mut server), _) => {
+                server.execute(query).await?;
             }
 
             _ => (),

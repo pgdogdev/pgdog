@@ -5,7 +5,7 @@ use super::replication::ReplicationMeta;
 use super::replication::XLogData;
 
 /// CopyData (F & B) message.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct CopyData {
     data: Bytes,
 }
@@ -16,6 +16,11 @@ impl CopyData {
         Self {
             data: Bytes::copy_from_slice(data),
         }
+    }
+
+    /// New copy data from bytes.
+    pub fn bytes(data: Bytes) -> Self {
+        Self { data }
     }
 
     /// Get copy data.
@@ -30,6 +35,24 @@ impl CopyData {
 
     pub fn replication_meta(&self) -> Option<ReplicationMeta> {
         ReplicationMeta::from_bytes(self.data.clone()).ok()
+    }
+}
+
+impl std::fmt::Debug for CopyData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(xlog_data) = self.xlog_data() {
+            f.debug_struct("CopyData")
+                .field("xlog_data", &xlog_data)
+                .finish()
+        } else if let Some(meta) = self.replication_meta() {
+            f.debug_struct("CopyData")
+                .field("replication_meta", &meta)
+                .finish()
+        } else {
+            f.debug_struct("CopyData")
+                .field("data", &self.data())
+                .finish()
+        }
     }
 }
 

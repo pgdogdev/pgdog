@@ -28,6 +28,9 @@ pub enum Error {
 
     #[error("scram error")]
     Scram(#[from] scram::Error),
+
+    #[error("replication")]
+    Replication(#[from] crate::backend::replication::Error),
 }
 
 impl Error {

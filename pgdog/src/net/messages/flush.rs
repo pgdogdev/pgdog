@@ -4,6 +4,7 @@ use super::code;
 use super::prelude::*;
 
 /// Flush (F) message.
+#[derive(Debug)]
 pub struct Flush;
 
 impl FromBytes for Flush {

@@ -5,10 +5,10 @@ use super::super::super::prelude::*;
 
 #[derive(Debug, Clone)]
 pub struct Commit {
-    flags: i8,
-    commit_lsn: i64,
-    end_lsn: i64,
-    commit_timestamp: i64,
+    pub flags: i8,
+    pub commit_lsn: i64,
+    pub end_lsn: i64,
+    pub commit_timestamp: i64,
 }
 
 impl FromBytes for Commit {

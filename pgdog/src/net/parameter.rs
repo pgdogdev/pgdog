@@ -28,6 +28,20 @@ impl Parameters {
             .map(|p| p.value.as_str())
     }
 
+    /// Get self-declared shard number.
+    pub fn shard(&self) -> Option<usize> {
+        self.params
+            .iter()
+            .find(|p| p.name == "application_name" && p.value.starts_with("pgdog_shard_"))
+            .and_then(|param| {
+                param
+                    .value
+                    .replace("pgdog_shard_", "")
+                    .parse::<usize>()
+                    .ok()
+            })
+    }
+
     /// Get parameter value or returned an error.
     pub fn get_required(&self, name: &str) -> Result<&str, Error> {
         self.get(name).ok_or(Error::MissingParameter(name.into()))

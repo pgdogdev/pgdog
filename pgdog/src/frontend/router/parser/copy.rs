@@ -49,6 +49,8 @@ pub struct CopyParser {
     pub buffer: CsvBuffer,
     /// Number of columns
     pub columns: usize,
+    /// This is a COPY coming from the server.
+    pub is_from: bool,
 }
 
 impl Default for CopyParser {
@@ -60,6 +62,7 @@ impl Default for CopyParser {
             shards: 1,
             buffer: CsvBuffer::new(),
             columns: 0,
+            is_from: false,
         }
     }
 }
@@ -67,17 +70,13 @@ impl Default for CopyParser {
 impl CopyParser {
     /// Create new copy parser from a COPY statement.
     pub fn new(stmt: &CopyStmt, cluster: &Cluster) -> Result<Option<Self>, Error> {
-        if !stmt.is_from {
-            return Ok(None);
-        }
-
         let mut parser = Self {
             shards: cluster.shards().len(),
+            is_from: stmt.is_from,
             ..Default::default()
         };
 
         if let Some(ref rel) = stmt.relation {
-            // parser.table_name = rel.relname.clone();
             let mut columns = vec![];
 
             for column in &stmt.attlist {
@@ -145,7 +144,7 @@ impl CopyParser {
                 .delimiter(self.delimiter())
                 .from_reader(data);
 
-            if self.headers {
+            if self.headers && self.is_from {
                 let headers = csv
                     .headers()?
                     .into_iter()
@@ -231,6 +230,7 @@ mod test {
         let mut copy = CopyParser::new(&copy, &Cluster::default())
             .unwrap()
             .unwrap();
+        assert!(copy.is_from);
 
         assert_eq!(copy.delimiter(), b',');
         assert!(copy.headers);

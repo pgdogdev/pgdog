@@ -16,60 +16,60 @@ use super::{
     Error, Route,
 };
 
+use once_cell::sync::Lazy;
 use pg_query::{
     fingerprint, parse,
     protobuf::{a_const::Val, *},
     NodeEnum,
 };
+use regex::Regex;
 use tracing::{debug, trace};
+
+static REPLICATION_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        "(CREATE_REPLICATION_SLOT|IDENTIFY_SYSTEM|DROP_REPLICATION_SLOT|READ_REPLICATION_SLOT|ALTER_REPLICATION_SLOT|TIMELINE_HISTORY).*",
+    )
+    .unwrap()
+});
 
 /// Command determined by the query parser.
 #[derive(Debug, Clone)]
 pub enum Command {
     Query(Route),
     Copy(CopyParser),
-    StartTransaction,
+    StartTransaction(std::string::String),
     CommitTransaction,
     RollbackTransaction,
-}
-
-impl Command {
-    /// This is a BEGIN TRANSACTION command.
-    pub fn begin(&self) -> bool {
-        matches!(self, Command::StartTransaction)
-    }
-
-    /// This is a ROLLBACK command.
-    pub fn rollback(&self) -> bool {
-        matches!(self, Command::RollbackTransaction)
-    }
-
-    pub fn commit(&self) -> bool {
-        matches!(self, Command::CommitTransaction)
-    }
+    StartReplication,
+    ReplicationMeta,
 }
 
 #[derive(Debug)]
 pub struct QueryParser {
     command: Command,
+    replication_mode: bool,
 }
 
 impl Default for QueryParser {
     fn default() -> Self {
         Self {
             command: Command::Query(Route::default()),
+            replication_mode: false,
         }
     }
 }
 
 impl QueryParser {
+    /// Set parser to handle replication commands.
+    pub fn replication_mode(&mut self) {
+        self.replication_mode = true;
+    }
+
     pub fn parse(&mut self, buffer: &Buffer, cluster: &Cluster) -> Result<&Command, Error> {
         if let Some(query) = buffer.query()? {
-            self.command = Self::query(&query, cluster, buffer.parameters()?)?;
-            Ok(&self.command)
-        } else {
-            Err(Error::NoQueryInBuffer)
+            self.command = self.query(&query, cluster, buffer.parameters()?)?;
         }
+        Ok(&self.command)
     }
 
     /// Shard copy data.
@@ -83,14 +83,26 @@ impl QueryParser {
     pub fn route(&self) -> Route {
         match self.command {
             Command::Query(ref route) => route.clone(),
-            Command::Copy(_) => Route::write(None),
-            Command::CommitTransaction
-            | Command::RollbackTransaction
-            | Command::StartTransaction => Route::write(None),
+            _ => Route::write(None),
         }
     }
 
-    fn query(query: &str, cluster: &Cluster, params: Option<Bind>) -> Result<Command, Error> {
+    fn query(
+        &self,
+        query: &str,
+        cluster: &Cluster,
+        params: Option<Bind>,
+    ) -> Result<Command, Error> {
+        if self.replication_mode {
+            if query.starts_with("START_REPLICATION") {
+                return Ok(Command::StartReplication);
+            }
+
+            if REPLICATION_REGEX.is_match(query) {
+                return Ok(Command::ReplicationMeta);
+            }
+        }
+
         // Shortcut single shard clusters that don't require read/write separation.
         if cluster.shards().len() == 1 {
             if cluster.read_only() {
@@ -143,7 +155,7 @@ impl QueryParser {
                 TransactionStmtKind::TransStmtCommit => return Ok(Command::CommitTransaction),
                 TransactionStmtKind::TransStmtRollback => return Ok(Command::RollbackTransaction),
                 TransactionStmtKind::TransStmtBegin | TransactionStmtKind::TransStmtStart => {
-                    return Ok(Command::StartTransaction)
+                    return Ok(Command::StartTransaction(query.to_string()))
                 }
                 _ => Ok(Command::Query(Route::write(None))),
             },
@@ -152,13 +164,13 @@ impl QueryParser {
 
         if let Some(shard) = shard {
             if let Command::Query(ref mut route) = command {
-                route.overwrite_shard(shard);
+                route.set_shard(shard);
             }
         }
 
         if cluster.shards().len() == 1 {
             if let Command::Query(ref mut route) = command {
-                route.overwrite_shard(0);
+                route.set_shard(0);
             }
         }
 
@@ -169,7 +181,7 @@ impl QueryParser {
 
                 // TODO: check routing logic required by config.
                 if manual_route.is_some() {
-                    route.overwrite_shard(round_robin::next() % cluster.shards().len());
+                    route.set_shard(round_robin::next() % cluster.shards().len());
                 }
             }
         }
@@ -185,7 +197,7 @@ impl QueryParser {
         params: Option<Bind>,
     ) -> Result<Command, Error> {
         let order_by = Self::select_sort(&stmt.sort_clause);
-        let sharded_tables = cluster.shaded_tables();
+        let sharded_tables = cluster.sharded_tables();
         let mut shards = HashSet::new();
         let table_name = stmt
             .from_clause
@@ -213,6 +225,7 @@ impl QueryParser {
                                 shards.insert(shard);
                             }
                         }
+
                         Key::Parameter(param) => {
                             if let Some(ref params) = params {
                                 if let Some(param) = params.parameter(param)? {
@@ -303,5 +316,45 @@ impl QueryParser {
 
     fn delete(_stmt: &DeleteStmt) -> Result<Command, Error> {
         Ok(Command::Query(Route::write(None)))
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::net::messages::Protocol;
+
+    use super::*;
+    use crate::net::messages::Query;
+
+    #[test]
+    fn test_start_replication() {
+        let query = Query::new(
+            r#"START_REPLICATION SLOT "sharded" LOGICAL 0/1E2C3B0 (proto_version '4', origin 'any', publication_names '"sharded"')"#,
+        );
+        let mut buffer = Buffer::new();
+        buffer.push(query.message().unwrap());
+
+        let mut query_parser = QueryParser::default();
+        query_parser.replication_mode();
+
+        let cluster = Cluster::default();
+
+        let command = query_parser.parse(&buffer, &cluster).unwrap();
+        assert!(matches!(command, &Command::StartReplication));
+    }
+
+    #[test]
+    fn test_replication_meta() {
+        let query = Query::new(r#"IDENTIFY_SYSTEM"#);
+        let mut buffer = Buffer::new();
+        buffer.push(query.message().unwrap());
+
+        let mut query_parser = QueryParser::default();
+        query_parser.replication_mode();
+
+        let cluster = Cluster::default();
+
+        let command = query_parser.parse(&buffer, &cluster).unwrap();
+        assert!(matches!(command, &Command::ReplicationMeta));
     }
 }

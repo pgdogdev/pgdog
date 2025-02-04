@@ -7,6 +7,7 @@ use crate::net::{
 };
 
 /// ParameterStatus (B) message.
+#[derive(Debug)]
 pub struct ParameterStatus {
     /// Parameter name, e.g. `client_encoding`.
     pub name: String,

@@ -4,7 +4,10 @@ use tokio::time::sleep;
 
 use crate::{
     admin::backend::Backend,
-    backend::databases::databases,
+    backend::{
+        databases::databases,
+        replication::{Buffer, ReplicationConfig},
+    },
     config::PoolerMode,
     frontend::router::{CopyRow, Route},
     net::messages::{BackendKeyData, Message, ParameterStatus, Protocol},
@@ -15,7 +18,7 @@ use super::{
     Address, Cluster,
 };
 
-use std::time::Duration;
+use std::{mem::replace, time::Duration};
 
 mod binding;
 mod multi_shard;
@@ -62,7 +65,7 @@ impl Connection {
     /// Create a server connection if one doesn't exist already.
     pub async fn connect(&mut self, id: &BackendKeyData, route: &Route) -> Result<(), Error> {
         let connect = match &self.binding {
-            Binding::Server(None) => true,
+            Binding::Server(None) | Binding::Replication(None, _) => true,
             Binding::MultiShard(shards, _) => shards.is_empty(),
             _ => false,
         };
@@ -81,6 +84,16 @@ impl Connection {
         Ok(())
     }
 
+    /// Set the connection into replication mode.
+    pub fn replication_mode(
+        &mut self,
+        shard: Option<usize>,
+        replication_config: &ReplicationConfig,
+    ) -> Result<(), Error> {
+        self.binding = Binding::Replication(None, Buffer::new(shard, replication_config));
+        Ok(())
+    }
+
     /// Try to get a connection for the given route.
     async fn try_conn(&mut self, id: &BackendKeyData, route: &Route) -> Result<(), Error> {
         if let Some(shard) = route.shard() {
@@ -96,7 +109,17 @@ impl Connection {
                 server.reset = true;
             }
 
-            self.binding = Binding::Server(Some(server));
+            match &mut self.binding {
+                Binding::Server(existing) => {
+                    let _ = replace(existing, Some(server));
+                }
+
+                Binding::Replication(existing, _) => {
+                    let _ = replace(existing, Some(server));
+                }
+
+                _ => (),
+            };
         } else if route.is_all_shards() {
             let mut shards = vec![];
             for shard in self.cluster()?.shards() {
@@ -124,7 +147,7 @@ impl Connection {
     pub async fn parameters(&mut self, id: &BackendKeyData) -> Result<Vec<ParameterStatus>, Error> {
         match &self.binding {
             Binding::Admin(_) => Ok(ParameterStatus::fake()),
-            Binding::Server(_) | Binding::MultiShard(_, _) => {
+            _ => {
                 self.connect(id, &Route::write(Some(0))).await?; // Get params from primary.
                 let params = self
                     .server()?

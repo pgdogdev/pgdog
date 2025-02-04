@@ -30,6 +30,7 @@ use crate::{
 };
 
 /// PostgreSQL server connection.
+#[derive(Debug)]
 pub struct Server {
     addr: Address,
     stream: Option<Stream>,
@@ -198,8 +199,7 @@ impl Server {
     pub async fn send_one(&mut self, message: impl Protocol) -> Result<(), Error> {
         self.stats.state(State::Active);
 
-        #[cfg(debug_assertions)]
-        message.debug("→")?;
+        debug!("→ {:#?}", message);
 
         match self.stream().send(message).await {
             Ok(sent) => self.stats.send(sent),
@@ -248,6 +248,8 @@ impl Server {
                         return Err(Error::UnexpectedTransactionStatus(status));
                     }
                 }
+
+                self.streaming = false;
             }
             '1' => self.stats.prepared_statement(),
             'E' => self.stats.error(),
@@ -258,8 +260,7 @@ impl Server {
             _ => (),
         }
 
-        #[cfg(debug_assertions)]
-        message.debug("←")?;
+        debug!("← {:#?}", message);
 
         Ok(message)
     }

@@ -6,7 +6,7 @@ use std::time::Instant;
 use tokio::{select, spawn};
 use tracing::{debug, error, info, trace};
 
-use super::{Buffer, Comms, Error, Router, Stats};
+use super::{Buffer, Command, Comms, Error, Router, Stats};
 use crate::auth::scram::Server;
 use crate::backend::pool::Connection;
 use crate::config::config;
@@ -26,6 +26,7 @@ pub struct Client {
     comms: Comms,
     admin: bool,
     streaming: bool,
+    shard: Option<usize>,
 }
 
 impl Client {
@@ -90,17 +91,27 @@ impl Client {
         stream.send(id).await?;
         stream.send_flush(ReadyForQuery::idle()).await?;
         comms.connect(&id, addr);
+        let shard = params.shard();
 
-        info!("client connected [{}]", addr);
+        info!(
+            "client connected [{}]{}",
+            addr,
+            if let Some(ref shard) = shard {
+                format!(" (replication, shard {})", shard)
+            } else {
+                "".into()
+            }
+        );
 
         let mut client = Self {
             addr,
             stream,
             id,
-            params,
             comms,
             admin,
             streaming: false,
+            shard,
+            params,
         };
 
         if client.admin {
@@ -140,8 +151,16 @@ impl Client {
         let mut router = Router::new();
         let mut stats = Stats::new();
         let mut async_ = false;
-        let mut start_transaction = false;
+        let mut start_transaction = None;
         let comms = self.comms.clone();
+
+        if self.shard.is_some() {
+            if let Some(config) = backend.cluster()?.replication_sharding_config() {
+                backend.replication_mode(self.shard, &config)?;
+                router.replication_mode();
+                debug!("logical replication sharding [{}]", self.addr);
+            }
+        }
 
         loop {
             select! {
@@ -164,24 +183,29 @@ impl Client {
                         debug!("{} [{}]", query, self.addr);
                     }
 
+                    let command = backend.cluster().ok().map(|cluster| router.query(&buffer, cluster)).transpose()?;
+
+                    self.streaming = matches!(command, Some(Command::StartReplication));
+
                     if !backend.connected() {
-                        // Figure out where the query should go.
-                        if let Ok(cluster) = backend.cluster() {
-                            let command = router.query(&buffer, cluster)?;
-                            if command.begin() {
-                                start_transaction = true;
+                        match command {
+                            Some(Command::StartTransaction(query)) => {
+                                start_transaction = Some(query.clone());
                                 self.start_transaction().await?;
                                 continue;
-                            } else if command.commit() {
-                                start_transaction  = false;
-                                self.end_transaction(false).await?;
-                                continue;
-                            } else if command.rollback() {
-                                start_transaction = false;
+                            },
+                            Some(Command::RollbackTransaction) => {
+                                start_transaction  = None;
                                 self.end_transaction(true).await?;
                                 continue;
-                            }
-                        }
+                            },
+                            Some(Command::CommitTransaction) => {
+                                start_transaction = None;
+                                self.end_transaction(false).await?;
+                                continue;
+                            },
+                            _ => (),
+                        };
 
                         // Grab a connection from the right pool.
                         comms.stats(stats.waiting());
@@ -205,9 +229,8 @@ impl Client {
                         // Simulate a transaction until the client
                         // sends a query over. This ensures that we don't
                         // connect to all shards for no reason.
-                        if start_transaction {
-                            backend.execute("BEGIN").await?;
-                            start_transaction = false;
+                        if let Some(query) = start_transaction.take() {
+                            backend.execute(&query).await?;
                         }
                     }
 
@@ -228,7 +251,6 @@ impl Client {
 
                 message = backend.read() => {
                     let message = message?;
-                    self.streaming = message.streaming();
                     let len = message.len();
                     let code = message.code();
 

@@ -26,3 +26,4 @@ Cargo.lock
 /target*
 
 *.md.bak
+.DS_Store

@@ -390,6 +390,8 @@ pub struct User {
     /// Relication mode.
     #[serde(default)]
     pub replication_mode: bool,
+    /// Sharding into this database.
+    pub replication_sharding: Option<String>,
 }
 
 /// Admin database settings.
