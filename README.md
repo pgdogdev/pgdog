@@ -1,11 +1,11 @@
-# pgDog - Modern PostgreSQL pooler
+# pgDog - Sharding for PostgreSQL
 
 [![Documentation](https://img.shields.io/badge/documentation-blue?style=flat)](https://pgdog.dev)
 [![CI](https://github.com/levkk/pgdog/actions/workflows/ci.yml/badge.svg)](https://github.com/levkk/pgdog/actions/workflows/ci.yml)
 
-pgDog is a PostgreSQL proxy and transaction pooler written in Rust.
-Spiritual successor to [pgcat](https://github.com/levkk/pgcat), pgDog comes with a lot of
-classic features like basic sharding, load balancing and failover. In addition, pgDog makes improvements to query performance, and adds new features like plugins, cross-shard queries, and async protocol support.
+pgDog is a PostgreSQL proxy and transaction pooler that can shard databases.
+Spiritual successor to [pgcat](https://github.com/levkk/pgcat) and also written in Rust, pgDog comes with a lot of
+classic features like load balancing, failover and connection state management. In addition, pgDog makes improvements to query performance, and adds new features like plugins, cross-shard queries, async protocol support, and `COPY` and logical replication sharding.
 
 ## Documentation
 
