@@ -1,9 +1,9 @@
-site_name: pgDog
+site_name: PgDog
 repo_url: "https://github.com/levkk/pgdog"
 site_url: "https://pgdog.dev"
 extra_css:
   - style.css
-site_description: "pgDog - PostgreSQL query router, pooler, load balancer, and proxy."
+site_description: "PgDog - PostgreSQL query router, pooler, load balancer, and sharding proxy."
 theme:
   name: material
   features:
