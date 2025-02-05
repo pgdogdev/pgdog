@@ -1,7 +1,7 @@
 # Admin database settings
 
 Admin database settings control access to the [admin](../../administration/index.md) database which contains real time statistics about internal operations
-of pgDog. For example:
+of PgDog. For example:
 
 ```toml
 [admin]

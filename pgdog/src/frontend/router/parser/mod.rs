@@ -4,6 +4,7 @@ pub mod comment;
 pub mod copy;
 pub mod csv_buffer;
 pub mod error;
+pub mod insert;
 pub mod order_by;
 pub mod query;
 pub mod route;

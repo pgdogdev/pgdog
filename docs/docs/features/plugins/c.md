@@ -1,6 +1,6 @@
 # Plugins in C
 
-Writing pgDog plugins in C is pretty straight forward if you're comfortable in the language. The plugin API
+Writing PgDog plugins in C is pretty straight forward if you're comfortable in the language. The plugin API
 is written in C (for compatibility), so if you're comfortable in C, you should be right at home.
 
 ## Getting started
@@ -25,7 +25,7 @@ cargo build
 This ensures all libraries and bindings are compiled before you get started.
 
 !!! note
-    If you're writing plugins for release (`-02`), build the crate using the release profile by passing `--release` flag to Cargo.    
+    If you're writing plugins for release (`-02`), build the crate using the release profile by passing `--release` flag to Cargo.
 
 The shared library will be placed in `target/(debug|release)` and you can link to it like so:
 
@@ -36,7 +36,7 @@ gcc plugin.c -lpgdog_routing -lshared -o plugin.so
 
 ### Memory safety
 
-All structures passed to plugins are owned by pgDog runtime, so make sure not to `free` any pointers. All structures passed back to pgDog will be freed automatically by pgDog, so you don't need to worry about leaks.
+All structures passed to plugins are owned by PgDog runtime, so make sure not to `free` any pointers. All structures passed back to PgDog will be freed automatically by PgDog, so you don't need to worry about leaks.
 
 If you allocate any memory during routine execution, make sure to free it before you return from the plugin API call.
 

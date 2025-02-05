@@ -1,7 +1,7 @@
 # Manual routing
 
 In cases where the sharding key is not obvious or can't be extracted from the query,
-pgDog supports extracting it from a query comment. For example:
+PgDog supports extracting it from a query comment. For example:
 
 ```postgresql
 /* pgdog_shard: 1 */ SELECT * FROM users WHERE email = $1
@@ -31,7 +31,7 @@ If you don't know the shard number but have a sharding key, e.g., the value of a
 /* pgdog_sharding_key: <value> */
 ```
 
-pgDog will extract this value from the query and apply a [sharding function](sharding-functions.md) to find out the actual shard number.
+PgDog will extract this value from the query and apply a [sharding function](sharding-functions.md) to find out the actual shard number.
 
 ## Usage in frameworks
 

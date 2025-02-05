@@ -1,8 +1,8 @@
 # Benchmarks
 
-pgDog does its best to minimize its impact on database performance. Great care is taken to make sure as few operations are possible are performed
+PgDog does its best to minimize its impact on database performance. Great care is taken to make sure as few operations are possible are performed
 when passing data between clients and servers. All benchmarks listed below were done on my local system and should be taken with a grain of salt.
-Real world performance is impacted by factors like network speed, query complexity and especially by hardware used for running pgDog and PostgreSQL servers.
+Real world performance is impacted by factors like network speed, query complexity and especially by hardware used for running PgDog and PostgreSQL servers.
 
 ## pgbench
 
@@ -13,13 +13,13 @@ $ pgbench --version
 pgbench (PostgreSQL) 16.4 (Postgres.app)
 ```
 
-A standard pgBench benchmark will run `INSERT`, `UPDATE`, `SELECT` and `DELETE` queries to get an overall view of database performance. Since we are only testing the performance of pgDog, we are going to run `SELECT` queries only and minimize the impact of hard disk I/O on this test.
+A standard pgBench benchmark will run `INSERT`, `UPDATE`, `SELECT` and `DELETE` queries to get an overall view of database performance. Since we are only testing the performance of PgDog, we are going to run `SELECT` queries only and minimize the impact of hard disk I/O on this test.
 
 This benchmark can be reproduced by passing the `-S` flag to `pgbench`. The results below were performed using the configuration found in [`pgdog.toml`](https://github.com/levkk/pgdog/blob/main/pgdog.toml).
 
 ### Results
 
-Numbers below are for a single primary benchmark in transaction mode. No plugins are in use and pgDog is configured to use only 1 CPU core (`workers = 0`).
+Numbers below are for a single primary benchmark in transaction mode. No plugins are in use and PgDog is configured to use only 1 CPU core (`workers = 0`).
 
 | Clients | Throughput (/s) | Latency |
 |---------|--------------|------------|
@@ -47,7 +47,7 @@ has some noticeable overhead. Enabling multi-threading improved performance by o
 #### 1 client
 
 Benchmarks with `-c 1` (1 client) are a good baseline for what's possible under the best possible circumstances. There is no contention on resources
-and pgDog effectively receives data in one socket and pushes it out the other.
+and PgDog effectively receives data in one socket and pushes it out the other.
 
 #### 10 clients
 
@@ -56,11 +56,11 @@ has to serve clients without any slack in the system. This benchmark should prod
 
 #### 100 clients
 
-With over 10x more clients connected than available servers, connections are fighting for resources and pgDog has to make sure everyone gets served in a fair way. Consistent throughput in this benchmark demonstrates our ability to timeshare server connections effectively.
+With over 10x more clients connected than available servers, connections are fighting for resources and PgDog has to make sure everyone gets served in a fair way. Consistent throughput in this benchmark demonstrates our ability to timeshare server connections effectively.
 
 ### In the real world
 
-In production, PostgreSQL clients are expected to be mostly idle. For example, web applications spend a lot of their time parsing HTTP requests, running code and waiting on network I/O. This leaves plenty of time for pgDog (and PostgreSQL) to serve queries for thousands of clients.
+In production, PostgreSQL clients are expected to be mostly idle. For example, web applications spend a lot of their time parsing HTTP requests, running code and waiting on network I/O. This leaves plenty of time for PgDog (and PostgreSQL) to serve queries for thousands of clients.
 
 #### Hardware impact
 

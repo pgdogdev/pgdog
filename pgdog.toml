@@ -34,12 +34,17 @@ shard = 1
 
 
 #
-# Write access to this table will be automatically
+# Read/write access to theses tables will be automatically
 # sharded.
 #
 [[sharded_tables]]
 database = "pgdog_sharded"
 table = "sharded"
+column = "id"
+
+[[sharded_tables]]
+database = "pgdog_sharded"
+table = "users"
 column = "id"
 
 #

@@ -1,28 +1,28 @@
-# pgDog
+# PgDog
 
-[pgDog](https://github.com/levkk/pgdog) is a PostgreSQL query router, pooler, proxy and load balancer written in Rust. Spiritual successor to
-[pgcat](https://github.com/levkk/pgcat), pgDog comes with a lot of similar features, better performance,
-and introduces new features like plugins.
+[PgDog](https://github.com/levkk/pgdog) is a PostgreSQL query router, pooler, proxy and load balancer written in Rust. Spiritual successor to
+[pgcat](https://github.com/levkk/pgcat), PgDog comes with a lot of similar features, better performance,
+and introduces new features like plugins and cross-shard queries.
 
-PostgreSQL deployments of any size can be proxied by pgDog, ranging from a single database to hundreds of primaries and replicas in a sharded configuration.
+PostgreSQL deployments of any size can be proxied by PgDog, ranging from a single database to hundreds of primaries and replicas in a sharded configuration.
 
 ## Installation
 
-pgDog is easily compiled from source. Before proceeding, make sure you have the latest version of the Rust
+PgDog is easily compiled from source. Before proceeding, make sure you have the latest version of the Rust
 compiler, available from [rust-lang.org](https://rust-lang.org).
 
 ### Checkout the code
 
-pgDog source code can be downloaded from [GitHub](https://github.com/levkk/pgdog):
+PgDog source code can be downloaded from [GitHub](https://github.com/levkk/pgdog):
 
 ```bash
 git clone https://github.com/levkk/pgdog && \
 cd pgdog
 ```
 
-### Compile pgDog
+### Compile PgDog
 
-pgDog should be compiled in release mode to make sure you get all performance benefits. You can do this with Cargo:
+PgDog should be compiled in release mode to make sure you get all performance benefits. You can do this with Cargo:
 
 ```bash
 cargo build --release
@@ -30,7 +30,7 @@ cargo build --release
 
 ### Configuration
 
-pgDog is [configured](configuration/index.md) via two files:
+PgDog is [configured](configuration/index.md) via two files:
 
 * [`pgdog.toml`](configuration/index.md) which contains general pooler settings and PostgreSQL server information
 * [`users.toml`](configuration/users.toml/users.md) which contains passwords for users allowed to connect to the pooler
@@ -38,12 +38,12 @@ pgDog is [configured](configuration/index.md) via two files:
 The passwords are stored in a separate file to simplify deployments in environments where
 secrets can be safely encrypted, like Kubernetes or AWS EC2.
 
-Both files can to be placed in the current working directory (CWD) for pgDog to detect them. Alternatively,
-you can pass the `--config` and `--secrets` arguments with their locations when starting pgDog.
+Both files can to be placed in the current working directory (CWD) for PgDog to detect them. Alternatively,
+you can pass the `--config` and `--secrets` arguments with their locations when starting PgDog.
 
 #### Example `pgdog.toml`
 
-Most pgDog configuration options have sensible defaults. This allows a basic primary-only configuration to be pretty short:
+Most PgDog configuration options have sensible defaults. This allows a basic primary-only configuration to be pretty short:
 
 ```toml
 [general]
@@ -58,7 +58,7 @@ host = "127.0.0.1"
 #### Example `users.toml`
 
 This configuration file contains a mapping between databases, users and passwords. Users not specified in this file
-won't be able to connect to pgDog:
+won't be able to connect to PgDog:
 
 ```toml
 [[users]]
@@ -79,11 +79,11 @@ Starting the pooler can be done by running the binary in `target/release` folder
 
 === "Output"
     ```
-    INFO 🐕 pgDog 0.1.0
+    INFO 🐕 PgDog 0.1.0
     INFO loaded pgdog.toml
     INFO loaded users.toml
     INFO loaded "pgdog_routing" plugin [1.0461ms]
-    INFO 🐕 pgDog listening on 0.0.0.0:6432
+    INFO 🐕 PgDog listening on 0.0.0.0:6432
     INFO new server connection [127.0.0.1:5432]
     ```
 

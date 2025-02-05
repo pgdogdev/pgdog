@@ -1,6 +1,6 @@
 # Pools
 
-`SHOW POOLS` is a command to show real time statistics on connection pools used to [multiplex](../features/transaction-mode.md) pgDog clients and PostgreSQL servers. For example:
+`SHOW POOLS` is a command to show real time statistics on connection pools used to [multiplex](../features/transaction-mode.md) PgDog clients and PostgreSQL servers. For example:
 
 ```
 admin=> \x

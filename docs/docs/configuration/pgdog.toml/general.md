@@ -5,7 +5,7 @@ General settings are relevant to the operations of the pooler itself, or apply t
 
 ### `host`
 
-The IP address of the local network interface pgDog will bind to listen for connections.
+The IP address of the local network interface PgDog will bind to listen for connections.
 
 !!! note
     This setting cannot be changed at runtime.
@@ -14,7 +14,7 @@ Default: **`0.0.0.0`** (all interfaces)
 
 ### `port`
 
-The TCP port pgDog will bind to listen for connections.
+The TCP port PgDog will bind to listen for connections.
 
 Default: **`6432`**
 
@@ -55,7 +55,7 @@ Default:  **`transaction`**
 
 ### `tls_certificate`
 
-Path to the TLS certificate pgDog will use to setup TLS connections with clients. If none is provided, TLS will be disabled.
+Path to the TLS certificate PgDog will use to setup TLS connections with clients. If none is provided, TLS will be disabled.
 
 Default: **none**
 
@@ -64,7 +64,7 @@ Default: **none**
 
 ### `tls_private_key`
 
-Path to the TLS private key pgDog will use to setup TLS connections with clients. If none is provided, TLS will be disabled.
+Path to the TLS private key PgDog will use to setup TLS connections with clients. If none is provided, TLS will be disabled.
 
 Default: **none**
 
@@ -75,30 +75,30 @@ Default: **none**
 
 ### `healthcheck_interval`
 
-Frequency of healthchecks performed by pgDog to ensure connections provided to clients from the pool are working.
+Frequency of healthchecks performed by PgDog to ensure connections provided to clients from the pool are working.
 
 Default: **`30_000`** (30s)
 
 ### `idle_healthcheck_interval`
 
-Frequency of healthchecks performed by pgDog on idle connections. This ensures the database is checked for health periodically when
-pgDog receives little to no client requests.
+Frequency of healthchecks performed by PgDog on idle connections. This ensures the database is checked for health periodically when
+PgDog receives little to no client requests.
 
 Default: **`30_000`** (30s)
 
 #### Note on `min_pool_size`
 
-[Healthchecks](../../features/healthchecks.md) try to use existing idle connections to validate the database is up and running. If there are no idle connections available, pgDog will create an ephemeral connection to perform the healthcheck. If you want to avoid this, make sure to have `min_pool_size` to be at least `1`.
+[Healthchecks](../../features/healthchecks.md) try to use existing idle connections to validate the database is up and running. If there are no idle connections available, PgDog will create an ephemeral connection to perform the healthcheck. If you want to avoid this, make sure to have `min_pool_size` to be at least `1`.
 
 ### `idle_healthcheck_delay`
 
-Delay running idle healthchecks at pgDog startup to give databases (and pools) time to spin up.
+Delay running idle healthchecks at PgDog startup to give databases (and pools) time to spin up.
 
 Default: **`5_000`** (5s)
 
 ## Timeouts
 
-These settings control how long pgDog waits for maintenance tasks to complete. These timeouts make sure pgDog can recover
+These settings control how long PgDog waits for maintenance tasks to complete. These timeouts make sure PgDog can recover
 from abnormal conditions like hardware failure.
 
 ### `rollback_timeout`
@@ -116,7 +116,7 @@ Default: **`300_000`** (5 minutes)
 
 ### `shutdown_timeout`
 
-How long to wait for active clients to finish transactions when shutting down. This ensures that pgDog redeployments disrupt as few
+How long to wait for active clients to finish transactions when shutting down. This ensures that PgDog redeployments disrupt as few
 queries as possible.
 
 Default: **`60_000`** (60s)

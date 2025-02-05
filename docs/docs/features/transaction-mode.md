@@ -1,6 +1,6 @@
 # Transaction mode
 
-In transaction mode, pgDog is able to multiplex client transactions with several PostgreSQL backend servers. This
+In transaction mode, PgDog is able to multiplex client transactions with several PostgreSQL backend servers. This
 allows the pooler to serve thousands of clients using only dozens of actual server connections. This feature is essential for at-scale PostgreSQL deployments since Postgres is not able to maintain
 more than a few thousand concurrently open connections.
 
@@ -33,9 +33,9 @@ and user level:
 !!! note
     This feature is a work in progress.
 
-Since clients in transaction mode reuse PostgreSQL server connections, it's possible for session-level variables and state to leak between clients. pgDog keeps track of connection state modifications and can automatically clean up server connections after a transaction. While this helps prevent session variables leakage between clients, this does have a small performance overhead.
+Since clients in transaction mode reuse PostgreSQL server connections, it's possible for session-level variables and state to leak between clients. PgDog keeps track of connection state modifications and can automatically clean up server connections after a transaction. While this helps prevent session variables leakage between clients, this does have a small performance overhead.
 
-To avoid this, clients using pgDog in transaction mode should avoid the usage of `SET` statements and use `SET LOCAL` inside an explicit transaction instead:
+To avoid this, clients using PgDog in transaction mode should avoid the usage of `SET` statements and use `SET LOCAL` inside an explicit transaction instead:
 
 ```postgresql
 BEGIN;

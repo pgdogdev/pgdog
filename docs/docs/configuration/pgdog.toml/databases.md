@@ -1,6 +1,6 @@
 # Database settings
 
-Database settings configure which databases pgDog is proxying. This is a TOML list of hosts, ports, and other settings like database roles (primary or replica). For each database host, add a `[[databases]]` entry to `pgdog.toml`. For example:
+Database settings configure which databases PgDog is proxying. This is a TOML list of hosts, ports, and other settings like database roles (primary or replica). For each database host, add a `[[databases]]` entry to `pgdog.toml`. For example:
 
 ```toml
 [[databases]]
@@ -17,7 +17,7 @@ role = "replica"
 
 ### `name`
 
-Name of your database. Clients that connect to pgDog will need to use this name to refer to the database. For multiple entries part of
+Name of your database. Clients that connect to PgDog will need to use this name to refer to the database. For multiple entries part of
 the same cluster, use the same `name`.
 
 Default: **none** (required)
@@ -48,13 +48,13 @@ Default: **`primary`**
 
 ### `database_name`
 
-Name of the PostgreSQL database on the server pgDog will connect to. If not set, this defaults to `name`.
+Name of the PostgreSQL database on the server PgDog will connect to. If not set, this defaults to `name`.
 
 Default: **none** (defaults to `name`)
 
 ### `user`
 
-Name of the PostgreSQL user to connect with when creating backend connections from pgDog to Postgres. If not set, this defaults to `name` in [`users.toml`](../users.toml/users.md). This setting is used to override `users.toml` configuration values.
+Name of the PostgreSQL user to connect with when creating backend connections from PgDog to Postgres. If not set, this defaults to `name` in [`users.toml`](../users.toml/users.md). This setting is used to override `users.toml` configuration values.
 
 Default: **none** (see [`users.toml`](../users.toml/users.md))
 

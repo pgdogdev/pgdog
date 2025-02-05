@@ -44,7 +44,7 @@ age                 | 1719734
 | `state` | Server connection state, e.g. `active`, `idle in transaction`, etc. |
 | `transactions` | Number of transactions completed by this server connection. |
 | `queries` | Number of queries executed by this server connection. |
-| `rollbacks` | Number of automatic rollbacks executed on this server connection by pgDog to clean up after idle transactions left by clients. |
+| `rollbacks` | Number of automatic rollbacks executed on this server connection by PgDog to clean up after idle transactions left by clients. |
 | `prepared_statements` | Number of prepared statements created on this server connection. |
 | `healthchecks` | Number of healthchecks executed on this server connection. |
 | `errors` | Number of errors this connection has produced e.g. syntax errors. |

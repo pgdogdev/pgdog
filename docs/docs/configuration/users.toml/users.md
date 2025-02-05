@@ -1,6 +1,6 @@
 # Users configuration
 
-This configuration controls which users are allowed to connect to pgDog. This is a TOML list so for each user, add a `[[users]]` section to `users.toml`. For example:
+This configuration controls which users are allowed to connect to PgDog. This is a TOML list so for each user, add a `[[users]]` section to `users.toml`. For example:
 
 ```toml
 [[users]]
@@ -17,7 +17,7 @@ password = "opensesame"
 
 ### `name`
 
-Name of the user. Clients that connect to pgDog will need to use this username.
+Name of the user. Clients that connect to PgDog will need to use this username.
 
 Default: **none** (required)
 
@@ -29,7 +29,7 @@ Default: **none** (required)
 
 ### `password`
 
-The password for the user. Clients will need to provide this when connecting to pgDog.
+The password for the user. Clients will need to provide this when connecting to PgDog.
 
 Default: **none** (required)
 
@@ -42,13 +42,13 @@ Default: **none** (defaults to `default_pool_size` from `pgdog.toml`)
 ### `pooler_mode`
 
 Overrides [`pooler_mode`](../pgdog.toml/general.md) for this user. This allows users in [session mode](../../features/session-mode.md) to connect to the
-same pgDog instance as users in [transaction mode](../../features/transaction-mode.md).
+same PgDog instance as users in [transaction mode](../../features/transaction-mode.md).
 
 Default: **none** (defaults to `pooler_mode` from `pgdog.toml`)
 
 ### `server_user`
 
-Which user to connect with when creating backend connections from pgDog to PostgreSQL. By default, the user configured in `name` is used. This setting allows to override this configuration and use a different user.
+Which user to connect with when creating backend connections from PgDog to PostgreSQL. By default, the user configured in `name` is used. This setting allows to override this configuration and use a different user.
 
 !!! note
     Values specified in `pgdog.toml` take priority over this configuration.
@@ -57,7 +57,7 @@ Default: **none** (defaults to `name`)
 
 ### `server_password`
 
-Which password to connect with when creating backend connections from pgDog to PostgreSQL. By default, the password configured in `password` is used. This setting allows to override this configuration and use a different password, decoupling server passwords from user passwords given to clients.
+Which password to connect with when creating backend connections from PgDog to PostgreSQL. By default, the password configured in `password` is used. This setting allows to override this configuration and use a different password, decoupling server passwords from user passwords given to clients.
 
 Default: **none** (defaults to `password`)
 

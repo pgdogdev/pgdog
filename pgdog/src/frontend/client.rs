@@ -183,7 +183,13 @@ impl Client {
                         debug!("{} [{}]", query, self.addr);
                     }
 
-                    let command = backend.cluster().ok().map(|cluster| router.query(&buffer, cluster)).transpose()?;
+                    let command = match backend.cluster().ok().map(|cluster| router.query(&buffer, cluster)).transpose() {
+                        Ok(command) => command,
+                        Err(err) => {
+                            self.stream.error(ErrorResponse::syntax(err.to_string().as_str())).await?;
+                            continue;
+                        }
+                    };
 
                     self.streaming = matches!(command, Some(Command::StartReplication));
 

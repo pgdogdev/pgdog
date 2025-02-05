@@ -1,6 +1,6 @@
 # Load balancer
 
-pgDog operates at the application layer (OSI Level 7) and is capable of load balancing queries across
+PgDog operates at the application layer (OSI Level 7) and is capable of load balancing queries across
 multiple PostgreSQL databases.
 
 <center>
@@ -27,7 +27,7 @@ This strategy is used by **default**.
 
 ### Least active connections
 
-pgDog keeps track of how many active connections each database has and can route queries to databases
+PgDog keeps track of how many active connections each database has and can route queries to databases
 which are least busy executing requests. This allows to "bin pack" the cluster based on how seemingly active
 (or inactive) the databases are.
 
