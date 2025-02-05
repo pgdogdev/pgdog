@@ -20,7 +20,7 @@ impl<'a> Insert<'a> {
         self.stmt
             .cols
             .iter()
-            .map(|column| Column::try_from(column))
+            .map(Column::try_from)
             .collect::<Result<Vec<Column<'a>>, ()>>()
             .ok()
             .unwrap_or(vec![])
@@ -28,23 +28,19 @@ impl<'a> Insert<'a> {
 
     /// Get table name, if specified (should always be).
     pub fn table(&self) -> Option<Table> {
-        self.stmt.relation.as_ref().map(|table| Table::from(table))
+        self.stmt.relation.as_ref().map(Table::from)
     }
 
     /// Get rows from the statement.
     pub fn tuples(&'a self) -> Vec<Tuple<'a>> {
         if let Some(select) = &self.stmt.select_stmt {
-            match &select.node {
-                Some(NodeEnum::SelectStmt(stmt)) => {
-                    let tuples = stmt
-                        .values_lists
-                        .iter()
-                        .map(|values| Tuple::try_from(values))
-                        .collect::<Result<Vec<Tuple<'a>>, ()>>();
-                    return tuples.unwrap();
-                }
-
-                _ => (),
+            if let Some(NodeEnum::SelectStmt(stmt)) = &select.node {
+                let tuples = stmt
+                    .values_lists
+                    .iter()
+                    .map(Tuple::try_from)
+                    .collect::<Result<Vec<Tuple<'a>>, ()>>();
+                return tuples.unwrap();
             }
         }
 

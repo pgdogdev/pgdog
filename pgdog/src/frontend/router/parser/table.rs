@@ -13,9 +13,8 @@ impl<'a> TryFrom<&'a Node> for Table<'a> {
     type Error = ();
 
     fn try_from(value: &'a Node) -> Result<Self, Self::Error> {
-        match &value.node {
-            Some(NodeEnum::RangeVar(range_var)) => return Ok(range_var.into()),
-            _ => (),
+        if let Some(NodeEnum::RangeVar(range_var)) = &value.node {
+            return Ok(range_var.into());
         }
 
         Err(())

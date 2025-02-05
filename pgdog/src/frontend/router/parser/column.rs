@@ -13,14 +13,10 @@ impl<'a> TryFrom<&'a Node> for Column<'a> {
     type Error = ();
 
     fn try_from(value: &'a Node) -> Result<Self, Self::Error> {
-        match &value.node {
-            Some(NodeEnum::ResTarget(res_target)) => {
-                return Ok(Self {
-                    name: res_target.name.as_str(),
-                })
-            }
-
-            _ => (),
+        if let Some(NodeEnum::ResTarget(res_target)) = &value.node {
+            return Ok(Self {
+                name: res_target.name.as_str(),
+            });
         }
 
         Err(())
@@ -54,7 +50,7 @@ mod test {
                 let columns = insert
                     .cols
                     .iter()
-                    .map(|col| Column::try_from(col))
+                    .map(Column::try_from)
                     .collect::<Result<Vec<Column>, ()>>()
                     .unwrap();
                 assert_eq!(
