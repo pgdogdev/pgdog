@@ -6,6 +6,8 @@ use pg_query::{
 };
 use std::string::String;
 
+use super::Key;
+
 #[derive(Debug)]
 pub struct Column {
     /// Table name if fully qualified.
@@ -22,12 +24,6 @@ enum Output {
     Int(i32),
     Column(Column),
     Filter(Vec<Output>, Vec<Output>),
-}
-
-#[derive(Debug, PartialEq)]
-pub enum Key {
-    Parameter(usize),
-    Constant(String),
 }
 
 /// Parse `WHERE` clause of a statement looking for sharding keys.

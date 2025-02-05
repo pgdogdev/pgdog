@@ -1,5 +1,5 @@
 //! Route queries to correct shards.
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 
 use crate::{
     backend::{databases::databases, Cluster},
@@ -10,11 +10,7 @@ use crate::{
     net::messages::{Bind, CopyData},
 };
 
-use super::{
-    copy::CopyParser,
-    where_clause::{Key, WhereClause},
-    Error, Route,
-};
+use super::{CopyParser, Error, Insert, Key, Route, WhereClause};
 
 use once_cell::sync::Lazy;
 use pg_query::{
@@ -148,7 +144,7 @@ impl QueryParser {
                 }
             }
             Some(NodeEnum::CopyStmt(ref stmt)) => Self::copy(stmt, cluster),
-            Some(NodeEnum::InsertStmt(ref stmt)) => Self::insert(stmt),
+            Some(NodeEnum::InsertStmt(ref stmt)) => Self::insert(stmt, cluster),
             Some(NodeEnum::UpdateStmt(ref stmt)) => Self::update(stmt),
             Some(NodeEnum::DeleteStmt(ref stmt)) => Self::delete(stmt),
             Some(NodeEnum::TransactionStmt(ref stmt)) => match stmt.kind() {
@@ -306,8 +302,31 @@ impl QueryParser {
         }
     }
 
-    fn insert(_stmt: &InsertStmt) -> Result<Command, Error> {
-        Ok(Command::Query(Route::write(None)))
+    fn insert(stmt: &InsertStmt, cluster: &Cluster) -> Result<Command, Error> {
+        let insert = Insert::new(stmt);
+        let columns = insert
+            .columns()
+            .into_iter()
+            .map(|column| column.name)
+            .collect::<Vec<_>>();
+        let table = insert.table().unwrap().name;
+
+        let sharding_column = cluster.sharded_column(table, &columns);
+        let mut shards = BTreeSet::new();
+        if let Some(column) = sharding_column {
+            for tuple in insert.tuples() {
+                if let Some(value) = tuple.get(column) {
+                    shards.insert(value.shard(cluster.shards().len()));
+                }
+            }
+        }
+
+        // TODO: support sending inserts to multiple shards.
+        if shards.len() == 1 {
+            Ok(Command::Query(Route::write(shards.pop_last().unwrap())))
+        } else {
+            Ok(Command::Query(Route::write(None)))
+        }
     }
 
     fn update(_stmt: &UpdateStmt) -> Result<Command, Error> {
