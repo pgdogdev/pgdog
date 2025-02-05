@@ -17,6 +17,11 @@ pub fn uuid(uuid: Uuid) -> u64 {
     }
 }
 
+/// Shard an integer.
+pub fn shard_int(value: i64, shards: usize) -> usize {
+    bigint(value) as usize % shards
+}
+
 /// Shard a string value, parsing out a BIGINT or UUID.
 pub fn shard_str(value: &str, shards: usize) -> Option<usize> {
     Some(match value.parse::<i64>() {

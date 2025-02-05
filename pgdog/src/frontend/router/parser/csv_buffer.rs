@@ -30,6 +30,7 @@ impl CsvBuffer {
     ///
     pub fn add(&mut self, data: &[u8]) {
         let nl = data.iter().rev().position(|p| *p as char == '\n');
+
         if let Some(nl) = nl {
             let actual = data.len() - (nl + 1);
             let remainder = take(&mut self.remainder);
@@ -94,5 +95,12 @@ mod test {
         assert_eq!(buffer.read(), "11,df\n".as_bytes());
         buffer.clear();
         assert_eq!(buffer.remainder, "44,test@test.com".as_bytes());
+
+        let mut buffer = CsvBuffer::new();
+
+        let in_quotes = "1234,\"hello\nworld\"\n".as_bytes();
+        buffer.add(in_quotes);
+        assert_eq!(buffer.read(), "1234,\"hello\nworld\"\n".as_bytes());
+        assert!(buffer.remainder.is_empty());
     }
 }

@@ -5,7 +5,7 @@ use pg_query::{
     NodeEnum,
 };
 
-use crate::frontend::router::sharding::{bigint, shard_str};
+use crate::frontend::router::sharding::{shard_int, shard_str};
 
 /// A value extracted from a query.
 pub enum Value<'a> {
@@ -20,7 +20,7 @@ impl Value<'_> {
     pub fn shard(&self, shards: usize) -> Option<usize> {
         match self {
             Value::String(v) => shard_str(v, shards),
-            Value::Integer(v) => Some(bigint(*v) as usize % shards),
+            Value::Integer(v) => Some(shard_int(*v, shards)),
             _ => None,
         }
     }
