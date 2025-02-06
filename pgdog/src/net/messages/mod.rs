@@ -20,7 +20,7 @@ pub mod terminate;
 
 pub use auth::{Authentication, Password};
 pub use backend_key::BackendKeyData;
-pub use bind::Bind;
+pub use bind::{Bind, Parameter, ParameterWithFormat};
 use command_complete::CommandComplete;
 pub use copy_data::CopyData;
 pub use data_row::{DataRow, ToDataRowColumn};

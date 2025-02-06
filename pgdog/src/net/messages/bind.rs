@@ -172,7 +172,7 @@ impl ToBytes for Bind {
         for code in &self.codes {
             payload.put_i16(*code);
         }
-        payload.put_i32(self.params.len() as i32);
+        payload.put_i16(self.params.len() as i16);
         for param in &self.params {
             payload.put_i32(param.len);
             for b in &param.data {

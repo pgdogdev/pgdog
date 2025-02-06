@@ -16,6 +16,17 @@ pub struct Parse {
     pub data_types: Vec<i32>,
 }
 
+impl Parse {
+    /// New anonymous prepared statement.
+    pub fn new_anonymous(query: &str) -> Self {
+        Self {
+            name: "".into(),
+            query: query.to_string(),
+            data_types: vec![],
+        }
+    }
+}
+
 impl FromBytes for Parse {
     fn from_bytes(mut bytes: Bytes) -> Result<Self, Error> {
         code!(bytes, 'P');

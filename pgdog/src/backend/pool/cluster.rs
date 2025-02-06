@@ -192,3 +192,27 @@ impl Cluster {
             .and_then(|database| databases().replication(database))
     }
 }
+
+#[cfg(test)]
+mod test {
+    use crate::{
+        backend::{Shard, ShardedTables},
+        config::ShardedTable,
+    };
+
+    use super::Cluster;
+
+    impl Cluster {
+        pub fn new_test() -> Self {
+            let mut cluster = Self::default();
+            cluster.sharded_tables = ShardedTables::new(vec![ShardedTable {
+                database: "pgdog".into(),
+                name: Some("sharded".into()),
+                column: "id".into(),
+            }]);
+            cluster.shards = vec![Shard::default(), Shard::default()];
+
+            cluster
+        }
+    }
+}

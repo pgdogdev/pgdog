@@ -52,6 +52,7 @@ impl<'a> Insert<'a> {
 mod test {
     use pg_query::{parse, NodeEnum};
 
+    use super::super::Value;
     use super::*;
 
     #[test]
@@ -73,6 +74,26 @@ mod test {
                     insert.columns(),
                     vec![Column { name: "id" }, Column { name: "email" }]
                 );
+            }
+
+            _ => panic!("not an insert"),
+        }
+    }
+
+    #[test]
+    fn test_insert_params() {
+        let query = parse("INSERT INTO my_table (id, email) VALUES ($1, $2)").unwrap();
+        let select = query.protobuf.stmts.first().unwrap().stmt.as_ref().unwrap();
+
+        match &select.node {
+            Some(NodeEnum::InsertStmt(stmt)) => {
+                let insert = Insert::new(stmt);
+                assert_eq!(
+                    insert.tuples(),
+                    vec![Tuple {
+                        values: vec![Value::Placeholder(1), Value::Placeholder(2),]
+                    }]
+                )
             }
 
             _ => panic!("not an insert"),

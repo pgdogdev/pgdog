@@ -5,17 +5,36 @@ use pg_query::{
     NodeEnum,
 };
 
-use crate::frontend::router::sharding::{shard_int, shard_str};
+use crate::{
+    frontend::router::sharding::{shard_int, shard_str},
+    net::messages::Bind,
+};
 
 /// A value extracted from a query.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Value<'a> {
     String(&'a str),
     Integer(i64),
     Boolean(bool),
     Null,
+    Placeholder(i32),
 }
 
-impl Value<'_> {
+impl<'a> Value<'a> {
+    /// Extract value from a Bind (F) message and shard on it.
+    pub fn shard_placeholder(&self, bind: &'a Bind, shards: usize) -> Option<usize> {
+        match self {
+            Value::Placeholder(placeholder) => bind
+                .parameter(*placeholder as usize - 1)
+                .ok()
+                .flatten()
+                .map(|value| value.text().map(|value| shard_str(value, shards)))
+                .flatten()
+                .flatten(),
+            _ => self.shard(shards),
+        }
+    }
+
     /// Shard the value given the number of shards in the cluster.
     pub fn shard(&self, shards: usize) -> Option<usize> {
         match self {
@@ -50,6 +69,7 @@ impl<'a> TryFrom<&'a Node> for Value<'a> {
     fn try_from(value: &'a Node) -> Result<Self, Self::Error> {
         match &value.node {
             Some(NodeEnum::AConst(a_const)) => Ok(a_const.into()),
+            Some(NodeEnum::ParamRef(param_ref)) => Ok(Value::Placeholder(param_ref.number)),
             _ => Err(()),
         }
     }

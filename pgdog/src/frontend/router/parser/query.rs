@@ -76,6 +76,7 @@ impl QueryParser {
         }
     }
 
+    /// Get the route currently determined by the parser.
     pub fn route(&self) -> Route {
         match self.command {
             Command::Query(ref route) => route.clone(),
@@ -134,8 +135,11 @@ impl QueryParser {
 
         let mut command = match root.node {
             Some(NodeEnum::SelectStmt(ref stmt)) => {
+                if shard.is_some() {
+                    return Ok(Command::Query(Route::read(shard)));
+                }
                 // `SELECT NOW()`, `SELECT 1`, etc.
-                if ast.tables().is_empty() && shard.is_none() {
+                else if ast.tables().is_empty() {
                     return Ok(Command::Query(Route::read(Some(
                         round_robin::next() % cluster.shards().len(),
                     ))));
@@ -144,7 +148,7 @@ impl QueryParser {
                 }
             }
             Some(NodeEnum::CopyStmt(ref stmt)) => Self::copy(stmt, cluster),
-            Some(NodeEnum::InsertStmt(ref stmt)) => Self::insert(stmt, cluster),
+            Some(NodeEnum::InsertStmt(ref stmt)) => Self::insert(stmt, cluster, &params),
             Some(NodeEnum::UpdateStmt(ref stmt)) => Self::update(stmt),
             Some(NodeEnum::DeleteStmt(ref stmt)) => Self::delete(stmt),
             Some(NodeEnum::TransactionStmt(ref stmt)) => match stmt.kind() {
@@ -302,7 +306,11 @@ impl QueryParser {
         }
     }
 
-    fn insert(stmt: &InsertStmt, cluster: &Cluster) -> Result<Command, Error> {
+    fn insert(
+        stmt: &InsertStmt,
+        cluster: &Cluster,
+        params: &Option<Bind>,
+    ) -> Result<Command, Error> {
         let insert = Insert::new(stmt);
         let columns = insert
             .columns()
@@ -310,16 +318,23 @@ impl QueryParser {
             .map(|column| column.name)
             .collect::<Vec<_>>();
         let table = insert.table().unwrap().name;
+        let num_shards = cluster.shards().len();
 
         let sharding_column = cluster.sharded_column(table, &columns);
         let mut shards = BTreeSet::new();
         if let Some(column) = sharding_column {
             for tuple in insert.tuples() {
                 if let Some(value) = tuple.get(column) {
-                    shards.insert(value.shard(cluster.shards().len()));
+                    shards.insert(if let Some(bind) = params {
+                        value.shard_placeholder(bind, num_shards)
+                    } else {
+                        value.shard(num_shards)
+                    });
                 }
             }
         }
+
+        println!("shards: {:?}", shards);
 
         // TODO: support sending inserts to multiple shards.
         if shards.len() == 1 {
@@ -340,7 +355,7 @@ impl QueryParser {
 
 #[cfg(test)]
 mod test {
-    use crate::net::messages::Protocol;
+    use crate::net::messages::{parse::Parse, Parameter, Protocol};
 
     use super::*;
     use crate::net::messages::Query;
@@ -375,5 +390,38 @@ mod test {
 
         let command = query_parser.parse(&buffer, &cluster).unwrap();
         assert!(matches!(command, &Command::ReplicationMeta));
+    }
+
+    #[test]
+    fn test_insert() {
+        let query = Parse::new_anonymous("INSERT INTO sharded (id, email) VALUES ($1, $2)");
+        let params = Bind {
+            portal: "".into(),
+            statement: "".into(),
+            codes: vec![],
+            params: vec![
+                Parameter {
+                    len: 2,
+                    data: "11".as_bytes().to_vec(),
+                },
+                Parameter {
+                    len: "test@test.com".as_bytes().len() as i32,
+                    data: "test@test.com".as_bytes().to_vec(),
+                },
+            ],
+            results: vec![],
+        };
+        let mut buffer = Buffer::new();
+        buffer.push(query.message().unwrap());
+        buffer.push(params.message().unwrap());
+
+        let mut parser = QueryParser::default();
+        let cluster = Cluster::new_test();
+        let command = parser.parse(&buffer, &cluster).unwrap();
+        if let Command::Query(route) = command {
+            assert_eq!(route.shard(), Some(1));
+        } else {
+            panic!("not a route");
+        }
     }
 }
