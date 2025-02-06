@@ -334,8 +334,6 @@ impl QueryParser {
             }
         }
 
-        println!("shards: {:?}", shards);
-
         // TODO: support sending inserts to multiple shards.
         if shards.len() == 1 {
             Ok(Command::Query(Route::write(shards.pop_last().unwrap())))
