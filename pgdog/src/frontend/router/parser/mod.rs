@@ -3,6 +3,7 @@
 pub mod column;
 pub mod comment;
 pub mod copy;
+pub mod csv;
 pub mod csv_buffer;
 pub mod error;
 pub mod insert;
