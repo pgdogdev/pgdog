@@ -78,7 +78,7 @@ impl Monitor {
         let (delay, replication_mode) = {
             let lock = pool.lock();
             let config = lock.config();
-            (config.idle_healtcheck_delay(), config.replication_mode)
+            (config.idle_healthcheck_delay(), config.replication_mode)
         };
 
         if !replication_mode {
@@ -279,7 +279,7 @@ impl Monitor {
                 pool.clone(),
                 healthcheck_timeout,
             )
-            .healtcheck()
+            .healthcheck()
             .await?;
 
             Ok(())
@@ -298,7 +298,7 @@ impl Monitor {
                 }
             }
 
-            Err(Error::HealtcheckError)
+            Err(Error::HealthcheckError)
         }
     }
 }

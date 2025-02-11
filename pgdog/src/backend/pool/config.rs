@@ -84,7 +84,7 @@ impl Config {
     }
 
     /// Idle healtcheck delay.
-    pub fn idle_healtcheck_delay(&self) -> Duration {
+    pub fn idle_healthcheck_delay(&self) -> Duration {
         Duration::from_millis(self.idle_healthcheck_delay)
     }
 

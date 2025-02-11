@@ -24,11 +24,11 @@ pub enum Error {
     #[error("pool is banned")]
     Banned,
 
-    #[error("healtcheck timeout")]
-    HealtcheckTimeout,
+    #[error("healthcheck timeout")]
+    HealthcheckTimeout,
 
-    #[error("healtcheck error")]
-    HealtcheckError,
+    #[error("healthcheck error")]
+    HealthcheckError,
 
     #[error("pool is shut down")]
     Offline,

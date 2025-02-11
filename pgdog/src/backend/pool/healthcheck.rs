@@ -37,7 +37,7 @@ impl Healtcheck {
     }
 
     /// Perform the healtcheck if it's required.
-    pub async fn healtcheck(mut self) -> Result<Guard, Error> {
+    pub async fn healthcheck(mut self) -> Result<Guard, Error> {
         let healtcheck_age = self.conn.healthcheck_age(Instant::now());
 
         if healtcheck_age < self.healthcheck_interval {
@@ -48,14 +48,14 @@ impl Healtcheck {
             Ok(Ok(())) => Ok(self.conn),
             Ok(Err(err)) => {
                 drop(self.conn); // Check the connection in first.
-                self.pool.ban(Error::HealtcheckError);
+                self.pool.ban(Error::HealthcheckError);
                 error!("server error: {} [{}]", err, self.pool.addr());
                 Err(Error::ServerError)
             }
             Err(_) => {
                 drop(self.conn); // Check the connection in first.
-                self.pool.ban(Error::HealtcheckTimeout);
-                Err(Error::HealtcheckError)
+                self.pool.ban(Error::HealthcheckTimeout);
+                Err(Error::HealthcheckError)
             }
         }
     }

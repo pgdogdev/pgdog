@@ -5,7 +5,6 @@ use std::time::{Duration, Instant};
 
 use parking_lot::{lock_api::MutexGuard, Mutex, RawMutex};
 use tokio::select;
-use tokio::sync::Notify;
 use tokio::time::sleep;
 use tracing::{error, info};
 
@@ -13,83 +12,9 @@ use crate::backend::Server;
 use crate::net::messages::BackendKeyData;
 use crate::net::Parameter;
 
-use super::{Address, Ban, Config, Error, Guard, Healtcheck, Inner, Monitor, PoolConfig};
-
-/// Mapping between a client and a server.
-#[derive(Debug, Copy, Clone, PartialEq, Default)]
-pub(super) struct Mapping {
-    /// Client ID.
-    pub(super) client: BackendKeyData,
-    /// Server ID.
-    pub(super) server: BackendKeyData,
-}
-
-/// Internal pool notifications.
-pub(super) struct Comms {
-    /// An idle connection is available in the pool.
-    pub(super) ready: Notify,
-    /// A client requests a new connection to be open
-    /// or waiting for one to be returned to the pool.
-    pub(super) request: Notify,
-    /// Pool is shutting down.
-    pub(super) shutdown: Notify,
-}
-
-impl Comms {
-    /// Create new comms.
-    pub(super) fn new() -> Self {
-        Self {
-            ready: Notify::new(),
-            request: Notify::new(),
-            shutdown: Notify::new(),
-        }
-    }
-}
-
-/// Pool state.
-pub struct State {
-    /// Number of connections checked out.
-    pub checked_out: usize,
-    /// Number of idle connections.
-    pub idle: usize,
-    /// Total number of connections managed by the pool.
-    pub total: usize,
-    /// Is the pool online?
-    pub online: bool,
-    /// Pool has no idle connections.
-    pub empty: bool,
-    /// Pool configuration.
-    pub config: Config,
-    /// The pool is paused.
-    pub paused: bool,
-    /// Number of clients waiting for a connection.
-    pub waiting: usize,
-    /// Pool ban.
-    pub ban: Option<Ban>,
-    /// Pool is banned.
-    pub banned: bool,
-    /// Errors.
-    pub errors: usize,
-    /// Out of sync
-    pub out_of_sync: usize,
-}
-
-struct Waiting {
-    pool: Pool,
-}
-
-impl Waiting {
-    fn new(pool: Pool) -> Self {
-        pool.lock().waiting += 1;
-        Self { pool }
-    }
-}
-
-impl Drop for Waiting {
-    fn drop(&mut self) {
-        self.pool.lock().waiting -= 1;
-    }
-}
+use super::{
+    Address, Comms, Config, Error, Guard, Healtcheck, Inner, Monitor, PoolConfig, State, Waiting,
+};
 
 /// Connection pool.
 pub struct Pool {
@@ -201,7 +126,7 @@ impl Pool {
             healthcheck_timeout,
         );
 
-        healthcheck.healtcheck().await
+        healthcheck.healthcheck().await
     }
 
     /// Create new identical connection pool.
@@ -315,6 +240,7 @@ impl Pool {
     }
 
     /// Pool address.
+    #[inline]
     pub fn addr(&self) -> &Address {
         &self.addr
     }
@@ -347,22 +273,7 @@ impl Pool {
 
     /// Pool state.
     pub fn state(&self) -> State {
-        let guard = self.lock();
-
-        State {
-            checked_out: guard.checked_out(),
-            idle: guard.idle(),
-            total: guard.total(),
-            online: guard.online,
-            empty: guard.idle() == 0,
-            config: guard.config,
-            paused: guard.paused,
-            waiting: guard.waiting,
-            ban: guard.ban,
-            banned: guard.ban.is_some(),
-            errors: guard.errors,
-            out_of_sync: guard.out_of_sync,
-        }
+        State::get(self)
     }
 
     /// Update pool configuration.
