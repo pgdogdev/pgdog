@@ -7,6 +7,7 @@ pub use iterator::Iter;
 pub use record::Record;
 
 /// CSV reader that can handle partial inputs.
+#[derive(Debug, Clone)]
 pub struct CsvStream {
     /// Input buffer.
     buffer: Vec<u8>,
@@ -80,7 +81,8 @@ impl CsvStream {
                 }
 
                 ReadRecordResult::Record => {
-                    let record = Record::new(&self.record[..written], &self.ends[..ends]);
+                    let record =
+                        Record::new(&self.record[..written], &self.ends[..ends], self.delimiter);
                     self.read += read;
                     self.record.clear();
 

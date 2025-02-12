@@ -18,6 +18,7 @@ pub mod where_clause;
 
 pub use column::Column;
 pub use copy::CopyParser;
+pub use csv::{CsvStream, Record};
 pub use csv_buffer::CsvBuffer;
 pub use error::Error;
 pub use insert::Insert;
