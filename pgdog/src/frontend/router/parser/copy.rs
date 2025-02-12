@@ -48,7 +48,7 @@ pub struct CopyParser {
     pub columns: usize,
     /// This is a COPY coming from the server.
     pub is_from: bool,
-
+    /// CSV parser that can handle incomplete records.
     csv_stream: CsvStream,
 }
 
