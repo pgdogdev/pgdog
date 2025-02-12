@@ -223,5 +223,16 @@ mod test {
         assert_eq!(sharded[0].message().data(), b"id,value\n");
         assert_eq!(sharded[1].message().data(), b"5,hello world\n");
         assert_eq!(sharded[2].message().data(), b"10,howdy mate\n");
+
+        let partial_one = CopyData::new("11,howdy partner".as_bytes());
+        let partial_two = CopyData::new("\n1,2".as_bytes());
+        let partial_three = CopyData::new("\n".as_bytes());
+
+        let sharded = copy.shard(vec![partial_one]).unwrap();
+        assert!(sharded.is_empty());
+        let sharded = copy.shard(vec![partial_two]).unwrap();
+        assert_eq!(sharded[0].message().data(), b"11,howdy partner\n");
+        let sharded = copy.shard(vec![partial_three]).unwrap();
+        assert_eq!(sharded[0].message().data(), b"1,2\n");
     }
 }
