@@ -3,7 +3,7 @@
 pub mod column;
 pub mod comment;
 pub mod copy;
-pub mod csv_buffer;
+pub mod csv;
 pub mod error;
 pub mod insert;
 pub mod key;
@@ -17,7 +17,7 @@ pub mod where_clause;
 
 pub use column::Column;
 pub use copy::CopyParser;
-pub use csv_buffer::CsvBuffer;
+pub use csv::{CsvStream, Record};
 pub use error::Error;
 pub use insert::Insert;
 pub use key::Key;

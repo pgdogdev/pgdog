@@ -14,9 +14,6 @@ pub enum Error {
     NoShardingColumn,
 
     #[error("{0}")]
-    Csv(#[from] csv::Error),
-
-    #[error("{0}")]
     Net(#[from] crate::net::Error),
 
     #[error("empty query")]
@@ -30,4 +27,7 @@ pub enum Error {
 
     #[error("copy out of sync")]
     CopyOutOfSync,
+
+    #[error("exceeded maximum number of rows in CSV parser")]
+    MaxCsvParserRows,
 }

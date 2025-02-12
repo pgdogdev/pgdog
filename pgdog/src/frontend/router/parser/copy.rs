@@ -1,6 +1,5 @@
 //! Parse COPY statement.
 
-use csv::ReaderBuilder;
 use pg_query::{protobuf::CopyStmt, NodeEnum};
 
 use crate::{
@@ -9,7 +8,7 @@ use crate::{
     net::messages::CopyData,
 };
 
-use super::{CsvBuffer, Error};
+use super::{CsvStream, Error};
 
 /// Copy information parsed from a COPY statement.
 #[derive(Debug, Clone)]
@@ -45,12 +44,12 @@ pub struct CopyParser {
     pub shards: usize,
     /// Which column is used for sharding.
     pub sharded_column: Option<usize>,
-    /// Buffer incomplete messages.
-    pub buffer: CsvBuffer,
     /// Number of columns
     pub columns: usize,
     /// This is a COPY coming from the server.
     pub is_from: bool,
+    /// CSV parser that can handle incomplete records.
+    csv_stream: CsvStream,
 }
 
 impl Default for CopyParser {
@@ -60,9 +59,9 @@ impl Default for CopyParser {
             delimiter: None,
             sharded_column: None,
             shards: 1,
-            buffer: CsvBuffer::new(),
             columns: 0,
             is_from: false,
+            csv_stream: CsvStream::new(',', false),
         }
     }
 }
@@ -122,12 +121,14 @@ impl CopyParser {
             }
         }
 
+        parser.csv_stream = CsvStream::new(parser.delimiter(), parser.headers);
+
         Ok(Some(parser))
     }
 
     #[inline]
-    fn delimiter(&self) -> u8 {
-        self.delimiter.unwrap_or('\t') as u8
+    fn delimiter(&self) -> char {
+        self.delimiter.unwrap_or('\t')
     }
 
     /// Split CopyData (F) messages into multiple CopyData (F) messages
@@ -136,51 +137,30 @@ impl CopyParser {
         let mut rows = vec![];
 
         for row in data {
-            self.buffer.add(row.data());
-            let data = self.buffer.read();
-
-            let mut csv = ReaderBuilder::new()
-                .has_headers(self.headers)
-                .delimiter(self.delimiter())
-                .from_reader(data);
+            self.csv_stream.write(row.data());
 
             if self.headers && self.is_from {
-                let headers = csv
-                    .headers()?
-                    .into_iter()
-                    .collect::<Vec<_>>()
-                    .join((self.delimiter() as char).to_string().as_str())
-                    + "\n";
-                rows.push(CopyRow::new(headers.as_bytes(), None));
+                let headers = self.csv_stream.headers()?;
+                if let Some(headers) = headers {
+                    rows.push(CopyRow::new(headers.to_string().as_bytes(), None));
+                }
                 self.headers = false;
             }
 
-            for record in csv.records() {
+            for record in self.csv_stream.records() {
                 // Totally broken.
                 let record = record?;
 
                 let shard = if let Some(sharding_column) = self.sharded_column {
-                    let key = record
-                        .iter()
-                        .nth(sharding_column)
-                        .ok_or(Error::NoShardingColumn)?;
+                    let key = record.get(sharding_column).ok_or(Error::NoShardingColumn)?;
 
                     shard_str(key, self.shards)
                 } else {
                     None
                 };
 
-                if let Some(pos) = record.position() {
-                    let start = pos.byte() as usize;
-                    let record = self.buffer.record(start);
-
-                    if let Some(data) = record {
-                        rows.push(CopyRow::new(data, shard));
-                    }
-                }
+                rows.push(CopyRow::new(record.to_string().as_bytes(), shard));
             }
-
-            self.buffer.clear();
         }
 
         Ok(rows)
@@ -207,7 +187,7 @@ mod test {
             .unwrap()
             .unwrap();
 
-        assert_eq!(copy.delimiter(), b'\t');
+        assert_eq!(copy.delimiter(), '\t');
         assert!(!copy.headers);
 
         let one = CopyData::new("5\thello world\n".as_bytes());
@@ -232,7 +212,7 @@ mod test {
             .unwrap();
         assert!(copy.is_from);
 
-        assert_eq!(copy.delimiter(), b',');
+        assert_eq!(copy.delimiter(), ',');
         assert!(copy.headers);
 
         let header = CopyData::new("id,value\n".as_bytes());
@@ -243,5 +223,16 @@ mod test {
         assert_eq!(sharded[0].message().data(), b"id,value\n");
         assert_eq!(sharded[1].message().data(), b"5,hello world\n");
         assert_eq!(sharded[2].message().data(), b"10,howdy mate\n");
+
+        let partial_one = CopyData::new("11,howdy partner".as_bytes());
+        let partial_two = CopyData::new("\n1,2".as_bytes());
+        let partial_three = CopyData::new("\n".as_bytes());
+
+        let sharded = copy.shard(vec![partial_one]).unwrap();
+        assert!(sharded.is_empty());
+        let sharded = copy.shard(vec![partial_two]).unwrap();
+        assert_eq!(sharded[0].message().data(), b"11,howdy partner\n");
+        let sharded = copy.shard(vec![partial_three]).unwrap();
+        assert_eq!(sharded[0].message().data(), b"1,2\n");
     }
 }
