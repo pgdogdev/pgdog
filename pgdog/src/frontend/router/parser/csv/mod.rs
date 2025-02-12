@@ -16,20 +16,36 @@ pub struct CsvStream {
     ends: Vec<usize>,
     /// CSV reader.
     reader: Reader,
+    /// Number of bytes read so far.
+    read: usize,
+    /// CSV deliminter.
+    delimiter: char,
+    /// First record are headers.
+    headers: bool,
+    /// Read headers.
+    headers_record: Option<Record>,
 }
 
 impl CsvStream {
     /// Create new CSV stream reader.
-    pub fn new(delimiter: char) -> Self {
+    pub fn new(delimiter: char, headers: bool) -> Self {
         Self {
             buffer: Vec::new(),
             record: Vec::new(),
             ends: vec![0usize; 2048],
-            reader: ReaderBuilder::new()
-                .delimiter(delimiter as u8)
-                .double_quote(true)
-                .build(),
+            reader: Self::reader(delimiter),
+            read: 0,
+            delimiter,
+            headers,
+            headers_record: None,
         }
+    }
+
+    fn reader(delimiter: char) -> Reader {
+        ReaderBuilder::new()
+            .delimiter(delimiter as u8)
+            .double_quote(true)
+            .build()
     }
 
     /// Write some data to the CSV stream.
@@ -42,11 +58,13 @@ impl CsvStream {
 
     /// Fetch a record from the stream. This mutates the inner buffer,
     /// so you can only fetch the record once.
-    pub fn record(&mut self) -> Option<Record> {
+    pub fn record(&mut self) -> Result<Option<Record>, super::Error> {
         loop {
-            let (result, read, written, ends) =
-                self.reader
-                    .read_record(&self.buffer, &mut self.record, &mut self.ends);
+            let (result, read, written, ends) = self.reader.read_record(
+                &self.buffer[self.read..],
+                &mut self.record,
+                &mut self.ends,
+            );
 
             match result {
                 ReadRecordResult::OutputFull => {
@@ -55,18 +73,26 @@ impl CsvStream {
 
                 // Data incomplete.
                 ReadRecordResult::InputEmpty | ReadRecordResult::End => {
-                    return None;
+                    self.buffer = Vec::from(&self.buffer[self.read..]);
+                    self.read = 0;
+                    self.reader = Self::reader(self.delimiter);
+                    return Ok(None);
                 }
 
                 ReadRecordResult::Record => {
                     let record = Record::new(&self.record[..written], &self.ends[..ends]);
+                    self.read += read;
                     self.record.clear();
-                    self.buffer = Vec::from(&self.buffer[read..]);
-                    return Some(record);
+
+                    if self.headers && self.headers_record.is_none() {
+                        self.headers_record = Some(record);
+                    } else {
+                        return Ok(Some(record));
+                    }
                 }
 
                 ReadRecordResult::OutputEndsFull => {
-                    self.ends.resize(self.ends.len() * 2 + 1, 0usize);
+                    return Err(super::Error::MaxCsvParserRows);
                 }
             }
         }
@@ -76,6 +102,22 @@ impl CsvStream {
     pub fn records(&mut self) -> Iter<'_> {
         Iter::new(self)
     }
+
+    /// Get headers from the CSV, if any.
+    pub fn headers(&mut self) -> Result<Option<&Record>, super::Error> {
+        if self.headers {
+            if let Some(ref headers) = self.headers_record {
+                return Ok(Some(headers));
+            } else {
+                self.record()?;
+                if let Some(ref headers) = self.headers_record {
+                    return Ok(Some(headers));
+                }
+            }
+        }
+
+        Ok(None)
+    }
 }
 
 #[cfg(test)]
@@ -83,19 +125,40 @@ mod test {
     use super::CsvStream;
 
     #[test]
-    fn test_csv() {
-        let csv = "on,two,three\none,two";
-        let mut reader = CsvStream::new(',');
+    fn test_csv_stream() {
+        let csv = "one,two,three\nfour,five,six\nseven,eight";
+        let mut reader = CsvStream::new(',', false);
         reader.write(csv.as_bytes());
-        let record = reader.record().unwrap();
-        assert_eq!(record.get(0), Some("on"));
+
+        let record = reader.record().unwrap().unwrap();
+        assert_eq!(record.get(0), Some("one"));
         assert_eq!(record.get(1), Some("two"));
         assert_eq!(record.get(2), Some("three"));
 
-        reader.write(",four\n".as_bytes());
-        let record = reader.record().unwrap();
-        assert_eq!(record.get(2), Some("four"));
+        let record = reader.record().unwrap().unwrap();
+        assert_eq!(record.get(0), Some("four"));
+        assert_eq!(record.get(1), Some("five"));
+        assert_eq!(record.get(2), Some("six"));
 
-        assert!(reader.record().is_none());
+        assert!(reader.record().unwrap().is_none());
+
+        reader.write(",nine\n".as_bytes());
+
+        let record = reader.record().unwrap().unwrap();
+        assert_eq!(record.get(0), Some("seven"));
+        assert_eq!(record.get(1), Some("eight"));
+        assert_eq!(record.get(2), Some("nine"));
+
+        assert!(reader.record().unwrap().is_none());
+    }
+
+    #[test]
+    fn test_csv_stream_with_headers() {
+        let csv = "column_a,column_b,column_c\n1,2,3\n";
+        let mut reader = CsvStream::new(',', true);
+        reader.write(csv.as_bytes());
+        let record = reader.record().unwrap().unwrap();
+        assert_eq!(reader.headers().unwrap().unwrap().get(0), Some("column_a"));
+        assert_eq!(record.get(0), Some("1"));
     }
 }

@@ -30,4 +30,7 @@ pub enum Error {
 
     #[error("copy out of sync")]
     CopyOutOfSync,
+
+    #[error("exceeded maximum number of rows in CSV parser")]
+    MaxCsvParserRows,
 }
