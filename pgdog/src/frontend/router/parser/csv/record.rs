@@ -22,11 +22,10 @@ impl std::fmt::Debug for Record {
 
 impl std::fmt::Display for Record {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
+        writeln!(
             f,
-            "{}\n",
+            "{}",
             (0..self.len())
-                .into_iter()
                 .map(|field| self.get(field).unwrap())
                 .collect::<Vec<&str>>()
                 .join(&format!("{}", self.delimiter))
@@ -63,7 +62,6 @@ impl Record {
         self.fields
             .get(index)
             .cloned()
-            .map(|range| from_utf8(&self.data[range]).ok())
-            .flatten()
+            .and_then(|range| from_utf8(&self.data[range]).ok())
     }
 }

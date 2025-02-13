@@ -53,8 +53,8 @@ impl ConfigAndUsers {
     /// Load from database URLs.
     pub fn from_urls(urls: &[String]) -> Result<Self, Error> {
         let urls = urls
-            .into_iter()
-            .map(|url| Url::parse(&url))
+            .iter()
+            .map(|url| Url::parse(url))
             .collect::<Result<Vec<Url>, url::ParseError>>()?;
         let databases = urls
             .iter()

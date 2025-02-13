@@ -28,8 +28,7 @@ impl<'a> Value<'a> {
                 .parameter(*placeholder as usize - 1)
                 .ok()
                 .flatten()
-                .map(|value| value.text().map(|value| shard_str(value, shards)))
-                .flatten()
+                .and_then(|value| value.text().map(|value| shard_str(value, shards)))
                 .flatten(),
             _ => self.shard(shards),
         }
