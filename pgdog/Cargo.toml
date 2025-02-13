@@ -39,6 +39,7 @@ csv-core = "0.1"
 pg_query = "6"
 regex = "1"
 uuid = { version = "1", features = ["v4"] }
+url = "2"
 
 [build-dependencies]
 cc = "1"

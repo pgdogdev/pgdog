@@ -1,6 +1,7 @@
 //! Configuration.
 
 pub mod error;
+pub mod url;
 
 use error::Error;
 
@@ -28,6 +29,13 @@ pub fn config() -> Arc<ConfigAndUsers> {
 /// Load the configuration file from disk.
 pub fn load(config: &PathBuf, users: &PathBuf) -> Result<ConfigAndUsers, Error> {
     let config = ConfigAndUsers::load(config, users)?;
+    CONFIG.store(Arc::new(config.clone()));
+    Ok(config)
+}
+
+/// Load configuration from a list of database URLs.
+pub fn from_urls(urls: &[String]) -> Result<ConfigAndUsers, Error> {
+    let config = ConfigAndUsers::from_urls(urls)?;
     CONFIG.store(Arc::new(config.clone()));
     Ok(config)
 }
@@ -158,7 +166,7 @@ impl Config {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct General {
     /// Run on this address.
     #[serde(default = "General::host")]
@@ -203,6 +211,28 @@ pub struct General {
     /// Shutdown timeout.
     #[serde(default = "General::default_shutdown_timeout")]
     pub shutdown_timeout: u64,
+}
+
+impl Default for General {
+    fn default() -> Self {
+        Self {
+            host: Self::host(),
+            port: Self::port(),
+            workers: Self::workers(),
+            default_pool_size: Self::default_pool_size(),
+            min_pool_size: Self::min_pool_size(),
+            pooler_mode: PoolerMode::default(),
+            healthcheck_interval: Self::healthcheck_interval(),
+            idle_healthcheck_interval: Self::idle_healthcheck_interval(),
+            idle_healthcheck_delay: Self::idle_healthcheck_delay(),
+            ban_timeout: Self::ban_timeout(),
+            rollback_timeout: Self::rollback_timeout(),
+            load_balancing_strategy: Self::load_balancing_strategy(),
+            tls_certificate: None,
+            tls_private_key: None,
+            shutdown_timeout: Self::default_shutdown_timeout(),
+        }
+    }
 }
 
 impl General {
@@ -274,7 +304,7 @@ impl General {
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Stats {}
 
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Copy)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Copy, Eq, Ord, PartialOrd)]
 #[serde(rename_all = "snake_case")]
 pub enum PoolerMode {
     #[default]
@@ -292,7 +322,7 @@ pub enum LoadBalancingStrategy {
 }
 
 /// Database server proxied by pgDog.
-#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Ord, PartialOrd, Eq)]
 pub struct Database {
     /// Database name visible to the clients.
     pub name: String,
@@ -329,7 +359,7 @@ impl Database {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Ord, PartialOrd, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Role {
     #[default]
@@ -367,7 +397,7 @@ impl Users {
 }
 
 /// User allowed to connect to pgDog.
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, Ord, PartialOrd)]
 pub struct User {
     /// User name.
     pub name: String,

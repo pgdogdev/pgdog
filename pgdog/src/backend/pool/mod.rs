@@ -39,4 +39,4 @@ use mapping::Mapping;
 use waiting::Waiting;
 
 #[cfg(test)]
-mod test;
+pub mod test;

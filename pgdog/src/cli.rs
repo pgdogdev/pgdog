@@ -13,6 +13,9 @@ pub struct Cli {
     /// Path to the users.toml file. Default: "users.toml"
     #[arg(short, long, default_value = "users.toml")]
     pub users: PathBuf,
+    /// Connection URL.
+    #[arg(short, long)]
+    pub database_url: Option<Vec<String>>,
     /// Subcommand.
     #[command(subcommand)]
     pub command: Option<Commands>,
@@ -30,6 +33,8 @@ pub enum Commands {
         #[arg(short, long)]
         path: Option<PathBuf>,
     },
+
+    Schema,
 }
 
 /// Fingerprint some queries.

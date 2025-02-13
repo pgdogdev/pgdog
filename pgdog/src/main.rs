@@ -55,12 +55,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             exit(0);
         }
 
+        Some(Commands::Schema) => (),
+
         None | Some(Commands::Run) => (),
     }
 
     info!("🐕 pgDog {}", env!("CARGO_PKG_VERSION"));
 
-    let config = config::load(&args.config, &args.users)?;
+    let config = if let Some(database_urls) = args.database_url {
+        config::from_urls(&database_urls)?
+    } else {
+        config::load(&args.config, &args.users)?
+    };
 
     plugin::load_from_config()?;
 
