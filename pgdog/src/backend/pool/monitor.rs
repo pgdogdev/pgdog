@@ -118,7 +118,9 @@ impl Monitor {
 
                     if idle > 0 {
                         comms.ready.notify_waiters();
-                    } else if should_create {
+                    }
+
+                    if should_create {
                         self.pool.lock().creating();
                         let ok = self.replenish(connect_timeout).await;
                         if ok {

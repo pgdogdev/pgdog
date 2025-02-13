@@ -49,6 +49,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     logger();
 
+    let mut overrides = config::Overrides::default();
+
     match args.command {
         Some(Commands::Fingerprint { query, path }) => {
             cli::fingerprint(query, path)?;
@@ -57,7 +59,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         Some(Commands::Schema) => (),
 
-        None | Some(Commands::Run) => (),
+        Some(Commands::Run {
+            pool_size,
+            min_pool_size,
+            session_mode,
+        }) => {
+            overrides = config::Overrides {
+                min_pool_size,
+                session_mode,
+                default_pool_size: pool_size,
+            };
+        }
+
+        None => (),
     }
 
     info!("🐕 pgDog {}", env!("CARGO_PKG_VERSION"));
@@ -67,6 +81,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         config::load(&args.config, &args.users)?
     };
+
+    config::overrides(overrides);
 
     plugin::load_from_config()?;
 

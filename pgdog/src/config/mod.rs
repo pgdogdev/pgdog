@@ -1,9 +1,11 @@
 //! Configuration.
 
 pub mod error;
+pub mod overrides;
 pub mod url;
 
 use error::Error;
+pub use overrides::Overrides;
 
 use std::fs::read_to_string;
 use std::sync::Arc;
@@ -38,6 +40,30 @@ pub fn from_urls(urls: &[String]) -> Result<ConfigAndUsers, Error> {
     let config = ConfigAndUsers::from_urls(urls)?;
     CONFIG.store(Arc::new(config.clone()));
     Ok(config)
+}
+
+/// Override some settings.
+pub fn overrides(overrides: Overrides) {
+    let mut config = (*config()).clone();
+    let Overrides {
+        default_pool_size,
+        min_pool_size,
+        session_mode,
+    } = overrides;
+
+    if let Some(default_pool_size) = default_pool_size {
+        config.config.general.default_pool_size = default_pool_size;
+    }
+
+    if let Some(min_pool_size) = min_pool_size {
+        config.config.general.min_pool_size = min_pool_size;
+    }
+
+    if let Some(true) = session_mode {
+        config.config.general.pooler_mode = PoolerMode::Session;
+    }
+
+    CONFIG.store(Arc::new(config));
 }
 
 /// pgdog.toml and users.toml.

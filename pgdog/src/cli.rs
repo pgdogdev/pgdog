@@ -24,7 +24,19 @@ pub struct Cli {
 #[derive(Subcommand, Debug)]
 pub enum Commands {
     /// Run pgDog.
-    Run,
+    Run {
+        /// Size of the connection pool.
+        #[arg(short, long)]
+        pool_size: Option<usize>,
+
+        /// Minimum number of idle connectios to maintain open.
+        #[arg(short, long)]
+        min_pool_size: Option<usize>,
+
+        /// Run the pooler in session mode.
+        #[arg(short, long)]
+        session_mode: Option<bool>,
+    },
 
     /// Fingerprint a query.
     Fingerprint {
