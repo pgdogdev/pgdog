@@ -15,7 +15,7 @@ use super::*;
 
 mod replica;
 
-fn pool() -> Pool {
+pub fn pool() -> Pool {
     let config = Config {
         max: 1,
         min: 1,

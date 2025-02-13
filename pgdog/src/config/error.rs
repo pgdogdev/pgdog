@@ -13,6 +13,9 @@ pub enum Error {
 
     #[error("{0}, line {1}")]
     MissingField(String, usize),
+
+    #[error("{0}")]
+    Url(#[from] url::ParseError),
 }
 
 impl Error {

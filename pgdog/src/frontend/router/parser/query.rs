@@ -32,7 +32,7 @@ static REPLICATION_REGEX: Lazy<Regex> = Lazy::new(|| {
 #[derive(Debug, Clone)]
 pub enum Command {
     Query(Route),
-    Copy(CopyParser),
+    Copy(Box<CopyParser>),
     StartTransaction(std::string::String),
     CommitTransaction,
     RollbackTransaction,
@@ -300,7 +300,7 @@ impl QueryParser {
     fn copy(stmt: &CopyStmt, cluster: &Cluster) -> Result<Command, Error> {
         let parser = CopyParser::new(stmt, cluster)?;
         if let Some(parser) = parser {
-            Ok(Command::Copy(parser))
+            Ok(Command::Copy(Box::new(parser)))
         } else {
             Ok(Command::Query(Route::write(None)))
         }

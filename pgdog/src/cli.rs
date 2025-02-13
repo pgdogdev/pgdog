@@ -13,6 +13,9 @@ pub struct Cli {
     /// Path to the users.toml file. Default: "users.toml"
     #[arg(short, long, default_value = "users.toml")]
     pub users: PathBuf,
+    /// Connection URL.
+    #[arg(short, long)]
+    pub database_url: Option<Vec<String>>,
     /// Subcommand.
     #[command(subcommand)]
     pub command: Option<Commands>,
@@ -21,7 +24,19 @@ pub struct Cli {
 #[derive(Subcommand, Debug)]
 pub enum Commands {
     /// Run pgDog.
-    Run,
+    Run {
+        /// Size of the connection pool.
+        #[arg(short, long)]
+        pool_size: Option<usize>,
+
+        /// Minimum number of idle connectios to maintain open.
+        #[arg(short, long)]
+        min_pool_size: Option<usize>,
+
+        /// Run the pooler in session mode.
+        #[arg(short, long)]
+        session_mode: Option<bool>,
+    },
 
     /// Fingerprint a query.
     Fingerprint {
@@ -30,6 +45,8 @@ pub enum Commands {
         #[arg(short, long)]
         path: Option<PathBuf>,
     },
+
+    Schema,
 }
 
 /// Fingerprint some queries.
