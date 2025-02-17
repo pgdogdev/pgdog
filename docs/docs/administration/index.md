@@ -18,6 +18,7 @@ The admin database name is [configurable](../configuration/pgdog.toml/admin.md).
 | [`SHOW SERVERS`](servers.md) | Server connections made by PgDog to PostgreSQL. |
 | [`SHOW POOLS`](pools.md) | Connection pools used to multiplex clients and servers. |
 | [`SHOW CONFIG`](config.md) | Currently loaded values from `pgdog.toml`. |
+| `SHOW PEERS` | List of PgDog processes running on the same network. Requires service discovery to be enabled. |
 | `RELOAD` | Reload configuration from disk. See [pgdog.toml](../configuration/pgdog.toml/general.md) and [users.toml](../configuration/users.toml/users.md) for which options can be changed at runtime. |
 | `RECONNECT` | Re-create all server connections using existing configuration. |
 | `PAUSE` | Pause all pools. Clients will wait for connections until pools are resumed. Can be used for gracefully restarting PostgreSQL servers. |
