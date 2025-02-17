@@ -1,19 +1,22 @@
+//! Service discovery listener.
+
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
-use tokio::spawn;
-
 use rand::Rng;
+use tracing::{debug, error, info};
+
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::SystemTime;
+
 use tokio::net::UdpSocket;
-use tokio::select;
 use tokio::time::{interval, Duration};
-use tracing::{debug, error, info};
+use tokio::{select, spawn};
 
 use super::{Error, Message};
 
+/// Service discovery listener.
 #[derive(Clone, Debug)]
 pub struct Listener {
     id: u64,
@@ -73,14 +76,17 @@ impl Listener {
                 result = socket.recv_from(&mut buf) => {
                     let (len, addr) = result?;
                     let message = Message::from_bytes(&buf[..len]).ok();
+                    let now = SystemTime::now();
+
                     if let Some(message) = message {
                         debug!("{}: {:#?}", addr, message);
-                        self.inner.lock().peers.insert(addr, SystemTime::now());
+                        self.inner.lock().peers.insert(addr, now);
                     }
                 }
 
                 _ = interval.tick() => {
-                    socket.send_to(&Message::healthcheck(self.id).to_bytes()?, format!("{}:{}", address, port)).await?;
+                    let healthcheck = Message::healthcheck(self.id).to_bytes()?;
+                    socket.send_to(&healthcheck, format!("{}:{}", address, port)).await?;
                     debug!("healtcheck");
                 }
             }

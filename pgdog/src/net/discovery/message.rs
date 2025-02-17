@@ -4,7 +4,6 @@ use serde::{Deserialize, Serialize};
 /// Message kind.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum Payload {
-    Startup,
     Healthcheck,
 }
 
@@ -28,6 +27,7 @@ impl Message {
         Message::deserialize(&mut Deserializer::new(buf))
     }
 
+    /// Healtcheck message.
     pub fn healthcheck(node_id: u64) -> Self {
         Self {
             node_id,
