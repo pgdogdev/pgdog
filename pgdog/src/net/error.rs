@@ -17,7 +17,7 @@ pub enum Error {
     #[error("connection is not sending messages")]
     ConnectionDown,
 
-    #[error("unexpected message, expected {0} got {0}")]
+    #[error("unexpected message, expected {0} got {1}")]
     UnexpectedMessage(char, char),
 
     #[error("unexpected payload")]

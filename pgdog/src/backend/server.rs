@@ -11,11 +11,11 @@ use tokio::{
     net::TcpStream,
     spawn,
 };
-use tracing::{debug, info, trace};
+use tracing::{debug, info, trace, warn};
 
 use super::{pool::Address, Error, Stats};
 use crate::net::{
-    messages::{parse::Parse, Flush},
+    messages::{parse::Parse, Flush, NoticeResponse},
     parameter::Parameters,
     tls::connector,
     Parameter, Stream,
@@ -136,11 +136,16 @@ impl Server {
                 'K' => {
                     key_data = Some(BackendKeyData::from_bytes(message.payload())?);
                 }
-
+                // ErrorResponse (B)
                 'E' => {
                     return Err(Error::ConnectionError(ErrorResponse::from_bytes(
                         message.to_bytes()?,
                     )?));
+                }
+                // NoticeResponse (B)
+                'N' => {
+                    let notice = NoticeResponse::from_bytes(message.payload())?;
+                    warn!("{}", notice.message);
                 }
 
                 code => return Err(Error::UnexpectedMessage(code)),

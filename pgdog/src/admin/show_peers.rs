@@ -1,4 +1,10 @@
 //! SHOW PEERS command.
+//!
+//! If there are other instances of PgDog running
+//! on the same network, they will be shown here.
+//!
+//! See [`crate::net::discovery`] for how this works.
+//!
 
 use std::time::{Duration, SystemTime};
 
@@ -27,11 +33,8 @@ impl Command for ShowPeers {
         let listener = Listener::get();
         let peers = listener.peers();
 
-        let mut rows = vec![RowDescription::new(&[
-            Field::text("addr"),
-            Field::text("last_message"),
-        ])
-        .message()?];
+        let mut rows =
+            vec![RowDescription::new(&[Field::text("addr"), Field::text("last_seen")]).message()?];
 
         let now = SystemTime::now();
 
