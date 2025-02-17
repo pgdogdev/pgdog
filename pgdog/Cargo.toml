@@ -9,6 +9,10 @@ homepage = "https://pgdog.dev"
 repository = "https://github.com/levkk/pgdog"
 readme = "README.md"
 
+[features]
+tui = ["ratatui"]
+# default = ["tui"]
+
 [dependencies]
 pin-project = "1"
 tokio = { version = "1", features = ["full"] }
@@ -40,6 +44,9 @@ pg_query = "6"
 regex = "1"
 uuid = { version = "1", features = ["v4"] }
 url = "2"
+ratatui = { version = "0.30.0-alpha.1", optional = true }
+rmp-serde = "1"
+
 
 [build-dependencies]
 cc = "1"

@@ -3,6 +3,7 @@
 use backend::databases;
 use clap::Parser;
 use cli::Commands;
+use config::config;
 use frontend::listener::Listener;
 use tokio::runtime::Builder;
 use tracing::{info, level_filters::LevelFilter};
@@ -20,6 +21,8 @@ pub mod net;
 pub mod plugin;
 pub mod state;
 pub mod stats;
+#[cfg(feature = "tui")]
+pub mod tui;
 pub mod util;
 
 /// Setup the logger, so `info!`, `debug!`
@@ -114,7 +117,13 @@ async fn pgdog() -> Result<(), Box<dyn std::error::Error>> {
     // Load databases and connect if needed.
     databases::init();
 
-    let mut listener = Listener::new("0.0.0.0:6432");
+    let general = &config().config.general;
+
+    if let Some(broadcast_addr) = general.broadcast_address {
+        net::discovery::Listener::get().run(broadcast_addr, general.broadcast_port);
+    }
+
+    let mut listener = Listener::new(format!("{}:{}", general.host, general.port));
     listener.listen().await?;
 
     info!("🐕 pgDog is shutting down");

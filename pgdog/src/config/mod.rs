@@ -8,6 +8,7 @@ use error::Error;
 pub use overrides::Overrides;
 
 use std::fs::read_to_string;
+use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::time::Duration;
 use std::{collections::HashMap, path::PathBuf};
@@ -237,6 +238,11 @@ pub struct General {
     /// Shutdown timeout.
     #[serde(default = "General::default_shutdown_timeout")]
     pub shutdown_timeout: u64,
+    /// Broadcast IP.
+    pub broadcast_address: Option<Ipv4Addr>,
+    /// Broadcast port.
+    #[serde(default = "General::broadcast_port")]
+    pub broadcast_port: u16,
 }
 
 impl Default for General {
@@ -257,6 +263,8 @@ impl Default for General {
             tls_certificate: None,
             tls_private_key: None,
             shutdown_timeout: Self::default_shutdown_timeout(),
+            broadcast_address: None,
+            broadcast_port: Self::broadcast_port(),
         }
     }
 }
@@ -308,6 +316,10 @@ impl General {
 
     fn default_shutdown_timeout() -> u64 {
         60_000
+    }
+
+    fn broadcast_port() -> u16 {
+        Self::port() + 1
     }
 
     /// Get shutdown timeout as a duration.
