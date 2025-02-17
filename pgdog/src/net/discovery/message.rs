@@ -1,10 +1,13 @@
 use rmp_serde::{decode, encode, Deserializer, Serializer};
 use serde::{Deserialize, Serialize};
 
+use crate::frontend::comms::comms;
+
 /// Message kind.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum Payload {
     Healthcheck,
+    Stats { clients: u64 },
 }
 
 /// Message sent via UDP.
@@ -32,6 +35,16 @@ impl Message {
         Self {
             node_id,
             payload: Payload::Healthcheck,
+        }
+    }
+
+    /// Collect statistics.
+    pub fn stats(node_id: u64) -> Self {
+        let clients = comms().len() as u64;
+
+        Self {
+            node_id,
+            payload: Payload::Stats { clients },
         }
     }
 }

@@ -60,6 +60,16 @@ impl Comms {
         self.global.clients.lock().clone()
     }
 
+    /// Get number of connected clients.
+    pub fn len(&self) -> usize {
+        self.global.clients.lock().len()
+    }
+
+    /// There are no connected clients.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     /// New client connected.
     pub fn connect(&mut self, id: &BackendKeyData, addr: SocketAddr) -> Self {
         self.global

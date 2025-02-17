@@ -6,7 +6,7 @@
 host = "0.0.0.0"
 port = 6432
 shutdown_timeout = 5_000
-# broadcast_address = "224.0.0.1"
+broadcast_address = "224.0.0.1"
 # broadcast_port = 6435
 
 [[databases]]

@@ -14,7 +14,7 @@ use tokio::net::UdpSocket;
 use tokio::time::{interval, Duration};
 use tokio::{select, spawn};
 
-use super::{Error, Message};
+use super::{Error, Message, Payload};
 
 /// Service discovery listener.
 #[derive(Clone, Debug)]
@@ -23,9 +23,17 @@ pub struct Listener {
     inner: Arc<Mutex<Inner>>,
 }
 
+#[derive(Debug, Clone)]
+pub struct State {
+    /// Number of connected clients.
+    pub clients: u64,
+    /// When we received the last state update.
+    pub last_message: SystemTime,
+}
+
 #[derive(Debug)]
 struct Inner {
-    peers: HashMap<SocketAddr, SystemTime>,
+    peers: HashMap<SocketAddr, State>,
 }
 
 static LISTENER: Lazy<Listener> = Lazy::new(Listener::new);
@@ -47,7 +55,7 @@ impl Listener {
     }
 
     /// Get peers.
-    pub fn peers(&self) -> HashMap<SocketAddr, SystemTime> {
+    pub fn peers(&self) -> HashMap<SocketAddr, State> {
         self.inner.lock().peers.clone()
     }
 
@@ -80,12 +88,25 @@ impl Listener {
 
                     if let Some(message) = message {
                         debug!("{}: {:#?}", addr, message);
-                        self.inner.lock().peers.insert(addr, now);
+
+                        match message.payload {
+                            Payload::Stats {
+                                clients
+                            } => {
+                                self.inner.lock().peers.insert(addr, State {
+                                    clients,
+                                    last_message: now,
+                                });
+                            }
+
+                            _ => (),
+                        }
+
                     }
                 }
 
                 _ = interval.tick() => {
-                    let healthcheck = Message::healthcheck(self.id).to_bytes()?;
+                    let healthcheck = Message::stats(self.id).to_bytes()?;
                     socket.send_to(&healthcheck, format!("{}:{}", address, port)).await?;
                     debug!("healtcheck");
                 }
