@@ -13,6 +13,7 @@ pub mod reconnect;
 pub mod reload;
 pub mod show_clients;
 pub mod show_config;
+pub mod show_peers;
 pub mod show_pools;
 pub mod show_servers;
 

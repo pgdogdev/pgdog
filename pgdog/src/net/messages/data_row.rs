@@ -44,6 +44,12 @@ impl ToDataRowColumn for usize {
     }
 }
 
+impl ToDataRowColumn for u64 {
+    fn to_data_row_column(&self) -> Bytes {
+        Bytes::copy_from_slice(self.to_string().as_bytes())
+    }
+}
+
 impl ToDataRowColumn for bool {
     fn to_data_row_column(&self) -> Bytes {
         Bytes::copy_from_slice(if *self { b"t" } else { b"f" })

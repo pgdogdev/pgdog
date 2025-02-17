@@ -1,17 +1,28 @@
 //! ErrorResponse (B) message.
 use std::fmt::Display;
 
-use crate::net::{c_string_buf, messages::code};
+use crate::net::c_string_buf;
 
 use super::prelude::*;
 
 /// ErrorResponse (B) message.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct ErrorResponse {
     severity: String,
     code: String,
     message: String,
     detail: Option<String>,
+}
+
+impl Default for ErrorResponse {
+    fn default() -> Self {
+        Self {
+            severity: "NOTICE".into(),
+            code: String::default(),
+            message: String::default(),
+            detail: None,
+        }
+    }
 }
 
 impl ErrorResponse {
@@ -70,13 +81,16 @@ impl ErrorResponse {
 
 impl Display for ErrorResponse {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}: {} {}", self.severity, self.code, self.message)
+        write!(f, "{}: {} {}", self.severity, self.code, self.message)?;
+        if let Some(ref detail) = self.detail {
+            write!(f, "\n{}", detail)?
+        }
+        Ok(())
     }
 }
 
 impl FromBytes for ErrorResponse {
     fn from_bytes(mut bytes: Bytes) -> Result<Self, Error> {
-        code!(bytes, 'E');
         let _len = bytes.get_i32();
 
         let mut error_response = ErrorResponse::default();

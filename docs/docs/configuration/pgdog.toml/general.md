@@ -132,3 +132,19 @@ Which strategy to use for load balancing read queries. See [load balancer](../..
 * `round_robin`
 
 Default: **`random`**
+
+## Service discovery
+
+### `broadcast_address`
+
+Send multicast packets to this address on the local network. Configuring this setting enables
+mutual service discovery. Instances of PgDog running on the same network will be able to see
+each other.
+
+Default: unset
+
+### `broadcast_port`
+
+The port used for sending and receiving broadcast messages.
+
+Default: **`6433`**

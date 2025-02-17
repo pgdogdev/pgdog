@@ -204,7 +204,7 @@ mod test {
 
     impl Cluster {
         pub fn new_test() -> Self {
-            let cluster = Cluster {
+            Cluster {
                 sharded_tables: ShardedTables::new(vec![ShardedTable {
                     database: "pgdog".into(),
                     name: Some("sharded".into()),
@@ -212,9 +212,7 @@ mod test {
                 }]),
                 shards: vec![Shard::default(), Shard::default()],
                 ..Default::default()
-            };
-
-            cluster
+            }
         }
     }
 }

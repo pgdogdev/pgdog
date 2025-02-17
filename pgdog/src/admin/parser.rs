@@ -2,8 +2,8 @@
 
 use super::{
     pause::Pause, prelude::Message, reconnect::Reconnect, reload::Reload,
-    show_clients::ShowClients, show_config::ShowConfig, show_pools::ShowPools,
-    show_servers::ShowServers, Command, Error,
+    show_clients::ShowClients, show_config::ShowConfig, show_peers::ShowPeers,
+    show_pools::ShowPools, show_servers::ShowServers, Command, Error,
 };
 
 use tracing::debug;
@@ -17,6 +17,7 @@ pub enum ParseResult {
     ShowPools(ShowPools),
     ShowConfig(ShowConfig),
     ShowServers(ShowServers),
+    ShowPeers(ShowPeers),
 }
 
 impl ParseResult {
@@ -32,6 +33,7 @@ impl ParseResult {
             ShowPools(show_pools) => show_pools.execute().await,
             ShowConfig(show_config) => show_config.execute().await,
             ShowServers(show_servers) => show_servers.execute().await,
+            ShowPeers(show_peers) => show_peers.execute().await,
         }
     }
 
@@ -47,6 +49,7 @@ impl ParseResult {
             ShowPools(show_pools) => show_pools.name(),
             ShowConfig(show_config) => show_config.name(),
             ShowServers(show_servers) => show_servers.name(),
+            ShowPeers(show_peers) => show_peers.name(),
         }
     }
 }
@@ -69,6 +72,7 @@ impl Parser {
                 "pools" => ParseResult::ShowPools(ShowPools::parse(&sql)?),
                 "config" => ParseResult::ShowConfig(ShowConfig::parse(&sql)?),
                 "servers" => ParseResult::ShowServers(ShowServers::parse(&sql)?),
+                "peers" => ParseResult::ShowPeers(ShowPeers::parse(&sql)?),
                 command => {
                     debug!("unknown admin show command: '{}'", command);
                     return Err(Error::Syntax);
