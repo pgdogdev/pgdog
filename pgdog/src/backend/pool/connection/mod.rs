@@ -199,6 +199,23 @@ impl Connection {
         Ok(())
     }
 
+    /// Make sure a prepared statement exists on the connection.
+    pub async fn prepare(&mut self, name: &str) -> Result<(), Error> {
+        match self.binding {
+            Binding::Server(Some(ref mut server)) => {
+                server.prepare(name).await?;
+            }
+            Binding::MultiShard(ref mut servers, _) => {
+                for server in servers {
+                    server.prepare(name).await?;
+                }
+            }
+            _ => (),
+        }
+
+        Ok(())
+    }
+
     /// We are done and can disconnect from this server.
     pub fn done(&self) -> bool {
         self.binding.done()

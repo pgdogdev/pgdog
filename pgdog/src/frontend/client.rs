@@ -6,13 +6,15 @@ use std::time::Instant;
 use tokio::{select, spawn};
 use tracing::{debug, error, info, trace};
 
-use super::{Buffer, Command, Comms, Error, Router, Stats};
+use super::{Buffer, Command, Comms, Error, PreparedStatements, Router, Stats};
 use crate::auth::scram::Server;
 use crate::backend::pool::Connection;
 use crate::config::config;
 use crate::net::messages::command_complete::CommandComplete;
+use crate::net::messages::parse::Parse;
 use crate::net::messages::{
-    Authentication, BackendKeyData, ErrorResponse, Protocol, ReadyForQuery,
+    Authentication, BackendKeyData, Bind, Describe, ErrorResponse, FromBytes, Protocol,
+    ReadyForQuery, ToBytes,
 };
 use crate::net::{parameter::Parameters, Stream};
 
@@ -27,6 +29,7 @@ pub struct Client {
     admin: bool,
     streaming: bool,
     shard: Option<usize>,
+    prepared_statements: PreparedStatements,
 }
 
 impl Client {
@@ -118,6 +121,7 @@ impl Client {
             streaming: false,
             shard,
             params,
+            prepared_statements: PreparedStatements::new(),
         };
 
         if client.admin {
@@ -177,6 +181,7 @@ impl Client {
                 }
 
                 buffer = self.buffer() => {
+                    let buffer = buffer?;
                     if buffer.is_empty() {
                         break;
                     }
@@ -246,6 +251,11 @@ impl Client {
                         }
                     }
 
+                    // Handle any prepared statements.
+                    for statement in buffer.prepared_statements()? {
+                        backend.prepare(&statement).await?;
+                    }
+
                     // Handle COPY subprotocol in a potentially sharded context.
                     if buffer.copy() && !self.streaming {
                         let rows = router.copy_data(&buffer)?;
@@ -308,7 +318,7 @@ impl Client {
     ///
     /// This ensures we don't check out a connection from the pool until the client
     /// sent a complete request.
-    async fn buffer(&mut self) -> Buffer {
+    async fn buffer(&mut self) -> Result<Buffer, Error> {
         let mut buffer = Buffer::new();
         let mut timer = None;
 
@@ -316,7 +326,7 @@ impl Client {
             let message = match self.stream.read().await {
                 Ok(message) => message.stream(self.streaming),
                 Err(_) => {
-                    return vec![].into();
+                    return Ok(vec![].into());
                 }
             };
 
@@ -326,7 +336,39 @@ impl Client {
 
             match message.code() {
                 // Terminate (F)
-                'X' => return vec![].into(),
+                'X' => return Ok(vec![].into()),
+                'P' => {
+                    let parse = Parse::from_bytes(message.to_bytes()?)?;
+                    if parse.anonymous() {
+                        buffer.push(message);
+                    } else {
+                        buffer.push(self.prepared_statements.insert(parse).message()?);
+                    }
+                }
+                'B' => {
+                    let bind = Bind::from_bytes(message.to_bytes()?)?;
+                    if bind.anonymous() {
+                        buffer.push(message);
+                    } else {
+                        let counter = self
+                            .prepared_statements
+                            .name(&bind.statement)
+                            .ok_or(Error::MissingPreparedStatement(bind.statement.clone()))?;
+                        buffer.push(bind.rename(counter).message()?);
+                    }
+                }
+                'D' => {
+                    let describe = Describe::from_bytes(message.to_bytes()?)?;
+                    if describe.anonymous() {
+                        buffer.push(message);
+                    } else {
+                        let counter = self
+                            .prepared_statements
+                            .name(&describe.statement)
+                            .ok_or(Error::MissingPreparedStatement(describe.statement.clone()))?;
+                        buffer.push(describe.rename(counter).message()?);
+                    }
+                }
                 _ => buffer.push(message),
             }
         }
@@ -336,7 +378,7 @@ impl Client {
             timer.unwrap().elapsed().as_secs_f64() * 1000.0
         );
 
-        buffer
+        Ok(buffer)
     }
 
     /// Tell the client we started a transaction.

@@ -15,5 +15,6 @@ pub use client::Client;
 pub use comms::Comms;
 pub use connected_client::ConnectedClient;
 pub use error::Error;
+pub use prepared_statements::PreparedStatements;
 pub use router::{Command, Router};
 pub use stats::Stats;

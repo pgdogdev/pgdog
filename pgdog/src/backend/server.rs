@@ -13,7 +13,7 @@ use tokio::{
 };
 use tracing::{debug, info, trace, warn};
 
-use super::{pool::Address, Error, Stats};
+use super::{pool::Address, Error, PreparedStatements, Stats};
 use crate::net::{
     messages::{parse::Parse, Flush, NoticeResponse},
     parameter::Parameters,
@@ -37,7 +37,7 @@ pub struct Server {
     id: BackendKeyData,
     params: Parameters,
     stats: Stats,
-    prepared_statements: HashSet<String>,
+    prepared_statements: PreparedStatements,
     dirty: bool,
     streaming: bool,
 }
@@ -162,7 +162,7 @@ impl Server {
             id,
             params,
             stats: Stats::connect(id, addr),
-            prepared_statements: HashSet::new(),
+            prepared_statements: PreparedStatements::new(),
             dirty: false,
             streaming: false,
         })
@@ -360,8 +360,8 @@ impl Server {
     }
 
     /// Prepare a statement on this connection if it doesn't exist already.
-    pub async fn prepare(&mut self, parse: &Parse) -> Result<bool, Error> {
-        if self.prepared_statements.contains(&parse.name) {
+    pub async fn prepare(&mut self, name: &str) -> Result<bool, Error> {
+        if self.prepared_statements.contains(name) {
             return Ok(false);
         }
 
@@ -369,14 +369,18 @@ impl Server {
             return Err(Error::NotInSync);
         }
 
+        let parse = self.prepared_statements.parse(name).unwrap();
+
         self.send(vec![parse.message()?, Flush.message()?]).await?;
-        let parse_complete = self.read().await?;
+        let response = self.read().await?;
 
-        if parse_complete.code() != '1' {
-            return Err(Error::ExpectedParseComplete(parse_complete.code()));
+        match response.code() {
+            'E' => Err(Error::PreparedStatementError(ErrorResponse::from_bytes(
+                response.to_bytes()?,
+            )?)),
+            '1' => Ok(true),
+            code => Err(Error::ExpectedParseComplete(code)),
         }
-
-        Ok(true)
     }
 
     /// Server connection unique identifier.
@@ -471,7 +475,7 @@ mod test {
                 id,
                 params: Parameters::default(),
                 stats: Stats::connect(id, &addr),
-                prepared_statements: HashSet::new(),
+                prepared_statements: PreparedStatements::new(),
                 addr,
                 dirty: false,
                 streaming: false,

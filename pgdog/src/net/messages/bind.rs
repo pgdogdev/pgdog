@@ -116,6 +116,17 @@ impl Bind {
             .map(|parameter| ParameterWithFormat { parameter, format }))
     }
 
+    /// Rename this Bind message to a different prepared statement.
+    pub fn rename(mut self, name: impl ToString) -> Self {
+        self.statement = name.to_string();
+        self
+    }
+
+    /// Is this Bind message anonymous?
+    pub fn anonymous(&self) -> bool {
+        self.statement.is_empty()
+    }
+
     /// Convert bind parameters to plugin parameters.
     ///
     /// # Safety

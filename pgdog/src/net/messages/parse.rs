@@ -25,6 +25,20 @@ impl Parse {
             data_types: vec![],
         }
     }
+
+    /// New prepared statement.
+    pub fn numbered(name: impl ToString, query: impl ToString) -> Self {
+        Self {
+            name: name.to_string(),
+            query: query.to_string(),
+            data_types: vec![],
+        }
+    }
+
+    /// Anonymous prepared statement.
+    pub fn anonymous(&self) -> bool {
+        self.name.is_empty()
+    }
 }
 
 impl FromBytes for Parse {

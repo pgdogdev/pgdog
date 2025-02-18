@@ -31,6 +31,12 @@ pub enum Error {
 
     #[error("replication")]
     Replication(#[from] crate::backend::replication::Error),
+
+    #[error("{0}")]
+    PreparedStatements(#[from] super::prepared_statements::Error),
+
+    #[error("prepared staatement \"{0}\" is missing")]
+    MissingPreparedStatement(String),
 }
 
 impl Error {
