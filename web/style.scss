@@ -54,10 +54,6 @@ p.subheading {
     line-height: 1.6rem;
 }
 
-a:visited {
-    color: initial;
-}
-
 .mt-1 {
     margin-top: 1rem;
 }
@@ -95,6 +91,10 @@ a:visited {
 }
 
 a {
+    color: black;
+    &:visited {
+        color: black;
+    }
     &.btn {
         padding: 12px;
         text-decoration: none;

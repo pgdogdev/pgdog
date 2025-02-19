@@ -41,9 +41,6 @@ p.subheading {
   text-rendering: geometricPrecision;
   line-height: 1.6rem; }
 
-a:visited {
-  color: initial; }
-
 .mt-1 {
   margin-top: 1rem; }
 
@@ -71,16 +68,20 @@ a:visited {
 .text-center {
   text-align: center; }
 
-a.btn {
-  padding: 12px;
-  text-decoration: none;
-  text-align: center; }
-  a.btn.primary {
-    border: 1px solid var(--blue);
-    background: var(--blue);
-    color: white; }
-  a.btn.secondary:hover {
-    text-decoration: underline; }
+a {
+  color: black; }
+  a:visited {
+    color: black; }
+  a.btn {
+    padding: 12px;
+    text-decoration: none;
+    text-align: center; }
+    a.btn.primary {
+      border: 1px solid var(--blue);
+      background: var(--blue);
+      color: white; }
+    a.btn.secondary:hover {
+      text-decoration: underline; }
 
 .embed {
   border: 2px solid var(--blue);
