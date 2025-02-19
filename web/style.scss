@@ -1,0 +1,79 @@
+.flex {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 1rem;
+}
+
+html,
+body {
+    font-family: "IBM Plex Sans", Arial, sans-serif;
+
+    font-size: 1rem;
+    background: color-mix(in oklab, hsl(214.3, 94.6%, 92.7%) 40%, transparent);
+    min-height: 100vh;
+}
+
+nav {
+    ul,
+    li {
+        list-style: none;
+        font-family: "IBM Plex Mono", monospace;
+    }
+
+    ul {
+        padding: 0;
+    }
+
+    height: 74px;
+    border-bottom: 1px solid black;
+    background: white;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5 {
+    font-family: "IBM Plex Mono", monospace;
+    color: hsl(217.8, 93.5%, 42%);
+}
+
+p.subheading {
+    font-size: 1.2rem;
+    color: hsl(217.1, 12.1%, 33.9%);
+    text-rendering: geometricPrecision;
+    line-height: 1.4rem;
+}
+
+a:visited {
+    color: initial;
+}
+
+.mt-1 {
+    margin-top: 1rem;
+}
+
+.mt-2 {
+    margin-top: 1.5rem;
+}
+
+.mt-3 {
+    margin-top: 2rem;
+}
+
+.mb-1 {
+    margin-bottom: 1rem;
+}
+
+.mb-2 {
+    margin-bottom: 1.5rem;
+}
+
+.mb-3 {
+    margin-bottom: 2rem;
+}
+
+.text-center {
+    text-align: center;
+}
