@@ -12,10 +12,7 @@
 html,
 body {
     font-family: "IBM Plex Sans", Arial, sans-serif;
-
     font-size: 1rem;
-    background: color-mix(in oklab, hsl(214.3, 94.6%, 92.7%) 40%, transparent);
-    min-height: 100vh;
 }
 
 :root {
@@ -45,49 +42,72 @@ h4,
 h5 {
     font-family: "IBM Plex Mono", monospace;
     color: hsl(217.8, 93.5%, 42%);
+    text-rendering: geometricPrecision;
+}
+
+$headers: (
+    1: 2em,
+    2: 1.5em,
+    3: 1.17em,
+    4: 1em,
+    5: 0.83em,
+);
+
+@each $level, $value in $headers {
+    .fs-#{$level} {
+        font-size: #{$value};
+    }
+
+    .h#{$level},
+    h#{$level} {
+        font-size: #{$value};
+    }
 }
 
 p.subheading {
-    font-size: 1.2rem;
+    @extend .h3;
     color: hsl(217.1, 12.1%, 33.9%);
-    text-rendering: geometricPrecision;
     line-height: 1.6rem;
 }
 
-.mt-1 {
-    margin-top: 1rem;
+$spacings: (
+    1: 1rem,
+    2: 1.5rem,
+    3: 2rem,
+    4: 3rem,
+    5: 4rem,
+);
+
+@each $level, $value in $spacings {
+    .mt-#{$level} {
+        margin-top: #{$value};
+    }
+
+    .mb-#{$level} {
+        margin-bottom: #{$value};
+    }
+
+    .pt-#{$level} {
+        padding-top: #{$value};
+    }
+
+    .pb-#{$level} {
+        padding-bottom: #{$value};
+    }
 }
 
-.mt-2 {
-    margin-top: 1.5rem;
+@each $level, $value in $spacings {
+    .gap-#{$level} {
+        gap: #{$value};
+    }
 }
 
-.mt-3 {
-    margin-top: 2rem;
-}
+$alignments: (left, center, right);
 
-.mt-5 {
-    margin-top: 3rem;
-}
-
-.mb-1 {
-    margin-bottom: 1rem;
-}
-
-.mb-2 {
-    margin-bottom: 1.5rem;
-}
-
-.mb-3 {
-    margin-bottom: 2rem;
-}
-
-.mb-5 {
-    margin-bottom: 3rem;
-}
-
-.text-center {
-    text-align: center;
+@each $alignment in $alignments {
+    .text-#{$alignment} {
+        text-align: #{$alignment};
+    }
 }
 
 a {
@@ -126,4 +146,6 @@ a {
 
 main {
     padding: 0 1rem;
+    background: color-mix(in oklab, hsl(214.3, 94.6%, 92.7%) 40%, transparent);
+    min-height: 100vh;
 }
