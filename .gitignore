@@ -27,3 +27,4 @@ Cargo.lock
 
 *.md.bak
 .DS_Store
+*.zip
