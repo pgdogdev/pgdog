@@ -89,17 +89,13 @@ impl Listener {
                     if let Some(message) = message {
                         debug!("{}: {:#?}", addr, message);
 
-                        match message.payload {
-                            Payload::Stats {
+                        if let Payload::Stats {
                                 clients
-                            } => {
-                                self.inner.lock().peers.insert(addr, State {
-                                    clients,
-                                    last_message: now,
-                                });
-                            }
-
-                            _ => (),
+                            } = message.payload {
+                            self.inner.lock().peers.insert(addr, State {
+                                clients,
+                                last_message: now,
+                            });
                         }
 
                     }
