@@ -30,57 +30,59 @@
             </ul>
         </nav>
         <main class="pb-5">
-            <header style="padding-top: 4rem;">
-                <h1 class="flex text-center" style="font-size: 2.5rem;">
-                    Shard PostgreSQL automatically
-                </h1>
-                <p class="flex text-center subheading mt-2">
-                    PgDog is a load balancer and logical replication manager<br> that can (re)shard databases without downtime.
-                </p>
-            </header>
-            <div class="flex mt-5">
-                <a target="_blank" href="https://github.com/levkk/pgdog" class="btn primary flex" style="gap:10px;">
-                    <img src="github-mark.svg" height="16" width="16" class="github">
-                    <span>Download code</span>
-                </a>
-                <a target="_blank" href="/docs" class="btn secondary">
-                    Read documentation
-                </a>
-            </div>
-            <div class="flex mt-5 mb-5">
-                <video controls class="embed">
-                    <source src="demo.mp4">
-                </video>
-            </div>
-            <div class="mt-5 mb-3">
-                <h2 class="text-center font-primary fw-semibold">PgDog takes care of <br><span class="font-monospace">everything</span></h2>
-                <p class="text-center subheading">Comprehensive by design, nothing is out of scope <br> when it comes
-                to scaling PostgreSQL horizontally.</p>
-            </div>
-            <div class="grid gap-2">
-                <div class="col">
-                    <h3 class="mb-1 font-primary fw-semibold">Route queries</h3>
-                    <p>Using the PostgreSQL parser, PgDog can inspect queries, extract the sharding column,
-                    and route them to the correct shard.</p>
-                </div>
-                <div class="col">
-                    <h3 class="mb-1 font-primary fw-semibold">Shard existing databases</h3>
-                    <p>Databases are not greenfield projects. PgDog understands the PostgreSQL replication protocol and can read data directly from databases, splitting it between shards.</p>
-                </div>
-                <div>
-                    <h3 class="mb-1 font-primary fw-semibold">Scalable coordinator</h3>
-                    <p>PgDog speaks SQL. It can join results from multiple shards and load balance read queries across replicas. Applications don't know they are talking to a sharded cluster or require special drivers.</p>
-                </div>
-                <div>
-                    <h3 class="mb-1 font-primary fw-semibold">Share-nothing architecture</h3>
-                    <p>There is no single point of failure. PgDog is controlled via configuration and doesn't have to talk to other nodes or databases.</p>
-                </div>
-            </div>
-            <div class="mt-5 mb-5">
-                <div class="flex">
-                    <a class="btn primary cta" href="https://forms.gle/xU9axyfz8yUQM3XSA" target="_blank">
-                    Request a demo
+            <div class="container">
+                <header style="padding-top: 4rem;">
+                    <h1 class="flex text-center" style="font-size: 2.5rem;">
+                        Shard PostgreSQL automatically
+                    </h1>
+                    <p class="flex text-center subheading mt-2">
+                        PgDog is a load balancer and logical replication manager<br> that can (re)shard databases without downtime.
+                    </p>
+                </header>
+                <div class="flex mt-5">
+                    <a target="_blank" href="https://github.com/levkk/pgdog" class="btn primary flex" style="gap:10px;">
+                        <img src="github-mark.svg" height="16" width="16" class="github">
+                        <span>Download code</span>
                     </a>
+                    <a target="_blank" href="/docs" class="btn secondary">
+                        Read documentation
+                    </a>
+                </div>
+                <div class="flex mt-5 mb-5">
+                    <video controls class="embed">
+                        <source src="demo.mp4">
+                    </video>
+                </div>
+                <div class="mt-5 mb-3">
+                    <h2 class="text-center font-primary fw-semibold">PgDog takes care of <br><span class="font-monospace">everything</span></h2>
+                    <p class="text-center subheading">Comprehensive by design, nothing is out of scope <br> when it comes
+                    to scaling PostgreSQL horizontally.</p>
+                </div>
+                <div class="grid gap-2">
+                    <div>
+                        <h3 class="mb-1 font-primary fw-semibold">Route queries</h3>
+                        <p>Using the PostgreSQL parser, PgDog can inspect queries, extract the sharding column,
+                        and route them to the correct shard.</p>
+                    </div>
+                    <div>
+                        <h3 class="mb-1 font-primary fw-semibold">Shard existing databases</h3>
+                        <p>Databases are not greenfield projects. PgDog understands the PostgreSQL replication protocol and can read data directly from databases, splitting it between shards.</p>
+                    </div>
+                    <div>
+                        <h3 class="mb-1 font-primary fw-semibold">Scalable coordinator</h3>
+                        <p>PgDog speaks SQL. It can join results from multiple shards and load balance read queries across replicas. Applications don't know they are talking to a sharded cluster or require special drivers.</p>
+                    </div>
+                    <div>
+                        <h3 class="mb-1 font-primary fw-semibold">Share-nothing architecture</h3>
+                        <p>There is no single point of failure. PgDog is controlled via configuration and doesn't have to talk to other nodes or databases.</p>
+                    </div>
+                </div>
+                <div class="mt-5 mb-5">
+                    <div class="flex">
+                        <a class="btn primary cta" href="https://forms.gle/xU9axyfz8yUQM3XSA" target="_blank">
+                        Request a demo
+                        </a>
+                    </div>
                 </div>
             </div>
         </main>

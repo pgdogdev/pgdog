@@ -110,7 +110,6 @@ $alignments: (left, center, right);
     }
 }
 
-
 //
 // Anchors.
 //
@@ -181,6 +180,23 @@ main {
     }
 }
 
+$container: (
+    576px: 540px,
+    768px: 720px,
+    992px: 960px,
+    1200px: 1140px,
+    1400px: 1320px,
+);
+
+@each $breakpoint, $width in $container {
+    @media all and (min-width: $breakpoint) {
+        .container {
+            width: $width;
+            margin: 0 auto;
+        }
+    }
+}
+
 .font-primary {
     font-family: "IBM Plex Sans", sans-serif;
 }
@@ -189,7 +205,11 @@ main {
     font-family: "IBM Plex Mono", monospfont-monospace;
 }
 
-$weight: (normal: 400, semibold: 500, bold: 600);
+$weight: (
+    normal: 400,
+    semibold: 500,
+    bold: 600,
+);
 
 @each $name, $weight in $weight {
     .fw-#{$name} {
