@@ -55,19 +55,6 @@ impl Client {
             }
         };
 
-        let server_params = match conn.parameters(&id).await {
-            Ok(params) => params,
-            Err(err) => {
-                if err.no_server() {
-                    error!("connection pool is down");
-                    stream.fatal(ErrorResponse::connection()).await?;
-                    return Ok(());
-                } else {
-                    return Err(err.into());
-                }
-            }
-        };
-
         let password = if admin {
             admin_password
         } else {
@@ -83,6 +70,25 @@ impl Client {
             stream.fatal(ErrorResponse::auth(user, database)).await?;
             return Ok(());
         }
+
+        // Check if the pooler is shutting down.
+        if comms.offline() && !admin {
+            stream.fatal(ErrorResponse::shutting_down()).await?;
+            return Ok(());
+        }
+
+        let server_params = match conn.parameters(&id).await {
+            Ok(params) => params,
+            Err(err) => {
+                if err.no_server() {
+                    error!("connection pool is down");
+                    stream.fatal(ErrorResponse::connection()).await?;
+                    return Ok(());
+                } else {
+                    return Err(err.into());
+                }
+            }
+        };
 
         for param in server_params {
             stream.send(param).await?;
@@ -281,7 +287,7 @@ impl Client {
                         }
                         comms.stats(stats.transaction());
                         trace!("transaction finished [{}ms]", stats.last_transaction_time.as_secs_f64() * 1000.0);
-                        if comms.offline() {
+                        if comms.offline() && !self.admin {
                             break;
                         }
                     }
@@ -289,7 +295,7 @@ impl Client {
             }
         }
 
-        if comms.offline() {
+        if comms.offline() && !self.admin {
             self.stream
                 .send_flush(ErrorResponse::shutting_down())
                 .await?;

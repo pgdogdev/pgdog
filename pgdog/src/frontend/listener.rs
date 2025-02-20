@@ -1,11 +1,13 @@
 //! Connection listener. Handles all client connections.
 
 use std::net::SocketAddr;
+use std::sync::Arc;
 
 use tokio::net::{TcpListener, TcpStream};
-use tokio::select;
 use tokio::signal::ctrl_c;
+use tokio::sync::Notify;
 use tokio::time::timeout;
+use tokio::{select, spawn};
 use tokio_util::task::TaskTracker;
 
 use crate::backend::databases::{databases, shutdown};
@@ -23,10 +25,11 @@ use super::{
 };
 
 /// Client connections listener and handler.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Listener {
     addr: String,
     clients: TaskTracker,
+    shutdown: Arc<Notify>,
 }
 
 impl Listener {
@@ -35,55 +38,71 @@ impl Listener {
         Self {
             addr: addr.to_string(),
             clients: TaskTracker::new(),
+            shutdown: Arc::new(Notify::new()),
         }
     }
 
     /// Listen for client connections and handle them.
     pub async fn listen(&mut self) -> Result<(), Error> {
         let listener = TcpListener::bind(&self.addr).await?;
-        let comms = comms();
         info!("🐕 pgDog listening on {}", self.addr);
+        let comms = comms();
 
         loop {
             let comms = comms.clone();
+
             select! {
                 connection = listener.accept() => {
                    let (stream, addr) = connection?;
+                   let offline = comms.offline();
 
                    // Disable the Nagle algorithm.
                    stream.set_nodelay(true)?;
 
-                   self.clients.spawn(async move {
+                   let future = async move {
                        match Self::handle_client(stream, addr, comms).await {
                            Ok(_) => (),
                            Err(err) => {
                                error!("client crashed: {:?}", err);
                            }
                        };
-                   });
+                   };
+
+                   if offline {
+                       spawn(future);
+                   } else {
+                       self.clients.spawn(future);
+                   }
                 }
 
                 _ = ctrl_c() => {
                     self.clients.close();
                     comms.shutdown();
                     shutdown();
+
+                    let listener = self.clone();
+                    spawn(async move {
+                        listener.shutdown().await;
+                    });
+                }
+
+                _ = self.shutdown.notified() => {
                     break;
                 }
             }
         }
 
-        // Close the listener before
-        // we wait for clients to shut down.
-        //
-        // TODO: allow admin connections here anyway
-        // to debug clients refusing to shut down.
-        drop(listener);
+        Ok(())
+    }
 
+    async fn shutdown(&self) {
         let shutdown_timeout = config().config.general.shutdown_timeout();
+
         info!(
             "waiting up to {:.3}s for clients to finish transactions",
             shutdown_timeout.as_secs_f64()
         );
+
         if timeout(shutdown_timeout, self.clients.wait())
             .await
             .is_err()
@@ -94,7 +113,7 @@ impl Listener {
             );
         }
 
-        Ok(())
+        self.shutdown.notify_waiters();
     }
 
     async fn handle_client(stream: TcpStream, addr: SocketAddr, comms: Comms) -> Result<(), Error> {
