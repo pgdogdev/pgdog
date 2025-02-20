@@ -65,9 +65,9 @@ $headers: (
 }
 
 p.subheading {
-    @extend .h3;
+    font-size: 1.1rem;
     color: hsl(217.1, 12.1%, 33.9%);
-    line-height: 1.6rem;
+    line-height: 1.4rem;
 }
 
 $spacings: (
@@ -110,6 +110,10 @@ $alignments: (left, center, right);
     }
 }
 
+
+//
+// Anchors.
+//
 a {
     color: black;
     &:visited {
@@ -131,9 +135,17 @@ a {
                 text-decoration: underline;
             }
         }
+
+        &.cta {
+            padding: 18px;
+            font-size: 1.2em;
+        }
     }
 }
 
+//
+// Video embeds.
+//
 .embed {
     border: 2px solid var(--blue);
     border-radius: 12px;
@@ -148,4 +160,39 @@ main {
     padding: 0 1rem;
     background: color-mix(in oklab, hsl(214.3, 94.6%, 92.7%) 40%, transparent);
     min-height: 100vh;
+}
+
+.grid {
+    display: grid;
+    place-items: start;
+    grid-template-columns: repeat(2, 1fr);
+}
+
+///
+/// Responsive styles.
+///
+@media all and (max-width: 500px) {
+    .grid {
+        grid-template-columns: 1fr;
+    }
+
+    br {
+        display: none;
+    }
+}
+
+.font-primary {
+    font-family: "IBM Plex Sans", sans-serif;
+}
+
+.font-monospace {
+    font-family: "IBM Plex Mono", monospfont-monospace;
+}
+
+$weight: (normal: 400, semibold: 500, bold: 600);
+
+@each $name, $weight in $weight {
+    .fw-#{$name} {
+        font-weight: #{$weight};
+    }
 }
