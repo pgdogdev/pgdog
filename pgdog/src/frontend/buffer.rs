@@ -162,3 +162,9 @@ impl DerefMut for Buffer {
         &mut self.buffer
     }
 }
+
+#[derive(Debug)]
+pub struct PreparedStatementRequest {
+    pub name: String,
+    pub is_new: bool,
+}

@@ -1,60 +1,26 @@
 //! Prepared statements cache.
 
-use std::{
-    collections::{hash_map::Entry, HashMap},
-    sync::Arc,
-};
+use std::{collections::HashMap, sync::Arc};
 
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 
-use crate::net::messages::parse::Parse;
+use crate::net::messages::{Message, Parse, Protocol};
 
-mod error;
+pub mod error;
+pub mod global_cache;
+pub mod rewrite;
+
 pub use error::Error;
-
-type Query = String;
-type Name = String;
+pub use global_cache::GlobalCache;
+pub use rewrite::Rewrite;
 
 static CACHE: Lazy<PreparedStatements> = Lazy::new(PreparedStatements::default);
 
-fn global_name(counter: usize) -> String {
-    format!("__pgdog_{}", counter)
-}
-
-#[derive(Default, Debug)]
-pub struct GlobalCache {
-    statements: HashMap<Query, usize>,
-    names: HashMap<Name, Query>, // Ideally this holds an entry to `statements`. Maybe an Arc?
-    counter: usize,
-}
-
-impl GlobalCache {
-    fn insert(&mut self, parse: &Parse) -> (bool, String) {
-        match self.statements.entry(parse.query.clone()) {
-            Entry::Occupied(entry) => (false, global_name(*entry.get())),
-            Entry::Vacant(entry) => {
-                self.counter += 1;
-                entry.insert(self.counter);
-                self.names
-                    .insert(global_name(self.counter), parse.query.clone());
-
-                (true, global_name(self.counter))
-            }
-        }
-    }
-
-    pub fn parse(&self, name: &str) -> Option<Parse> {
-        self.names
-            .get(name)
-            .map(|query| Parse::numbered(name, query))
-    }
-}
-
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Debug)]
 pub struct PreparedStatements {
-    global: Arc<Mutex<GlobalCache>>,
-    local: HashMap<String, String>,
+    pub(super) global: Arc<Mutex<GlobalCache>>,
+    pub(super) local: HashMap<String, String>,
 }
 
 impl PreparedStatements {
@@ -68,22 +34,33 @@ impl PreparedStatements {
         Self::new().global.clone()
     }
 
+    /// Maybe rewrite message.
+    pub fn maybe_rewrite(&mut self, message: impl Protocol) -> Result<Message, Error> {
+        let mut rewrite = Rewrite::new(self);
+        rewrite.rewrite(message)
+    }
+
     /// Register prepared statement with the global cache.
-    pub fn insert(&mut self, parse: Parse) -> Parse {
+    fn insert(&mut self, parse: Parse) -> Parse {
         let mut guard = self.global.lock();
         let (_new, name) = guard.insert(&parse);
         self.local.insert(parse.name.clone(), name.clone());
 
-        Parse::numbered(name, parse.query)
-    }
-
-    /// Get a parse for the given prepared statement by name.
-    pub fn parse(&self, name: &str) -> Option<Parse> {
-        self.global.lock().parse(name)
+        Parse::named(name, parse.query)
     }
 
     /// Get global statement counter.
-    pub fn name(&self, name: &str) -> Option<&String> {
+    fn name(&self, name: &str) -> Option<&String> {
         self.local.get(name)
+    }
+
+    /// Number of prepared stamenets in the local cache.
+    pub fn len(&self) -> usize {
+        self.local.len()
+    }
+
+    /// Is the local cache empty?
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 }

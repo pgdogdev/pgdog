@@ -57,6 +57,9 @@ pub enum Error {
     #[error("{0}")]
     PreparedStatementError(ErrorResponse),
 
+    #[error("prepared statement \"{0}\" is missing")]
+    PreparedStatementMissing(String),
+
     #[error("expected '1', got '{0}")]
     ExpectedParseComplete(char),
 

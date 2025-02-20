@@ -1,8 +1,5 @@
 //! PostgreSQL serer connection.
-use std::{
-    collections::HashSet,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
 use bytes::{BufMut, BytesMut};
 use rustls_pki_types::ServerName;
@@ -15,7 +12,7 @@ use tracing::{debug, info, trace, warn};
 
 use super::{pool::Address, Error, PreparedStatements, Stats};
 use crate::net::{
-    messages::{parse::Parse, Flush, NoticeResponse},
+    messages::{Flush, NoticeResponse},
     parameter::Parameters,
     tls::connector,
     Parameter, Stream,
@@ -369,7 +366,10 @@ impl Server {
             return Err(Error::NotInSync);
         }
 
-        let parse = self.prepared_statements.parse(name).unwrap();
+        let parse = self
+            .prepared_statements
+            .parse(name)
+            .ok_or(Error::PreparedStatementMissing(name.to_string()))?;
 
         self.send(vec![parse.message()?, Flush.message()?]).await?;
         let response = self.read().await?;

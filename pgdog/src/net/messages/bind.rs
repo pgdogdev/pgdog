@@ -78,7 +78,7 @@ impl ParameterWithFormat<'_> {
 }
 
 /// Bind (F) message.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Bind {
     /// Portal name.
     pub portal: String,

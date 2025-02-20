@@ -2,6 +2,12 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("Parse for statement is missing")]
-    StatementParseMissing,
+    #[error("prepared statement \"{0}\" is missing from cache")]
+    MissingPreparedStatement(String),
+
+    #[error("{0}")]
+    Net(#[from] crate::net::Error),
+
+    #[error("wrong message")]
+    WrongMessage,
 }

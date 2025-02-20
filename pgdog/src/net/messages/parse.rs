@@ -27,7 +27,7 @@ impl Parse {
     }
 
     /// New prepared statement.
-    pub fn numbered(name: impl ToString, query: impl ToString) -> Self {
+    pub fn named(name: impl ToString, query: impl ToString) -> Self {
         Self {
             name: name.to_string(),
             query: query.to_string(),

@@ -10,11 +10,8 @@ use super::{Buffer, Command, Comms, Error, PreparedStatements, Router, Stats};
 use crate::auth::scram::Server;
 use crate::backend::pool::Connection;
 use crate::config::config;
-use crate::net::messages::command_complete::CommandComplete;
-use crate::net::messages::parse::Parse;
 use crate::net::messages::{
-    Authentication, BackendKeyData, Bind, Describe, ErrorResponse, FromBytes, Protocol,
-    ReadyForQuery, ToBytes,
+    Authentication, BackendKeyData, CommandComplete, ErrorResponse, Protocol, ReadyForQuery,
 };
 use crate::net::{parameter::Parameters, Stream};
 
@@ -172,7 +169,7 @@ impl Client {
             }
         }
 
-        loop {
+        'main: loop {
             select! {
                 _ = comms.shutting_down() => {
                     if !backend.connected() {
@@ -253,7 +250,10 @@ impl Client {
 
                     // Handle any prepared statements.
                     for statement in buffer.prepared_statements()? {
-                        backend.prepare(&statement).await?;
+                        if let Err(err) = backend.prepare(&statement).await {
+                            self.stream.error(ErrorResponse::from_err(&err)).await?;
+                            continue 'main;
+                        }
                     }
 
                     // Handle COPY subprotocol in a potentially sharded context.
@@ -334,42 +334,10 @@ impl Client {
                 timer = Some(Instant::now());
             }
 
-            match message.code() {
-                // Terminate (F)
-                'X' => return Ok(vec![].into()),
-                'P' => {
-                    let parse = Parse::from_bytes(message.to_bytes()?)?;
-                    if parse.anonymous() {
-                        buffer.push(message);
-                    } else {
-                        buffer.push(self.prepared_statements.insert(parse).message()?);
-                    }
-                }
-                'B' => {
-                    let bind = Bind::from_bytes(message.to_bytes()?)?;
-                    if bind.anonymous() {
-                        buffer.push(message);
-                    } else {
-                        let counter = self
-                            .prepared_statements
-                            .name(&bind.statement)
-                            .ok_or(Error::MissingPreparedStatement(bind.statement.clone()))?;
-                        buffer.push(bind.rename(counter).message()?);
-                    }
-                }
-                'D' => {
-                    let describe = Describe::from_bytes(message.to_bytes()?)?;
-                    if describe.anonymous() {
-                        buffer.push(message);
-                    } else {
-                        let counter = self
-                            .prepared_statements
-                            .name(&describe.statement)
-                            .ok_or(Error::MissingPreparedStatement(describe.statement.clone()))?;
-                        buffer.push(describe.rename(counter).message()?);
-                    }
-                }
-                _ => buffer.push(message),
+            if message.code() == 'X' {
+                return Ok(vec![].into());
+            } else {
+                buffer.push(self.prepared_statements.maybe_rewrite(message)?);
             }
         }
 
