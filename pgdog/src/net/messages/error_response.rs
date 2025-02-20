@@ -54,7 +54,7 @@ impl ErrorResponse {
         ErrorResponse {
             severity: "FATAL".into(),
             code: "57P01".into(),
-            message: "pgDog is shutting down".into(),
+            message: "PgDog is shutting down".into(),
             detail: None,
         }
     }
