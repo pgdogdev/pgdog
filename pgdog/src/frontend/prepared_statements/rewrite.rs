@@ -1,18 +1,22 @@
 //! Rerwrite messages if using prepared statements.
 use crate::net::messages::{Bind, Describe, FromBytes, Message, Parse, Protocol};
 
-use super::{Error, PreparedStatements};
+use super::{request::Request, Error, PreparedStatements};
 
 /// Rewrite messages.
 #[derive(Debug)]
 pub struct Rewrite<'a> {
     statements: &'a mut PreparedStatements,
+    request: Option<Request>,
 }
 
 impl<'a> Rewrite<'a> {
     /// New rewrite module.
     pub fn new(statements: &'a mut PreparedStatements) -> Self {
-        Self { statements }
+        Self {
+            statements,
+            request: None,
+        }
     }
 
     /// Rewrite a message if needed.
@@ -26,42 +30,51 @@ impl<'a> Rewrite<'a> {
     }
 
     /// Rewrite Parse message.
-    pub fn parse(&mut self, message: impl Protocol) -> Result<Message, Error> {
+    fn parse(&mut self, message: impl Protocol) -> Result<Message, Error> {
         let parse = Parse::from_bytes(message.to_bytes()?)?;
 
         if parse.anonymous() {
             Ok(message.message()?)
         } else {
-            Ok(self.statements.insert(parse).message()?)
+            let parse = self.statements.insert(parse);
+            self.request = Some(Request::new(&parse.name, true));
+            Ok(parse.message()?)
         }
     }
 
     /// Rerwrite Bind message.
-    pub fn bind(&mut self, message: impl Protocol) -> Result<Message, Error> {
+    fn bind(&mut self, message: impl Protocol) -> Result<Message, Error> {
         let bind = Bind::from_bytes(message.to_bytes()?)?;
         if bind.anonymous() {
             Ok(message.message()?)
         } else {
-            let counter = self
+            let name = self
                 .statements
                 .name(&bind.statement)
                 .ok_or(Error::MissingPreparedStatement(bind.statement.clone()))?;
-            Ok(bind.rename(counter).message()?)
+            self.request = Some(Request::new(name, false));
+            Ok(bind.rename(name).message()?)
         }
     }
 
     /// Rewrite Describe message.
-    pub fn describe(&mut self, message: impl Protocol) -> Result<Message, Error> {
+    fn describe(&mut self, message: impl Protocol) -> Result<Message, Error> {
         let describe = Describe::from_bytes(message.to_bytes()?)?;
         if describe.anonymous() {
             Ok(message.message()?)
         } else {
-            let counter = self
+            let name = self
                 .statements
                 .name(&describe.statement)
                 .ok_or(Error::MissingPreparedStatement(describe.statement.clone()))?;
-            Ok(describe.rename(counter).message()?)
+            self.request = Some(Request::new(name, false));
+            Ok(describe.rename(name).message()?)
         }
+    }
+
+    /// Consume request.
+    pub(super) fn request(&mut self) -> Option<Request> {
+        self.request.take()
     }
 }
 
@@ -82,6 +95,9 @@ mod test {
         assert!(!parse.anonymous());
         assert_eq!(parse.name, "__pgdog_1");
         assert_eq!(parse.query, "SELECT * FROM users");
+        let request = rewrite.request().unwrap();
+        assert_eq!(request.name, "__pgdog_1");
+        assert!(request.new);
 
         let bind = Bind {
             statement: "__sqlx_1".into(),
@@ -90,6 +106,9 @@ mod test {
 
         let bind = Bind::from_bytes(rewrite.rewrite(bind).unwrap().to_bytes().unwrap()).unwrap();
         assert_eq!(bind.statement, "__pgdog_1");
+        let request = rewrite.request().unwrap();
+        assert_eq!(request.name, "__pgdog_1");
+        assert!(!request.new);
 
         let describe = Describe {
             statement: "__sqlx_1".into(),
@@ -100,6 +119,9 @@ mod test {
             Describe::from_bytes(rewrite.rewrite(describe).unwrap().to_bytes().unwrap()).unwrap();
         assert_eq!(describe.statement, "__pgdog_1");
         assert_eq!(describe.kind, 'S');
+        let request = rewrite.request().unwrap();
+        assert_eq!(request.name, "__pgdog_1");
+        assert!(!request.new);
 
         assert_eq!(statements.len(), 1);
         assert_eq!(statements.global.lock().len(), 1);

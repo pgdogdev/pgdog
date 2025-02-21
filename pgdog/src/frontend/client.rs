@@ -11,7 +11,8 @@ use crate::auth::scram::Server;
 use crate::backend::pool::Connection;
 use crate::config::config;
 use crate::net::messages::{
-    Authentication, BackendKeyData, CommandComplete, ErrorResponse, Protocol, ReadyForQuery,
+    Authentication, BackendKeyData, CommandComplete, ErrorResponse, ParseComplete, Protocol,
+    ReadyForQuery,
 };
 use crate::net::{parameter::Parameters, Stream};
 
@@ -249,10 +250,14 @@ impl Client {
                     }
 
                     // Handle any prepared statements.
-                    for statement in buffer.prepared_statements()? {
-                        if let Err(err) = backend.prepare(&statement).await {
+                    for request in self.prepared_statements.requests() {
+                        if let Err(err) = backend.prepare(&request.name).await {
                             self.stream.error(ErrorResponse::from_err(&err)).await?;
                             continue 'main;
+                        }
+
+                        if request.new {
+                            self.stream.send(ParseComplete).await?;
                         }
                     }
 

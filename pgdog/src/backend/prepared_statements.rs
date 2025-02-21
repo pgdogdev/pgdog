@@ -22,6 +22,7 @@ impl PreparedStatements {
         }
     }
 
+    /// The server has prepared this statement already.
     pub fn contains(&self, name: &str) -> bool {
         self.names.contains(name)
     }

@@ -120,21 +120,6 @@ impl Buffer {
             .map(|m| m.code() == 'd' || m.code() == 'c')
             .unwrap_or(false)
     }
-
-    /// Get all prepared statements (by name) contained in the buffer.
-    pub fn prepared_statements(&self) -> Result<Vec<String>, Error> {
-        let mut names = vec![];
-        for message in &self.buffer {
-            match message.code() {
-                'D' => names.push(Describe::from_bytes(message.to_bytes()?)?.statement),
-                'P' => names.push(Parse::from_bytes(message.to_bytes()?)?.name),
-                'B' => names.push(Bind::from_bytes(message.to_bytes()?)?.statement),
-                _ => (),
-            }
-        }
-
-        Ok(names.into_iter().filter(|name| !name.is_empty()).collect())
-    }
 }
 
 impl From<Buffer> for Vec<Message> {

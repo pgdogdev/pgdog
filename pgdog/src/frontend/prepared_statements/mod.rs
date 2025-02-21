@@ -9,18 +9,21 @@ use crate::net::messages::{Message, Parse, Protocol};
 
 pub mod error;
 pub mod global_cache;
+pub mod request;
 pub mod rewrite;
 
 pub use error::Error;
 pub use global_cache::GlobalCache;
+pub use request::Request;
 pub use rewrite::Rewrite;
 
 static CACHE: Lazy<PreparedStatements> = Lazy::new(PreparedStatements::default);
 
-#[derive(Default, Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct PreparedStatements {
     pub(super) global: Arc<Mutex<GlobalCache>>,
     pub(super) local: HashMap<String, String>,
+    pub(super) requests: Vec<Request>,
 }
 
 impl PreparedStatements {
@@ -37,7 +40,11 @@ impl PreparedStatements {
     /// Maybe rewrite message.
     pub fn maybe_rewrite(&mut self, message: impl Protocol) -> Result<Message, Error> {
         let mut rewrite = Rewrite::new(self);
-        rewrite.rewrite(message)
+        let message = rewrite.rewrite(message)?;
+        if let Some(request) = rewrite.request() {
+            self.requests.push(request);
+        }
+        Ok(message)
     }
 
     /// Register prepared statement with the global cache.
@@ -62,5 +69,10 @@ impl PreparedStatements {
     /// Is the local cache empty?
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    /// Get requests.
+    pub fn requests(&mut self) -> Vec<Request> {
+        std::mem::take(&mut self.requests)
     }
 }
