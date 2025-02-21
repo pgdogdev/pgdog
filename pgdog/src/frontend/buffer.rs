@@ -84,18 +84,22 @@ impl Buffer {
 
                 'B' => {
                     let bind = Bind::from_bytes(message.to_bytes()?)?;
-                    return Ok(PreparedStatements::global()
-                        .lock()
-                        .query(&bind.statement)
-                        .cloned());
+                    if !bind.anonymous() {
+                        return Ok(PreparedStatements::global()
+                            .lock()
+                            .query(&bind.statement)
+                            .cloned());
+                    }
                 }
 
                 'D' => {
                     let describe = Describe::from_bytes(message.to_bytes()?)?;
-                    return Ok(PreparedStatements::global()
-                        .lock()
-                        .query(&describe.statement)
-                        .cloned());
+                    if !describe.anonymous() {
+                        return Ok(PreparedStatements::global()
+                            .lock()
+                            .query(&describe.statement)
+                            .cloned());
+                    }
                 }
 
                 _ => (),
