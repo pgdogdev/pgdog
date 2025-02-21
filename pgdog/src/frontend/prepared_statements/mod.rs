@@ -1,6 +1,9 @@
 //! Prepared statements cache.
 
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{BTreeSet, HashMap},
+    sync::Arc,
+};
 
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
@@ -23,7 +26,7 @@ static CACHE: Lazy<PreparedStatements> = Lazy::new(PreparedStatements::default);
 pub struct PreparedStatements {
     pub(super) global: Arc<Mutex<GlobalCache>>,
     pub(super) local: HashMap<String, String>,
-    pub(super) requests: Vec<Request>,
+    pub(super) requests: BTreeSet<Request>,
 }
 
 impl PreparedStatements {
@@ -42,7 +45,7 @@ impl PreparedStatements {
         let mut rewrite = Rewrite::new(self);
         let message = rewrite.rewrite(message)?;
         if let Some(request) = rewrite.request() {
-            self.requests.push(request);
+            self.requests.insert(request);
         }
         Ok(message)
     }
@@ -73,6 +76,38 @@ impl PreparedStatements {
 
     /// Get requests.
     pub fn requests(&mut self) -> Vec<Request> {
-        std::mem::take(&mut self.requests)
+        std::mem::take(&mut self.requests).into_iter().collect()
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::net::messages::Bind;
+
+    use super::*;
+
+    #[test]
+    fn test_maybe_rewrite() {
+        let mut statements = PreparedStatements::default();
+
+        let messages = vec![
+            Parse::named("__sqlx_1", "SELECT 1").message().unwrap(),
+            Bind {
+                statement: "__sqlx_1".into(),
+                ..Default::default()
+            }
+            .message()
+            .unwrap(),
+        ];
+
+        for message in messages {
+            statements.maybe_rewrite(message).unwrap();
+        }
+
+        let requests = statements.requests();
+        assert_eq!(requests.len(), 1);
+        let request = requests.first().unwrap();
+        assert_eq!(request.name, "__pgdog_1");
+        assert!(request.new);
     }
 }

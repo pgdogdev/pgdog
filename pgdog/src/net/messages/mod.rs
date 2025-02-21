@@ -105,18 +105,29 @@ pub trait Protocol: ToBytes + FromBytes + std::fmt::Debug {
     }
 }
 
+#[derive(Clone, PartialEq, Default, Copy)]
+pub enum Source {
+    Backend,
+    #[default]
+    Frontend,
+}
+
 /// PostgreSQL protocol message.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct Message {
     payload: Bytes,
     stream: bool,
+    source: Source,
 }
 
 impl std::fmt::Debug for Message {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.code() {
             'Q' => Query::from_bytes(self.payload()).unwrap().fmt(f),
-            'D' => DataRow::from_bytes(self.payload()).unwrap().fmt(f),
+            'D' => match self.source {
+                Source::Backend => DataRow::from_bytes(self.payload()).unwrap().fmt(f),
+                Source::Frontend => Describe::from_bytes(self.payload()).unwrap().fmt(f),
+            },
             'T' => RowDescription::from_bytes(self.payload()).unwrap().fmt(f),
             'Z' => ReadyForQuery::from_bytes(self.payload()).unwrap().fmt(f),
             'C' => CommandComplete::from_bytes(self.payload()).unwrap().fmt(f),
@@ -152,6 +163,7 @@ impl FromBytes for Message {
         Ok(Self {
             payload: bytes,
             stream: false,
+            source: Source::default(),
         })
     }
 }
@@ -162,6 +174,7 @@ impl Message {
         Self {
             payload,
             stream: false,
+            source: Source::default(),
         }
     }
 
@@ -184,6 +197,23 @@ impl Message {
     /// Is the message empty?
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    /// This message is coming from the backend.
+    pub fn backend(mut self) -> Self {
+        self.source = Source::Backend;
+        self
+    }
+
+    /// This message is coming from the frontend.
+    pub fn frontend(mut self) -> Self {
+        self.source = Source::Frontend;
+        self
+    }
+
+    /// Where is this message coming from?
+    pub fn source(&self) -> Source {
+        self.source
     }
 }
 

@@ -168,6 +168,10 @@ impl FromBytes for DataRow {
                 let len = bytes.get_i32() as isize; // NULL = -1
                 let mut column = BytesMut::new();
 
+                if len < 0 {
+                    return column.freeze();
+                }
+
                 for _ in 0..len {
                     column.put_u8(bytes.get_u8());
                 }

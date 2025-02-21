@@ -27,6 +27,11 @@ impl PreparedStatements {
         self.names.contains(name)
     }
 
+    /// Indicate this statement is prepared on the connection.
+    pub fn prepared(&mut self, name: &str) {
+        self.names.insert(name.to_owned());
+    }
+
     pub fn parse(&self, name: &str) -> Option<Parse> {
         self.cache.lock().parse(name)
     }

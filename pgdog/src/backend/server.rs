@@ -226,7 +226,7 @@ impl Server {
     /// Read a single message from the server.
     pub async fn read(&mut self) -> Result<Message, Error> {
         let message = match self.stream().read().await {
-            Ok(message) => message.stream(self.streaming),
+            Ok(message) => message.stream(self.streaming).backend(),
             Err(err) => {
                 self.stats.state(State::Error);
                 return Err(err.into());
@@ -371,6 +371,8 @@ impl Server {
             .parse(name)
             .ok_or(Error::PreparedStatementMissing(name.to_string()))?;
 
+        debug!("preparing \"{}\" [{}]", parse.name, self.addr());
+
         self.send(vec![parse.message()?, Flush.message()?]).await?;
         let response = self.read().await?;
 
@@ -378,7 +380,10 @@ impl Server {
             'E' => Err(Error::PreparedStatementError(ErrorResponse::from_bytes(
                 response.to_bytes()?,
             )?)),
-            '1' => Ok(true),
+            '1' => {
+                self.prepared_statements.prepared(name);
+                Ok(true)
+            }
             code => Err(Error::ExpectedParseComplete(code)),
         }
     }

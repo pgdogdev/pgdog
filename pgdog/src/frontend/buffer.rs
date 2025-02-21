@@ -3,9 +3,7 @@
 use std::ops::{Deref, DerefMut};
 
 use crate::net::{
-    messages::{
-        parse::Parse, Bind, CopyData, Describe, FromBytes, Message, Protocol, Query, ToBytes,
-    },
+    messages::{parse::Parse, Bind, CopyData, FromBytes, Message, Protocol, Query, ToBytes},
     Error,
 };
 
@@ -110,6 +108,13 @@ impl Buffer {
     pub fn without_copy_data(&self) -> Self {
         let mut buffer = self.buffer.clone();
         buffer.retain(|m| m.code() != 'd');
+        Self { buffer }
+    }
+
+    /// Remove Parse message and return the rest.
+    pub fn without_parse(&self) -> Self {
+        let mut buffer = self.buffer.clone();
+        buffer.retain(|m| m.code() != 'P');
         Self { buffer }
     }
 

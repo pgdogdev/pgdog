@@ -179,7 +179,7 @@ impl Client {
                 }
 
                 buffer = self.buffer() => {
-                    let buffer = buffer?;
+                    let mut buffer = buffer?;
                     if buffer.is_empty() {
                         break;
                     }
@@ -258,6 +258,7 @@ impl Client {
 
                         if request.new {
                             self.stream.send(ParseComplete).await?;
+                            buffer = buffer.without_parse();
                         }
                     }
 
@@ -329,7 +330,7 @@ impl Client {
 
         while !buffer.full() {
             let message = match self.stream.read().await {
-                Ok(message) => message.stream(self.streaming),
+                Ok(message) => message.stream(self.streaming).frontend(),
                 Err(_) => {
                     return Ok(vec![].into());
                 }

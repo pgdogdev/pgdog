@@ -72,7 +72,7 @@ impl QueryParser {
     pub fn copy_data(&mut self, rows: Vec<CopyData>) -> Result<Vec<CopyRow>, Error> {
         match &mut self.command {
             Command::Copy(copy) => copy.shard(rows),
-            _ => Err(Error::CopyOutOfSync),
+            _ => Ok(vec![]),
         }
     }
 
