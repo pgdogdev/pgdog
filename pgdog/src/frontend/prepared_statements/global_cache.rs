@@ -27,8 +27,15 @@ impl GlobalCache {
         }
     }
 
+    /// Get query stored in the global cache.
+    #[inline]
+    pub fn query(&self, name: &str) -> Option<&String> {
+        self.names.get(name)
+    }
+
+    /// Construct a Parse message from a query stored in the global cache.
     pub fn parse(&self, name: &str) -> Option<Parse> {
-        self.names.get(name).map(|query| Parse::named(name, query))
+        self.query(name).map(|query| Parse::named(name, query))
     }
 
     pub fn len(&self) -> usize {

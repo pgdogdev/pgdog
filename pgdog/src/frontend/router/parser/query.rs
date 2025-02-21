@@ -10,11 +10,11 @@ use crate::{
     net::messages::{Bind, CopyData},
 };
 
-use super::{CopyParser, Error, Insert, Key, Route, WhereClause};
+use super::{Cache, CopyParser, Error, Insert, Key, Route, WhereClause};
 
 use once_cell::sync::Lazy;
 use pg_query::{
-    fingerprint, parse,
+    fingerprint,
     protobuf::{a_const::Val, *},
     NodeEnum,
 };
@@ -125,7 +125,7 @@ impl QueryParser {
             }
         }
 
-        let ast = parse(query).map_err(Error::PgQuery)?;
+        let ast = Cache::get().parse(query).map_err(Error::PgQuery)?;
 
         debug!("{}", query);
         trace!("{:#?}", ast);

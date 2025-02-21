@@ -13,6 +13,12 @@ pub struct PreparedStatements {
     names: HashSet<String>,
 }
 
+impl Default for PreparedStatements {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PreparedStatements {
     /// New server prepared statements.
     pub fn new() -> Self {
