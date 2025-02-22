@@ -37,7 +37,7 @@ impl Cleanup {
     /// Cleanup parameters.
     pub fn parameters() -> Self {
         Self {
-            queries: vec!["RESET ALL"],
+            queries: vec!["RESET ALL", "DISCARD ALL"],
         }
     }
 

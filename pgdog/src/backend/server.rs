@@ -483,6 +483,11 @@ impl Server {
     pub fn streaming(&self) -> bool {
         self.streaming
     }
+
+    #[inline]
+    pub(super) fn prepared_statements(&mut self) -> &mut PreparedStatements {
+        &mut self.prepared_statements
+    }
 }
 
 impl Drop for Server {
