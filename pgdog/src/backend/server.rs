@@ -12,7 +12,7 @@ use tracing::{debug, info, trace, warn};
 
 use super::{pool::Address, Error, PreparedStatements, Stats};
 use crate::net::{
-    messages::{Flush, NoticeResponse},
+    messages::{Close, Flush, NoticeResponse},
     parameter::Parameters,
     tls::connector,
     Parameter, Stream,
@@ -37,6 +37,7 @@ pub struct Server {
     prepared_statements: PreparedStatements,
     dirty: bool,
     streaming: bool,
+    schema_changed: bool,
 }
 
 impl Server {
@@ -162,6 +163,7 @@ impl Server {
             prepared_statements: PreparedStatements::new(),
             dirty: false,
             streaming: false,
+            schema_changed: false,
         })
     }
 
@@ -254,7 +256,11 @@ impl Server {
                 self.streaming = false;
             }
             '1' => self.stats.prepared_statement(),
-            'E' => self.stats.error(),
+            'E' => {
+                let error = ErrorResponse::from_bytes(message.to_bytes()?)?;
+                self.schema_changed = error.code == "0A000";
+                self.stats.error()
+            }
             'W' => {
                 debug!("streaming replication on [{}]", self.addr());
                 self.streaming = true;
@@ -295,6 +301,11 @@ impl Server {
     #[inline]
     pub fn error(&self) -> bool {
         self.stats.state == State::Error
+    }
+
+    /// Did the schema change and prepared statements are broken.
+    pub fn schema_changed(&self) -> bool {
+        self.schema_changed
     }
 
     /// Server parameters.
@@ -357,7 +368,7 @@ impl Server {
     }
 
     /// Prepare a statement on this connection if it doesn't exist already.
-    pub async fn prepare(&mut self, name: &str) -> Result<bool, Error> {
+    pub async fn prepare_statement(&mut self, name: &str) -> Result<bool, Error> {
         if self.prepared_statements.contains(name) {
             return Ok(false);
         }
@@ -377,15 +388,42 @@ impl Server {
         let response = self.read().await?;
 
         match response.code() {
-            'E' => Err(Error::PreparedStatementError(ErrorResponse::from_bytes(
-                response.to_bytes()?,
-            )?)),
+            'E' => {
+                let error = ErrorResponse::from_bytes(response.to_bytes()?)?;
+                Err(Error::PreparedStatementError(error))
+            }
             '1' => {
                 self.prepared_statements.prepared(name);
                 Ok(true)
             }
             code => Err(Error::ExpectedParseComplete(code)),
         }
+    }
+
+    pub async fn close_statement(&mut self, name: &str) -> Result<(), Error> {
+        self.send(vec![Close::named(name).message()?, Flush.message()?])
+            .await?;
+        let response = self.read().await?;
+
+        match response.code() {
+            '3' => {
+                self.prepared_statements.remove(name);
+                Ok(())
+            }
+            'E' => {
+                let error = ErrorResponse::from_bytes(response.to_bytes()?)?;
+                Err(Error::PreparedStatementError(error))
+            }
+            code => Err(Error::ExpectedCloseComplete(code)),
+        }
+    }
+
+    /// Remove all prepared statements from the server connection.
+    pub async fn close_all_statements(&mut self) -> Result<(), Error> {
+        self.execute_batch(&["DISCARD ALL"]).await?;
+        self.prepared_statements.clear();
+
+        Ok(())
     }
 
     /// Server connection unique identifier.
@@ -484,6 +522,7 @@ mod test {
                 addr,
                 dirty: false,
                 streaming: false,
+                schema_changed: false,
             }
         }
     }

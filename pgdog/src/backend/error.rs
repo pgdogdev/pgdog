@@ -63,6 +63,9 @@ pub enum Error {
     #[error("expected '1', got '{0}")]
     ExpectedParseComplete(char),
 
+    #[error("expected '3', got '{0}'")]
+    ExpectedCloseComplete(char),
+
     #[error("unsupported authentication algorithm")]
     UnsupportedAuth,
 

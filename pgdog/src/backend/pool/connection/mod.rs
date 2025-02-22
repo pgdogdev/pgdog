@@ -203,11 +203,11 @@ impl Connection {
     pub async fn prepare(&mut self, name: &str) -> Result<(), Error> {
         match self.binding {
             Binding::Server(Some(ref mut server)) => {
-                server.prepare(name).await?;
+                server.prepare_statement(name).await?;
             }
             Binding::MultiShard(ref mut servers, _) => {
                 for server in servers {
-                    server.prepare(name).await?;
+                    server.prepare_statement(name).await?;
                 }
             }
             _ => (),

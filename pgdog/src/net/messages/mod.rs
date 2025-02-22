@@ -2,6 +2,7 @@
 pub mod auth;
 pub mod backend_key;
 pub mod bind;
+pub mod close;
 pub mod command_complete;
 pub mod copy_data;
 pub mod data_row;
@@ -24,6 +25,7 @@ pub mod terminate;
 pub use auth::{Authentication, Password};
 pub use backend_key::BackendKeyData;
 pub use bind::{Bind, Parameter, ParameterWithFormat};
+pub use close::Close;
 pub use command_complete::CommandComplete;
 pub use copy_data::CopyData;
 pub use data_row::{DataRow, ToDataRowColumn};
@@ -130,7 +132,10 @@ impl std::fmt::Debug for Message {
             },
             'T' => RowDescription::from_bytes(self.payload()).unwrap().fmt(f),
             'Z' => ReadyForQuery::from_bytes(self.payload()).unwrap().fmt(f),
-            'C' => CommandComplete::from_bytes(self.payload()).unwrap().fmt(f),
+            'C' => match self.source {
+                Source::Backend => CommandComplete::from_bytes(self.payload()).unwrap().fmt(f),
+                Source::Frontend => Close::from_bytes(self.payload()).unwrap().fmt(f),
+            },
             'd' => CopyData::from_bytes(self.payload()).unwrap().fmt(f),
             'W' => f.debug_struct("CopyBothResponse").finish(),
             'I' => f.debug_struct("EmptyQueryResponse").finish(),

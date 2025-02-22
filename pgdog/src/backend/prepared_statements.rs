@@ -41,4 +41,13 @@ impl PreparedStatements {
     pub fn parse(&self, name: &str) -> Option<Parse> {
         self.cache.lock().parse(name)
     }
+
+    pub fn remove(&mut self, name: &str) -> bool {
+        self.names.remove(name)
+    }
+
+    /// Indicate all prepared statements have been removed.
+    pub fn clear(&mut self) {
+        self.names.clear();
+    }
 }

@@ -20,6 +20,8 @@ impl Cleanup {
             Self::all()
         } else if server.dirty() {
             Self::parameters()
+        } else if server.schema_changed() {
+            Self::prepared_statements()
         } else {
             Self::none()
         }
@@ -28,7 +30,7 @@ impl Cleanup {
     /// Cleanup prepared statements.
     pub fn prepared_statements() -> Self {
         Self {
-            queries: vec!["DISCARD ALL"],
+            queries: vec!["DEALLOCATE ALL"],
         }
     }
 
@@ -42,7 +44,7 @@ impl Cleanup {
     /// Cleanup everything.
     pub fn all() -> Self {
         Self {
-            queries: vec!["RESET ALL", "DISCARD ALL"],
+            queries: vec!["RESET ALL", "DISCARD ALL", "DEALLOCATE ALL"],
         }
     }
 
