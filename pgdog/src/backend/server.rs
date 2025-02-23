@@ -12,7 +12,7 @@ use tracing::{debug, info, trace, warn};
 
 use super::{pool::Address, Error, PreparedStatements, Stats};
 use crate::net::{
-    messages::{Close, Flush, NoticeResponse},
+    messages::{Flush, NoticeResponse},
     parameter::Parameters,
     tls::connector,
     Parameter, Stream,
@@ -398,32 +398,6 @@ impl Server {
             }
             code => Err(Error::ExpectedParseComplete(code)),
         }
-    }
-
-    pub async fn close_statement(&mut self, name: &str) -> Result<(), Error> {
-        self.send(vec![Close::named(name).message()?, Flush.message()?])
-            .await?;
-        let response = self.read().await?;
-
-        match response.code() {
-            '3' => {
-                self.prepared_statements.remove(name);
-                Ok(())
-            }
-            'E' => {
-                let error = ErrorResponse::from_bytes(response.to_bytes()?)?;
-                Err(Error::PreparedStatementError(error))
-            }
-            code => Err(Error::ExpectedCloseComplete(code)),
-        }
-    }
-
-    /// Remove all prepared statements from the server connection.
-    pub async fn close_all_statements(&mut self) -> Result<(), Error> {
-        self.execute_batch(&["DISCARD ALL"]).await?;
-        self.prepared_statements.clear();
-
-        Ok(())
     }
 
     /// Reset error state caused by schema change.
