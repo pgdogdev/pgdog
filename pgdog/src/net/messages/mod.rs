@@ -2,15 +2,18 @@
 pub mod auth;
 pub mod backend_key;
 pub mod bind;
+pub mod close;
 pub mod command_complete;
 pub mod copy_data;
 pub mod data_row;
+pub mod describe;
 pub mod error_response;
 pub mod flush;
 pub mod hello;
 pub mod notice_response;
 pub mod parameter_status;
 pub mod parse;
+pub mod parse_complete;
 pub mod payload;
 pub mod prelude;
 pub mod query;
@@ -22,14 +25,18 @@ pub mod terminate;
 pub use auth::{Authentication, Password};
 pub use backend_key::BackendKeyData;
 pub use bind::{Bind, Parameter, ParameterWithFormat};
-use command_complete::CommandComplete;
+pub use close::Close;
+pub use command_complete::CommandComplete;
 pub use copy_data::CopyData;
 pub use data_row::{DataRow, ToDataRowColumn};
+pub use describe::Describe;
 pub use error_response::ErrorResponse;
 pub use flush::Flush;
 pub use hello::Startup;
 pub use notice_response::NoticeResponse;
 pub use parameter_status::ParameterStatus;
+pub use parse::Parse;
+pub use parse_complete::ParseComplete;
 pub use payload::Payload;
 pub use query::Query;
 pub use rfq::ReadyForQuery;
@@ -100,21 +107,48 @@ pub trait Protocol: ToBytes + FromBytes + std::fmt::Debug {
     }
 }
 
+#[derive(Clone, PartialEq, Default, Copy)]
+pub enum Source {
+    Backend,
+    #[default]
+    Frontend,
+}
+
 /// PostgreSQL protocol message.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct Message {
     payload: Bytes,
     stream: bool,
+    source: Source,
 }
 
 impl std::fmt::Debug for Message {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.code() {
             'Q' => Query::from_bytes(self.payload()).unwrap().fmt(f),
-            'D' => DataRow::from_bytes(self.payload()).unwrap().fmt(f),
+            'D' => match self.source {
+                Source::Backend => DataRow::from_bytes(self.payload()).unwrap().fmt(f),
+                Source::Frontend => Describe::from_bytes(self.payload()).unwrap().fmt(f),
+            },
+            'P' => Parse::from_bytes(self.payload()).unwrap().fmt(f),
+            'B' => Bind::from_bytes(self.payload()).unwrap().fmt(f),
+            'S' => match self.source {
+                Source::Frontend => f.debug_struct("Sync").finish(),
+                Source::Backend => ParameterStatus::from_bytes(self.payload()).unwrap().fmt(f),
+            },
+            '1' => ParseComplete::from_bytes(self.payload()).unwrap().fmt(f),
+            '2' => f.debug_struct("BindComplete").finish(),
+            '3' => f.debug_struct("CloseComplete").finish(),
+            'E' => match self.source {
+                Source::Frontend => f.debug_struct("Execute").finish(),
+                Source::Backend => ErrorResponse::from_bytes(self.payload()).unwrap().fmt(f),
+            },
             'T' => RowDescription::from_bytes(self.payload()).unwrap().fmt(f),
             'Z' => ReadyForQuery::from_bytes(self.payload()).unwrap().fmt(f),
-            'C' => CommandComplete::from_bytes(self.payload()).unwrap().fmt(f),
+            'C' => match self.source {
+                Source::Backend => CommandComplete::from_bytes(self.payload()).unwrap().fmt(f),
+                Source::Frontend => Close::from_bytes(self.payload()).unwrap().fmt(f),
+            },
             'd' => CopyData::from_bytes(self.payload()).unwrap().fmt(f),
             'W' => f.debug_struct("CopyBothResponse").finish(),
             'I' => f.debug_struct("EmptyQueryResponse").finish(),
@@ -147,6 +181,7 @@ impl FromBytes for Message {
         Ok(Self {
             payload: bytes,
             stream: false,
+            source: Source::default(),
         })
     }
 }
@@ -157,6 +192,7 @@ impl Message {
         Self {
             payload,
             stream: false,
+            source: Source::default(),
         }
     }
 
@@ -179,6 +215,23 @@ impl Message {
     /// Is the message empty?
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    /// This message is coming from the backend.
+    pub fn backend(mut self) -> Self {
+        self.source = Source::Backend;
+        self
+    }
+
+    /// This message is coming from the frontend.
+    pub fn frontend(mut self) -> Self {
+        self.source = Source::Frontend;
+        self
+    }
+
+    /// Where is this message coming from?
+    pub fn source(&self) -> Source {
+        self.source
     }
 }
 

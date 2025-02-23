@@ -20,6 +20,8 @@ pub enum State {
     Error,
     /// Parse complete.
     ParseComplete,
+    /// Prepared statement error.
+    PreparedStatementError,
 }
 
 impl std::fmt::Display for State {
@@ -34,6 +36,7 @@ impl std::fmt::Display for State {
             Disconnected => write!(f, "disconnected"),
             Error => write!(f, "error"),
             ParseComplete => write!(f, "parse complete"),
+            PreparedStatementError => write!(f, "prepared statement error"),
         }
     }
 }

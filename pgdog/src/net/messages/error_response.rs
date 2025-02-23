@@ -8,10 +8,10 @@ use super::prelude::*;
 /// ErrorResponse (B) message.
 #[derive(Debug)]
 pub struct ErrorResponse {
-    severity: String,
-    code: String,
-    message: String,
-    detail: Option<String>,
+    pub severity: String,
+    pub code: String,
+    pub message: String,
+    pub detail: Option<String>,
 }
 
 impl Default for ErrorResponse {

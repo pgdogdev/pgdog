@@ -19,6 +19,11 @@ impl CopyRow {
         }
     }
 
+    /// Send copy row to all shards.
+    pub fn omnishard(row: CopyData) -> Self {
+        Self { row, shard: None }
+    }
+
     /// Which shard it should go to.
     pub fn shard(&self) -> Option<usize> {
         self.shard

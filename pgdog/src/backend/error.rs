@@ -54,8 +54,17 @@ pub enum Error {
     #[error("config error")]
     Config(#[from] crate::config::error::Error),
 
+    #[error("{0}")]
+    PreparedStatementError(ErrorResponse),
+
+    #[error("prepared statement \"{0}\" is missing")]
+    PreparedStatementMissing(String),
+
     #[error("expected '1', got '{0}")]
     ExpectedParseComplete(char),
+
+    #[error("expected '3', got '{0}'")]
+    ExpectedCloseComplete(char),
 
     #[error("unsupported authentication algorithm")]
     UnsupportedAuth,

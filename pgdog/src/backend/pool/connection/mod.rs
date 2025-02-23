@@ -118,6 +118,10 @@ impl Connection {
                     let _ = replace(existing, Some(server));
                 }
 
+                Binding::MultiShard(_, _) => {
+                    self.binding = Binding::Server(Some(server));
+                }
+
                 _ => (),
             };
         } else if route.is_all_shards() {
@@ -193,6 +197,23 @@ impl Connection {
                 self.cluster = Some(cluster);
             }
 
+            _ => (),
+        }
+
+        Ok(())
+    }
+
+    /// Make sure a prepared statement exists on the connection.
+    pub async fn prepare(&mut self, name: &str) -> Result<(), Error> {
+        match self.binding {
+            Binding::Server(Some(ref mut server)) => {
+                server.prepare_statement(name).await?;
+            }
+            Binding::MultiShard(ref mut servers, _) => {
+                for server in servers {
+                    server.prepare_statement(name).await?;
+                }
+            }
             _ => (),
         }
 

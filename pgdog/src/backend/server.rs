@@ -1,8 +1,5 @@
 //! PostgreSQL serer connection.
-use std::{
-    collections::HashSet,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
 use bytes::{BufMut, BytesMut};
 use rustls_pki_types::ServerName;
@@ -13,9 +10,9 @@ use tokio::{
 };
 use tracing::{debug, info, trace, warn};
 
-use super::{pool::Address, Error, Stats};
+use super::{pool::Address, Error, PreparedStatements, Stats};
 use crate::net::{
-    messages::{parse::Parse, Flush, NoticeResponse},
+    messages::{Flush, NoticeResponse},
     parameter::Parameters,
     tls::connector,
     Parameter, Stream,
@@ -37,9 +34,10 @@ pub struct Server {
     id: BackendKeyData,
     params: Parameters,
     stats: Stats,
-    prepared_statements: HashSet<String>,
+    prepared_statements: PreparedStatements,
     dirty: bool,
     streaming: bool,
+    schema_changed: bool,
 }
 
 impl Server {
@@ -162,9 +160,10 @@ impl Server {
             id,
             params,
             stats: Stats::connect(id, addr),
-            prepared_statements: HashSet::new(),
+            prepared_statements: PreparedStatements::new(),
             dirty: false,
             streaming: false,
+            schema_changed: false,
         })
     }
 
@@ -229,7 +228,7 @@ impl Server {
     /// Read a single message from the server.
     pub async fn read(&mut self) -> Result<Message, Error> {
         let message = match self.stream().read().await {
-            Ok(message) => message.stream(self.streaming),
+            Ok(message) => message.stream(self.streaming).backend(),
             Err(err) => {
                 self.stats.state(State::Error);
                 return Err(err.into());
@@ -256,8 +255,11 @@ impl Server {
 
                 self.streaming = false;
             }
-            '1' => self.stats.prepared_statement(),
-            'E' => self.stats.error(),
+            'E' => {
+                let error = ErrorResponse::from_bytes(message.to_bytes()?)?;
+                self.schema_changed = error.code == "0A000";
+                self.stats.error()
+            }
             'W' => {
                 debug!("streaming replication on [{}]", self.addr());
                 self.streaming = true;
@@ -298,6 +300,11 @@ impl Server {
     #[inline]
     pub fn error(&self) -> bool {
         self.stats.state == State::Error
+    }
+
+    /// Did the schema change and prepared statements are broken.
+    pub fn schema_changed(&self) -> bool {
+        self.schema_changed
     }
 
     /// Server parameters.
@@ -360,8 +367,8 @@ impl Server {
     }
 
     /// Prepare a statement on this connection if it doesn't exist already.
-    pub async fn prepare(&mut self, parse: &Parse) -> Result<bool, Error> {
-        if self.prepared_statements.contains(&parse.name) {
+    pub async fn prepare_statement(&mut self, name: &str) -> Result<bool, Error> {
+        if self.prepared_statements.contains(name) {
             return Ok(false);
         }
 
@@ -369,14 +376,35 @@ impl Server {
             return Err(Error::NotInSync);
         }
 
+        let parse = self
+            .prepared_statements
+            .parse(name)
+            .ok_or(Error::PreparedStatementMissing(name.to_string()))?;
+
+        debug!("preparing \"{}\" [{}]", parse.name, self.addr());
+
         self.send(vec![parse.message()?, Flush.message()?]).await?;
-        let parse_complete = self.read().await?;
+        let response = self.read().await?;
 
-        if parse_complete.code() != '1' {
-            return Err(Error::ExpectedParseComplete(parse_complete.code()));
+        match response.code() {
+            'E' => {
+                let error = ErrorResponse::from_bytes(response.to_bytes()?)?;
+                Err(Error::PreparedStatementError(error))
+            }
+            '1' => {
+                self.prepared_statements.prepared(name);
+                self.stats.prepared_statement();
+                Ok(true)
+            }
+            code => Err(Error::ExpectedParseComplete(code)),
         }
+    }
 
-        Ok(true)
+    /// Reset error state caused by schema change.
+    #[inline]
+    pub fn reset_schema_changed(&mut self) {
+        self.schema_changed = false;
+        self.prepared_statements.clear();
     }
 
     /// Server connection unique identifier.
@@ -471,10 +499,11 @@ mod test {
                 id,
                 params: Parameters::default(),
                 stats: Stats::connect(id, &addr),
-                prepared_statements: HashSet::new(),
+                prepared_statements: PreparedStatements::new(),
                 addr,
                 dirty: false,
                 streaming: false,
+                schema_changed: false,
             }
         }
     }

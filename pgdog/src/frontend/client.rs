@@ -6,13 +6,13 @@ use std::time::Instant;
 use tokio::{select, spawn};
 use tracing::{debug, error, info, trace};
 
-use super::{Buffer, Command, Comms, Error, Router, Stats};
+use super::{Buffer, Command, Comms, Error, PreparedStatements, Router, Stats};
 use crate::auth::scram::Server;
 use crate::backend::pool::Connection;
 use crate::config::config;
-use crate::net::messages::command_complete::CommandComplete;
 use crate::net::messages::{
-    Authentication, BackendKeyData, ErrorResponse, Protocol, ReadyForQuery,
+    Authentication, BackendKeyData, CommandComplete, ErrorResponse, ParseComplete, Protocol,
+    ReadyForQuery,
 };
 use crate::net::{parameter::Parameters, Stream};
 
@@ -27,6 +27,7 @@ pub struct Client {
     admin: bool,
     streaming: bool,
     shard: Option<usize>,
+    prepared_statements: PreparedStatements,
 }
 
 impl Client {
@@ -118,6 +119,7 @@ impl Client {
             streaming: false,
             shard,
             params,
+            prepared_statements: PreparedStatements::new(),
         };
 
         if client.admin {
@@ -168,7 +170,7 @@ impl Client {
             }
         }
 
-        loop {
+        'main: loop {
             select! {
                 _ = comms.shutting_down() => {
                     if !backend.connected() {
@@ -177,6 +179,7 @@ impl Client {
                 }
 
                 buffer = self.buffer() => {
+                    let mut buffer = buffer?;
                     if buffer.is_empty() {
                         break;
                     }
@@ -246,6 +249,19 @@ impl Client {
                         }
                     }
 
+                    // Handle any prepared statements.
+                    for request in self.prepared_statements.requests() {
+                        if let Err(err) = backend.prepare(&request.name).await {
+                            self.stream.error(ErrorResponse::from_err(&err)).await?;
+                            continue 'main;
+                        }
+
+                        if request.new {
+                            self.stream.send(ParseComplete).await?;
+                            buffer = buffer.without_parse();
+                        }
+                    }
+
                     // Handle COPY subprotocol in a potentially sharded context.
                     if buffer.copy() && !self.streaming {
                         let rows = router.copy_data(&buffer)?;
@@ -308,15 +324,15 @@ impl Client {
     ///
     /// This ensures we don't check out a connection from the pool until the client
     /// sent a complete request.
-    async fn buffer(&mut self) -> Buffer {
+    async fn buffer(&mut self) -> Result<Buffer, Error> {
         let mut buffer = Buffer::new();
         let mut timer = None;
 
         while !buffer.full() {
             let message = match self.stream.read().await {
-                Ok(message) => message.stream(self.streaming),
+                Ok(message) => message.stream(self.streaming).frontend(),
                 Err(_) => {
-                    return vec![].into();
+                    return Ok(vec![].into());
                 }
             };
 
@@ -324,10 +340,10 @@ impl Client {
                 timer = Some(Instant::now());
             }
 
-            match message.code() {
-                // Terminate (F)
-                'X' => return vec![].into(),
-                _ => buffer.push(message),
+            if message.code() == 'X' {
+                return Ok(vec![].into());
+            } else {
+                buffer.push(self.prepared_statements.maybe_rewrite(message)?);
             }
         }
 
@@ -336,7 +352,7 @@ impl Client {
             timer.unwrap().elapsed().as_secs_f64() * 1000.0
         );
 
-        buffer
+        Ok(buffer)
     }
 
     /// Tell the client we started a transaction.

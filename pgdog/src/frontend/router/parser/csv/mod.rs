@@ -6,6 +6,11 @@ pub mod record;
 pub use iterator::Iter;
 pub use record::Record;
 
+static RECORD_BUFFER: usize = 4096;
+static ENDS_BUFFER: usize = 2048; // Max of 2048 columns in a CSV.
+                                  // Postgres supports a max of 1600 columns in a table,
+                                  // so we are well within bounds.
+
 /// CSV reader that can handle partial inputs.
 #[derive(Debug, Clone)]
 pub struct CsvStream {
@@ -32,8 +37,8 @@ impl CsvStream {
     pub fn new(delimiter: char, headers: bool) -> Self {
         Self {
             buffer: Vec::new(),
-            record: Vec::new(),
-            ends: vec![0usize; 2048],
+            record: vec![0u8; RECORD_BUFFER],
+            ends: vec![0usize; ENDS_BUFFER],
             reader: Self::reader(delimiter),
             read: 0,
             delimiter,
@@ -84,7 +89,7 @@ impl CsvStream {
                     let record =
                         Record::new(&self.record[..written], &self.ends[..ends], self.delimiter);
                     self.read += read;
-                    self.record.clear();
+                    self.record.fill(0u8);
 
                     if self.headers && self.headers_record.is_none() {
                         self.headers_record = Some(record);

@@ -52,6 +52,7 @@ impl Guard {
             let rollback = server.in_transaction();
             let cleanup = Cleanup::new(self, &server);
             let reset = cleanup.needed();
+            let schema_changed = server.schema_changed();
 
             // No need to delay checkin unless we have to.
             if rollback || reset {
@@ -73,6 +74,10 @@ impl Guard {
                             debug!("{} [{}]", cleanup, server.addr());
                             server.cleaned();
                         }
+                    }
+
+                    if schema_changed {
+                        server.reset_schema_changed();
                     }
 
                     pool.checkin(server);

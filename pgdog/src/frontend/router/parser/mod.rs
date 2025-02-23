@@ -1,5 +1,6 @@
 //! Query parser.
 
+pub mod cache;
 pub mod column;
 pub mod comment;
 pub mod copy;
@@ -15,6 +16,7 @@ pub mod tuple;
 pub mod value;
 pub mod where_clause;
 
+pub use cache::Cache;
 pub use column::Column;
 pub use copy::CopyParser;
 pub use csv::{CsvStream, Record};
