@@ -118,6 +118,10 @@ impl Connection {
                     let _ = replace(existing, Some(server));
                 }
 
+                Binding::MultiShard(_, _) => {
+                    self.binding = Binding::Server(Some(server));
+                }
+
                 _ => (),
             };
         } else if route.is_all_shards() {

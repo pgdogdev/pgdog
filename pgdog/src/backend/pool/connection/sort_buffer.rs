@@ -15,7 +15,7 @@ enum SortableValue {
 }
 
 /// Sort rows received from multiple shards.
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub(super) struct SortBuffer {
     buffer: VecDeque<DataRow>,
     full: bool,

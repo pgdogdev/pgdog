@@ -13,6 +13,7 @@ use super::prelude::Message;
 use super::Error;
 
 /// Admin backend.
+#[derive(Debug)]
 pub struct Backend {
     messages: VecDeque<Message>,
 }

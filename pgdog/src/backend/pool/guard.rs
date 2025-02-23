@@ -55,7 +55,7 @@ impl Guard {
             let schema_changed = server.schema_changed();
 
             // No need to delay checkin unless we have to.
-            if rollback || reset || schema_changed {
+            if rollback || reset {
                 let rollback_timeout = pool.lock().config.rollback_timeout();
                 spawn(async move {
                     // Rollback any unfinished transactions,
@@ -77,7 +77,7 @@ impl Guard {
                     }
 
                     if schema_changed {
-                        server.prepared_statements().clear();
+                        server.reset_schema_changed();
                     }
 
                     pool.checkin(server);

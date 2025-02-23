@@ -255,7 +255,6 @@ impl Server {
 
                 self.streaming = false;
             }
-            '1' => self.stats.prepared_statement(),
             'E' => {
                 let error = ErrorResponse::from_bytes(message.to_bytes()?)?;
                 self.schema_changed = error.code == "0A000";
@@ -394,6 +393,7 @@ impl Server {
             }
             '1' => {
                 self.prepared_statements.prepared(name);
+                self.stats.prepared_statement();
                 Ok(true)
             }
             code => Err(Error::ExpectedParseComplete(code)),
@@ -424,6 +424,13 @@ impl Server {
         self.prepared_statements.clear();
 
         Ok(())
+    }
+
+    /// Reset error state caused by schema change.
+    #[inline]
+    pub fn reset_schema_changed(&mut self) {
+        self.schema_changed = false;
+        self.prepared_statements.clear();
     }
 
     /// Server connection unique identifier.
@@ -482,11 +489,6 @@ impl Server {
     #[inline]
     pub fn streaming(&self) -> bool {
         self.streaming
-    }
-
-    #[inline]
-    pub(super) fn prepared_statements(&mut self) -> &mut PreparedStatements {
-        &mut self.prepared_statements
     }
 }
 

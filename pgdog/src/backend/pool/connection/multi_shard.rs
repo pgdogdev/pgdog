@@ -12,7 +12,7 @@ use crate::{
 use super::sort_buffer::SortBuffer;
 
 /// Multi-shard state.
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub(super) struct MultiShard {
     /// Number of shards we are connected to.
     shards: usize,

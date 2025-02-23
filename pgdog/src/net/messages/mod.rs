@@ -130,6 +130,19 @@ impl std::fmt::Debug for Message {
                 Source::Backend => DataRow::from_bytes(self.payload()).unwrap().fmt(f),
                 Source::Frontend => Describe::from_bytes(self.payload()).unwrap().fmt(f),
             },
+            'P' => Parse::from_bytes(self.payload()).unwrap().fmt(f),
+            'B' => Bind::from_bytes(self.payload()).unwrap().fmt(f),
+            'S' => match self.source {
+                Source::Frontend => f.debug_struct("Sync").finish(),
+                Source::Backend => ParameterStatus::from_bytes(self.payload()).unwrap().fmt(f),
+            },
+            '1' => ParseComplete::from_bytes(self.payload()).unwrap().fmt(f),
+            '2' => f.debug_struct("BindComplete").finish(),
+            '3' => f.debug_struct("CloseComplete").finish(),
+            'E' => match self.source {
+                Source::Frontend => f.debug_struct("Execute").finish(),
+                Source::Backend => ErrorResponse::from_bytes(self.payload()).unwrap().fmt(f),
+            },
             'T' => RowDescription::from_bytes(self.payload()).unwrap().fmt(f),
             'Z' => ReadyForQuery::from_bytes(self.payload()).unwrap().fmt(f),
             'C' => match self.source {

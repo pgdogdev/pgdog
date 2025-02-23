@@ -3,6 +3,7 @@
 use super::*;
 
 /// The server(s) the client is connected to.
+#[derive(Debug)]
 pub(super) enum Binding {
     Server(Option<Guard>),
     Admin(Backend),
