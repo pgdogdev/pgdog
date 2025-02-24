@@ -15,7 +15,7 @@ cp * /tmp/pgdog-web/
 
 pushd /tmp/pgdog-web
 
-zip -r pgdog.zip .
+zip -r pgdog.zip -x blog/**/*.md .
 mv pgdog.zip "$SCRIPT_DIR"
 popd
 popd

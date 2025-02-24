@@ -19,15 +19,19 @@ body {
     --blue: rgb(7, 81, 207);
 }
 
+/* Lists */
+li {
+    list-style: none;
+}
+
+ul {
+    padding: 0;
+}
+
 nav {
     ul,
     li {
-        list-style: none;
         font-family: "IBM Plex Mono", monospace;
-    }
-
-    ul {
-        padding: 0;
     }
 
     height: 74px;
@@ -71,6 +75,7 @@ p.subheading {
 }
 
 $spacings: (
+    0: 0,
     1: 1rem,
     2: 1.5rem,
     3: 2rem,
@@ -83,8 +88,30 @@ $spacings: (
         margin-top: #{$value};
     }
 
+    .m-#{$level} {
+        margin: #{$value};
+    }
+
+    .mx-#{$level} {
+        margin-left: #{$value};
+        margin-right: #{$value};
+    }
+
+    .my-#{$level} {
+        margin-top: #{$value};
+        margin-bottom: #{$value};
+    }
+
     .mb-#{$level} {
         margin-bottom: #{$value};
+    }
+
+    .ms-#{$level} {
+        margin-left: #{$value};
+    }
+
+    .me-#{$level} {
+        margin-right: #{$value};
     }
 
     .pt-#{$level} {
@@ -92,6 +119,28 @@ $spacings: (
     }
 
     .pb-#{$level} {
+        padding-bottom: #{$value};
+    }
+
+    .ps-#{$level} {
+        padding-left: #{$value};
+    }
+
+    .pe-#{$level} {
+        padding-right: #{$value};
+    }
+
+    .p-#{$level} {
+        padding: #{$value};
+    }
+
+    .px-#{$level} {
+        padding-left: #{$value};
+        padding-right: #{$value};
+    }
+
+    .py-#{$level} {
+        padding-top: #{$value};
         padding-bottom: #{$value};
     }
 }
@@ -214,5 +263,23 @@ $weight: (
 @each $name, $weight in $weight {
     .fw-#{$name} {
         font-weight: #{$weight};
+    }
+}
+
+//
+// Blog styles
+//
+.blog {
+    .container {
+        max-width: 800px;
+    }
+
+    ul {
+        li {
+            list-style: square;
+            margin-bottom: 0.5rem;
+        }
+
+        margin-left: 2rem;
     }
 }

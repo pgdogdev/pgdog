@@ -1,0 +1,2 @@
+Markdown==3.7
+setuptools==75.8.0

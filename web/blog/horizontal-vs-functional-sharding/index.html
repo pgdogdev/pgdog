@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <link rel="stylesheet" href="/styles/normalize.css" />
+        <link rel="stylesheet" href="/styles/style.css" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta charset="utf-8">
+
+        <link rel="preconnect" href="https://fonts.googleapis.com">
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,100;0,200;0,300;0,400;0,500;0,600;0,700;1,100;1,200;1,300;1,400;1,500;1,600;1,700&family=IBM+Plex+Sans:ital,wght@0,100..700;1,100..700&display=swap" rel="stylesheet">
+
+        <title>Blog - PgDog</title>
+    </head>
+    <body>
+        <nav class="flex">
+            <ul class="flex">
+                <li>
+                    <a href="/blog/">Blog</a>
+                </li>
+                <li>
+                    <a target="_blank" href="/docs">Documentation</a>
+                </li>
+                <li>
+                    <a target="_blank" href="https://github.com/levkk/pgdog">GitHub</a>
+                </li>
+                <li>
+                    <a target="_blank" href="https://forms.gle/xU9axyfz8yUQM3XSA">Contact</a>
+                </li>
+            </ul>
+        </nav>
+        <main class="pb-5 blog">
+            <div class="container pt-2">
+<h1>Horizontal vs. functional sharding</h1>
+<p>Applications built on relational databases, like PostgreSQL, can benefit from multiple scaling techniques. Sharding is a technique to scale database writes: the performance of INSERT, UPDATE, and DELETE queries.</p>
+<p>There are two types of sharding: horizontal and functional. <a href="/">PgDog</a> aims to automate both of them, making the scaling your PostgreSQL workloads easier. This article discusses both of these techniques along with their trade-offs and recommended implementation.</p>
+<h2>Types of sharding</h2>
+<p><strong>Horizontal sharding</strong> works by splitting all your database tables evenly between multiple machines. It uses a hashing function and applies it to a table column and all its foreign key references. Your application will need to connect to all machines and pick the right one to query based on the same hashing function applied to query parameters.</p>
+<p><strong>Functional sharding</strong> is arguably simpler: it works by taking whole tables from your primary database and moving them to another database. Your application will need to connect to both and explicitely choose the right database to talk to based on the tables in the query.</p>
+<h3>Traditional trade-offs</h3>
+<p>Most sharding done today implements both of these techniques in the application layer. Functional sharding is the most popular, since it's pretty easy (relatively speaking) to implement by hand. However, once the tables are moved to their own databases, operations like joins between your other tables become difficult. Joining data between two databases requires doing so in the application and suffers from performance and accuracy problems, as each join has to be done manually with code and by pulling all the data off of each database.</p>
+<p>Horizontal sharding requires that the sharding key, a table column, is representative of how data is accessed by the application. If chosen wrong, the percentage of cross-shard (aka all-shard) queries becomes too high and performance benefits brought by splitting data between multiple databases are reduced.</p>
+<h2>When to shard?</h2>
+<p>Sharding should be considered when your database load is about to impact the stability (and performance) of your application. With PostgreSQL workloads, you can usually see this coming by looking out of a few indicators:</p>
+<ul>
+<li>Peak database CPU usage is over 40%</li>
+<li>Average query latency has been growing steadily</li>
+</ul>        </div>
+    </main>
+</html>
