@@ -416,10 +416,10 @@ main {
   place-items: start;
   grid-template-columns: repeat(2, 1fr); }
 
-@media all and (max-width: 500px) {
+@media all and (max-width: 800px) {
   .grid {
     grid-template-columns: 1fr; }
-  br {
+  p br {
     display: none; } }
 
 @media all and (min-width: 576px) {
@@ -447,6 +447,9 @@ main {
     width: 1320px;
     margin: 0 auto; } }
 
+.container.fixed {
+  max-width: 800px; }
+
 .font-primary {
   font-family: "IBM Plex Sans", sans-serif; }
 
@@ -464,6 +467,14 @@ main {
 
 .blog .container {
   max-width: 800px; }
+
+.blog p {
+  font-size: 1rem;
+  line-height: 1.5rem; }
+
+.blog h2,
+.blog h3 {
+  margin-top: 2rem; }
 
 .blog ul {
   margin-left: 2rem; }

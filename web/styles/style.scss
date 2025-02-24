@@ -219,13 +219,15 @@ main {
 ///
 /// Responsive styles.
 ///
-@media all and (max-width: 500px) {
+@media all and (max-width: 800px) {
     .grid {
         grid-template-columns: 1fr;
     }
 
-    br {
-        display: none;
+    p {
+        br {
+            display: none;
+        }
     }
 }
 
@@ -244,6 +246,10 @@ $container: (
             margin: 0 auto;
         }
     }
+}
+
+.container.fixed {
+    max-width: 800px;
 }
 
 .font-primary {
@@ -272,6 +278,16 @@ $weight: (
 .blog {
     .container {
         max-width: 800px;
+    }
+
+    p {
+        font-size: 1rem;
+        line-height: 1.5rem;
+    }
+
+    h2,
+    h3 {
+        margin-top: 2rem;
     }
 
     ul {
