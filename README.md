@@ -18,7 +18,7 @@ classic features like load balancing, failover and connection state management. 
 | [Load balancer](https://pgdog.dev/docs/features/load-balancer) | Operational | Spread `SELECT` queries across multiple replicas automatically, using algorithms like round robin. |
 | [Transaction pooling](https://pgdog.dev/docs/features/transaction-mode) | Operational | Identical to pgbouncer, allows for thousands of clients to reuse a handful of server connections. |
 | [Session pooling](https://pgdog.dev/docs/features/session-mode) | Operational | Exclusive use of server connections for clients needing session-level features. |
-| [Plugins](https://pgdog.dev/features/docs/plugins/) | Operational | Control how PgDog routes queries and what results it sends to clients, through loading shared libraries at runtime. |
+| [Plugins](https://pgdog.dev/docs/features/docs/plugins/) | Operational | Control how PgDog routes queries and what results it sends to clients, through loading shared libraries at runtime. |
 | [Sharding](https://pgdog.dev/docs/features/sharding/) | Work in progress | Automatically split data and queries between multiple databases, scaling writes horizonally. |
 | [Authentication](https://pgdog.dev/docs/features/authentication/) | Supports `scram-sha-256` and `trust` | Suppport for various PostgreSQL authentication mechanisms, like SCRAM, MD5, and LDAP. |
 | [Configuration](https://pgdog.dev/docs/configuration/) | Operational | Configure PgDog without restarting the pooler or breaking connections. |
@@ -125,7 +125,7 @@ go as far as block or intercept queries and return custom results to the client.
 
 Examples of plugins can be found in [examples](https://github.com/levkk/pgdog/tree/main/examples) and [plugins](https://github.com/levkk/pgdog/tree/main/plugins).
 
-&#128216; **[Plugins](https://pgdog.dev/features/plugins/)**
+&#128216; **[Plugins](https://pgdog.dev/docs/features/plugins/)**
 
 ### Sharding
 
