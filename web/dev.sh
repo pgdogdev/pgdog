@@ -13,7 +13,7 @@ pid=$!
 
 trap "kill -TERM ${pid}; echo \"existing., bye\"; exit;" INT
 
-open http://localhost:8000/
+open http://localhost:8000/ || true
 
 while true; do
     python blog/blog.py > /dev/null

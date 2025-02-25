@@ -34,23 +34,36 @@
             <div class="container pt-2">
 <h1>Horizontal vs. functional sharding</h1>
 <p><em>Feb 25, 2025</em></p>
-<p>Applications built on relational databases, like PostgreSQL, can benefit from multiple scaling techniques. Sharding is one that scales database writes: the performance of INSERT, UPDATE, and DELETE queries.</p>
-<p>There are two types of sharding: horizontal and functional. <a href="/">PgDog</a> aims to automate both of them, making the scaling your PostgreSQL workloads easier. This article discusses both of these techniques along with their trade-offs.</p>
+<p>Applications built on relational databases, like PostgreSQL, can benefit from multiple scaling techniques. Sharding is the one that scales writes, by improving the performance of INSERT, UPDATE, and DELETE queries.</p>
+<p>There are two types of sharding: horizontal and functional. <a href="/">PgDog</a> aims to automate both of them. This article discusses both of these techniques along with their trade-offs and implementation.</p>
 <h2>Types of sharding</h2>
-<h3>Horizontal</h3>
-<p>Horizontal sharding works by splitting data in your database tables evenly between multiple machines. It does so using a hashing function and applies it to a table column and all its foreign key references. Your application will need to connect to all machines and pick the right one to query based on the same hashing function, applied to query parameters.</p>
-<p><center>
-    <img alt="Horizontal sharding" src="/assets/horizontal-sharding.svg" /><br>
-    <small><i>Horizontal sharding using a<br> hashing function applied to a column.</i></small>
-</center></p>
-<h4>Implementation</h4>
+<h3>Horizontal sharding</h3>
+<p>Horizontal sharding works by splitting data evenly between multiple machines. It does so by applying a sharding function to a table column and its foreign key references. Applications will need to connect to all machines and, for each query, apply the same function to query parameters.</p>
+<h4>Sharding function</h4>
+<p>A sharding function transforms any table column to a number. This number is then divided by the number of shards in the system, and the remainder of that division is the shard where that table row should be stored.</p>
+<p><center><pre><code>shard = hash(id) % number of shards</code></pre></center></p>
+<p>The sharding function implemented by PgDog is based off of the hashing function used in PostgreSQL declarative partitions. This choice was intentional, since this allows data to be sharded both at the pooler and inside the database. Additionally, each shard can use partitions to ensure only the correct rows are inserted.</p>
+<p>If you have access to a PostgreSQL database, you can test this function directly in psql. For example, you can create a partitioned table like so:</p>
+<pre><code>CREATE TABLE users (id BIGINT PRIMARY KEY)
+PARTITION BY HASH(id);</code></pre>
+
+<p>Once you have a partitioned table, you can find out which partitoin (or shard) any row belongs to by calling the <code>satisfies_hash_parittion</code> function on any value of the sharded column, with the total number of shards and the desired shard as arguments:</p>
+<pre><code>SELECT satisfies_hash_partition(
+        'users'::regclass, -- Name of the partitioned table.
+        2, -- Number of shards (aka partitions).
+        1, -- The shard where the row should go.
+        3::bigint -- The value of the sharded column (the primary key).
+);</code></pre>
+
+<p>This will return true, which means the row with <code>id = 3</code> should go to shard 1. If the function returned false, this would mean the row should go to another shard.</p>
+<h4>Sharding an existing database</h4>
 <p>Horizontal sharding requires that the sharding key, i.e. a table column, is representative of how data is accessed by the application. For example, let's assume your database has 2 tables, "users" and "payments", with the following schema:</p>
 <p><center>
     <img alt="Schema" src="/assets/schema.svg" /><br>
     <small><i>E/R diagram describing the database schema.</i></small>
 </center></p>
-<p>Before sharding your database, it's helpful to come up with an E/R (entity/relationship) diagram, like the one above, to map out tables and their relationships. The primary key of the table at the top with the most transitive connections is a good choice for the sharding key.</p>
-<p>If most queries that access these tables reference either the <code>"users"."id"</code> column or, by extension, the <code>"payments"."user_id"</code> column, that would make it a great choice for a sharding key. This would indicate that, more commonly than not, your application accesses data one user at a time.</p>
+<p>Before sharding your database, it's helpful to come up with an E/R (entity/relationship) diagram, like the one above, to map out tables and their relationships. The primary key of the table at the top, with the most transitive connections, is a good choice for the sharding key.</p>
+<p>Choosing the most referenced table allows all queries to specify a sharding key. For example, if most queries that access these tables reference either the <code>"users"."id"</code> column or, by extension, the <code>"payments"."user_id"</code> column, this may indicate that  your application tends to access data one user at a time.</p>
 <p>When sharding this schema, data in the "users" table will be split by applying the sharding function to the "id" column, while data in the "payments" table will be split by applying the same function to the "user_id" column:</p>
 <p><center>
     <img alt="Schema" src="/assets/sharded-schema.svg" /><br>
