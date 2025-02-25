@@ -481,3 +481,10 @@ main {
   .blog ul li {
     list-style: square;
     margin-bottom: 0.5rem; }
+
+code {
+  font-family: "IBM Plex Mono";
+  font-size: 0.8rem; }
+
+pre {
+  margin-left: 1rem; }

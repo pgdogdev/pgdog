@@ -4,36 +4,49 @@
 import markdown
 import glob
 import os
-from time import sleep
 import sys
 
 script_path = os.path.abspath(sys.argv[0])
 script_dir = os.path.dirname(script_path)
 
-with open(os.path.join(script_dir, "head.html")) as f:
-    head = f.read()
-with open(os.path.join(script_dir, "footer.html")) as f:
-    footer = f.read()
+TITLE_REPLACEMENTS = [
+    ["vs", "vs."],
+    ["-", " "],
+]
 
-def build_blog_entry(file):
-    folder = os.path.basename(file).replace(".md", "")
-    blog_folder = os.path.join(script_dir, folder)
-    title = folder.replace("-", " ").replace("vs", "vs.").capitalize()
-    os.makedirs(blog_folder, exist_ok=True)
-    with open(file) as f:
-        text = f.read()
-        html = markdown.markdown(text)
-        with open(os.path.join(blog_folder, "index.html"), "w") as f:
-            f.write(head.replace("{{TITLE}}", title))
-            f.write(html)
-            f.write(footer)
-        print(f"written {blog_folder}")
+def build():
+    with open(os.path.join(script_dir, "head.html")) as f:
+        head = f.read()
+    with open(os.path.join(script_dir, "footer.html")) as f:
+        footer = f.read()
 
-files = glob.glob(f"{script_dir}/*.md")
+    def build_blog_entry(file):
+        folder = os.path.basename(file).replace(".md", "")
 
-while True:
+        # Create blog entry directory
+        blog_folder = os.path.join(script_dir, folder)
+        os.makedirs(blog_folder, exist_ok=True)
+
+        # Construct post title.
+        title = folder
+        for replacement in TITLE_REPLACEMENTS:
+            title = folder.replace(replacement[0], replacement[1])
+        title = title.capitalize()
+
+        # Write blog post HTML.
+        with open(file) as f:
+            html = markdown.markdown(f.read())
+            with open(os.path.join(blog_folder, "index.html"), "w") as f:
+                f.write(head.replace("{{TITLE}}", title))
+                f.write(html)
+                f.write(footer)
+            print(f"written {blog_folder}")
+
+    files = glob.glob(f"{script_dir}/*.md")
     print("building blog...")
     for file in files:
         build_blog_entry(file)
     print("done")
-    sleep(2)
+
+if __name__ == "__main__":
+    build()

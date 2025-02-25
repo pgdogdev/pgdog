@@ -11,7 +11,7 @@
         <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
         <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,100;0,200;0,300;0,400;0,500;0,600;0,700;1,100;1,200;1,300;1,400;1,500;1,600;1,700&family=IBM+Plex+Sans:ital,wght@0,100..700;1,100..700&display=swap" rel="stylesheet">
 
-        <title>Horizontal vs. functional sharding - PgDog Blog</title>
+        <title>Horizontal vs functional sharding - PgDog Blog</title>
     </head>
     <body>
         <nav class="flex">
@@ -34,20 +34,39 @@
             <div class="container pt-2">
 <h1>Horizontal vs. functional sharding</h1>
 <p><em>Feb 25, 2025</em></p>
-<p>Applications built on relational databases, like PostgreSQL, can benefit from multiple scaling techniques. Sharding is a one that scales database writes: the performance of INSERT, UPDATE, and DELETE queries.</p>
-<p>There are two types of sharding: horizontal and functional. <a href="/">PgDog</a> aims to automate both of them, making the scaling your PostgreSQL workloads easier. This article discusses both of these techniques along with their trade-offs and recommended implementation.</p>
+<p>Applications built on relational databases, like PostgreSQL, can benefit from multiple scaling techniques. Sharding is one that scales database writes: the performance of INSERT, UPDATE, and DELETE queries.</p>
+<p>There are two types of sharding: horizontal and functional. <a href="/">PgDog</a> aims to automate both of them, making the scaling your PostgreSQL workloads easier. This article discusses both of these techniques along with their trade-offs.</p>
 <h2>Types of sharding</h2>
-<p><strong>Horizontal sharding</strong> works by splitting data in your database tables evenly between multiple machines. It uses a hashing function and applies it to a table column and all its foreign key references. Your application will need to connect to all machines and pick the right one to query based on the same hashing function, applied to query parameters.</p>
-<p><strong>Functional sharding</strong> is arguably simpler: it works by taking whole tables from your primary database and moving them to another database. Your application will need to connect to both and explicitely choose the right database to talk to based on the tables in the query.</p>
-<h3>Trade-offs</h3>
-<p>Most sharding done today implements both of these techniques in the application layer. Functional sharding is the most popular, since it's pretty easy (relatively speaking) to implement by hand. However, once the tables are moved to their own databases, operations like joins between your other tables become difficult. Joining data between two databases requires doing so in the application and suffers from performance and accuracy problems, as each join has to be done manually with code and by pulling large amounts of the data off of each database.</p>
-<p>Horizontal sharding requires that the sharding key, a table column, is representative of how data is accessed by the application. If chosen wrong, the percentage of cross-shard (i.e. all shard) queries becomes too high and performance benefits brought by splitting data between multiple databases are reduced.</p>
-<h2>When to shard?</h2>
-<p>Sharding should be considered when your database load is about to or is impacting the stability (and performance) of your application. With PostgreSQL workloads, you can usually see this coming by looking out of a few indicators:</p>
-<ul>
-<li>Peak database CPU usage is over 40%</li>
-<li>Average query latency has been growing steadily</li>
-<li>Database failovers (in multi-AZ deployments) are no longer rare events</li>
-</ul>        </div>
+<h3>Horizontal</h3>
+<p>Horizontal sharding works by splitting data in your database tables evenly between multiple machines. It does so using a hashing function and applies it to a table column and all its foreign key references. Your application will need to connect to all machines and pick the right one to query based on the same hashing function, applied to query parameters.</p>
+<p><center>
+    <img alt="Horizontal sharding" src="/assets/horizontal-sharding.svg" /><br>
+    <small><i>Horizontal sharding using a<br> hashing function applied to a column.</i></small>
+</center></p>
+<h4>Implementation</h4>
+<p>Horizontal sharding requires that the sharding key, i.e. a table column, is representative of how data is accessed by the application. For example, let's assume your database has 2 tables, "users" and "payments", with the following schema:</p>
+<p><center>
+    <img alt="Schema" src="/assets/schema.svg" /><br>
+    <small><i>E/R diagram describing the database schema.</i></small>
+</center></p>
+<p>Before sharding your database, it's helpful to come up with an E/R (entity/relationship) diagram, like the one above, to map out tables and their relationships. The primary key of the table at the top with the most transitive connections is a good choice for the sharding key.</p>
+<p>If most queries that access these tables reference either the <code>"users"."id"</code> column or, by extension, the <code>"payments"."user_id"</code> column, that would make it a great choice for a sharding key. This would indicate that, more commonly than not, your application accesses data one user at a time.</p>
+<p>When sharding this schema, data in the "users" table will be split by applying the sharding function to the "id" column, while data in the "payments" table will be split by applying the same function to the "user_id" column:</p>
+<p><center>
+    <img alt="Schema" src="/assets/sharded-schema.svg" /><br>
+    <small><i>Database schema after sharding.</i></small>
+</center></p>
+<h3>Functional</h3>
+<p>Functional sharding is arguably simpler: it works by taking whole tables from your primary database and moving them to another database. Your application will need to connect to both and explicitely choose the right database to talk to based on the tables in each query.</p>
+<p><center>
+    <img alt="Functional sharding" src="/assets/functional-sharding.svg" /><br>
+    <small><i>Functional sharding by moving tables<br> into their own database.</i></small>
+</center></p>
+<h4>Implementation</h4>
+<p>Functional sharding is the most popular, since it's pretty easy (relatively speaking) to implement by hand. However, once the tables are moved to their own databases, operations like joins between your other tables become difficult. Joining data between two databases requires doing so in the application and suffers from performance and accuracy problems, as each join has to be done manually with code and by pulling large amounts of the data off of each database.</p>
+<h3>Cross-shard queries</h3>
+<p>Cross-shard (or all-shard) queries fetch data from multiple databases (shards) at the same time. They often lack a sharding key or specify multiple values for the key. For example, if you sharded your database on <code>"users"."id"</code> column, a query that doesn't reference that column will have to go to all shards:</p>
+<pre><code>SELECT * FROM payments
+WHERE created_at < NOW() - INTERVAL '1 day';</code></pre>        </div>
     </main>
 </html>
