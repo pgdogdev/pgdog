@@ -33,10 +33,21 @@ h1,
 h2,
 h3,
 h4,
-h5 {
-  font-family: "IBM Plex Mono", monospace;
+h5,
+h6 {
   color: #0751cf;
   text-rendering: geometricPrecision; }
+
+h1,
+h2,
+h3 {
+  font-family: "IBM Plex Mono", monospace; }
+
+h4,
+h5,
+h6 {
+  font-family: "IBM Plex Sans", Arial, sans-serif;
+  margin-bottom: 1rem; }
 
 .fs-1 {
   font-size: 2em; }

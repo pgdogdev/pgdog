@@ -43,10 +43,23 @@ h1,
 h2,
 h3,
 h4,
-h5 {
-    font-family: "IBM Plex Mono", monospace;
+h5,
+h6 {
     color: hsl(217.8, 93.5%, 42%);
     text-rendering: geometricPrecision;
+}
+
+h1,
+h2,
+h3 {
+    font-family: "IBM Plex Mono", monospace;
+}
+
+h4,
+h5,
+h6 {
+    font-family: "IBM Plex Sans", Arial, sans-serif;
+    margin-bottom: 1rem;
 }
 
 $headers: (
