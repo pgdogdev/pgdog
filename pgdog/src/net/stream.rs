@@ -4,7 +4,7 @@ use bytes::{BufMut, BytesMut};
 use pin_project::pin_project;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufStream, ReadBuf};
 use tokio::net::TcpStream;
-use tracing::{error, trace};
+use tracing::trace;
 
 use std::io::Error;
 use std::net::SocketAddr;
@@ -111,6 +111,8 @@ impl Stream {
         #[cfg(debug_assertions)]
         {
             use crate::net::messages::FromBytes;
+            use tracing::error;
+
             if message.code() == 'E' {
                 let error = ErrorResponse::from_bytes(bytes.clone())?;
                 error!("{:?} <= {}", self.peer_addr(), error)
