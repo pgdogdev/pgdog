@@ -12,7 +12,7 @@ use std::ops::Deref;
 use std::pin::Pin;
 use std::task::Context;
 
-use super::messages::{ErrorResponse, FromBytes, Message, Protocol, ReadyForQuery, Terminate};
+use super::messages::{ErrorResponse, Message, Protocol, ReadyForQuery, Terminate};
 
 /// A network socket.
 #[pin_project(project = StreamProjection)]
@@ -110,6 +110,7 @@ impl Stream {
 
         #[cfg(debug_assertions)]
         {
+            use crate::net::messages::FromBytes;
             if message.code() == 'E' {
                 let error = ErrorResponse::from_bytes(bytes.clone())?;
                 error!("{:?} <= {}", self.peer_addr(), error)
