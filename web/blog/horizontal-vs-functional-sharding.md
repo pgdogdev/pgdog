@@ -118,7 +118,7 @@ PgDog shards data, so to add it to the shards, we need to pass it through the po
 
 PgDog will parse the command, connect to all shards, apply the same hashing function to all rows, splitting them evenly between all 3 shards. Doing the same to the `payments` table will shard that data as well.
 
-For data in a live database, which changes constantly, PgDog supports using logical replication to copy (and shard) data in real time.
+For data in a live database, which changes constantly, PgDog is working to support logical replication to copy, synchronize and shard data in real time.
 
 ## Functional sharding
 

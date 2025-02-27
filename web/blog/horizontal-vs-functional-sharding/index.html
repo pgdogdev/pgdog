@@ -117,7 +117,7 @@ PARTITION OF payments FOR VALUES WITH (modulus 3, remainder <strong>2</strong>);
 <pre><code>psql -c '\copy users TO STDOUT' | psql postgres://pgdog-connection-url</code></pre>
 
 <p>PgDog will parse the command, connect to all shards, apply the same hashing function to all rows, splitting them evenly between all 3 shards. Doing the same to the <code>payments</code> table will shard that data as well.</p>
-<p>For data in a live database, which changes constantly, PgDog supports using logical replication to copy (and shard) data in real time.</p>
+<p>For data in a live database, which changes constantly, PgDog is working to support logical replication to copy, synchronize and shard data in real time.</p>
 <h2>Functional sharding</h2>
 <p>Functional sharding is arguably simpler: it works by taking whole tables from your primary database and moving them to another database. Your application will need to connect to both and explicitely choose the right database to talk to based on the tables in each query.</p>
 <p><center>
