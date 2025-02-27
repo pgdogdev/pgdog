@@ -1,11 +1,21 @@
-FROM rust:1-bookworm AS builder
+FROM ubuntu:latest AS builder
+
+RUN apt update && \
+    apt install -y build-essential cmake clang curl
+
+# Install Rust.
+# We are not using rust:1 because
+# bindgen is producing weird pointer types there.
+RUN curl https://sh.rustup.rs -sSf | sh -s -- -y
+
 COPY . /build
 WORKDIR /build
-RUN apt update && \
-    apt install -y build-essential cmake clang
-RUN cargo build --release
 
-FROM debian:bookworm
+RUN rm /bin/sh && ln -s /bin/bash /bin/sh
+RUN source ~/.cargo/env && \
+    cargo build --release
+
+FROM ubuntu:latest
 ENV RUST_LOG=info
 RUN apt update && \
     apt install -y ca-certificates && \

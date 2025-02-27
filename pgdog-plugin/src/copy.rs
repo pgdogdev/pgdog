@@ -35,9 +35,6 @@ impl Copy {
             cols.push(cstr.into_raw());
         }
         let layout = Layout::array::<*mut i8>(columns.len()).unwrap();
-        #[cfg(target_os = "linux")]
-        let ptr = unsafe { alloc(layout) as *mut *mut u8 };
-        #[cfg(not(target_os = "linux"))]
         let ptr = unsafe { alloc(layout) as *mut *mut i8 };
         unsafe {
             copy(cols.as_ptr(), ptr, columns.len());
@@ -101,13 +98,9 @@ impl Copy {
 impl CopyInput {
     /// Create new copy input.
     pub fn new(data: &[u8], sharding_column: usize, headers: bool, delimiter: char) -> Self {
-        #[cfg(target_os = "linux")]
-        let data_ptr = data.as_ptr() as *const u8;
-        #[cfg(not(target_os = "linux"))]
-        let data_ptr = data.as_ptr() as *const i8;
         Self {
             len: data.len() as i32,
-            data: data_ptr,
+            data: data.as_ptr() as *const i8,
             sharding_column: sharding_column as i32,
             has_headers: if headers { 1 } else { 0 },
             delimiter: delimiter as c_char,
@@ -138,15 +131,9 @@ impl CopyInput {
 impl CopyRow {
     /// Create new row from data slice.
     pub fn new(data: &[u8], shard: i32) -> Self {
-        #[cfg(target_os = "linux")]
-        let data_ptr = data.as_ptr() as *mut u8;
-
-        #[cfg(not(target_os = "linux"))]
-        let data_ptr = data.as_ptr() as *mut i8;
-
         Self {
             len: data.len() as i32,
-            data: data_ptr,
+            data: data.as_ptr() as *mut i8,
             shard,
         }
     }

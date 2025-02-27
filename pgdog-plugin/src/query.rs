@@ -57,14 +57,7 @@ impl Query {
     /// This is not to be used by plugins.
     /// This is for internal pgDog usage only.
     pub unsafe fn deallocate(&mut self) {
-        #[cfg(target_os = "linux")]
-        unsafe {
-            drop(CString::from_raw(self.query as *mut u8))
-        }
-        #[cfg(not(target_os = "linux"))]
-        unsafe {
-            drop(CString::from_raw(self.query as *mut i8))
-        }
+        unsafe { drop(CString::from_raw(self.query as *mut i8)) }
 
         if !self.parameters.is_null() {
             for index in 0..self.num_parameters {
