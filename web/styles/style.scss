@@ -19,15 +19,19 @@ body {
     --blue: rgb(7, 81, 207);
 }
 
+/* Lists */
+li {
+    list-style: none;
+}
+
+ul {
+    padding: 0;
+}
+
 nav {
     ul,
     li {
-        list-style: none;
         font-family: "IBM Plex Mono", monospace;
-    }
-
-    ul {
-        padding: 0;
     }
 
     height: 74px;
@@ -39,10 +43,23 @@ h1,
 h2,
 h3,
 h4,
-h5 {
-    font-family: "IBM Plex Mono", monospace;
+h5,
+h6 {
     color: hsl(217.8, 93.5%, 42%);
     text-rendering: geometricPrecision;
+}
+
+h1,
+h2,
+h3 {
+    font-family: "IBM Plex Mono", monospace;
+}
+
+h4,
+h5,
+h6 {
+    font-family: "IBM Plex Sans", Arial, sans-serif;
+    margin-bottom: 1rem;
 }
 
 $headers: (
@@ -71,6 +88,7 @@ p.subheading {
 }
 
 $spacings: (
+    0: 0,
     1: 1rem,
     2: 1.5rem,
     3: 2rem,
@@ -83,8 +101,30 @@ $spacings: (
         margin-top: #{$value};
     }
 
+    .m-#{$level} {
+        margin: #{$value};
+    }
+
+    .mx-#{$level} {
+        margin-left: #{$value};
+        margin-right: #{$value};
+    }
+
+    .my-#{$level} {
+        margin-top: #{$value};
+        margin-bottom: #{$value};
+    }
+
     .mb-#{$level} {
         margin-bottom: #{$value};
+    }
+
+    .ms-#{$level} {
+        margin-left: #{$value};
+    }
+
+    .me-#{$level} {
+        margin-right: #{$value};
     }
 
     .pt-#{$level} {
@@ -92,6 +132,28 @@ $spacings: (
     }
 
     .pb-#{$level} {
+        padding-bottom: #{$value};
+    }
+
+    .ps-#{$level} {
+        padding-left: #{$value};
+    }
+
+    .pe-#{$level} {
+        padding-right: #{$value};
+    }
+
+    .p-#{$level} {
+        padding: #{$value};
+    }
+
+    .px-#{$level} {
+        padding-left: #{$value};
+        padding-right: #{$value};
+    }
+
+    .py-#{$level} {
+        padding-top: #{$value};
         padding-bottom: #{$value};
     }
 }
@@ -170,13 +232,15 @@ main {
 ///
 /// Responsive styles.
 ///
-@media all and (max-width: 500px) {
+@media all and (max-width: 800px) {
     .grid {
         grid-template-columns: 1fr;
     }
 
-    br {
-        display: none;
+    p {
+        br {
+            display: none;
+        }
     }
 }
 
@@ -197,6 +261,10 @@ $container: (
     }
 }
 
+.container.fixed {
+    max-width: 800px;
+}
+
 .font-primary {
     font-family: "IBM Plex Sans", sans-serif;
 }
@@ -215,4 +283,41 @@ $weight: (
     .fw-#{$name} {
         font-weight: #{$weight};
     }
+}
+
+//
+// Blog styles
+//
+.blog {
+    .container {
+        max-width: 800px;
+    }
+
+    p {
+        font-size: 1rem;
+        line-height: 1.5rem;
+    }
+
+    h2,
+    h3 {
+        margin-top: 2rem;
+    }
+
+    ul {
+        li {
+            list-style: square;
+            margin-bottom: 0.5rem;
+        }
+
+        margin-left: 2rem;
+    }
+}
+
+code {
+    font-family: "IBM Plex Mono";
+    font-size: 0.8rem;
+}
+
+pre {
+    margin-left: 1rem;
 }
