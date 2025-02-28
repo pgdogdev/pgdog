@@ -1,0 +1,4 @@
+table {
+    table-layout: fixed !important;
+    display: table !important;
+}
