@@ -4,8 +4,6 @@ RUN apt update && \
     apt install -y build-essential cmake clang curl
 
 # Install Rust.
-# We are not using rust:1 because
-# bindgen is producing weird pointer types there.
 RUN curl https://sh.rustup.rs -sSf | sh -s -- -y
 
 COPY . /build
