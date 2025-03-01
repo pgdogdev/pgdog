@@ -8,7 +8,7 @@ pub struct ShowQueryCache {
     filter: String,
 }
 
-#[async_trait::async_trait]
+#[async_trait]
 impl Command for ShowQueryCache {
     fn name(&self) -> String {
         "SHOW QUERY CACHE".into()
