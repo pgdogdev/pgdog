@@ -26,4 +26,5 @@ COPY pgdog.toml /pgdog/pgdog.toml
 COPY users.toml /pgdog/users.toml
 
 WORKDIR /pgdog
+STOPSIGNAL SIGINT
 CMD ["/pgdog/pgdog"]

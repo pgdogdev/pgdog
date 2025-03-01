@@ -5,7 +5,7 @@ pub static TABLES: &str = include_str!("tables.sql");
 
 #[derive(Debug, Clone)]
 pub struct Table {
-    pub schema: String,
+    schema: String,
     pub name: String,
     pub type_: String,
     pub owner: String,
@@ -26,6 +26,17 @@ impl From<DataRow> for Table {
             access_method: value.get_text(5).unwrap_or_default(),
             size: value.get_int(6, true).unwrap_or_default() as usize,
             description: value.get_text(7).unwrap_or_default(),
+        }
+    }
+}
+
+impl Table {
+    /// Get schema where the table is located.
+    pub fn schema(&self) -> &str {
+        if self.schema.is_empty() {
+            "public"
+        } else {
+            &self.schema
         }
     }
 }

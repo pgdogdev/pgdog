@@ -1,0 +1,26 @@
+[[databases]]
+name = "postgres"
+host = "shard_0"
+role = "primary"
+shard = 0
+
+[[databases]]
+name = "postgres"
+host = "shard_1"
+role = "primary"
+shard = 1
+
+[[databases]]
+name = "postgres"
+host = "shard_2"
+role = "primary"
+shard = 2
+
+[[sharded_tables]]
+database = "postgres"
+table = "users"
+column = "id"
+
+[[sharded_tables]]
+database = "postgres"
+column = "user_id"

@@ -1,7 +1,11 @@
-pub mod queries;
+//! Schema operations.
+pub mod table;
+pub mod trigger_function;
+
 use std::collections::HashMap;
 
-pub use queries::{Table, TABLES};
+pub use table::{Table, TABLES};
+pub use trigger_function::source;
 
 use crate::net::messages::{DataRow, FromBytes, Protocol, ToBytes};
 
@@ -22,7 +26,7 @@ impl Schema {
             if message.code() == 'D' {
                 let row = DataRow::from_bytes(message.to_bytes()?)?;
                 let table = Table::from(row);
-                tables.insert((table.schema.clone(), table.name.clone()), table);
+                tables.insert((table.schema().to_string(), table.name.clone()), table);
             }
         }
 

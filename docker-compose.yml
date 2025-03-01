@@ -1,0 +1,40 @@
+services:
+  pgdog:
+    build:
+      dockerfile: Dockerfile
+    volumes:
+      - ./docker/pgdog.toml:/pgdog/pgdog.toml
+      - ./docker/users.toml:/pgdog/users.toml
+    ports:
+      - 6432:6432
+    networks:
+      - postgres
+    environment:
+      RUST_LOG: debug
+  shard_0:
+    image: postgres:17
+    environment:
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - ./docker/setup.sql:/docker-entrypoint-initdb.d/setup.sql
+    networks:
+      - postgres
+  shard_1:
+    image: postgres:17
+    environment:
+      POSTGRES_PASSWORD: postgres
+    networks:
+      - postgres
+    volumes:
+      - ./docker/setup.sql:/docker-entrypoint-initdb.d/setup.sql
+  shard_2:
+    image: postgres:17
+    environment:
+      POSTGRES_PASSWORD: postgres
+    networks:
+      - postgres
+    volumes:
+      - ./docker/setup.sql:/docker-entrypoint-initdb.d/setup.sql
+
+networks:
+  postgres:
