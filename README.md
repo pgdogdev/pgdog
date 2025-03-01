@@ -9,19 +9,19 @@ classic features like load balancing, failover and connection state management. 
 
 ## Documentation
 
-&#128216; PgDog documentation can be **[found here](https://pgdog.dev/docs/).**
+&#128216; PgDog documentation can be **[found here](https://docs.pgdog.dev/).**
 
 ## Features summary
 
 | Feature | Status | Summary |
 |---------|--------|---------|
-| [Load balancer](https://pgdog.dev/docs/features/load-balancer) | Operational | Spread `SELECT` queries across multiple replicas automatically, using algorithms like round robin. |
-| [Transaction pooling](https://pgdog.dev/docs/features/transaction-mode) | Operational | Identical to pgbouncer, allows for thousands of clients to reuse a handful of server connections. |
-| [Session pooling](https://pgdog.dev/docs/features/session-mode) | Operational | Exclusive use of server connections for clients needing session-level features. |
-| [Plugins](https://pgdog.dev/docs/features/docs/plugins/) | Operational | Control how PgDog routes queries and what results it sends to clients, through loading shared libraries at runtime. |
-| [Sharding](https://pgdog.dev/docs/features/sharding/) | Work in progress | Automatically split data and queries between multiple databases, scaling writes horizonally. |
-| [Authentication](https://pgdog.dev/docs/features/authentication/) | Supports `scram-sha-256` and `trust` | Suppport for various PostgreSQL authentication mechanisms, like SCRAM, MD5, and LDAP. |
-| [Configuration](https://pgdog.dev/docs/configuration/) | Operational | Configure PgDog without restarting the pooler or breaking connections. |
+| [Load balancer](https://docs.pgdog.dev/features/load-balancer) | Operational | Spread `SELECT` queries across multiple replicas automatically, using algorithms like round robin. |
+| [Transaction pooling](https://docs.pgdog.dev/features/transaction-mode) | Operational | Identical to pgbouncer, allows for thousands of clients to reuse a handful of server connections. |
+| [Session pooling](https://docs.pgdog.dev/features/session-mode) | Operational | Exclusive use of server connections for clients needing session-level features. |
+| [Plugins](https://docs.pgdog.dev/features/docs/plugins/) | Operational | Control how PgDog routes queries and what results it sends to clients, through loading shared libraries at runtime. |
+| [Sharding](https://docs.pgdog.dev/features/sharding/) | Work in progress | Automatically split data and queries between multiple databases, scaling writes horizonally. |
+| [Authentication](https://docs.pgdog.dev/features/authentication/) | Supports `scram-sha-256` and `trust` | Suppport for various PostgreSQL authentication mechanisms, like SCRAM, MD5, and LDAP. |
+| [Configuration](https://docs.pgdog.dev/configuration/) | Operational | Configure PgDog without restarting the pooler or breaking connections. |
 
 ## Getting started
 
@@ -93,7 +93,7 @@ psql postgres://pgdog:pgdog@127.0.0.1:6432/pgdog
 
 PgDog is an application layer (OSI Level 7) load balancer for PostgreSQL. It can proxy multiple replicas (and primary) and distribute transactions. It comes with support for multiple strategies, including round robin and random. Additionally, it can parse queries and send `SELECT` queries to replicas and all others to the primary. This allows to proxy all databases behind a single PgDog deployment.
 
-&#128216; **[Load balancer](https://pgdog.dev/docs/features/load-balancer)**
+&#128216; **[Load balancer](https://docs.pgdog.dev/features/load-balancer)**
 
 #### Healthchecks and failover
 
@@ -104,14 +104,14 @@ load balancing, except it's at the database layer.
 
 Failover maximizes database availability and protects against intermittent issues like spotty network connectivity and temporary downtime.
 
-&#128216; **[Healthchecks](https://pgdog.dev/docs/features/healthchecks)**
+&#128216; **[Healthchecks](https://docs.pgdog.dev/features/healthchecks)**
 
 ### Transaction pooling
 
 Like pgbouncer, PgDog supports transaction-level connection pooling, allowing
 1000s (even 100,000s) of clients to reuse just a few PostgreSQL server connections.
 
-&#128216; **[Transactions](https://pgdog.dev/docs/features/transaction-mode)**
+&#128216; **[Transactions](https://docs.pgdog.dev/features/transaction-mode)**
 
 ### Plugins
 
@@ -125,7 +125,7 @@ go as far as block or intercept queries and return custom results to the client.
 
 Examples of plugins can be found in [examples](https://github.com/levkk/pgdog/tree/main/examples) and [plugins](https://github.com/levkk/pgdog/tree/main/plugins).
 
-&#128216; **[Plugins](https://pgdog.dev/docs/features/plugins/)**
+&#128216; **[Plugins](https://docs.pgdog.dev/features/plugins/)**
 
 ### Sharding
 
@@ -135,7 +135,7 @@ PgDog is able to handle databases with multiple shards by routing queries automa
 queries, extracts tables and columns information, and calculates which shard(s) the query should go to based on the parameters. Not all operations are supported, but
 a lot of common use cases are working.
 
-&#128216; **[Sharding](https://pgdog.dev/docs/features/sharding/)**
+&#128216; **[Sharding](https://docs.pgdog.dev/features/sharding/)**
 
 #### Local testing
 
@@ -161,13 +161,13 @@ PgDog is highly configurable and many aspects of its operation can be tweaked at
 to restart the process and break PostgreSQL connections. If you've used pgbouncer (or pgcat) before, the options
 will be familiar. If not, options are documented with examples.
 
-&#128216; **[Configuration](https://pgdog.dev/docs/configuration/)**
+&#128216; **[Configuration](https://docs.pgdog.dev/configuration/)**
 
 ## &#128678; Status &#128678;
 
 While a lot of "classic" features of PgDog, like load balancing and healthchecks, have been well tested in production and at scale, the current codebase has not. This project is just getting started and early adopters are welcome to try PgDog internally.
 
-Status on features stability will be [updated regularly](https://pgdog.dev/docs/features/).
+Status on features stability will be [updated regularly](https://docs.pgdog.dev/features/).
 
 ## Performance
 
@@ -175,7 +175,7 @@ PgDog does its best to minimize its impact on overall database performance. Usin
 care is also taken to perform as few operations as possible while moving data between client and server sockets. Some benchmarks are provided
 to help set a baseline.
 
-&#128216; **[Architecture & benchmarks](https://pgdog.dev/docs/architecture/)**
+&#128216; **[Architecture & benchmarks](https://docs.pgdog.dev/architecture/)**
 
 ## License
 
