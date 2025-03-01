@@ -27,7 +27,7 @@ PGPASSWORD=postgres psql -h 127.0.0.1 -p 6432 -U postgres
 
 The demo comes with 3 shards and 2 sharded tables:
 
-```postgresql
+```sql
 INSERT INTO users (id, email) VALUES (1, 'admin@acme.com');
 INSERT INTO payments (id, user_id, amount) VALUES (1, 1, 100.0);
 
