@@ -115,7 +115,9 @@ impl Stream {
 
             if message.code() == 'E' {
                 let error = ErrorResponse::from_bytes(bytes.clone())?;
-                error!("{:?} <= {}", self.peer_addr(), error)
+                if !error.message.is_empty() {
+                    error!("{:?} <= {}", self.peer_addr(), error)
+                }
             }
         }
 

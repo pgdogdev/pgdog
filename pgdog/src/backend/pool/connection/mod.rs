@@ -192,7 +192,7 @@ impl Connection {
     /// Fetch the cluster from the global database store.
     pub fn reload(&mut self) -> Result<(), Error> {
         match self.binding {
-            Binding::Server(_) | Binding::MultiShard(_, _) => {
+            Binding::Server(_) | Binding::MultiShard(_, _) | Binding::Replication(_, _) => {
                 let cluster = databases().cluster((self.user.as_str(), self.database.as_str()))?;
                 self.cluster = Some(cluster);
             }
