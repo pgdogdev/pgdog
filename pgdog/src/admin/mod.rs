@@ -11,10 +11,12 @@ pub mod pause;
 pub mod prelude;
 pub mod reconnect;
 pub mod reload;
+pub mod reset_query_cache;
 pub mod show_clients;
 pub mod show_config;
 pub mod show_peers;
 pub mod show_pools;
+pub mod show_query_cache;
 pub mod show_servers;
 
 pub use error::Error;
