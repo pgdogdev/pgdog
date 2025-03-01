@@ -4,12 +4,37 @@
 [![CI](https://github.com/levkk/pgdog/actions/workflows/ci.yml/badge.svg)](https://github.com/levkk/pgdog/actions/workflows/ci.yml)
 
 PgDog is a PostgreSQL proxy and transaction pooler that can shard databases.
-Spiritual successor to [pgcat](https://github.com/levkk/pgcat) and also written in Rust, PgDog comes with a lot of
-classic features like load balancing, failover and connection state management. In addition, PgDog makes improvements to query performance, and adds new features like plugins, cross-shard queries, async protocol support, and `COPY` and logical replication sharding.
+Spiritual successor to [pgcat](https://github.com/levkk/pgcat) and written in Rust, PgDog comes with a lot of
+classic features like load balancing, failover and connection state management. In addition, PgDog makes improvements to query performance, and adds new features like plugins, cross-shard queries, async protocol support, sharded `COPY`, and logical replication sharding.
 
 ## Documentation
 
 &#128216; PgDog documentation can be **[found here](https://docs.pgdog.dev/).**
+
+## Quick start
+
+You can try PgDog by using Docker. Make sure to install [Docker Compose](https://docs.docker.com/compose/) and run the following:
+
+```
+docker-compose up
+```
+
+It will take a few minutes to build PgDog from source and launch the containers. Once started, you can connect to PgDog with psql (or any other PostgreSQL client):
+
+```
+PGPASSWORD=postgres psql -h 127.0.0.1 -p 6432 -U postgres
+```
+
+The demo comes with 3 shards and 2 sharded tables:
+
+```sql
+INSERT INTO users (id, email) VALUES (1, 'admin@acme.com');
+INSERT INTO payments (id, user_id, amount) VALUES (1, 1, 100.0);
+
+SELECT * FROM users WHERE id = 1;
+SELECT * FROM payments WHERE user_id = 1;
+```
+
 
 ## Features summary
 
