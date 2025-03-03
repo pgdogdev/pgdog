@@ -2,7 +2,6 @@
     <img src="./.github/logo-white.png" height="128" width="auto">
 </center>
 
-[![Documentation](https://img.shields.io/badge/documentation-blue?style=flat)](https://pgdog.dev)
 [![CI](https://github.com/levkk/pgdog/actions/workflows/ci.yml/badge.svg)](https://github.com/levkk/pgdog/actions/workflows/ci.yml)
 
 PgDog is a transaction pooler and logical replication manager than can shard PostgreSQL.
