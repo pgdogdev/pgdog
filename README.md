@@ -1,5 +1,5 @@
 <p align="center">
-    <img src="./.github/logo-white.png" height="172" width="auto">
+    <img src="./.github/logo-white.png" height="128" width="auto">
 </center>
 
 [![Documentation](https://img.shields.io/badge/documentation-blue?style=flat)](https://pgdog.dev)
