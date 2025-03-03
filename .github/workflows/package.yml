@@ -1,0 +1,45 @@
+name: package
+on:
+  push:
+    branches:
+      - main
+  workflow_run:
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup QEMU
+        uses: docker/setup-qemu-action@v3
+      - name: Setup Docker buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Determine tags
+        id: metadata
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.registry }}/${{ env.image-name }}
+          tags: |
+            type=sha,prefix=,format=long
+            type=schedule
+            type=ref,event=tag
+            type=ref,event=branch
+            type=ref,event=pr
+            type=raw,value=latest,enable={{ is_default_branch }}
+      - name: Login into container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.registry }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push ${{ env.image-name }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          provenance: false
+          push: true
+          tags: ${{ steps.metadata.outputs.tags }}
+          labels: ${{ steps.metadata.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
