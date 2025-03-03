@@ -17,7 +17,7 @@ jobs:
         id: metadata
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.registry }}/${{ env.image-name }}
+          images: ghcr.io/pgdogdev/pgdog
           tags: |
             type=sha,prefix=,format=long
             type=schedule
@@ -31,7 +31,7 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build and push ${{ env.image-name }}
+      - name: Build and push ghcr.io/pgdogdev/pgdog
         uses: docker/build-push-action@v6
         with:
           context: .
