@@ -1,4 +1,6 @@
-# PgDog - Sharding for PostgreSQL
+<center>
+    <img src="./github/logo-wide.png" height="256" width="auto">
+</center>
 
 [![Documentation](https://img.shields.io/badge/documentation-blue?style=flat)](https://pgdog.dev)
 [![CI](https://github.com/levkk/pgdog/actions/workflows/ci.yml/badge.svg)](https://github.com/levkk/pgdog/actions/workflows/ci.yml)
