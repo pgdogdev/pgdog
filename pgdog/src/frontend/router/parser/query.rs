@@ -403,7 +403,7 @@ mod test {
                     data: "11".as_bytes().to_vec(),
                 },
                 Parameter {
-                    len: "test@test.com".as_bytes().len() as i32,
+                    len: "test@test.com".len() as i32,
                     data: "test@test.com".as_bytes().to_vec(),
                 },
             ],

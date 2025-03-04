@@ -18,7 +18,7 @@ impl Command for ShowStats {
         fields.extend(
             ["total", "avg"]
                 .into_iter()
-                .map(|prefix| {
+                .flat_map(|prefix| {
                     [
                         Field::numeric(&format!("{}_xact_count", prefix)),
                         Field::numeric(&format!("{}_server_assignment_count", prefix)),
@@ -32,7 +32,6 @@ impl Command for ShowStats {
                         Field::numeric(&format!("{}_bind_count", prefix)),
                     ]
                 })
-                .flatten()
                 .collect::<Vec<Field>>(),
         );
 

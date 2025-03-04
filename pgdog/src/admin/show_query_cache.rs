@@ -32,10 +32,8 @@ impl Command for ShowQueryCache {
             vec![RowDescription::new(&[Field::text("query"), Field::numeric("hits")]).message()?];
 
         for query in queries {
-            if !self.filter.is_empty() {
-                if !query.0.to_lowercase().contains(&self.filter) {
-                    continue;
-                }
+            if !self.filter.is_empty() && !query.0.to_lowercase().contains(&self.filter) {
+                continue;
             }
             let mut data_row = DataRow::new();
             data_row.add(query.0).add(query.1.hits);

@@ -85,7 +85,7 @@ impl Cache {
 
     /// Get cache stats.
     pub fn stats() -> Stats {
-        Self::get().inner.lock().stats.clone()
+        Self::get().inner.lock().stats
     }
 
     /// Get a copy of all queries stored in the cache.
