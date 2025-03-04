@@ -464,6 +464,16 @@ impl Server {
     pub fn streaming(&self) -> bool {
         self.streaming
     }
+
+    #[inline]
+    pub fn stats(&self) -> &Stats {
+        &self.stats
+    }
+
+    #[inline]
+    pub fn stats_mut(&mut self) -> &mut Stats {
+        &mut self.stats
+    }
 }
 
 impl Drop for Server {

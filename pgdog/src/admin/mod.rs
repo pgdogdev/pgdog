@@ -18,6 +18,7 @@ pub mod show_peers;
 pub mod show_pools;
 pub mod show_query_cache;
 pub mod show_servers;
+pub mod show_stats;
 
 pub use error::Error;
 

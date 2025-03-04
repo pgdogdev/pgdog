@@ -10,12 +10,12 @@ use crate::{
     },
     config::PoolerMode,
     frontend::router::{CopyRow, Route},
-    net::messages::{BackendKeyData, Message, ParameterStatus, Protocol},
+    net::messages::{Message, ParameterStatus, Protocol},
 };
 
 use super::{
     super::{pool::Guard, Error},
-    Address, Cluster,
+    Address, Cluster, Request,
 };
 
 use std::{mem::replace, time::Duration};
@@ -63,7 +63,7 @@ impl Connection {
     }
 
     /// Create a server connection if one doesn't exist already.
-    pub async fn connect(&mut self, id: &BackendKeyData, route: &Route) -> Result<(), Error> {
+    pub async fn connect(&mut self, request: &Request, route: &Route) -> Result<(), Error> {
         let connect = match &self.binding {
             Binding::Server(None) | Binding::Replication(None, _) => true,
             Binding::MultiShard(shards, _) => shards.is_empty(),
@@ -71,11 +71,11 @@ impl Connection {
         };
 
         if connect {
-            match self.try_conn(id, route).await {
+            match self.try_conn(request, route).await {
                 Ok(()) => (),
                 Err(Error::Pool(super::Error::Offline)) => {
                     self.reload()?;
-                    return self.try_conn(id, route).await;
+                    return self.try_conn(request, route).await;
                 }
                 Err(err) => return Err(err),
             }
@@ -95,12 +95,12 @@ impl Connection {
     }
 
     /// Try to get a connection for the given route.
-    async fn try_conn(&mut self, id: &BackendKeyData, route: &Route) -> Result<(), Error> {
+    async fn try_conn(&mut self, request: &Request, route: &Route) -> Result<(), Error> {
         if let Some(shard) = route.shard() {
             let mut server = if route.is_read() {
-                self.cluster()?.replica(shard, id).await?
+                self.cluster()?.replica(shard, request).await?
             } else {
-                self.cluster()?.primary(shard, id).await?
+                self.cluster()?.primary(shard, request).await?
             };
 
             // Cleanup session mode connections when
@@ -128,9 +128,9 @@ impl Connection {
             let mut shards = vec![];
             for shard in self.cluster()?.shards() {
                 let mut server = if route.is_read() {
-                    shard.replica(id).await?
+                    shard.replica(request).await?
                 } else {
-                    shard.primary(id).await?
+                    shard.primary(request).await?
                 };
 
                 if self.session_mode() {
@@ -148,11 +148,11 @@ impl Connection {
     }
 
     /// Get server parameters.
-    pub async fn parameters(&mut self, id: &BackendKeyData) -> Result<Vec<ParameterStatus>, Error> {
+    pub async fn parameters(&mut self, request: &Request) -> Result<Vec<ParameterStatus>, Error> {
         match &self.binding {
             Binding::Admin(_) => Ok(ParameterStatus::fake()),
             _ => {
-                self.connect(id, &Route::write(Some(0))).await?; // Get params from primary.
+                self.connect(request, &Route::write(Some(0))).await?; // Get params from primary.
                 let params = self
                     .server()?
                     .params()

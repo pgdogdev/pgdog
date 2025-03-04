@@ -47,14 +47,14 @@ impl Command for ShowServers {
             dr.add(server.addr.host.as_str())
                 .add(server.addr.port.to_string())
                 .add(server.stats.state.to_string())
-                .add(server.stats.transactions)
-                .add(server.stats.queries)
-                .add(server.stats.rollbacks)
-                .add(server.stats.prepared_statements)
+                .add(server.stats.total.transactions)
+                .add(server.stats.total.queries)
+                .add(server.stats.total.rollbacks)
+                .add(server.stats.total.prepared_statements)
                 .add(server.stats.healthchecks)
-                .add(server.stats.errors)
-                .add(server.stats.bytes_received)
-                .add(server.stats.bytes_sent)
+                .add(server.stats.total.errors)
+                .add(server.stats.total.bytes_received)
+                .add(server.stats.total.bytes_sent)
                 .add(now.duration_since(server.stats.created_at).as_millis() as i64);
             messages.push(dr.message()?);
         }

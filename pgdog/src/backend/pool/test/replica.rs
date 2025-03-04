@@ -40,7 +40,7 @@ async fn test_replicas() {
             tasks.push(spawn(async move {
                 assert!(replicas.pools[pool].banned());
                 assert!(!replicas.pools[other].banned());
-                let conn = replicas.get(&BackendKeyData::new(), &None).await.unwrap();
+                let conn = replicas.get(&Request::default(), &None).await.unwrap();
                 assert_eq!(conn.addr(), replicas.pools[other].addr());
                 assert!(replicas.pools[pool].banned());
                 assert!(!replicas.pools[other].banned());
@@ -59,6 +59,6 @@ async fn test_replicas() {
 
     // All replicas banned, unban everyone.
     assert!(replicas.pools.iter().all(|pool| pool.banned()));
-    replicas.get(&BackendKeyData::new(), &None).await.unwrap();
+    replicas.get(&Request::default(), &None).await.unwrap();
     assert!(replicas.pools.iter().all(|pool| !pool.banned()));
 }

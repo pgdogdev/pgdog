@@ -42,7 +42,7 @@ impl Schema {
 
 #[cfg(test)]
 mod test {
-    use crate::net::messages::BackendKeyData;
+    use crate::backend::pool::Request;
 
     use super::super::pool::test::pool;
     use super::Schema;
@@ -50,7 +50,7 @@ mod test {
     #[tokio::test]
     async fn test_schema() {
         let pool = pool();
-        let mut conn = pool.get(&BackendKeyData::new()).await.unwrap();
+        let mut conn = pool.get(&Request::default()).await.unwrap();
         let _schema = Schema::load(&mut conn).await.unwrap();
         // println!("{:#?}", schema);
     }

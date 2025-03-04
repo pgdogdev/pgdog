@@ -15,8 +15,10 @@ pub mod mapping;
 pub mod monitor;
 pub mod pool_impl;
 pub mod replicas;
+pub mod request;
 pub mod shard;
 pub mod state;
+pub mod stats;
 pub mod waiting;
 
 pub use address::Address;
@@ -29,8 +31,10 @@ pub use healthcheck::Healtcheck;
 use monitor::Monitor;
 pub use pool_impl::Pool;
 pub use replicas::Replicas;
+pub use request::Request;
 pub use shard::Shard;
 pub use state::State;
+pub use stats::Stats;
 
 use ban::Ban;
 use comms::Comms;

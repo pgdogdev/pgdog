@@ -15,7 +15,7 @@ use tracing::error;
 use crate::config::LoadBalancingStrategy;
 use crate::net::messages::BackendKeyData;
 
-use super::{Error, Guard, Pool, PoolConfig};
+use super::{Error, Guard, Pool, PoolConfig, Request};
 
 /// Replicas pools.
 #[derive(Clone, Default, Debug)]
@@ -42,10 +42,10 @@ impl Replicas {
     }
 
     /// Get a live connection from the pool.
-    pub async fn get(&self, id: &BackendKeyData, primary: &Option<Pool>) -> Result<Guard, Error> {
+    pub async fn get(&self, request: &Request, primary: &Option<Pool>) -> Result<Guard, Error> {
         match timeout(
             self.checkout_timeout * self.pools.len() as u32,
-            self.get_internal(id, primary),
+            self.get_internal(request, primary),
         )
         .await
         {
@@ -90,7 +90,7 @@ impl Replicas {
 
     async fn get_internal(
         &self,
-        id: &BackendKeyData,
+        request: &Request,
         primary: &Option<Pool>,
     ) -> Result<Guard, Error> {
         let mut candidates = self
@@ -132,7 +132,7 @@ impl Replicas {
                 continue;
             }
 
-            match candidate.get(id).await {
+            match candidate.get(request).await {
                 Ok(conn) => return Ok(conn),
                 Err(Error::Offline) => continue,
                 Err(Error::Banned) => continue,
