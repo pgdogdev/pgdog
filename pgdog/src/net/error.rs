@@ -49,4 +49,10 @@ pub enum Error {
 
     #[error("not text encoding")]
     NotTextEncoding,
+
+    #[error("not utf-8")]
+    Utf8(#[from] std::str::Utf8Error),
+
+    #[error("not an integer")]
+    NotInteger(#[from] std::num::ParseIntError),
 }

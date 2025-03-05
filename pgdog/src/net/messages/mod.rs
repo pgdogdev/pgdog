@@ -6,6 +6,7 @@ pub mod close;
 pub mod command_complete;
 pub mod copy_data;
 pub mod data_row;
+pub mod data_types;
 pub mod describe;
 pub mod error_response;
 pub mod flush;
