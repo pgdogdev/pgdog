@@ -50,12 +50,12 @@ impl ParameterWithFormat<'_> {
 
     /// Get BIGINT if one is encoded in the field.
     pub fn bigint(&self) -> Option<i64> {
-        Self::decode(&self)
+        Self::decode(self)
     }
 
     /// Get UUID, if one is encoded in the field.
     pub fn uuid(&self) -> Option<Uuid> {
-        Self::decode(&self)
+        Self::decode(self)
     }
 
     /// Get decoded value.
