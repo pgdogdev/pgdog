@@ -13,7 +13,8 @@ use crate::net::messages::BackendKeyData;
 use crate::net::Parameter;
 
 use super::{
-    Address, Comms, Config, Error, Guard, Healtcheck, Inner, Monitor, PoolConfig, State, Waiting,
+    Address, Comms, Config, Error, Guard, Healtcheck, Inner, Monitor, PoolConfig, Request, State,
+    Waiting,
 };
 
 /// Connection pool.
@@ -59,10 +60,11 @@ impl Pool {
     }
 
     /// Get a connetion from the pool.
-    pub async fn get(&self, id: &BackendKeyData) -> Result<Guard, Error> {
+    pub async fn get(&self, request: &Request) -> Result<Guard, Error> {
         loop {
             // Fast path, idle connection probably available.
             let (checkout_timeout, healthcheck_timeout, healthcheck_interval, server) = {
+                let elapsed = request.created_at.elapsed(); // Before the lock!
                 let mut guard = self.lock();
 
                 if !guard.online {
@@ -70,8 +72,13 @@ impl Pool {
                 }
 
                 let conn = guard
-                    .take(id)
+                    .take(&request.id)
                     .map(|server| Guard::new(self.clone(), server));
+
+                if conn.is_some() {
+                    guard.stats.counts.wait_time += elapsed.as_micros();
+                    guard.stats.counts.server_assignment_count += 1;
+                }
 
                 (
                     if guard.paused {

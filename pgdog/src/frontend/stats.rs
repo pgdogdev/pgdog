@@ -74,9 +74,9 @@ impl Stats {
         *self
     }
 
-    pub(super) fn waiting(&mut self) -> Self {
+    pub(super) fn waiting(&mut self, instant: Instant) -> Self {
         self.state = State::Waiting;
-        self.wait_timer = Instant::now();
+        self.wait_timer = instant;
         *self
     }
 

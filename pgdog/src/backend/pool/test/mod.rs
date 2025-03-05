@@ -9,8 +9,6 @@ use tokio::task::yield_now;
 use tokio::time::{sleep, timeout};
 use tokio_util::task::TaskTracker;
 
-use crate::net::messages::BackendKeyData;
-
 use super::*;
 
 mod replica;
@@ -41,7 +39,7 @@ async fn test_pool_checkout() {
     crate::logger();
 
     let pool = pool();
-    let conn = pool.get(&BackendKeyData::new()).await.unwrap();
+    let conn = pool.get(&Request::default()).await.unwrap();
     let id = *(conn.id());
 
     assert!(conn.in_sync());
@@ -53,14 +51,14 @@ async fn test_pool_checkout() {
     assert_eq!(pool.lock().total(), 1);
     assert!(!pool.lock().should_create());
 
-    let err = timeout(Duration::from_millis(100), pool.get(&BackendKeyData::new())).await;
+    let err = timeout(Duration::from_millis(100), pool.get(&Request::default())).await;
 
     assert_eq!(pool.lock().total(), 1);
     assert_eq!(pool.lock().idle(), 0);
     assert!(err.is_err());
 
     drop(conn); // Return conn to the pool.
-    let conn = pool.get(&BackendKeyData::new()).await.unwrap();
+    let conn = pool.get(&Request::default()).await.unwrap();
     assert_eq!(conn.id(), &id);
 }
 
@@ -72,7 +70,7 @@ async fn test_concurrency() {
     for _ in 0..1000 {
         let pool = pool.clone();
         tracker.spawn(async move {
-            let _conn = pool.get(&BackendKeyData::new()).await.unwrap();
+            let _conn = pool.get(&Request::default()).await.unwrap();
             let duration = rand::thread_rng().gen_range(0..10);
             sleep(Duration::from_millis(duration)).await;
         });
@@ -105,7 +103,7 @@ async fn test_concurrency_with_gas() {
     for _ in 0..10000 {
         let pool = pool.clone();
         tracker.spawn(async move {
-            let _conn = pool.get(&BackendKeyData::new()).await.unwrap();
+            let _conn = pool.get(&Request::default()).await.unwrap();
             let duration = rand::thread_rng().gen_range(0..10);
             assert!(pool.lock().checked_out() > 0);
             assert!(pool.lock().total() <= 10);
@@ -130,7 +128,7 @@ async fn test_bans() {
     assert!(pool.banned());
 
     // Will timeout getting a connection from a banned pool.
-    let conn = pool.get(&BackendKeyData::new()).await;
+    let conn = pool.get(&Request::default()).await;
     assert!(conn.is_err());
 }
 
@@ -144,7 +142,7 @@ async fn test_offline() {
     assert!(!pool.banned());
 
     // Cannot get a connection from the pool.
-    let err = pool.get(&BackendKeyData::new()).await;
+    let err = pool.get(&Request::default()).await;
     err.expect_err("pool is shut down");
 }
 
@@ -159,29 +157,27 @@ async fn test_pause() {
     };
     pool.update_config(config);
 
-    let hold = pool.get(&BackendKeyData::new()).await.unwrap();
-    pool.get(&BackendKeyData::new())
+    let hold = pool.get(&Request::default()).await.unwrap();
+    pool.get(&Request::default())
         .await
         .expect_err("checkout timeout");
     pool.unban();
     drop(hold);
     // Make sure we're not blocked still.
-    drop(pool.get(&BackendKeyData::new()).await.unwrap());
+    drop(pool.get(&Request::default()).await.unwrap());
 
     pool.pause();
 
     // We'll hit the timeout now because we're waiting forever.
     let pause = Duration::from_millis(2_000);
-    assert!(timeout(pause, pool.get(&BackendKeyData::new()))
-        .await
-        .is_err());
+    assert!(timeout(pause, pool.get(&Request::default())).await.is_err());
 
     // Spin up a bunch of clients and make them wait for
     // a connection while the pool is paused.
     for _ in 0..1000 {
         let pool = pool.clone();
         tracker.spawn(async move {
-            let _conn = pool.get(&BackendKeyData::new()).await.unwrap();
+            let _conn = pool.get(&Request::default()).await.unwrap();
         });
     }
 
@@ -189,7 +185,7 @@ async fn test_pause() {
     tracker.close();
     tracker.wait().await;
 
-    assert!(pool.get(&BackendKeyData::new()).await.is_ok());
+    assert!(pool.get(&Request::default()).await.is_ok());
 
     // Shutdown the pool while clients wait.
     // Makes sure they get woken up and kicked out of
@@ -202,7 +198,7 @@ async fn test_pause() {
         let pool = pool.clone();
         tracker.spawn(async move {
             if !pool
-                .get(&BackendKeyData::new())
+                .get(&Request::default())
                 .await
                 .is_err_and(|err| err == Error::Offline)
             {

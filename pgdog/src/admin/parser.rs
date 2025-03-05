@@ -4,7 +4,7 @@ use super::{
     pause::Pause, prelude::Message, reconnect::Reconnect, reload::Reload,
     reset_query_cache::ResetQueryCache, show_clients::ShowClients, show_config::ShowConfig,
     show_peers::ShowPeers, show_pools::ShowPools, show_query_cache::ShowQueryCache,
-    show_servers::ShowServers, Command, Error,
+    show_servers::ShowServers, show_stats::ShowStats, Command, Error,
 };
 
 use tracing::debug;
@@ -21,6 +21,7 @@ pub enum ParseResult {
     ShowPeers(ShowPeers),
     ShowQueryCache(ShowQueryCache),
     ResetQueryCache(ResetQueryCache),
+    ShowStats(ShowStats),
 }
 
 impl ParseResult {
@@ -39,6 +40,7 @@ impl ParseResult {
             ShowPeers(show_peers) => show_peers.execute().await,
             ShowQueryCache(show_query_cache) => show_query_cache.execute().await,
             ResetQueryCache(reset_query_cache) => reset_query_cache.execute().await,
+            ShowStats(show_stats) => show_stats.execute().await,
         }
     }
 
@@ -57,6 +59,7 @@ impl ParseResult {
             ShowPeers(show_peers) => show_peers.name(),
             ShowQueryCache(show_query_cache) => show_query_cache.name(),
             ResetQueryCache(reset_query_cache) => reset_query_cache.name(),
+            ShowStats(show_stats) => show_stats.name(),
         }
     }
 }
@@ -81,6 +84,7 @@ impl Parser {
                 "servers" => ParseResult::ShowServers(ShowServers::parse(&sql)?),
                 "peers" => ParseResult::ShowPeers(ShowPeers::parse(&sql)?),
                 "query_cache" => ParseResult::ShowQueryCache(ShowQueryCache::parse(&sql)?),
+                "stats" => ParseResult::ShowStats(ShowStats::parse(&sql)?),
                 command => {
                     debug!("unknown admin show command: '{}'", command);
                     return Err(Error::Syntax);

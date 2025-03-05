@@ -6,8 +6,11 @@ use super::Stats;
 /// Connected client.
 #[derive(Copy, Clone, Debug)]
 pub struct ConnectedClient {
+    /// Client statistics.
     pub stats: Stats,
+    /// Client IP address.
     pub addr: SocketAddr,
+    /// System time when the client connected.
     pub connected_at: SystemTime,
 }
 

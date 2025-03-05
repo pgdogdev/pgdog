@@ -71,6 +71,8 @@ impl Monitor {
         // Maintenance loop.
         let pool = self.pool.clone();
         spawn(async move { Self::maintenance(pool).await });
+        let pool = self.pool.clone();
+        spawn(async move { Self::stats(pool).await });
 
         // Delay starting healthchecks to give
         // time for the pool to spin up.
@@ -301,6 +303,27 @@ impl Monitor {
             }
 
             Err(Error::HealthcheckError)
+        }
+    }
+
+    async fn stats(pool: Pool) {
+        let duration = Duration::from_secs(15);
+        let comms = pool.comms();
+
+        loop {
+            select! {
+                _ = sleep(duration) => {
+                    {
+                        let mut lock = pool.lock();
+                        lock.stats.calc_averages(duration);
+                    }
+                    debug!("calculated averages [{}]", pool.addr());
+                }
+
+                _ = comms.shutdown.notified() => {
+                    break;
+                }
+            }
         }
     }
 }

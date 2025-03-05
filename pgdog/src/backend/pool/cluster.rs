@@ -6,7 +6,7 @@ use crate::{
     net::messages::BackendKeyData,
 };
 
-use super::{Address, Config, Error, Guard, Shard};
+use super::{Address, Config, Error, Guard, Request, Shard};
 use crate::config::LoadBalancingStrategy;
 
 use std::ffi::CString;
@@ -57,15 +57,15 @@ impl Cluster {
     }
 
     /// Get a connection to a primary of the given shard.
-    pub async fn primary(&self, shard: usize, id: &BackendKeyData) -> Result<Guard, Error> {
+    pub async fn primary(&self, shard: usize, request: &Request) -> Result<Guard, Error> {
         let shard = self.shards.get(shard).ok_or(Error::NoShard(shard))?;
-        shard.primary(id).await
+        shard.primary(request).await
     }
 
     /// Get a connection to a replica of the given shard.
-    pub async fn replica(&self, shard: usize, id: &BackendKeyData) -> Result<Guard, Error> {
+    pub async fn replica(&self, shard: usize, request: &Request) -> Result<Guard, Error> {
         let shard = self.shards.get(shard).ok_or(Error::NoShard(shard))?;
-        shard.replica(id).await
+        shard.replica(request).await
     }
 
     /// Create new identical cluster connection pool.

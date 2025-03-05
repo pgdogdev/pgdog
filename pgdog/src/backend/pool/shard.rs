@@ -2,7 +2,7 @@
 
 use crate::{config::LoadBalancingStrategy, net::messages::BackendKeyData};
 
-use super::{Error, Guard, Pool, PoolConfig, Replicas};
+use super::{Error, Guard, Pool, PoolConfig, Replicas, Request};
 
 /// Primary and replicas.
 #[derive(Clone, Default, Debug)]
@@ -25,20 +25,24 @@ impl Shard {
     }
 
     /// Get a connection to the shard primary database.
-    pub async fn primary(&self, id: &BackendKeyData) -> Result<Guard, Error> {
-        self.primary.as_ref().ok_or(Error::NoPrimary)?.get(id).await
+    pub async fn primary(&self, request: &Request) -> Result<Guard, Error> {
+        self.primary
+            .as_ref()
+            .ok_or(Error::NoPrimary)?
+            .get(request)
+            .await
     }
 
     /// Get a connection to a shard replica, if any.
-    pub async fn replica(&self, id: &BackendKeyData) -> Result<Guard, Error> {
+    pub async fn replica(&self, request: &Request) -> Result<Guard, Error> {
         if self.replicas.is_empty() {
             self.primary
                 .as_ref()
                 .ok_or(Error::NoDatabases)?
-                .get(id)
+                .get(request)
                 .await
         } else {
-            self.replicas.get(id, &self.primary).await
+            self.replicas.get(request, &self.primary).await
         }
     }
 

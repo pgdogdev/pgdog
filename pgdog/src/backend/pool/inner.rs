@@ -6,7 +6,7 @@ use std::{cmp::max, time::Instant};
 use crate::backend::Server;
 use crate::net::messages::BackendKeyData;
 
-use super::{Ban, Config, Error, Mapping};
+use super::{Ban, Config, Error, Mapping, Stats};
 
 /// Pool internals protected by a mutex.
 #[derive(Default)]
@@ -31,6 +31,8 @@ pub(super) struct Inner {
     pub(super) out_of_sync: usize,
     /// Track connections closed with errors.
     pub(super) errors: usize,
+    /// Stats
+    pub(super) stats: Stats,
 }
 
 impl std::fmt::Debug for Inner {
@@ -60,6 +62,7 @@ impl Inner {
             creating: 0,
             out_of_sync: 0,
             errors: 0,
+            stats: Stats::default(),
         }
     }
     /// Total number of connections managed by the pool.
@@ -216,7 +219,7 @@ impl Inner {
     /// Otherwise, drop the connection and close it.
     ///
     /// Return: true if the pool should be banned, false otherwise.
-    pub(super) fn maybe_check_in(&mut self, server: Server, now: Instant) -> bool {
+    pub(super) fn maybe_check_in(&mut self, mut server: Server, now: Instant) -> bool {
         let id = *server.id();
 
         let index = self
@@ -229,6 +232,10 @@ impl Inner {
         if let Some(index) = index {
             self.taken.remove(index);
         }
+
+        // Update stats
+        let stats = server.stats_mut().reset_last_checkout();
+        self.stats.counts = self.stats.counts + stats;
 
         // Ban the pool from serving more clients.
         if server.error() {

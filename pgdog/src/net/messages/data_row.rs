@@ -26,6 +26,12 @@ impl ToDataRowColumn for String {
     }
 }
 
+impl ToDataRowColumn for &String {
+    fn to_data_row_column(&self) -> Bytes {
+        Bytes::copy_from_slice(self.as_bytes())
+    }
+}
+
 impl ToDataRowColumn for &str {
     fn to_data_row_column(&self) -> Bytes {
         Bytes::copy_from_slice(self.as_bytes())
@@ -60,6 +66,12 @@ impl ToDataRowColumn for f64 {
     fn to_data_row_column(&self) -> Bytes {
         let number = format!("{:.5}", self);
         Bytes::copy_from_slice(number.as_bytes())
+    }
+}
+
+impl ToDataRowColumn for u128 {
+    fn to_data_row_column(&self) -> Bytes {
+        Bytes::copy_from_slice(self.to_string().as_bytes())
     }
 }
 
