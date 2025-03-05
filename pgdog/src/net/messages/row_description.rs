@@ -2,24 +2,8 @@
 
 use crate::net::c_string_buf;
 
-use super::code;
-use super::prelude::*;
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum DataType {
-    Bigint,
-    Integer,
-    Text,
-    Interval,
-    Timestamp,
-    TimestampTz,
-    Real,
-    DoublePrecision,
-    Bool,
-    SmallInt,
-    TinyInt,
-    Other(i32),
-}
+use super::{code, DataType};
+use super::{prelude::*, Format};
 
 /// Column field description.
 #[derive(Clone, Debug, PartialEq)]
@@ -104,7 +88,15 @@ impl Field {
             1114 => DataType::Timestamp,
             1184 => DataType::TimestampTz,
             1186 => DataType::Interval,
+            2950 => DataType::Uuid,
             _ => DataType::Other(self.type_oid),
+        }
+    }
+
+    pub fn format(&self) -> Format {
+        match self.format {
+            0 => Format::Text,
+            _ => Format::Binary,
         }
     }
 

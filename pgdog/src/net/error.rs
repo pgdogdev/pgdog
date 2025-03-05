@@ -58,9 +58,15 @@ pub enum Error {
     #[error("not an integer")]
     NotInteger(#[from] std::num::ParseIntError),
 
+    #[error("not a float")]
+    NotFloat(#[from] std::num::ParseFloatError),
+
     #[error("not a uuid")]
     NotUuid(#[from] uuid::Error),
 
     #[error("wrong size slice")]
     WrongSizeSlice(#[from] TryFromSliceError),
+
+    #[error("wrong size binary ({0}) for type")]
+    WrongSizeBinary(usize),
 }

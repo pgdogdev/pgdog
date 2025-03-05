@@ -1,7 +1,7 @@
 use super::*;
 use bytes::{Buf, Bytes};
 
-impl DataType for i32 {
+impl FromDataType for i32 {
     fn decode(mut bytes: &[u8], encoding: Format) -> Result<Self, Error> {
         match encoding {
             Format::Binary => Ok(bytes.get_i32()),

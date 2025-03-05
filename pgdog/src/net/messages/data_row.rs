@@ -2,9 +2,9 @@
 
 use super::code;
 use super::prelude::*;
-use super::DataType;
 use super::Datum;
 use super::Format;
+use super::FromDataType;
 use super::RowDescription;
 
 use bytes::BytesMut;
@@ -152,21 +152,21 @@ impl DataRow {
     }
 
     /// Get column at index given format encoding.
-    pub fn get<T: DataType>(&self, index: usize, format: Format) -> Option<T> {
+    pub fn get<T: FromDataType>(&self, index: usize, format: Format) -> Option<T> {
         self.column(index)
             .map(|col| T::decode(&col, format).ok())
             .flatten()
     }
 
     /// Render the data row.
-    pub fn into_row(&self, rd: &RowDescription) -> Result<Vec<Column>, Error> {
+    pub fn into_row<'a>(&self, rd: &'a RowDescription) -> Result<Vec<Column<'a>>, Error> {
         let mut row = vec![];
 
         for (index, field) in rd.fields.iter().enumerate() {
-            if let Some(data) = self.get_text(index) {
+            if let Some(data) = self.column(index) {
                 row.push(Column {
-                    name: field.name.clone(),
-                    value: Datum::Text(data),
+                    name: field.name.as_str(),
+                    value: Datum::new(&data, field.data_type(), field.format())?,
                 });
             }
         }
@@ -176,8 +176,8 @@ impl DataRow {
 }
 
 #[derive(Debug, Clone)]
-pub struct Column {
-    pub name: String,
+pub struct Column<'a> {
+    pub name: &'a str,
     pub value: Datum,
 }
 

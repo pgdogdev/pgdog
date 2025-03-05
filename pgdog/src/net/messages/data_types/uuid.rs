@@ -3,7 +3,7 @@ use std::str::FromStr;
 use super::*;
 use ::uuid::Uuid;
 
-impl DataType for Uuid {
+impl FromDataType for Uuid {
     fn decode(bytes: &[u8], encoding: Format) -> Result<Self, Error> {
         match encoding {
             Format::Text => {

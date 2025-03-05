@@ -41,7 +41,7 @@ parser!(bigint, i64);
 parser!(tinyint, i8);
 parser!(smallint, i16);
 
-impl DataType for Interval {
+impl FromDataType for Interval {
     fn decode(bytes: &[u8], encoding: Format) -> Result<Self, Error> {
         match encoding {
             Format::Binary => Err(Error::NotTextEncoding),

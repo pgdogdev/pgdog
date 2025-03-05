@@ -30,7 +30,7 @@ pub use close::Close;
 pub use command_complete::CommandComplete;
 pub use copy_data::CopyData;
 pub use data_row::{DataRow, ToDataRowColumn};
-pub use data_types::{DataType, Datum};
+pub use data_types::{DataType, Datum, FromDataType};
 pub use describe::Describe;
 pub use error_response::ErrorResponse;
 pub use flush::Flush;
