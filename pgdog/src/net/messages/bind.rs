@@ -5,6 +5,7 @@ use uuid::Uuid;
 
 use super::code;
 use super::prelude::*;
+use super::DataType;
 use super::Error;
 
 use std::cmp::max;
@@ -74,6 +75,11 @@ impl ParameterWithFormat<'_> {
                 .map(Uuid::from_bytes)
                 .ok(),
         }
+    }
+
+    /// Get decoded value.
+    pub fn decode<T: DataType>(&self) -> Option<T> {
+        T::decode(&self.parameter.data, self.format).ok()
     }
 }
 

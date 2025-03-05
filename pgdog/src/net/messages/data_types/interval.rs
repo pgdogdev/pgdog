@@ -3,7 +3,7 @@ use std::num::ParseIntError;
 use super::*;
 use bytes::Bytes;
 
-#[derive(Eq, PartialEq, Ord, PartialOrd, Default)]
+#[derive(Eq, PartialEq, Ord, PartialOrd, Default, Debug, Clone)]
 pub struct Interval {
     years: i64,
     months: i8,
@@ -42,7 +42,7 @@ parser!(tinyint, i8);
 parser!(smallint, i16);
 
 impl DataType for Interval {
-    fn decode(bytes: Bytes, encoding: Format) -> Result<Self, Error> {
+    fn decode(bytes: &[u8], encoding: Format) -> Result<Self, Error> {
         match encoding {
             Format::Binary => Err(Error::NotTextEncoding),
 
@@ -135,8 +135,7 @@ mod test {
     #[test]
     fn test_interval_decode() {
         let s = "115 years 2 mons 19 days 16:48:00.006";
-        let interval =
-            Interval::decode(Bytes::copy_from_slice(s.as_bytes()), Format::Text).unwrap();
+        let interval = Interval::decode(s.as_bytes(), Format::Text).unwrap();
         assert_eq!(interval.years, 115);
         assert_eq!(interval.months, 2);
         assert_eq!(interval.days, 19);
@@ -145,7 +144,7 @@ mod test {
         assert_eq!(interval.seconds, 0);
         assert_eq!(interval.millis, 6);
 
-        let s = Bytes::copy_from_slice("00:46:12".as_bytes());
+        let s = "00:46:12".as_bytes();
         let interval = Interval::decode(s, Format::Text).unwrap();
         assert_eq!(interval.hours, 0);
         assert_eq!(interval.minutes, 46);

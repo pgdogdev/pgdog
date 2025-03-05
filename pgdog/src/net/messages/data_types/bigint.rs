@@ -2,7 +2,7 @@ use super::*;
 use bytes::{Buf, Bytes};
 
 impl DataType for i64 {
-    fn decode(mut bytes: Bytes, encoding: Format) -> Result<Self, Error> {
+    fn decode(mut bytes: &[u8], encoding: Format) -> Result<Self, Error> {
         match encoding {
             Format::Binary => Ok(bytes.get_i64()),
 

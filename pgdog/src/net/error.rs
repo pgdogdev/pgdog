@@ -1,5 +1,7 @@
 //! Frontend errors.
 
+use std::array::TryFromSliceError;
+
 use thiserror::Error;
 use tokio_rustls::rustls;
 
@@ -55,4 +57,10 @@ pub enum Error {
 
     #[error("not an integer")]
     NotInteger(#[from] std::num::ParseIntError),
+
+    #[error("not a uuid")]
+    NotUuid(#[from] uuid::Error),
+
+    #[error("wrong size slice")]
+    WrongSizeSlice(#[from] TryFromSliceError),
 }

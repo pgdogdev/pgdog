@@ -5,6 +5,22 @@ use crate::net::c_string_buf;
 use super::code;
 use super::prelude::*;
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum DataType {
+    Bigint,
+    Integer,
+    Text,
+    Interval,
+    Timestamp,
+    TimestampTz,
+    Real,
+    DoublePrecision,
+    Bool,
+    SmallInt,
+    TinyInt,
+    Other(i32),
+}
+
 /// Column field description.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Field {
@@ -74,19 +90,40 @@ impl Field {
         !self.is_text_encoding()
     }
 
+    /// Get the column data type.
+    pub fn data_type(&self) -> DataType {
+        match self.type_oid {
+            16 => DataType::Bool,
+            20 => DataType::Bigint,
+            23 => DataType::Integer,
+            21 => DataType::SmallInt,
+            25 => DataType::Text,
+            700 => DataType::Real,
+            701 => DataType::DoublePrecision,
+            1043 => DataType::Text,
+            1114 => DataType::Timestamp,
+            1184 => DataType::TimestampTz,
+            1186 => DataType::Interval,
+            _ => DataType::Other(self.type_oid),
+        }
+    }
+
     /// This is an integer.
     pub fn is_int(&self) -> bool {
-        matches!(self.type_oid, 20 | 23 | 21)
+        use DataType::*;
+        matches!(self.data_type(), Bigint | Integer | SmallInt)
     }
 
     /// This is a float.
     pub fn is_float(&self) -> bool {
-        matches!(self.type_oid, 700 | 701)
+        use DataType::*;
+        matches!(self.data_type(), Real | DoublePrecision)
     }
 
     /// This is a varchar.
     pub fn is_varchar(&self) -> bool {
-        matches!(self.type_oid, 1043 | 25)
+        use DataType::*;
+        self.data_type() == Text
     }
 }
 

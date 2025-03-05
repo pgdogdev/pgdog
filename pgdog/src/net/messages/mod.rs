@@ -25,11 +25,12 @@ pub mod terminate;
 
 pub use auth::{Authentication, Password};
 pub use backend_key::BackendKeyData;
-pub use bind::{Bind, Parameter, ParameterWithFormat};
+pub use bind::{Bind, Format, Parameter, ParameterWithFormat};
 pub use close::Close;
 pub use command_complete::CommandComplete;
 pub use copy_data::CopyData;
 pub use data_row::{DataRow, ToDataRowColumn};
+pub use data_types::{DataType, Datum};
 pub use describe::Describe;
 pub use error_response::ErrorResponse;
 pub use flush::Flush;
