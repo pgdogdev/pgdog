@@ -10,7 +10,6 @@ use super::FromDataType;
 
 use std::cmp::max;
 use std::str::from_utf8;
-use std::str::FromStr;
 
 #[derive(PartialEq, Debug, Copy, Clone)]
 pub enum Format {
@@ -51,30 +50,12 @@ impl ParameterWithFormat<'_> {
 
     /// Get BIGINT if one is encoded in the field.
     pub fn bigint(&self) -> Option<i64> {
-        match self.format {
-            Format::Text => self.text().and_then(|data| data.parse().ok()),
-            Format::Binary => self
-                .parameter
-                .data
-                .as_slice()
-                .try_into()
-                .map(i64::from_be_bytes)
-                .ok(),
-        }
+        Self::decode(&self)
     }
 
     /// Get UUID, if one is encoded in the field.
     pub fn uuid(&self) -> Option<Uuid> {
-        match self.format {
-            Format::Text => self.text().and_then(|uuid| Uuid::from_str(uuid).ok()),
-            Format::Binary => self
-                .parameter
-                .data
-                .as_slice()
-                .try_into()
-                .map(Uuid::from_bytes)
-                .ok(),
-        }
+        Self::decode(&self)
     }
 
     /// Get decoded value.
