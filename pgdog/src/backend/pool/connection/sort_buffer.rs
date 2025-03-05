@@ -7,13 +7,6 @@ use crate::{
     net::messages::{DataRow, FromBytes, Message, Protocol, RowDescription, ToBytes},
 };
 
-#[derive(PartialEq, PartialOrd)]
-enum SortableValue {
-    String(Option<String>),
-    Int(Option<i64>),
-    Float(Option<f64>),
-}
-
 /// Sort rows received from multiple shards.
 #[derive(Default, Debug)]
 pub(super) struct SortBuffer {
@@ -58,45 +51,28 @@ impl SortBuffer {
 
         // Sort rows.
         let order_by = move |a: &DataRow, b: &DataRow| -> Ordering {
-            for index in &cols {
-                let (index, asc) = if let Some((index, asc)) = index {
-                    (*index, *asc)
-                } else {
-                    continue;
-                };
-                let ordering = if let Some(field) = rd.field(index) {
-                    let text = field.is_text_encoding();
-                    let (left, right) = if field.is_int() {
-                        (
-                            SortableValue::Int(a.get_int(index, text)),
-                            SortableValue::Int(b.get_int(index, text)),
-                        )
-                    } else if field.is_float() {
-                        (
-                            SortableValue::Float(a.get_float(index, text)),
-                            SortableValue::Float(b.get_float(index, text)),
-                        )
-                    } else if field.is_varchar() {
-                        (
-                            SortableValue::String(a.get_text(index)),
-                            SortableValue::String(b.get_text(index)),
-                        )
-                    } else {
-                        continue;
-                    };
-                    if asc {
-                        left.partial_cmp(&right)
-                    } else {
-                        right.partial_cmp(&left)
+            for col in cols.iter().flatten() {
+                let (index, asc) = col;
+                let left = a.get_column(*index, rd);
+                let right = b.get_column(*index, rd);
+
+                let ordering = match (left, right) {
+                    (Ok(Some(left)), Ok(Some(right))) => {
+                        if *asc {
+                            left.value.partial_cmp(&right.value)
+                        } else {
+                            right.value.partial_cmp(&left.value)
+                        }
                     }
-                } else {
-                    continue;
+
+                    _ => Some(Ordering::Equal),
                 };
 
                 if ordering != Some(Ordering::Equal) {
                     return ordering.unwrap_or(Ordering::Equal);
                 }
             }
+
             Ordering::Equal
         };
 
@@ -110,5 +86,39 @@ impl SortBuffer {
         } else {
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::net::messages::{Field, Format};
+
+    #[test]
+    fn test_sort_buffer() {
+        let mut buf = SortBuffer::default();
+        let rd = RowDescription::new(&[Field::bigint("one"), Field::text("two")]);
+        let columns = [OrderBy::Asc(1), OrderBy::Desc(2)];
+
+        for i in 0..25_i64 {
+            let mut dr = DataRow::new();
+            dr.add(25 - i).add((25 - i).to_string());
+            buf.add(dr.message().unwrap()).unwrap();
+        }
+
+        buf.sort(&columns, &rd);
+        buf.full();
+
+        let mut i = 1;
+        while let Some(message) = buf.take() {
+            let dr = DataRow::from_bytes(message.to_bytes().unwrap()).unwrap();
+            let one = dr.get::<i64>(0, Format::Text).unwrap();
+            let two = dr.get::<String>(1, Format::Text).unwrap();
+            assert_eq!(one, i);
+            assert_eq!(two, i.to_string());
+            i += 1;
+        }
+
+        assert_eq!(i, 26);
     }
 }

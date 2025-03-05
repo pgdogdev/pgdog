@@ -17,12 +17,12 @@ class Sharded < ActiveRecord::Base
   self.primary_key = "id"
 end
 
-[true, false].each do |prepared_statements|
+[false, true].each do |prepared_statements|
   puts "Connecting to database..."
   establish_connection prepared_statements
   puts "Connection established"
 
   15.times do |i|
-    count = Sharded.where(id: 1).count
+    count = Sharded.where(id: i).count
   end
 end

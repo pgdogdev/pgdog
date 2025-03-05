@@ -2,8 +2,8 @@
 
 use crate::net::c_string_buf;
 
-use super::code;
-use super::prelude::*;
+use super::{code, DataType};
+use super::{prelude::*, Format};
 
 /// Column field description.
 #[derive(Clone, Debug, PartialEq)]
@@ -64,29 +64,44 @@ impl Field {
         }
     }
 
-    /// Encoded with text encoding.
-    pub fn is_text_encoding(&self) -> bool {
-        self.format == 0
+    pub fn bigint(name: &str) -> Self {
+        Self {
+            name: name.into(),
+            table_oid: 0,
+            column: 0,
+            type_oid: 20,
+            type_size: 8,
+            type_modifier: -1,
+            format: 0, // We always use text format.
+        }
     }
 
-    /// Encoded with binary encoding.
-    pub fn is_binary_encoding(&self) -> bool {
-        !self.is_text_encoding()
+    /// Get the column data type.
+    #[inline]
+    pub fn data_type(&self) -> DataType {
+        match self.type_oid {
+            16 => DataType::Bool,
+            20 => DataType::Bigint,
+            23 => DataType::Integer,
+            21 => DataType::SmallInt,
+            25 => DataType::Text,
+            700 => DataType::Real,
+            701 => DataType::DoublePrecision,
+            1043 => DataType::Text,
+            1114 => DataType::Timestamp,
+            1184 => DataType::TimestampTz,
+            1186 => DataType::Interval,
+            2950 => DataType::Uuid,
+            _ => DataType::Other(self.type_oid),
+        }
     }
 
-    /// This is an integer.
-    pub fn is_int(&self) -> bool {
-        matches!(self.type_oid, 20 | 23 | 21)
-    }
-
-    /// This is a float.
-    pub fn is_float(&self) -> bool {
-        matches!(self.type_oid, 700 | 701)
-    }
-
-    /// This is a varchar.
-    pub fn is_varchar(&self) -> bool {
-        matches!(self.type_oid, 1043 | 25)
+    #[inline]
+    pub fn format(&self) -> Format {
+        match self.format {
+            0 => Format::Text,
+            _ => Format::Binary,
+        }
     }
 }
 
@@ -106,6 +121,7 @@ impl RowDescription {
     }
 
     /// Get field info.
+    #[inline]
     pub fn field(&self, index: usize) -> Option<&Field> {
         self.fields.get(index)
     }

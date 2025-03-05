@@ -1,5 +1,7 @@
 //! Frontend errors.
 
+use std::array::TryFromSliceError;
+
 use thiserror::Error;
 use tokio_rustls::rustls;
 
@@ -49,4 +51,25 @@ pub enum Error {
 
     #[error("not text encoding")]
     NotTextEncoding,
+
+    #[error("not utf-8")]
+    Utf8(#[from] std::str::Utf8Error),
+
+    #[error("not an integer")]
+    NotInteger(#[from] std::num::ParseIntError),
+
+    #[error("not a float")]
+    NotFloat(#[from] std::num::ParseFloatError),
+
+    #[error("not a uuid")]
+    NotUuid(#[from] uuid::Error),
+
+    #[error("not a timestamptz")]
+    NotTimestampTz,
+
+    #[error("wrong size slice")]
+    WrongSizeSlice(#[from] TryFromSliceError),
+
+    #[error("wrong size binary ({0}) for type")]
+    WrongSizeBinary(usize),
 }
