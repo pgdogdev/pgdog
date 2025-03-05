@@ -64,7 +64,7 @@ impl Inner {
         self.backend
             .cluster()
             .ok()
-            .map(|cluster| self.router.query(&buffer, cluster))
+            .map(|cluster| self.router.query(buffer, cluster))
             .transpose()
     }
 
@@ -78,7 +78,7 @@ impl Inner {
 
         self.comms.stats(self.stats.waiting(request.created_at));
 
-        let result = self.backend.connect(&request, &route).await;
+        let result = self.backend.connect(request, &route).await;
 
         if result.is_ok() {
             self.comms.stats(self.stats.connected());
