@@ -16,7 +16,7 @@ pub struct Interval {
 
 macro_rules! parser {
     ($name:tt, $typ:ty) => {
-        fn $name(s: &str) -> Result<$typ, ParseIntError> {
+        pub(super) fn $name(s: &str) -> Result<$typ, ParseIntError> {
             // Skip leading zeros.
             let mut cnt = 0;
             for c in s.chars() {

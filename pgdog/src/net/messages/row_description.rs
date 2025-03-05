@@ -64,14 +64,16 @@ impl Field {
         }
     }
 
-    /// Encoded with text encoding.
-    pub fn is_text_encoding(&self) -> bool {
-        self.format == 0
-    }
-
-    /// Encoded with binary encoding.
-    pub fn is_binary_encoding(&self) -> bool {
-        !self.is_text_encoding()
+    pub fn bigint(name: &str) -> Self {
+        Self {
+            name: name.into(),
+            table_oid: 0,
+            column: 0,
+            type_oid: 20,
+            type_size: 8,
+            type_modifier: -1,
+            format: 0, // We always use text format.
+        }
     }
 
     /// Get the column data type.
@@ -100,24 +102,6 @@ impl Field {
             0 => Format::Text,
             _ => Format::Binary,
         }
-    }
-
-    /// This is an integer.
-    pub fn is_int(&self) -> bool {
-        use DataType::*;
-        matches!(self.data_type(), Bigint | Integer | SmallInt)
-    }
-
-    /// This is a float.
-    pub fn is_float(&self) -> bool {
-        use DataType::*;
-        matches!(self.data_type(), Real | DoublePrecision)
-    }
-
-    /// This is a varchar.
-    pub fn is_varchar(&self) -> bool {
-        use DataType::*;
-        self.data_type() == Text
     }
 }
 

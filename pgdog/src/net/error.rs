@@ -64,6 +64,9 @@ pub enum Error {
     #[error("not a uuid")]
     NotUuid(#[from] uuid::Error),
 
+    #[error("not a timestamptz")]
+    NotTimestampTz,
+
     #[error("wrong size slice")]
     WrongSizeSlice(#[from] TryFromSliceError),
 

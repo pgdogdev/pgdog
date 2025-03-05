@@ -89,3 +89,37 @@ impl SortBuffer {
         }
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::net::messages::{Field, Format};
+
+    #[test]
+    fn test_sort_buffer() {
+        let mut buf = SortBuffer::default();
+        let rd = RowDescription::new(&[Field::bigint("one"), Field::text("two")]);
+        let columns = [OrderBy::Asc(1), OrderBy::Desc(2)];
+
+        for i in 0..25_i64 {
+            let mut dr = DataRow::new();
+            dr.add(25 - i).add((25 - i).to_string());
+            buf.add(dr.message().unwrap()).unwrap();
+        }
+
+        buf.sort(&columns, &rd);
+        buf.full();
+
+        let mut i = 1;
+        while let Some(message) = buf.take() {
+            let dr = DataRow::from_bytes(message.to_bytes().unwrap()).unwrap();
+            let one = dr.get::<i64>(0, Format::Text).unwrap();
+            let two = dr.get::<String>(1, Format::Text).unwrap();
+            assert_eq!(one, i);
+            assert_eq!(two, i.to_string());
+            i += 1;
+        }
+
+        assert_eq!(i, 26);
+    }
+}

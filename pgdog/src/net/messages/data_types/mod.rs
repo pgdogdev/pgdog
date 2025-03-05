@@ -13,6 +13,7 @@ pub mod uuid;
 
 pub use interval::Interval;
 pub use numeric::Numeric;
+pub use timestamp::Timestamp;
 
 pub trait FromDataType: Sized + PartialOrd + Ord + PartialEq {
     fn decode(bytes: &[u8], encoding: Format) -> Result<Self, Error>;
