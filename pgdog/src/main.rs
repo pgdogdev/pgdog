@@ -77,7 +77,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         None => (),
     }
 
-    info!("🐕 pgDog {}", env!("CARGO_PKG_VERSION"));
+    info!("🐕 PgDog v{}", env!("GIT_HASH"));
 
     let config = if let Some(database_urls) = args.database_url {
         config::from_urls(&database_urls)?
