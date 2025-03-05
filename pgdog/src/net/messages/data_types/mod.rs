@@ -14,6 +14,7 @@ pub mod uuid;
 pub use interval::Interval;
 pub use numeric::Numeric;
 pub use timestamp::Timestamp;
+pub use timestamptz::TimestampTz;
 
 pub trait FromDataType: Sized + PartialOrd + Ord + PartialEq {
     fn decode(bytes: &[u8], encoding: Format) -> Result<Self, Error>;
@@ -33,9 +34,9 @@ pub enum Datum {
     /// TEXT/VARCHAR.
     Text(String),
     /// TIMESTAMP.
-    Timestamp,
-    /// TIMTESTAMPTZ.
-    TeimstampTz,
+    Timestamp(Timestamp),
+    /// TIMESTAMPTZ.
+    TimestampTz(TimestampTz),
     /// UUID.
     Uuid(Uuid),
     /// NUMERIC, REAL, DOUBLE PRECISION.
@@ -59,6 +60,8 @@ impl Datum {
                 Ok(Datum::Numeric(Numeric::decode(bytes, encoding)?))
             }
             DataType::Uuid => Ok(Datum::Uuid(Uuid::decode(bytes, encoding)?)),
+            DataType::Timestamp => Ok(Datum::Timestamp(Timestamp::decode(bytes, encoding)?)),
+            DataType::TimestampTz => Ok(Datum::TimestampTz(TimestampTz::decode(bytes, encoding)?)),
             _ => Ok(Datum::Null),
         }
     }
