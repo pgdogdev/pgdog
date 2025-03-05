@@ -46,7 +46,6 @@ pub use terminate::Terminate;
 use crate::net::Error;
 
 use bytes::Bytes;
-use tracing::debug;
 
 /// Convert a Rust struct to a PostgreSQL wire protocol message.
 pub trait ToBytes {
@@ -72,36 +71,7 @@ pub trait Protocol: ToBytes + FromBytes + std::fmt::Debug {
         Ok(Message::new(self.to_bytes()?))
     }
 
-    fn debug(&self, direction: &str) -> Result<(), Error> {
-        let message = self.message()?;
-        match message.code() {
-            'd' => {
-                let copy_data = CopyData::from_bytes(message.to_bytes()?)?;
-                if let Some(xlog) = copy_data.xlog_data() {
-                    debug!("{} {:#?}", direction, xlog.payload());
-                }
-                if let Some(meta) = copy_data.replication_meta() {
-                    debug!("{} {:#?}", direction, meta);
-                }
-            }
-
-            'D' => {
-                let data_row = DataRow::from_bytes(message.to_bytes()?)?;
-                debug!("{} {:#?}", direction, data_row);
-            }
-
-            'T' => {
-                let rd = RowDescription::from_bytes(message.to_bytes()?)?;
-                debug!("{} {:#?}", direction, rd);
-            }
-
-            _ => (),
-        };
-        Ok(())
-    }
-
-    /// Message is part of a stream and should
-    /// not be buffered or inspected for meaningful values.
+    /// Message is part of a stream and should not be buffered.
     fn streaming(&self) -> bool {
         false
     }

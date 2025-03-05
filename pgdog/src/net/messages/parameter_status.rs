@@ -31,7 +31,7 @@ impl ParameterStatus {
         vec![
             ParameterStatus {
                 name: "server_name".into(),
-                value: "pgDog".into(),
+                value: "PgDog".into(),
             },
             ParameterStatus {
                 name: "server_encoding".into(),
