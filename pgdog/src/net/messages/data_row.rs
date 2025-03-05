@@ -154,8 +154,7 @@ impl DataRow {
     /// Get column at index given format encoding.
     pub fn get<T: FromDataType>(&self, index: usize, format: Format) -> Option<T> {
         self.column(index)
-            .map(|col| T::decode(&col, format).ok())
-            .flatten()
+            .and_then(|col| T::decode(&col, format).ok())
     }
 
     /// Render the data row.

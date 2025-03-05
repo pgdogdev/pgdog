@@ -11,7 +11,7 @@ impl FromDataType for Uuid {
                 Ok(Uuid::from_str(&s)?)
             }
 
-            Format::Binary => Ok(bytes.try_into().map(|bytes| Uuid::from_bytes(bytes))?),
+            Format::Binary => Ok(bytes.try_into().map(Uuid::from_bytes)?),
         }
     }
 

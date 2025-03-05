@@ -8,9 +8,15 @@ use bytes::Buf;
 use super::*;
 
 /// We don't expect NaN's so we're going to implement Ord for this below.
-#[derive(PartialEq, Copy, Clone, Debug, PartialOrd)]
+#[derive(PartialEq, Copy, Clone, Debug)]
 pub struct Numeric {
     data: f64,
+}
+
+impl PartialOrd for Numeric {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
 impl Deref for Numeric {
