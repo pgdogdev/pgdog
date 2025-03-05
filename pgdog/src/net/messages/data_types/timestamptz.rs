@@ -18,7 +18,7 @@ impl FromDataType for TimestampTz {
     }
 
     fn encode(&self, encoding: Format) -> Result<Bytes, Error> {
-        Timestamp::encode(&self, encoding)
+        Timestamp::encode(self, encoding)
     }
 }
 
@@ -50,7 +50,7 @@ mod test {
         assert_eq!(ts.day, 5);
         assert_eq!(ts.hour, 14);
         assert_eq!(ts.minute, 55);
-        assert_eq!(ts.second, 02);
+        assert_eq!(ts.second, 2);
         assert_eq!(ts.micros, 436109);
         assert_eq!(ts.offset, Some(-8));
     }

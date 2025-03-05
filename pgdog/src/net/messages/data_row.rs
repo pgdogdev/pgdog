@@ -2,7 +2,7 @@
 
 use super::{code, prelude::*, Datum, Format, FromDataType, Numeric, RowDescription};
 use bytes::BytesMut;
-use std::{ops::Deref, str::from_utf8};
+use std::ops::Deref;
 
 /// DataRow message.
 #[derive(Debug, Clone)]
@@ -112,7 +112,7 @@ impl DataRow {
     // Get float at index with text/binary encoding.
     pub fn get_float(&self, index: usize, text: bool) -> Option<f64> {
         self.get::<Numeric>(index, if text { Format::Text } else { Format::Binary })
-            .map(|numeric| numeric.deref().clone())
+            .map(|numeric| *numeric.deref())
     }
 
     /// Get text value at index.

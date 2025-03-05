@@ -51,26 +51,25 @@ impl SortBuffer {
 
         // Sort rows.
         let order_by = move |a: &DataRow, b: &DataRow| -> Ordering {
-            for col in &cols {
-                if let Some((index, asc)) = col {
-                    let left = a.get_column(*index, &rd);
-                    let right = b.get_column(*index, &rd);
+            for col in cols.iter().flatten() {
+                let (index, asc) = col;
+                let left = a.get_column(*index, rd);
+                let right = b.get_column(*index, rd);
 
-                    let ordering = match (left, right) {
-                        (Ok(Some(left)), Ok(Some(right))) => {
-                            if *asc {
-                                left.value.partial_cmp(&right.value)
-                            } else {
-                                right.value.partial_cmp(&left.value)
-                            }
+                let ordering = match (left, right) {
+                    (Ok(Some(left)), Ok(Some(right))) => {
+                        if *asc {
+                            left.value.partial_cmp(&right.value)
+                        } else {
+                            right.value.partial_cmp(&left.value)
                         }
-
-                        _ => Some(Ordering::Equal),
-                    };
-
-                    if ordering != Some(Ordering::Equal) {
-                        return ordering.unwrap_or(Ordering::Equal);
                     }
+
+                    _ => Some(Ordering::Equal),
+                };
+
+                if ordering != Some(Ordering::Equal) {
+                    return ordering.unwrap_or(Ordering::Equal);
                 }
             }
 

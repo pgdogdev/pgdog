@@ -71,7 +71,7 @@ impl FromDataType for Timestamp {
                             let mut parts = micros.split(&['-', '+']);
                             assign!(result, micros, parts);
                             if let Some(offset) = parts.next() {
-                                let offset: i8 = bigint(&offset)?.try_into().unwrap();
+                                let offset: i8 = bigint(offset)?.try_into().unwrap();
                                 let offset = if neg { -offset } else { offset };
                                 result.offset = Some(offset);
                             }
