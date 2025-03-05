@@ -1,4 +1,9 @@
 //! SHOW STATS.
+use crate::backend::{
+    databases::databases,
+    pool::{stats::Counts, Stats},
+};
+
 use super::prelude::*;
 
 pub struct ShowStats;
@@ -14,7 +19,11 @@ impl Command for ShowStats {
     }
 
     async fn execute(&self) -> Result<Vec<Message>, Error> {
-        let mut fields = vec![Field::text("database"), Field::numeric("shard")];
+        let mut fields = vec![
+            Field::text("database"),
+            Field::text("user"),
+            Field::numeric("shard"),
+        ];
         fields.extend(
             ["total", "avg"]
                 .into_iter()
@@ -35,7 +44,41 @@ impl Command for ShowStats {
                 .collect::<Vec<Field>>(),
         );
 
-        let rd = RowDescription::new(&fields);
-        Ok(vec![rd.message()?])
+        let mut messages = vec![RowDescription::new(&fields).message()?];
+
+        let clusters = databases().all().clone();
+
+        for (user, cluster) in clusters {
+            let shards = cluster.shards();
+
+            for (shard_num, shard) in shards.into_iter().enumerate() {
+                let pools = shard.pools();
+                let stats: Vec<Stats> = pools.into_iter().map(|pool| pool.state().stats).collect();
+                let totals = stats.iter().map(|stats| stats.counts).sum::<Counts>();
+                let averages = stats.iter().map(|stats| stats.averages).sum::<Counts>();
+
+                let mut dr = DataRow::new();
+
+                dr.add(user.database.as_str())
+                    .add(user.user.as_str())
+                    .add(shard_num);
+
+                for stat in [totals, averages] {
+                    dr.add(stat.xact_count)
+                        .add(stat.server_assignment_count)
+                        .add(stat.received)
+                        .add(stat.sent)
+                        .add(stat.xact_time)
+                        .add(stat.query_time)
+                        .add(stat.wait_time)
+                        .add(0 as i64)
+                        .add(0 as i64)
+                        .add(0 as i64);
+                }
+
+                messages.push(dr.message()?);
+            }
+        }
+        Ok(messages)
     }
 }

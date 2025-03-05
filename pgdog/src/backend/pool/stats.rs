@@ -1,6 +1,7 @@
 //! Pool stats.
 
 use std::{
+    iter::Sum,
     ops::{Add, Div, Sub},
     time::Duration,
 };
@@ -65,6 +66,36 @@ impl Add<crate::backend::stats::Counts> for Counts {
             query_time: self.query_time,
             xact_time: self.xact_time,
             wait_time: self.wait_time,
+        }
+    }
+}
+
+impl Sum for Counts {
+    fn sum<I: Iterator<Item = Self>>(mut iter: I) -> Self {
+        let mut result = Counts::default();
+        while let Some(next) = iter.next() {
+            result = result + next;
+        }
+
+        result
+    }
+}
+
+impl Add for Counts {
+    type Output = Counts;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        Counts {
+            xact_count: self.xact_count.saturating_add(rhs.xact_count),
+            query_count: self.query_count.saturating_add(rhs.query_count),
+            server_assignment_count: self
+                .server_assignment_count
+                .saturating_add(rhs.server_assignment_count),
+            received: self.received.saturating_add(rhs.received),
+            sent: self.sent.saturating_add(rhs.sent),
+            xact_time: self.xact_time.saturating_add(rhs.xact_time),
+            query_time: self.query_time.saturating_add(rhs.query_time),
+            wait_time: self.wait_time.saturating_add(rhs.wait_time),
         }
     }
 }

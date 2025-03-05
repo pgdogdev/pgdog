@@ -1,4 +1,4 @@
-use super::{Ban, Config, Pool};
+use super::{Ban, Config, Pool, Stats};
 
 /// Pool state.
 pub struct State {
@@ -26,6 +26,8 @@ pub struct State {
     pub errors: usize,
     /// Out of sync
     pub out_of_sync: usize,
+    /// Statistics
+    pub stats: Stats,
 }
 
 impl State {
@@ -45,6 +47,7 @@ impl State {
             banned: guard.ban.is_some(),
             errors: guard.errors,
             out_of_sync: guard.out_of_sync,
+            stats: guard.stats,
         }
     }
 }
