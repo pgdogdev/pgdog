@@ -1,8 +1,6 @@
 use super::{bind::Format, Error};
 use ::uuid::Uuid;
 use bytes::Bytes;
-use interval::Interval;
-use numeric::Numeric;
 
 pub mod bigint;
 pub mod integer;
@@ -13,6 +11,9 @@ pub mod timestamp;
 pub mod timestamptz;
 pub mod uuid;
 
+pub use interval::Interval;
+pub use numeric::Numeric;
+
 pub trait FromDataType: Sized + PartialOrd + Ord + PartialEq {
     fn decode(bytes: &[u8], encoding: Format) -> Result<Self, Error>;
     fn encode(&self, encoding: Format) -> Result<Bytes, Error>;
@@ -20,19 +21,34 @@ pub trait FromDataType: Sized + PartialOrd + Ord + PartialEq {
 
 #[derive(Debug, Clone, PartialEq, PartialOrd, Eq, Ord)]
 pub enum Datum {
+    /// BIGINT.
     Bigint(i64),
+    /// INTEGER.
     Integer(i32),
+    /// SMALLINT.
+    SmallInt(i16),
+    /// INTERVAL.
     Interval(Interval),
+    /// TEXT/VARCHAR.
     Text(String),
+    /// TIMESTAMP.
     Timestamp,
+    /// TIMTESTAMPTZ.
     TeimstampTz,
+    /// UUID.
     Uuid(Uuid),
+    /// NUMERIC, REAL, DOUBLE PRECISION.
     Numeric(Numeric),
+    /// NULL.
     Null,
 }
 
 impl Datum {
     pub fn new(bytes: &[u8], data_type: DataType, encoding: Format) -> Result<Self, Error> {
+        if bytes.is_empty() {
+            return Ok(Datum::Null);
+        }
+
         match data_type {
             DataType::Bigint => Ok(Datum::Bigint(i64::decode(bytes, encoding)?)),
             DataType::Integer => Ok(Datum::Integer(i32::decode(bytes, encoding)?)),
@@ -47,6 +63,7 @@ impl Datum {
     }
 }
 
+/// PostgreSQL data types.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum DataType {
     Bigint,

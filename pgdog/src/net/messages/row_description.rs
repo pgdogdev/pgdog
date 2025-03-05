@@ -75,6 +75,7 @@ impl Field {
     }
 
     /// Get the column data type.
+    #[inline]
     pub fn data_type(&self) -> DataType {
         match self.type_oid {
             16 => DataType::Bool,
@@ -93,6 +94,7 @@ impl Field {
         }
     }
 
+    #[inline]
     pub fn format(&self) -> Format {
         match self.format {
             0 => Format::Text,
@@ -135,6 +137,7 @@ impl RowDescription {
     }
 
     /// Get field info.
+    #[inline]
     pub fn field(&self, index: usize) -> Option<&Field> {
         self.fields.get(index)
     }

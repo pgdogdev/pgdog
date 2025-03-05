@@ -37,7 +37,7 @@ impl Ord for Numeric {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         match self.partial_cmp(other) {
             Some(ordering) => ordering,
-            None => Ordering::Equal,
+            None => Ordering::Equal, // We don't expect Postgres to send us NaNs.
         }
     }
 }

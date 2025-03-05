@@ -1,15 +1,8 @@
 //! DataRow (B) message.
 
-use super::code;
-use super::prelude::*;
-use super::Datum;
-use super::Format;
-use super::FromDataType;
-use super::RowDescription;
-
+use super::{code, prelude::*, Datum, Format, FromDataType, Numeric, RowDescription};
 use bytes::BytesMut;
-
-use std::str::from_utf8;
+use std::{ops::Deref, str::from_utf8};
 
 /// DataRow message.
 #[derive(Debug, Clone)]
@@ -106,55 +99,49 @@ impl DataRow {
     }
 
     /// Get data for column at index.
+    #[inline]
     pub fn column(&self, index: usize) -> Option<Bytes> {
         self.columns.get(index).cloned()
     }
 
     /// Get integer at index with text/binary encoding.
     pub fn get_int(&self, index: usize, text: bool) -> Option<i64> {
-        self.column(index).and_then(|mut column| {
-            if text {
-                from_utf8(&column[..])
-                    .ok()
-                    .and_then(|s| s.parse::<i64>().ok())
-            } else {
-                match column.len() {
-                    2 => Some(column.get_i16() as i64),
-                    4 => Some(column.get_i32() as i64),
-                    8 => Some(column.get_i64()),
-                    _ => None,
-                }
-            }
-        })
+        self.get::<i64>(index, if text { Format::Text } else { Format::Binary })
     }
 
-    // Get integer at index with text/binary encoding.
+    // Get float at index with text/binary encoding.
     pub fn get_float(&self, index: usize, text: bool) -> Option<f64> {
-        self.column(index).and_then(|mut column| {
-            if text {
-                from_utf8(&column[..])
-                    .ok()
-                    .and_then(|s| s.parse::<f64>().ok())
-            } else {
-                match column.len() {
-                    4 => Some(column.get_f32() as f64),
-                    8 => Some(column.get_f64()),
-                    _ => None,
-                }
-            }
-        })
+        self.get::<Numeric>(index, if text { Format::Text } else { Format::Binary })
+            .map(|numeric| numeric.deref().clone())
     }
 
     /// Get text value at index.
     pub fn get_text(&self, index: usize) -> Option<String> {
-        self.column(index)
-            .and_then(|column| from_utf8(&column[..]).ok().map(|s| s.to_string()))
+        self.get::<String>(index, Format::Text)
     }
 
     /// Get column at index given format encoding.
     pub fn get<T: FromDataType>(&self, index: usize, format: Format) -> Option<T> {
         self.column(index)
             .and_then(|col| T::decode(&col, format).ok())
+    }
+
+    /// Get column at index given row description.
+    pub fn get_column<'a>(
+        &self,
+        index: usize,
+        rd: &'a RowDescription,
+    ) -> Result<Option<Column<'a>>, Error> {
+        if let Some(field) = rd.field(index) {
+            if let Some(data) = self.column(index) {
+                return Ok(Some(Column {
+                    name: field.name.as_str(),
+                    value: Datum::new(&data, field.data_type(), field.format())?,
+                }));
+            }
+        }
+
+        Ok(None)
     }
 
     /// Render the data row.
@@ -174,9 +161,12 @@ impl DataRow {
     }
 }
 
+/// Column with data type mapped to a Rust type.
 #[derive(Debug, Clone)]
 pub struct Column<'a> {
+    /// Column name.
     pub name: &'a str,
+    /// Column value.
     pub value: Datum,
 }
 

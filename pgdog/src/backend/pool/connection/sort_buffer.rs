@@ -7,13 +7,6 @@ use crate::{
     net::messages::{DataRow, FromBytes, Message, Protocol, RowDescription, ToBytes},
 };
 
-#[derive(PartialEq, PartialOrd)]
-enum SortableValue {
-    String(Option<String>),
-    Int(Option<i64>),
-    Float(Option<f64>),
-}
-
 /// Sort rows received from multiple shards.
 #[derive(Default, Debug)]
 pub(super) struct SortBuffer {
@@ -58,45 +51,29 @@ impl SortBuffer {
 
         // Sort rows.
         let order_by = move |a: &DataRow, b: &DataRow| -> Ordering {
-            for index in &cols {
-                let (index, asc) = if let Some((index, asc)) = index {
-                    (*index, *asc)
-                } else {
-                    continue;
-                };
-                let ordering = if let Some(field) = rd.field(index) {
-                    let text = field.is_text_encoding();
-                    let (left, right) = if field.is_int() {
-                        (
-                            SortableValue::Int(a.get_int(index, text)),
-                            SortableValue::Int(b.get_int(index, text)),
-                        )
-                    } else if field.is_float() {
-                        (
-                            SortableValue::Float(a.get_float(index, text)),
-                            SortableValue::Float(b.get_float(index, text)),
-                        )
-                    } else if field.is_varchar() {
-                        (
-                            SortableValue::String(a.get_text(index)),
-                            SortableValue::String(b.get_text(index)),
-                        )
-                    } else {
-                        continue;
-                    };
-                    if asc {
-                        left.partial_cmp(&right)
-                    } else {
-                        right.partial_cmp(&left)
-                    }
-                } else {
-                    continue;
-                };
+            for col in &cols {
+                if let Some((index, asc)) = col {
+                    let left = a.get_column(*index, &rd);
+                    let right = b.get_column(*index, &rd);
 
-                if ordering != Some(Ordering::Equal) {
-                    return ordering.unwrap_or(Ordering::Equal);
+                    let ordering = match (left, right) {
+                        (Ok(Some(left)), Ok(Some(right))) => {
+                            if *asc {
+                                left.value.partial_cmp(&right.value)
+                            } else {
+                                right.value.partial_cmp(&left.value)
+                            }
+                        }
+
+                        _ => Some(Ordering::Equal),
+                    };
+
+                    if ordering != Some(Ordering::Equal) {
+                        return ordering.unwrap_or(Ordering::Equal);
+                    }
                 }
             }
+
             Ordering::Equal
         };
 
