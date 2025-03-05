@@ -51,7 +51,7 @@ impl Command for ShowStats {
         for (user, cluster) in clusters {
             let shards = cluster.shards();
 
-            for (shard_num, shard) in shards.into_iter().enumerate() {
+            for (shard_num, shard) in shards.iter().enumerate() {
                 let pools = shard.pools();
                 let stats: Vec<Stats> = pools.into_iter().map(|pool| pool.state().stats).collect();
                 let totals = stats.iter().map(|stats| stats.counts).sum::<Counts>();
@@ -71,9 +71,9 @@ impl Command for ShowStats {
                         .add(stat.xact_time)
                         .add(stat.query_time)
                         .add(stat.wait_time)
-                        .add(0 as i64)
-                        .add(0 as i64)
-                        .add(0 as i64);
+                        .add(0_i64)
+                        .add(0_i64)
+                        .add(0_i64);
                 }
 
                 messages.push(dr.message()?);

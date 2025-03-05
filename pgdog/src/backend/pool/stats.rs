@@ -71,9 +71,9 @@ impl Add<crate::backend::stats::Counts> for Counts {
 }
 
 impl Sum for Counts {
-    fn sum<I: Iterator<Item = Self>>(mut iter: I) -> Self {
+    fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
         let mut result = Counts::default();
-        while let Some(next) = iter.next() {
+        for next in iter {
             result = result + next;
         }
 
