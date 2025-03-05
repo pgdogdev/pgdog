@@ -210,13 +210,8 @@ impl Client {
             debug!("{} [{}]", query, self.addr);
         }
 
-        let command = match inner
-            .backend
-            .cluster()
-            .ok()
-            .map(|cluster| inner.router.query(&buffer, cluster))
-            .transpose()
-        {
+        let connected = inner.connected();
+        let command = match inner.command(&buffer) {
             Ok(command) => command,
             Err(err) => {
                 self.stream
@@ -228,7 +223,7 @@ impl Client {
 
         self.streaming = matches!(command, Some(Command::StartReplication));
 
-        if !inner.backend.connected() {
+        if !connected {
             match command {
                 Some(Command::StartTransaction(query)) => {
                     inner.start_transaction = Some(query.clone());
@@ -250,33 +245,18 @@ impl Client {
 
             // Grab a connection from the right pool.
             let request = Request::new(self.id);
-            inner.comms.stats(inner.stats.waiting(request.created_at));
-            match inner.backend.connect(&request, &inner.router.route()).await {
+            match inner.connect(&request).await {
                 Ok(()) => (),
                 Err(err) => {
                     if err.no_server() {
                         error!("connection pool is down");
                         self.stream.error(ErrorResponse::connection()).await?;
-                        inner.comms.stats(inner.stats.error());
                         return Ok(false);
                     } else {
                         return Err(err.into());
                     }
                 }
             };
-            inner.comms.stats(inner.stats.connected());
-            if let Ok(addr) = inner.backend.addr() {
-                let addrs = addr
-                    .into_iter()
-                    .map(|a| a.to_string())
-                    .collect::<Vec<_>>()
-                    .join(",");
-                debug!(
-                    "client paired with {} [{:.4}ms]",
-                    addrs,
-                    inner.stats.wait_time.as_secs_f64() * 1000.0
-                );
-            }
 
             // Simulate a transaction until the client
             // sends a query over. This ensures that we don't
@@ -320,37 +300,37 @@ impl Client {
     }
 
     /// Handle message from server(s).
-    async fn server_message(&mut self, state: &mut Inner, message: Message) -> Result<bool, Error> {
+    async fn server_message(&mut self, inner: &mut Inner, message: Message) -> Result<bool, Error> {
         let len = message.len();
         let code = message.code();
 
         // ReadyForQuery (B) | CopyInResponse (B) || RowDescription (B) | ErrorResponse (B)
         let flush = matches!(code, 'Z' | 'G')
-            || matches!(code, 'T' | 'E') && state.async_
+            || matches!(code, 'T' | 'E') && inner.async_
             || message.streaming();
         if flush {
             self.stream.send_flush(message).await?;
-            state.async_ = false;
+            inner.async_ = false;
         } else {
             self.stream.send(message).await?;
         }
 
-        state.comms.stats(state.stats.sent(len));
+        inner.comms.stats(inner.stats.sent(len));
 
         if code == 'Z' {
-            state.comms.stats(state.stats.query());
+            inner.comms.stats(inner.stats.query());
         }
 
-        if state.backend.done() {
-            if state.backend.transaction_mode() {
-                state.backend.disconnect();
+        if inner.backend.done() {
+            if inner.backend.transaction_mode() {
+                inner.backend.disconnect();
             }
-            state.comms.stats(state.stats.transaction());
+            inner.comms.stats(inner.stats.transaction());
             trace!(
                 "transaction finished [{}ms]",
-                state.stats.last_transaction_time.as_secs_f64() * 1000.0
+                inner.stats.last_transaction_time.as_secs_f64() * 1000.0
             );
-            if state.comms.offline() && !self.admin {
+            if inner.comms.offline() && !self.admin {
                 return Ok(true);
             }
         }
