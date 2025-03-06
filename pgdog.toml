@@ -6,12 +6,25 @@
 host = "0.0.0.0"
 port = 6432
 shutdown_timeout = 5_000
+query_log = "queries.txt"
 # broadcast_address = "224.0.0.1"
 # broadcast_port = 6435
+
 
 [[databases]]
 name = "pgdog"
 host = "127.0.0.1"
+role = "primary"
+
+[[databases]]
+name = "pgdog"
+host = "10.0.0.0"
+role = "replica"
+
+[[databases]]
+name = "pgdog"
+host = "10.0.0.1"
+role = "replica"
 
 #
 # Admin database password.

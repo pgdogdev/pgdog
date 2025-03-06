@@ -12,7 +12,7 @@ use tracing::{debug, info, trace, warn};
 
 use super::{pool::Address, Error, PreparedStatements, Stats};
 use crate::net::{
-    messages::{Flush, NoticeResponse},
+    messages::{DataRow, Flush, NoticeResponse},
     parameter::Parameters,
     tls::connector,
     Parameter, Stream,
@@ -340,6 +340,20 @@ impl Server {
     /// Execute a query on the server and return the result.
     pub async fn execute(&mut self, query: &str) -> Result<Vec<Message>, Error> {
         self.execute_batch(&[query]).await
+    }
+
+    /// Execute a query and return all rows.
+    pub async fn fetch_all<T: From<DataRow>>(&mut self, query: &str) -> Result<Vec<T>, Error> {
+        let messages = self.execute(query).await?;
+        Ok(messages
+            .into_iter()
+            .filter(|message| message.code() == 'D')
+            .map(|message| message.to_bytes().unwrap())
+            .map(|bytes| DataRow::from_bytes(bytes))
+            .collect::<Result<Vec<DataRow>, crate::net::Error>>()?
+            .into_iter()
+            .map(|row| T::from(row))
+            .collect())
     }
 
     /// Perform a healthcheck on this connection using the provided query.
