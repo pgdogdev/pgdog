@@ -2,9 +2,10 @@
 
 use super::{
     pause::Pause, prelude::Message, reconnect::Reconnect, reload::Reload,
-    reset_query_cache::ResetQueryCache, show_clients::ShowClients, show_config::ShowConfig,
-    show_peers::ShowPeers, show_pools::ShowPools, show_query_cache::ShowQueryCache,
-    show_servers::ShowServers, show_stats::ShowStats, show_version::ShowVersion, Command, Error,
+    reset_query_cache::ResetQueryCache, setup_schema::SetupSchema, show_clients::ShowClients,
+    show_config::ShowConfig, show_peers::ShowPeers, show_pools::ShowPools,
+    show_query_cache::ShowQueryCache, show_servers::ShowServers, show_stats::ShowStats,
+    show_version::ShowVersion, Command, Error,
 };
 
 use tracing::debug;
@@ -23,6 +24,7 @@ pub enum ParseResult {
     ResetQueryCache(ResetQueryCache),
     ShowStats(ShowStats),
     ShowVersion(ShowVersion),
+    SetupSchema(SetupSchema),
 }
 
 impl ParseResult {
@@ -43,6 +45,7 @@ impl ParseResult {
             ResetQueryCache(reset_query_cache) => reset_query_cache.execute().await,
             ShowStats(show_stats) => show_stats.execute().await,
             ShowVersion(show_version) => show_version.execute().await,
+            SetupSchema(setup_schema) => setup_schema.execute().await,
         }
     }
 
@@ -63,6 +66,7 @@ impl ParseResult {
             ResetQueryCache(reset_query_cache) => reset_query_cache.name(),
             ShowStats(show_stats) => show_stats.name(),
             ShowVersion(show_version) => show_version.name(),
+            SetupSchema(setup_schema) => setup_schema.name(),
         }
     }
 }
@@ -96,6 +100,13 @@ impl Parser {
             },
             "reset" => match iter.next().ok_or(Error::Syntax)?.trim() {
                 "query_cache" => ParseResult::ResetQueryCache(ResetQueryCache::parse(&sql)?),
+                command => {
+                    debug!("unknown admin show command: '{}'", command);
+                    return Err(Error::Syntax);
+                }
+            },
+            "setup" => match iter.next().ok_or(Error::Syntax)?.trim() {
+                "schema" => ParseResult::SetupSchema(SetupSchema::parse(&sql)?),
                 command => {
                     debug!("unknown admin show command: '{}'", command);
                     return Err(Error::Syntax);

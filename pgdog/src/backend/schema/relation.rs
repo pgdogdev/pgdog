@@ -82,6 +82,11 @@ impl Relation {
     pub fn is_table(&self) -> bool {
         matches!(self.type_.as_str(), "table" | "partitioned table")
     }
+
+    /// This is a sequence.
+    pub fn is_sequence(&self) -> bool {
+        self.type_ == "sequence"
+    }
 }
 
 #[cfg(test)]

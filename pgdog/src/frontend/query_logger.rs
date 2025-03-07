@@ -25,8 +25,12 @@ impl<'a> QueryLogger<'a> {
 
         if let Some(path) = path {
             if let Some(query) = self.buffer.query()? {
-                let mut file = OpenOptions::new().append(true).open(path).await?;
-                let line = format!("{}\n\n", query);
+                let mut file = OpenOptions::new()
+                    .append(true)
+                    .create(true)
+                    .open(path)
+                    .await?;
+                let line = format!("{}\n", query.trim());
                 file.write_all(line.as_bytes()).await?;
             }
         }

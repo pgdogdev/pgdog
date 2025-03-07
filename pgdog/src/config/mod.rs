@@ -525,6 +525,9 @@ pub struct ShardedTable {
     pub name: Option<String>,
     /// Table sharded on this column.
     pub column: String,
+    /// This table is the primary sharding anchor (e.g. "users").
+    #[serde(default)]
+    pub primary: bool,
 }
 
 /// Queries with manual routing rules.
