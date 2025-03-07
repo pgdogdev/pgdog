@@ -11,9 +11,6 @@ jobs:
         with:
           toolchain: stable
           override: true
-      - uses: Swatinem/rust-cache@v2
-        with:
-          prefix-key: "v1" # Change this when cache gets busted because of new tools.
       - name: Format
         run: cargo fmt --all -- --check
       - name: Clippy
@@ -47,8 +44,10 @@ jobs:
           toolchain: stable
           override: true
       - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: "v1" # Change this when updating tooling
       - name: Install test dependencies
-        run: cargo install cargo-nextest
+        run: cargo install cargo-nextest --version "0.9.78" --locked
       - name: Run tests
         run: cargo nextest run
       - name: Run documentation tests
