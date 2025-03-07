@@ -37,11 +37,8 @@ impl Inner {
 
         let mut backend = Connection::new(user, database, client.admin)?;
         let mut router = Router::new();
-        let stats = Stats::new();
-        let async_ = false;
-        let start_transaction = None;
-        let comms = client.comms.clone();
 
+        // Configure replication mode.
         if client.shard.is_some() {
             if let Some(config) = backend.cluster()?.replication_sharding_config() {
                 backend.replication_mode(client.shard, &config)?;
@@ -53,13 +50,14 @@ impl Inner {
         Ok(Self {
             backend,
             router,
-            stats,
-            async_,
-            start_transaction,
-            comms,
+            stats: Stats::new(),
+            async_: false,
+            start_transaction: None,
+            comms: client.comms.clone(),
         })
     }
 
+    /// Get the query from the buffer and figure out what it wants to do.
     pub(super) fn command(&mut self, buffer: &Buffer) -> Result<Option<&Command>, RouterError> {
         self.backend
             .cluster()
@@ -68,8 +66,24 @@ impl Inner {
             .transpose()
     }
 
+    /// Client is connected to server(s).
     pub(super) fn connected(&self) -> bool {
         self.backend.connected()
+    }
+
+    /// Server(s) are done talking.
+    pub(super) fn done(&self) -> bool {
+        self.backend.done()
+    }
+
+    /// Server(s) are in transaction mode pooling.
+    pub(super) fn transaction_mode(&self) -> bool {
+        self.backend.transaction_mode()
+    }
+
+    /// Disconnect client from server(s).
+    pub(super) fn disconnect(&mut self) {
+        self.backend.disconnect();
     }
 
     pub(super) async fn connect(&mut self, request: &Request) -> Result<(), BackendError> {

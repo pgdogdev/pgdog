@@ -19,7 +19,8 @@
        end                                                        AS "persistence",
        am.amname                                                  AS "access_method",
        pg_catalog.pg_table_size(c.oid)                            AS "size",
-       pg_catalog.obj_description(c.oid, 'pg_class')              AS "description"
+       pg_catalog.obj_description(c.oid, 'pg_class')              AS "description",
+       c.oid::integer                                             AS "oid"
 FROM   pg_catalog.pg_class c
        LEFT JOIN pg_catalog.pg_namespace n
               ON n.oid = c.relnamespace

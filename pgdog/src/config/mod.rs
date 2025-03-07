@@ -243,6 +243,9 @@ pub struct General {
     /// Broadcast port.
     #[serde(default = "General::broadcast_port")]
     pub broadcast_port: u16,
+    /// Load queries to file (warning: slow, don't use in production).
+    #[serde(default)]
+    pub query_log: Option<PathBuf>,
 }
 
 impl Default for General {
@@ -265,6 +268,7 @@ impl Default for General {
             shutdown_timeout: Self::default_shutdown_timeout(),
             broadcast_address: None,
             broadcast_port: Self::broadcast_port(),
+            query_log: None,
         }
     }
 }
@@ -521,6 +525,9 @@ pub struct ShardedTable {
     pub name: Option<String>,
     /// Table sharded on this column.
     pub column: String,
+    /// This table is the primary sharding anchor (e.g. "users").
+    #[serde(default)]
+    pub primary: bool,
 }
 
 /// Queries with manual routing rules.

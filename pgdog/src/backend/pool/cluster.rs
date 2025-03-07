@@ -209,6 +209,7 @@ mod test {
                     database: "pgdog".into(),
                     name: Some("sharded".into()),
                     column: "id".into(),
+                    primary: true,
                 }]),
                 shards: vec![Shard::default(), Shard::default()],
                 ..Default::default()

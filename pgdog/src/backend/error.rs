@@ -71,6 +71,9 @@ pub enum Error {
 
     #[error("{0}")]
     Replication(#[from] crate::backend::replication::Error),
+
+    #[error("{0}")]
+    ExecutionError(ErrorResponse),
 }
 
 impl Error {

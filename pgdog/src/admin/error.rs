@@ -18,4 +18,7 @@ pub enum Error {
 
     #[error("{0}")]
     SerdeJson(#[from] serde_json::Error),
+
+    #[error("{0}")]
+    Backend(Box<crate::backend::Error>),
 }

@@ -10,6 +10,7 @@ use super::{Buffer, Command, Comms, Error, PreparedStatements};
 use crate::auth::scram::Server;
 use crate::backend::pool::{Connection, Request};
 use crate::config::config;
+use crate::frontend::QueryLogger;
 use crate::net::messages::{
     Authentication, BackendKeyData, CommandComplete, ErrorResponse, Message, ParseComplete,
     Protocol, ReadyForQuery,
@@ -208,6 +209,7 @@ impl Client {
         #[cfg(debug_assertions)]
         if let Some(query) = buffer.query()? {
             debug!("{} [{}]", query, self.addr);
+            QueryLogger::new(&buffer).log().await?;
         }
 
         let connected = inner.connected();
@@ -304,13 +306,17 @@ impl Client {
         let len = message.len();
         let code = message.code();
 
-        // ReadyForQuery (B) | CopyInResponse (B) || RowDescription (B) | ErrorResponse (B)
-        let flush = matches!(code, 'Z' | 'G')
-            || matches!(code, 'T' | 'E') && inner.async_
-            || message.streaming();
-        if flush {
+        // ReadyForQuery (B) | CopyInResponse (B)
+        let flush = matches!(code, 'Z' | 'G');
+        // RowDescription (B) | ErrorResponse (B)
+        let async_flush = matches!(code, 'T' | 'E') && inner.async_;
+        let streaming = message.streaming();
+
+        if flush || async_flush || streaming {
             self.stream.send_flush(message).await?;
-            inner.async_ = false;
+            if async_flush {
+                inner.async_ = false;
+            }
         } else {
             self.stream.send(message).await?;
         }
@@ -321,9 +327,9 @@ impl Client {
             inner.comms.stats(inner.stats.query());
         }
 
-        if inner.backend.done() {
-            if inner.backend.transaction_mode() {
-                inner.backend.disconnect();
+        if inner.done() {
+            if inner.transaction_mode() {
+                inner.disconnect();
             }
             inner.comms.stats(inner.stats.transaction());
             trace!(
@@ -344,6 +350,7 @@ impl Client {
     /// sent a complete request.
     async fn buffer(&mut self) -> Result<Buffer, Error> {
         let mut buffer = Buffer::new();
+        // Only start timer once we receive the first message.
         let mut timer = None;
 
         while !buffer.full() {
@@ -358,6 +365,7 @@ impl Client {
                 timer = Some(Instant::now());
             }
 
+            // Terminate (B & F).
             if message.code() == 'X' {
                 return Ok(vec![].into());
             } else {
@@ -375,33 +383,30 @@ impl Client {
 
     /// Tell the client we started a transaction.
     async fn start_transaction(&mut self) -> Result<(), Error> {
-        let cmd = CommandComplete {
-            command: "BEGIN".into(),
-        };
-        let rfq = ReadyForQuery::in_transaction();
         self.stream
-            .send_many(vec![cmd.message()?, rfq.message()?])
+            .send_many(vec![
+                CommandComplete::new_begin().message()?,
+                ReadyForQuery::in_transaction().message()?,
+            ])
             .await?;
         debug!("transaction started");
-
         Ok(())
     }
 
+    /// Tell the client we finished a transaction (without doing any work).
+    ///
+    /// This avoids connecting to servers when clients start and commit transactions
+    /// with no queries.
     async fn end_transaction(&mut self, rollback: bool) -> Result<(), Error> {
         let cmd = if rollback {
-            CommandComplete {
-                command: "ROLLBACK".into(),
-            }
+            CommandComplete::new_rollback()
         } else {
-            CommandComplete {
-                command: "COMMIT".into(),
-            }
+            CommandComplete::new_commit()
         };
         self.stream
             .send_many(vec![cmd.message()?, ReadyForQuery::idle().message()?])
             .await?;
         debug!("transaction ended");
-
         Ok(())
     }
 }

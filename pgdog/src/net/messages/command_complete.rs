@@ -35,6 +35,27 @@ impl CommandComplete {
             command: parts.join(" "),
         })
     }
+
+    /// Start transaction.
+    pub fn new_begin() -> Self {
+        Self {
+            command: "BEGIN".into(),
+        }
+    }
+
+    /// Rollback transaction.
+    pub fn new_rollback() -> Self {
+        Self {
+            command: "ROLLBACK".into(),
+        }
+    }
+
+    /// Commit transaction.
+    pub fn new_commit() -> Self {
+        Self {
+            command: "COMMIT".into(),
+        }
+    }
 }
 
 impl ToBytes for CommandComplete {

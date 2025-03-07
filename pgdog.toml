@@ -6,18 +6,22 @@
 host = "0.0.0.0"
 port = 6432
 shutdown_timeout = 5_000
+# query_log = "queries.txt"
 # broadcast_address = "224.0.0.1"
 # broadcast_port = 6435
-
-[[databases]]
-name = "pgdog"
-host = "127.0.0.1"
 
 #
 # Admin database password.
 #
 [admin]
 password = "pgdog"
+
+#
+# Simple database.
+#
+[[databases]]
+name = "pgdog"
+host = "127.0.0.1"
 
 #
 # Sharded cluster with two primaries.
@@ -48,6 +52,7 @@ column = "id"
 database = "pgdog_sharded"
 table = "users"
 column = "id"
+primary = true
 
 #
 # ActiveRecord sends these queries

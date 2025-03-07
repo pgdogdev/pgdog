@@ -1,7 +1,7 @@
 use std::str::from_utf8;
 
 use super::*;
-use crate::net::Error;
+use crate::net::{messages::DataRow, Error};
 
 use bytes::Bytes;
 
@@ -12,5 +12,11 @@ impl FromDataType for String {
 
     fn encode(&self, _: Format) -> Result<Bytes, Error> {
         Ok(Bytes::copy_from_slice(self.as_bytes()))
+    }
+}
+
+impl From<DataRow> for String {
+    fn from(value: DataRow) -> Self {
+        value.get_text(0).unwrap_or_default()
     }
 }

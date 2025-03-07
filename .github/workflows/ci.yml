@@ -11,7 +11,6 @@ jobs:
         with:
           toolchain: stable
           override: true
-      - uses: Swatinem/rust-cache@v2
       - name: Format
         run: cargo fmt --all -- --check
       - name: Clippy
@@ -37,6 +36,7 @@ jobs:
           createdb pgdog
           psql -c "CREATE USER pgdog PASSWORD 'pgdog' LOGIN;"
           psql -c "GRANT ALL ON SCHEMA public TO pgdog;" pgdog
+          psql -c "GRANT ALL ON DATABASE pgdog TO pgdog;"
           psql postgres://pgdog:pgdog@127.0.0.1:5432/pgdog -c "SELECT 1" > /dev/null
       - uses: actions/checkout@v4
       - uses: actions-rs/toolchain@v1
@@ -44,8 +44,10 @@ jobs:
           toolchain: stable
           override: true
       - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: "v1" # Change this when updating tooling
       - name: Install test dependencies
-        run: cargo install cargo-nextest
+        run: cargo install cargo-nextest --version "0.9.78" --locked
       - name: Run tests
         run: cargo nextest run
       - name: Run documentation tests
