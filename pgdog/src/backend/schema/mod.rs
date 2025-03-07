@@ -49,7 +49,7 @@ impl Schema {
             return Ok(());
         }
 
-        for (shard_number, shard) in shards.into_iter().enumerate() {
+        for (shard_number, shard) in shards.iter().enumerate() {
             let mut server = shard.primary(&Request::default()).await?;
             Self::setup(&mut server).await?;
             let schema = Self::load(&mut server).await?;
@@ -143,8 +143,7 @@ mod test {
         let seq = schema
             .sequences()
             .into_iter()
-            .filter(|seq| seq.schema() == "pgdog")
-            .next()
+            .find(|seq| seq.schema() == "pgdog")
             .cloned()
             .unwrap();
         assert_eq!(seq.name, "validator_bigint_id_seq");

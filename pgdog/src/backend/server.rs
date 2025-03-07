@@ -350,7 +350,7 @@ impl Server {
             .into_iter()
             .filter(|message| message.code() == 'D')
             .map(|message| message.to_bytes().unwrap())
-            .map(|bytes| DataRow::from_bytes(bytes))
+            .map(DataRow::from_bytes)
             .collect::<Result<Vec<DataRow>, crate::net::Error>>()?
             .into_iter()
             .map(|row| T::from(row))

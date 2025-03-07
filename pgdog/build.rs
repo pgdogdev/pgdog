@@ -7,7 +7,7 @@ fn main() {
         .file("src/frontend/router/sharding/hashfn.c")
         .compile("postgres_hash");
 
-    let output = Command::new("git").args(&["rev-parse", "HEAD"]).output();
+    let output = Command::new("git").args(["rev-parse", "HEAD"]).output();
     if let Ok(output) = output {
         let git_hash = String::from_utf8(output.stdout).unwrap_or_default();
         println!(
