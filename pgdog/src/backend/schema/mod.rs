@@ -127,7 +127,6 @@ impl Schema {
 #[cfg(test)]
 mod test {
     use crate::backend::pool::Request;
-    use crate::net::messages::{DataRow, Format};
 
     use super::super::pool::test::pool;
     use super::Schema;
@@ -150,19 +149,13 @@ mod test {
             .unwrap();
         assert_eq!(seq.name, "validator_bigint_id_seq");
 
-        struct One {
-            one: i32,
-        }
+        let server_ok = conn.fetch_all::<i32>("SELECT 1 AS one").await.unwrap();
+        assert_eq!(server_ok.first().unwrap().clone(), 1);
 
-        impl From<DataRow> for One {
-            fn from(value: DataRow) -> Self {
-                Self {
-                    one: value.get::<i32>(0, Format::Text).unwrap_or_default(),
-                }
-            }
-        }
-
-        let server_ok = conn.fetch_all::<One>("SELECT 1 AS one").await.unwrap();
-        assert_eq!(server_ok.first().unwrap().one, 1);
+        let debug = conn
+            .fetch_all::<String>("SELECT pgdog.debug()")
+            .await
+            .unwrap();
+        assert!(debug.first().unwrap().contains("PgDog Debug"));
     }
 }

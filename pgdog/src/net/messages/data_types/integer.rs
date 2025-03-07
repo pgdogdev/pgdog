@@ -1,3 +1,5 @@
+use crate::net::messages::DataRow;
+
 use super::*;
 use bytes::{Buf, Bytes};
 
@@ -18,5 +20,11 @@ impl FromDataType for i32 {
             Format::Text => Ok(Bytes::copy_from_slice(self.to_string().as_bytes())),
             Format::Binary => Ok(Bytes::copy_from_slice(&self.to_be_bytes())),
         }
+    }
+}
+
+impl From<DataRow> for i32 {
+    fn from(value: DataRow) -> Self {
+        value.get_int(0, true).unwrap_or(0) as i32
     }
 }
