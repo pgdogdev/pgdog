@@ -343,9 +343,21 @@ impl Server {
         self.execute_batch(&[query]).await
     }
 
+    /// Execute query and raise an error if one is returned by PosttgreSQL.
+    pub async fn execute_checked(&mut self, query: &str) -> Result<Vec<Message>, Error> {
+        let messages = self.execute(query).await?;
+        let error = messages.iter().find(|m| m.code() == 'E');
+        if let Some(error) = error {
+            let error = ErrorResponse::from_bytes(error.to_bytes()?)?;
+            return Err(Error::ExecutionError(error));
+        } else {
+            Ok(messages)
+        }
+    }
+
     /// Execute a query and return all rows.
     pub async fn fetch_all<T: From<DataRow>>(&mut self, query: &str) -> Result<Vec<T>, Error> {
-        let messages = self.execute(query).await?;
+        let messages = self.execute_checked(query).await?;
         Ok(messages
             .into_iter()
             .filter(|message| message.code() == 'D')

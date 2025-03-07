@@ -36,7 +36,7 @@ impl Schema {
 
     /// Install PgDog functions and schema.
     pub async fn setup(server: &mut Server) -> Result<(), Error> {
-        server.execute(SETUP).await?;
+        server.execute_checked(SETUP).await?;
         Ok(())
     }
 
