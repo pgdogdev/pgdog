@@ -12,6 +12,8 @@ jobs:
           toolchain: stable
           override: true
       - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: "v1" # Change this when cache gets busted because of new tools.
       - name: Format
         run: cargo fmt --all -- --check
       - name: Clippy
