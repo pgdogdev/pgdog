@@ -10,6 +10,7 @@ use super::{Buffer, Command, Comms, Error, PreparedStatements};
 use crate::auth::scram::Server;
 use crate::backend::pool::{Connection, Request};
 use crate::config::config;
+#[cfg(debug_assertions)]
 use crate::frontend::QueryLogger;
 use crate::net::messages::{
     Authentication, BackendKeyData, CommandComplete, ErrorResponse, Message, ParseComplete,
