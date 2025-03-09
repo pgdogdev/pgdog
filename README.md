@@ -4,17 +4,15 @@
 
 [![CI](https://github.com/levkk/pgdog/actions/workflows/ci.yml/badge.svg)](https://github.com/levkk/pgdog/actions/workflows/ci.yml)
 
-PgDog is a transaction pooler and logical replication manager that can shard PostgreSQL.
-Spiritual successor to [pgcat](https://github.com/levkk/pgcat) and written in Rust, PgDog comes with a lot of
-the same features, like load balancing, failover and connection pooling. In addition, PgDog improves performance and adds new features like cross-shard queries, async protocol support, and sharded `COPY`.
+PgDog is a transaction pooler and logical replication manager that can shard PostgreSQL. Written in Rust, PgDog is fast, secure and can manage hundreds of databases and thousands of connections.
 
 ## Documentation
 
-&#128216; PgDog documentation can be **[found here](https://docs.pgdog.dev/).**
+&#128216; PgDog documentation can be **[found here](https://docs.pgdog.dev/)**. Any questions? Join our **[Discord](https://discord.gg/jf5A6VES)**.
 
 ## Quick start
 
-You can try PgDog by using Docker. Make sure to install [Docker Compose](https://docs.docker.com/compose/) and run the following:
+You can try PgDog using Docker. Install [Docker Compose](https://docs.docker.com/compose/) and run:
 
 ```
 docker-compose up
@@ -34,83 +32,6 @@ INSERT INTO payments (id, user_id, amount) VALUES (1, 1, 100.0);
 
 SELECT * FROM users WHERE id = 1;
 SELECT * FROM payments WHERE user_id = 1;
-```
-
-
-## Features summary
-
-| Feature | Status | Summary |
-|---------|--------|---------|
-| [Load balancer](https://docs.pgdog.dev/features/load-balancer) | Operational | Spread `SELECT` queries across multiple replicas automatically, using algorithms like round robin. |
-| [Transaction pooling](https://docs.pgdog.dev/features/transaction-mode) | Operational | Identical to pgbouncer, allows for thousands of clients to reuse a handful of server connections. |
-| [Session pooling](https://docs.pgdog.dev/features/session-mode) | Operational | Exclusive use of server connections for clients needing session-level features. |
-| [Plugins](https://docs.pgdog.dev/features/docs/plugins/) | Operational | Control how PgDog routes queries and what results it sends to clients, through loading shared libraries at runtime. |
-| [Sharding](https://docs.pgdog.dev/features/sharding/) | Work in progress | Automatically split data and queries between multiple databases, scaling writes horizonally. |
-| [Authentication](https://docs.pgdog.dev/features/authentication/) | Supports `scram-sha-256` and `trust` | Suppport for various PostgreSQL authentication mechanisms, like SCRAM, MD5, and LDAP. |
-| [Configuration](https://docs.pgdog.dev/configuration/) | Operational | Configure PgDog without restarting the pooler or breaking connections. |
-
-## Getting started
-
-Install the latest version of the Rust compiler from [rust-lang.org](https://rust-lang.org).
-Once you have Rust installed, clone this repository and build the project in release mode:
-
-```bash
-cargo build --release
-```
-
-It's important to use the release profile if you're deploying to production or want to run
-performance benchmarks.
-
-### Configuration
-
-PgDog has two configuration files:
-
-* `pgdog.toml` which contains general settings and PostgreSQL servers information
-* `users.toml` for users and passwords
-
-Most options have reasonable defaults, so a basic configuration for a single user
-and database running on the same machine is pretty short:
-
-**`pgdog.toml`**
-
-```toml
-[general]
-host = "0.0.0.0"
-port = 6432
-
-[[databases]]
-name = "pgdog"
-host = "127.0.0.1"
-```
-
-**`users.toml`**
-
-```toml
-[[users]]
-name = "pgdog"
-password = "pgdog"
-database = "pgdog"
-```
-
-If you'd like to try this out, you can set it up like so:
-
-```postgresql
-CREATE DATABASE pgdog;
-CREATE USER pgdog PASSWORD 'pgdog' LOGIN;
-```
-
-### Running PgDog
-
-Running PgDog can be done with Cargo:
-
-```bash
-cargo run --release
-```
-
-You can connect to PgDog with psql or any other PostgreSQL client:
-
-```bash
-psql postgres://pgdog:pgdog@127.0.0.1:6432/pgdog
 ```
 
 ## Features
@@ -188,6 +109,70 @@ to restart the process and break PostgreSQL connections. If you've used pgbounce
 will be familiar. If not, options are documented with examples.
 
 &#128216; **[Configuration](https://docs.pgdog.dev/configuration/)**
+
+## Running PgDog locally
+
+Install the latest version of the Rust compiler from [rust-lang.org](https://rust-lang.org).
+Once you have Rust installed, clone this repository and build the project in release mode:
+
+```bash
+cargo build --release
+```
+
+It's important to use the release profile if you're deploying to production or want to run
+performance benchmarks.
+
+### Configuration
+
+PgDog has two configuration files:
+
+* `pgdog.toml` which contains general settings and PostgreSQL servers information
+* `users.toml` for users and passwords
+
+Most options have reasonable defaults, so a basic configuration for a single user
+and database running on the same machine is pretty short:
+
+**`pgdog.toml`**
+
+```toml
+[general]
+host = "0.0.0.0"
+port = 6432
+
+[[databases]]
+name = "pgdog"
+host = "127.0.0.1"
+```
+
+**`users.toml`**
+
+```toml
+[[users]]
+name = "pgdog"
+password = "pgdog"
+database = "pgdog"
+```
+
+If you'd like to try this out, you can set it up like so:
+
+```postgresql
+CREATE DATABASE pgdog;
+CREATE USER pgdog PASSWORD 'pgdog' LOGIN;
+```
+
+### Start PgDog
+
+Running PgDog can be done with Cargo:
+
+```bash
+cargo run --release
+```
+
+You can connect to PgDog with psql or any other PostgreSQL client:
+
+```bash
+psql postgres://pgdog:pgdog@127.0.0.1:6432/pgdog
+```
 
 ## &#128678; Status &#128678;
 
