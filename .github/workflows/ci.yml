@@ -25,6 +25,8 @@ jobs:
           override: true
       - name: Build
         run: cargo build
+      - name: Check release
+        run: cargo check --release
   tests:
     runs-on: ubuntu-latest
     steps:
