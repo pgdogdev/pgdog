@@ -64,7 +64,7 @@ PgDog is able to handle databases with multiple shards by routing queries automa
 
 #### Using `COPY`
 
-PgDog come with a CSV parser and can split a COPY command between all shards automatically. This allows clients to ingest data into sharded PostgreSQL without preprocessing.
+PgDog comes with a CSV parser and can split COPY commands between all shards automatically. This allows clients to ingest data into sharded PostgreSQL without preprocessing.
 
 #### Logical replication
 
