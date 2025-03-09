@@ -4,17 +4,15 @@
 
 [![CI](https://github.com/levkk/pgdog/actions/workflows/ci.yml/badge.svg)](https://github.com/levkk/pgdog/actions/workflows/ci.yml)
 
-PgDog is a transaction pooler and logical replication manager that can shard PostgreSQL.
-Spiritual successor to [pgcat](https://github.com/levkk/pgcat) and written in Rust, PgDog comes with a lot of
-the same features, like load balancing, failover and connection pooling. In addition, PgDog improves performance and adds new features like cross-shard queries, async protocol support, and sharded `COPY`.
+PgDog is a transaction pooler and logical replication manager that can shard PostgreSQL. Written in Rust, PgDog is fast, secure and can manage hundreds of databases and hudreds of thousands of connections.
 
 ## Documentation
 
-&#128216; PgDog documentation can be **[found here](https://docs.pgdog.dev/).**
+&#128216; PgDog documentation can be **[found here](https://docs.pgdog.dev/)**. Any questions? Join our **[Discord](https://discord.gg/jf5A6VES)**.
 
 ## Quick start
 
-You can try PgDog by using Docker. Make sure to install [Docker Compose](https://docs.docker.com/compose/) and run the following:
+You can try PgDog using Docker. Install [Docker Compose](https://docs.docker.com/compose/) and run:
 
 ```
 docker-compose up
@@ -36,23 +34,56 @@ SELECT * FROM users WHERE id = 1;
 SELECT * FROM payments WHERE user_id = 1;
 ```
 
+## Features
 
-## Features summary
 
-| Feature | Status | Summary |
-|---------|--------|---------|
-| [Load balancer](https://docs.pgdog.dev/features/load-balancer) | Operational | Spread `SELECT` queries across multiple replicas automatically, using algorithms like round robin. |
-| [Transaction pooling](https://docs.pgdog.dev/features/transaction-mode) | Operational | Identical to pgbouncer, allows for thousands of clients to reuse a handful of server connections. |
-| [Session pooling](https://docs.pgdog.dev/features/session-mode) | Operational | Exclusive use of server connections for clients needing session-level features. |
-| [Plugins](https://docs.pgdog.dev/features/docs/plugins/) | Operational | Control how PgDog routes queries and what results it sends to clients, through loading shared libraries at runtime. |
-| [Sharding](https://docs.pgdog.dev/features/sharding/) | Work in progress | Automatically split data and queries between multiple databases, scaling writes horizonally. |
-| [Authentication](https://docs.pgdog.dev/features/authentication/) | Supports `scram-sha-256` and `trust` | Suppport for various PostgreSQL authentication mechanisms, like SCRAM, MD5, and LDAP. |
-| [Configuration](https://docs.pgdog.dev/configuration/) | Operational | Configure PgDog without restarting the pooler or breaking connections. |
+### Load balancer
 
-## Getting started
+PgDog is an application layer (OSI Level 7) load balancer for PostgreSQL. It can proxy multiple replicas (and primary) and distribute transactions evenly between databases. It supports multiple strategies, including round robin, random, least active connections, etc. PgDog can also inspect queries and send `SELECT` queries to replicas, and all others to the primary. This allows to proxy all databases behind a single PgDog deployment.
+
+&#128216; **[Load balancer](https://docs.pgdog.dev/features/load-balancer)**
+
+#### Healthchecks and failover
+
+PgDog maintains a real-time list of healthy hosts. When a host fails a healthcheck, it's removed from active rotation and queries are rerouted to other databases. This is similar to HTTP load balancing, except it's at the database layer.
+
+Failover maximizes database availability and protects against bad network connections, temporary hardware failures or misconfiguration.
+
+&#128216; **[Healthchecks](https://docs.pgdog.dev/features/healthchecks)**
+
+### Transaction pooling
+
+Like PgBouncer, PgDog supports transaction (and session) pooling, allowing
+100,000s of clients to use just a few PostgreSQL server connections.
+
+&#128216; **[Transactions](https://docs.pgdog.dev/features/transaction-mode)**
+
+### Sharding
+
+PgDog is able to handle databases with multiple shards by routing queries automatically to one or more shards. Using the native PostgreSQL parser, PgDog understands queries, extracts sharding keys and determines the best routing strategy. For cross-shard queries, PgDog assembles results in memory and sends them all to the client transparently.
+
+#### Using `COPY`
+
+PgDog comes with a CSV parser and can split COPY commands between all shards automatically. This allows clients to ingest data into sharded PostgreSQL without preprocessing.
+
+#### Logical replication
+
+PgDog understands the PostgreSQL logical replication protocol and can split data between databases in the background and without downtime. This allows to shard existing databases and add more shards to existing clusters in production, without impacting database operations.
+
+&#128216; **[Sharding](https://docs.pgdog.dev/features/sharding/)**
+
+### Configuration
+
+PgDog is highly configurable and many aspects of its operation can be tweaked at runtime, without having
+to restart the process and break PostgreSQL connections. If you've used PgBouncer (or PgCat) before, the options
+will be familiar. If not, they are documented with examples.
+
+&#128216; **[Configuration](https://docs.pgdog.dev/configuration/)**
+
+## Running PgDog locally
 
 Install the latest version of the Rust compiler from [rust-lang.org](https://rust-lang.org).
-Once you have Rust installed, clone this repository and build the project in release mode:
+Clone this repository and build the project in release mode:
 
 ```bash
 cargo build --release
@@ -99,7 +130,19 @@ CREATE DATABASE pgdog;
 CREATE USER pgdog PASSWORD 'pgdog' LOGIN;
 ```
 
-### Running PgDog
+#### Try sharding
+
+The configuration files for a sharded database are provided in the repository. To make it work locally, create the required databases:
+
+```postgresql
+CREATE DATABASE shard_0;
+CREATE DATABASE shard_1;
+
+GRANT ALL ON DATABASE shard_0 TO pgdog;
+GRANT ALL ON DATABASE shard_1 TO pgdog;
+```
+
+### Start PgDog
 
 Running PgDog can be done with Cargo:
 
@@ -113,93 +156,13 @@ You can connect to PgDog with psql or any other PostgreSQL client:
 psql postgres://pgdog:pgdog@127.0.0.1:6432/pgdog
 ```
 
-## Features
-
-### Load balancer
-
-PgDog is an application layer (OSI Level 7) load balancer for PostgreSQL. It can proxy multiple replicas (and primary) and distribute transactions. It comes with support for multiple strategies, including round robin and random. Additionally, it can parse queries and send `SELECT` queries to replicas and all others to the primary. This allows to proxy all databases behind a single PgDog deployment.
-
-&#128216; **[Load balancer](https://docs.pgdog.dev/features/load-balancer)**
-
-#### Healthchecks and failover
-
-PgDog maintains a real time list of healthy hosts in its database configuration.
-When a host fails a healthcheck, it's removed from active rotation
-and queries are rerouted to other replicas. This is analogous to modern HTTP
-load balancing, except it's at the database layer.
-
-Failover maximizes database availability and protects against intermittent issues like spotty network connectivity and temporary downtime.
-
-&#128216; **[Healthchecks](https://docs.pgdog.dev/features/healthchecks)**
-
-### Transaction pooling
-
-Like pgbouncer, PgDog supports transaction-level connection pooling, allowing
-1000s (even 100,000s) of clients to reuse just a few PostgreSQL server connections.
-
-&#128216; **[Transactions](https://docs.pgdog.dev/features/transaction-mode)**
-
-### Plugins
-
-PgDog comes with its own plugin system that loads them at runtime using a shared library interface.
-If a plugin can expose a predefined C API, it can be written in any language, including C/C++, Rust, Zig, Go, Python, Ruby, Java, and many more.
-
-Plugins can be used to route queries to specific databases in a sharded configuration, or to
-split traffic between writes and reads in a mixed (primary & replicas) deployment. The plugin
-interface allows code execution at multiple stages of the request/response lifecycle, and can
-go as far as block or intercept queries and return custom results to the client.
-
-Examples of plugins can be found in [examples](https://github.com/levkk/pgdog/tree/main/examples) and [plugins](https://github.com/levkk/pgdog/tree/main/plugins).
-
-&#128216; **[Plugins](https://docs.pgdog.dev/features/plugins/)**
-
-### Sharding
-
-_This feature is a work in progress._
-
-PgDog is able to handle databases with multiple shards by routing queries automatically to one or more shards. The `pgdog-routing` plugin parses
-queries, extracts tables and columns information, and calculates which shard(s) the query should go to based on the parameters. Not all operations are supported, but
-a lot of common use cases are working.
-
-&#128216; **[Sharding](https://docs.pgdog.dev/features/sharding/)**
-
-#### Local testing
-
-The configuration files for a sharded database are provided in the repository. To make it work locally, create the required databases:
-
-```postgresql
-CREATE DATABASE shard_0;
-CREATE DATABASE shard_1;
-
-GRANT CONNECT ON DATABASE shard_0 TO pgdog;
-GRANT CONNECT ON DATABASE shard_1 TO pgdog;
-```
-
-You can launch PgDog with the sharded configuration using the files provided in the repository:
-
-```bash
-cargo run -- --config pgdog-sharded.toml --users users-sharded.toml
-```
-
-### Configuration
-
-PgDog is highly configurable and many aspects of its operation can be tweaked at runtime, without having
-to restart the process and break PostgreSQL connections. If you've used pgbouncer (or pgcat) before, the options
-will be familiar. If not, options are documented with examples.
-
-&#128216; **[Configuration](https://docs.pgdog.dev/configuration/)**
-
 ## &#128678; Status &#128678;
 
-While a lot of "classic" features of PgDog, like load balancing and healthchecks, have been well tested in production and at scale, the current codebase has not. This project is just getting started and early adopters are welcome to try PgDog internally.
-
-Status on features stability will be [updated regularly](https://docs.pgdog.dev/features/).
+This project is just getting started and early adopters are welcome to try PgDog internally. Status on features stability will be [updated regularly](https://docs.pgdog.dev/features/). Most features have tests and are benchmarked regularly for performance regressions.
 
 ## Performance
 
-PgDog does its best to minimize its impact on overall database performance. Using Rust and Tokio is a great start for a fast network proxy, but additional
-care is also taken to perform as few operations as possible while moving data between client and server sockets. Some benchmarks are provided
-to help set a baseline.
+PgDog does its best to minimize its impact on overall database performance. Using Rust and Tokio is a great start for a fast network proxy, but additional care is also taken to perform as few operations as possible while moving data between client and server sockets. Some benchmarks are provided to help set a baseline.
 
 &#128216; **[Architecture & benchmarks](https://docs.pgdog.dev/architecture/)**
 
