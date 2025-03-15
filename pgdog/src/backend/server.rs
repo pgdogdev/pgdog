@@ -1,4 +1,4 @@
-//! PostgreSQL serer connection.
+//! PostgreSQL server connection.
 use std::time::{Duration, Instant};
 
 use bytes::{BufMut, BytesMut};
@@ -120,7 +120,7 @@ impl Server {
             let message = stream.read().await?;
 
             match message.code() {
-                // ReadyForQery (B)
+                // ReadyForQuery (B)
                 'Z' => break,
                 // ParameterStatus (B)
                 'S' => {
@@ -343,7 +343,7 @@ impl Server {
         self.execute_batch(&[query]).await
     }
 
-    /// Execute query and raise an error if one is returned by PosttgreSQL.
+    /// Execute query and raise an error if one is returned by PostgreSQL.
     pub async fn execute_checked(&mut self, query: &str) -> Result<Vec<Message>, Error> {
         let messages = self.execute(query).await?;
         let error = messages.iter().find(|m| m.code() == 'E');

@@ -29,7 +29,7 @@ pub enum Commands {
         #[arg(short, long)]
         pool_size: Option<usize>,
 
-        /// Minimum number of idle connectios to maintain open.
+        /// Minimum number of idle connections to maintain open.
         #[arg(short, long)]
         min_pool_size: Option<usize>,
 
