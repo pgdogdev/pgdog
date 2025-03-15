@@ -18,6 +18,7 @@ pub enum Aggregate {
 }
 
 impl Aggregate {
+    /// Figure out what aggregates are present and which ones PgDog supports.
     pub fn parse(stmt: &SelectStmt) -> Result<Vec<Self>, Error> {
         let mut aggs = vec![];
 
@@ -27,11 +28,26 @@ impl Aggregate {
                     if let Some(NodeEnum::FuncCall(func)) = &node.node {
                         if let Some(name) = func.funcname.first() {
                             if let Some(NodeEnum::String(protobuf::String { sval })) = &name.node {
-                                if sval.as_str() == "count"
-                                    && func.args.is_empty()
-                                    && stmt.group_clause.is_empty()
-                                {
-                                    aggs.push(Aggregate::Count(AggregateTarget::Star(idx)));
+                                match sval.as_str() {
+                                    "count" => {
+                                        if stmt.group_clause.is_empty() {
+                                            aggs.push(Aggregate::Count(AggregateTarget::Star(idx)));
+                                        }
+                                    }
+
+                                    "max" => {
+                                        if stmt.group_clause.is_empty() {
+                                            aggs.push(Aggregate::Max(AggregateTarget::Star(idx)));
+                                        }
+                                    }
+
+                                    "min" => {
+                                        if stmt.group_clause.is_empty() {
+                                            aggs.push(Aggregate::Min(AggregateTarget::Star(idx)));
+                                        }
+                                    }
+
+                                    _ => {}
                                 }
                             }
                         }

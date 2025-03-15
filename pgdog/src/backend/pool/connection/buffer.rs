@@ -1,6 +1,6 @@
 //! Buffer messages to sort and aggregate them later.
 
-use std::{cmp::Ordering, collections::VecDeque};
+use std::{cmp::Ordering, collections::VecDeque, i64};
 
 use crate::{
     frontend::router::parser::{Aggregate, AggregateTarget, OrderBy},
@@ -111,6 +111,34 @@ impl Buffer {
                     }
 
                     result.insert(*index, count);
+                }
+
+                Aggregate::Max(AggregateTarget::Star(index)) => {
+                    let mut max = Datum::Bigint(i64::MIN);
+                    for row in &buffer {
+                        let column = row.get_column(*index, rd)?;
+                        if let Some(column) = column {
+                            if max < column.value {
+                                max = column.value;
+                            }
+                        }
+                    }
+
+                    result.insert(*index, max);
+                }
+
+                Aggregate::Min(AggregateTarget::Star(index)) => {
+                    let mut min = Datum::Bigint(i64::MAX);
+                    for row in &buffer {
+                        let column = row.get_column(*index, rd)?;
+                        if let Some(column) = column {
+                            if min > column.value {
+                                min = column.value;
+                            }
+                        }
+                    }
+
+                    result.insert(*index, min);
                 }
                 _ => (),
             }
