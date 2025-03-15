@@ -1,6 +1,6 @@
 //! Buffer messages to sort and aggregate them later.
 
-use std::{cmp::Ordering, collections::VecDeque, i64};
+use std::{cmp::Ordering, collections::VecDeque};
 
 use crate::{
     frontend::router::parser::{Aggregate, AggregateTarget, OrderBy},
