@@ -1,4 +1,4 @@
-use super::OrderBy;
+use super::{Aggregate, OrderBy};
 
 /// Path a query should take and any transformations
 /// that should be applied along the way.
@@ -7,6 +7,7 @@ pub struct Route {
     shard: Option<usize>,
     read: bool,
     order_by: Vec<OrderBy>,
+    aggregate: Vec<Aggregate>,
 }
 
 impl Default for Route {
@@ -17,11 +18,12 @@ impl Default for Route {
 
 impl Route {
     /// SELECT query.
-    pub fn select(shard: Option<usize>, order_by: &[OrderBy]) -> Self {
+    pub fn select(shard: Option<usize>, order_by: &[OrderBy], aggregate: &[Aggregate]) -> Self {
         Self {
             shard,
             order_by: order_by.to_vec(),
             read: true,
+            aggregate: aggregate.to_vec(),
         }
     }
 
@@ -31,6 +33,7 @@ impl Route {
             shard,
             read: true,
             order_by: vec![],
+            aggregate: vec![],
         }
     }
 
@@ -40,6 +43,7 @@ impl Route {
             shard,
             read: false,
             order_by: vec![],
+            aggregate: vec![],
         }
     }
 
@@ -65,7 +69,15 @@ impl Route {
         &self.order_by
     }
 
+    pub fn aggregate(&self) -> &[Aggregate] {
+        &self.aggregate
+    }
+
     pub fn set_shard(&mut self, shard: usize) {
         self.shard = Some(shard);
+    }
+
+    pub fn should_buffer(&self) -> bool {
+        !self.order_by().is_empty() || !self.aggregate().is_empty()
     }
 }

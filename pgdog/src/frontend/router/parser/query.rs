@@ -10,7 +10,7 @@ use crate::{
     net::messages::{Bind, CopyData},
 };
 
-use super::{Cache, CopyParser, Error, Insert, Key, Route, WhereClause};
+use super::{Aggregate, Cache, CopyParser, Error, Insert, Key, Route, WhereClause};
 
 use once_cell::sync::Lazy;
 use pg_query::{
@@ -250,7 +250,9 @@ impl QueryParser {
             None
         };
 
-        Ok(Command::Query(Route::select(shard, &order_by)))
+        let aggregates = Aggregate::parse(stmt)?;
+
+        Ok(Command::Query(Route::select(shard, &order_by, &aggregates)))
     }
 
     /// Parse the `ORDER BY` clause of a `SELECT` statement.

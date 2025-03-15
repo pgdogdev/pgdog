@@ -1,5 +1,6 @@
 //! Query parser.
 
+pub mod aggregate;
 pub mod cache;
 pub mod column;
 pub mod comment;
@@ -16,6 +17,7 @@ pub mod tuple;
 pub mod value;
 pub mod where_clause;
 
+pub use aggregate::{Aggregate, AggregateTarget};
 pub use cache::Cache;
 pub use column::Column;
 pub use copy::CopyParser;

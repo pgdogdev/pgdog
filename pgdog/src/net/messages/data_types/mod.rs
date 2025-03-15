@@ -1,4 +1,6 @@
-use super::{bind::Format, Error};
+use std::ops::Add;
+
+use super::{bind::Format, Error, ToDataRowColumn};
 use ::uuid::Uuid;
 use bytes::Bytes;
 
@@ -43,6 +45,35 @@ pub enum Datum {
     Numeric(Numeric),
     /// NULL.
     Null,
+}
+
+impl ToDataRowColumn for Datum {
+    fn to_data_row_column(&self) -> Bytes {
+        use Datum::*;
+
+        match self {
+            Bigint(val) => val.to_data_row_column(),
+            Integer(val) => (*val as i64).to_data_row_column(),
+            SmallInt(val) => (*val as i64).to_data_row_column(),
+            _ => todo!(),
+        }
+    }
+}
+
+impl Add for Datum {
+    type Output = Datum;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        use Datum::*;
+
+        match (self, rhs) {
+            (Bigint(a), Bigint(b)) => Bigint(a + b),
+            (Integer(a), Integer(b)) => Integer(a + b),
+            (SmallInt(a), SmallInt(b)) => SmallInt(a + b),
+
+            _ => todo!(),
+        }
+    }
 }
 
 impl Datum {
