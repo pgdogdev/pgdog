@@ -349,7 +349,7 @@ impl Server {
         let error = messages.iter().find(|m| m.code() == 'E');
         if let Some(error) = error {
             let error = ErrorResponse::from_bytes(error.to_bytes()?)?;
-            return Err(Error::ExecutionError(error));
+            Err(Error::ExecutionError(error))
         } else {
             Ok(messages)
         }

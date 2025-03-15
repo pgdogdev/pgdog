@@ -4,9 +4,7 @@ use std::{cmp::Ordering, collections::VecDeque};
 
 use crate::{
     frontend::router::parser::{Aggregate, AggregateTarget, OrderBy},
-    net::messages::{
-        data_row::Column, DataRow, Datum, FromBytes, Message, Protocol, RowDescription, ToBytes,
-    },
+    net::messages::{DataRow, Datum, FromBytes, Message, Protocol, RowDescription, ToBytes},
 };
 
 /// Sort and aggregate rows received from multiple shards.
