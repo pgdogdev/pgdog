@@ -55,7 +55,13 @@ impl ToDataRowColumn for Datum {
             Bigint(val) => val.to_data_row_column(),
             Integer(val) => (*val as i64).to_data_row_column(),
             SmallInt(val) => (*val as i64).to_data_row_column(),
-            _ => todo!(),
+            Interval(interval) => interval.to_data_row_column(),
+            Text(text) => text.to_data_row_column(),
+            Timestamp(t) => t.to_data_row_column(),
+            TimestampTz(tz) => tz.to_data_row_column(),
+            Uuid(uuid) => uuid.to_data_row_column(),
+            Numeric(num) => num.to_data_row_column(),
+            Null => Bytes::new(),
         }
     }
 }
@@ -70,8 +76,9 @@ impl Add for Datum {
             (Bigint(a), Bigint(b)) => Bigint(a + b),
             (Integer(a), Integer(b)) => Integer(a + b),
             (SmallInt(a), SmallInt(b)) => SmallInt(a + b),
-
-            _ => todo!(),
+            (Interval(a), Interval(b)) => Interval(a + b),
+            (Numeric(a), Numeric(b)) => Numeric(a + b),
+            _ => Datum::Null, // Might be good to raise an error.
         }
     }
 }

@@ -22,3 +22,9 @@ impl FromDataType for Uuid {
         }
     }
 }
+
+impl ToDataRowColumn for Uuid {
+    fn to_data_row_column(&self) -> Bytes {
+        self.encode(Format::Text).unwrap()
+    }
+}
