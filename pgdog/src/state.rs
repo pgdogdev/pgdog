@@ -16,7 +16,7 @@ pub enum State {
     Waiting,
     /// Connection is closed.
     Disconnected,
-    /// An error occurered.
+    /// An error occurred.
     Error,
     /// Parse complete.
     ParseComplete,
