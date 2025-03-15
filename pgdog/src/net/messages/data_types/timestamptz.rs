@@ -36,6 +36,12 @@ impl DerefMut for TimestampTz {
     }
 }
 
+impl ToDataRowColumn for TimestampTz {
+    fn to_data_row_column(&self) -> Bytes {
+        self.encode(Format::Text).unwrap()
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;

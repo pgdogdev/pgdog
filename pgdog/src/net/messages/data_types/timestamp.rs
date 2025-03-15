@@ -16,6 +16,12 @@ pub struct Timestamp {
     pub offset: Option<i8>,
 }
 
+impl ToDataRowColumn for Timestamp {
+    fn to_data_row_column(&self) -> Bytes {
+        self.encode(Format::Text).unwrap()
+    }
+}
+
 impl Display for Timestamp {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(

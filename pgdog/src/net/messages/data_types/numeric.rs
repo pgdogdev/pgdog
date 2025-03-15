@@ -33,6 +33,16 @@ impl DerefMut for Numeric {
     }
 }
 
+impl Add for Numeric {
+    type Output = Numeric;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        Numeric {
+            data: self.data + rhs.data,
+        }
+    }
+}
+
 impl Ord for Numeric {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         match self.partial_cmp(other) {
@@ -67,5 +77,11 @@ impl FromDataType for Numeric {
             Format::Text => Ok(Bytes::copy_from_slice(self.data.to_string().as_bytes())),
             Format::Binary => Ok(Bytes::copy_from_slice(self.data.to_be_bytes().as_slice())),
         }
+    }
+}
+
+impl ToDataRowColumn for Numeric {
+    fn to_data_row_column(&self) -> Bytes {
+        self.encode(Format::Text).unwrap()
     }
 }

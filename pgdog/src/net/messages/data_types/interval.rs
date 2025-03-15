@@ -14,6 +14,29 @@ pub struct Interval {
     millis: i16,
 }
 
+impl Add for Interval {
+    type Output = Interval;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        // Postgres will figure it out.
+        Self {
+            years: self.years + rhs.years,
+            months: self.months + rhs.months,
+            days: self.days + rhs.days,
+            hours: self.hours + rhs.hours,
+            minutes: self.minutes + rhs.minutes,
+            seconds: self.seconds + rhs.seconds,
+            millis: self.millis + rhs.millis,
+        }
+    }
+}
+
+impl ToDataRowColumn for Interval {
+    fn to_data_row_column(&self) -> Bytes {
+        self.encode(Format::Text).unwrap()
+    }
+}
+
 macro_rules! parser {
     ($name:tt, $typ:ty) => {
         pub(super) fn $name(s: &str) -> Result<$typ, ParseIntError> {

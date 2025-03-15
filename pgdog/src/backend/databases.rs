@@ -44,7 +44,7 @@ pub fn reconnect() {
     replace_databases(databases().duplicate());
 }
 
-/// Iniitialize the databases for the first time.
+/// Initialize the databases for the first time.
 pub fn init() {
     let config = config();
     replace_databases(from_config(&config));

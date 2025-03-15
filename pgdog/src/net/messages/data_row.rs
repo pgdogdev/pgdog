@@ -89,6 +89,16 @@ impl DataRow {
         self
     }
 
+    /// Insert column at index. If row is smaller than index,
+    /// columns will be prefilled with NULLs.
+    pub fn insert(&mut self, index: usize, value: impl ToDataRowColumn) -> &mut Self {
+        while self.columns.len() <= index {
+            self.columns.push(Bytes::new());
+        }
+        self.columns[index] = value.to_data_row_column();
+        self
+    }
+
     /// Create data row from columns.
     pub fn from_columns(columns: Vec<impl ToDataRowColumn>) -> Self {
         let mut dr = Self::new();
@@ -159,6 +169,14 @@ impl DataRow {
 
         Ok(row)
     }
+
+    pub fn len(&self) -> usize {
+        self.columns.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 
 /// Column with data type mapped to a Rust type.
@@ -212,5 +230,19 @@ impl ToBytes for DataRow {
 impl Protocol for DataRow {
     fn code(&self) -> char {
         'D'
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_insert() {
+        let mut dr = DataRow::new();
+        dr.insert(4, "test");
+        assert_eq!(dr.columns.len(), 5);
+        assert_eq!(dr.get::<String>(4, Format::Text).unwrap(), "test");
+        assert_eq!(dr.get::<String>(0, Format::Text).unwrap(), "");
     }
 }

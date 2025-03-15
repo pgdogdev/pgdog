@@ -9,7 +9,7 @@ use crate::{
     },
 };
 
-use super::sort_buffer::SortBuffer;
+use super::buffer::Buffer;
 
 /// Multi-shard state.
 #[derive(Default, Debug)]
@@ -32,8 +32,8 @@ pub(super) struct MultiShard {
     rd: Option<RowDescription>,
     /// Rewritten CommandComplete message.
     command_complete: Option<Message>,
-    /// Sorting buffer.
-    sort_buffer: SortBuffer,
+    /// Sorting/aggregate buffer.
+    buffer: Buffer,
 }
 
 impl MultiShard {
@@ -51,7 +51,6 @@ impl MultiShard {
     /// or modified.
     pub(super) fn forward(&mut self, message: Message) -> Result<Option<Message>, super::Error> {
         let mut forward = None;
-        let order_by = self.route.order_by();
 
         match message.code() {
             'Z' => {
@@ -74,13 +73,19 @@ impl MultiShard {
                 self.cc += 1;
 
                 if self.cc == self.shards {
-                    self.sort_buffer.full();
+                    self.buffer.full();
                     if let Some(ref rd) = self.rd {
-                        self.sort_buffer.sort(order_by, rd);
+                        self.buffer.aggregate(self.route.aggregate(), rd)?;
+                        self.buffer.sort(self.route.order_by(), rd);
                     }
 
                     if has_rows {
-                        self.command_complete = Some(cc.rewrite(self.rows)?.message()?);
+                        let rows = if self.route.should_buffer() {
+                            self.buffer.len()
+                        } else {
+                            self.rows
+                        };
+                        self.command_complete = Some(cc.rewrite(rows)?.message()?);
                     } else {
                         forward = Some(cc.message()?);
                     }
@@ -107,10 +112,10 @@ impl MultiShard {
             }
 
             'D' => {
-                if order_by.is_empty() {
+                if !self.route.should_buffer() {
                     forward = Some(message);
                 } else {
-                    self.sort_buffer.add(message)?;
+                    self.buffer.add(message)?;
                 }
             }
 
@@ -129,7 +134,7 @@ impl MultiShard {
 
     /// Multi-shard state is ready to send messages.
     pub(super) fn message(&mut self) -> Option<Message> {
-        if let Some(data_row) = self.sort_buffer.take() {
+        if let Some(data_row) = self.buffer.take() {
             Some(data_row)
         } else {
             self.command_complete.take()

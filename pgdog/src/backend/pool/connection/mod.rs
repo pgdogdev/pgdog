@@ -21,8 +21,8 @@ use super::{
 use std::{mem::replace, time::Duration};
 
 mod binding;
+mod buffer;
 mod multi_shard;
-mod sort_buffer;
 
 use binding::Binding;
 use multi_shard::MultiShard;

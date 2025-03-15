@@ -1,4 +1,6 @@
-use super::{bind::Format, Error};
+use std::ops::Add;
+
+use super::{bind::Format, Error, ToDataRowColumn};
 use ::uuid::Uuid;
 use bytes::Bytes;
 
@@ -43,6 +45,42 @@ pub enum Datum {
     Numeric(Numeric),
     /// NULL.
     Null,
+}
+
+impl ToDataRowColumn for Datum {
+    fn to_data_row_column(&self) -> Bytes {
+        use Datum::*;
+
+        match self {
+            Bigint(val) => val.to_data_row_column(),
+            Integer(val) => (*val as i64).to_data_row_column(),
+            SmallInt(val) => (*val as i64).to_data_row_column(),
+            Interval(interval) => interval.to_data_row_column(),
+            Text(text) => text.to_data_row_column(),
+            Timestamp(t) => t.to_data_row_column(),
+            TimestampTz(tz) => tz.to_data_row_column(),
+            Uuid(uuid) => uuid.to_data_row_column(),
+            Numeric(num) => num.to_data_row_column(),
+            Null => Bytes::new(),
+        }
+    }
+}
+
+impl Add for Datum {
+    type Output = Datum;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        use Datum::*;
+
+        match (self, rhs) {
+            (Bigint(a), Bigint(b)) => Bigint(a + b),
+            (Integer(a), Integer(b)) => Integer(a + b),
+            (SmallInt(a), SmallInt(b)) => SmallInt(a + b),
+            (Interval(a), Interval(b)) => Interval(a + b),
+            (Numeric(a), Numeric(b)) => Numeric(a + b),
+            _ => Datum::Null, // Might be good to raise an error.
+        }
+    }
 }
 
 impl Datum {
