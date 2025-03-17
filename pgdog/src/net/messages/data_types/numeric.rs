@@ -5,6 +5,7 @@ use std::{
 };
 
 use bytes::Buf;
+use tracing::warn;
 
 use crate::net::messages::data_row::Data;
 
@@ -18,6 +19,9 @@ pub struct Numeric {
 
 impl Hash for Numeric {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        if self.data.is_nan() {
+            warn!("using NaNs in hashing, this breaks aggregates");
+        }
         // We don't expect NaNs from Postgres.
         self.data.to_bits().hash(state);
     }
@@ -57,7 +61,12 @@ impl Ord for Numeric {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         match self.partial_cmp(other) {
             Some(ordering) => ordering,
-            None => Ordering::Equal, // We don't expect Postgres to send us NaNs.
+            None => {
+                if self.data.is_nan() || other.data.is_nan() {
+                    warn!("using NaNs in sorting, this doesn't work")
+                }
+                Ordering::Equal // We don't expect Postgres to send us NaNs.
+            }
         }
     }
 }
