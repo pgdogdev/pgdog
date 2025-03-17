@@ -78,6 +78,8 @@ impl Add for Datum {
             (SmallInt(a), SmallInt(b)) => SmallInt(a + b),
             (Interval(a), Interval(b)) => Interval(a + b),
             (Numeric(a), Numeric(b)) => Numeric(a + b),
+            (Datum::Null, b) => b,
+            (a, Datum::Null) => a,
             _ => Datum::Null, // Might be good to raise an error.
         }
     }
@@ -102,6 +104,10 @@ impl Datum {
             DataType::TimestampTz => Ok(Datum::TimestampTz(TimestampTz::decode(bytes, encoding)?)),
             _ => Ok(Datum::Null),
         }
+    }
+
+    pub fn is_null(&self) -> bool {
+        matches!(self, Datum::Null)
     }
 }
 

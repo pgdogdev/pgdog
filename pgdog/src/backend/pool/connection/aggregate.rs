@@ -46,14 +46,6 @@ impl<'a> Accumulator<'a> {
                     target,
                     datum: Datum::Bigint(0),
                 },
-                AggregateFunction::Max => Accumulator {
-                    target,
-                    datum: Datum::Bigint(i64::MIN),
-                },
-                AggregateFunction::Min => Accumulator {
-                    target,
-                    datum: Datum::Bigint(i64::MAX),
-                },
                 _ => Accumulator {
                     target,
                     datum: Datum::Null,
@@ -68,12 +60,20 @@ impl<'a> Accumulator<'a> {
             match self.target.function() {
                 AggregateFunction::Count => self.datum = self.datum.clone() + column.value,
                 AggregateFunction::Max => {
-                    if self.datum < column.value {
+                    if !self.datum.is_null() {
+                        if self.datum < column.value {
+                            self.datum = column.value;
+                        }
+                    } else {
                         self.datum = column.value;
                     }
                 }
                 AggregateFunction::Min => {
-                    if self.datum > column.value {
+                    if !self.datum.is_null() {
+                        if self.datum > column.value {
+                            self.datum = column.value;
+                        }
+                    } else {
                         self.datum = column.value;
                     }
                 }
