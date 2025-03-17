@@ -41,7 +41,7 @@ impl Aggregate {
         let group_by = stmt
             .group_clause
             .iter()
-            .map(|node| {
+            .filter_map(|node| {
                 node.node.as_ref().map(|node| match node {
                     NodeEnum::AConst(aconst) => aconst.val.as_ref().map(|val| match val {
                         Val::Ival(Integer { ival }) => Some(*ival as usize - 1), // We use 0-indexed arrays, Postgres uses 1-indexed.
@@ -50,7 +50,6 @@ impl Aggregate {
                     _ => None,
                 })
             })
-            .flatten()
             .flatten()
             .flatten()
             .collect::<Vec<_>>();

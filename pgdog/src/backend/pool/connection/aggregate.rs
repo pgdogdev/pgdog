@@ -19,9 +19,9 @@ impl Grouping {
     fn new(row: &DataRow, group_by: &[usize], rd: &RowDescription) -> Result<Self, Error> {
         let mut columns = vec![];
         for idx in group_by {
-            let column = row.get_column(idx.clone(), rd)?;
+            let column = row.get_column(*idx, rd)?;
             if let Some(column) = column {
-                columns.push((idx.clone(), column.value));
+                columns.push((*idx, column.value));
             }
         }
 
@@ -109,14 +109,14 @@ impl<'a> Aggregates<'a> {
 
     pub(super) fn aggregate(mut self) -> Result<VecDeque<DataRow>, Error> {
         for row in self.rows {
-            let grouping = Grouping::new(&row, &self.aggregate.group_by(), &self.rd)?;
+            let grouping = Grouping::new(row, self.aggregate.group_by(), self.rd)?;
             let entry = self
                 .mappings
                 .entry(grouping)
-                .or_insert_with(|| Accumulator::from_aggregate(&self.aggregate));
+                .or_insert_with(|| Accumulator::from_aggregate(self.aggregate));
 
             for aggregate in entry {
-                aggregate.accumulate(&row, &self.rd)?;
+                aggregate.accumulate(row, self.rd)?;
             }
         }
 
