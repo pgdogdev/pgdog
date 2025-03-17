@@ -95,13 +95,17 @@ impl Buffer {
         rd: &RowDescription,
     ) -> Result<(), super::Error> {
         let buffer: VecDeque<DataRow> = self.buffer.drain(0..).collect();
-        let aggregates = Aggregates::new(&buffer, rd, aggregate);
-        let result = aggregates.aggregate()?;
-
-        if !result.is_empty() {
-            self.buffer = result;
-        } else {
+        if aggregate.is_empty() {
             self.buffer = buffer;
+        } else {
+            let aggregates = Aggregates::new(&buffer, rd, aggregate);
+            let result = aggregates.aggregate()?;
+
+            if !result.is_empty() {
+                self.buffer = result;
+            } else {
+                self.buffer = buffer;
+            }
         }
 
         Ok(())
