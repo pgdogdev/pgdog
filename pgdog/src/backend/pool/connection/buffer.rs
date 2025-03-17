@@ -94,7 +94,7 @@ impl Buffer {
         aggregate: &Aggregate,
         rd: &RowDescription,
     ) -> Result<(), super::Error> {
-        let buffer: VecDeque<DataRow> = self.buffer.drain(0..).collect();
+        let buffer: VecDeque<DataRow> = std::mem::take(&mut self.buffer);
         if aggregate.is_empty() {
             self.buffer = buffer;
         } else {
