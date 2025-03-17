@@ -2,72 +2,109 @@
 
 use super::{code, prelude::*, Datum, Format, FromDataType, Numeric, RowDescription};
 use bytes::BytesMut;
-use std::ops::Deref;
+use std::ops::{Deref, DerefMut};
+
+#[derive(Debug, Clone)]
+pub struct Data {
+    data: Bytes,
+    is_null: bool,
+}
+
+impl Deref for Data {
+    type Target = Bytes;
+
+    fn deref(&self) -> &Self::Target {
+        &self.data
+    }
+}
+
+impl DerefMut for Data {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.data
+    }
+}
+
+impl From<Bytes> for Data {
+    fn from(value: Bytes) -> Self {
+        Self {
+            data: value,
+            is_null: false,
+        }
+    }
+}
+
+impl Data {
+    pub fn null() -> Self {
+        Self {
+            data: Bytes::new(),
+            is_null: true,
+        }
+    }
+}
 
 /// DataRow message.
 #[derive(Debug, Clone)]
 pub struct DataRow {
-    columns: Vec<Bytes>,
+    columns: Vec<Data>,
 }
 
 /// Convert value to data row column
 /// using text formatting.
 pub trait ToDataRowColumn {
-    fn to_data_row_column(&self) -> Bytes;
+    fn to_data_row_column(&self) -> Data;
 }
 
 impl ToDataRowColumn for String {
-    fn to_data_row_column(&self) -> Bytes {
-        Bytes::copy_from_slice(self.as_bytes())
+    fn to_data_row_column(&self) -> Data {
+        Bytes::copy_from_slice(self.as_bytes()).into()
     }
 }
 
 impl ToDataRowColumn for &String {
-    fn to_data_row_column(&self) -> Bytes {
-        Bytes::copy_from_slice(self.as_bytes())
+    fn to_data_row_column(&self) -> Data {
+        Bytes::copy_from_slice(self.as_bytes()).into()
     }
 }
 
 impl ToDataRowColumn for &str {
-    fn to_data_row_column(&self) -> Bytes {
-        Bytes::copy_from_slice(self.as_bytes())
+    fn to_data_row_column(&self) -> Data {
+        Bytes::copy_from_slice(self.as_bytes()).into()
     }
 }
 
 impl ToDataRowColumn for i64 {
-    fn to_data_row_column(&self) -> Bytes {
-        Bytes::copy_from_slice(self.to_string().as_bytes())
+    fn to_data_row_column(&self) -> Data {
+        Bytes::copy_from_slice(self.to_string().as_bytes()).into()
     }
 }
 
 impl ToDataRowColumn for usize {
-    fn to_data_row_column(&self) -> Bytes {
-        Bytes::copy_from_slice(self.to_string().as_bytes())
+    fn to_data_row_column(&self) -> Data {
+        Bytes::copy_from_slice(self.to_string().as_bytes()).into()
     }
 }
 
 impl ToDataRowColumn for u64 {
-    fn to_data_row_column(&self) -> Bytes {
-        Bytes::copy_from_slice(self.to_string().as_bytes())
+    fn to_data_row_column(&self) -> Data {
+        Bytes::copy_from_slice(self.to_string().as_bytes()).into()
     }
 }
 
 impl ToDataRowColumn for bool {
-    fn to_data_row_column(&self) -> Bytes {
-        Bytes::copy_from_slice(if *self { b"t" } else { b"f" })
+    fn to_data_row_column(&self) -> Data {
+        Bytes::copy_from_slice(if *self { b"t" } else { b"f" }).into()
     }
 }
 
 impl ToDataRowColumn for f64 {
-    fn to_data_row_column(&self) -> Bytes {
-        let number = format!("{:.5}", self);
-        Bytes::copy_from_slice(number.as_bytes())
+    fn to_data_row_column(&self) -> Data {
+        Bytes::copy_from_slice(self.to_string().as_bytes()).into()
     }
 }
 
 impl ToDataRowColumn for u128 {
-    fn to_data_row_column(&self) -> Bytes {
-        Bytes::copy_from_slice(self.to_string().as_bytes())
+    fn to_data_row_column(&self) -> Data {
+        Bytes::copy_from_slice(self.to_string().as_bytes()).into()
     }
 }
 
@@ -93,7 +130,7 @@ impl DataRow {
     /// columns will be prefilled with NULLs.
     pub fn insert(&mut self, index: usize, value: impl ToDataRowColumn) -> &mut Self {
         while self.columns.len() <= index {
-            self.columns.push(Bytes::new());
+            self.columns.push(Data::null());
         }
         self.columns[index] = value.to_data_row_column();
         self
@@ -111,7 +148,7 @@ impl DataRow {
     /// Get data for column at index.
     #[inline]
     pub fn column(&self, index: usize) -> Option<Bytes> {
-        self.columns.get(index).cloned()
+        self.columns.get(index).cloned().map(|d| d.data)
     }
 
     /// Get integer at index with text/binary encoding.
@@ -207,6 +244,7 @@ impl FromBytes for DataRow {
 
                 column.freeze()
             })
+            .map(Data::from)
             .collect();
 
         Ok(Self { columns })
@@ -219,8 +257,12 @@ impl ToBytes for DataRow {
         payload.put_i16(self.columns.len() as i16);
 
         for column in &self.columns {
-            payload.put_i32(column.len() as i32);
-            payload.put(&column[..]);
+            if column.is_null {
+                payload.put_i32(-1);
+            } else {
+                payload.put_i32(column.len() as i32);
+                payload.put(&column[..]);
+            }
         }
 
         Ok(payload.freeze())

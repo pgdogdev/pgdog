@@ -3,9 +3,11 @@
 use std::{cmp::Ordering, collections::VecDeque};
 
 use crate::{
-    frontend::router::parser::{Aggregate, AggregateTarget, OrderBy},
-    net::messages::{DataRow, Datum, FromBytes, Message, Protocol, RowDescription, ToBytes},
+    frontend::router::parser::{Aggregate, OrderBy},
+    net::messages::{DataRow, FromBytes, Message, Protocol, RowDescription, ToBytes},
 };
+
+use super::Aggregates;
 
 /// Sort and aggregate rows received from multiple shards.
 #[derive(Default, Debug)]
@@ -89,65 +91,21 @@ impl Buffer {
     /// and extra columns fetched from Postgres removed from the final result.
     pub(super) fn aggregate(
         &mut self,
-        aggregates: &[Aggregate],
+        aggregate: &Aggregate,
         rd: &RowDescription,
     ) -> Result<(), super::Error> {
-        let buffer: VecDeque<DataRow> = self.buffer.drain(0..).collect();
-        let mut result = DataRow::new();
-
-        for aggregate in aggregates {
-            match aggregate {
-                // COUNT(*) are summed across shards. This is the easiest of the aggregates,
-                // yet it's probably the most common one.
-                //
-                // TODO: If there is a GROUP BY clause, we need to sum across specified columns.
-                Aggregate::Count(AggregateTarget::Star(index)) => {
-                    let mut count = Datum::Bigint(0);
-                    for row in &buffer {
-                        let column = row.get_column(*index, rd)?;
-                        if let Some(column) = column {
-                            count = count + column.value;
-                        }
-                    }
-
-                    result.insert(*index, count);
-                }
-
-                Aggregate::Max(AggregateTarget::Star(index)) => {
-                    let mut max = Datum::Bigint(i64::MIN);
-                    for row in &buffer {
-                        let column = row.get_column(*index, rd)?;
-                        if let Some(column) = column {
-                            if max < column.value {
-                                max = column.value;
-                            }
-                        }
-                    }
-
-                    result.insert(*index, max);
-                }
-
-                Aggregate::Min(AggregateTarget::Star(index)) => {
-                    let mut min = Datum::Bigint(i64::MAX);
-                    for row in &buffer {
-                        let column = row.get_column(*index, rd)?;
-                        if let Some(column) = column {
-                            if min > column.value {
-                                min = column.value;
-                            }
-                        }
-                    }
-
-                    result.insert(*index, min);
-                }
-                _ => (),
-            }
-        }
-
-        if !result.is_empty() {
-            self.buffer.push_back(result);
-        } else {
+        let buffer: VecDeque<DataRow> = std::mem::take(&mut self.buffer);
+        if aggregate.is_empty() {
             self.buffer = buffer;
+        } else {
+            let aggregates = Aggregates::new(&buffer, rd, aggregate);
+            let result = aggregates.aggregate()?;
+
+            if !result.is_empty() {
+                self.buffer = result;
+            } else {
+                self.buffer = buffer;
+            }
         }
 
         Ok(())
@@ -209,7 +167,7 @@ mod test {
     fn test_aggregate_buffer() {
         let mut buf = Buffer::default();
         let rd = RowDescription::new(&[Field::bigint("count")]);
-        let agg = [Aggregate::Count(AggregateTarget::Star(0))];
+        let agg = Aggregate::new_count(0);
 
         for _ in 0..6 {
             let mut dr = DataRow::new();
@@ -225,5 +183,33 @@ mod test {
         let dr = DataRow::from_bytes(row.to_bytes().unwrap()).unwrap();
         let count = dr.get::<i64>(0, Format::Text).unwrap();
         assert_eq!(count, 15 * 6);
+    }
+
+    #[test]
+    fn test_aggregate_buffer_group_by() {
+        let mut buf = Buffer::default();
+        let rd = RowDescription::new(&[Field::bigint("count"), Field::text("email")]);
+        let agg = Aggregate::new_count_group_by(0, &[1]);
+        let emails = ["test@test.com", "admin@test.com"];
+
+        for email in emails {
+            for _ in 0..6 {
+                let mut dr = DataRow::new();
+                dr.add(15_i64);
+                dr.add(email);
+                buf.add(dr.message().unwrap()).unwrap();
+            }
+        }
+
+        buf.aggregate(&agg, &rd).unwrap();
+        buf.full();
+
+        assert_eq!(buf.len(), 2);
+        for _ in &emails {
+            let row = buf.take().unwrap();
+            let dr = DataRow::from_bytes(row.to_bytes().unwrap()).unwrap();
+            let count = dr.get::<i64>(0, Format::Text).unwrap();
+            assert_eq!(count, 15 * 6);
+        }
     }
 }

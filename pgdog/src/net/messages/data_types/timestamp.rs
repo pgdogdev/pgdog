@@ -4,7 +4,7 @@ use super::*;
 
 use super::interval::bigint;
 
-#[derive(Debug, Copy, Clone, PartialEq, Ord, PartialOrd, Eq, Default)]
+#[derive(Debug, Copy, Clone, PartialEq, Ord, PartialOrd, Eq, Default, Hash)]
 pub struct Timestamp {
     pub year: i64,
     pub month: i8,
@@ -17,8 +17,8 @@ pub struct Timestamp {
 }
 
 impl ToDataRowColumn for Timestamp {
-    fn to_data_row_column(&self) -> Bytes {
-        self.encode(Format::Text).unwrap()
+    fn to_data_row_column(&self) -> Data {
+        self.encode(Format::Text).unwrap().into()
     }
 }
 

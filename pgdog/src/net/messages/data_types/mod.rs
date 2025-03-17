@@ -1,6 +1,6 @@
 use std::ops::Add;
 
-use super::{bind::Format, Error, ToDataRowColumn};
+use super::{bind::Format, data_row::Data, Error, ToDataRowColumn};
 use ::uuid::Uuid;
 use bytes::Bytes;
 
@@ -23,7 +23,7 @@ pub trait FromDataType: Sized + PartialOrd + Ord + PartialEq {
     fn encode(&self, encoding: Format) -> Result<Bytes, Error>;
 }
 
-#[derive(Debug, Clone, PartialEq, PartialOrd, Eq, Ord)]
+#[derive(Debug, Clone, PartialEq, PartialOrd, Eq, Ord, Hash)]
 pub enum Datum {
     /// BIGINT.
     Bigint(i64),
@@ -48,7 +48,7 @@ pub enum Datum {
 }
 
 impl ToDataRowColumn for Datum {
-    fn to_data_row_column(&self) -> Bytes {
+    fn to_data_row_column(&self) -> Data {
         use Datum::*;
 
         match self {
@@ -61,7 +61,7 @@ impl ToDataRowColumn for Datum {
             TimestampTz(tz) => tz.to_data_row_column(),
             Uuid(uuid) => uuid.to_data_row_column(),
             Numeric(num) => num.to_data_row_column(),
-            Null => Bytes::new(),
+            Null => Data::null(),
         }
     }
 }
@@ -78,6 +78,8 @@ impl Add for Datum {
             (SmallInt(a), SmallInt(b)) => SmallInt(a + b),
             (Interval(a), Interval(b)) => Interval(a + b),
             (Numeric(a), Numeric(b)) => Numeric(a + b),
+            (Datum::Null, b) => b,
+            (a, Datum::Null) => a,
             _ => Datum::Null, // Might be good to raise an error.
         }
     }
@@ -102,6 +104,10 @@ impl Datum {
             DataType::TimestampTz => Ok(Datum::TimestampTz(TimestampTz::decode(bytes, encoding)?)),
             _ => Ok(Datum::Null),
         }
+    }
+
+    pub fn is_null(&self) -> bool {
+        matches!(self, Datum::Null)
     }
 }
 

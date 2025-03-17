@@ -2,7 +2,7 @@ use std::ops::{Deref, DerefMut};
 
 use super::*;
 
-#[derive(Debug, Copy, Clone, PartialEq, Ord, PartialOrd, Eq, Default)]
+#[derive(Debug, Copy, Clone, PartialEq, Ord, PartialOrd, Eq, Default, Hash)]
 pub struct TimestampTz {
     timestamp: Timestamp,
 }
@@ -37,8 +37,8 @@ impl DerefMut for TimestampTz {
 }
 
 impl ToDataRowColumn for TimestampTz {
-    fn to_data_row_column(&self) -> Bytes {
-        self.encode(Format::Text).unwrap()
+    fn to_data_row_column(&self) -> Data {
+        self.encode(Format::Text).unwrap().into()
     }
 }
 
