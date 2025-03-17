@@ -98,8 +98,7 @@ impl ToDataRowColumn for bool {
 
 impl ToDataRowColumn for f64 {
     fn to_data_row_column(&self) -> Data {
-        let number = format!("{:.5}", self);
-        Bytes::copy_from_slice(number.as_bytes()).into()
+        Bytes::copy_from_slice(self.to_string().as_bytes()).into()
     }
 }
 
