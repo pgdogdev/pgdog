@@ -6,6 +6,8 @@ use std::{
 
 use bytes::Buf;
 
+use crate::net::messages::data_row::Data;
+
 use super::*;
 
 /// We don't expect NaN's so we're going to implement Ord for this below.
@@ -89,7 +91,7 @@ impl FromDataType for Numeric {
 }
 
 impl ToDataRowColumn for Numeric {
-    fn to_data_row_column(&self) -> Bytes {
-        self.encode(Format::Text).unwrap()
+    fn to_data_row_column(&self) -> Data {
+        self.encode(Format::Text).unwrap().into()
     }
 }

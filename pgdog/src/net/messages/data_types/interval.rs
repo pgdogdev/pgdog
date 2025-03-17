@@ -1,5 +1,7 @@
 use std::num::ParseIntError;
 
+use crate::net::messages::data_row::Data;
+
 use super::*;
 use bytes::Bytes;
 
@@ -32,8 +34,8 @@ impl Add for Interval {
 }
 
 impl ToDataRowColumn for Interval {
-    fn to_data_row_column(&self) -> Bytes {
-        self.encode(Format::Text).unwrap()
+    fn to_data_row_column(&self) -> Data {
+        self.encode(Format::Text).unwrap().into()
     }
 }
 
