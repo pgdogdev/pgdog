@@ -23,7 +23,7 @@ pub trait FromDataType: Sized + PartialOrd + Ord + PartialEq {
     fn encode(&self, encoding: Format) -> Result<Bytes, Error>;
 }
 
-#[derive(Debug, Clone, PartialEq, PartialOrd, Eq, Ord)]
+#[derive(Debug, Clone, PartialEq, PartialOrd, Eq, Ord, Hash)]
 pub enum Datum {
     /// BIGINT.
     Bigint(i64),

@@ -20,10 +20,12 @@ use super::{
 
 use std::{mem::replace, time::Duration};
 
-mod binding;
-mod buffer;
-mod multi_shard;
+pub mod aggregate;
+pub mod binding;
+pub mod buffer;
+pub mod multi_shard;
 
+use aggregate::Aggregates;
 use binding::Binding;
 use multi_shard::MultiShard;
 

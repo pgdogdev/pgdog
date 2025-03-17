@@ -4,7 +4,7 @@ use super::*;
 
 use super::interval::bigint;
 
-#[derive(Debug, Copy, Clone, PartialEq, Ord, PartialOrd, Eq, Default)]
+#[derive(Debug, Copy, Clone, PartialEq, Ord, PartialOrd, Eq, Default, Hash)]
 pub struct Timestamp {
     pub year: i64,
     pub month: i8,

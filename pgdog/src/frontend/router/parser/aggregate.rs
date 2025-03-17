@@ -1,26 +1,59 @@
-use pg_query::protobuf::{self, SelectStmt};
+use pg_query::protobuf::Integer;
+use pg_query::protobuf::{self, a_const::Val, SelectStmt};
 use pg_query::NodeEnum;
 
 use super::Error;
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum AggregateTarget {
-    Column(String, usize),
-    Star(usize),
+pub struct AggregateTarget {
+    column: usize,
+    function: AggregateFunction,
+}
+
+impl AggregateTarget {
+    pub fn function(&self) -> &AggregateFunction {
+        &self.function
+    }
+
+    pub fn column(&self) -> usize {
+        self.column
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum Aggregate {
-    Count(AggregateTarget),
-    Max(AggregateTarget),
-    Min(AggregateTarget),
-    Avg(AggregateTarget),
+pub enum AggregateFunction {
+    Count,
+    Max,
+    Min,
+    Avg,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Aggregate {
+    targets: Vec<AggregateTarget>,
+    group_by: Vec<usize>,
 }
 
 impl Aggregate {
     /// Figure out what aggregates are present and which ones PgDog supports.
-    pub fn parse(stmt: &SelectStmt) -> Result<Vec<Self>, Error> {
-        let mut aggs = vec![];
+    pub fn parse(stmt: &SelectStmt) -> Result<Self, Error> {
+        let mut targets = vec![];
+        let group_by = stmt
+            .group_clause
+            .iter()
+            .map(|node| {
+                node.node.as_ref().map(|node| match node {
+                    NodeEnum::AConst(aconst) => aconst.val.as_ref().map(|val| match val {
+                        Val::Ival(Integer { ival }) => Some(*ival as usize - 1), // We use 0-indexed arrays, Postgres uses 1-indexed.
+                        _ => None,
+                    }),
+                    _ => None,
+                })
+            })
+            .flatten()
+            .flatten()
+            .flatten()
+            .collect::<Vec<_>>();
 
         for (idx, node) in stmt.target_list.iter().enumerate() {
             if let Some(NodeEnum::ResTarget(ref res)) = &node.node {
@@ -30,21 +63,24 @@ impl Aggregate {
                             if let Some(NodeEnum::String(protobuf::String { sval })) = &name.node {
                                 match sval.as_str() {
                                     "count" => {
-                                        if stmt.group_clause.is_empty() {
-                                            aggs.push(Aggregate::Count(AggregateTarget::Star(idx)));
-                                        }
+                                        targets.push(AggregateTarget {
+                                            column: idx,
+                                            function: AggregateFunction::Count,
+                                        });
                                     }
 
                                     "max" => {
-                                        if stmt.group_clause.is_empty() {
-                                            aggs.push(Aggregate::Max(AggregateTarget::Star(idx)));
-                                        }
+                                        targets.push(AggregateTarget {
+                                            column: idx,
+                                            function: AggregateFunction::Max,
+                                        });
                                     }
 
                                     "min" => {
-                                        if stmt.group_clause.is_empty() {
-                                            aggs.push(Aggregate::Min(AggregateTarget::Star(idx)));
-                                        }
+                                        targets.push(AggregateTarget {
+                                            column: idx,
+                                            function: AggregateFunction::Min,
+                                        });
                                     }
 
                                     _ => {}
@@ -56,6 +92,42 @@ impl Aggregate {
             }
         }
 
-        Ok(aggs)
+        Ok(Self { targets, group_by })
+    }
+
+    pub fn targets(&self) -> &[AggregateTarget] {
+        &self.targets
+    }
+
+    pub fn group_by(&self) -> &[usize] {
+        &self.group_by
+    }
+
+    pub fn new_count(column: usize) -> Self {
+        Self {
+            targets: vec![AggregateTarget {
+                function: AggregateFunction::Count,
+                column,
+            }],
+            group_by: vec![],
+        }
+    }
+
+    pub fn new_count_group_by(column: usize, group_by: &[usize]) -> Self {
+        Self {
+            targets: vec![AggregateTarget {
+                function: AggregateFunction::Count,
+                column,
+            }],
+            group_by: group_by.to_vec(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn len(&self) -> usize {
+        self.targets.len()
     }
 }

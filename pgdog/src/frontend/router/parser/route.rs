@@ -7,7 +7,7 @@ pub struct Route {
     shard: Option<usize>,
     read: bool,
     order_by: Vec<OrderBy>,
-    aggregate: Vec<Aggregate>,
+    aggregate: Aggregate,
 }
 
 impl Default for Route {
@@ -18,12 +18,12 @@ impl Default for Route {
 
 impl Route {
     /// SELECT query.
-    pub fn select(shard: Option<usize>, order_by: &[OrderBy], aggregate: &[Aggregate]) -> Self {
+    pub fn select(shard: Option<usize>, order_by: &[OrderBy], aggregate: &Aggregate) -> Self {
         Self {
             shard,
             order_by: order_by.to_vec(),
             read: true,
-            aggregate: aggregate.to_vec(),
+            aggregate: aggregate.clone(),
         }
     }
 
@@ -33,7 +33,7 @@ impl Route {
             shard,
             read: true,
             order_by: vec![],
-            aggregate: vec![],
+            aggregate: Aggregate::default(),
         }
     }
 
@@ -43,7 +43,7 @@ impl Route {
             shard,
             read: false,
             order_by: vec![],
-            aggregate: vec![],
+            aggregate: Aggregate::default(),
         }
     }
 
@@ -69,7 +69,7 @@ impl Route {
         &self.order_by
     }
 
-    pub fn aggregate(&self) -> &[Aggregate] {
+    pub fn aggregate(&self) -> &Aggregate {
         &self.aggregate
     }
 

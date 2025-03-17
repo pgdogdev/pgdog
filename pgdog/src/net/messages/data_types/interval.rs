@@ -3,7 +3,7 @@ use std::num::ParseIntError;
 use super::*;
 use bytes::Bytes;
 
-#[derive(Eq, PartialEq, Ord, PartialOrd, Default, Debug, Clone)]
+#[derive(Eq, PartialEq, Ord, PartialOrd, Default, Debug, Clone, Hash)]
 pub struct Interval {
     years: i64,
     months: i8,

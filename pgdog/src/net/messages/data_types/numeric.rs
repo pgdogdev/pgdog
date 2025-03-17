@@ -1,5 +1,6 @@
 use std::{
     cmp::Ordering,
+    hash::Hash,
     ops::{Deref, DerefMut},
 };
 
@@ -11,6 +12,13 @@ use super::*;
 #[derive(PartialEq, Copy, Clone, Debug)]
 pub struct Numeric {
     data: f64,
+}
+
+impl Hash for Numeric {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        // We don't expect NaNs from Postgres.
+        self.data.to_bits().hash(state);
+    }
 }
 
 impl PartialOrd for Numeric {

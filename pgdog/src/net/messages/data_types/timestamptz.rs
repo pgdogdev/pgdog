@@ -2,7 +2,7 @@ use std::ops::{Deref, DerefMut};
 
 use super::*;
 
-#[derive(Debug, Copy, Clone, PartialEq, Ord, PartialOrd, Eq, Default)]
+#[derive(Debug, Copy, Clone, PartialEq, Ord, PartialOrd, Eq, Default, Hash)]
 pub struct TimestampTz {
     timestamp: Timestamp,
 }
