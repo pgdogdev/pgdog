@@ -528,12 +528,17 @@ pub struct ShardedTable {
     /// This table is the primary sharding anchor (e.g. "users").
     #[serde(default)]
     pub primary: bool,
+    /// Hardcoded shard number.
+    pub shard: Option<usize>,
 }
 
 /// Queries with manual routing rules.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ManualQuery {
+    /// Query fingerprint.
     pub fingerprint: String,
+    /// Which shard this query should go to.
+    pub shard: Option<usize>,
 }
 
 #[cfg(test)]
