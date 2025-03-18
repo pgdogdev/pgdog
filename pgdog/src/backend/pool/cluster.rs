@@ -210,6 +210,7 @@ mod test {
                     name: Some("sharded".into()),
                     column: "id".into(),
                     primary: true,
+                    shard: None,
                 }]),
                 shards: vec![Shard::default(), Shard::default()],
                 ..Default::default()

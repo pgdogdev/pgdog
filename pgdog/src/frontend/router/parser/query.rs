@@ -179,9 +179,12 @@ impl QueryParser {
                 let fingerprint = fingerprint(query).map_err(Error::PgQuery)?;
                 let manual_route = databases().manual_query(&fingerprint.hex).cloned();
 
-                // TODO: check routing logic required by config.
-                if manual_route.is_some() {
-                    route.set_shard(round_robin::next() % cluster.shards().len());
+                if let Some(manual_route) = manual_route {
+                    if let Some(shard) = manual_route.shard {
+                        route.set_shard(shard);
+                    } else {
+                        route.set_shard(round_robin::next() % cluster.shards().len());
+                    }
                 }
             }
         }
