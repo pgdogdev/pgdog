@@ -2,7 +2,7 @@
 use std::collections::{BTreeSet, HashSet};
 
 use crate::{
-    backend::{databases::databases, Cluster},
+    backend::{databases::databases, Cluster, ShardingSchema},
     frontend::{
         router::{parser::OrderBy, round_robin, sharding::shard_str, CopyRow},
         Buffer,
@@ -110,8 +110,10 @@ impl QueryParser {
             }
         }
 
+        let sharding_schema = cluster.sharding_schema();
+
         // Hardcoded shard from a comment.
-        let shard = super::comment::shard(query, cluster.shards().len()).map_err(Error::PgQuery)?;
+        let shard = super::comment::shard(query, &sharding_schema).map_err(Error::PgQuery)?;
 
         // Cluster is read only or write only, traffic split isn't needed,
         // so don't parse the query further.
@@ -144,11 +146,11 @@ impl QueryParser {
                         round_robin::next() % cluster.shards().len(),
                     ))));
                 } else {
-                    Self::select(stmt, cluster, params)
+                    Self::select(stmt, &sharding_schema, params)
                 }
             }
             Some(NodeEnum::CopyStmt(ref stmt)) => Self::copy(stmt, cluster),
-            Some(NodeEnum::InsertStmt(ref stmt)) => Self::insert(stmt, cluster, &params),
+            Some(NodeEnum::InsertStmt(ref stmt)) => Self::insert(stmt, &sharding_schema, &params),
             Some(NodeEnum::UpdateStmt(ref stmt)) => Self::update(stmt),
             Some(NodeEnum::DeleteStmt(ref stmt)) => Self::delete(stmt),
             Some(NodeEnum::TransactionStmt(ref stmt)) => match stmt.kind() {
@@ -193,11 +195,10 @@ impl QueryParser {
 
     fn select(
         stmt: &SelectStmt,
-        cluster: &Cluster,
+        sharding_schema: &ShardingSchema,
         params: Option<Bind>,
     ) -> Result<Command, Error> {
         let order_by = Self::select_sort(&stmt.sort_clause);
-        let sharded_tables = cluster.sharded_tables();
         let mut shards = HashSet::new();
         let table_name = stmt
             .from_clause
@@ -215,13 +216,13 @@ impl QueryParser {
             .flatten();
         if let Some(where_clause) = WhereClause::new(table_name, &stmt.where_clause) {
             // Complexity: O(number of sharded tables * number of columns in the query)
-            for table in sharded_tables {
+            for table in sharding_schema.tables.tables() {
                 let table_name = table.name.as_deref();
                 let keys = where_clause.keys(table_name, &table.column);
                 for key in keys {
                     match key {
                         Key::Constant(value) => {
-                            if let Some(shard) = shard_str(&value, cluster.shards().len()) {
+                            if let Some(shard) = shard_str(&value, &sharding_schema) {
                                 shards.insert(shard);
                             }
                         }
@@ -231,8 +232,7 @@ impl QueryParser {
                                 if let Some(param) = params.parameter(param)? {
                                     // TODO: Handle binary encoding.
                                     if let Some(text) = param.text() {
-                                        if let Some(shard) = shard_str(text, cluster.shards().len())
-                                        {
+                                        if let Some(shard) = shard_str(text, &sharding_schema) {
                                             shards.insert(shard);
                                         }
                                     }
@@ -310,7 +310,7 @@ impl QueryParser {
 
     fn insert(
         stmt: &InsertStmt,
-        cluster: &Cluster,
+        sharding_schema: &ShardingSchema,
         params: &Option<Bind>,
     ) -> Result<Command, Error> {
         let insert = Insert::new(stmt);
@@ -320,17 +320,15 @@ impl QueryParser {
             .map(|column| column.name)
             .collect::<Vec<_>>();
         let table = insert.table().unwrap().name;
-        let num_shards = cluster.shards().len();
-
-        let sharding_column = cluster.sharded_column(table, &columns);
+        let sharding_column = sharding_schema.tables.sharded_column(table, &columns);
         let mut shards = BTreeSet::new();
         if let Some(column) = sharding_column {
             for tuple in insert.tuples() {
                 if let Some(value) = tuple.get(column) {
                     shards.insert(if let Some(bind) = params {
-                        value.shard_placeholder(bind, num_shards)
+                        value.shard_placeholder(bind, &sharding_schema)
                     } else {
-                        value.shard(num_shards)
+                        value.shard(&sharding_schema)
                     });
                 }
             }

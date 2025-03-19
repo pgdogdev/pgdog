@@ -12,11 +12,13 @@ pub mod text;
 pub mod timestamp;
 pub mod timestamptz;
 pub mod uuid;
+pub mod vector;
 
 pub use interval::Interval;
 pub use numeric::Numeric;
 pub use timestamp::Timestamp;
 pub use timestamptz::TimestampTz;
+pub use vector::Vector;
 
 pub trait FromDataType: Sized + PartialOrd + Ord + PartialEq {
     fn decode(bytes: &[u8], encoding: Format) -> Result<Self, Error>;

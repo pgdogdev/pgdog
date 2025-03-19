@@ -5,6 +5,11 @@ use std::{
 };
 
 use bytes::Buf;
+use serde::Deserialize;
+use serde::{
+    de::{self, Visitor},
+    Serialize,
+};
 use tracing::warn;
 
 use crate::net::messages::data_row::Data;
@@ -13,6 +18,7 @@ use super::*;
 
 /// We don't expect NaN's so we're going to implement Ord for this below.
 #[derive(PartialEq, Copy, Clone, Debug)]
+#[repr(C)]
 pub struct Numeric {
     data: f64,
 }
@@ -102,5 +108,59 @@ impl FromDataType for Numeric {
 impl ToDataRowColumn for Numeric {
     fn to_data_row_column(&self) -> Data {
         self.encode(Format::Text).unwrap().into()
+    }
+}
+
+impl From<f32> for Numeric {
+    fn from(value: f32) -> Self {
+        Self { data: value as f64 }
+    }
+}
+
+impl From<f64> for Numeric {
+    fn from(value: f64) -> Self {
+        Self { data: value }
+    }
+}
+
+struct NumericVisitor;
+
+impl<'de> Visitor<'de> for NumericVisitor {
+    type Value = Numeric;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("a floating point (f32 or f64)")
+    }
+
+    fn visit_f64<E>(self, v: f64) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Ok(Numeric { data: v })
+    }
+
+    fn visit_i64<E>(self, v: i64) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Ok(Numeric { data: v as f64 })
+    }
+}
+
+impl<'de> Deserialize<'de> for Numeric {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: de::Deserializer<'de>,
+    {
+        deserializer.deserialize_f64(NumericVisitor)
+    }
+}
+
+impl Serialize for Numeric {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_f64(self.data)
     }
 }

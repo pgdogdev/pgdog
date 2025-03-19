@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 use tracing::info;
 use tracing::warn;
 
+use crate::net::messages::Vector;
 use crate::util::random_string;
 
 static CONFIG: Lazy<ArcSwap<ConfigAndUsers>> =
@@ -388,6 +389,8 @@ pub struct Database {
     // Maximum number of connections to this database from this pooler.
     // #[serde(default = "Database::max_connections")]
     // pub max_connections: usize,
+    /// Centroid used for a vector index.
+    pub centroid: Option<Vector>,
 }
 
 impl Database {

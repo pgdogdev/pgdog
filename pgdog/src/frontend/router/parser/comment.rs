@@ -2,6 +2,8 @@ use once_cell::sync::Lazy;
 use pg_query::{protobuf::Token, scan, Error};
 use regex::Regex;
 
+use crate::backend::ShardingSchema;
+
 use super::super::sharding::shard_str;
 
 static SHARD: Lazy<Regex> = Lazy::new(|| Regex::new(r#"pgdog_shard: *([0-9]+)"#).unwrap());
@@ -15,7 +17,7 @@ static SHARDING_KEY: Lazy<Regex> =
 ///
 /// See [`SHARD`] and [`SHARDING_KEY`] for the style of comment we expect.
 ///
-pub fn shard(query: &str, shards: usize) -> Result<Option<usize>, Error> {
+pub fn shard(query: &str, schema: &ShardingSchema) -> Result<Option<usize>, Error> {
     let tokens = scan(query)?;
 
     for token in tokens.tokens.iter() {
@@ -23,7 +25,7 @@ pub fn shard(query: &str, shards: usize) -> Result<Option<usize>, Error> {
             let comment = &query[token.start as usize..token.end as usize];
             if let Some(cap) = SHARDING_KEY.captures(comment) {
                 if let Some(sharding_key) = cap.get(1) {
-                    return Ok(shard_str(sharding_key.as_str(), shards));
+                    return Ok(shard_str(sharding_key.as_str(), schema));
                 }
             }
             if let Some(cap) = SHARD.captures(comment) {

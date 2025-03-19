@@ -15,7 +15,7 @@ use crate::{
 
 use super::{
     super::{pool::Guard, Error},
-    Address, Cluster, Request,
+    Address, Cluster, Request, ShardingSchema,
 };
 
 use std::{mem::replace, time::Duration};
@@ -91,8 +91,12 @@ impl Connection {
         &mut self,
         shard: Option<usize>,
         replication_config: &ReplicationConfig,
+        sharding_schema: &ShardingSchema,
     ) -> Result<(), Error> {
-        self.binding = Binding::Replication(None, Buffer::new(shard, replication_config));
+        self.binding = Binding::Replication(
+            None,
+            Buffer::new(shard, replication_config, sharding_schema),
+        );
         Ok(())
     }
 

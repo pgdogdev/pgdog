@@ -42,11 +42,11 @@ impl Clone for Pool {
 
 impl Pool {
     /// Create new connection pool.
-    pub fn new(config: PoolConfig) -> Self {
+    pub fn new(config: &PoolConfig) -> Self {
         Self {
             inner: Arc::new(Mutex::new(Inner::new(config.config))),
             comms: Arc::new(Comms::new()),
-            addr: config.address,
+            addr: config.address.clone(),
         }
     }
 
@@ -138,7 +138,7 @@ impl Pool {
 
     /// Create new identical connection pool.
     pub fn duplicate(&self) -> Pool {
-        Pool::new(PoolConfig {
+        Pool::new(&PoolConfig {
             address: self.addr().clone(),
             config: *self.lock().config(),
         })

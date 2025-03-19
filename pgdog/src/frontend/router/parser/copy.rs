@@ -3,7 +3,7 @@
 use pg_query::{protobuf::CopyStmt, NodeEnum};
 
 use crate::{
-    backend::Cluster,
+    backend::{Cluster, ShardingSchema},
     frontend::router::{sharding::shard_str, CopyRow},
     net::messages::CopyData,
 };
@@ -50,6 +50,8 @@ pub struct CopyParser {
     pub is_from: bool,
     /// CSV parser that can handle incomplete records.
     csv_stream: CsvStream,
+
+    sharding_schema: ShardingSchema,
 }
 
 impl Default for CopyParser {
@@ -62,6 +64,7 @@ impl Default for CopyParser {
             columns: 0,
             is_from: false,
             csv_stream: CsvStream::new(',', false),
+            sharding_schema: ShardingSchema::default(),
         }
     }
 }
@@ -122,6 +125,7 @@ impl CopyParser {
         }
 
         parser.csv_stream = CsvStream::new(parser.delimiter(), parser.headers);
+        parser.sharding_schema = cluster.sharding_schema();
 
         Ok(Some(parser))
     }
@@ -154,7 +158,7 @@ impl CopyParser {
                 let shard = if let Some(sharding_column) = self.sharded_column {
                     let key = record.get(sharding_column).ok_or(Error::NoShardingColumn)?;
 
-                    shard_str(key, self.shards)
+                    shard_str(key, &self.sharding_schema)
                 } else {
                     None
                 };

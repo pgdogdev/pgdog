@@ -3,7 +3,7 @@
 use crate::{
     backend::{databases::databases, replication::ReplicationConfig, ShardedTables},
     config::{PoolerMode, ShardedTable},
-    net::messages::BackendKeyData,
+    net::messages::{BackendKeyData, Vector},
 };
 
 use super::{Address, Config, Error, Guard, Request, Shard};
@@ -32,11 +32,47 @@ pub struct Cluster {
     replication_sharding: Option<String>,
 }
 
+/// Sharding configuration from the cluster.
+#[derive(Debug, Clone, Default)]
+pub struct ShardingSchema {
+    /// Number of shards.
+    pub shards: usize,
+    /// Vector centroids.
+    pub centroids: Vec<Option<Vector>>,
+    /// Sharded tables.
+    pub tables: ShardedTables,
+}
+
+impl ShardingSchema {
+    pub fn shard_by_distance_l2(&self, vector: &Vector) -> Option<usize> {
+        let mut shard = None;
+        let mut min_distance = f64::MAX;
+
+        for (i, c) in self.centroids.iter().enumerate() {
+            if let Some(c) = c {
+                let distance = vector.distance_l2(c);
+                if distance < min_distance {
+                    min_distance = distance;
+                    shard = Some(i);
+                }
+            }
+        }
+
+        shard
+    }
+}
+
+pub struct ClusterShardConfig {
+    pub primary: Option<PoolConfig>,
+    pub replicas: Vec<PoolConfig>,
+    pub centroid: Option<Vector>,
+}
+
 impl Cluster {
     /// Create new cluster of shards.
     pub fn new(
         name: &str,
-        shards: &[(Option<PoolConfig>, Vec<PoolConfig>)],
+        shards: &[ClusterShardConfig],
         lb_strategy: LoadBalancingStrategy,
         password: &str,
         pooler_mode: PoolerMode,
@@ -46,7 +82,14 @@ impl Cluster {
         Self {
             shards: shards
                 .iter()
-                .map(|addr| Shard::new(addr.0.clone(), &addr.1, lb_strategy))
+                .map(|config| {
+                    Shard::new(
+                        &config.primary,
+                        &config.replicas,
+                        lb_strategy,
+                        config.centroid.clone(),
+                    )
+                })
                 .collect(),
             name: name.to_owned(),
             password: password.to_owned(),
@@ -190,6 +233,15 @@ impl Cluster {
         self.replication_sharding
             .as_ref()
             .and_then(|database| databases().replication(database))
+    }
+
+    /// Get all data required for sharding.
+    pub fn sharding_schema(&self) -> ShardingSchema {
+        ShardingSchema {
+            shards: self.shards.len(),
+            centroids: self.shards().iter().map(|s| s.centroid().clone()).collect(),
+            tables: self.sharded_tables.clone(),
+        }
     }
 }
 

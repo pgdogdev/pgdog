@@ -22,7 +22,7 @@ pub mod stats;
 pub mod waiting;
 
 pub use address::Address;
-pub use cluster::{Cluster, PoolConfig};
+pub use cluster::{Cluster, ClusterShardConfig, PoolConfig, ShardingSchema};
 pub use config::Config;
 pub use connection::Connection;
 pub use error::Error;

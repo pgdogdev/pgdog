@@ -2,6 +2,7 @@ use fnv::FnvHashMap as HashMap;
 use fnv::FnvHashSet as HashSet;
 use std::collections::VecDeque;
 
+use crate::backend::ShardingSchema;
 use crate::frontend::router::sharding::shard_str;
 use crate::net::messages::FromBytes;
 use crate::net::messages::Protocol;
@@ -23,11 +24,16 @@ pub struct Buffer {
     shard: Option<usize>,
     oid: Option<i32>,
     buffer: VecDeque<Message>,
+    sharding_schema: ShardingSchema,
 }
 
 impl Buffer {
     /// New replication buffer.
-    pub fn new(shard: Option<usize>, cluster: &ReplicationConfig) -> Self {
+    pub fn new(
+        shard: Option<usize>,
+        cluster: &ReplicationConfig,
+        sharding_schema: &ShardingSchema,
+    ) -> Self {
         Self {
             begin: None,
             message: None,
@@ -37,6 +43,7 @@ impl Buffer {
             oid: None,
             buffer: VecDeque::new(),
             replication_config: cluster.clone(),
+            sharding_schema: sharding_schema.clone(),
         }
     }
 
@@ -74,7 +81,7 @@ impl Buffer {
                             .and_then(|column| update.column(column))
                             .and_then(|column| column.as_str());
                         if let Some(column) = column {
-                            let shard = shard_str(column, self.replication_config.shards());
+                            let shard = shard_str(column, &self.sharding_schema);
                             if self.shard == shard {
                                 self.message = Some(xlog_data);
                                 return self.flush();
@@ -92,7 +99,7 @@ impl Buffer {
                             .and_then(|column| insert.column(column))
                             .and_then(|column| column.as_str());
                         if let Some(column) = column {
-                            let shard = shard_str(column, self.replication_config.shards());
+                            let shard = shard_str(column, &self.sharding_schema);
                             if self.shard == shard {
                                 self.message = Some(xlog_data);
                                 return self.flush();
