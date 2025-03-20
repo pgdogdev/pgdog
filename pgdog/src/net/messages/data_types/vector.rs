@@ -92,6 +92,14 @@ impl From<&[f32]> for Vector {
     }
 }
 
+impl TryFrom<&str> for Vector {
+    type Error = Error;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        Self::decode(value.as_bytes(), Format::Text)
+    }
+}
+
 struct VectorVisitor;
 
 impl<'de> Visitor<'de> for VectorVisitor {

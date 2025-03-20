@@ -7,7 +7,7 @@ use crate::{
         router::{parser::OrderBy, round_robin, sharding::shard_str, CopyRow},
         Buffer,
     },
-    net::messages::{Bind, CopyData},
+    net::messages::{Bind, CopyData, Vector},
 };
 
 use super::{Aggregate, Cache, CopyParser, Error, Insert, Key, Route, WhereClause};
@@ -200,6 +200,13 @@ impl QueryParser {
     ) -> Result<Command, Error> {
         let order_by = Self::select_sort(&stmt.sort_clause);
         let mut shards = HashSet::new();
+        for order in &order_by {
+            if let Some(vector) = order.vector() {
+                if let Some(shard) = sharding_schema.shard_by_distance_l2(vector) {
+                    shards.insert(shard);
+                }
+            }
+        }
         let table_name = stmt
             .from_clause
             .first()
@@ -267,6 +274,7 @@ impl QueryParser {
                 let Some(ref node) = node.node else {
                     continue;
                 };
+
                 match node {
                     NodeEnum::AConst(aconst) => {
                         if let Some(Val::Ival(ref integer)) = aconst.val {
@@ -288,6 +296,66 @@ impl QueryParser {
                             } else {
                                 OrderBy::DescColumn(string.sval.clone())
                             });
+                        }
+                    }
+
+                    NodeEnum::AExpr(expr) => {
+                        if expr.kind() == AExprKind::AexprOp {
+                            if let Some(node) = expr.name.first() {
+                                if let Some(ref node) = node.node {
+                                    if let NodeEnum::String(String { sval }) = node {
+                                        match sval.as_str() {
+                                            "<->" => {
+                                                let mut vector: Option<Vector> = None;
+                                                let mut column: Option<std::string::String> = None;
+
+                                                for e in &[&expr.lexpr, &expr.rexpr] {
+                                                    if let Some(e) = e {
+                                                        match &e.node {
+                                                            Some(NodeEnum::ColumnRef(col)) => {
+                                                                if let Some(name) =
+                                                                    col.fields.first()
+                                                                {
+                                                                    if let Some(NodeEnum::String(
+                                                                        string,
+                                                                    )) = &name.node
+                                                                    {
+                                                                        column = Some(
+                                                                            string.sval.clone(),
+                                                                        );
+                                                                    }
+                                                                }
+                                                            }
+
+                                                            Some(NodeEnum::AConst(a_const)) => {
+                                                                if let Some(a_const::Val::Sval(
+                                                                    string,
+                                                                )) = &a_const.val
+                                                                {
+                                                                    vector = Vector::try_from(
+                                                                        string.sval.as_str(),
+                                                                    )
+                                                                    .ok();
+                                                                }
+                                                            }
+                                                            _ => continue,
+                                                        }
+                                                    }
+                                                }
+
+                                                if let Some(vector) = vector {
+                                                    if let Some(column) = column {
+                                                        order_by.push(OrderBy::AscVectorL2(
+                                                            column, vector,
+                                                        ));
+                                                    }
+                                                }
+                                            }
+                                            _ => continue,
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
 

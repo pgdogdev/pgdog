@@ -49,6 +49,11 @@ pub fn shard_str(value: &str, schema: &ShardingSchema) -> Option<usize> {
     })
 }
 
+/// Shard by vector.
+pub fn shard_vector(value: &Vector, schema: &ShardingSchema) -> Option<usize> {
+    schema.shard_by_distance_l2(value)
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
