@@ -125,7 +125,7 @@ impl From<f64> for Numeric {
 
 struct NumericVisitor;
 
-impl<'de> Visitor<'de> for NumericVisitor {
+impl Visitor<'_> for NumericVisitor {
     type Value = Numeric;
 
     fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {

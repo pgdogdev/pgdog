@@ -29,10 +29,9 @@ impl FromDataType for Vector {
                 let no_brackets = &bytes[1..bytes.len() - 1];
                 let floats = no_brackets
                     .split(|n| n == &b',')
-                    .map(|b| from_utf8(b).map(|n| n.trim().parse::<f32>().ok()))
+                    .flat_map(|b| from_utf8(b).map(|n| n.trim().parse::<f32>().ok()))
                     .flatten()
-                    .flatten()
-                    .map(|f| Numeric::from(f))
+                    .map(Numeric::from)
                     .collect();
                 Ok(Self { values: floats })
             }
@@ -56,7 +55,7 @@ impl FromDataType for Vector {
 
 impl ToDataRowColumn for Vector {
     fn to_data_row_column(&self) -> crate::net::messages::data_row::Data {
-        Bytes::from(self.encode(Format::Text).unwrap()).into()
+        self.encode(Format::Text).unwrap().into()
     }
 }
 
@@ -109,9 +108,9 @@ impl TryFrom<&str> for Vector {
     }
 }
 
-impl Into<Datum> for Vector {
-    fn into(self) -> Datum {
-        Datum::Vector(self)
+impl From<Vector> for Datum {
+    fn from(val: Vector) -> Self {
+        Datum::Vector(val)
     }
 }
 

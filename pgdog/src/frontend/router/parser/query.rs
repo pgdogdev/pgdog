@@ -229,7 +229,7 @@ impl QueryParser {
                 for key in keys {
                     match key {
                         Key::Constant(value) => {
-                            if let Some(shard) = shard_str(&value, &sharding_schema) {
+                            if let Some(shard) = shard_str(&value, sharding_schema) {
                                 shards.insert(shard);
                             }
                         }
@@ -239,7 +239,7 @@ impl QueryParser {
                                 if let Some(param) = params.parameter(param)? {
                                     // TODO: Handle binary encoding.
                                     if let Some(text) = param.text() {
-                                        if let Some(shard) = shard_str(text, &sharding_schema) {
+                                        if let Some(shard) = shard_str(text, sharding_schema) {
                                             shards.insert(shard);
                                         }
                                     }
@@ -394,9 +394,9 @@ impl QueryParser {
             for tuple in insert.tuples() {
                 if let Some(value) = tuple.get(column) {
                     shards.insert(if let Some(bind) = params {
-                        value.shard_placeholder(bind, &sharding_schema)
+                        value.shard_placeholder(bind, sharding_schema)
                     } else {
-                        value.shard(&sharding_schema)
+                        value.shard(sharding_schema)
                     });
                 }
             }
