@@ -30,6 +30,9 @@ impl Grouping {
 }
 
 /// The aggregate accumulator.
+///
+/// This transfors disttributed aggregate functions
+/// into a single value.
 #[derive(Debug)]
 struct Accumulator<'a> {
     target: &'a AggregateTarget,
@@ -54,6 +57,7 @@ impl<'a> Accumulator<'a> {
             .collect()
     }
 
+    /// Transform COUNT(*), MIN, MAX, etc., from multiple shards into a single value.
     fn accumulate(&mut self, row: &DataRow, rd: &RowDescription) -> Result<(), Error> {
         let column = row.get_column(self.target.column(), rd)?;
         if let Some(column) = column {
@@ -73,6 +77,13 @@ impl<'a> Accumulator<'a> {
                         if self.datum > column.value {
                             self.datum = column.value;
                         }
+                    } else {
+                        self.datum = column.value;
+                    }
+                }
+                AggregateFunction::Sum => {
+                    if !self.datum.is_null() {
+                        self.datum = self.datum.clone() + column.value;
                     } else {
                         self.datum = column.value;
                     }
@@ -122,6 +133,15 @@ impl<'a> Aggregates<'a> {
 
         let mut rows = VecDeque::new();
         for (grouping, accumulator) in self.mappings {
+            //
+            // Aggregate rules in Postgres dictate that the only
+            // columns present in the row are either:
+            //
+            // 1. part of the GROUP BY, which means they are
+            //    stored in the grouping
+            // 2. are aggregate functions, which means they
+            //    are stored in the accunmulator
+            //
             let mut row = DataRow::new();
             for (idx, datum) in grouping.columns {
                 row.insert(idx, datum);

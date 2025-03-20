@@ -26,6 +26,7 @@ pub enum AggregateFunction {
     Max,
     Min,
     Avg,
+    Sum,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -81,6 +82,11 @@ impl Aggregate {
                                             function: AggregateFunction::Min,
                                         });
                                     }
+
+                                    "sum" => targets.push(AggregateTarget {
+                                        column: idx,
+                                        function: AggregateFunction::Max,
+                                    }),
 
                                     _ => {}
                                 }
