@@ -302,57 +302,49 @@ impl QueryParser {
                     NodeEnum::AExpr(expr) => {
                         if expr.kind() == AExprKind::AexprOp {
                             if let Some(node) = expr.name.first() {
-                                if let Some(ref node) = node.node {
-                                    if let NodeEnum::String(String { sval }) = node {
-                                        match sval.as_str() {
-                                            "<->" => {
-                                                let mut vector: Option<Vector> = None;
-                                                let mut column: Option<std::string::String> = None;
+                                if let Some(NodeEnum::String(String { sval })) = &node.node {
+                                    match sval.as_str() {
+                                        "<->" => {
+                                            let mut vector: Option<Vector> = None;
+                                            let mut column: Option<std::string::String> = None;
 
-                                                for e in &[&expr.lexpr, &expr.rexpr] {
-                                                    if let Some(e) = e {
-                                                        match &e.node {
-                                                            Some(NodeEnum::ColumnRef(col)) => {
-                                                                if let Some(name) =
-                                                                    col.fields.first()
-                                                                {
-                                                                    if let Some(NodeEnum::String(
-                                                                        string,
-                                                                    )) = &name.node
-                                                                    {
-                                                                        column = Some(
-                                                                            string.sval.clone(),
-                                                                        );
-                                                                    }
-                                                                }
+                                            for e in
+                                                [&expr.lexpr, &expr.rexpr].iter().copied().flatten()
+                                            {
+                                                match &e.node {
+                                                    Some(NodeEnum::ColumnRef(col)) => {
+                                                        if let Some(name) = col.fields.first() {
+                                                            if let Some(NodeEnum::String(string)) =
+                                                                &name.node
+                                                            {
+                                                                column = Some(string.sval.clone());
                                                             }
-
-                                                            Some(NodeEnum::AConst(a_const)) => {
-                                                                if let Some(a_const::Val::Sval(
-                                                                    string,
-                                                                )) = &a_const.val
-                                                                {
-                                                                    vector = Vector::try_from(
-                                                                        string.sval.as_str(),
-                                                                    )
-                                                                    .ok();
-                                                                }
-                                                            }
-                                                            _ => continue,
                                                         }
                                                     }
-                                                }
 
-                                                if let Some(vector) = vector {
-                                                    if let Some(column) = column {
-                                                        order_by.push(OrderBy::AscVectorL2Column(
-                                                            column, vector,
-                                                        ));
+                                                    Some(NodeEnum::AConst(a_const)) => {
+                                                        if let Some(a_const::Val::Sval(string)) =
+                                                            &a_const.val
+                                                        {
+                                                            vector = Vector::try_from(
+                                                                string.sval.as_str(),
+                                                            )
+                                                            .ok();
+                                                        }
                                                     }
+                                                    _ => continue,
                                                 }
                                             }
-                                            _ => continue,
+
+                                            if let Some(vector) = vector {
+                                                if let Some(column) = column {
+                                                    order_by.push(OrderBy::AscVectorL2Column(
+                                                        column, vector,
+                                                    ));
+                                                }
+                                            }
                                         }
+                                        _ => continue,
                                     }
                                 }
                             }
