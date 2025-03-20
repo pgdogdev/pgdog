@@ -35,7 +35,7 @@ impl Buffer {
     /// Sort the buffer.
     pub(super) fn sort(&mut self, columns: &[OrderBy], rd: &RowDescription) {
         // Calculate column indicies once, since
-        // fetching indicies by name is O(n).
+        // fetching indicies by name is O(number of columns).
         let mut cols = vec![];
         for column in columns {
             match column {
