@@ -4,7 +4,7 @@ use std::{cmp::Ordering, collections::VecDeque};
 
 use crate::{
     frontend::router::parser::{Aggregate, OrderBy},
-    net::messages::{DataRow, FromBytes, Message, Protocol, RowDescription, ToBytes},
+    net::messages::{DataRow, FromBytes, Message, Protocol, RowDescription, ToBytes, Vector},
 };
 
 use super::Aggregates;
@@ -34,33 +34,60 @@ impl Buffer {
 
     /// Sort the buffer.
     pub(super) fn sort(&mut self, columns: &[OrderBy], rd: &RowDescription) {
-        // Calculate column indecies once, since
-        // fetching indecies by name is O(n).
+        // Calculate column indicies once, since
+        // fetching indicies by name is O(n).
         let mut cols = vec![];
         for column in columns {
-            if let Some(index) = column.index() {
-                cols.push(Some((index, column.asc())));
-            } else if let Some(name) = column.name() {
-                if let Some(index) = rd.field_index(name) {
-                    cols.push(Some((index, column.asc())));
-                } else {
-                    cols.push(None);
+            match column {
+                OrderBy::Asc(_) => cols.push(column.clone()),
+                OrderBy::AscColumn(name) => {
+                    if let Some(index) = rd.field_index(name) {
+                        cols.push(OrderBy::Asc(index + 1));
+                    }
                 }
-            } else {
-                cols.push(None);
+                OrderBy::Desc(_) => cols.push(column.clone()),
+                OrderBy::DescColumn(name) => {
+                    if let Some(index) = rd.field_index(name) {
+                        cols.push(OrderBy::Desc(index + 1));
+                    }
+                }
+                OrderBy::AscVectorL2(_, _) => cols.push(column.clone()),
+                OrderBy::AscVectorL2Column(name, vector) => {
+                    if let Some(index) = rd.field_index(name) {
+                        cols.push(OrderBy::AscVectorL2(index + 1, vector.clone()));
+                    }
+                }
             };
         }
 
         // Sort rows.
         let order_by = move |a: &DataRow, b: &DataRow| -> Ordering {
-            for col in cols.iter().flatten() {
-                let (index, asc) = col;
-                let left = a.get_column(*index, rd);
-                let right = b.get_column(*index, rd);
+            for col in cols.iter() {
+                let index = col.index();
+                let asc = col.asc();
+                let index = if let Some(index) = index {
+                    index
+                } else {
+                    continue;
+                };
+                let left = a.get_column(index, rd);
+                let right = b.get_column(index, rd);
 
                 let ordering = match (left, right) {
                     (Ok(Some(left)), Ok(Some(right))) => {
-                        if *asc {
+                        if let OrderBy::AscVectorL2(_, vector) = col {
+                            let left: Option<Vector> = left.value.try_into().ok();
+                            let right: Option<Vector> = right.value.try_into().ok();
+
+                            if let (Some(left), Some(right)) = (left, right) {
+                                let left = left.distance_l2(vector);
+                                let right = right.distance_l2(vector);
+
+                                left.partial_cmp(&right)
+                            } else {
+                                Some(Ordering::Equal)
+                            }
+                        } else if asc {
                             left.value.partial_cmp(&right.value)
                         } else {
                             right.value.partial_cmp(&left.value)

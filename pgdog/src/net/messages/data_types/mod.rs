@@ -45,6 +45,8 @@ pub enum Datum {
     Uuid(Uuid),
     /// NUMERIC, REAL, DOUBLE PRECISION.
     Numeric(Numeric),
+    /// Vector
+    Vector(Vector),
     /// NULL.
     Null,
 }
@@ -63,6 +65,7 @@ impl ToDataRowColumn for Datum {
             TimestampTz(tz) => tz.to_data_row_column(),
             Uuid(uuid) => uuid.to_data_row_column(),
             Numeric(num) => num.to_data_row_column(),
+            Vector(vector) => vector.to_data_row_column(),
             Null => Data::null(),
         }
     }
@@ -104,6 +107,7 @@ impl Datum {
             DataType::Uuid => Ok(Datum::Uuid(Uuid::decode(bytes, encoding)?)),
             DataType::Timestamp => Ok(Datum::Timestamp(Timestamp::decode(bytes, encoding)?)),
             DataType::TimestampTz => Ok(Datum::TimestampTz(TimestampTz::decode(bytes, encoding)?)),
+            DataType::Vector => Ok(Datum::Vector(Vector::decode(bytes, encoding)?)),
             _ => Ok(Datum::Null),
         }
     }
@@ -130,4 +134,5 @@ pub enum DataType {
     Numeric,
     Other(i32),
     Uuid,
+    Vector,
 }

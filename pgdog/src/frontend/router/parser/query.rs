@@ -345,7 +345,7 @@ impl QueryParser {
 
                                                 if let Some(vector) = vector {
                                                     if let Some(column) = column {
-                                                        order_by.push(OrderBy::AscVectorL2(
+                                                        order_by.push(OrderBy::AscVectorL2Column(
                                                             column, vector,
                                                         ));
                                                     }

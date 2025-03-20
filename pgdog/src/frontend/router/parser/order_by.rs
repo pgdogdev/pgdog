@@ -8,7 +8,8 @@ pub enum OrderBy {
     Desc(usize),
     AscColumn(String),
     DescColumn(String),
-    AscVectorL2(String, Vector),
+    AscVectorL2Column(String, Vector),
+    AscVectorL2(usize, Vector),
 }
 
 impl OrderBy {
@@ -16,7 +17,10 @@ impl OrderBy {
     pub fn asc(&self) -> bool {
         matches!(
             self,
-            OrderBy::Asc(_) | OrderBy::AscColumn(_) | OrderBy::AscVectorL2(_, _)
+            OrderBy::Asc(_)
+                | OrderBy::AscColumn(_)
+                | OrderBy::AscVectorL2Column(_, _)
+                | OrderBy::AscVectorL2(_, _)
         )
     }
 
@@ -25,6 +29,7 @@ impl OrderBy {
         match self {
             OrderBy::Asc(column) => Some(*column - 1),
             OrderBy::Desc(column) => Some(*column - 1),
+            OrderBy::AscVectorL2(column, _) => Some(*column - 1),
             _ => None,
         }
     }
@@ -34,7 +39,7 @@ impl OrderBy {
         match self {
             OrderBy::AscColumn(ref name) => Some(name.as_str()),
             OrderBy::DescColumn(ref name) => Some(name.as_str()),
-            OrderBy::AscVectorL2(ref name, _) => Some(name.as_str()),
+            OrderBy::AscVectorL2Column(ref name, _) => Some(name.as_str()),
             _ => None,
         }
     }
@@ -42,7 +47,7 @@ impl OrderBy {
     /// ORDER BY clause contains a vector.
     pub fn vector(&self) -> Option<&Vector> {
         match self {
-            OrderBy::AscVectorL2(_, vector) => Some(&vector),
+            OrderBy::AscVectorL2Column(_, vector) => Some(&vector),
             _ => None,
         }
     }

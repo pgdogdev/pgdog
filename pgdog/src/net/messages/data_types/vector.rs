@@ -1,6 +1,9 @@
 use crate::{
     frontend::router::sharding::vector::Distance,
-    net::{messages::Format, Error},
+    net::{
+        messages::{Format, ToDataRowColumn},
+        Error,
+    },
 };
 use bytes::Bytes;
 use serde::{
@@ -10,7 +13,7 @@ use serde::{
 };
 use std::{ops::Deref, str::from_utf8};
 
-use super::{FromDataType, Numeric};
+use super::{Datum, FromDataType, Numeric};
 
 #[derive(Debug, Clone, PartialEq, PartialOrd, Ord, Eq, Hash)]
 #[repr(C)]
@@ -48,6 +51,12 @@ impl FromDataType for Vector {
             ))),
             Format::Binary => Err(Error::NotTextEncoding),
         }
+    }
+}
+
+impl ToDataRowColumn for Vector {
+    fn to_data_row_column(&self) -> crate::net::messages::data_row::Data {
+        Bytes::from(self.encode(Format::Text).unwrap()).into()
     }
 }
 
@@ -97,6 +106,23 @@ impl TryFrom<&str> for Vector {
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         Self::decode(value.as_bytes(), Format::Text)
+    }
+}
+
+impl Into<Datum> for Vector {
+    fn into(self) -> Datum {
+        Datum::Vector(self)
+    }
+}
+
+impl TryFrom<Datum> for Vector {
+    type Error = Error;
+
+    fn try_from(value: Datum) -> Result<Self, Self::Error> {
+        match value {
+            Datum::Vector(vector) => Ok(vector),
+            _ => Err(Error::UnexpectedPayload),
+        }
     }
 }
 

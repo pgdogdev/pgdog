@@ -65,7 +65,7 @@ impl Add for Numeric {
 
 impl Ord for Numeric {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        match self.partial_cmp(other) {
+        match self.data.partial_cmp(&other.data) {
             Some(ordering) => ordering,
             None => {
                 if self.data.is_nan() || other.data.is_nan() {
