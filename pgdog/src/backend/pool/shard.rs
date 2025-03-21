@@ -1,9 +1,6 @@
 //! A shard is a collection of replicas and a primary.
 
-use crate::{
-    config::LoadBalancingStrategy,
-    net::messages::{BackendKeyData, Vector},
-};
+use crate::{config::LoadBalancingStrategy, net::messages::BackendKeyData};
 
 use super::{Error, Guard, Pool, PoolConfig, Replicas, Request};
 

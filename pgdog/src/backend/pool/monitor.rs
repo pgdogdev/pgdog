@@ -263,6 +263,7 @@ impl Monitor {
         ok
     }
 
+    #[allow(dead_code)]
     async fn fetch_oids(pool: &Pool) -> Result<(), Error> {
         if pool.lock().oids.is_none() {
             let oids = Oids::load(&mut pool.get(&Request::default()).await?)
