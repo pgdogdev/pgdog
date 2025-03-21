@@ -14,5 +14,7 @@ fn main() {
             "cargo:rustc-env=GIT_HASH={}",
             git_hash.chars().take(7).collect::<String>()
         );
+    } else {
+        println!("cargo:rustc-env=GIT_HASH={}", env!("CARGO_PKG_VERSION"));
     }
 }
