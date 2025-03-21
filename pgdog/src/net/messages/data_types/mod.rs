@@ -47,6 +47,8 @@ pub enum Datum {
     Numeric(Numeric),
     /// Vector
     Vector(Vector),
+    /// We don't know.
+    Unknown(Bytes),
     /// NULL.
     Null,
 }
@@ -66,6 +68,7 @@ impl ToDataRowColumn for Datum {
             Uuid(uuid) => uuid.to_data_row_column(),
             Numeric(num) => num.to_data_row_column(),
             Vector(vector) => vector.to_data_row_column(),
+            Unknown(bytes) => bytes.clone().into(),
             Null => Data::null(),
         }
     }
@@ -108,7 +111,7 @@ impl Datum {
             DataType::Timestamp => Ok(Datum::Timestamp(Timestamp::decode(bytes, encoding)?)),
             DataType::TimestampTz => Ok(Datum::TimestampTz(TimestampTz::decode(bytes, encoding)?)),
             DataType::Vector => Ok(Datum::Vector(Vector::decode(bytes, encoding)?)),
-            _ => Ok(Datum::Null),
+            _ => Ok(Datum::Unknown(Bytes::copy_from_slice(bytes))),
         }
     }
 

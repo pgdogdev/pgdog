@@ -92,7 +92,6 @@ impl Field {
             1184 => DataType::TimestampTz,
             1186 => DataType::Interval,
             2950 => DataType::Uuid,
-            27231 => DataType::Vector, // TODO: this is actually variable.
             _ => DataType::Other(self.type_oid),
         }
     }

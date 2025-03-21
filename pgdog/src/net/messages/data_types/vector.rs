@@ -120,6 +120,7 @@ impl TryFrom<Datum> for Vector {
     fn try_from(value: Datum) -> Result<Self, Self::Error> {
         match value {
             Datum::Vector(vector) => Ok(vector),
+            Datum::Unknown(data) => Vector::decode(&data, Format::Text), // Try decoding anyway.
             _ => Err(Error::UnexpectedPayload),
         }
     }
