@@ -6,7 +6,7 @@ use std::{cmp::max, time::Instant};
 use crate::backend::Server;
 use crate::net::messages::BackendKeyData;
 
-use super::{Ban, Config, Error, Mapping, Stats};
+use super::{Ban, Config, Error, Mapping, Oids, Stats};
 
 /// Pool internals protected by a mutex.
 #[derive(Default)]
@@ -21,7 +21,7 @@ pub(super) struct Inner {
     pub(super) waiting: usize,
     /// Pool ban status.
     pub(super) ban: Option<Ban>,
-    /// Pool is online and availble to clients.
+    /// Pool is online and available to clients.
     pub(super) online: bool,
     /// Pool is paused.
     pub(super) paused: bool,
@@ -33,6 +33,8 @@ pub(super) struct Inner {
     pub(super) errors: usize,
     /// Stats
     pub(super) stats: Stats,
+    /// OIDs.
+    pub(super) oids: Option<Oids>,
 }
 
 impl std::fmt::Debug for Inner {
@@ -63,6 +65,7 @@ impl Inner {
             out_of_sync: 0,
             errors: 0,
             stats: Stats::default(),
+            oids: None,
         }
     }
     /// Total number of connections managed by the pool.

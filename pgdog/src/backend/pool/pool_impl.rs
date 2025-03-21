@@ -13,8 +13,8 @@ use crate::net::messages::BackendKeyData;
 use crate::net::Parameter;
 
 use super::{
-    Address, Comms, Config, Error, Guard, Healtcheck, Inner, Monitor, PoolConfig, Request, State,
-    Waiting,
+    Address, Comms, Config, Error, Guard, Healtcheck, Inner, Monitor, Oids, PoolConfig, Request,
+    State, Waiting,
 };
 
 /// Connection pool.
@@ -59,7 +59,7 @@ impl Pool {
         }
     }
 
-    /// Get a connetion from the pool.
+    /// Get a connection from the pool.
     pub async fn get(&self, request: &Request) -> Result<Guard, Error> {
         loop {
             // Fast path, idle connection probably available.
@@ -288,5 +288,10 @@ impl Pool {
     /// This takes effect immediately.
     pub fn update_config(&self, config: Config) {
         self.lock().config = config;
+    }
+
+    /// Fetch OIDs for user-defined data types.
+    pub fn oids(&self) -> Option<Oids> {
+        self.lock().oids
     }
 }

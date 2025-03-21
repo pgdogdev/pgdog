@@ -10,7 +10,7 @@ use crate::{
     net::messages::{Bind, CopyData, Vector},
 };
 
-use super::{Aggregate, Cache, CopyParser, Error, Insert, Key, Route, WhereClause};
+use super::{Aggregate, Cache, Column, CopyParser, Error, Insert, Key, Route, Value, WhereClause};
 
 use once_cell::sync::Lazy;
 use pg_query::{
@@ -198,7 +198,7 @@ impl QueryParser {
         sharding_schema: &ShardingSchema,
         params: Option<Bind>,
     ) -> Result<Command, Error> {
-        let order_by = Self::select_sort(&stmt.sort_clause);
+        let order_by = Self::select_sort(&stmt.sort_clause, &params);
         let mut shards = HashSet::new();
         for order in &order_by {
             if let Some(vector) = order.vector() {
@@ -263,7 +263,7 @@ impl QueryParser {
     }
 
     /// Parse the `ORDER BY` clause of a `SELECT` statement.
-    fn select_sort(nodes: &[Node]) -> Vec<OrderBy> {
+    fn select_sort(nodes: &[Node], params: &Option<Bind>) -> Vec<OrderBy> {
         let mut order_by = vec![];
         for clause in nodes {
             if let Some(NodeEnum::SortBy(ref sort_by)) = clause.node {
@@ -311,28 +311,14 @@ impl QueryParser {
                                             for e in
                                                 [&expr.lexpr, &expr.rexpr].iter().copied().flatten()
                                             {
-                                                match &e.node {
-                                                    Some(NodeEnum::ColumnRef(col)) => {
-                                                        if let Some(name) = col.fields.first() {
-                                                            if let Some(NodeEnum::String(string)) =
-                                                                &name.node
-                                                            {
-                                                                column = Some(string.sval.clone());
-                                                            }
-                                                        }
-                                                    }
+                                                if let Ok(Some(vec)) = Value::try_from(&e.node)
+                                                    .map(|value| value.vector())
+                                                {
+                                                    vector = Some(vec);
+                                                }
 
-                                                    Some(NodeEnum::AConst(a_const)) => {
-                                                        if let Some(a_const::Val::Sval(string)) =
-                                                            &a_const.val
-                                                        {
-                                                            vector = Vector::try_from(
-                                                                string.sval.as_str(),
-                                                            )
-                                                            .ok();
-                                                        }
-                                                    }
-                                                    _ => continue,
+                                                if let Ok(col) = Column::try_from(&e.node) {
+                                                    column = Some(col.name.to_owned());
                                                 }
                                             }
 

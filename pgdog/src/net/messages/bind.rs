@@ -7,6 +7,7 @@ use super::code;
 use super::prelude::*;
 use super::Error;
 use super::FromDataType;
+use super::Vector;
 
 use std::cmp::max;
 use std::str::from_utf8;
@@ -55,6 +56,11 @@ impl ParameterWithFormat<'_> {
 
     /// Get UUID, if one is encoded in the field.
     pub fn uuid(&self) -> Option<Uuid> {
+        Self::decode(self)
+    }
+
+    /// Get vector, if one is encoded in the field.
+    pub fn vector(&self) -> Option<Vector> {
         Self::decode(self)
     }
 

@@ -1,6 +1,6 @@
 //! Column name reference.
 
-use pg_query::{Node, NodeEnum};
+use pg_query::{protobuf::String as PgQueryString, Node, NodeEnum};
 
 /// Column name extracted from a query.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -13,10 +13,32 @@ impl<'a> TryFrom<&'a Node> for Column<'a> {
     type Error = ();
 
     fn try_from(value: &'a Node) -> Result<Self, Self::Error> {
-        if let Some(NodeEnum::ResTarget(res_target)) = &value.node {
-            return Ok(Self {
-                name: res_target.name.as_str(),
-            });
+        Column::try_from(&value.node)
+    }
+}
+
+impl<'a> TryFrom<&'a Option<NodeEnum>> for Column<'a> {
+    type Error = ();
+
+    fn try_from(value: &'a Option<NodeEnum>) -> Result<Self, Self::Error> {
+        match value {
+            Some(NodeEnum::ResTarget(res_target)) => {
+                return Ok(Self {
+                    name: res_target.name.as_str(),
+                });
+            }
+
+            Some(NodeEnum::ColumnRef(column_ref)) => {
+                if let Some(node) = column_ref.fields.last() {
+                    if let Some(NodeEnum::String(PgQueryString { sval })) = &node.node {
+                        return Ok(Self {
+                            name: sval.as_str(),
+                        });
+                    }
+                }
+            }
+
+            _ => return Err(()),
         }
 
         Err(())
