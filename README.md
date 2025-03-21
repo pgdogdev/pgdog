@@ -1,6 +1,6 @@
 <p align="center">
     <img src="/.github/logo-white.png" height="128" width="auto">
-</center>
+</p>
 
 [![CI](https://github.com/levkk/pgdog/actions/workflows/ci.yml/badge.svg)](https://github.com/levkk/pgdog/actions/workflows/ci.yml)
 
