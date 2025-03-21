@@ -149,7 +149,7 @@ pub struct Config {
 }
 
 impl Config {
-    /// Organize all databases by name for quicker retrival.
+    /// Organize all databases by name for quicker retrieval.
     pub fn databases(&self) -> HashMap<String, Vec<Vec<Database>>> {
         let mut databases = HashMap::new();
         for database in &self.databases {

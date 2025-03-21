@@ -1,4 +1,4 @@
-//! Get all table defintions.
+//! Get all table definitions.
 use super::Error;
 use crate::{backend::Server, net::messages::DataRow};
 use std::collections::HashMap;

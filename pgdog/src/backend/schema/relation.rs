@@ -41,7 +41,7 @@ impl From<DataRow> for Relation {
 }
 
 impl Relation {
-    /// Load relations and their columsn.
+    /// Load relations and their columns.
     pub async fn load(server: &mut Server) -> Result<Vec<Relation>, Error> {
         let mut relations: HashMap<_, _> = server
             .fetch_all::<Relation>(TABLES)
