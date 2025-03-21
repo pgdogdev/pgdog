@@ -193,8 +193,8 @@ pub enum BufferedQuery {
 impl BufferedQuery {
     pub fn query(&self) -> &str {
         match self {
-            Self::Query(query) => &query,
-            Self::Prepared(query) => &query,
+            Self::Query(query) => query,
+            Self::Prepared(query) => query,
         }
     }
 }
