@@ -38,7 +38,6 @@ host = "127.0.0.1"
 database_name = "shard_1"
 shard = 1
 
-
 #
 # Read/write access to theses tables will be automatically
 # sharded.
@@ -47,12 +46,23 @@ shard = 1
 database = "pgdog_sharded"
 table = "sharded"
 column = "id"
+primary = true
 
 [[sharded_tables]]
 database = "pgdog_sharded"
 table = "users"
 column = "id"
 primary = true
+
+# [[sharded_tables]]
+# database = "pgdog_sharded"
+# table = "vectors"
+# column = "embedding"
+# primary = true
+# centroids = [[
+#     [1, 2, 3],
+#     [100, 200, 300],
+# ]]
 
 #
 # ActiveRecord sends these queries

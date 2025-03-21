@@ -14,11 +14,11 @@ pub struct Shard {
 impl Shard {
     /// Create new shard connection pool.
     pub fn new(
-        primary: Option<PoolConfig>,
+        primary: &Option<PoolConfig>,
         replicas: &[PoolConfig],
         lb_strategy: LoadBalancingStrategy,
     ) -> Self {
-        let primary = primary.map(Pool::new);
+        let primary = primary.as_ref().map(Pool::new);
         let replicas = Replicas::new(replicas, lb_strategy);
 
         Self { primary, replicas }

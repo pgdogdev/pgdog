@@ -10,7 +10,7 @@ pub mod server;
 pub mod stats;
 
 pub use error::Error;
-pub use pool::{Cluster, Pool, Replicas, Shard};
+pub use pool::{Cluster, ClusterShardConfig, Pool, Replicas, Shard, ShardingSchema};
 pub use prepared_statements::PreparedStatements;
 pub use replication::ShardedTables;
 pub use schema::Schema;

@@ -12,11 +12,13 @@ pub mod text;
 pub mod timestamp;
 pub mod timestamptz;
 pub mod uuid;
+pub mod vector;
 
 pub use interval::Interval;
 pub use numeric::Numeric;
 pub use timestamp::Timestamp;
 pub use timestamptz::TimestampTz;
+pub use vector::Vector;
 
 pub trait FromDataType: Sized + PartialOrd + Ord + PartialEq {
     fn decode(bytes: &[u8], encoding: Format) -> Result<Self, Error>;
@@ -43,6 +45,10 @@ pub enum Datum {
     Uuid(Uuid),
     /// NUMERIC, REAL, DOUBLE PRECISION.
     Numeric(Numeric),
+    /// Vector
+    Vector(Vector),
+    /// We don't know.
+    Unknown(Bytes),
     /// NULL.
     Null,
 }
@@ -61,6 +67,8 @@ impl ToDataRowColumn for Datum {
             TimestampTz(tz) => tz.to_data_row_column(),
             Uuid(uuid) => uuid.to_data_row_column(),
             Numeric(num) => num.to_data_row_column(),
+            Vector(vector) => vector.to_data_row_column(),
+            Unknown(bytes) => bytes.clone().into(),
             Null => Data::null(),
         }
     }
@@ -102,7 +110,8 @@ impl Datum {
             DataType::Uuid => Ok(Datum::Uuid(Uuid::decode(bytes, encoding)?)),
             DataType::Timestamp => Ok(Datum::Timestamp(Timestamp::decode(bytes, encoding)?)),
             DataType::TimestampTz => Ok(Datum::TimestampTz(TimestampTz::decode(bytes, encoding)?)),
-            _ => Ok(Datum::Null),
+            DataType::Vector => Ok(Datum::Vector(Vector::decode(bytes, encoding)?)),
+            _ => Ok(Datum::Unknown(Bytes::copy_from_slice(bytes))),
         }
     }
 
@@ -128,4 +137,5 @@ pub enum DataType {
     Numeric,
     Other(i32),
     Uuid,
+    Vector,
 }

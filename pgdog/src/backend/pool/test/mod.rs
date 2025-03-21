@@ -20,7 +20,7 @@ pub fn pool() -> Pool {
         ..Default::default()
     };
 
-    let pool = Pool::new(PoolConfig {
+    let pool = Pool::new(&PoolConfig {
         address: Address {
             host: "127.0.0.1".into(),
             port: 5432,

@@ -69,17 +69,17 @@ impl Buffer {
     }
 
     /// If this buffer contains a query, retrieve it.
-    pub fn query(&self) -> Result<Option<String>, Error> {
+    pub fn query(&self) -> Result<Option<BufferedQuery>, Error> {
         for message in &self.buffer {
             match message.code() {
                 'Q' => {
                     let query = Query::from_bytes(message.to_bytes()?)?;
-                    return Ok(Some(query.query));
+                    return Ok(Some(BufferedQuery::Query(query.query)));
                 }
 
                 'P' => {
                     let parse = Parse::from_bytes(message.to_bytes()?)?;
-                    return Ok(Some(parse.query));
+                    return Ok(Some(BufferedQuery::Prepared(parse.query)));
                 }
 
                 'B' => {
@@ -88,7 +88,8 @@ impl Buffer {
                         return Ok(PreparedStatements::global()
                             .lock()
                             .query(&bind.statement)
-                            .cloned());
+                            .cloned()
+                            .map(BufferedQuery::Prepared));
                     }
                 }
 
@@ -98,7 +99,8 @@ impl Buffer {
                         return Ok(PreparedStatements::global()
                             .lock()
                             .query(&describe.statement)
-                            .cloned());
+                            .cloned()
+                            .map(BufferedQuery::Prepared));
                     }
                 }
 
@@ -183,8 +185,24 @@ impl DerefMut for Buffer {
     }
 }
 
-#[derive(Debug)]
-pub struct PreparedStatementRequest {
-    pub name: String,
-    pub is_new: bool,
+pub enum BufferedQuery {
+    Query(String),
+    Prepared(String),
+}
+
+impl BufferedQuery {
+    pub fn query(&self) -> &str {
+        match self {
+            Self::Query(query) => query,
+            Self::Prepared(query) => query,
+        }
+    }
+}
+
+impl Deref for BufferedQuery {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        self.query()
+    }
 }

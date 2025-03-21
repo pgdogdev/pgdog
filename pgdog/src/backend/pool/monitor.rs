@@ -34,7 +34,7 @@
 
 use std::time::{Duration, Instant};
 
-use super::{Error, Guard, Healtcheck, Pool};
+use super::{Error, Guard, Healtcheck, Oids, Pool, Request};
 use crate::backend::Server;
 use crate::net::messages::BackendKeyData;
 
@@ -95,7 +95,7 @@ impl Monitor {
 
             select! {
                 // A client is requesting a connection and no idle
-                // connections are availble.
+                // connections are available.
                 _ = comms.request.notified() => {
                     let (
                         idle,
@@ -261,6 +261,20 @@ impl Monitor {
         }
 
         ok
+    }
+
+    #[allow(dead_code)]
+    async fn fetch_oids(pool: &Pool) -> Result<(), Error> {
+        if pool.lock().oids.is_none() {
+            let oids = Oids::load(&mut pool.get(&Request::default()).await?)
+                .await
+                .ok();
+            if let Some(oids) = oids {
+                pool.lock().oids = Some(oids);
+            }
+        }
+
+        Ok(())
     }
 
     /// Perform a periodic healthcheck on the pool.

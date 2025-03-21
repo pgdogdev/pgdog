@@ -34,7 +34,7 @@ impl Replicas {
     /// Create new replicas pools.
     pub fn new(addrs: &[PoolConfig], lb_strategy: LoadBalancingStrategy) -> Replicas {
         Self {
-            pools: addrs.iter().map(|p| Pool::new(p.clone())).collect(),
+            pools: addrs.iter().map(Pool::new).collect(),
             checkout_timeout: Duration::from_millis(5_000),
             round_robin: Arc::new(AtomicUsize::new(0)),
             lb_strategy,

@@ -32,11 +32,25 @@ pub struct Cluster {
     replication_sharding: Option<String>,
 }
 
+/// Sharding configuration from the cluster.
+#[derive(Debug, Clone, Default)]
+pub struct ShardingSchema {
+    /// Number of shards.
+    pub shards: usize,
+    /// Sharded tables.
+    pub tables: ShardedTables,
+}
+
+pub struct ClusterShardConfig {
+    pub primary: Option<PoolConfig>,
+    pub replicas: Vec<PoolConfig>,
+}
+
 impl Cluster {
     /// Create new cluster of shards.
     pub fn new(
         name: &str,
-        shards: &[(Option<PoolConfig>, Vec<PoolConfig>)],
+        shards: &[ClusterShardConfig],
         lb_strategy: LoadBalancingStrategy,
         password: &str,
         pooler_mode: PoolerMode,
@@ -46,7 +60,7 @@ impl Cluster {
         Self {
             shards: shards
                 .iter()
-                .map(|addr| Shard::new(addr.0.clone(), &addr.1, lb_strategy))
+                .map(|config| Shard::new(&config.primary, &config.replicas, lb_strategy))
                 .collect(),
             name: name.to_owned(),
             password: password.to_owned(),
@@ -191,6 +205,14 @@ impl Cluster {
             .as_ref()
             .and_then(|database| databases().replication(database))
     }
+
+    /// Get all data required for sharding.
+    pub fn sharding_schema(&self) -> ShardingSchema {
+        ShardingSchema {
+            shards: self.shards.len(),
+            tables: self.sharded_tables.clone(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -210,6 +232,7 @@ mod test {
                     name: Some("sharded".into()),
                     column: "id".into(),
                     primary: true,
+                    centroids: vec![],
                 }]),
                 shards: vec![Shard::default(), Shard::default()],
                 ..Default::default()

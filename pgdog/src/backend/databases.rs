@@ -15,7 +15,7 @@ use crate::{
 use super::{
     pool::{Address, Config},
     replication::ReplicationConfig,
-    Cluster, Error, ShardedTables,
+    Cluster, ClusterShardConfig, Error, ShardedTables,
 };
 
 static DATABASES: Lazy<ArcSwap<Databases>> =
@@ -217,7 +217,8 @@ pub fn from_config(config: &ConfigAndUsers) -> Databases {
                         config: Config::new(general, replica, user),
                     })
                     .collect::<Vec<_>>();
-                shard_configs.push((primary, replicas));
+
+                shard_configs.push(ClusterShardConfig { primary, replicas });
             }
 
             let sharded_tables = sharded_tables

@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 use tracing::info;
 use tracing::warn;
 
+use crate::net::messages::Vector;
 use crate::util::random_string;
 
 static CONFIG: Lazy<ArcSwap<ConfigAndUsers>> =
@@ -528,6 +529,9 @@ pub struct ShardedTable {
     /// This table is the primary sharding anchor (e.g. "users").
     #[serde(default)]
     pub primary: bool,
+    /// Centroids for vector sharding.
+    #[serde(default)]
+    pub centroids: Vec<Vector>,
 }
 
 /// Queries with manual routing rules.

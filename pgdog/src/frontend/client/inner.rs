@@ -40,8 +40,9 @@ impl Inner {
 
         // Configure replication mode.
         if client.shard.is_some() {
-            if let Some(config) = backend.cluster()?.replication_sharding_config() {
-                backend.replication_mode(client.shard, &config)?;
+            let cluster = backend.cluster()?;
+            if let Some(config) = cluster.replication_sharding_config() {
+                backend.replication_mode(client.shard, &config, &cluster.sharding_schema())?;
                 router.replication_mode();
                 debug!("logical replication sharding [{}]", client.addr);
             }
