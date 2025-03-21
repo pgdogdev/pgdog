@@ -50,7 +50,9 @@ primary = true
 
 [[sharded_tables]]
 database = "pgdog_sharded"
-column = "user_id"
+table = "users"
+column = "id"
+primary = true
 
 # [[sharded_tables]]
 # database = "pgdog_sharded"
