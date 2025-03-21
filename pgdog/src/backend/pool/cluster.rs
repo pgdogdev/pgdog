@@ -3,7 +3,7 @@
 use crate::{
     backend::{databases::databases, replication::ReplicationConfig, ShardedTables},
     config::{PoolerMode, ShardedTable},
-    net::messages::{BackendKeyData, Vector},
+    net::messages::BackendKeyData,
 };
 
 use super::{Address, Config, Error, Guard, Request, Shard};
@@ -37,35 +37,13 @@ pub struct Cluster {
 pub struct ShardingSchema {
     /// Number of shards.
     pub shards: usize,
-    /// Vector centroids.
-    pub centroids: Vec<Option<Vector>>,
     /// Sharded tables.
     pub tables: ShardedTables,
-}
-
-impl ShardingSchema {
-    pub fn shard_by_distance_l2(&self, vector: &Vector) -> Option<usize> {
-        let mut shard = None;
-        let mut min_distance = f64::MAX;
-
-        for (i, c) in self.centroids.iter().enumerate() {
-            if let Some(c) = c {
-                let distance = vector.distance_l2(c);
-                if distance < min_distance {
-                    min_distance = distance;
-                    shard = Some(i);
-                }
-            }
-        }
-
-        shard
-    }
 }
 
 pub struct ClusterShardConfig {
     pub primary: Option<PoolConfig>,
     pub replicas: Vec<PoolConfig>,
-    pub centroid: Option<Vector>,
 }
 
 impl Cluster {
@@ -82,14 +60,7 @@ impl Cluster {
         Self {
             shards: shards
                 .iter()
-                .map(|config| {
-                    Shard::new(
-                        &config.primary,
-                        &config.replicas,
-                        lb_strategy,
-                        config.centroid.clone(),
-                    )
-                })
+                .map(|config| Shard::new(&config.primary, &config.replicas, lb_strategy))
                 .collect(),
             name: name.to_owned(),
             password: password.to_owned(),
@@ -239,7 +210,6 @@ impl Cluster {
     pub fn sharding_schema(&self) -> ShardingSchema {
         ShardingSchema {
             shards: self.shards.len(),
-            centroids: self.shards().iter().map(|s| s.centroid().clone()).collect(),
             tables: self.sharded_tables.clone(),
         }
     }
@@ -262,6 +232,7 @@ mod test {
                     name: Some("sharded".into()),
                     column: "id".into(),
                     primary: true,
+                    centroids: vec![],
                 }]),
                 shards: vec![Shard::default(), Shard::default()],
                 ..Default::default()

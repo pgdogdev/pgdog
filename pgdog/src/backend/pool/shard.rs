@@ -12,7 +12,6 @@ use super::{Error, Guard, Pool, PoolConfig, Replicas, Request};
 pub struct Shard {
     pub(super) primary: Option<Pool>,
     pub(super) replicas: Replicas,
-    pub(super) centroid: Option<Vector>,
 }
 
 impl Shard {
@@ -21,16 +20,11 @@ impl Shard {
         primary: &Option<PoolConfig>,
         replicas: &[PoolConfig],
         lb_strategy: LoadBalancingStrategy,
-        centroid: Option<Vector>,
     ) -> Self {
         let primary = primary.as_ref().map(Pool::new);
         let replicas = Replicas::new(replicas, lb_strategy);
 
-        Self {
-            primary,
-            replicas,
-            centroid,
-        }
+        Self { primary, replicas }
     }
 
     /// Get a connection to the shard primary database.
@@ -60,7 +54,6 @@ impl Shard {
         Self {
             primary: self.primary.as_ref().map(|primary| primary.duplicate()),
             replicas: self.replicas.duplicate(),
-            centroid: self.centroid.clone(),
         }
     }
 
@@ -93,10 +86,5 @@ impl Shard {
     /// Shutdown all pools, taking the shard offline.
     pub fn shutdown(&self) {
         self.pools().iter().for_each(|pool| pool.shutdown());
-    }
-
-    /// Get the shard vector centroid.
-    pub fn centroid(&self) -> &Option<Vector> {
-        &self.centroid
     }
 }

@@ -34,10 +34,10 @@ pub fn shard_int(value: i64, schema: &ShardingSchema) -> usize {
 /// from RowDescription in here to avoid guessing.
 pub fn shard_str(value: &str, schema: &ShardingSchema) -> Option<usize> {
     let shards = schema.shards;
-    if value.starts_with('[') {
+    if value.starts_with('[') && value.ends_with(']') {
         let vector = Vector::decode(value.as_bytes(), Format::Text).ok();
-        if let Some(vector) = vector {
-            return schema.shard_by_distance_l2(&vector);
+        if let Some(_vector) = vector {
+            // TODO: make sharding work.
         }
     }
     Some(match value.parse::<i64>() {
@@ -47,30 +47,4 @@ pub fn shard_str(value: &str, schema: &ShardingSchema) -> Option<usize> {
             Err(_) => return None,
         },
     })
-}
-
-/// Shard by vector.
-pub fn shard_vector(value: &Vector, schema: &ShardingSchema) -> Option<usize> {
-    schema.shard_by_distance_l2(value)
-}
-
-#[cfg(test)]
-mod test {
-    use super::*;
-
-    #[test]
-    fn test_shard_str() {
-        let schema = ShardingSchema {
-            shards: 2,
-            centroids: vec![
-                Some(Vector::from(&[0.0, 1.0, 2.0][..])),
-                Some(Vector::from(&[1.0, 2.0, 3.0][..])),
-            ],
-            ..Default::default()
-        };
-        let shard = shard_str("[1,2,3]", &schema);
-        assert_eq!(shard, Some(1));
-        let shard = shard_str("[0.0,0.5,0.1]", &schema);
-        assert_eq!(shard, Some(0));
-    }
 }

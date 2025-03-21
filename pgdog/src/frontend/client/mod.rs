@@ -209,7 +209,7 @@ impl Client {
 
         #[cfg(debug_assertions)]
         if let Some(query) = buffer.query()? {
-            debug!("{} [{}]", query, self.addr);
+            debug!("{} [{}]", query.query(), self.addr);
             QueryLogger::new(&buffer).log().await?;
         }
 

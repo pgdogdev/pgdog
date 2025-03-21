@@ -31,14 +31,12 @@ name = "pgdog_sharded"
 host = "127.0.0.1"
 database_name = "shard_0"
 shard = 0
-centroid = [0.0, 0.0, 0.0]
 
 [[databases]]
 name = "pgdog_sharded"
 host = "127.0.0.1"
 database_name = "shard_1"
 shard = 1
-centroid = [100.0, 100.0, 100.0]
 
 #
 # Read/write access to theses tables will be automatically
@@ -54,11 +52,15 @@ primary = true
 database = "pgdog_sharded"
 column = "user_id"
 
-[[sharded_tables]]
-database = "pgdog_sharded"
-table = "vectors"
-column = "embedding"
-primary = true
+# [[sharded_tables]]
+# database = "pgdog_sharded"
+# table = "vectors"
+# column = "embedding"
+# primary = true
+# centroids = [[
+#     [1, 2, 3],
+#     [100, 200, 300],
+# ]]
 
 #
 # ActiveRecord sends these queries

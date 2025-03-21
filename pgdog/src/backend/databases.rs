@@ -9,7 +9,7 @@ use once_cell::sync::Lazy;
 use crate::{
     backend::pool::PoolConfig,
     config::{config, load, ConfigAndUsers, ManualQuery, Role},
-    net::messages::{BackendKeyData, Vector},
+    net::messages::BackendKeyData,
 };
 
 use super::{
@@ -201,17 +201,13 @@ pub fn from_config(config: &ConfigAndUsers) -> Databases {
         if let Some(shards) = config_databases.get(&user.database) {
             let mut shard_configs = vec![];
             for user_databases in shards {
-                let mut centroid: Option<Vector> = None;
                 let primary =
                     user_databases
                         .iter()
                         .find(|d| d.role == Role::Primary)
-                        .map(|primary| {
-                            centroid = primary.centroid.clone();
-                            PoolConfig {
-                                address: Address::new(primary, user),
-                                config: Config::new(general, primary, user),
-                            }
+                        .map(|primary| PoolConfig {
+                            address: Address::new(primary, user),
+                            config: Config::new(general, primary, user),
                         });
                 let replicas = user_databases
                     .iter()
@@ -222,11 +218,7 @@ pub fn from_config(config: &ConfigAndUsers) -> Databases {
                     })
                     .collect::<Vec<_>>();
 
-                shard_configs.push(ClusterShardConfig {
-                    primary,
-                    replicas,
-                    centroid,
-                });
+                shard_configs.push(ClusterShardConfig { primary, replicas });
             }
 
             let sharded_tables = sharded_tables

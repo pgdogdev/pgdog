@@ -75,6 +75,7 @@ impl Buffer {
 
                 let ordering = match (left, right) {
                     (Ok(Some(left)), Ok(Some(right))) => {
+                        // Handle the special vector case.
                         if let OrderBy::AscVectorL2(_, vector) = col {
                             let left: Option<Vector> = left.value.try_into().ok();
                             let right: Option<Vector> = right.value.try_into().ok();

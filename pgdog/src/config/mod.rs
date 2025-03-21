@@ -389,8 +389,6 @@ pub struct Database {
     // Maximum number of connections to this database from this pooler.
     // #[serde(default = "Database::max_connections")]
     // pub max_connections: usize,
-    /// Centroid used for a vector index.
-    pub centroid: Option<Vector>,
 }
 
 impl Database {
@@ -531,6 +529,9 @@ pub struct ShardedTable {
     /// This table is the primary sharding anchor (e.g. "users").
     #[serde(default)]
     pub primary: bool,
+    /// Centroids for vector sharding.
+    #[serde(default)]
+    pub centroids: Vec<Vector>,
 }
 
 /// Queries with manual routing rules.

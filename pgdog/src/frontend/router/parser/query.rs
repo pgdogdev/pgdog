@@ -1,9 +1,13 @@
 //! Route queries to correct shards.
-use std::collections::{BTreeSet, HashSet};
+use std::{
+    collections::{BTreeSet, HashSet},
+    sync::Arc,
+};
 
 use crate::{
     backend::{databases::databases, Cluster, ShardingSchema},
     frontend::{
+        buffer::BufferedQuery,
         router::{parser::OrderBy, round_robin, sharding::shard_str, CopyRow},
         Buffer,
     },
@@ -14,7 +18,7 @@ use super::{Aggregate, Cache, Column, CopyParser, Error, Insert, Key, Route, Val
 
 use once_cell::sync::Lazy;
 use pg_query::{
-    fingerprint,
+    fingerprint, parse,
     protobuf::{a_const::Val, *},
     NodeEnum,
 };
@@ -86,7 +90,7 @@ impl QueryParser {
 
     fn query(
         &self,
-        query: &str,
+        query: &BufferedQuery,
         cluster: &Cluster,
         params: Option<Bind>,
     ) -> Result<Command, Error> {
@@ -127,9 +131,13 @@ impl QueryParser {
             }
         }
 
-        let ast = Cache::get().parse(query).map_err(Error::PgQuery)?;
+        let ast = match query {
+            BufferedQuery::Prepared(query) => Cache::get().parse(query).map_err(Error::PgQuery)?,
+            // Don't cache simple queries, they contain parameter values.
+            BufferedQuery::Query(query) => Arc::new(parse(query).map_err(Error::PgQuery)?),
+        };
 
-        debug!("{}", query);
+        debug!("{}", query.query());
         trace!("{:#?}", ast);
 
         let stmt = ast.protobuf.stmts.first().ok_or(Error::EmptyQuery)?;
@@ -200,13 +208,6 @@ impl QueryParser {
     ) -> Result<Command, Error> {
         let order_by = Self::select_sort(&stmt.sort_clause, &params);
         let mut shards = HashSet::new();
-        for order in &order_by {
-            if let Some(vector) = order.vector() {
-                if let Some(shard) = sharding_schema.shard_by_distance_l2(vector) {
-                    shards.insert(shard);
-                }
-            }
-        }
         let table_name = stmt
             .from_clause
             .first()
@@ -311,11 +312,21 @@ impl QueryParser {
                                             for e in
                                                 [&expr.lexpr, &expr.rexpr].iter().copied().flatten()
                                             {
-                                                if let Ok(Some(vec)) = Value::try_from(&e.node)
-                                                    .map(|value| value.vector())
-                                                {
-                                                    vector = Some(vec);
-                                                }
+                                                if let Ok(vec) = Value::try_from(&e.node) {
+                                                    match vec {
+                                                        Value::Placeholder(p) => {
+                                                            if let Some(bind) = params {
+                                                                if let Ok(Some(param)) =
+                                                                    bind.parameter((p - 1) as usize)
+                                                                {
+                                                                    vector = param.vector();
+                                                                }
+                                                            }
+                                                        }
+                                                        Value::Vector(vec) => vector = Some(vec),
+                                                        _ => (),
+                                                    }
+                                                };
 
                                                 if let Ok(col) = Column::try_from(&e.node) {
                                                     column = Some(col.name.to_owned());
@@ -464,6 +475,53 @@ mod test {
         let command = parser.parse(&buffer, &cluster).unwrap();
         if let Command::Query(route) = command {
             assert_eq!(route.shard(), Some(1));
+        } else {
+            panic!("not a route");
+        }
+    }
+
+    #[test]
+    fn test_order_by_vector() {
+        let query = Query::new("SELECT * FROM embeddings ORDER BY embedding <-> '[1,2,3]'");
+        let buffer = Buffer::from(vec![query.message().unwrap()]);
+        let route = QueryParser::default()
+            .parse(&buffer, &Cluster::default())
+            .unwrap()
+            .clone();
+        if let Command::Query(route) = route {
+            let order_by = route.order_by().first().unwrap();
+            assert!(order_by.asc());
+            assert_eq!(
+                order_by.vector().unwrap(),
+                &Vector::from(&[1.0, 2.0, 3.0][..])
+            );
+        } else {
+            panic!("not a route");
+        }
+
+        let query = Parse::new_anonymous("SELECT * FROM embeddings ORDER BY embedding  <-> $1");
+        let bind = Bind {
+            portal: "".into(),
+            statement: "".into(),
+            codes: vec![],
+            params: vec![Parameter {
+                len: 7,
+                data: "[4,5,6]".as_bytes().to_vec(),
+            }],
+            results: vec![],
+        };
+        let buffer = Buffer::from(vec![query.message().unwrap(), bind.message().unwrap()]);
+        let route = QueryParser::default()
+            .parse(&buffer, &Cluster::default())
+            .unwrap()
+            .clone();
+        if let Command::Query(query) = route {
+            let order_by = query.order_by().first().unwrap();
+            assert!(order_by.asc());
+            assert_eq!(
+                order_by.vector().unwrap(),
+                &Vector::from(&[4.0, 5.0, 6.0][..])
+            );
         } else {
             panic!("not a route");
         }
