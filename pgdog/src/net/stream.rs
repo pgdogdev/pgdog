@@ -83,6 +83,11 @@ impl Stream {
         Self::Tls(BufStream::new(stream))
     }
 
+    /// This is a TLS stream.
+    pub fn is_tls(&self) -> bool {
+        matches!(self, Self::Tls(_))
+    }
+
     /// Get peer address if any. We're not using UNIX sockets (yet)
     /// so the peer address should always be available.
     pub fn peer_addr(&self) -> PeerAddr {

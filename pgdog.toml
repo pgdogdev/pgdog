@@ -9,6 +9,8 @@ shutdown_timeout = 5_000
 # query_log = "queries.txt"
 # broadcast_address = "224.0.0.1"
 # broadcast_port = 6435
+# tls_certificate = "pgdog/tests/tls/cert.pem"
+# tls_private_key = "pgdog/tests/tls/key.pem"
 
 #
 # Admin database password.

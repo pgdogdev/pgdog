@@ -7,14 +7,14 @@ use tokio::{select, spawn};
 use tracing::{debug, error, info, trace};
 
 use super::{Buffer, Command, Comms, Error, PreparedStatements};
-use crate::auth::scram::Server;
+use crate::auth::{md5, scram::Server};
 use crate::backend::pool::{Connection, Request};
 use crate::config::config;
 #[cfg(debug_assertions)]
 use crate::frontend::QueryLogger;
 use crate::net::messages::{
-    Authentication, BackendKeyData, CommandComplete, ErrorResponse, Message, ParseComplete,
-    Protocol, ReadyForQuery,
+    Authentication, BackendKeyData, CommandComplete, ErrorResponse, FromBytes, Message,
+    ParseComplete, Password, Protocol, ReadyForQuery, ToBytes,
 };
 use crate::net::{parameter::Parameters, Stream};
 
@@ -67,14 +67,28 @@ impl Client {
             conn.cluster()?.password()
         };
 
-        stream.send_flush(Authentication::scram()).await?;
-
-        let scram = Server::new(password);
-        if let Ok(true) = scram.handle(&mut stream).await {
-            stream.send(Authentication::Ok).await?;
+        let auth_ok = if stream.is_tls() {
+            let md5 = md5::Client::new(user, password);
+            stream.send_flush(md5.challenge()).await?;
+            let password = Password::from_bytes(stream.read().await?.to_bytes()?)?;
+            if let Password::PasswordMessage { response } = password {
+                md5.check(&response)
+            } else {
+                false
+            }
         } else {
+            stream.send_flush(Authentication::scram()).await?;
+
+            let scram = Server::new(password);
+            let res = scram.handle(&mut stream).await;
+            matches!(res, Ok(true))
+        };
+
+        if !auth_ok {
             stream.fatal(ErrorResponse::auth(user, database)).await?;
             return Ok(());
+        } else {
+            stream.send(Authentication::Ok).await?;
         }
 
         // Check if the pooler is shutting down.
