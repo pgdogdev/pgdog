@@ -2,6 +2,7 @@ pub mod discovery;
 pub mod error;
 pub mod messages;
 pub mod parameter;
+pub mod parameter_diff;
 pub mod stream;
 pub mod tls;
 

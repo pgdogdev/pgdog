@@ -256,7 +256,7 @@ impl Pool {
     pub(super) fn startup_parameters(&self) -> Vec<Parameter> {
         let mut params = vec![Parameter {
             name: "application_name".into(),
-            value: "pgDog".into(),
+            value: "PgDog".into(),
         }];
 
         let config = *self.lock().config();
