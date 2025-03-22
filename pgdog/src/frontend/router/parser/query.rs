@@ -8,7 +8,12 @@ use crate::{
     backend::{databases::databases, Cluster, ShardingSchema},
     frontend::{
         buffer::BufferedQuery,
-        router::{parser::OrderBy, round_robin, sharding::shard_str, CopyRow},
+        router::{
+            parser::OrderBy,
+            round_robin,
+            sharding::{shard_param, shard_value},
+            CopyRow,
+        },
         Buffer,
     },
     net::messages::{Bind, CopyData, Vector},
@@ -230,7 +235,8 @@ impl QueryParser {
                 for key in keys {
                     match key {
                         Key::Constant(value) => {
-                            if let Some(shard) = shard_str(&value, sharding_schema) {
+                            if let Some(shard) = shard_value(&value, table, sharding_schema.shards)
+                            {
                                 shards.insert(shard);
                             }
                         }
@@ -238,11 +244,10 @@ impl QueryParser {
                         Key::Parameter(param) => {
                             if let Some(ref params) = params {
                                 if let Some(param) = params.parameter(param)? {
-                                    // TODO: Handle binary encoding.
-                                    if let Some(text) = param.text() {
-                                        if let Some(shard) = shard_str(text, sharding_schema) {
-                                            shards.insert(shard);
-                                        }
+                                    if let Some(shard) =
+                                        shard_param(&param, table, sharding_schema.shards)
+                                    {
+                                        shards.insert(shard);
                                     }
                                 }
                             }

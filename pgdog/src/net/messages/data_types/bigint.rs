@@ -4,9 +4,12 @@ use crate::net::messages::DataRow;
 use bytes::{Buf, Bytes};
 
 impl FromDataType for i64 {
-    fn decode(mut bytes: &[u8], encoding: Format) -> Result<Self, Error> {
+    fn decode(bytes: &[u8], encoding: Format) -> Result<Self, Error> {
         match encoding {
-            Format::Binary => Ok(bytes.get_i64()),
+            Format::Binary => {
+                let bytes: [u8; 8] = bytes.try_into()?;
+                Ok(bytes.as_slice().get_i64())
+            }
 
             Format::Text => {
                 let s = String::decode(bytes, Format::Text)?;

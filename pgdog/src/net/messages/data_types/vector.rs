@@ -5,7 +5,7 @@ use crate::{
         Error,
     },
 };
-use bytes::Bytes;
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 use serde::{
     de::{self, Visitor},
     ser::SerializeSeq,
@@ -22,9 +22,15 @@ pub struct Vector {
 }
 
 impl FromDataType for Vector {
-    fn decode(bytes: &[u8], encoding: Format) -> Result<Self, Error> {
+    fn decode(mut bytes: &[u8], encoding: Format) -> Result<Self, Error> {
         match encoding {
-            Format::Binary => Err(Error::NotTextEncoding),
+            Format::Binary => {
+                let mut values = vec![];
+                while bytes.len() >= std::mem::size_of::<f32>() {
+                    values.push(bytes.get_f32());
+                }
+                Ok(values.into())
+            }
             Format::Text => {
                 let no_brackets = &bytes[1..bytes.len() - 1];
                 let floats = no_brackets
@@ -48,7 +54,13 @@ impl FromDataType for Vector {
                     .collect::<Vec<_>>()
                     .join(",")
             ))),
-            Format::Binary => Err(Error::NotTextEncoding),
+            Format::Binary => {
+                let mut bytes = BytesMut::new();
+                for n in &self.values {
+                    bytes.put_f32(**n as f32); // TODO: potential loss of precision. Vectors should be f32's.
+                }
+                Ok(bytes.freeze())
+            }
         }
     }
 }
@@ -96,6 +108,22 @@ impl From<&[f32]> for Vector {
     fn from(value: &[f32]) -> Self {
         Self {
             values: value.iter().map(|v| Numeric::from(*v)).collect(),
+        }
+    }
+}
+
+impl From<Vec<f32>> for Vector {
+    fn from(value: Vec<f32>) -> Self {
+        Self {
+            values: value.into_iter().map(Numeric::from).collect(),
+        }
+    }
+}
+
+impl From<Vec<f64>> for Vector {
+    fn from(value: Vec<f64>) -> Self {
+        Self {
+            values: value.into_iter().map(Numeric::from).collect(),
         }
     }
 }
@@ -183,5 +211,14 @@ mod test {
         assert_eq!(vector.values[2], 3.0.into());
         let b = vector.encode(Format::Text).unwrap();
         assert_eq!(&b, &"[1,2,3]");
+
+        let mut v = vec![];
+        v.extend(1.0_f32.to_be_bytes());
+        v.extend(2.0_f32.to_be_bytes());
+        v.extend(3.0_f32.to_be_bytes());
+        let vector = Vector::decode(v.as_slice(), Format::Binary).unwrap();
+        assert_eq!(vector.values[0], 1.0.into());
+        assert_eq!(vector.values[1], 2.0.into());
+        assert_eq!(vector.values[2], 3.0.into());
     }
 }

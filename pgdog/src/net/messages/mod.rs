@@ -12,6 +12,7 @@ pub mod error_response;
 pub mod flush;
 pub mod hello;
 pub mod notice_response;
+pub mod parameter_description;
 pub mod parameter_status;
 pub mod parse;
 pub mod parse_complete;
@@ -36,6 +37,7 @@ pub use error_response::ErrorResponse;
 pub use flush::Flush;
 pub use hello::Startup;
 pub use notice_response::NoticeResponse;
+pub use parameter_description::ParameterDescription;
 pub use parameter_status::ParameterStatus;
 pub use parse::Parse;
 pub use parse_complete::ParseComplete;
@@ -124,6 +126,10 @@ impl std::fmt::Debug for Message {
             'd' => CopyData::from_bytes(self.payload()).unwrap().fmt(f),
             'W' => f.debug_struct("CopyBothResponse").finish(),
             'I' => f.debug_struct("EmptyQueryResponse").finish(),
+            't' => ParameterDescription::from_bytes(self.payload())
+                .unwrap()
+                .fmt(f),
+            'H' => f.debug_struct("Flush").finish(),
             _ => f
                 .debug_struct("Message")
                 .field("payload", &self.payload())

@@ -21,8 +21,8 @@ async def test_sharded():
 		database='pgdog_sharded',
 		host='127.0.0.1',
 		port=6432,
-		statement_cache_size=0)
-    for v in range(1):
+		statement_cache_size=500)
+    for v in range(25):
         values = await conn.fetch("SELECT * FROM sharded WHERE id = $1", v)
     await conn.close()
 

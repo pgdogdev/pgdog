@@ -532,6 +532,17 @@ pub struct ShardedTable {
     /// Centroids for vector sharding.
     #[serde(default)]
     pub centroids: Vec<Vector>,
+    /// Data type of the column.
+    #[serde(default)]
+    pub data_type: DataType,
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum DataType {
+    #[default]
+    Bigint,
+    Uuid,
 }
 
 /// Queries with manual routing rules.

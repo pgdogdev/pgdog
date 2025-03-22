@@ -4,9 +4,12 @@ use super::*;
 use bytes::{Buf, Bytes};
 
 impl FromDataType for i32 {
-    fn decode(mut bytes: &[u8], encoding: Format) -> Result<Self, Error> {
+    fn decode(bytes: &[u8], encoding: Format) -> Result<Self, Error> {
         match encoding {
-            Format::Binary => Ok(bytes.get_i32()),
+            Format::Binary => {
+                let bytes: [u8; 4] = bytes.try_into()?;
+                Ok(bytes.as_slice().get_i32())
+            }
 
             Format::Text => {
                 let s = String::decode(bytes, Format::Text)?;

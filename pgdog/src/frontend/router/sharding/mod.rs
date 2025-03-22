@@ -2,7 +2,8 @@ use uuid::Uuid;
 
 use crate::{
     backend::ShardingSchema,
-    net::messages::{Format, FromDataType, Vector},
+    config::{DataType, ShardedTable},
+    net::messages::{Format, FromDataType, ParameterWithFormat, Vector},
 };
 
 pub mod ffi;
@@ -47,4 +48,24 @@ pub fn shard_str(value: &str, schema: &ShardingSchema) -> Option<usize> {
             Err(_) => return None,
         },
     })
+}
+
+/// Shard a value that's coming out of the query text directly.
+pub fn shard_value(value: &str, table: &ShardedTable, shards: usize) -> Option<usize> {
+    match table.data_type {
+        DataType::Bigint => value.parse().map(|v| bigint(v) as usize % shards).ok(),
+        DataType::Uuid => value.parse().map(|v| uuid(v) as usize % shards).ok(),
+    }
+}
+
+/// Shard query parameter.
+pub fn shard_param(
+    value: &ParameterWithFormat,
+    table: &ShardedTable,
+    shards: usize,
+) -> Option<usize> {
+    match table.data_type {
+        DataType::Bigint => value.bigint().map(|i| bigint(i) as usize % shards),
+        DataType::Uuid => value.uuid().map(|v| uuid(v) as usize % shards),
+    }
 }

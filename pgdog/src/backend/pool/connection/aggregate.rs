@@ -31,7 +31,7 @@ impl Grouping {
 
 /// The aggregate accumulator.
 ///
-/// This transfors disttributed aggregate functions
+/// This transforms distributed aggregate functions
 /// into a single value.
 #[derive(Debug)]
 struct Accumulator<'a> {

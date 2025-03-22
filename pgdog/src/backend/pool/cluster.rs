@@ -219,7 +219,7 @@ impl Cluster {
 mod test {
     use crate::{
         backend::{Shard, ShardedTables},
-        config::ShardedTable,
+        config::{DataType, ShardedTable},
     };
 
     use super::Cluster;
@@ -233,6 +233,7 @@ mod test {
                     column: "id".into(),
                     primary: true,
                     centroids: vec![],
+                    data_type: DataType::Bigint,
                 }]),
                 shards: vec![Shard::default(), Shard::default()],
                 ..Default::default()

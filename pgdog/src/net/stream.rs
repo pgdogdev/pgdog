@@ -144,7 +144,7 @@ impl Stream {
         Ok(sent)
     }
 
-    /// Send mulitple messages and flush the buffer.
+    /// Send multiple messages and flush the buffer.
     pub async fn send_many(
         &mut self,
         messages: Vec<impl Protocol>,
