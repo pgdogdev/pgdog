@@ -7,7 +7,7 @@ pub enum Error {
     #[error("{0}")]
     PgQuery(pg_query::Error),
 
-    #[error("only CSV is suppoted for sharded copy")]
+    #[error("only CSV is supported for sharded copy")]
     OnlyCsv,
 
     #[error("no sharding column in CSV")]
@@ -30,4 +30,13 @@ pub enum Error {
 
     #[error("exceeded maximum number of rows in CSV parser")]
     MaxCsvParserRows,
+
+    #[error("{0}")]
+    Io(#[from] std::io::Error),
+
+    #[error("binary copy signature incorrect")]
+    BinaryMissingHeader,
+
+    #[error("unexpected header extension")]
+    BinaryHeaderExtension,
 }

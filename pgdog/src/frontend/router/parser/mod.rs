@@ -1,6 +1,7 @@
 //! Query parser.
 
 pub mod aggregate;
+pub mod binary;
 pub mod cache;
 pub mod column;
 pub mod comment;
