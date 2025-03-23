@@ -1,5 +1,4 @@
-name: Create and publish a Docker image
-
+name: package
 on:
   push:
     branches: ["main"]
