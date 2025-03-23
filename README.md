@@ -12,7 +12,19 @@ PgDog is a transaction pooler and logical replication manager that can shard Pos
 
 ## Quick start
 
-You can try PgDog using Docker. Install [Docker Compose](https://docs.docker.com/compose/) and run:
+### Kubernetes
+
+Helm chart is **[here](https://github.com/pgdogdev/helm)**. To install it, run:
+
+```bash
+git clone https://github.com/pgdogdev/helm && \
+cd helm && \
+helm install -f values.yaml pgdog ./
+```
+
+### Docker
+
+You can try PgDog quickly using Docker. Install [Docker Compose](https://docs.docker.com/compose/) and run:
 
 ```
 docker-compose up
