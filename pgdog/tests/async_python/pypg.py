@@ -24,6 +24,18 @@ async def test_sharded():
 		statement_cache_size=500)
     for v in range(25):
         values = await conn.fetch("SELECT * FROM sharded WHERE id = $1", v)
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS test (
+            id bigserial PRIMARY KEY,
+            num integer,
+            data text)
+        """)
+    await conn.execute("DELETE FROM test")
+    rows = []
+    for i in range(250):
+        rows.append((i, i+1, 'data'))
+    await conn.copy_records_to_table('test', records=rows, columns=['id', 'num', 'data'])
+
     await conn.close()
 
 # asyncio.run(test_asyncpg())

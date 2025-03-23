@@ -1,6 +1,7 @@
 //! Query parser.
 
 pub mod aggregate;
+pub mod binary;
 pub mod cache;
 pub mod column;
 pub mod comment;
@@ -18,6 +19,7 @@ pub mod value;
 pub mod where_clause;
 
 pub use aggregate::{Aggregate, AggregateFunction, AggregateTarget};
+pub use binary::BinaryStream;
 pub use cache::Cache;
 pub use column::Column;
 pub use copy::CopyParser;

@@ -1,4 +1,4 @@
-use super::ShardedTables;
+use super::{ShardedColumn, ShardedTables};
 
 /// Logical replication configuration.
 #[derive(Debug, Clone)]
@@ -11,7 +11,7 @@ pub struct ReplicationConfig {
 
 impl ReplicationConfig {
     /// Get the position of the sharded column in a row.
-    pub fn sharded_column(&self, table: &str, columns: &[&str]) -> Option<usize> {
+    pub fn sharded_column(&self, table: &str, columns: &[&str]) -> Option<ShardedColumn> {
         self.sharded_tables.sharded_column(table, columns)
     }
 

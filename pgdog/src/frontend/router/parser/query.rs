@@ -235,7 +235,8 @@ impl QueryParser {
                 for key in keys {
                     match key {
                         Key::Constant(value) => {
-                            if let Some(shard) = shard_value(&value, table, sharding_schema.shards)
+                            if let Some(shard) =
+                                shard_value(&value, &table.data_type, sharding_schema.shards)
                             {
                                 shards.insert(shard);
                             }
@@ -386,7 +387,7 @@ impl QueryParser {
         let mut shards = BTreeSet::new();
         if let Some(column) = sharding_column {
             for tuple in insert.tuples() {
-                if let Some(value) = tuple.get(column) {
+                if let Some(value) = tuple.get(column.position) {
                     shards.insert(if let Some(bind) = params {
                         value.shard_placeholder(bind, sharding_schema)
                     } else {
