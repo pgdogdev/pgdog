@@ -1,5 +1,5 @@
 //! Tables sharded in the database.
-use crate::config::ShardedTable;
+use crate::config::{DataType, ShardedTable};
 
 #[derive(Debug, Clone, Default)]
 pub struct ShardedTables {
@@ -21,7 +21,7 @@ impl ShardedTables {
         &self.tables
     }
 
-    pub fn sharded_column(&self, table: &str, columns: &[&str]) -> Option<usize> {
+    pub fn sharded_column(&self, table: &str, columns: &[&str]) -> Option<ShardedColumn> {
         let table = self.tables.iter().find(|sharded_table| {
             sharded_table
                 .name
@@ -31,6 +31,22 @@ impl ShardedTables {
                 && columns.contains(&sharded_table.column.as_str())
         });
 
-        table.and_then(|t| columns.iter().position(|c| *c == t.column))
+        if let Some(table) = table {
+            let position = columns.iter().position(|c| *c == table.column);
+            if let Some(position) = position {
+                return Some(ShardedColumn {
+                    data_type: table.data_type,
+                    position,
+                });
+            }
+        }
+
+        None
     }
+}
+
+#[derive(Debug, Copy, Clone)]
+pub struct ShardedColumn {
+    pub data_type: DataType,
+    pub position: usize,
 }

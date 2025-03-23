@@ -3,12 +3,15 @@
 use pg_query::{protobuf::CopyStmt, NodeEnum};
 
 use crate::{
-    backend::{Cluster, ShardingSchema},
-    frontend::router::{sharding::shard_str, CopyRow},
-    net::messages::CopyData,
+    backend::{replication::ShardedColumn, Cluster, ShardingSchema},
+    frontend::router::{
+        sharding::{shard_binary, shard_str},
+        CopyRow,
+    },
+    net::messages::{CopyData, ToBytes},
 };
 
-use super::{CsvStream, Error};
+use super::{binary::Data, BinaryStream, CsvStream, Error};
 
 /// Copy information parsed from a COPY statement.
 #[derive(Debug, Clone)]
@@ -35,6 +38,12 @@ impl Default for CopyInfo {
 }
 
 #[derive(Debug, Clone)]
+enum CopyStream {
+    Text(CsvStream),
+    Binary(BinaryStream),
+}
+
+#[derive(Debug, Clone)]
 pub struct CopyParser {
     /// CSV contains headers.
     pub headers: bool,
@@ -43,13 +52,13 @@ pub struct CopyParser {
     /// Number of shards.
     pub shards: usize,
     /// Which column is used for sharding.
-    pub sharded_column: Option<usize>,
+    pub sharded_column: Option<ShardedColumn>,
     /// Number of columns
     pub columns: usize,
     /// This is a COPY coming from the server.
     pub is_from: bool,
     /// CSV parser that can handle incomplete records.
-    csv_stream: CsvStream,
+    stream: CopyStream,
 
     sharding_schema: ShardingSchema,
 }
@@ -63,7 +72,7 @@ impl Default for CopyParser {
             shards: 1,
             columns: 0,
             is_from: false,
-            csv_stream: CsvStream::new(',', false),
+            stream: CopyStream::Text(CsvStream::new(',', false)),
             sharding_schema: ShardingSchema::default(),
         }
     }
@@ -77,6 +86,8 @@ impl CopyParser {
             is_from: stmt.is_from,
             ..Default::default()
         };
+
+        let mut binary = false;
 
         if let Some(ref rel) = stmt.relation {
             let mut columns = vec![];
@@ -96,6 +107,18 @@ impl CopyParser {
                         "format" => {
                             if let Some(ref arg) = elem.arg {
                                 if let Some(NodeEnum::String(ref string)) = arg.node {
+                                    match string.sval.to_lowercase().as_str() {
+                                        "binary" => {
+                                            binary = true;
+                                            parser.headers = true;
+                                        }
+                                        "csv" => {
+                                            if parser.delimiter.is_none() {
+                                                parser.delimiter = Some(',');
+                                            }
+                                        }
+                                        _ => (),
+                                    }
                                     if string.sval.to_lowercase().as_str() == "csv"
                                         && parser.delimiter.is_none()
                                     {
@@ -124,7 +147,11 @@ impl CopyParser {
             }
         }
 
-        parser.csv_stream = CsvStream::new(parser.delimiter(), parser.headers);
+        parser.stream = if binary {
+            CopyStream::Binary(BinaryStream::default())
+        } else {
+            CopyStream::Text(CsvStream::new(parser.delimiter(), parser.headers))
+        };
         parser.sharding_schema = cluster.sharding_schema();
 
         Ok(Some(parser))
@@ -141,29 +168,67 @@ impl CopyParser {
         let mut rows = vec![];
 
         for row in data {
-            self.csv_stream.write(row.data());
-
-            if self.headers && self.is_from {
-                let headers = self.csv_stream.headers()?;
-                if let Some(headers) = headers {
-                    rows.push(CopyRow::new(headers.to_string().as_bytes(), None));
-                }
-                self.headers = false;
+            match &mut self.stream {
+                CopyStream::Binary(stream) => stream.write(row.data()),
+                CopyStream::Text(stream) => stream.write(row.data()),
             }
 
-            for record in self.csv_stream.records() {
-                // Totally broken.
-                let record = record?;
+            match &mut self.stream {
+                CopyStream::Text(stream) => {
+                    if self.headers && self.is_from {
+                        let headers = stream.headers()?;
+                        if let Some(headers) = headers {
+                            rows.push(CopyRow::new(headers.to_string().as_bytes(), None));
+                        }
+                        self.headers = false;
+                    }
 
-                let shard = if let Some(sharding_column) = self.sharded_column {
-                    let key = record.get(sharding_column).ok_or(Error::NoShardingColumn)?;
+                    for record in stream.records() {
+                        // Totally broken.
+                        let record = record?;
 
-                    shard_str(key, &self.sharding_schema)
-                } else {
-                    None
-                };
+                        let shard = if let Some(sharding_column) = self.sharded_column {
+                            let key = record
+                                .get(sharding_column.position)
+                                .ok_or(Error::NoShardingColumn)?;
 
-                rows.push(CopyRow::new(record.to_string().as_bytes(), shard));
+                            shard_str(key, &self.sharding_schema)
+                        } else {
+                            None
+                        };
+
+                        rows.push(CopyRow::new(record.to_string().as_bytes(), shard));
+                    }
+                }
+
+                CopyStream::Binary(stream) => {
+                    if self.headers {
+                        let header = stream.header()?;
+                        rows.push(CopyRow::new(&header.to_bytes()?, None));
+                        self.headers = false;
+                    }
+
+                    for tuple in stream.tuples() {
+                        let tuple = tuple?;
+                        if tuple.end() {
+                            let terminator = (-1_i16).to_be_bytes();
+                            rows.push(CopyRow::new(&terminator, None));
+                            break;
+                        }
+                        let shard = if let Some(column) = self.sharded_column {
+                            let key = tuple.get(column.position).ok_or(Error::NoShardingColumn)?;
+                            if let Data::Column(key) = key {
+                                shard_binary(key, &column.data_type, self.sharding_schema.shards)
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        };
+
+                        rows.push(CopyRow::new(&tuple.to_bytes()?, shard));
+                    }
+                }
             }
         }
 

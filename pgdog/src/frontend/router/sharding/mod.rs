@@ -51,10 +51,21 @@ pub fn shard_str(value: &str, schema: &ShardingSchema) -> Option<usize> {
 }
 
 /// Shard a value that's coming out of the query text directly.
-pub fn shard_value(value: &str, table: &ShardedTable, shards: usize) -> Option<usize> {
-    match table.data_type {
+pub fn shard_value(value: &str, data_type: &DataType, shards: usize) -> Option<usize> {
+    match data_type {
         DataType::Bigint => value.parse().map(|v| bigint(v) as usize % shards).ok(),
         DataType::Uuid => value.parse().map(|v| uuid(v) as usize % shards).ok(),
+    }
+}
+
+pub fn shard_binary(bytes: &[u8], data_type: &DataType, shards: usize) -> Option<usize> {
+    match data_type {
+        DataType::Bigint => i64::decode(bytes, Format::Binary)
+            .ok()
+            .map(|i| bigint(i) as usize % shards),
+        DataType::Uuid => Uuid::decode(bytes, Format::Binary)
+            .ok()
+            .map(|u| uuid(u) as usize % shards),
     }
 }
 

@@ -537,7 +537,7 @@ pub struct ShardedTable {
     pub data_type: DataType,
 }
 
-#[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Default)]
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Default, Copy)]
 #[serde(rename_all = "snake_case")]
 pub enum DataType {
     #[default]

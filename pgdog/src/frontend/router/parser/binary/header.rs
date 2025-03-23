@@ -1,12 +1,25 @@
 use std::io::Read;
 
-use bytes::Buf;
+use bytes::{Buf, BufMut, BytesMut};
+use once_cell::sync::Lazy;
+
+use crate::net::messages::ToBytes;
 
 use super::super::Error;
 
+static SIGNATURE: Lazy<Vec<u8>> = Lazy::new(|| {
+    let mut expected = b"PGCOPY\n".to_vec();
+    expected.push(255); // Not sure how to escape these.
+    expected.push('\r' as u8);
+    expected.push('\n' as u8);
+    expected.push('\0' as u8);
+
+    expected
+});
+
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
-pub(super) struct Header {
+pub struct Header {
     pub(super) flags: i32,
     pub(super) has_oid: bool,
     pub(super) header_extension: i32,
@@ -14,18 +27,10 @@ pub(super) struct Header {
 
 impl Header {
     pub(super) fn read(buf: &mut impl Buf) -> Result<Self, Error> {
-        let mut signature = vec![0u8; 11];
+        let mut signature = vec![0u8; SIGNATURE.len()];
         buf.reader().read_exact(&mut signature)?;
 
-        let mut expected = b"PGCOPY\n".to_vec();
-        expected.push(3u8); // Not sure how to escape these.
-        expected.push(7u8);
-        expected.push(7u8);
-        expected.push('\r' as u8);
-        expected.push('\n' as u8);
-        expected.push('\0' as u8);
-
-        if signature != expected {
+        if signature != *SIGNATURE {
             return Err(Error::BinaryMissingHeader);
         }
 
@@ -45,6 +50,17 @@ impl Header {
     }
 
     pub(super) fn bytes_read(&self) -> usize {
-        15
+        SIGNATURE.len() + std::mem::size_of::<i32>() * 2
+    }
+}
+
+impl ToBytes for Header {
+    fn to_bytes(&self) -> Result<bytes::Bytes, crate::net::Error> {
+        let mut payload = BytesMut::new();
+        payload.extend(SIGNATURE.iter());
+        payload.put_i32(self.flags);
+        payload.put_i32(self.header_extension);
+
+        Ok(payload.freeze())
     }
 }

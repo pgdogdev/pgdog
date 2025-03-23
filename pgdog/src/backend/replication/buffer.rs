@@ -78,7 +78,7 @@ impl Buffer {
                         let column = self
                             .replication_config
                             .sharded_column(table, &columns)
-                            .and_then(|column| update.column(column))
+                            .and_then(|column| update.column(column.position))
                             .and_then(|column| column.as_str());
                         if let Some(column) = column {
                             let shard = shard_str(column, &self.sharding_schema);
@@ -96,7 +96,7 @@ impl Buffer {
                         let column = self
                             .replication_config
                             .sharded_column(table, &columns)
-                            .and_then(|column| insert.column(column))
+                            .and_then(|column| insert.column(column.position))
                             .and_then(|column| column.as_str());
                         if let Some(column) = column {
                             let shard = shard_str(column, &self.sharding_schema);

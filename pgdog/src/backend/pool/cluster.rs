@@ -1,7 +1,11 @@
 //! A collection of replicas and a primary.
 
 use crate::{
-    backend::{databases::databases, replication::ReplicationConfig, ShardedTables},
+    backend::{
+        databases::databases,
+        replication::{ReplicationConfig, ShardedColumn},
+        ShardedTables,
+    },
     config::{PoolerMode, ShardedTable},
     net::messages::BackendKeyData,
 };
@@ -173,7 +177,7 @@ impl Cluster {
     }
 
     /// Find sharded column position, if the table and columns match the configuration.
-    pub fn sharded_column(&self, table: &str, columns: &[&str]) -> Option<usize> {
+    pub fn sharded_column(&self, table: &str, columns: &[&str]) -> Option<ShardedColumn> {
         self.sharded_tables.sharded_column(table, columns)
     }
 

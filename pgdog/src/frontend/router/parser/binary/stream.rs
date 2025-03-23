@@ -1,6 +1,6 @@
 use super::{super::Error, header::Header, tuple::Tuple};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct BinaryStream {
     header: Option<Header>,
     buffer: Vec<u8>,
@@ -16,21 +16,30 @@ impl BinaryStream {
             if let Some(header) = &self.header {
                 let tuple = Tuple::read(header, &mut self.buffer.as_slice())?;
                 if let Some(tuple) = tuple {
-                    self.buffer = Vec::from(&self.buffer[..tuple.bytes_read(header)]);
+                    self.buffer = Vec::from(&self.buffer[tuple.bytes_read(header)..]);
                     return Ok(Some(tuple));
                 } else {
                     return Ok(None);
                 }
             } else {
-                let header = Header::read(&mut self.buffer.as_slice())?;
-                self.buffer = Vec::from(&self.buffer[..header.bytes_read()]);
-                self.header = Some(header);
+                self.header()?;
             }
         }
     }
 
     pub fn tuples(&mut self) -> Iter<'_> {
         Iter::new(self)
+    }
+
+    pub fn header(&mut self) -> Result<&Header, Error> {
+        if let Some(ref header) = self.header {
+            Ok(header)
+        } else {
+            let header = Header::read(&mut self.buffer.as_slice())?;
+            self.buffer = Vec::from(&self.buffer[header.bytes_read()..]);
+            self.header = Some(header);
+            Ok(self.header().as_ref().unwrap())
+        }
     }
 }
 
