@@ -19,7 +19,7 @@ use crate::net::{
 };
 use crate::state::State;
 use crate::{
-    auth::scram::Client,
+    auth::{md5, scram::Client},
     net::messages::{
         hello::SslReply, Authentication, BackendKeyData, ErrorResponse, FromBytes, Message,
         ParameterStatus, Password, Protocol, Query, ReadyForQuery, Startup, Terminate, ToBytes,
@@ -105,7 +105,10 @@ impl Server {
                         Authentication::SaslFinal(data) => {
                             scram.server_last(&data)?;
                         }
-                        Authentication::Md5(_) => return Err(Error::UnsupportedAuth),
+                        Authentication::Md5(salt) => {
+                            let client = md5::Client::new_salt(&addr.user, &addr.password, &salt)?;
+                            stream.send_flush(client.response()).await?;
+                        }
                     }
                 }
 

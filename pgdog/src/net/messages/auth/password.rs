@@ -22,6 +22,12 @@ impl Password {
             response: response.to_owned(),
         }
     }
+
+    pub fn password(response: impl ToString) -> Self {
+        Self::PasswordMessage {
+            response: response.to_string() + "\0",
+        }
+    }
 }
 
 impl FromBytes for Password {

@@ -74,6 +74,9 @@ pub enum Error {
 
     #[error("{0}")]
     ExecutionError(ErrorResponse),
+
+    #[error("{0}")]
+    Auth(#[from] crate::auth::Error),
 }
 
 impl Error {

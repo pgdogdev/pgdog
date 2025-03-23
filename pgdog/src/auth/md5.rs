@@ -6,7 +6,8 @@ use bytes::Bytes;
 use md5::Context;
 use rand::Rng;
 
-use crate::net::messages::Authentication;
+use super::Error;
+use crate::net::messages::{Authentication, Password};
 
 #[derive(Debug, Clone)]
 pub struct Client<'a> {
@@ -25,13 +26,20 @@ impl<'a> Client<'a> {
         }
     }
 
+    pub fn new_salt(user: &'a str, password: &'a str, salt: &[u8]) -> Result<Self, Error> {
+        Ok(Self {
+            user,
+            password,
+            salt: salt.try_into()?,
+        })
+    }
+
     /// Challenge
     pub fn challenge(&self) -> Authentication {
         Authentication::Md5(Bytes::from(self.salt.to_vec()))
     }
 
-    /// Check encrypted password against what we have.
-    pub fn check(&self, encrypted: &str) -> bool {
+    pub fn encrypted(&self) -> String {
         let mut md5 = Context::new();
         md5.consume(self.password);
         md5.consume(self.user);
@@ -42,6 +50,15 @@ impl<'a> Client<'a> {
         md5.consume(self.salt);
         let password = format!("md5{:x}", md5.compute());
 
-        encrypted == password
+        password
+    }
+
+    pub fn response(&self) -> Password {
+        Password::password(self.encrypted())
+    }
+
+    /// Check encrypted password against what we have.
+    pub fn check(&self, encrypted: &str) -> bool {
+        self.encrypted() == encrypted
     }
 }
