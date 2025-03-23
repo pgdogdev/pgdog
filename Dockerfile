@@ -20,8 +20,6 @@ RUN apt update && \
     update-ca-certificates
 
 COPY --from=builder /build/target/release/pgdog /pgdog/pgdog
-COPY pgdog.toml /pgdog/pgdog.toml
-COPY users.toml /pgdog/users.toml
 
 WORKDIR /pgdog
 STOPSIGNAL SIGINT
