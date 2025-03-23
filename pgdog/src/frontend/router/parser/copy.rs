@@ -57,7 +57,8 @@ pub struct CopyParser {
     pub columns: usize,
     /// This is a COPY coming from the server.
     pub is_from: bool,
-    /// CSV parser that can handle incomplete records.
+
+    /// Stream parser.
     stream: CopyStream,
 
     sharding_schema: ShardingSchema,
@@ -118,11 +119,6 @@ impl CopyParser {
                                             }
                                         }
                                         _ => (),
-                                    }
-                                    if string.sval.to_lowercase().as_str() == "csv"
-                                        && parser.delimiter.is_none()
-                                    {
-                                        parser.delimiter = Some(',');
                                     }
                                 }
                             }
@@ -303,5 +299,42 @@ mod test {
         assert_eq!(sharded[0].message().data(), b"11,howdy partner\n");
         let sharded = copy.shard(vec![partial_three]).unwrap();
         assert_eq!(sharded[0].message().data(), b"1,2\n");
+    }
+
+    #[test]
+    fn test_copy_binary() {
+        let copy = "COPY sharded (id, value) FROM STDIN (FORMAT 'binary')";
+        let stmt = parse(copy).unwrap();
+        let stmt = stmt.protobuf.stmts.first().unwrap();
+        let copy = match stmt.stmt.clone().unwrap().node.unwrap() {
+            NodeEnum::CopyStmt(copy) => copy,
+            _ => panic!("not a copy"),
+        };
+
+        let mut copy = CopyParser::new(&copy, &Cluster::default())
+            .unwrap()
+            .unwrap();
+        assert!(copy.is_from);
+        assert!(copy.headers);
+        let mut data = b"PGCOPY".to_vec();
+        data.push(b'\n');
+        data.push(255);
+        data.push(b'\r');
+        data.push(b'\n');
+        data.push(b'\0');
+        data.extend(0_i32.to_be_bytes());
+        data.extend(0_i32.to_be_bytes());
+        data.extend(2_i16.to_be_bytes());
+        data.extend(8_i32.to_be_bytes());
+        data.extend(1234_i64.to_be_bytes());
+        data.extend(3_i32.to_be_bytes());
+        data.extend(b"yes");
+        data.extend((-1_i16).to_be_bytes());
+        let header = CopyData::new(data.as_slice());
+        let sharded = copy.shard(vec![header]).unwrap();
+        assert_eq!(sharded.len(), 3);
+        assert_eq!(sharded[0].message().data(), &data[..19]); // Header is 19 bytes long.
+        assert_eq!(sharded[1].message().data().len(), 2 + 4 + 8 + 4 + 3);
+        assert_eq!(sharded[2].message().data(), (-1_i16).to_be_bytes());
     }
 }
