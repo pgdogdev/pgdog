@@ -10,9 +10,9 @@ use super::super::Error;
 static SIGNATURE: Lazy<Vec<u8>> = Lazy::new(|| {
     let mut expected = b"PGCOPY\n".to_vec();
     expected.push(255); // Not sure how to escape these.
-    expected.push('\r' as u8);
-    expected.push('\n' as u8);
-    expected.push('\0' as u8);
+    expected.push(b'\r');
+    expected.push(b'\n');
+    expected.push(b'\0');
 
     expected
 });

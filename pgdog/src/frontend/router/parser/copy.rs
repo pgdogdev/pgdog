@@ -39,7 +39,7 @@ impl Default for CopyInfo {
 
 #[derive(Debug, Clone)]
 enum CopyStream {
-    Text(CsvStream),
+    Text(Box<CsvStream>),
     Binary(BinaryStream),
 }
 
@@ -72,7 +72,7 @@ impl Default for CopyParser {
             shards: 1,
             columns: 0,
             is_from: false,
-            stream: CopyStream::Text(CsvStream::new(',', false)),
+            stream: CopyStream::Text(Box::new(CsvStream::new(',', false))),
             sharding_schema: ShardingSchema::default(),
         }
     }
@@ -150,7 +150,7 @@ impl CopyParser {
         parser.stream = if binary {
             CopyStream::Binary(BinaryStream::default())
         } else {
-            CopyStream::Text(CsvStream::new(parser.delimiter(), parser.headers))
+            CopyStream::Text(Box::new(CsvStream::new(parser.delimiter(), parser.headers)))
         };
         parser.sharding_schema = cluster.sharding_schema();
 
