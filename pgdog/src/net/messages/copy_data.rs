@@ -1,4 +1,6 @@
 //! CopyData (F & B) message.
+use std::str::from_utf8;
+
 use super::code;
 use super::prelude::*;
 use super::replication::ReplicationMeta;
@@ -49,9 +51,13 @@ impl std::fmt::Debug for CopyData {
                 .field("replication_meta", &meta)
                 .finish()
         } else {
-            f.debug_struct("CopyData")
-                .field("data", &self.data())
-                .finish()
+            let mut f = f.debug_struct("CopyData");
+            let f = if let Ok(s) = from_utf8(self.data()) {
+                f.field("data", &s)
+            } else {
+                f.field("data", &self.data())
+            };
+            f.finish()
         }
     }
 }

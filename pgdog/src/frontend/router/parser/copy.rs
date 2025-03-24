@@ -183,12 +183,12 @@ impl CopyParser {
                         // Totally broken.
                         let record = record?;
 
-                        let shard = if let Some(sharding_column) = self.sharded_column {
+                        let shard = if let Some(sharding_column) = &self.sharded_column {
                             let key = record
                                 .get(sharding_column.position)
                                 .ok_or(Error::NoShardingColumn)?;
 
-                            shard_str(key, &self.sharding_schema)
+                            shard_str(key, &self.sharding_schema, &sharding_column.centroids)
                         } else {
                             None
                         };
@@ -211,10 +211,15 @@ impl CopyParser {
                             rows.push(CopyRow::new(&terminator, None));
                             break;
                         }
-                        let shard = if let Some(column) = self.sharded_column {
+                        let shard = if let Some(column) = &self.sharded_column {
                             let key = tuple.get(column.position).ok_or(Error::NoShardingColumn)?;
                             if let Data::Column(key) = key {
-                                shard_binary(key, &column.data_type, self.sharding_schema.shards)
+                                shard_binary(
+                                    key,
+                                    &column.data_type,
+                                    self.sharding_schema.shards,
+                                    &column.centroids,
+                                )
                             } else {
                                 None
                             }

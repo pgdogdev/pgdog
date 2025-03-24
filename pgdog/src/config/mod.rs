@@ -564,6 +564,7 @@ pub enum DataType {
     #[default]
     Bigint,
     Uuid,
+    Vector,
 }
 
 /// Queries with manual routing rules.

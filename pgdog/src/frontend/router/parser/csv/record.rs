@@ -26,8 +26,8 @@ impl std::fmt::Display for Record {
             f,
             "{}",
             (0..self.len())
-                .map(|field| self.get(field).unwrap())
-                .collect::<Vec<&str>>()
+                .map(|field| format!("\"{}\"", self.get(field).unwrap()))
+                .collect::<Vec<String>>()
                 .join(&format!("{}", self.delimiter))
         )
     }

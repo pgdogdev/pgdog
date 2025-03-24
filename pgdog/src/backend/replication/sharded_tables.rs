@@ -1,5 +1,8 @@
 //! Tables sharded in the database.
-use crate::config::{DataType, ShardedTable};
+use crate::{
+    config::{DataType, ShardedTable},
+    net::messages::Vector,
+};
 
 #[derive(Debug, Clone, Default)]
 pub struct ShardedTables {
@@ -21,6 +24,7 @@ impl ShardedTables {
         &self.tables
     }
 
+    /// Find out which column (if any) is sharded in the given table.
     pub fn sharded_column(&self, table: &str, columns: &[&str]) -> Option<ShardedColumn> {
         let table = self.tables.iter().find(|sharded_table| {
             sharded_table
@@ -37,6 +41,7 @@ impl ShardedTables {
                 return Some(ShardedColumn {
                     data_type: table.data_type,
                     position,
+                    centroids: table.centroids.clone(),
                 });
             }
         }
@@ -45,8 +50,9 @@ impl ShardedTables {
     }
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Clone)]
 pub struct ShardedColumn {
     pub data_type: DataType,
     pub position: usize,
+    pub centroids: Vec<Vector>,
 }

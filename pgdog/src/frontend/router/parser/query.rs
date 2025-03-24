@@ -235,9 +235,12 @@ impl QueryParser {
                 for key in keys {
                     match key {
                         Key::Constant(value) => {
-                            if let Some(shard) =
-                                shard_value(&value, &table.data_type, sharding_schema.shards)
-                            {
+                            if let Some(shard) = shard_value(
+                                &value,
+                                &table.data_type,
+                                sharding_schema.shards,
+                                &table.centroids,
+                            ) {
                                 shards.insert(shard);
                             }
                         }
@@ -404,9 +407,9 @@ impl QueryParser {
             for tuple in insert.tuples() {
                 if let Some(value) = tuple.get(column.position) {
                     shards.insert(if let Some(bind) = params {
-                        value.shard_placeholder(bind, sharding_schema)
+                        value.shard_placeholder(bind, sharding_schema, &column)
                     } else {
-                        value.shard(sharding_schema)
+                        value.shard(sharding_schema, &column)
                     });
                 }
             }

@@ -6,7 +6,7 @@ use pg_query::{
 };
 
 use crate::{
-    backend::ShardingSchema,
+    backend::{replication::ShardedColumn, ShardingSchema},
     frontend::router::sharding::{shard_int, shard_str},
     net::messages::{Bind, Vector},
 };
@@ -24,22 +24,31 @@ pub enum Value<'a> {
 
 impl<'a> Value<'a> {
     /// Extract value from a Bind (F) message and shard on it.
-    pub fn shard_placeholder(&self, bind: &'a Bind, schema: &ShardingSchema) -> Option<usize> {
+    pub fn shard_placeholder(
+        &self,
+        bind: &'a Bind,
+        schema: &ShardingSchema,
+        column: &ShardedColumn,
+    ) -> Option<usize> {
         match self {
             Value::Placeholder(placeholder) => bind
                 .parameter(*placeholder as usize - 1)
                 .ok()
                 .flatten()
-                .and_then(|value| value.text().map(|value| shard_str(value, schema)))
+                .and_then(|value| {
+                    value
+                        .text()
+                        .map(|value| shard_str(value, schema, &column.centroids))
+                })
                 .flatten(),
-            _ => self.shard(schema),
+            _ => self.shard(schema, column),
         }
     }
 
     /// Shard the value given the number of shards in the cluster.
-    pub fn shard(&self, schema: &ShardingSchema) -> Option<usize> {
+    pub fn shard(&self, schema: &ShardingSchema, column: &ShardedColumn) -> Option<usize> {
         match self {
-            Value::String(v) => shard_str(v, schema),
+            Value::String(v) => shard_str(v, schema, &column.centroids),
             Value::Integer(v) => Some(shard_int(*v, schema)),
             _ => None,
         }

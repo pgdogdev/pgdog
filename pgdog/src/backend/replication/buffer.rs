@@ -81,7 +81,7 @@ impl Buffer {
                             .and_then(|column| update.column(column.position))
                             .and_then(|column| column.as_str());
                         if let Some(column) = column {
-                            let shard = shard_str(column, &self.sharding_schema);
+                            let shard = shard_str(column, &self.sharding_schema, &vec![]);
                             if self.shard == shard {
                                 self.message = Some(xlog_data);
                                 return self.flush();
@@ -99,7 +99,7 @@ impl Buffer {
                             .and_then(|column| insert.column(column.position))
                             .and_then(|column| column.as_str());
                         if let Some(column) = column {
-                            let shard = shard_str(column, &self.sharding_schema);
+                            let shard = shard_str(column, &self.sharding_schema, &vec![]);
                             if self.shard == shard {
                                 self.message = Some(xlog_data);
                                 return self.flush();

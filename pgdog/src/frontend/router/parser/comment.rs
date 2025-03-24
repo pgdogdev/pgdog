@@ -25,7 +25,7 @@ pub fn shard(query: &str, schema: &ShardingSchema) -> Result<Option<usize>, Erro
             let comment = &query[token.start as usize..token.end as usize];
             if let Some(cap) = SHARDING_KEY.captures(comment) {
                 if let Some(sharding_key) = cap.get(1) {
-                    return Ok(shard_str(sharding_key.as_str(), schema));
+                    return Ok(shard_str(sharding_key.as_str(), schema, &vec![]));
                 }
             }
             if let Some(cap) = SHARD.captures(comment) {

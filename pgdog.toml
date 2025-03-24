@@ -58,6 +58,18 @@ data_type = "bigint"
 column = "id"
 primary = true
 
+[[sharded_tables]]
+database = "pgdog_sharded"
+table = "embeddings"
+data_type = "vector"
+column = "embedding"
+centroids = [
+    [1,2,3],
+    [4,5,6],
+    [25,34,34],
+    [0.5,0.5,0.5],
+]
+
 # [[sharded_tables]]
 # database = "pgdog_sharded"
 # table = "vectors"
