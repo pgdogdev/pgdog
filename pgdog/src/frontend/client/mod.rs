@@ -263,7 +263,9 @@ impl Client {
             // Grab a connection from the right pool.
             let request = Request::new(self.id);
             match inner.connect(&request).await {
-                Ok(()) => (),
+                Ok(()) => {
+                    inner.backend.sync_params(&self.params).await?;
+                }
                 Err(err) => {
                     if err.no_server() {
                         error!("connection pool is down");
@@ -351,6 +353,7 @@ impl Client {
                 "transaction finished [{}ms]",
                 inner.stats.last_transaction_time.as_secs_f64() * 1000.0
             );
+            inner.backend.changed_params().merge(&mut self.params);
             if inner.comms.offline() && !self.admin {
                 return Ok(true);
             }

@@ -33,6 +33,7 @@ pub struct Server {
     stream: Option<Stream>,
     id: BackendKeyData,
     params: Parameters,
+    changed_params: Parameters,
     stats: Stats,
     prepared_statements: PreparedStatements,
     dirty: bool,
@@ -162,6 +163,7 @@ impl Server {
             stream: Some(stream),
             id,
             params,
+            changed_params: Parameters::default(),
             stats: Stats::connect(id, addr),
             prepared_statements: PreparedStatements::new(),
             dirty: false,
@@ -267,12 +269,36 @@ impl Server {
                 debug!("streaming replication on [{}]", self.addr());
                 self.streaming = true;
             }
+            'S' => {
+                let ps = ParameterStatus::from_bytes(message.to_bytes()?)?;
+                self.changed_params.set(&ps.name, &ps.value);
+            }
             _ => (),
         }
 
         trace!("← {:#?}", message);
 
         Ok(message)
+    }
+
+    /// Synchronize parameters between client and server.
+    pub async fn sync_params(&mut self, params: &Parameters) -> Result<(), Error> {
+        let diff = params.merge(&mut self.params);
+        if !diff.is_empty() {
+            debug!("syncing {} params", diff.len());
+            self.execute_batch(
+                &diff
+                    .iter()
+                    .map(|query| query.query.as_str())
+                    .collect::<Vec<_>>(),
+            )
+            .await?;
+        }
+        Ok(())
+    }
+
+    pub fn changed_params(&mut self) -> Parameters {
+        std::mem::take(&mut self.changed_params)
     }
 
     /// Server sent everything.
@@ -538,6 +564,7 @@ mod test {
                 stream: None,
                 id,
                 params: Parameters::default(),
+                changed_params: Parameters::default(),
                 stats: Stats::connect(id, &addr),
                 prepared_statements: PreparedStatements::new(),
                 addr,

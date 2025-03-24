@@ -12,7 +12,7 @@ use super::logical::relation::Relation;
 use super::logical::truncate::Truncate;
 use super::logical::update::Update;
 
-/// XLogData (B) messsage.
+/// XLogData (B) message.
 #[derive(Clone)]
 pub struct XLogData {
     pub starting_point: i64,

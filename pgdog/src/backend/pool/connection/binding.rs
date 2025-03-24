@@ -1,5 +1,7 @@
 //! Binding between frontend client and a connection on the backend.
 
+use crate::net::parameter::Parameters;
+
 use super::*;
 
 /// The server(s) the client is connected to.
@@ -190,5 +192,35 @@ impl Binding {
         }
 
         Ok(())
+    }
+
+    pub(super) async fn sync_params(&mut self, params: &Parameters) -> Result<(), Error> {
+        match self {
+            Binding::Server(Some(ref mut server)) => server.sync_params(params).await,
+            Binding::MultiShard(ref mut servers, _) => {
+                for server in servers {
+                    server.sync_params(params).await?;
+                }
+                Ok(())
+            }
+            Binding::Replication(Some(ref mut server), _) => server.sync_params(params).await,
+
+            _ => Ok(()),
+        }
+    }
+
+    pub(super) fn changed_params(&mut self) -> Parameters {
+        match self {
+            Binding::Server(Some(ref mut server)) => server.changed_params(),
+            Binding::MultiShard(ref mut servers, _) => {
+                let mut params = Parameters::default();
+                for server in servers {
+                    server.changed_params().merge(&mut params);
+                }
+                params
+            }
+            Binding::Replication(Some(ref mut server), _) => server.changed_params(),
+            _ => Parameters::default(),
+        }
     }
 }

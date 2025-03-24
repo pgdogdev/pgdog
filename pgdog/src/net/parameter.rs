@@ -2,7 +2,9 @@
 
 use std::ops::{Deref, DerefMut};
 
-use super::Error;
+use super::{messages::Query, Error};
+
+static CHANGEABLE_PARAMS: &[&str] = &["application_name", "statement_timeout", "lock_timeout"];
 
 /// Startup parameter.
 #[derive(Debug, Clone, PartialEq)]
@@ -20,12 +22,57 @@ pub struct Parameters {
 }
 
 impl Parameters {
-    /// Find a paramaeter by name.
+    /// Find a parameter by name.
     pub fn get(&self, name: &str) -> Option<&str> {
         self.params
             .iter()
             .find(|p| p.name == name)
             .map(|p| p.value.as_str())
+    }
+
+    /// Set parameter to a value.
+    ///
+    /// We don't use a HashMap because clients/servers have very few params
+    /// and its faster to iterate through a list than to use a hash (in theory).
+    pub fn set(&mut self, name: &str, value: &str) -> bool {
+        if !CHANGEABLE_PARAMS.contains(&name) {
+            return false;
+        }
+
+        for param in self.params.iter_mut() {
+            if param.name == name {
+                if param.value != value {
+                    param.value = value.to_string();
+                    return true;
+                } else {
+                    return false;
+                }
+            }
+        }
+
+        self.params.push(Parameter {
+            name: name.to_owned(),
+            value: value.to_string(),
+        });
+
+        true
+    }
+
+    /// Merge params from self into other, generating the queries
+    /// needed to sync that state on the server.
+    pub fn merge(&self, other: &mut Self) -> Vec<Query> {
+        let mut queries = vec![];
+        for param in &self.params {
+            let changed = other.set(&param.name, &param.value);
+            if changed {
+                queries.push(Query::new(format!(
+                    "SET \"{}\" TO '{}'",
+                    param.name, param.value
+                )));
+            }
+        }
+
+        queries
     }
 
     /// Get self-declared shard number.

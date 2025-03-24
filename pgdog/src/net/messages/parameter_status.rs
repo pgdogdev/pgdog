@@ -24,6 +24,15 @@ impl From<Parameter> for ParameterStatus {
     }
 }
 
+impl From<ParameterStatus> for Parameter {
+    fn from(value: ParameterStatus) -> Self {
+        Parameter {
+            name: value.name,
+            value: value.value,
+        }
+    }
+}
+
 impl ParameterStatus {
     /// Fake parameter status messages we can return
     /// to a client to make this seem like a legitimate PostgreSQL connection.

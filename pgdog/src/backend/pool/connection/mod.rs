@@ -10,7 +10,10 @@ use crate::{
     },
     config::PoolerMode,
     frontend::router::{CopyRow, Route},
-    net::messages::{Message, ParameterStatus, Protocol},
+    net::{
+        messages::{Message, ParameterStatus, Protocol},
+        parameter::Parameters,
+    },
 };
 
 use super::{
@@ -281,5 +284,13 @@ impl Connection {
     /// Execute a query on the binding, if it's connected.
     pub async fn execute(&mut self, query: &str) -> Result<(), Error> {
         self.binding.execute(query).await
+    }
+
+    pub async fn sync_params(&mut self, params: &Parameters) -> Result<(), Error> {
+        self.binding.sync_params(params).await
+    }
+
+    pub fn changed_params(&mut self) -> Parameters {
+        self.binding.changed_params()
     }
 }
