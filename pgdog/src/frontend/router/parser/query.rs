@@ -261,14 +261,12 @@ impl QueryParser {
         for order in &order_by {
             if let Some((vector, column_name)) = order.vector() {
                 for table in sharding_schema.tables.tables() {
-                    if &table.column == column_name {
-                        if table.name.is_none()
-                            || table.name.as_ref().map(|t| t.as_str()) == table_name
-                        {
-                            let centroids = Centroids::from(&table.centroids);
-                            if let Some(shard) = centroids.shard(vector, sharding_schema.shards) {
-                                shards.insert(shard);
-                            }
+                    if &table.column == column_name
+                        && (table.name.is_none() || table.name.as_deref() == table_name)
+                    {
+                        let centroids = Centroids::from(&table.centroids);
+                        if let Some(shard) = centroids.shard(vector, sharding_schema.shards) {
+                            shards.insert(shard);
                         }
                     }
                 }
