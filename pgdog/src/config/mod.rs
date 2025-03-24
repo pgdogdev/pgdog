@@ -7,6 +7,7 @@ pub mod url;
 use error::Error;
 pub use overrides::Overrides;
 
+use std::collections::HashSet;
 use std::fs::read_to_string;
 use std::net::Ipv4Addr;
 use std::sync::Arc;
@@ -33,6 +34,7 @@ pub fn config() -> Arc<ConfigAndUsers> {
 /// Load the configuration file from disk.
 pub fn load(config: &PathBuf, users: &PathBuf) -> Result<ConfigAndUsers, Error> {
     let config = ConfigAndUsers::load(config, users)?;
+    config.config.check();
     CONFIG.store(Arc::new(config.clone()));
     Ok(config)
 }
@@ -93,7 +95,7 @@ impl ConfigAndUsers {
             config
         } else {
             warn!(
-                "\"{}\" doesn't exist or not a valid, loading defaults instead",
+                "\"{}\" doesn't exist, loading defaults instead",
                 config_path.display()
             );
             Config::default()
@@ -112,7 +114,7 @@ impl ConfigAndUsers {
             users
         } else {
             warn!(
-                "\"{}\" doesn't exist or is invalid, loading defaults instead",
+                "\"{}\" doesn't exist, loading defaults instead",
                 users_path.display()
             );
             Users::default()
@@ -191,6 +193,25 @@ impl Config {
         }
 
         queries
+    }
+
+    pub fn check(&self) {
+        // Check databases.
+        let mut duplicate_primaries = HashSet::new();
+        for database in self.databases.clone() {
+            let id = (
+                database.name.clone(),
+                database.role == Role::Primary,
+                database.shard,
+            );
+            let new = duplicate_primaries.insert(id);
+            if !new {
+                warn!(
+                    "database \"{}\" (shard={}) has more than one primary, only the last one will be used",
+                    database.name, database.shard,
+                );
+            }
+        }
     }
 }
 
