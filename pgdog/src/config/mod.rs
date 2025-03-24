@@ -207,7 +207,7 @@ impl Config {
             let new = duplicate_primaries.insert(id);
             if !new {
                 warn!(
-                    "database \"{}\" (shard={}) has more than one primary, only the last one will be used",
+                    "database \"{}\" (shard={}) has more than one primary, only the first one will be used",
                     database.name, database.shard,
                 );
             }
