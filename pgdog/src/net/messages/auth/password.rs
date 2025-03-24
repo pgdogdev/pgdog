@@ -23,7 +23,7 @@ impl Password {
         }
     }
 
-    pub fn password(response: impl ToString) -> Self {
+    pub fn new_password(response: impl ToString) -> Self {
         Self::PasswordMessage {
             response: response.to_string() + "\0",
         }

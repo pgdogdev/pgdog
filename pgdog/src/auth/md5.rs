@@ -54,7 +54,7 @@ impl<'a> Client<'a> {
     }
 
     pub fn response(&self) -> Password {
-        Password::password(self.encrypted())
+        Password::new_password(self.encrypted())
     }
 
     /// Check encrypted password against what we have.
