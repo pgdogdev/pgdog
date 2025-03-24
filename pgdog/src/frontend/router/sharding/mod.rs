@@ -9,6 +9,8 @@ use crate::{
 pub mod ffi;
 pub mod vector;
 
+pub use vector::{Centroids, Distance};
+
 /// Hash `BIGINT`.
 pub fn bigint(id: i64) -> u64 {
     unsafe { ffi::hash_combine64(0, ffi::hashint8extended(id)) }

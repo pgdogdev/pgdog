@@ -45,9 +45,9 @@ impl OrderBy {
     }
 
     /// ORDER BY clause contains a vector.
-    pub fn vector(&self) -> Option<&Vector> {
+    pub fn vector(&self) -> Option<(&Vector, &String)> {
         match self {
-            OrderBy::AscVectorL2Column(_, vector) => Some(vector),
+            OrderBy::AscVectorL2Column(name, vector) => Some((vector, name)),
             _ => None,
         }
     }

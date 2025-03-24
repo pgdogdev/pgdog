@@ -1,4 +1,4 @@
-use crate::net::messages::Vector;
+use crate::net::messages::{Numeric, Vector};
 
 pub enum Distance<'a> {
     Euclidean(&'a Vector, &'a Vector),
@@ -17,6 +17,27 @@ impl Distance<'_> {
                     .sqrt()
             }
         }
+    }
+}
+
+pub struct Centroids<'a> {
+    centroids: &'a [Vector],
+}
+
+impl Centroids<'_> {
+    /// Find the shard with the closest centroid.
+    pub fn shard(&self, vector: &Vector, shards: usize) -> Option<usize> {
+        self.centroids
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, c)| Numeric::from(c.distance_l2(vector)))
+            .map(|(i, _)| i % shards)
+    }
+}
+
+impl<'a> From<&'a Vec<Vector>> for Centroids<'a> {
+    fn from(centroids: &'a Vec<Vector>) -> Self {
+        Centroids { centroids }
     }
 }
 

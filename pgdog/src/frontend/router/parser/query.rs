@@ -11,7 +11,7 @@ use crate::{
         router::{
             parser::OrderBy,
             round_robin,
-            sharding::{shard_param, shard_value},
+            sharding::{shard_param, shard_value, Centroids},
             CopyRow,
         },
         Buffer,
@@ -251,6 +251,23 @@ impl QueryParser {
                                         shards.insert(shard);
                                     }
                                 }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // Shard by vector in ORDER BY clause.
+        for order in &order_by {
+            if let Some((vector, column_name)) = order.vector() {
+                for table in sharding_schema.tables.tables() {
+                    if &table.column == column_name {
+                        if table.name.is_none()
+                            || table.name.as_ref().map(|t| t.as_str()) == table_name
+                        {
+                            let centroids = Centroids::from(&table.centroids);
+                            if let Some(shard) = centroids.shard(vector, sharding_schema.shards) {
+                                shards.insert(shard);
                             }
                         }
                     }
@@ -499,7 +516,10 @@ mod test {
             assert!(order_by.asc());
             assert_eq!(
                 order_by.vector().unwrap(),
-                &Vector::from(&[1.0, 2.0, 3.0][..])
+                (
+                    &Vector::from(&[1.0, 2.0, 3.0][..]),
+                    &std::string::String::from("embedding")
+                ),
             );
         } else {
             panic!("not a route");
@@ -526,7 +546,10 @@ mod test {
             assert!(order_by.asc());
             assert_eq!(
                 order_by.vector().unwrap(),
-                &Vector::from(&[4.0, 5.0, 6.0][..])
+                (
+                    &Vector::from(&[4.0, 5.0, 6.0][..]),
+                    &std::string::String::from("embedding")
+                )
             );
         } else {
             panic!("not a route");
