@@ -64,8 +64,7 @@ pub fn shard_value(
         DataType::Uuid => value.parse().map(|v| uuid(v) as usize % shards).ok(),
         DataType::Vector => Vector::try_from(value)
             .ok()
-            .map(|v| Centroids::from(centroids).shard(&v, shards))
-            .flatten(),
+            .and_then(|v| Centroids::from(centroids).shard(&v, shards)),
     }
 }
 
@@ -84,8 +83,7 @@ pub fn shard_binary(
             .map(|u| uuid(u) as usize % shards),
         DataType::Vector => Vector::decode(bytes, Format::Binary)
             .ok()
-            .map(|v| Centroids::from(centroids).shard(&v, shards))
-            .flatten(),
+            .and_then(|v| Centroids::from(centroids).shard(&v, shards)),
     }
 }
 
@@ -100,10 +98,7 @@ pub fn shard_param(
         DataType::Uuid => value.uuid().map(|v| uuid(v) as usize % shards),
         DataType::Vector => {
             let centroids = Centroids::from(&table.centroids);
-            value
-                .vector()
-                .map(|v| centroids.shard(&v, shards))
-                .flatten()
+            value.vector().and_then(|v| centroids.shard(&v, shards))
         }
     }
 }
