@@ -47,6 +47,10 @@ impl MultiShard {
         }
     }
 
+    pub(super) fn new_reset(&self) -> Self {
+        Self::new(self.shards, &self.route)
+    }
+
     /// Check if the message should be sent to the client, skipped,
     /// or modified.
     pub(super) fn forward(&mut self, message: Message) -> Result<Option<Message>, super::Error> {
@@ -55,7 +59,7 @@ impl MultiShard {
         match message.code() {
             'Z' => {
                 self.rfq += 1;
-                forward = if self.rfq % self.shards == 0 {
+                forward = if self.rfq == self.shards {
                     Some(message)
                 } else {
                     None
@@ -72,7 +76,7 @@ impl MultiShard {
                 };
                 self.cc += 1;
 
-                if self.cc % self.shards == 0 {
+                if self.cc == self.shards {
                     self.buffer.full();
                     if let Some(ref rd) = self.rd {
                         self.buffer.aggregate(self.route.aggregate(), rd)?;
@@ -106,7 +110,7 @@ impl MultiShard {
 
             'I' => {
                 self.nd += 1;
-                if self.nd % self.shards == 0 {
+                if self.nd == self.shards {
                     forward = Some(message);
                 }
             }
@@ -121,7 +125,7 @@ impl MultiShard {
 
             'G' => {
                 self.ci += 1;
-                if self.ci % self.shards == 0 {
+                if self.ci == self.shards {
                     forward = Some(message);
                 }
             }

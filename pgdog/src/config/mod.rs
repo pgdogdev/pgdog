@@ -570,6 +570,7 @@ impl ShardedTable {
             if let Ok(f) = std::fs::read_to_string(centroids_path) {
                 let centroids: Vec<Vector> = serde_json::from_str(&f)?;
                 self.centroids = centroids;
+                info!("loaded {} centroids", self.centroids.len());
             } else {
                 warn!(
                     "centroids at path \"{}\" not found",

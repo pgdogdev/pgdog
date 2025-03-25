@@ -27,11 +27,12 @@ pub struct Centroids<'a> {
 impl Centroids<'_> {
     /// Find the shard with the closest centroid.
     pub fn shard(&self, vector: &Vector, shards: usize) -> Option<usize> {
-        self.centroids
+        let best = self
+            .centroids
             .iter()
             .enumerate()
-            .min_by_key(|(_, c)| Numeric::from(c.distance_l2(vector)))
-            .map(|(i, _)| i % shards)
+            .min_by_key(|(_, c)| Numeric::from(c.distance_l2(vector)));
+        best.map(|(i, _)| i % shards)
     }
 }
 

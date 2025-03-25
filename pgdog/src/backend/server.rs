@@ -307,6 +307,11 @@ impl Server {
         self.stats.state == State::Idle
     }
 
+    #[inline]
+    pub fn has_more_messages(&self) -> bool {
+        !matches!(self.stats.state, State::Idle | State::IdleInTransaction)
+    }
+
     /// Server connection is synchronized and can receive more messages.
     #[inline]
     pub fn in_sync(&self) -> bool {
