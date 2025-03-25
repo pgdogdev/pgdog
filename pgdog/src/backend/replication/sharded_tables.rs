@@ -33,7 +33,7 @@ impl ShardedTables {
             .collect::<Vec<_>>();
         tables.extend(self.tables().iter().filter(|t| t.name.is_none()));
         for sharded_table in tables {
-            if Some(table) == sharded_table.name.as_ref().map(|s| s.as_str()) {
+            if Some(table) == sharded_table.name.as_deref() {
                 if let Some(position) = columns.iter().position(|c| *c == sharded_table.column) {
                     return Some(ShardedColumn {
                         data_type: sharded_table.data_type,
