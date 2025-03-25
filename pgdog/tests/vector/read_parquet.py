@@ -46,6 +46,7 @@ def read(file, kmeans, plot):
         conn = psycopg.connect("host=127.0.0.1 port=6432 user=pgdog password=pgdog dbname=pgdog_sharded")
         cur = conn.cursor()
         cur.execute("CREATE TABLE IF NOT EXISTS embeddings (id BIGINT, title TEXT, body TEXT, embedding vector(768))")
+        conn.commit()
         file = pq.ParquetFile(file)
         count = 0
         for batch in file.iter_batches(batch_size=100):
