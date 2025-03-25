@@ -238,6 +238,7 @@ mod test {
                     primary: true,
                     centroids: vec![],
                     data_type: DataType::Bigint,
+                    centroids_path: None,
                 }]),
                 shards: vec![Shard::default(), Shard::default()],
                 ..Default::default()
