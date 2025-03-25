@@ -1,5 +1,7 @@
 //! Binding between frontend client and a connection on the backend.
 
+use futures::{stream::FuturesUnordered, StreamExt};
+
 use crate::net::parameter::Parameters;
 
 use super::*;
@@ -66,17 +68,19 @@ impl Binding {
                         }
 
                         let pending = shards.iter_mut().filter(|s| !s.done());
-                        let mut read = false;
+
+                        let mut waiter = FuturesUnordered::new();
 
                         for shard in pending {
-                            let message = shard.read().await?;
-                            read = true;
+                            waiter.push(shard.read());
+                        }
+
+                        if let Some(message) = waiter.next().await {
+                            let message = message?;
                             if let Some(message) = state.forward(message)? {
                                 return Ok(message);
                             }
-                        }
-
-                        if !read {
+                        } else {
                             break;
                         }
                     }

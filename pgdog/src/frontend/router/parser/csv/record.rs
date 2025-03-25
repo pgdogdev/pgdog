@@ -1,3 +1,4 @@
+use super::super::CopyFormat;
 use std::{ops::Range, str::from_utf8};
 
 /// A complete CSV record.
@@ -9,6 +10,8 @@ pub struct Record {
     pub fields: Vec<Range<usize>>,
     /// Delimiter.
     pub delimiter: char,
+    /// Format used.
+    pub format: CopyFormat,
 }
 
 impl std::fmt::Debug for Record {
@@ -16,6 +19,8 @@ impl std::fmt::Debug for Record {
         f.debug_struct("Record")
             .field("data", &from_utf8(&self.data))
             .field("fields", &self.fields)
+            .field("delimiter", &self.delimiter)
+            .field("format", &self.format)
             .finish()
     }
 }
@@ -26,15 +31,18 @@ impl std::fmt::Display for Record {
             f,
             "{}",
             (0..self.len())
-                .map(|field| self.get(field).unwrap())
-                .collect::<Vec<&str>>()
+                .map(|field| match self.format {
+                    CopyFormat::Csv => format!("\"{}\"", self.get(field).unwrap()),
+                    _ => self.get(field).unwrap().to_string(),
+                })
+                .collect::<Vec<String>>()
                 .join(&format!("{}", self.delimiter))
         )
     }
 }
 
 impl Record {
-    pub(super) fn new(data: &[u8], ends: &[usize], delimiter: char) -> Self {
+    pub(super) fn new(data: &[u8], ends: &[usize], delimiter: char, format: CopyFormat) -> Self {
         let mut last = 0;
         let mut fields = vec![];
         for e in ends {
@@ -45,6 +53,7 @@ impl Record {
             data: data.to_vec(),
             fields,
             delimiter,
+            format,
         }
     }
 

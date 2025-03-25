@@ -46,17 +46,24 @@ shard = 1
 #
 [[sharded_tables]]
 database = "pgdog_sharded"
-table = "sharded"
+name = "sharded"
 column = "id"
 data_type = "bigint"
 primary = true
 
 [[sharded_tables]]
 database = "pgdog_sharded"
-table = "users"
+name = "users"
 data_type = "bigint"
 column = "id"
 primary = true
+
+[[sharded_tables]]
+database = "pgdog_sharded"
+name = "embeddings"
+data_type = "vector"
+column = "embedding"
+centroids_path = "centroids.json"
 
 # [[sharded_tables]]
 # database = "pgdog_sharded"

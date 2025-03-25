@@ -117,7 +117,7 @@ impl Stats {
         self.update();
     }
 
-    /// Error occured in a transaction.
+    /// Error occurred in a transaction.
     pub fn transaction_error(&mut self) {
         self.total.transactions += 1;
         self.last_checkout.transactions += 1;

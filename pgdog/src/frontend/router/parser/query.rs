@@ -11,7 +11,7 @@ use crate::{
         router::{
             parser::OrderBy,
             round_robin,
-            sharding::{shard_param, shard_value},
+            sharding::{shard_param, shard_value, Centroids},
             CopyRow,
         },
         Buffer,
@@ -201,7 +201,7 @@ impl QueryParser {
             }
         }
 
-        trace!("{:#?}", command);
+        // trace!("{:#?}", command);
 
         Ok(command)
     }
@@ -235,9 +235,12 @@ impl QueryParser {
                 for key in keys {
                     match key {
                         Key::Constant(value) => {
-                            if let Some(shard) =
-                                shard_value(&value, &table.data_type, sharding_schema.shards)
-                            {
+                            if let Some(shard) = shard_value(
+                                &value,
+                                &table.data_type,
+                                sharding_schema.shards,
+                                &table.centroids,
+                            ) {
                                 shards.insert(shard);
                             }
                         }
@@ -252,6 +255,21 @@ impl QueryParser {
                                     }
                                 }
                             }
+                        }
+                    }
+                }
+            }
+        }
+        // Shard by vector in ORDER BY clause.
+        for order in &order_by {
+            if let Some((vector, column_name)) = order.vector() {
+                for table in sharding_schema.tables.tables() {
+                    if &table.column == column_name
+                        && (table.name.is_none() || table.name.as_deref() == table_name)
+                    {
+                        let centroids = Centroids::from(&table.centroids);
+                        if let Some(shard) = centroids.shard(vector, sharding_schema.shards) {
+                            shards.insert(shard);
                         }
                     }
                 }
@@ -389,9 +407,9 @@ impl QueryParser {
             for tuple in insert.tuples() {
                 if let Some(value) = tuple.get(column.position) {
                     shards.insert(if let Some(bind) = params {
-                        value.shard_placeholder(bind, sharding_schema)
+                        value.shard_placeholder(bind, sharding_schema, &column)
                     } else {
-                        value.shard(sharding_schema)
+                        value.shard(sharding_schema, &column)
                     });
                 }
             }
@@ -499,7 +517,10 @@ mod test {
             assert!(order_by.asc());
             assert_eq!(
                 order_by.vector().unwrap(),
-                &Vector::from(&[1.0, 2.0, 3.0][..])
+                (
+                    &Vector::from(&[1.0, 2.0, 3.0][..]),
+                    &std::string::String::from("embedding")
+                ),
             );
         } else {
             panic!("not a route");
@@ -526,7 +547,10 @@ mod test {
             assert!(order_by.asc());
             assert_eq!(
                 order_by.vector().unwrap(),
-                &Vector::from(&[4.0, 5.0, 6.0][..])
+                (
+                    &Vector::from(&[4.0, 5.0, 6.0][..]),
+                    &std::string::String::from("embedding")
+                )
             );
         } else {
             panic!("not a route");

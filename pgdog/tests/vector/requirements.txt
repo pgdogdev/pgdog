@@ -1,0 +1,6 @@
+pyarrow
+psycopg
+scikit-learn
+Click
+pandas
+numpy

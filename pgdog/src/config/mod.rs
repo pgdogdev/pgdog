@@ -33,8 +33,11 @@ pub fn config() -> Arc<ConfigAndUsers> {
 
 /// Load the configuration file from disk.
 pub fn load(config: &PathBuf, users: &PathBuf) -> Result<ConfigAndUsers, Error> {
-    let config = ConfigAndUsers::load(config, users)?;
+    let mut config = ConfigAndUsers::load(config, users)?;
     config.config.check();
+    for table in config.config.sharded_tables.iter_mut() {
+        table.load_centroids()?;
+    }
     CONFIG.store(Arc::new(config.clone()));
     Ok(config)
 }
@@ -539,6 +542,7 @@ fn admin_password() -> String {
 
 /// Sharded table.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct ShardedTable {
     /// Database this table belongs to.
     pub database: String,
@@ -553,9 +557,29 @@ pub struct ShardedTable {
     /// Centroids for vector sharding.
     #[serde(default)]
     pub centroids: Vec<Vector>,
+    #[serde(default)]
+    pub centroids_path: Option<PathBuf>,
     /// Data type of the column.
     #[serde(default)]
     pub data_type: DataType,
+}
+
+impl ShardedTable {
+    pub fn load_centroids(&mut self) -> Result<(), Error> {
+        if let Some(centroids_path) = &self.centroids_path {
+            if let Ok(f) = std::fs::read_to_string(centroids_path) {
+                let centroids: Vec<Vector> = serde_json::from_str(&f)?;
+                self.centroids = centroids;
+            } else {
+                warn!(
+                    "centroids at path \"{}\" not found",
+                    centroids_path.display()
+                );
+            }
+        }
+
+        Ok(())
+    }
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Default, Copy)]
@@ -564,6 +588,7 @@ pub enum DataType {
     #[default]
     Bigint,
     Uuid,
+    Vector,
 }
 
 /// Queries with manual routing rules.

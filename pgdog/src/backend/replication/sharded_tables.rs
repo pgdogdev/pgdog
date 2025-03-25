@@ -1,5 +1,8 @@
 //! Tables sharded in the database.
-use crate::config::{DataType, ShardedTable};
+use crate::{
+    config::{DataType, ShardedTable},
+    net::messages::Vector,
+};
 
 #[derive(Debug, Clone, Default)]
 pub struct ShardedTables {
@@ -21,23 +24,23 @@ impl ShardedTables {
         &self.tables
     }
 
+    /// Find out which column (if any) is sharded in the given table.
     pub fn sharded_column(&self, table: &str, columns: &[&str]) -> Option<ShardedColumn> {
-        let table = self.tables.iter().find(|sharded_table| {
-            sharded_table
-                .name
-                .as_ref()
-                .map(|name| name == table)
-                .unwrap_or(true)
-                && columns.contains(&sharded_table.column.as_str())
-        });
-
-        if let Some(table) = table {
-            let position = columns.iter().position(|c| *c == table.column);
-            if let Some(position) = position {
-                return Some(ShardedColumn {
-                    data_type: table.data_type,
-                    position,
-                });
+        let mut tables = self
+            .tables()
+            .iter()
+            .filter(|t| t.name.is_some())
+            .collect::<Vec<_>>();
+        tables.extend(self.tables().iter().filter(|t| t.name.is_none()));
+        for sharded_table in tables {
+            if Some(table) == sharded_table.name.as_deref() {
+                if let Some(position) = columns.iter().position(|c| *c == sharded_table.column) {
+                    return Some(ShardedColumn {
+                        data_type: sharded_table.data_type,
+                        position,
+                        centroids: sharded_table.centroids.clone(),
+                    });
+                }
             }
         }
 
@@ -45,8 +48,9 @@ impl ShardedTables {
     }
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Clone)]
 pub struct ShardedColumn {
     pub data_type: DataType,
     pub position: usize,
+    pub centroids: Vec<Vector>,
 }

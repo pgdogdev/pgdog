@@ -6,6 +6,8 @@ pub mod record;
 pub use iterator::Iter;
 pub use record::Record;
 
+use super::CopyFormat;
+
 static RECORD_BUFFER: usize = 4096;
 static ENDS_BUFFER: usize = 2048; // Max of 2048 columns in a CSV.
                                   // Postgres supports a max of 1600 columns in a table,
@@ -30,11 +32,13 @@ pub struct CsvStream {
     headers: bool,
     /// Read headers.
     headers_record: Option<Record>,
+    /// Copy format
+    format: CopyFormat,
 }
 
 impl CsvStream {
     /// Create new CSV stream reader.
-    pub fn new(delimiter: char, headers: bool) -> Self {
+    pub fn new(delimiter: char, headers: bool, format: CopyFormat) -> Self {
         Self {
             buffer: Vec::new(),
             record: vec![0u8; RECORD_BUFFER],
@@ -44,6 +48,7 @@ impl CsvStream {
             delimiter,
             headers,
             headers_record: None,
+            format,
         }
     }
 
@@ -75,6 +80,7 @@ impl CsvStream {
             match result {
                 ReadRecordResult::OutputFull => {
                     self.record.resize(self.buffer.len() * 2 + 1, 0u8);
+                    self.reader = Self::reader(self.delimiter);
                 }
 
                 // Data incomplete.
@@ -86,8 +92,12 @@ impl CsvStream {
                 }
 
                 ReadRecordResult::Record => {
-                    let record =
-                        Record::new(&self.record[..written], &self.ends[..ends], self.delimiter);
+                    let record = Record::new(
+                        &self.record[..written],
+                        &self.ends[..ends],
+                        self.delimiter,
+                        self.format,
+                    );
                     self.read += read;
                     self.record.fill(0u8);
 
@@ -129,12 +139,12 @@ impl CsvStream {
 
 #[cfg(test)]
 mod test {
-    use super::CsvStream;
+    use super::*;
 
     #[test]
     fn test_csv_stream() {
         let csv = "one,two,three\nfour,five,six\nseven,eight";
-        let mut reader = CsvStream::new(',', false);
+        let mut reader = CsvStream::new(',', false, CopyFormat::Csv);
         reader.write(csv.as_bytes());
 
         let record = reader.record().unwrap().unwrap();
@@ -162,7 +172,7 @@ mod test {
     #[test]
     fn test_csv_stream_with_headers() {
         let csv = "column_a,column_b,column_c\n1,2,3\n";
-        let mut reader = CsvStream::new(',', true);
+        let mut reader = CsvStream::new(',', true, CopyFormat::Csv);
         reader.write(csv.as_bytes());
         let record = reader.record().unwrap().unwrap();
         assert_eq!(reader.headers().unwrap().unwrap().get(0), Some("column_a"));

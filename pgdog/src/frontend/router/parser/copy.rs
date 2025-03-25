@@ -37,6 +37,13 @@ impl Default for CopyInfo {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum CopyFormat {
+    Text,
+    Csv,
+    Binary,
+}
+
 #[derive(Debug, Clone)]
 enum CopyStream {
     Text(Box<CsvStream>),
@@ -73,7 +80,7 @@ impl Default for CopyParser {
             shards: 1,
             columns: 0,
             is_from: false,
-            stream: CopyStream::Text(Box::new(CsvStream::new(',', false))),
+            stream: CopyStream::Text(Box::new(CsvStream::new(',', false, CopyFormat::Csv))),
             sharding_schema: ShardingSchema::default(),
         }
     }
@@ -88,7 +95,7 @@ impl CopyParser {
             ..Default::default()
         };
 
-        let mut binary = false;
+        let mut format = CopyFormat::Text;
 
         if let Some(ref rel) = stmt.relation {
             let mut columns = vec![];
@@ -110,13 +117,14 @@ impl CopyParser {
                                 if let Some(NodeEnum::String(ref string)) = arg.node {
                                     match string.sval.to_lowercase().as_str() {
                                         "binary" => {
-                                            binary = true;
                                             parser.headers = true;
+                                            format = CopyFormat::Binary;
                                         }
                                         "csv" => {
                                             if parser.delimiter.is_none() {
                                                 parser.delimiter = Some(',');
                                             }
+                                            format = CopyFormat::Csv;
                                         }
                                         _ => (),
                                     }
@@ -143,10 +151,14 @@ impl CopyParser {
             }
         }
 
-        parser.stream = if binary {
+        parser.stream = if format == CopyFormat::Binary {
             CopyStream::Binary(BinaryStream::default())
         } else {
-            CopyStream::Text(Box::new(CsvStream::new(parser.delimiter(), parser.headers)))
+            CopyStream::Text(Box::new(CsvStream::new(
+                parser.delimiter(),
+                parser.headers,
+                format,
+            )))
         };
         parser.sharding_schema = cluster.sharding_schema();
 
@@ -183,12 +195,12 @@ impl CopyParser {
                         // Totally broken.
                         let record = record?;
 
-                        let shard = if let Some(sharding_column) = self.sharded_column {
+                        let shard = if let Some(sharding_column) = &self.sharded_column {
                             let key = record
                                 .get(sharding_column.position)
                                 .ok_or(Error::NoShardingColumn)?;
 
-                            shard_str(key, &self.sharding_schema)
+                            shard_str(key, &self.sharding_schema, &sharding_column.centroids)
                         } else {
                             None
                         };
@@ -211,10 +223,15 @@ impl CopyParser {
                             rows.push(CopyRow::new(&terminator, None));
                             break;
                         }
-                        let shard = if let Some(column) = self.sharded_column {
+                        let shard = if let Some(column) = &self.sharded_column {
                             let key = tuple.get(column.position).ok_or(Error::NoShardingColumn)?;
                             if let Data::Column(key) = key {
-                                shard_binary(key, &column.data_type, self.sharding_schema.shards)
+                                shard_binary(
+                                    key,
+                                    &column.data_type,
+                                    self.sharding_schema.shards,
+                                    &column.centroids,
+                                )
                             } else {
                                 None
                             }
@@ -285,9 +302,9 @@ mod test {
         let two = CopyData::new("10,howdy mate\n".as_bytes());
         let sharded = copy.shard(vec![header, one, two]).unwrap();
 
-        assert_eq!(sharded[0].message().data(), b"id,value\n");
-        assert_eq!(sharded[1].message().data(), b"5,hello world\n");
-        assert_eq!(sharded[2].message().data(), b"10,howdy mate\n");
+        assert_eq!(sharded[0].message().data(), b"\"id\",\"value\"\n");
+        assert_eq!(sharded[1].message().data(), b"\"5\",\"hello world\"\n");
+        assert_eq!(sharded[2].message().data(), b"\"10\",\"howdy mate\"\n");
 
         let partial_one = CopyData::new("11,howdy partner".as_bytes());
         let partial_two = CopyData::new("\n1,2".as_bytes());
@@ -296,9 +313,9 @@ mod test {
         let sharded = copy.shard(vec![partial_one]).unwrap();
         assert!(sharded.is_empty());
         let sharded = copy.shard(vec![partial_two]).unwrap();
-        assert_eq!(sharded[0].message().data(), b"11,howdy partner\n");
+        assert_eq!(sharded[0].message().data(), b"\"11\",\"howdy partner\"\n");
         let sharded = copy.shard(vec![partial_three]).unwrap();
-        assert_eq!(sharded[0].message().data(), b"1,2\n");
+        assert_eq!(sharded[0].message().data(), b"\"1\",\"2\"\n");
     }
 
     #[test]
