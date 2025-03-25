@@ -201,7 +201,7 @@ impl QueryParser {
             }
         }
 
-        trace!("{:#?}", command);
+        // trace!("{:#?}", command);
 
         Ok(command)
     }

@@ -55,7 +55,7 @@ impl MultiShard {
         match message.code() {
             'Z' => {
                 self.rfq += 1;
-                forward = if self.rfq == self.shards {
+                forward = if self.rfq % self.shards == 0 {
                     Some(message)
                 } else {
                     None
@@ -72,7 +72,7 @@ impl MultiShard {
                 };
                 self.cc += 1;
 
-                if self.cc == self.shards {
+                if self.cc % self.shards == 0 {
                     self.buffer.full();
                     if let Some(ref rd) = self.rd {
                         self.buffer.aggregate(self.route.aggregate(), rd)?;
@@ -106,7 +106,7 @@ impl MultiShard {
 
             'I' => {
                 self.nd += 1;
-                if self.nd == self.shards {
+                if self.nd % self.shards == 0 {
                     forward = Some(message);
                 }
             }
@@ -121,7 +121,7 @@ impl MultiShard {
 
             'G' => {
                 self.ci += 1;
-                if self.ci == self.shards {
+                if self.ci % self.shards == 0 {
                     forward = Some(message);
                 }
             }

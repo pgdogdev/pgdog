@@ -37,6 +37,13 @@ impl Default for CopyInfo {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum CopyFormat {
+    Text,
+    Csv,
+    Binary,
+}
+
 #[derive(Debug, Clone)]
 enum CopyStream {
     Text(Box<CsvStream>),
@@ -73,7 +80,7 @@ impl Default for CopyParser {
             shards: 1,
             columns: 0,
             is_from: false,
-            stream: CopyStream::Text(Box::new(CsvStream::new(',', false))),
+            stream: CopyStream::Text(Box::new(CsvStream::new(',', false, CopyFormat::Csv))),
             sharding_schema: ShardingSchema::default(),
         }
     }
@@ -88,7 +95,7 @@ impl CopyParser {
             ..Default::default()
         };
 
-        let mut binary = false;
+        let mut format = CopyFormat::Text;
 
         if let Some(ref rel) = stmt.relation {
             let mut columns = vec![];
@@ -110,13 +117,14 @@ impl CopyParser {
                                 if let Some(NodeEnum::String(ref string)) = arg.node {
                                     match string.sval.to_lowercase().as_str() {
                                         "binary" => {
-                                            binary = true;
                                             parser.headers = true;
+                                            format = CopyFormat::Binary;
                                         }
                                         "csv" => {
                                             if parser.delimiter.is_none() {
                                                 parser.delimiter = Some(',');
                                             }
+                                            format = CopyFormat::Csv;
                                         }
                                         _ => (),
                                     }
@@ -143,10 +151,14 @@ impl CopyParser {
             }
         }
 
-        parser.stream = if binary {
+        parser.stream = if format == CopyFormat::Binary {
             CopyStream::Binary(BinaryStream::default())
         } else {
-            CopyStream::Text(Box::new(CsvStream::new(parser.delimiter(), parser.headers)))
+            CopyStream::Text(Box::new(CsvStream::new(
+                parser.delimiter(),
+                parser.headers,
+                format,
+            )))
         };
         parser.sharding_schema = cluster.sharding_schema();
 

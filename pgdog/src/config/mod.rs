@@ -539,6 +539,7 @@ fn admin_password() -> String {
 
 /// Sharded table.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct ShardedTable {
     /// Database this table belongs to.
     pub database: String,

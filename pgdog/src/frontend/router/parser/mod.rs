@@ -22,7 +22,7 @@ pub use aggregate::{Aggregate, AggregateFunction, AggregateTarget};
 pub use binary::BinaryStream;
 pub use cache::Cache;
 pub use column::Column;
-pub use copy::CopyParser;
+pub use copy::{CopyFormat, CopyParser};
 pub use csv::{CsvStream, Record};
 pub use error::Error;
 pub use insert::Insert;

@@ -38,8 +38,8 @@ impl Buffer {
     /// until it gets a reply, or we don't want to buffer the data in memory.
     pub fn full(&self) -> bool {
         if let Some(message) = self.buffer.last() {
-            // Flush (F) | Sync (F) | Query (F) | CopyDone (F)
-            if matches!(message.code(), 'H' | 'S' | 'Q' | 'c') {
+            // Flush (F) | Sync (F) | Query (F) | CopyDone (F) | CopyFail (F)
+            if matches!(message.code(), 'H' | 'S' | 'Q' | 'c' | 'f') {
                 return true;
             }
 
@@ -156,6 +156,11 @@ impl Buffer {
             .last()
             .map(|m| m.code() == 'd' || m.code() == 'c')
             .unwrap_or(false)
+    }
+
+    /// Client told us the copy failed.
+    pub fn copy_fail(&self) -> bool {
+        self.buffer.last().map(|m| m.code() == 'f').unwrap_or(false)
     }
 }
 

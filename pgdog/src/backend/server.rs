@@ -39,6 +39,7 @@ pub struct Server {
     dirty: bool,
     streaming: bool,
     schema_changed: bool,
+    copy_mode: bool,
 }
 
 impl Server {
@@ -169,6 +170,7 @@ impl Server {
             dirty: false,
             streaming: false,
             schema_changed: false,
+            copy_mode: false,
         })
     }
 
@@ -571,6 +573,7 @@ mod test {
                 dirty: false,
                 streaming: false,
                 schema_changed: false,
+                copy_mode: false,
             }
         }
     }
