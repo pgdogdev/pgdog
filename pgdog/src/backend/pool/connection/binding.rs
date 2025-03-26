@@ -147,12 +147,22 @@ impl Binding {
             Binding::MultiShard(servers, _state) => {
                 for row in rows {
                     for (shard, server) in servers.iter_mut().enumerate() {
-                        if let Shard::Direct(row_shard) = row.shard() {
-                            if shard == *row_shard {
+                        match row.shard() {
+                            Shard::Direct(row_shard) => {
+                                if shard == *row_shard {
+                                    server.send_one(row.message()).await?;
+                                }
+                            }
+
+                            Shard::All => {
                                 server.send_one(row.message()).await?;
                             }
-                        } else {
-                            server.send_one(row.message()).await?;
+
+                            Shard::Multi(multi) => {
+                                if multi.contains(&shard) {
+                                    server.send_one(row.message()).await?;
+                                }
+                            }
                         }
                     }
                 }
