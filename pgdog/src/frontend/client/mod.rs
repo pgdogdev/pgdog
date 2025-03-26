@@ -324,7 +324,7 @@ impl Client {
         let code = message.code();
 
         // ReadyForQuery (B) | CopyInResponse (B)
-        let flush = matches!(code, 'Z' | 'G' | 'E');
+        let flush = matches!(code, 'Z' | 'G' | 'E' | 'N');
         // RowDescription (B) | ErrorResponse (B)
         let async_flush = matches!(code, 'T') && inner.async_;
         let streaming = message.streaming();
