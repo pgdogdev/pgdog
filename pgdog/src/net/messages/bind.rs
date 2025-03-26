@@ -68,6 +68,14 @@ impl ParameterWithFormat<'_> {
     pub fn decode<T: FromDataType>(&self) -> Option<T> {
         T::decode(&self.parameter.data, self.format).ok()
     }
+
+    pub fn format(&self) -> Format {
+        self.format
+    }
+
+    pub fn data(&self) -> &[u8] {
+        &self.parameter.data
+    }
 }
 
 /// Bind (F) message.

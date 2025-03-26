@@ -1,4 +1,7 @@
-use crate::net::messages::{Numeric, Vector};
+use crate::{
+    frontend::router::parser::Shard,
+    net::messages::{Numeric, Vector},
+};
 
 pub enum Distance<'a> {
     Euclidean(&'a Vector, &'a Vector),
@@ -26,13 +29,21 @@ pub struct Centroids<'a> {
 
 impl Centroids<'_> {
     /// Find the shard with the closest centroid.
-    pub fn shard(&self, vector: &Vector, shards: usize) -> Option<usize> {
-        let best = self
+    pub fn shard(&self, vector: &Vector, shards: usize, probes: usize) -> Shard {
+        let mut selected = vec![];
+        let mut centroids = self
             .centroids
-            .iter()
+            .to_vec()
+            .into_iter()
             .enumerate()
-            .min_by_key(|(_, c)| Numeric::from(c.distance_l2(vector)));
-        best.map(|(i, _)| i % shards)
+            .collect::<Vec<_>>();
+        centroids.sort_by_key(|(_, c)| Numeric::from(c.distance_l2(&vector)));
+        let centroids = centroids.into_iter().take(probes);
+        for (i, _) in centroids {
+            selected.push(i % shards);
+        }
+
+        Shard::Multi(selected)
     }
 }
 

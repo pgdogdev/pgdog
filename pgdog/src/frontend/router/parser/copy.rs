@@ -5,6 +5,7 @@ use pg_query::{protobuf::CopyStmt, NodeEnum};
 use crate::{
     backend::{replication::ShardedColumn, Cluster, ShardingSchema},
     frontend::router::{
+        parser::Shard,
         sharding::{shard_binary, shard_str},
         CopyRow,
     },
@@ -186,7 +187,7 @@ impl CopyParser {
                     if self.headers && self.is_from {
                         let headers = stream.headers()?;
                         if let Some(headers) = headers {
-                            rows.push(CopyRow::new(headers.to_string().as_bytes(), None));
+                            rows.push(CopyRow::new(headers.to_string().as_bytes(), Shard::All));
                         }
                         self.headers = false;
                     }
@@ -202,7 +203,7 @@ impl CopyParser {
 
                             shard_str(key, &self.sharding_schema, &sharding_column.centroids)
                         } else {
-                            None
+                            Shard::All
                         };
 
                         rows.push(CopyRow::new(record.to_string().as_bytes(), shard));
@@ -212,7 +213,7 @@ impl CopyParser {
                 CopyStream::Binary(stream) => {
                     if self.headers {
                         let header = stream.header()?;
-                        rows.push(CopyRow::new(&header.to_bytes()?, None));
+                        rows.push(CopyRow::new(&header.to_bytes()?, Shard::All));
                         self.headers = false;
                     }
 
@@ -220,7 +221,7 @@ impl CopyParser {
                         let tuple = tuple?;
                         if tuple.end() {
                             let terminator = (-1_i16).to_be_bytes();
-                            rows.push(CopyRow::new(&terminator, None));
+                            rows.push(CopyRow::new(&terminator, Shard::All));
                             break;
                         }
                         let shard = if let Some(column) = &self.sharded_column {
@@ -233,10 +234,10 @@ impl CopyParser {
                                     &column.centroids,
                                 )
                             } else {
-                                None
+                                Shard::All
                             }
                         } else {
-                            None
+                            Shard::All
                         };
 
                         rows.push(CopyRow::new(&tuple.to_bytes()?, shard));

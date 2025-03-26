@@ -9,7 +9,7 @@ use crate::{
         replication::{Buffer, ReplicationConfig},
     },
     config::PoolerMode,
-    frontend::router::{CopyRow, Route},
+    frontend::router::{parser::Shard, CopyRow, Route},
     net::{
         messages::{Message, ParameterStatus, Protocol},
         parameter::Parameters,
@@ -92,7 +92,7 @@ impl Connection {
     /// Set the connection into replication mode.
     pub fn replication_mode(
         &mut self,
-        shard: Option<usize>,
+        shard: Shard,
         replication_config: &ReplicationConfig,
         sharding_schema: &ShardingSchema,
     ) -> Result<(), Error> {
@@ -105,11 +105,11 @@ impl Connection {
 
     /// Try to get a connection for the given route.
     async fn try_conn(&mut self, request: &Request, route: &Route) -> Result<(), Error> {
-        if let Some(shard) = route.shard() {
+        if let Shard::Direct(shard) = route.shard() {
             let mut server = if route.is_read() {
-                self.cluster()?.replica(shard, request).await?
+                self.cluster()?.replica(*shard, request).await?
             } else {
-                self.cluster()?.primary(shard, request).await?
+                self.cluster()?.primary(*shard, request).await?
             };
 
             // Cleanup session mode connections when
@@ -133,9 +133,17 @@ impl Connection {
 
                 _ => (),
             };
-        } else if route.is_all_shards() {
+        } else {
             let mut shards = vec![];
-            for shard in self.cluster()?.shards() {
+            for (i, shard) in self.cluster()?.shards().iter().enumerate() {
+                match route.shard() {
+                    Shard::Multi(numbers) => {
+                        if !numbers.contains(&i) {
+                            continue;
+                        }
+                    }
+                    _ => (),
+                };
                 let mut server = if route.is_read() {
                     shard.replica(request).await?
                 } else {

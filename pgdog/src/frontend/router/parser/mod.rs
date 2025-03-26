@@ -29,7 +29,7 @@ pub use insert::Insert;
 pub use key::Key;
 pub use order_by::OrderBy;
 pub use query::{Command, QueryParser};
-pub use route::Route;
+pub use route::{Route, Shard};
 pub use table::Table;
 pub use tuple::Tuple;
 pub use value::Value;
