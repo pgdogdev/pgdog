@@ -266,7 +266,7 @@ impl QueryParser {
                         && (table.name.is_none() || table.name.as_deref() == table_name)
                     {
                         let centroids = Centroids::from(&table.centroids);
-                        shards.insert(centroids.shard(vector, sharding_schema.shards, 3));
+                        shards.insert(centroids.shard(vector, sharding_schema.shards, 1));
                     }
                 }
             }
