@@ -11,14 +11,35 @@ use serde::{
     ser::SerializeSeq,
     Deserialize, Serialize,
 };
-use std::{ops::Deref, str::from_utf8};
+use std::{fmt::Debug, ops::Deref, str::from_utf8};
 
 use super::{Datum, FromDataType, Numeric};
 
-#[derive(Debug, Clone, PartialEq, PartialOrd, Ord, Eq, Hash)]
+#[derive(Clone, PartialEq, PartialOrd, Ord, Eq, Hash)]
 #[repr(C)]
 pub struct Vector {
     values: Vec<Numeric>,
+}
+
+impl Debug for Vector {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.values.len() > 3 {
+            f.debug_struct("Vector")
+                .field(
+                    "values",
+                    &format!(
+                        "[{}..{}]",
+                        self.values[0],
+                        self.values[self.values.len() - 1]
+                    ),
+                )
+                .finish()
+        } else {
+            f.debug_struct("Vector")
+                .field("values", &self.values)
+                .finish()
+        }
+    }
 }
 
 impl FromDataType for Vector {

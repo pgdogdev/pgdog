@@ -1,9 +1,18 @@
 use super::{super::Error, header::Header, tuple::Tuple};
 
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct BinaryStream {
     header: Option<Header>,
     buffer: Vec<u8>,
+}
+
+impl std::fmt::Debug for BinaryStream {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BinaryStream")
+            .field("header", &self.header)
+            .field("buffer", &self.buffer.len())
+            .finish()
+    }
 }
 
 impl BinaryStream {

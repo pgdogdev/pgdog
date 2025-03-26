@@ -2,17 +2,19 @@
 
 use crate::net::messages::CopyData;
 
+use super::parser::Shard;
+
 /// Sharded CopyData message.
 #[derive(Debug, Clone)]
 pub struct CopyRow {
     row: CopyData,
     /// If shard is none, row should go to all shards.
-    shard: Option<usize>,
+    shard: Shard,
 }
 
 impl CopyRow {
     /// Create new copy row for given shard.
-    pub fn new(data: &[u8], shard: Option<usize>) -> Self {
+    pub fn new(data: &[u8], shard: Shard) -> Self {
         Self {
             row: CopyData::new(data),
             shard,
@@ -21,12 +23,15 @@ impl CopyRow {
 
     /// Send copy row to all shards.
     pub fn omnishard(row: CopyData) -> Self {
-        Self { row, shard: None }
+        Self {
+            row,
+            shard: Shard::All,
+        }
     }
 
     /// Which shard it should go to.
-    pub fn shard(&self) -> Option<usize> {
-        self.shard
+    pub fn shard(&self) -> &Shard {
+        &self.shard
     }
 
     /// Get message data.
@@ -37,18 +42,8 @@ impl CopyRow {
     /// Create new headers message that should go to all shards.
     pub fn headers(headers: &str) -> Self {
         Self {
-            shard: None,
+            shard: Shard::All,
             row: CopyData::new(headers.as_bytes()),
-        }
-    }
-}
-
-impl From<pgdog_plugin::CopyRow> for CopyRow {
-    fn from(value: pgdog_plugin::CopyRow) -> Self {
-        let row = CopyData::new(value.data());
-        Self {
-            row,
-            shard: Some(value.shard()),
         }
     }
 }

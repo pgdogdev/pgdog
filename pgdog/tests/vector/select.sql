@@ -1,5 +1,5 @@
 SELECT
-    title, body
+    title, body, embedding
 FROM
     embeddings
 ORDER BY

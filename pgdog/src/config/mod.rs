@@ -562,6 +562,9 @@ pub struct ShardedTable {
     /// Data type of the column.
     #[serde(default)]
     pub data_type: DataType,
+    /// How many centroids to probe.
+    #[serde(default)]
+    pub centroid_probes: usize,
 }
 
 impl ShardedTable {
@@ -577,6 +580,11 @@ impl ShardedTable {
                     centroids_path.display()
                 );
             }
+        }
+
+        if self.centroid_probes < 1 {
+            self.centroid_probes = (self.centroids.len() as f32).sqrt().ceil() as usize;
+            info!("setting centroid probes to {}", self.centroid_probes);
         }
 
         Ok(())

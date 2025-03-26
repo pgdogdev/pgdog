@@ -4,6 +4,7 @@ use regex::Regex;
 
 use crate::backend::ShardingSchema;
 
+use super::super::parser::Shard;
 use super::super::sharding::shard_str;
 
 static SHARD: Lazy<Regex> = Lazy::new(|| Regex::new(r#"pgdog_shard: *([0-9]+)"#).unwrap());
@@ -17,7 +18,7 @@ static SHARDING_KEY: Lazy<Regex> =
 ///
 /// See [`SHARD`] and [`SHARDING_KEY`] for the style of comment we expect.
 ///
-pub fn shard(query: &str, schema: &ShardingSchema) -> Result<Option<usize>, Error> {
+pub fn shard(query: &str, schema: &ShardingSchema) -> Result<Shard, Error> {
     let tokens = scan(query)?;
 
     for token in tokens.tokens.iter() {
@@ -25,16 +26,22 @@ pub fn shard(query: &str, schema: &ShardingSchema) -> Result<Option<usize>, Erro
             let comment = &query[token.start as usize..token.end as usize];
             if let Some(cap) = SHARDING_KEY.captures(comment) {
                 if let Some(sharding_key) = cap.get(1) {
-                    return Ok(shard_str(sharding_key.as_str(), schema, &vec![]));
+                    // TODO: support vectors in comments.
+                    return Ok(shard_str(sharding_key.as_str(), schema, &vec![], 0));
                 }
             }
             if let Some(cap) = SHARD.captures(comment) {
                 if let Some(shard) = cap.get(1) {
-                    return Ok(shard.as_str().parse::<usize>().ok());
+                    return Ok(shard
+                        .as_str()
+                        .parse::<usize>()
+                        .ok()
+                        .map(Shard::Direct)
+                        .unwrap_or(Shard::All));
                 }
             }
         }
     }
 
-    Ok(None)
+    Ok(Shard::All)
 }

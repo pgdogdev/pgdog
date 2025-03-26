@@ -11,6 +11,8 @@ use crate::{
     net::messages::{Bind, Vector},
 };
 
+use super::Shard;
+
 /// A value extracted from a query.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value<'a> {
@@ -29,28 +31,28 @@ impl<'a> Value<'a> {
         bind: &'a Bind,
         schema: &ShardingSchema,
         column: &ShardedColumn,
-    ) -> Option<usize> {
+    ) -> Shard {
         match self {
             Value::Placeholder(placeholder) => bind
                 .parameter(*placeholder as usize - 1)
                 .ok()
                 .flatten()
                 .and_then(|value| {
-                    value
-                        .text()
-                        .map(|value| shard_str(value, schema, &column.centroids))
+                    value.text().map(|value| {
+                        shard_str(value, schema, &column.centroids, column.centroid_probes)
+                    })
                 })
-                .flatten(),
+                .unwrap_or(Shard::All),
             _ => self.shard(schema, column),
         }
     }
 
     /// Shard the value given the number of shards in the cluster.
-    pub fn shard(&self, schema: &ShardingSchema, column: &ShardedColumn) -> Option<usize> {
+    pub fn shard(&self, schema: &ShardingSchema, column: &ShardedColumn) -> Shard {
         match self {
-            Value::String(v) => shard_str(v, schema, &column.centroids),
-            Value::Integer(v) => Some(shard_int(*v, schema)),
-            _ => None,
+            Value::String(v) => shard_str(v, schema, &column.centroids, column.centroid_probes),
+            Value::Integer(v) => shard_int(*v, schema),
+            _ => Shard::All,
         }
     }
 

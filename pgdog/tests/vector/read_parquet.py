@@ -22,7 +22,7 @@ def read(file, kmeans, plot):
             l = col.tolist()
             X.append(l)
 
-        kmeans = KMeans(n_clusters=2, random_state=0, n_init="auto").fit(X)
+        kmeans = KMeans(n_clusters=16, random_state=0, n_init="auto").fit(X)
         centroids = kmeans.cluster_centers_.tolist()
         with open("centroids.json", "w") as f:
             json.dump(centroids, f)

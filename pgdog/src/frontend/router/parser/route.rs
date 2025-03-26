@@ -1,13 +1,47 @@
 use super::{Aggregate, OrderBy};
 
+#[derive(Debug, Clone, PartialEq, PartialOrd, Ord, Eq, Hash)]
+pub enum Shard {
+    Direct(usize),
+    Multi(Vec<usize>),
+    All,
+}
+
+impl Shard {
+    pub fn all(&self) -> bool {
+        matches!(self, Shard::All)
+    }
+
+    pub fn direct(shard: usize) -> Self {
+        Self::Direct(shard)
+    }
+}
+
+impl From<Option<usize>> for Shard {
+    fn from(value: Option<usize>) -> Self {
+        if let Some(value) = value {
+            Shard::Direct(value)
+        } else {
+            Shard::All
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Limit {
+    pub limit: usize,
+    pub offset: usize,
+}
+
 /// Path a query should take and any transformations
 /// that should be applied along the way.
 #[derive(Debug, Clone)]
 pub struct Route {
-    shard: Option<usize>,
+    shard: Shard,
     read: bool,
     order_by: Vec<OrderBy>,
     aggregate: Aggregate,
+    limit: Option<Limit>,
 }
 
 impl Default for Route {
@@ -18,32 +52,35 @@ impl Default for Route {
 
 impl Route {
     /// SELECT query.
-    pub fn select(shard: Option<usize>, order_by: &[OrderBy], aggregate: &Aggregate) -> Self {
+    pub fn select(shard: Shard, order_by: &[OrderBy], aggregate: &Aggregate) -> Self {
         Self {
             shard,
             order_by: order_by.to_vec(),
             read: true,
             aggregate: aggregate.clone(),
+            limit: None,
         }
     }
 
     /// A query that should go to a replica.
-    pub fn read(shard: Option<usize>) -> Self {
+    pub fn read(shard: impl Into<Shard>) -> Self {
         Self {
-            shard,
+            shard: shard.into(),
             read: true,
             order_by: vec![],
             aggregate: Aggregate::default(),
+            limit: None,
         }
     }
 
     /// A write query.
-    pub fn write(shard: Option<usize>) -> Self {
+    pub fn write(shard: impl Into<Shard>) -> Self {
         Self {
-            shard,
+            shard: shard.into(),
             read: false,
             order_by: vec![],
             aggregate: Aggregate::default(),
+            limit: None,
         }
     }
 
@@ -56,13 +93,13 @@ impl Route {
     }
 
     /// Get shard if any.
-    pub fn shard(&self) -> Option<usize> {
-        self.shard
+    pub fn shard(&self) -> &Shard {
+        &self.shard
     }
 
     /// Should this query go to all shards?
     pub fn is_all_shards(&self) -> bool {
-        self.shard.is_none()
+        matches!(self.shard, Shard::All)
     }
 
     pub fn order_by(&self) -> &[OrderBy] {
@@ -74,10 +111,14 @@ impl Route {
     }
 
     pub fn set_shard(&mut self, shard: usize) {
-        self.shard = Some(shard);
+        self.shard = Shard::Direct(shard);
     }
 
     pub fn should_buffer(&self) -> bool {
         !self.order_by().is_empty() || !self.aggregate().is_empty()
+    }
+
+    pub fn limit(&self) -> Option<Limit> {
+        self.limit
     }
 }

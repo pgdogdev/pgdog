@@ -39,6 +39,7 @@ impl ShardedTables {
                         data_type: sharded_table.data_type,
                         position,
                         centroids: sharded_table.centroids.clone(),
+                        centroid_probes: sharded_table.centroid_probes,
                     });
                 }
             }
@@ -53,4 +54,5 @@ pub struct ShardedColumn {
     pub data_type: DataType,
     pub position: usize,
     pub centroids: Vec<Vector>,
+    pub centroid_probes: usize,
 }

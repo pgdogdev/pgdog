@@ -5,6 +5,7 @@ use pg_query::{protobuf::CopyStmt, NodeEnum};
 use crate::{
     backend::{replication::ShardedColumn, Cluster, ShardingSchema},
     frontend::router::{
+        parser::Shard,
         sharding::{shard_binary, shard_str},
         CopyRow,
     },
@@ -12,6 +13,10 @@ use crate::{
 };
 
 use super::{binary::Data, BinaryStream, CsvStream, Error};
+
+/// We are putting data on only _one_ shard
+/// for each row.
+static CENTROID_PROBES: usize = 1;
 
 /// Copy information parsed from a COPY statement.
 #[derive(Debug, Clone)]
@@ -186,7 +191,7 @@ impl CopyParser {
                     if self.headers && self.is_from {
                         let headers = stream.headers()?;
                         if let Some(headers) = headers {
-                            rows.push(CopyRow::new(headers.to_string().as_bytes(), None));
+                            rows.push(CopyRow::new(headers.to_string().as_bytes(), Shard::All));
                         }
                         self.headers = false;
                     }
@@ -200,9 +205,14 @@ impl CopyParser {
                                 .get(sharding_column.position)
                                 .ok_or(Error::NoShardingColumn)?;
 
-                            shard_str(key, &self.sharding_schema, &sharding_column.centroids)
+                            shard_str(
+                                key,
+                                &self.sharding_schema,
+                                &sharding_column.centroids,
+                                CENTROID_PROBES,
+                            )
                         } else {
-                            None
+                            Shard::All
                         };
 
                         rows.push(CopyRow::new(record.to_string().as_bytes(), shard));
@@ -212,7 +222,7 @@ impl CopyParser {
                 CopyStream::Binary(stream) => {
                     if self.headers {
                         let header = stream.header()?;
-                        rows.push(CopyRow::new(&header.to_bytes()?, None));
+                        rows.push(CopyRow::new(&header.to_bytes()?, Shard::All));
                         self.headers = false;
                     }
 
@@ -220,7 +230,7 @@ impl CopyParser {
                         let tuple = tuple?;
                         if tuple.end() {
                             let terminator = (-1_i16).to_be_bytes();
-                            rows.push(CopyRow::new(&terminator, None));
+                            rows.push(CopyRow::new(&terminator, Shard::All));
                             break;
                         }
                         let shard = if let Some(column) = &self.sharded_column {
@@ -231,12 +241,13 @@ impl CopyParser {
                                     &column.data_type,
                                     self.sharding_schema.shards,
                                     &column.centroids,
+                                    CENTROID_PROBES,
                                 )
                             } else {
-                                None
+                                Shard::All
                             }
                         } else {
-                            None
+                            Shard::All
                         };
 
                         rows.push(CopyRow::new(&tuple.to_bytes()?, shard));

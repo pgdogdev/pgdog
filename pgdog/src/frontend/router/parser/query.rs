@@ -9,7 +9,7 @@ use crate::{
     frontend::{
         buffer::BufferedQuery,
         router::{
-            parser::OrderBy,
+            parser::{OrderBy, Shard},
             round_robin,
             sharding::{shard_param, shard_value, Centroids},
             CopyRow,
@@ -126,13 +126,13 @@ impl QueryParser {
 
         // Cluster is read only or write only, traffic split isn't needed,
         // so don't parse the query further.
-        if let Some(shard) = shard {
+        if let Shard::Direct(_) = shard {
             if cluster.read_only() {
-                return Ok(Command::Query(Route::read(Some(shard))));
+                return Ok(Command::Query(Route::read(shard)));
             }
 
             if cluster.write_only() {
-                return Ok(Command::Query(Route::write(Some(shard))));
+                return Ok(Command::Query(Route::write(shard)));
             }
         }
 
@@ -150,7 +150,7 @@ impl QueryParser {
 
         let mut command = match root.node {
             Some(NodeEnum::SelectStmt(ref stmt)) => {
-                if shard.is_some() {
+                if matches!(shard, Shard::Direct(_)) {
                     return Ok(Command::Query(Route::read(shard)));
                 }
                 // `SELECT NOW()`, `SELECT 1`, etc.
@@ -177,7 +177,7 @@ impl QueryParser {
             _ => Ok(Command::Query(Route::write(None))),
         }?;
 
-        if let Some(shard) = shard {
+        if let Shard::Direct(shard) = shard {
             if let Command::Query(ref mut route) = command {
                 route.set_shard(shard);
             }
@@ -190,7 +190,7 @@ impl QueryParser {
         }
 
         if let Command::Query(ref mut route) = command {
-            if route.shard().is_none() {
+            if route.shard().all() {
                 let fingerprint = fingerprint(query).map_err(Error::PgQuery)?;
                 let manual_route = databases().manual_query(&fingerprint.hex).cloned();
 
@@ -201,7 +201,7 @@ impl QueryParser {
             }
         }
 
-        // trace!("{:#?}", command);
+        debug!("{:#?}", command);
 
         Ok(command)
     }
@@ -235,24 +235,23 @@ impl QueryParser {
                 for key in keys {
                     match key {
                         Key::Constant(value) => {
-                            if let Some(shard) = shard_value(
+                            shards.insert(shard_value(
                                 &value,
                                 &table.data_type,
                                 sharding_schema.shards,
                                 &table.centroids,
-                            ) {
-                                shards.insert(shard);
-                            }
+                                table.centroid_probes,
+                            ));
                         }
 
                         Key::Parameter(param) => {
                             if let Some(ref params) = params {
                                 if let Some(param) = params.parameter(param)? {
-                                    if let Some(shard) =
-                                        shard_param(&param, table, sharding_schema.shards)
-                                    {
-                                        shards.insert(shard);
-                                    }
+                                    shards.insert(shard_param(
+                                        &param,
+                                        table,
+                                        sharding_schema.shards,
+                                    ));
                                 }
                             }
                         }
@@ -268,18 +267,36 @@ impl QueryParser {
                         && (table.name.is_none() || table.name.as_deref() == table_name)
                     {
                         let centroids = Centroids::from(&table.centroids);
-                        if let Some(shard) = centroids.shard(vector, sharding_schema.shards) {
-                            shards.insert(shard);
-                        }
+                        shards.insert(centroids.shard(
+                            vector,
+                            sharding_schema.shards,
+                            table.centroid_probes,
+                        ));
                     }
                 }
             }
         }
 
         let shard = if shards.len() == 1 {
-            shards.iter().next().cloned()
+            shards.iter().next().cloned().unwrap()
         } else {
-            None
+            let mut multi = vec![];
+            let mut all = false;
+            for shard in &shards {
+                match shard {
+                    Shard::All => {
+                        all = true;
+                        break;
+                    }
+                    Shard::Direct(v) => multi.push(*v),
+                    Shard::Multi(m) => multi.extend(m),
+                };
+            }
+            if all || shards.is_empty() {
+                Shard::All
+            } else {
+                Shard::Multi(multi)
+            }
         };
 
         let aggregates = Aggregate::parse(stmt)?;
@@ -436,7 +453,7 @@ impl QueryParser {
 mod test {
     use crate::net::messages::{parse::Parse, Parameter, Protocol};
 
-    use super::*;
+    use super::{super::Shard, *};
     use crate::net::messages::Query;
 
     #[test]
@@ -498,7 +515,7 @@ mod test {
         let cluster = Cluster::new_test();
         let command = parser.parse(&buffer, &cluster).unwrap();
         if let Command::Query(route) = command {
-            assert_eq!(route.shard(), Some(1));
+            assert_eq!(route.shard(), &Shard::direct(1));
         } else {
             panic!("not a route");
         }

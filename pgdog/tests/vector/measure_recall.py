@@ -14,6 +14,7 @@ if __name__ == "__main__":
         cur.execute("SELECT embedding FROM embeddings WHERE embedding <-> %s < 0.1 ORDER BY embedding <-> %s LIMIT 5", (vec,vec,))
         neighbors = cur.fetchall()
         results.append(len(neighbors))
+        conn.commit()
 
     hits = 0
     misses = 0

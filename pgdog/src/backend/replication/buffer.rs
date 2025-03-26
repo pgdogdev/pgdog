@@ -3,6 +3,7 @@ use fnv::FnvHashSet as HashSet;
 use std::collections::VecDeque;
 
 use crate::backend::ShardingSchema;
+use crate::frontend::router::parser::Shard;
 use crate::frontend::router::sharding::shard_str;
 use crate::net::messages::FromBytes;
 use crate::net::messages::Protocol;
@@ -14,6 +15,9 @@ use crate::net::messages::{
 
 use super::{Error, ReplicationConfig};
 
+/// We are putting vectors on a single shard only.
+static CENTROID_PROBES: usize = 1;
+
 #[derive(Debug)]
 pub struct Buffer {
     replication_config: ReplicationConfig,
@@ -21,7 +25,7 @@ pub struct Buffer {
     message: Option<XLogData>,
     relations: HashMap<i32, Relation>,
     sent_relations: HashSet<i32>,
-    shard: Option<usize>,
+    shard: Shard,
     oid: Option<i32>,
     buffer: VecDeque<Message>,
     sharding_schema: ShardingSchema,
@@ -30,7 +34,7 @@ pub struct Buffer {
 impl Buffer {
     /// New replication buffer.
     pub fn new(
-        shard: Option<usize>,
+        shard: Shard,
         cluster: &ReplicationConfig,
         sharding_schema: &ShardingSchema,
     ) -> Self {
@@ -81,7 +85,8 @@ impl Buffer {
                             .and_then(|column| update.column(column.position))
                             .and_then(|column| column.as_str());
                         if let Some(column) = column {
-                            let shard = shard_str(column, &self.sharding_schema, &vec![]);
+                            let shard =
+                                shard_str(column, &self.sharding_schema, &vec![], CENTROID_PROBES);
                             if self.shard == shard {
                                 self.message = Some(xlog_data);
                                 return self.flush();
@@ -99,7 +104,8 @@ impl Buffer {
                             .and_then(|column| insert.column(column.position))
                             .and_then(|column| column.as_str());
                         if let Some(column) = column {
-                            let shard = shard_str(column, &self.sharding_schema, &vec![]);
+                            let shard =
+                                shard_str(column, &self.sharding_schema, &vec![], CENTROID_PROBES);
                             if self.shard == shard {
                                 self.message = Some(xlog_data);
                                 return self.flush();
