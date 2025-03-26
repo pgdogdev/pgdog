@@ -14,7 +14,7 @@ static ENDS_BUFFER: usize = 2048; // Max of 2048 columns in a CSV.
                                   // so we are well within bounds.
 
 /// CSV reader that can handle partial inputs.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct CsvStream {
     /// Input buffer.
     buffer: Vec<u8>,
@@ -34,6 +34,17 @@ pub struct CsvStream {
     headers_record: Option<Record>,
     /// Copy format
     format: CopyFormat,
+}
+
+impl std::fmt::Debug for CsvStream {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CsvStream")
+            .field("read", &self.read)
+            .field("delimiter", &self.delimiter)
+            .field("headers", &self.headers)
+            .field("format", &self.format)
+            .finish()
+    }
 }
 
 impl CsvStream {

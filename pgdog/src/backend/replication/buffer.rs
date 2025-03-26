@@ -15,6 +15,9 @@ use crate::net::messages::{
 
 use super::{Error, ReplicationConfig};
 
+/// We are putting vectors on a single shard only.
+static CENTROID_PROBES: usize = 1;
+
 #[derive(Debug)]
 pub struct Buffer {
     replication_config: ReplicationConfig,
@@ -82,7 +85,8 @@ impl Buffer {
                             .and_then(|column| update.column(column.position))
                             .and_then(|column| column.as_str());
                         if let Some(column) = column {
-                            let shard = shard_str(column, &self.sharding_schema, &vec![]);
+                            let shard =
+                                shard_str(column, &self.sharding_schema, &vec![], CENTROID_PROBES);
                             if self.shard == shard {
                                 self.message = Some(xlog_data);
                                 return self.flush();
@@ -100,7 +104,8 @@ impl Buffer {
                             .and_then(|column| insert.column(column.position))
                             .and_then(|column| column.as_str());
                         if let Some(column) = column {
-                            let shard = shard_str(column, &self.sharding_schema, &vec![]);
+                            let shard =
+                                shard_str(column, &self.sharding_schema, &vec![], CENTROID_PROBES);
                             if self.shard == shard {
                                 self.message = Some(xlog_data);
                                 return self.flush();

@@ -1,5 +1,6 @@
 use std::{
     cmp::Ordering,
+    fmt::Display,
     hash::Hash,
     ops::{Deref, DerefMut},
 };
@@ -21,6 +22,12 @@ use super::*;
 #[repr(C)]
 pub struct Numeric {
     data: f64,
+}
+
+impl Display for Numeric {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.data)
+    }
 }
 
 impl Hash for Numeric {

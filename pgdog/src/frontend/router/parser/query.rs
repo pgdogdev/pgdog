@@ -201,7 +201,7 @@ impl QueryParser {
             }
         }
 
-        trace!("{:#?}", command);
+        debug!("{:#?}", command);
 
         Ok(command)
     }
@@ -240,6 +240,7 @@ impl QueryParser {
                                 &table.data_type,
                                 sharding_schema.shards,
                                 &table.centroids,
+                                table.centroid_probes,
                             ));
                         }
 
@@ -266,7 +267,11 @@ impl QueryParser {
                         && (table.name.is_none() || table.name.as_deref() == table_name)
                     {
                         let centroids = Centroids::from(&table.centroids);
-                        shards.insert(centroids.shard(vector, sharding_schema.shards, 1));
+                        shards.insert(centroids.shard(
+                            vector,
+                            sharding_schema.shards,
+                            table.centroid_probes,
+                        ));
                     }
                 }
             }

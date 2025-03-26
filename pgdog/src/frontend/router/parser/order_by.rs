@@ -1,5 +1,7 @@
 //! Sorting columns extracted from the query.
 
+use std::fmt::Debug;
+
 use crate::net::messages::Vector;
 
 #[derive(Clone, Debug)]

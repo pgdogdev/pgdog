@@ -38,9 +38,9 @@ impl<'a> Value<'a> {
                 .ok()
                 .flatten()
                 .and_then(|value| {
-                    value
-                        .text()
-                        .map(|value| shard_str(value, schema, &column.centroids))
+                    value.text().map(|value| {
+                        shard_str(value, schema, &column.centroids, column.centroid_probes)
+                    })
                 })
                 .unwrap_or(Shard::All),
             _ => self.shard(schema, column),
@@ -50,7 +50,7 @@ impl<'a> Value<'a> {
     /// Shard the value given the number of shards in the cluster.
     pub fn shard(&self, schema: &ShardingSchema, column: &ShardedColumn) -> Shard {
         match self {
-            Value::String(v) => shard_str(v, schema, &column.centroids),
+            Value::String(v) => shard_str(v, schema, &column.centroids, column.centroid_probes),
             Value::Integer(v) => shard_int(*v, schema),
             _ => Shard::All,
         }

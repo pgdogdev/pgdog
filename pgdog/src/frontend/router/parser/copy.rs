@@ -14,6 +14,10 @@ use crate::{
 
 use super::{binary::Data, BinaryStream, CsvStream, Error};
 
+/// We are putting data on only _one_ shard
+/// for each row.
+static CENTROID_PROBES: usize = 1;
+
 /// Copy information parsed from a COPY statement.
 #[derive(Debug, Clone)]
 pub struct CopyInfo {
@@ -201,7 +205,12 @@ impl CopyParser {
                                 .get(sharding_column.position)
                                 .ok_or(Error::NoShardingColumn)?;
 
-                            shard_str(key, &self.sharding_schema, &sharding_column.centroids)
+                            shard_str(
+                                key,
+                                &self.sharding_schema,
+                                &sharding_column.centroids,
+                                CENTROID_PROBES,
+                            )
                         } else {
                             Shard::All
                         };
@@ -232,6 +241,7 @@ impl CopyParser {
                                     &column.data_type,
                                     self.sharding_schema.shards,
                                     &column.centroids,
+                                    CENTROID_PROBES,
                                 )
                             } else {
                                 Shard::All

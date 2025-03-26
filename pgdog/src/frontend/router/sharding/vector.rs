@@ -28,16 +28,12 @@ pub struct Centroids<'a> {
 }
 
 impl Centroids<'_> {
-    /// Find the shard with the closest centroid.
+    /// Find the shards with the closest centroids,
+    /// according to the number of probes.
     pub fn shard(&self, vector: &Vector, shards: usize, probes: usize) -> Shard {
         let mut selected = vec![];
-        let mut centroids = self
-            .centroids
-            .to_vec()
-            .into_iter()
-            .enumerate()
-            .collect::<Vec<_>>();
-        centroids.sort_by_key(|(_, c)| Numeric::from(c.distance_l2(&vector)));
+        let mut centroids = self.centroids.iter().enumerate().collect::<Vec<_>>();
+        centroids.sort_by_key(|(_, c)| Numeric::from(c.distance_l2(vector)));
         let centroids = centroids.into_iter().take(probes);
         for (i, _) in centroids {
             selected.push(i % shards);

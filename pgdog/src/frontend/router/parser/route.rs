@@ -27,6 +27,12 @@ impl From<Option<usize>> for Shard {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct Limit {
+    pub limit: usize,
+    pub offset: usize,
+}
+
 /// Path a query should take and any transformations
 /// that should be applied along the way.
 #[derive(Debug, Clone)]
@@ -35,6 +41,7 @@ pub struct Route {
     read: bool,
     order_by: Vec<OrderBy>,
     aggregate: Aggregate,
+    limit: Option<Limit>,
 }
 
 impl Default for Route {
@@ -51,6 +58,7 @@ impl Route {
             order_by: order_by.to_vec(),
             read: true,
             aggregate: aggregate.clone(),
+            limit: None,
         }
     }
 
@@ -61,6 +69,7 @@ impl Route {
             read: true,
             order_by: vec![],
             aggregate: Aggregate::default(),
+            limit: None,
         }
     }
 
@@ -71,6 +80,7 @@ impl Route {
             read: false,
             order_by: vec![],
             aggregate: Aggregate::default(),
+            limit: None,
         }
     }
 
@@ -106,5 +116,9 @@ impl Route {
 
     pub fn should_buffer(&self) -> bool {
         !self.order_by().is_empty() || !self.aggregate().is_empty()
+    }
+
+    pub fn limit(&self) -> Option<Limit> {
+        self.limit
     }
 }

@@ -136,13 +136,10 @@ impl Connection {
         } else {
             let mut shards = vec![];
             for (i, shard) in self.cluster()?.shards().iter().enumerate() {
-                match route.shard() {
-                    Shard::Multi(numbers) => {
-                        if !numbers.contains(&i) {
-                            continue;
-                        }
+                if let Shard::Multi(numbers) = route.shard() {
+                    if !numbers.contains(&i) {
+                        continue;
                     }
-                    _ => (),
                 };
                 let mut server = if route.is_read() {
                     shard.replica(request).await?

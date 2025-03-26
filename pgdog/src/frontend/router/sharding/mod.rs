@@ -37,7 +37,12 @@ pub fn shard_int(value: i64, schema: &ShardingSchema) -> Shard {
 ///
 /// TODO: This is really not great, we should pass in the type oid
 /// from RowDescription in here to avoid guessing.
-pub fn shard_str(value: &str, schema: &ShardingSchema, centroids: &Vec<Vector>) -> Shard {
+pub fn shard_str(
+    value: &str,
+    schema: &ShardingSchema,
+    centroids: &Vec<Vector>,
+    centroid_probes: usize,
+) -> Shard {
     let data_type = if value.starts_with('[') && value.ends_with(']') {
         DataType::Vector
     } else if value.parse::<i64>().is_ok() {
@@ -45,7 +50,7 @@ pub fn shard_str(value: &str, schema: &ShardingSchema, centroids: &Vec<Vector>) 
     } else {
         DataType::Uuid
     };
-    shard_value(value, &data_type, schema.shards, centroids)
+    shard_value(value, &data_type, schema.shards, centroids, centroid_probes)
 }
 
 /// Shard a value that's coming out of the query text directly.
@@ -54,6 +59,7 @@ pub fn shard_value(
     data_type: &DataType,
     shards: usize,
     centroids: &Vec<Vector>,
+    centroid_probes: usize,
 ) -> Shard {
     match data_type {
         DataType::Bigint => value
@@ -70,7 +76,7 @@ pub fn shard_value(
             .unwrap_or(Shard::All),
         DataType::Vector => Vector::try_from(value)
             .ok()
-            .map(|v| Centroids::from(centroids).shard(&v, shards, 1))
+            .map(|v| Centroids::from(centroids).shard(&v, shards, centroid_probes))
             .unwrap_or(Shard::All),
     }
 }
@@ -80,6 +86,7 @@ pub fn shard_binary(
     data_type: &DataType,
     shards: usize,
     centroids: &Vec<Vector>,
+    centroid_probes: usize,
 ) -> Shard {
     match data_type {
         DataType::Bigint => i64::decode(bytes, Format::Binary)
@@ -92,7 +99,7 @@ pub fn shard_binary(
             .unwrap_or(Shard::All),
         DataType::Vector => Vector::decode(bytes, Format::Binary)
             .ok()
-            .map(|v| Centroids::from(centroids).shard(&v, shards, 1))
+            .map(|v| Centroids::from(centroids).shard(&v, shards, centroid_probes))
             .unwrap_or(Shard::All),
     }
 }
@@ -100,10 +107,24 @@ pub fn shard_binary(
 /// Shard query parameter.
 pub fn shard_param(value: &ParameterWithFormat, table: &ShardedTable, shards: usize) -> Shard {
     match value.format() {
-        Format::Binary => shard_binary(value.data(), &table.data_type, shards, &vec![]),
+        Format::Binary => shard_binary(
+            value.data(),
+            &table.data_type,
+            shards,
+            &table.centroids,
+            table.centroid_probes,
+        ),
         Format::Text => value
             .text()
-            .map(|v| shard_value(v, &table.data_type, shards, &vec![]))
+            .map(|v| {
+                shard_value(
+                    v,
+                    &table.data_type,
+                    shards,
+                    &table.centroids,
+                    table.centroid_probes,
+                )
+            })
             .unwrap_or(Shard::All),
     }
 }
