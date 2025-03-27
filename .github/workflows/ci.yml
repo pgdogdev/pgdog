@@ -58,12 +58,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Setup PostgreSQL
+      - name: Setup dependencies
         run: |
           sudo service postgresql start
           sudo -u postgres createuser --superuser --login $USER
           sudo -u postgres createdb $USER
           bash integration/setup.sh
+          sudo apt update && sudo apt install -y python3-virtualenv python3
       - uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
