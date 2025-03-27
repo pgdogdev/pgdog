@@ -166,6 +166,7 @@ impl WhereClause {
                     match val {
                         Val::Ival(int) => keys.push(Output::Int(int.ival)),
                         Val::Sval(sval) => keys.push(Output::Value(sval.sval.clone())),
+                        Val::Fval(fval) => keys.push(Output::Value(fval.fval.clone())),
                         _ => (),
                     }
                 }
