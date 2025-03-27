@@ -28,8 +28,8 @@ impl Command for ShowPools {
             Field::numeric("active"),
             Field::numeric("total"),
             Field::numeric("clients_waiting"),
-            Field::numeric("paused"),
-            Field::numeric("banned"),
+            Field::bool("paused"),
+            Field::bool("banned"),
             Field::numeric("errors"),
             Field::numeric("out_of_sync"),
         ]);

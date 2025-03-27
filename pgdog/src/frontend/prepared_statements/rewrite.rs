@@ -7,7 +7,7 @@ use super::{request::Request, Error, PreparedStatements};
 #[derive(Debug)]
 pub struct Rewrite<'a> {
     statements: &'a mut PreparedStatements,
-    request: Option<Request>,
+    requests: Vec<Request>,
 }
 
 impl<'a> Rewrite<'a> {
@@ -15,7 +15,7 @@ impl<'a> Rewrite<'a> {
     pub fn new(statements: &'a mut PreparedStatements) -> Self {
         Self {
             statements,
-            request: None,
+            requests: vec![],
         }
     }
 
@@ -37,7 +37,7 @@ impl<'a> Rewrite<'a> {
             Ok(message.message()?)
         } else {
             let parse = self.statements.insert(parse);
-            self.request = Some(Request::new(&parse.name, true));
+            self.requests.push(Request::new(&parse.name, true));
             Ok(parse.message()?)
         }
     }
@@ -52,7 +52,7 @@ impl<'a> Rewrite<'a> {
                 .statements
                 .name(&bind.statement)
                 .ok_or(Error::MissingPreparedStatement(bind.statement.clone()))?;
-            self.request = Some(Request::new(name, false));
+            self.requests.push(Request::new(name, false));
             Ok(bind.rename(name).message()?)
         }
     }
@@ -67,14 +67,15 @@ impl<'a> Rewrite<'a> {
                 .statements
                 .name(&describe.statement)
                 .ok_or(Error::MissingPreparedStatement(describe.statement.clone()))?;
-            self.request = Some(Request::new(name, false));
+            self.requests.push(Request::new(name, false));
+            self.requests.push(Request::new_describe(name));
             Ok(describe.rename(name).message()?)
         }
     }
 
     /// Consume request.
-    pub(super) fn request(&mut self) -> Option<Request> {
-        self.request.take()
+    pub(super) fn requests(&mut self) -> Vec<Request> {
+        std::mem::take(&mut self.requests)
     }
 }
 
@@ -95,9 +96,10 @@ mod test {
         assert!(!parse.anonymous());
         assert_eq!(parse.name, "__pgdog_1");
         assert_eq!(parse.query, "SELECT * FROM users");
-        let request = rewrite.request().unwrap();
-        assert_eq!(request.name, "__pgdog_1");
-        assert!(request.new);
+        let requests = rewrite.requests();
+        let request = requests.first().unwrap();
+        assert_eq!(request.name(), "__pgdog_1");
+        assert!(request.is_new());
 
         let bind = Bind {
             statement: "__sqlx_1".into(),
@@ -106,9 +108,10 @@ mod test {
 
         let bind = Bind::from_bytes(rewrite.rewrite(bind).unwrap().to_bytes().unwrap()).unwrap();
         assert_eq!(bind.statement, "__pgdog_1");
-        let request = rewrite.request().unwrap();
-        assert_eq!(request.name, "__pgdog_1");
-        assert!(!request.new);
+        let requests = rewrite.requests();
+        let request = requests.first().unwrap();
+        assert_eq!(request.name(), "__pgdog_1");
+        assert!(!request.is_new());
 
         let describe = Describe {
             statement: "__sqlx_1".into(),
@@ -119,9 +122,10 @@ mod test {
             Describe::from_bytes(rewrite.rewrite(describe).unwrap().to_bytes().unwrap()).unwrap();
         assert_eq!(describe.statement, "__pgdog_1");
         assert_eq!(describe.kind, 'S');
-        let request = rewrite.request().unwrap();
-        assert_eq!(request.name, "__pgdog_1");
-        assert!(!request.new);
+        let requests = rewrite.requests();
+        let request = requests.first().unwrap();
+        assert_eq!(request.name(), "__pgdog_1");
+        assert!(!request.is_new());
 
         assert_eq!(statements.len(), 1);
         assert_eq!(statements.global.lock().len(), 1);

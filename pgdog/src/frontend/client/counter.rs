@@ -10,6 +10,7 @@ pub struct Counter {
     ready_for_query: i64,
     command_complete: i64,
     in_transaction: bool,
+    describe: bool,
 }
 
 impl Counter {
@@ -19,6 +20,7 @@ impl Counter {
                 'D' => {
                     self.row_description += 1;
                     self.parameter_descripton += 1;
+                    self.describe = true;
                 }
 
                 'Q' | 'E' => {
@@ -70,5 +72,9 @@ impl Counter {
             && self.ready_for_query <= 0
             && self.parameter_descripton <= 0
             && !self.in_transaction
+    }
+
+    pub fn describe(&self) -> bool {
+        self.describe
     }
 }

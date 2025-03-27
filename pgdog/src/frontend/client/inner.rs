@@ -8,7 +8,7 @@ use crate::{
 
 use tracing::debug;
 
-use super::{counter::Counter, Client, Error};
+use super::{Client, Error};
 
 /// Mutable internals used by both client and server message handlers.
 ///
@@ -28,8 +28,6 @@ pub(super) struct Inner {
     pub(super) start_transaction: Option<String>,
     /// Client-wide comms.
     pub(super) comms: Comms,
-    /// Message counter
-    pub(super) counter: Counter,
 }
 
 impl Inner {
@@ -61,7 +59,6 @@ impl Inner {
             async_: false,
             start_transaction: None,
             comms: client.comms.clone(),
-            counter: Counter::default(),
         })
     }
 
@@ -116,9 +113,5 @@ impl Inner {
         }
 
         result
-    }
-
-    pub(super) fn reset_counter(&mut self) {
-        self.counter = Counter::default();
     }
 }

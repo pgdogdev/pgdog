@@ -143,11 +143,8 @@ impl Buffer {
         Self { buffer }
     }
 
-    /// Remove Parse message and return the rest.
-    pub fn without_parse(&self) -> Self {
-        let mut buffer = self.buffer.clone();
-        buffer.retain(|m| m.code() != 'P');
-        Self { buffer }
+    pub fn remove(&mut self, code: char) {
+        self.buffer.retain(|m| m.code() != code);
     }
 
     /// The buffer has CopyData messages.
@@ -156,6 +153,14 @@ impl Buffer {
             .last()
             .map(|m| m.code() == 'd' || m.code() == 'c')
             .unwrap_or(false)
+    }
+
+    pub fn flush(&self) -> bool {
+        self.buffer.last().map(|m| m.code() == 'H').unwrap_or(false)
+    }
+
+    pub fn only_flush(&self) -> bool {
+        self.buffer.len() == 1 && self.buffer.last().map(|m| m.code() == 'H').unwrap_or(false)
     }
 
     /// Client told us the copy failed.

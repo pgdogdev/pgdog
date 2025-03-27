@@ -234,6 +234,32 @@ impl Connection {
         Ok(())
     }
 
+    pub async fn describe(&mut self, name: &str) -> Result<Vec<Message>, Error> {
+        match self.binding {
+            Binding::Server(Some(ref mut server)) => Ok(server.describe_statement(name).await?),
+
+            Binding::MultiShard(ref mut servers, _) => {
+                let mut result: Option<Vec<Message>> = None;
+                for server in servers {
+                    let messages = server.describe_statement(name).await?;
+                    if let Some(ref _res) = result {
+                        // TODO: check for equivalency.
+                    } else {
+                        result = Some(messages);
+                    }
+                }
+
+                if let Some(result) = result {
+                    Ok(result)
+                } else {
+                    Err(Error::NotInSync)
+                }
+            }
+
+            _ => Err(Error::NotInSync),
+        }
+    }
+
     /// We are done and can disconnect from this server.
     pub fn done(&self) -> bool {
         self.binding.done()

@@ -30,6 +30,7 @@ pub(super) struct MultiShard {
     ci: usize,
     /// First RowDescription we received from any shard.
     rd: Option<RowDescription>,
+    er: usize,
     /// Rewritten CommandComplete message.
     command_complete: Option<Message>,
     /// Sorting/aggregate buffer.
@@ -126,6 +127,13 @@ impl MultiShard {
             'G' => {
                 self.ci += 1;
                 if self.ci == self.shards {
+                    forward = Some(message);
+                }
+            }
+
+            'n' => {
+                self.er += 1;
+                if self.er == self.shards {
                     forward = Some(message);
                 }
             }
