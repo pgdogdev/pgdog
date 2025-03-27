@@ -11,6 +11,7 @@ use super::{Buffer, Command, Comms, Error, PreparedStatements};
 use crate::auth::{md5, scram::Server};
 use crate::backend::pool::{Connection, Request};
 use crate::config::config;
+use crate::frontend::buffer::BufferedQuery;
 #[cfg(debug_assertions)]
 use crate::frontend::QueryLogger;
 use crate::net::messages::{
@@ -248,9 +249,11 @@ impl Client {
         if !connected {
             match command {
                 Some(Command::StartTransaction(query)) => {
-                    inner.start_transaction = Some(query.clone());
-                    self.start_transaction().await?;
-                    return Ok(false);
+                    if let BufferedQuery::Query(_) = query {
+                        self.start_transaction().await?;
+                        inner.start_transaction = Some(query.clone());
+                        return Ok(false);
+                    }
                 }
                 Some(Command::RollbackTransaction) => {
                     inner.start_transaction = None;
@@ -318,7 +321,10 @@ impl Client {
         }
 
         if buffer.is_empty() {
-            inner.disconnect();
+            if !self.in_transaction {
+                debug!("client finished extended exchange, disconnecting from servers");
+                inner.disconnect();
+            }
             return Ok(false);
         }
 
@@ -381,7 +387,7 @@ impl Client {
                 inner.disconnect();
             }
             inner.comms.stats(inner.stats.transaction());
-            trace!(
+            debug!(
                 "transaction finished [{}ms]",
                 inner.stats.last_transaction_time.as_secs_f64() * 1000.0
             );

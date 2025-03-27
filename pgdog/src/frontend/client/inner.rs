@@ -3,7 +3,9 @@ use crate::{
         pool::{Connection, Request},
         Error as BackendError,
     },
-    frontend::{router::Error as RouterError, Buffer, Command, Comms, Router, Stats},
+    frontend::{
+        buffer::BufferedQuery, router::Error as RouterError, Buffer, Command, Comms, Router, Stats,
+    },
 };
 
 use tracing::debug;
@@ -25,7 +27,7 @@ pub(super) struct Inner {
     /// Protocol is async.
     pub(super) async_: bool,
     /// Start transactio statement, intercepted by the router.
-    pub(super) start_transaction: Option<String>,
+    pub(super) start_transaction: Option<BufferedQuery>,
     /// Client-wide comms.
     pub(super) comms: Comms,
 }

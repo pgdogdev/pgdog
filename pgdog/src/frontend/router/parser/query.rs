@@ -42,7 +42,7 @@ static REPLICATION_REGEX: Lazy<Regex> = Lazy::new(|| {
 pub enum Command {
     Query(Route),
     Copy(Box<CopyParser>),
-    StartTransaction(std::string::String),
+    StartTransaction(BufferedQuery),
     CommitTransaction,
     RollbackTransaction,
     StartReplication,
@@ -137,9 +137,11 @@ impl QueryParser {
         }
 
         let ast = match query {
-            BufferedQuery::Prepared(query) => Cache::get().parse(query).map_err(Error::PgQuery)?,
+            BufferedQuery::Prepared(query) => {
+                Cache::get().parse(&query.query).map_err(Error::PgQuery)?
+            }
             // Don't cache simple queries, they contain parameter values.
-            BufferedQuery::Query(query) => Arc::new(parse(query).map_err(Error::PgQuery)?),
+            BufferedQuery::Query(query) => Arc::new(parse(&query.query).map_err(Error::PgQuery)?),
         };
 
         debug!("{}", query.query());
@@ -170,7 +172,7 @@ impl QueryParser {
                 TransactionStmtKind::TransStmtCommit => return Ok(Command::CommitTransaction),
                 TransactionStmtKind::TransStmtRollback => return Ok(Command::RollbackTransaction),
                 TransactionStmtKind::TransStmtBegin | TransactionStmtKind::TransStmtStart => {
-                    return Ok(Command::StartTransaction(query.to_string()))
+                    return Ok(Command::StartTransaction(query.clone()))
                 }
                 _ => Ok(Command::Query(Route::write(None))),
             },
