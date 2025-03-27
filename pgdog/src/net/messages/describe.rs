@@ -47,4 +47,11 @@ impl Describe {
         self.statement = name.to_string();
         self
     }
+
+    pub fn new_statement(name: &str) -> Describe {
+        Describe {
+            kind: 'S',
+            statement: name.to_string(),
+        }
+    }
 }

@@ -89,7 +89,7 @@ pub enum Source {
 }
 
 /// PostgreSQL protocol message.
-#[derive(Clone, Default)]
+#[derive(Clone, Default, PartialEq)]
 pub struct Message {
     payload: Bytes,
     stream: bool,

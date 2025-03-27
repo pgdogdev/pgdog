@@ -3,6 +3,7 @@
 use std::net::SocketAddr;
 use std::time::Instant;
 
+use tokio::io::AsyncWriteExt;
 use tokio::{select, spawn};
 use tracing::{debug, error, info, trace};
 
@@ -49,7 +50,7 @@ impl Client {
         let database = params.get_default("database", user);
         let config = config();
 
-        let admin = database == config.config.admin.name;
+        let admin = database == config.config.admin.name && config.config.admin.user == user;
         let admin_password = &config.config.admin.password;
 
         let id = BackendKeyData::new();
@@ -289,18 +290,35 @@ impl Client {
 
         // Handle any prepared statements.
         for request in self.prepared_statements.requests() {
-            if let Err(err) = inner.backend.prepare(&request.name).await {
-                self.stream.error(ErrorResponse::from_err(&err)).await?;
-                return Ok(false);
+            if request.is_prepare() {
+                if let Err(err) = inner.backend.prepare(request.name()).await {
+                    self.stream.error(ErrorResponse::from_err(&err)).await?;
+                    return Ok(false);
+                }
+            } else {
+                let messages = inner.backend.describe(request.name()).await?;
+                for message in messages {
+                    self.stream.send(message).await?;
+                }
+                buffer.remove('D');
+                if buffer.flush() {
+                    self.stream.flush().await?;
+                }
+                if buffer.only_flush() {
+                    buffer.remove('H');
+                }
             }
 
-            if request.new {
+            if request.is_new() {
                 self.stream.send(ParseComplete).await?;
-                buffer = buffer.without_parse();
+                buffer.remove('P');
             }
         }
 
-        inner.counter.count(&buffer);
+        if buffer.is_empty() {
+            inner.disconnect();
+            return Ok(false);
+        }
 
         // Handle COPY subprotocol in a potentially sharded context.
         if buffer.copy() && !self.streaming {
@@ -326,12 +344,11 @@ impl Client {
     async fn server_message(&mut self, inner: &mut Inner, message: Message) -> Result<bool, Error> {
         let len = message.len();
         let code = message.code();
-        inner.counter.receive(&message);
 
         // ReadyForQuery (B) | CopyInResponse (B)
         let flush = matches!(code, 'Z' | 'G' | 'E' | 'N');
         // RowDescription (B) | ErrorResponse (B)
-        let async_flush = matches!(code, 'T') && inner.async_;
+        let async_flush = matches!(code, 'T' | 'n') && inner.async_;
         let streaming = message.streaming();
 
         if flush || async_flush || streaming {
@@ -349,8 +366,7 @@ impl Client {
             inner.comms.stats(inner.stats.query());
         }
 
-        if inner.counter.done() {
-            inner.reset_counter();
+        if inner.backend.done() {
             if inner.transaction_mode() {
                 inner.disconnect();
             }

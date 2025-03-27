@@ -1,9 +1,6 @@
 //! Prepared statements cache.
 
-use std::{
-    collections::{BTreeSet, HashMap},
-    sync::Arc,
-};
+use std::{collections::HashMap, sync::Arc};
 
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
@@ -26,7 +23,7 @@ static CACHE: Lazy<PreparedStatements> = Lazy::new(PreparedStatements::default);
 pub struct PreparedStatements {
     pub(super) global: Arc<Mutex<GlobalCache>>,
     pub(super) local: HashMap<String, String>,
-    pub(super) requests: BTreeSet<Request>,
+    pub(super) requests: Vec<Request>,
 }
 
 impl PreparedStatements {
@@ -44,8 +41,11 @@ impl PreparedStatements {
     pub fn maybe_rewrite(&mut self, message: impl Protocol) -> Result<Message, Error> {
         let mut rewrite = Rewrite::new(self);
         let message = rewrite.rewrite(message)?;
-        if let Some(request) = rewrite.request() {
-            self.requests.insert(request);
+        let requests = rewrite.requests();
+        for request in requests {
+            if !self.exists(&request) {
+                self.requests.push(request);
+            }
         }
         Ok(message)
     }
@@ -78,6 +78,16 @@ impl PreparedStatements {
     pub fn requests(&mut self) -> Vec<Request> {
         std::mem::take(&mut self.requests).into_iter().collect()
     }
+
+    pub fn exists(&self, request: &Request) -> bool {
+        for r in self.requests.iter() {
+            if r.name() == request.name() && r.is_prepare() && request.is_prepare() {
+                return true;
+            }
+        }
+
+        false
+    }
 }
 
 #[cfg(test)]
@@ -107,7 +117,7 @@ mod test {
         let requests = statements.requests();
         assert_eq!(requests.len(), 1);
         let request = requests.first().unwrap();
-        assert_eq!(request.name, "__pgdog_1");
-        assert!(request.new);
+        assert_eq!(request.name(), "__pgdog_1");
+        assert!(request.is_new());
     }
 }

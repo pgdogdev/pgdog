@@ -12,7 +12,7 @@ use tracing::{debug, info, trace, warn};
 
 use super::{pool::Address, Error, PreparedStatements, Stats};
 use crate::net::{
-    messages::{DataRow, Flush, NoticeResponse},
+    messages::{DataRow, Describe, Flush, NoticeResponse},
     parameter::Parameters,
     tls::connector,
     Parameter, Stream,
@@ -464,6 +464,42 @@ impl Server {
         }
     }
 
+    pub async fn describe_statement(&mut self, name: &str) -> Result<Vec<Message>, Error> {
+        if !self.in_sync() {
+            return Err(Error::NotInSync);
+        }
+
+        debug!("describing \"{}\" [{}]", name, self.addr());
+
+        self.send(vec![
+            Describe::new_statement(name).message()?,
+            Flush.message()?,
+        ])
+        .await?;
+
+        let mut messages = vec![];
+
+        loop {
+            let response = self.read().await?;
+            match response.code() {
+                'T' | 'n' | 'E' => {
+                    messages.push(response);
+                    break;
+                }
+
+                't' => {
+                    messages.push(response);
+                }
+
+                c => return Err(Error::UnexpectedMessage(c)),
+            }
+        }
+
+        self.stats.state(State::Idle);
+
+        Ok(messages)
+    }
+
     /// Reset error state caused by schema change.
     #[inline]
     pub fn reset_schema_changed(&mut self) {
@@ -547,7 +583,11 @@ impl Drop for Server {
             // If you see a lot of these, tell your clients
             // to not send queries unless they are willing to stick
             // around for results.
-            let out_of_sync = if self.done() { " " } else { " out of sync " };
+            let out_of_sync = if self.done() {
+                " ".into()
+            } else {
+                format!(" {} ", self.stats.state)
+            };
             info!("closing{}server connection [{}]", out_of_sync, self.addr,);
 
             spawn(async move {

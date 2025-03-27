@@ -1,34 +1,44 @@
 //! Request to use a prepared statement.
 
-#[derive(Debug, Clone, Eq)]
-pub struct Request {
-    pub name: String,
-    pub new: bool,
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Request {
+    Prepare { name: String },
+    Describe { name: String },
+    PrepareNew { name: String },
 }
 
 impl Request {
     pub fn new(name: &str, new: bool) -> Self {
-        Self {
-            name: name.to_string(),
-            new,
+        if new {
+            Self::PrepareNew {
+                name: name.to_string(),
+            }
+        } else {
+            Self::Prepare {
+                name: name.to_string(),
+            }
         }
     }
-}
 
-impl Ord for Request {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.name.cmp(&other.name)
+    pub fn new_describe(name: &str) -> Self {
+        Self::Describe {
+            name: name.to_owned(),
+        }
     }
-}
 
-impl PartialOrd for Request {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
+    pub fn name(&self) -> &str {
+        match self {
+            Self::Prepare { name } => name,
+            Self::Describe { name } => name,
+            Self::PrepareNew { name } => name,
+        }
     }
-}
 
-impl PartialEq for Request {
-    fn eq(&self, other: &Self) -> bool {
-        self.name == other.name
+    pub fn is_new(&self) -> bool {
+        matches!(self, Self::PrepareNew { .. })
+    }
+
+    pub fn is_prepare(&self) -> bool {
+        matches!(self, Self::Prepare { .. } | Self::PrepareNew { .. })
     }
 }
