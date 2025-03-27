@@ -28,9 +28,9 @@ impl Request {
 
     pub fn name(&self) -> &str {
         match self {
-            Self::Prepare { name } => &name,
-            Self::Describe { name } => &name,
-            Self::PrepareNew { name } => &name,
+            Self::Prepare { name } => name,
+            Self::Describe { name } => name,
+            Self::PrepareNew { name } => name,
         }
     }
 
