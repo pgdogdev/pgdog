@@ -26,7 +26,7 @@ async def both():
     return [await sharded(), await normal()]
 
 def admin():
-    conn = psycopg.connect("dbname=admin user=pgdog password=pgdog host=127.0.0.1 port=6432")
+    conn = psycopg.connect("dbname=admin user=admin password=pgdog host=127.0.0.1 port=6432")
     conn.autocommit = True
     return conn
 
