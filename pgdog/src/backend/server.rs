@@ -304,12 +304,15 @@ impl Server {
     /// Server sent everything.
     #[inline]
     pub fn done(&self) -> bool {
-        self.stats.state == State::Idle
+        matches!(self.stats.state, State::Idle | State::ParseComplete)
     }
 
     #[inline]
     pub fn has_more_messages(&self) -> bool {
-        !matches!(self.stats.state, State::Idle | State::IdleInTransaction)
+        !matches!(
+            self.stats.state,
+            State::Idle | State::IdleInTransaction | State::TransactionError
+        )
     }
 
     /// Server connection is synchronized and can receive more messages.

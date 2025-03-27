@@ -584,7 +584,9 @@ impl ShardedTable {
 
         if self.centroid_probes < 1 {
             self.centroid_probes = (self.centroids.len() as f32).sqrt().ceil() as usize;
-            info!("setting centroid probes to {}", self.centroid_probes);
+            if self.centroid_probes > 0 {
+                info!("setting centroid probes to {}", self.centroid_probes);
+            }
         }
 
         Ok(())

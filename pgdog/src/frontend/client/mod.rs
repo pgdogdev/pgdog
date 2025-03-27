@@ -18,7 +18,9 @@ use crate::net::messages::{
 };
 use crate::net::{parameter::Parameters, Stream};
 
+pub mod counter;
 pub mod inner;
+
 use inner::Inner;
 
 /// Frontend client.
@@ -298,6 +300,8 @@ impl Client {
             }
         }
 
+        inner.counter.count(&buffer);
+
         // Handle COPY subprotocol in a potentially sharded context.
         if buffer.copy() && !self.streaming {
             let rows = inner.router.copy_data(&buffer)?;
@@ -322,6 +326,7 @@ impl Client {
     async fn server_message(&mut self, inner: &mut Inner, message: Message) -> Result<bool, Error> {
         let len = message.len();
         let code = message.code();
+        inner.counter.receive(&message);
 
         // ReadyForQuery (B) | CopyInResponse (B)
         let flush = matches!(code, 'Z' | 'G' | 'E' | 'N');
@@ -344,7 +349,8 @@ impl Client {
             inner.comms.stats(inner.stats.query());
         }
 
-        if inner.done() {
+        if inner.counter.done() {
+            inner.reset_counter();
             if inner.transaction_mode() {
                 inner.disconnect();
             }

@@ -211,6 +211,10 @@ impl Message {
     pub fn source(&self) -> Source {
         self.source
     }
+
+    pub fn in_transaction(&self) -> bool {
+        self.code() == 'Z' && matches!(self.payload[5] as char, 'T' | 'E')
+    }
 }
 
 /// Check that the message we received is what we expected.
