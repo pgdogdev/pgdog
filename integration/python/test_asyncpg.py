@@ -94,15 +94,15 @@ async def test_insert_allshard():
 @pytest.mark.asyncio
 async def test_direct_shard():
     conn = await sharded()
-    # try:
-    #     await conn.execute("DROP TABLE sharded")
-    # except asyncpg.exceptions.UndefinedTableError:
-    #     pass
-    # await conn.execute("""CREATE TABLE sharded (
-    #     id BIGINT,
-    #     value TEXT,
-    #     created_at TIMESTAMPTZ
-    # )""")
+    try:
+        await conn.execute("DROP TABLE sharded")
+    except asyncpg.exceptions.UndefinedTableError:
+        pass
+    await conn.execute("""CREATE TABLE sharded (
+        id BIGINT,
+        value TEXT,
+        created_at TIMESTAMPTZ
+    )""")
 
     for i in range(1):
         id = random.randint(i, i + 1000)
