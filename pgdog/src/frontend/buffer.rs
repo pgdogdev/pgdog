@@ -159,8 +159,13 @@ impl Buffer {
         self.buffer.last().map(|m| m.code() == 'H').unwrap_or(false)
     }
 
-    pub fn only_flush(&self) -> bool {
-        self.buffer.len() == 1 && self.buffer.last().map(|m| m.code() == 'H').unwrap_or(false)
+    pub fn only(&self, code: char) -> bool {
+        self.buffer.len() == 1
+            && self
+                .buffer
+                .last()
+                .map(|m| m.code() == code)
+                .unwrap_or(false)
     }
 
     /// Client told us the copy failed.

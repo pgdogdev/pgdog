@@ -36,6 +36,7 @@ pub struct Client {
     streaming: bool,
     shard: Option<usize>,
     prepared_statements: PreparedStatements,
+    in_transaction: bool,
 }
 
 impl Client {
@@ -142,6 +143,7 @@ impl Client {
             shard,
             params,
             prepared_statements: PreparedStatements::new(),
+            in_transaction: false,
         };
 
         if client.admin {
@@ -279,13 +281,6 @@ impl Client {
                     }
                 }
             };
-
-            // Simulate a transaction until the client
-            // sends a query over. This ensures that we don't
-            // connect to all shards for no reason.
-            if let Some(query) = inner.start_transaction.take() {
-                inner.backend.execute(&query).await?;
-            }
         }
 
         // Handle any prepared statements.
@@ -304,7 +299,7 @@ impl Client {
                 if buffer.flush() {
                     self.stream.flush().await?;
                 }
-                if buffer.only_flush() {
+                if buffer.only('H') {
                     buffer.remove('H');
                 }
             }
@@ -315,9 +310,23 @@ impl Client {
             }
         }
 
+        if buffer.only('S') {
+            buffer.remove('S');
+            self.stream
+                .send_flush(ReadyForQuery::in_transaction(self.in_transaction))
+                .await?;
+        }
+
         if buffer.is_empty() {
             inner.disconnect();
             return Ok(false);
+        }
+
+        // Simulate a transaction until the client
+        // sends a query over. This ensures that we don't
+        // connect to all shards for no reason.
+        if let Some(query) = inner.start_transaction.take() {
+            inner.backend.execute(&query).await?;
         }
 
         // Handle COPY subprotocol in a potentially sharded context.
@@ -351,6 +360,11 @@ impl Client {
         let async_flush = matches!(code, 'T' | 'n') && inner.async_;
         let streaming = message.streaming();
 
+        if code == 'Z' {
+            inner.comms.stats(inner.stats.query());
+            self.in_transaction = message.in_transaction();
+        }
+
         if flush || async_flush || streaming {
             self.stream.send_flush(message).await?;
             if async_flush {
@@ -361,10 +375,6 @@ impl Client {
         }
 
         inner.comms.stats(inner.stats.sent(len));
-
-        if code == 'Z' {
-            inner.comms.stats(inner.stats.query());
-        }
 
         if inner.backend.done() {
             if inner.transaction_mode() {
@@ -426,7 +436,7 @@ impl Client {
         self.stream
             .send_many(vec![
                 CommandComplete::new_begin().message()?,
-                ReadyForQuery::in_transaction().message()?,
+                ReadyForQuery::in_transaction(true).message()?,
             ])
             .await?;
         debug!("transaction started");

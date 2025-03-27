@@ -9,7 +9,6 @@ use super::Error;
 use super::FromDataType;
 use super::Vector;
 
-use std::cmp::max;
 use std::str::from_utf8;
 
 #[derive(PartialEq, Debug, Copy, Clone)]
@@ -28,7 +27,7 @@ impl From<Format> for i16 {
 }
 
 /// Parameter data.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Parameter {
     /// Parameter data length.
     pub len: i32,
@@ -79,7 +78,7 @@ impl ParameterWithFormat<'_> {
 }
 
 /// Bind (F) message.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Bind {
     /// Portal name.
     pub portal: String,
@@ -96,12 +95,19 @@ pub struct Bind {
 impl Bind {
     /// Format a parameter is using.
     pub fn parameter_format(&self, index: usize) -> Result<Format, Error> {
-        let index = max(self.codes.len() as isize - 1, index as isize) as usize;
-        if let Some(code) = self.codes.get(index) {
+        let code = if self.codes.len() == self.params.len() {
+            self.codes.get(index).copied()
+        } else if self.codes.len() == 1 {
+            self.codes.first().copied()
+        } else {
+            Some(0)
+        };
+
+        if let Some(code) = code {
             match code {
                 0 => Ok(Format::Text),
                 1 => Ok(Format::Binary),
-                _ => Err(Error::IncorrectParameterFormatCode(*code)),
+                _ => Err(Error::IncorrectParameterFormatCode(code)),
             }
         } else {
             Ok(Format::Text)
@@ -157,7 +163,7 @@ impl FromBytes for Bind {
         let params = (0..num_params)
             .map(|_| {
                 let len = bytes.get_i32();
-                let mut data = vec![];
+                let mut data = Vec::with_capacity(len as usize);
                 (0..len).for_each(|_| data.push(bytes.get_u8()));
                 Parameter { len, data }
             })
@@ -187,9 +193,7 @@ impl ToBytes for Bind {
         payload.put_i16(self.params.len() as i16);
         for param in &self.params {
             payload.put_i32(param.len);
-            for b in &param.data {
-                payload.put_u8(*b);
-            }
+            payload.put_slice(param.data.as_slice());
         }
         payload.put_i16(self.results.len() as i16);
         for result in &self.results {
@@ -202,5 +206,49 @@ impl ToBytes for Bind {
 impl Protocol for Bind {
     fn code(&self) -> char {
         'B'
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::{
+        backend::pool::{test::pool, Request},
+        net::messages::ErrorResponse,
+    };
+
+    #[tokio::test]
+    async fn test_bind() {
+        let pool = pool();
+        let mut conn = pool.get(&Request::default()).await.unwrap();
+        let bind = Bind {
+            portal: "".into(),
+            statement: "__pgdog_1".into(),
+            codes: vec![1, 0],
+            params: vec![
+                Parameter {
+                    len: 2,
+                    data: vec![0, 1],
+                },
+                Parameter {
+                    len: 4,
+                    data: "test".as_bytes().to_vec(),
+                },
+            ],
+            results: vec![0],
+        };
+
+        let bytes = bind.to_bytes().unwrap();
+        assert_eq!(Bind::from_bytes(bytes.clone()).unwrap(), bind);
+        let mut c = bytes.clone();
+        let _ = c.get_u8();
+        let len = c.get_i32();
+
+        assert_eq!(len as usize + 1, bytes.len());
+
+        conn.send(vec![bind.message().unwrap()]).await.unwrap();
+        let res = conn.read().await.unwrap();
+        let err = ErrorResponse::from_bytes(res.to_bytes().unwrap()).unwrap();
+        assert_eq!(err.code, "26000");
     }
 }

@@ -81,7 +81,7 @@ pub trait Protocol: ToBytes + FromBytes + std::fmt::Debug {
     }
 }
 
-#[derive(Clone, PartialEq, Default, Copy)]
+#[derive(Clone, PartialEq, Default, Copy, Debug)]
 pub enum Source {
     Backend,
     #[default]
