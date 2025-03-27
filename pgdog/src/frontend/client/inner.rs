@@ -8,7 +8,7 @@ use crate::{
 
 use tracing::debug;
 
-use super::{Client, Error};
+use super::{counter::Counter, Client, Error};
 
 /// Mutable internals used by both client and server message handlers.
 ///
@@ -28,6 +28,8 @@ pub(super) struct Inner {
     pub(super) start_transaction: Option<String>,
     /// Client-wide comms.
     pub(super) comms: Comms,
+    /// Message counter
+    pub(super) counter: Counter,
 }
 
 impl Inner {
@@ -59,6 +61,7 @@ impl Inner {
             async_: false,
             start_transaction: None,
             comms: client.comms.clone(),
+            counter: Counter::default(),
         })
     }
 
@@ -74,11 +77,6 @@ impl Inner {
     /// Client is connected to server(s).
     pub(super) fn connected(&self) -> bool {
         self.backend.connected()
-    }
-
-    /// Server(s) are done talking.
-    pub(super) fn done(&self) -> bool {
-        self.backend.done()
     }
 
     /// Server(s) are in transaction mode pooling.
@@ -118,5 +116,9 @@ impl Inner {
         }
 
         result
+    }
+
+    pub(super) fn reset_counter(&mut self) {
+        self.counter = Counter::default();
     }
 }

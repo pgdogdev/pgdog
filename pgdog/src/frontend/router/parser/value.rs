@@ -7,8 +7,8 @@ use pg_query::{
 
 use crate::{
     backend::{replication::ShardedColumn, ShardingSchema},
-    frontend::router::sharding::{shard_int, shard_str},
-    net::messages::{Bind, Vector},
+    frontend::router::sharding::{shard_binary, shard_int, shard_str, shard_value},
+    net::messages::{Bind, Format, Vector},
 };
 
 use super::Shard;
@@ -22,6 +22,7 @@ pub enum Value<'a> {
     Null,
     Placeholder(i32),
     Vector(Vector),
+    Function(&'a str),
 }
 
 impl<'a> Value<'a> {
@@ -37,10 +38,23 @@ impl<'a> Value<'a> {
                 .parameter(*placeholder as usize - 1)
                 .ok()
                 .flatten()
-                .and_then(|value| {
-                    value.text().map(|value| {
-                        shard_str(value, schema, &column.centroids, column.centroid_probes)
-                    })
+                .and_then(|value| match value.format() {
+                    Format::Binary => Some(shard_binary(
+                        value.data(),
+                        &column.data_type,
+                        schema.shards,
+                        &column.centroids,
+                        column.centroid_probes,
+                    )),
+                    Format::Text => value.text().map(|value| {
+                        shard_value(
+                            value,
+                            &column.data_type,
+                            schema.shards,
+                            &column.centroids,
+                            column.centroid_probes,
+                        )
+                    }),
                 })
                 .unwrap_or(Shard::All),
             _ => self.shard(schema, column),
@@ -108,7 +122,17 @@ impl<'a> TryFrom<&'a Option<NodeEnum>> for Value<'a> {
         match value {
             Some(NodeEnum::AConst(a_const)) => Ok(a_const.into()),
             Some(NodeEnum::ParamRef(param_ref)) => Ok(Value::Placeholder(param_ref.number)),
-            _ => Err(()),
+            Some(NodeEnum::FuncCall(func)) => {
+                if let Some(Node {
+                    node: Some(NodeEnum::String(sval)),
+                }) = func.funcname.first()
+                {
+                    Ok(Value::Function(&sval.sval))
+                } else {
+                    Ok(Value::Null)
+                }
+            }
+            _ => Ok(Value::Null),
         }
     }
 }

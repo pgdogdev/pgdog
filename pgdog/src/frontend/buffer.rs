@@ -190,6 +190,7 @@ impl DerefMut for Buffer {
     }
 }
 
+#[derive(Debug)]
 pub enum BufferedQuery {
     Query(String),
     Prepared(String),

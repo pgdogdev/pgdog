@@ -30,3 +30,6 @@ Cargo.lock
 *.zip
 queries.txt
 *.parquet
+__pycache__
+venv
+.pytest_cache

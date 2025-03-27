@@ -40,90 +40,6 @@ host = "127.0.0.1"
 database_name = "shard_1"
 shard = 1
 
-[[databases]]
-name = "pgdog_sharded"
-host = "127.0.0.1"
-database_name = "shard_2"
-shard = 2
-
-[[databases]]
-name = "pgdog_sharded"
-host = "127.0.0.1"
-database_name = "shard_3"
-shard = 3
-
-[[databases]]
-name = "pgdog_sharded"
-host = "127.0.0.1"
-database_name = "shard_4"
-shard = 4
-
-[[databases]]
-name = "pgdog_sharded"
-host = "127.0.0.1"
-database_name = "shard_5"
-shard = 5
-
-[[databases]]
-name = "pgdog_sharded"
-host = "127.0.0.1"
-database_name = "shard_6"
-shard = 6
-
-[[databases]]
-name = "pgdog_sharded"
-host = "127.0.0.1"
-database_name = "shard_7"
-shard = 7
-
-[[databases]]
-name = "pgdog_sharded"
-host = "127.0.0.1"
-database_name = "shard_8"
-shard = 8
-
-[[databases]]
-name = "pgdog_sharded"
-host = "127.0.0.1"
-database_name = "shard_9"
-shard = 9
-
-[[databases]]
-name = "pgdog_sharded"
-host = "127.0.0.1"
-database_name = "shard_10"
-shard = 10
-
-[[databases]]
-name = "pgdog_sharded"
-host = "127.0.0.1"
-database_name = "shard_11"
-shard = 11
-
-[[databases]]
-name = "pgdog_sharded"
-host = "127.0.0.1"
-database_name = "shard_12"
-shard = 12
-
-[[databases]]
-name = "pgdog_sharded"
-host = "127.0.0.1"
-database_name = "shard_13"
-shard = 13
-
-[[databases]]
-name = "pgdog_sharded"
-host = "127.0.0.1"
-database_name = "shard_14"
-shard = 14
-
-[[databases]]
-name = "pgdog_sharded"
-host = "127.0.0.1"
-database_name = "shard_15"
-shard = 15
-
 #
 # Read/write access to theses tables will be automatically
 # sharded.
@@ -148,16 +64,6 @@ name = "embeddings"
 data_type = "vector"
 column = "embedding"
 centroids_path = "centroids.json"
-
-# [[sharded_tables]]
-# database = "pgdog_sharded"
-# table = "vectors"
-# column = "embedding"
-# primary = true
-# centroids = [[
-#     [1, 2, 3],
-#     [100, 200, 300],
-# ]]
 
 #
 # ActiveRecord sends these queries
