@@ -206,9 +206,7 @@ impl Server {
     /// Send one message to the server but don't flush the buffer,
     /// accelerating bulk transfers.
     pub async fn send_one(&mut self, message: impl Protocol) -> Result<(), Error> {
-        if message.code() != 'H' {
-            self.stats.state(State::Active);
-        }
+        self.stats.state(State::Active);
 
         trace!("→ {:#?}", message);
 
@@ -274,11 +272,6 @@ impl Server {
             'S' => {
                 let ps = ParameterStatus::from_bytes(message.to_bytes()?)?;
                 self.changed_params.set(&ps.name, &ps.value);
-            }
-            'T' | 'n' => {
-                if self.stats().state == State::ActiveDescribe {
-                    self.stats.state(State::Idle);
-                }
             }
             _ => (),
         }
