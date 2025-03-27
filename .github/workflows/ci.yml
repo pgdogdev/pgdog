@@ -64,7 +64,7 @@ jobs:
           sudo -u postgres createuser --superuser --login $USER
           sudo -u postgres createdb $USER
           bash integration/setup.sh
-          sudo apt update && sudo apt install -y python3-virtualenv python3
+          sudo apt update && sudo apt install -y python3-virtualenv
       - uses: actions-rs/toolchain@v1
         with:
           toolchain: stable

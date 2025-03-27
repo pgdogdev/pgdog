@@ -11,7 +11,7 @@ source venv/bin/activate
 pip install -r requirements.txt
 
 pushd ${SCRIPT_DIR}/../../
-target/debug/pgdog --config tests/pgdog.toml --users tests/users.toml > ${SCRIPT_DIR}/pytest_log.txt &
+target/debug/pgdog --config integration/pgdog.toml --users integration/users.toml > ${SCRIPT_DIR}/pytest_log.txt &
 PID=$!
 popd
 
