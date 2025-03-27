@@ -12,6 +12,9 @@ pub struct ErrorResponse {
     pub code: String,
     pub message: String,
     pub detail: Option<String>,
+    pub context: Option<String>,
+    pub file: Option<String>,
+    pub routine: Option<String>,
 }
 
 impl Default for ErrorResponse {
@@ -21,6 +24,9 @@ impl Default for ErrorResponse {
             code: String::default(),
             message: String::default(),
             detail: None,
+            context: None,
+            file: None,
+            routine: None,
         }
     }
 }
@@ -36,6 +42,9 @@ impl ErrorResponse {
                 user, database
             ),
             detail: None,
+            context: None,
+            file: None,
+            routine: None,
         }
     }
 
@@ -46,6 +55,9 @@ impl ErrorResponse {
             code: "58000".into(),
             message: "connection pool is down".into(),
             detail: None,
+            context: None,
+            file: None,
+            routine: None,
         }
     }
 
@@ -56,6 +68,9 @@ impl ErrorResponse {
             code: "57P01".into(),
             message: "PgDog is shutting down".into(),
             detail: None,
+            context: None,
+            file: None,
+            routine: None,
         }
     }
 
@@ -65,6 +80,9 @@ impl ErrorResponse {
             code: "42601".into(),
             message: err.into(),
             detail: None,
+            context: None,
+            file: None,
+            routine: None,
         }
     }
 
@@ -75,6 +93,9 @@ impl ErrorResponse {
             code: "58000".into(),
             message,
             detail: None,
+            context: None,
+            file: None,
+            routine: None,
         }
     }
 }
@@ -104,6 +125,9 @@ impl FromBytes for ErrorResponse {
                 'C' => error_response.code = value,
                 'M' => error_response.message = value,
                 'D' => error_response.detail = Some(value),
+                'W' => error_response.context = Some(value),
+                'F' => error_response.file = Some(value),
+                'R' => error_response.routine = Some(value),
                 _ => continue,
             }
         }
@@ -128,6 +152,21 @@ impl ToBytes for ErrorResponse {
         if let Some(ref detail) = self.detail {
             payload.put_u8(b'D');
             payload.put_string(detail);
+        }
+
+        if let Some(ref context) = self.context {
+            payload.put_u8(b'W');
+            payload.put_string(context);
+        }
+
+        if let Some(ref file) = self.file {
+            payload.put_u8(b'F');
+            payload.put_string(file);
+        }
+
+        if let Some(ref routine) = self.routine {
+            payload.put_u8(b'R');
+            payload.put_string(routine);
         }
 
         payload.put_u8(0);

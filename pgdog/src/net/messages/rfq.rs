@@ -15,8 +15,12 @@ impl ReadyForQuery {
     }
 
     /// In transaction message.
-    pub fn in_transaction() -> Self {
-        ReadyForQuery { status: 'T' }
+    pub fn in_transaction(in_transaction: bool) -> Self {
+        if in_transaction {
+            ReadyForQuery { status: 'T' }
+        } else {
+            Self::idle()
+        }
     }
 }
 

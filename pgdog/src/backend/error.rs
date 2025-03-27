@@ -25,7 +25,7 @@ pub enum Error {
     UnexpectedTransactionStatus(char),
 
     #[error("{0}")]
-    ConnectionError(ErrorResponse),
+    ConnectionError(Box<ErrorResponse>),
 
     #[error("server connection is not synchronized")]
     NotInSync,
@@ -55,7 +55,7 @@ pub enum Error {
     Config(#[from] crate::config::error::Error),
 
     #[error("{0}")]
-    PreparedStatementError(ErrorResponse),
+    PreparedStatementError(Box<ErrorResponse>),
 
     #[error("prepared statement \"{0}\" is missing")]
     PreparedStatementMissing(String),
@@ -73,7 +73,7 @@ pub enum Error {
     Replication(#[from] crate::backend::replication::Error),
 
     #[error("{0}")]
-    ExecutionError(ErrorResponse),
+    ExecutionError(Box<ErrorResponse>),
 
     #[error("{0}")]
     Auth(#[from] crate::auth::Error),

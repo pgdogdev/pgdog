@@ -7,8 +7,25 @@ impl FromDataType for i64 {
     fn decode(bytes: &[u8], encoding: Format) -> Result<Self, Error> {
         match encoding {
             Format::Binary => {
-                let bytes: [u8; 8] = bytes.try_into()?;
-                Ok(bytes.as_slice().get_i64())
+                let val = match bytes.len() {
+                    2 => {
+                        let bytes: [u8; 2] = bytes.try_into()?;
+                        bytes.as_slice().get_i16().into()
+                    }
+
+                    4 => {
+                        let bytes: [u8; 4] = bytes.try_into()?;
+                        bytes.as_slice().get_i32().into()
+                    }
+
+                    8 => {
+                        let bytes: [u8; 8] = bytes.try_into()?;
+                        bytes.as_slice().get_i64()
+                    }
+
+                    _ => return Err(Error::WrongSizeBinary(bytes.len())),
+                };
+                Ok(val)
             }
 
             Format::Text => {

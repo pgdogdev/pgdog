@@ -85,7 +85,7 @@ impl Server {
             match message.code() {
                 'E' => {
                     let error = ErrorResponse::from_bytes(message.payload())?;
-                    return Err(Error::ConnectionError(error));
+                    return Err(Error::ConnectionError(Box::new(error)));
                 }
                 'R' => {
                     let auth = Authentication::from_bytes(message.payload())?;
@@ -140,9 +140,9 @@ impl Server {
                 }
                 // ErrorResponse (B)
                 'E' => {
-                    return Err(Error::ConnectionError(ErrorResponse::from_bytes(
+                    return Err(Error::ConnectionError(Box::new(ErrorResponse::from_bytes(
                         message.to_bytes()?,
-                    )?));
+                    )?)));
                 }
                 // NoticeResponse (B)
                 'N' => {
@@ -386,7 +386,7 @@ impl Server {
         let error = messages.iter().find(|m| m.code() == 'E');
         if let Some(error) = error {
             let error = ErrorResponse::from_bytes(error.to_bytes()?)?;
-            Err(Error::ExecutionError(error))
+            Err(Error::ExecutionError(Box::new(error)))
         } else {
             Ok(messages)
         }
@@ -453,7 +453,7 @@ impl Server {
         match response.code() {
             'E' => {
                 let error = ErrorResponse::from_bytes(response.to_bytes()?)?;
-                Err(Error::PreparedStatementError(error))
+                Err(Error::PreparedStatementError(Box::new(error)))
             }
             '1' => {
                 self.prepared_statements.prepared(name);

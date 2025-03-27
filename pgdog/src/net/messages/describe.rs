@@ -55,3 +55,26 @@ impl Describe {
         }
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::{
+        backend::pool::{test::pool, Request},
+        net::messages::ErrorResponse,
+    };
+
+    #[tokio::test]
+    async fn test_describe() {
+        let pool = pool();
+        let mut conn = pool.get(&Request::default()).await.unwrap();
+        let describe = Describe {
+            kind: 'P',
+            statement: "".into(),
+        };
+        conn.send(vec![describe.message().unwrap()]).await.unwrap();
+        let res = conn.read().await.unwrap();
+        let err = ErrorResponse::from_bytes(res.to_bytes().unwrap()).unwrap();
+        assert_eq!(err.code, "34000");
+    }
+}

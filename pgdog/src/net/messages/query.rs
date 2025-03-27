@@ -5,7 +5,7 @@ use super::code;
 use super::prelude::*;
 
 /// Query (F) message.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Query {
     /// Query string.
     pub query: String,

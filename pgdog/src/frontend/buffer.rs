@@ -74,12 +74,12 @@ impl Buffer {
             match message.code() {
                 'Q' => {
                     let query = Query::from_bytes(message.to_bytes()?)?;
-                    return Ok(Some(BufferedQuery::Query(query.query)));
+                    return Ok(Some(BufferedQuery::Query(query)));
                 }
 
                 'P' => {
                     let parse = Parse::from_bytes(message.to_bytes()?)?;
-                    return Ok(Some(BufferedQuery::Prepared(parse.query)));
+                    return Ok(Some(BufferedQuery::Prepared(parse)));
                 }
 
                 'B' => {
@@ -87,8 +87,7 @@ impl Buffer {
                     if !bind.anonymous() {
                         return Ok(PreparedStatements::global()
                             .lock()
-                            .query(&bind.statement)
-                            .cloned()
+                            .parse(&bind.statement)
                             .map(BufferedQuery::Prepared));
                     }
                 }
@@ -98,8 +97,7 @@ impl Buffer {
                     if !describe.anonymous() {
                         return Ok(PreparedStatements::global()
                             .lock()
-                            .query(&describe.statement)
-                            .cloned()
+                            .parse(&describe.statement)
                             .map(BufferedQuery::Prepared));
                     }
                 }
@@ -159,8 +157,13 @@ impl Buffer {
         self.buffer.last().map(|m| m.code() == 'H').unwrap_or(false)
     }
 
-    pub fn only_flush(&self) -> bool {
-        self.buffer.len() == 1 && self.buffer.last().map(|m| m.code() == 'H').unwrap_or(false)
+    pub fn only(&self, code: char) -> bool {
+        self.buffer.len() == 1
+            && self
+                .buffer
+                .last()
+                .map(|m| m.code() == code)
+                .unwrap_or(false)
     }
 
     /// Client told us the copy failed.
@@ -195,17 +198,17 @@ impl DerefMut for Buffer {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum BufferedQuery {
-    Query(String),
-    Prepared(String),
+    Query(Query),
+    Prepared(Parse),
 }
 
 impl BufferedQuery {
     pub fn query(&self) -> &str {
         match self {
-            Self::Query(query) => query,
-            Self::Prepared(query) => query,
+            Self::Query(query) => &query.query,
+            Self::Prepared(query) => &query.query,
         }
     }
 }

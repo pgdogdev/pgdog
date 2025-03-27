@@ -11,6 +11,7 @@ use super::{Buffer, Command, Comms, Error, PreparedStatements};
 use crate::auth::{md5, scram::Server};
 use crate::backend::pool::{Connection, Request};
 use crate::config::config;
+use crate::frontend::buffer::BufferedQuery;
 #[cfg(debug_assertions)]
 use crate::frontend::QueryLogger;
 use crate::net::messages::{
@@ -36,6 +37,7 @@ pub struct Client {
     streaming: bool,
     shard: Option<usize>,
     prepared_statements: PreparedStatements,
+    in_transaction: bool,
 }
 
 impl Client {
@@ -142,6 +144,7 @@ impl Client {
             shard,
             params,
             prepared_statements: PreparedStatements::new(),
+            in_transaction: false,
         };
 
         if client.admin {
@@ -246,9 +249,11 @@ impl Client {
         if !connected {
             match command {
                 Some(Command::StartTransaction(query)) => {
-                    inner.start_transaction = Some(query.clone());
-                    self.start_transaction().await?;
-                    return Ok(false);
+                    if let BufferedQuery::Query(_) = query {
+                        self.start_transaction().await?;
+                        inner.start_transaction = Some(query.clone());
+                        return Ok(false);
+                    }
                 }
                 Some(Command::RollbackTransaction) => {
                     inner.start_transaction = None;
@@ -279,13 +284,6 @@ impl Client {
                     }
                 }
             };
-
-            // Simulate a transaction until the client
-            // sends a query over. This ensures that we don't
-            // connect to all shards for no reason.
-            if let Some(query) = inner.start_transaction.take() {
-                inner.backend.execute(&query).await?;
-            }
         }
 
         // Handle any prepared statements.
@@ -304,7 +302,7 @@ impl Client {
                 if buffer.flush() {
                     self.stream.flush().await?;
                 }
-                if buffer.only_flush() {
+                if buffer.only('H') {
                     buffer.remove('H');
                 }
             }
@@ -315,9 +313,26 @@ impl Client {
             }
         }
 
+        if buffer.only('S') {
+            buffer.remove('S');
+            self.stream
+                .send_flush(ReadyForQuery::in_transaction(self.in_transaction))
+                .await?;
+        }
+
         if buffer.is_empty() {
-            inner.disconnect();
+            if !self.in_transaction {
+                debug!("client finished extended exchange, disconnecting from servers");
+                inner.disconnect();
+            }
             return Ok(false);
+        }
+
+        // Simulate a transaction until the client
+        // sends a query over. This ensures that we don't
+        // connect to all shards for no reason.
+        if let Some(query) = inner.start_transaction.take() {
+            inner.backend.execute(&query).await?;
         }
 
         // Handle COPY subprotocol in a potentially sharded context.
@@ -351,6 +366,11 @@ impl Client {
         let async_flush = matches!(code, 'T' | 'n') && inner.async_;
         let streaming = message.streaming();
 
+        if code == 'Z' {
+            inner.comms.stats(inner.stats.query());
+            self.in_transaction = message.in_transaction();
+        }
+
         if flush || async_flush || streaming {
             self.stream.send_flush(message).await?;
             if async_flush {
@@ -362,16 +382,12 @@ impl Client {
 
         inner.comms.stats(inner.stats.sent(len));
 
-        if code == 'Z' {
-            inner.comms.stats(inner.stats.query());
-        }
-
         if inner.backend.done() {
             if inner.transaction_mode() {
                 inner.disconnect();
             }
             inner.comms.stats(inner.stats.transaction());
-            trace!(
+            debug!(
                 "transaction finished [{}ms]",
                 inner.stats.last_transaction_time.as_secs_f64() * 1000.0
             );
@@ -426,7 +442,7 @@ impl Client {
         self.stream
             .send_many(vec![
                 CommandComplete::new_begin().message()?,
-                ReadyForQuery::in_transaction().message()?,
+                ReadyForQuery::in_transaction(true).message()?,
             ])
             .await?;
         debug!("transaction started");
