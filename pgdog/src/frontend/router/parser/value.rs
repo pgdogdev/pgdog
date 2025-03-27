@@ -102,6 +102,13 @@ impl<'a> From<&'a AConst> for Value<'a> {
             }
             Some(Val::Boolval(b)) => Value::Boolean(b.boolval),
             Some(Val::Ival(i)) => Value::Integer(i.ival as i64),
+            Some(Val::Fval(Float { fval })) => {
+                if let Ok(val) = fval.parse() {
+                    Value::Integer(val)
+                } else {
+                    Value::Null
+                }
+            }
             _ => Value::Null,
         }
     }
