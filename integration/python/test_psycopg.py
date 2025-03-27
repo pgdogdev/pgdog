@@ -48,8 +48,8 @@ def test_insert():
         setup(conn)
 
         for start in [1, 10_000, 100_000, 1_000_000_000, 10_000_000_000, 10_000_000_000_000]:
-            for _ in range(250):
-                id = random.randint(start, start + 100)
+            for offset in range(250):
+                id = start + offset
                 cur = conn.cursor()
                 cur.execute("INSERT INTO sharded (id, value) VALUES (%s, %s) RETURNING *", (id, 'test'))
                 results = cur.fetchall()
