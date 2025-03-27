@@ -74,3 +74,5 @@ jobs:
         run: cargo build
       - name: Python
         run: bash integration/python/run.sh
+      - name: pgbench
+        run: bash integration/pgbench/run.sh
