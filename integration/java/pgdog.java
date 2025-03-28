@@ -31,13 +31,43 @@ class SelectOne extends TestCase {
 
     void run() throws Exception {
         Statement st = this.connection.createStatement();
-        ResultSet rs = st.executeQuery("SELECT 1 AS one");
+        ResultSet rs = st.executeQuery("SELECT 1::integer AS one");
         int rows = 0;
         while (rs.next()) {
             rows += 1;
-            assert rs.getInt(0) == 1;
+            assert rs.getInt("one") == 1;
         }
         assert rows == 1;
+    }
+}
+
+class Prepared extends TestCase {
+
+    Prepared() throws Exception {
+        super("pgdog", "Prepared");
+    }
+
+    void run() throws Exception {
+        PreparedStatement st =
+            this.connection.prepareStatement(
+                    "INSERT INTO sharded (id, value) VALUES (?, ?) RETURNING *"
+                );
+
+        int rows = 0;
+
+        for (int i = 0; i < 25; i++) {
+            st.setInt(1, i);
+            st.setString(2, "value_" + i);
+            ResultSet rs = st.executeQuery();
+
+            while (rs.next()) {
+                rows += 1;
+                assert i == rs.getInt("id");
+                assert rs.getString("value").equals("value_" + i);
+            }
+        }
+
+        assert rows == 25;
     }
 }
 
@@ -53,5 +83,6 @@ class Pgdog {
 
     public static void main(String[] args) throws Exception {
         new SelectOne().execute();
+        new Prepared().execute();
     }
 }

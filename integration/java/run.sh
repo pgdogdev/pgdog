@@ -17,7 +17,7 @@ javac pgdog.java
 run_pgdog
 wait_for_pgdog
 
-java -cp ${CLASS_PATH} Pgdog
+java -cp ${CLASS_PATH} -ea Pgdog
 
 popd
 
