@@ -58,13 +58,7 @@ impl Decoder {
         match self.formats.len() {
             0 => Format::Text,
             1 => self.formats[0],
-            n => {
-                if position < n {
-                    self.formats[position]
-                } else {
-                    Format::Text
-                }
-            }
+            _ => self.formats.get(position).copied().unwrap_or(Format::Text),
         }
     }
 
