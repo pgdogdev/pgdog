@@ -1,4 +1,4 @@
-use crate::net::messages::Parse;
+use crate::net::messages::{Parse, RowDescription};
 use std::collections::hash_map::{Entry, HashMap};
 
 fn global_name(counter: usize) -> String {
@@ -8,6 +8,7 @@ fn global_name(counter: usize) -> String {
 #[derive(Debug, Clone)]
 struct StoredParse {
     parse: Parse,
+    row_description: Option<RowDescription>,
 }
 
 impl StoredParse {
@@ -43,9 +44,23 @@ impl GlobalCache {
                 let name = global_name(self.counter);
                 let mut parse = parse.clone();
                 parse.name = name.clone();
-                self.names.insert(name.clone(), StoredParse { parse });
+                self.names.insert(
+                    name.clone(),
+                    StoredParse {
+                        parse,
+                        row_description: None,
+                    },
+                );
 
                 (true, name)
+            }
+        }
+    }
+
+    pub fn describe(&mut self, name: &str, row_description: &RowDescription) {
+        if let Some(ref mut entry) = self.names.get_mut(name) {
+            if entry.row_description.is_none() {
+                entry.row_description = Some(row_description.clone());
             }
         }
     }
@@ -59,6 +74,13 @@ impl GlobalCache {
     /// Construct a Parse message from a query stored in the global cache.
     pub fn parse(&self, name: &str) -> Option<Parse> {
         self.names.get(name).map(|p| p.parse.clone())
+    }
+
+    pub fn row_description(&self, name: &str) -> Option<RowDescription> {
+        self.names
+            .get(name)
+            .map(|p| p.row_description.clone())
+            .flatten()
     }
 
     pub fn len(&self) -> usize {

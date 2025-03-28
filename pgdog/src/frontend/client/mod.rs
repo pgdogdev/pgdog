@@ -7,6 +7,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::{select, spawn};
 use tracing::{debug, error, info, trace};
 
+use super::prepared_statements::PreparedRequest;
 use super::{Buffer, Command, Comms, Error, PreparedStatements};
 use crate::auth::{md5, scram::Server};
 use crate::backend::pool::{Connection, Request};
@@ -288,28 +289,37 @@ impl Client {
 
         // Handle any prepared statements.
         for request in self.prepared_statements.requests() {
-            if request.is_prepare() {
-                if let Err(err) = inner.backend.prepare(request.name()).await {
-                    self.stream.error(ErrorResponse::from_err(&err)).await?;
-                    return Ok(false);
+            match &request {
+                PreparedRequest::PrepareNew { name } => {
+                    if let Err(err) = inner.backend.prepare(&name).await {
+                        self.stream.error(ErrorResponse::from_err(&err)).await?;
+                        return Ok(false);
+                    }
+                    self.stream.send(ParseComplete).await?;
+                    buffer.remove('P');
                 }
-            } else {
-                let messages = inner.backend.describe(request.name()).await?;
-                for message in messages {
-                    self.stream.send(message).await?;
+                PreparedRequest::Prepare { name } => {
+                    if let Err(err) = inner.backend.prepare(&name).await {
+                        self.stream.error(ErrorResponse::from_err(&err)).await?;
+                        return Ok(false);
+                    }
                 }
-                buffer.remove('D');
-                if buffer.flush() {
-                    self.stream.flush().await?;
+                PreparedRequest::Describe { name } => {
+                    let messages = inner.backend.describe(&name).await?;
+                    for message in messages {
+                        self.stream.send(message).await?;
+                    }
+                    buffer.remove('D');
+                    if buffer.flush() {
+                        self.stream.flush().await?;
+                    }
+                    if buffer.only('H') {
+                        buffer.remove('H');
+                    }
                 }
-                if buffer.only('H') {
-                    buffer.remove('H');
+                PreparedRequest::Bind { bind } => {
+                    inner.backend.bind(bind).await?;
                 }
-            }
-
-            if request.is_new() {
-                self.stream.send(ParseComplete).await?;
-                buffer.remove('P');
             }
         }
 
@@ -359,6 +369,7 @@ impl Client {
     async fn server_message(&mut self, inner: &mut Inner, message: Message) -> Result<bool, Error> {
         let len = message.len();
         let code = message.code();
+        let message = message.backend();
 
         // ReadyForQuery (B) | CopyInResponse (B)
         let flush = matches!(code, 'Z' | 'G' | 'E' | 'N');
@@ -370,6 +381,8 @@ impl Client {
             inner.comms.stats(inner.stats.query());
             self.in_transaction = message.in_transaction();
         }
+
+        trace!("-> {:#?}", message);
 
         if flush || async_flush || streaming {
             self.stream.send_flush(message).await?;

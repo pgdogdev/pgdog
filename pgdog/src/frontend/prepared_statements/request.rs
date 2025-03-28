@@ -1,13 +1,16 @@
 //! Request to use a prepared statement.
 
+use crate::net::messages::Bind;
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Request {
+pub enum PreparedRequest {
     Prepare { name: String },
     Describe { name: String },
     PrepareNew { name: String },
+    Bind { bind: Bind },
 }
 
-impl Request {
+impl PreparedRequest {
     pub fn new(name: &str, new: bool) -> Self {
         if new {
             Self::PrepareNew {
@@ -31,6 +34,7 @@ impl Request {
             Self::Prepare { name } => name,
             Self::Describe { name } => name,
             Self::PrepareNew { name } => name,
+            Self::Bind { bind } => &bind.statement,
         }
     }
 

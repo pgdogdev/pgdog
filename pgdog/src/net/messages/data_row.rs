@@ -1,5 +1,7 @@
 //! DataRow (B) message.
 
+use crate::net::Decoder;
+
 use super::{code, prelude::*, Datum, Format, FromDataType, Numeric, RowDescription};
 use bytes::BytesMut;
 use std::ops::{Deref, DerefMut};
@@ -52,6 +54,12 @@ pub struct DataRow {
 /// using text formatting.
 pub trait ToDataRowColumn {
     fn to_data_row_column(&self) -> Data;
+}
+
+impl ToDataRowColumn for Bytes {
+    fn to_data_row_column(&self) -> Data {
+        self.clone().into()
+    }
 }
 
 impl ToDataRowColumn for String {
@@ -177,13 +185,13 @@ impl DataRow {
     pub fn get_column<'a>(
         &self,
         index: usize,
-        rd: &'a RowDescription,
+        decoder: &'a Decoder,
     ) -> Result<Option<Column<'a>>, Error> {
-        if let Some(field) = rd.field(index) {
+        if let Some(field) = decoder.rd().field(index) {
             if let Some(data) = self.column(index) {
                 return Ok(Some(Column {
                     name: field.name.as_str(),
-                    value: Datum::new(&data, field.data_type(), field.format())?,
+                    value: Datum::new(&data, field.data_type(), decoder.format(index))?,
                 }));
             }
         }

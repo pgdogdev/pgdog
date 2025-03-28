@@ -1,6 +1,6 @@
 use std::ops::Add;
 
-use super::{bind::Format, data_row::Data, Error, ToDataRowColumn};
+use super::{bind::Format, data_row::Data, Error, ToBytes, ToDataRowColumn};
 use ::uuid::Uuid;
 use bytes::Bytes;
 
@@ -117,6 +117,16 @@ impl Datum {
 
     pub fn is_null(&self) -> bool {
         matches!(self, Datum::Null)
+    }
+
+    pub fn encode(&self, format: Format) -> Result<Bytes, Error> {
+        match self {
+            Datum::Bigint(i) => i.encode(format),
+            Datum::Integer(i) => i.encode(format),
+            Datum::Uuid(uuid) => uuid.encode(format),
+            Datum::Text(s) => s.encode(format),
+            _ => Err(Error::UnexpectedPayload),
+        }
     }
 }
 

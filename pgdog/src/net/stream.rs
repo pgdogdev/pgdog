@@ -106,8 +106,6 @@ impl Stream {
     pub async fn send(&mut self, message: impl Protocol) -> Result<usize, crate::net::Error> {
         let bytes = message.to_bytes()?;
 
-        trace!("📡 <= {}", message.code());
-
         match self {
             Stream::Plain(ref mut stream) => stream.write_all(&bytes).await?,
             Stream::Tls(ref mut stream) => stream.write_all(&bytes).await?,
@@ -180,7 +178,7 @@ impl Stream {
 
         let message = Message::new(bytes.freeze());
 
-        trace!("📡 => {}", message.code());
+        // trace!("📡 => {}", message.code());
 
         Ok(message)
     }

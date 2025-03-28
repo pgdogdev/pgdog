@@ -12,7 +12,7 @@ use tracing::{debug, info, trace, warn};
 
 use super::{pool::Address, Error, PreparedStatements, Stats};
 use crate::net::{
-    messages::{DataRow, Describe, Flush, NoticeResponse},
+    messages::{DataRow, Describe, Flush, NoticeResponse, RowDescription},
     parameter::Parameters,
     tls::connector,
     Parameter, Stream,
@@ -278,7 +278,7 @@ impl Server {
 
         trace!("← {:#?}", message);
 
-        Ok(message)
+        Ok(message.backend())
     }
 
     /// Synchronize parameters between client and server.
@@ -482,13 +482,20 @@ impl Server {
         loop {
             let response = self.read().await?;
             match response.code() {
-                'T' | 'n' | 'E' => {
-                    messages.push(response);
+                'T' => {
+                    let row_description = RowDescription::from_bytes(response.to_bytes()?)?;
+                    self.prepared_statements.describe(name, &row_description);
+                    messages.push(response.backend());
+                    break;
+                }
+
+                'n' | 'E' => {
+                    messages.push(response.backend());
                     break;
                 }
 
                 't' => {
-                    messages.push(response);
+                    messages.push(response.backend());
                 }
 
                 c => return Err(Error::UnexpectedMessage(c)),

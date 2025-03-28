@@ -27,7 +27,7 @@ impl From<Format> for i16 {
 }
 
 /// Parameter data.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, PartialOrd, Ord, Eq)]
 pub struct Parameter {
     /// Parameter data length.
     pub len: i32,
@@ -78,7 +78,7 @@ impl ParameterWithFormat<'_> {
 }
 
 /// Bind (F) message.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, PartialOrd, Ord, Eq)]
 pub struct Bind {
     /// Portal name.
     pub portal: String,
@@ -134,20 +134,18 @@ impl Bind {
         self.statement.is_empty()
     }
 
-    /// Convert bind parameters to plugin parameters.
-    ///
-    /// # Safety
-    ///
-    /// This function allocates memory the caller has to deallocate.
-    pub unsafe fn plugin_parameters(&self) -> Result<Vec<PluginParameter>, Error> {
-        let mut params = vec![];
-
-        for (index, param) in self.params.iter().enumerate() {
-            let format = self.parameter_format(index)?;
-            params.push(PluginParameter::new(format.into(), &param.data));
-        }
-
-        Ok(params)
+    /// Format codes, if any.
+    pub fn codes(&self) -> Vec<Format> {
+        self.codes
+            .iter()
+            .map(|c| {
+                if *c == 0 {
+                    Format::Text
+                } else {
+                    Format::Binary
+                }
+            })
+            .collect()
     }
 }
 

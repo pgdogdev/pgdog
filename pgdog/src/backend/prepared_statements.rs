@@ -4,7 +4,7 @@ use parking_lot::Mutex;
 
 use crate::{
     frontend::{self, prepared_statements::GlobalCache},
-    net::messages::parse::Parse,
+    net::messages::{parse::Parse, RowDescription},
 };
 
 #[derive(Debug)]
@@ -40,6 +40,14 @@ impl PreparedStatements {
 
     pub fn parse(&self, name: &str) -> Option<Parse> {
         self.cache.lock().parse(name)
+    }
+
+    pub fn row_description(&self, name: &str) -> Option<RowDescription> {
+        self.cache.lock().row_description(name)
+    }
+
+    pub fn describe(&self, name: &str, row_description: &RowDescription) {
+        self.cache.lock().describe(name, row_description);
     }
 
     pub fn remove(&mut self, name: &str) -> bool {

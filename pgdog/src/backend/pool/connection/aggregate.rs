@@ -4,7 +4,10 @@ use std::collections::{HashMap, VecDeque};
 
 use crate::{
     frontend::router::parser::{Aggregate, AggregateFunction, AggregateTarget},
-    net::messages::{DataRow, Datum, RowDescription},
+    net::{
+        messages::{DataRow, Datum},
+        Decoder,
+    },
 };
 
 use super::Error;
@@ -16,10 +19,10 @@ struct Grouping {
 }
 
 impl Grouping {
-    fn new(row: &DataRow, group_by: &[usize], rd: &RowDescription) -> Result<Self, Error> {
+    fn new(row: &DataRow, group_by: &[usize], decoder: &Decoder) -> Result<Self, Error> {
         let mut columns = vec![];
         for idx in group_by {
-            let column = row.get_column(*idx, rd)?;
+            let column = row.get_column(*idx, decoder)?;
             if let Some(column) = column {
                 columns.push((*idx, column.value));
             }
@@ -58,8 +61,8 @@ impl<'a> Accumulator<'a> {
     }
 
     /// Transform COUNT(*), MIN, MAX, etc., from multiple shards into a single value.
-    fn accumulate(&mut self, row: &DataRow, rd: &RowDescription) -> Result<(), Error> {
-        let column = row.get_column(self.target.column(), rd)?;
+    fn accumulate(&mut self, row: &DataRow, decoder: &Decoder) -> Result<(), Error> {
+        let column = row.get_column(self.target.column(), decoder)?;
         if let Some(column) = column {
             match self.target.function() {
                 AggregateFunction::Count => self.datum = self.datum.clone() + column.value,
@@ -100,19 +103,19 @@ impl<'a> Accumulator<'a> {
 pub(super) struct Aggregates<'a> {
     rows: &'a VecDeque<DataRow>,
     mappings: HashMap<Grouping, Vec<Accumulator<'a>>>,
-    rd: &'a RowDescription,
+    decoder: &'a Decoder,
     aggregate: &'a Aggregate,
 }
 
 impl<'a> Aggregates<'a> {
     pub(super) fn new(
         rows: &'a VecDeque<DataRow>,
-        rd: &'a RowDescription,
+        decoder: &'a Decoder,
         aggregate: &'a Aggregate,
     ) -> Self {
         Self {
             rows,
-            rd,
+            decoder,
             mappings: HashMap::new(),
             aggregate,
         }
@@ -120,14 +123,14 @@ impl<'a> Aggregates<'a> {
 
     pub(super) fn aggregate(mut self) -> Result<VecDeque<DataRow>, Error> {
         for row in self.rows {
-            let grouping = Grouping::new(row, self.aggregate.group_by(), self.rd)?;
+            let grouping = Grouping::new(row, self.aggregate.group_by(), self.decoder)?;
             let entry = self
                 .mappings
                 .entry(grouping)
                 .or_insert_with(|| Accumulator::from_aggregate(self.aggregate));
 
             for aggregate in entry {
-                aggregate.accumulate(row, self.rd)?;
+                aggregate.accumulate(row, self.decoder)?;
             }
         }
 
@@ -144,10 +147,13 @@ impl<'a> Aggregates<'a> {
             //
             let mut row = DataRow::new();
             for (idx, datum) in grouping.columns {
-                row.insert(idx, datum);
+                row.insert(idx, datum.encode(self.decoder.format(idx))?);
             }
             for acc in accumulator {
-                row.insert(acc.target.column(), acc.datum);
+                row.insert(
+                    acc.target.column(),
+                    acc.datum.encode(self.decoder.format(acc.target.column()))?,
+                );
             }
             rows.push_back(row);
         }

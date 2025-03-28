@@ -1,3 +1,4 @@
+pub mod decoder;
 pub mod discovery;
 pub mod error;
 pub mod messages;
@@ -5,8 +6,10 @@ pub mod parameter;
 pub mod stream;
 pub mod tls;
 
+pub use decoder::Decoder;
 pub use error::Error;
-pub use parameter::Parameter;
+pub use messages::*;
+pub use parameter::{Parameter, Parameters};
 pub use stream::Stream;
 
 use std::marker::Unpin;
