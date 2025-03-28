@@ -28,7 +28,7 @@ impl ShardedTables {
     pub fn table(&self, name: &str) -> Option<&ShardedTable> {
         self.tables()
             .iter()
-            .find(|t| t.name.as_ref().map(|name| name.as_str()) == Some(name))
+            .find(|t| t.name.as_deref() == Some(name))
     }
 
     /// Find out which column (if any) is sharded in the given table.
@@ -66,15 +66,14 @@ pub struct ShardedColumn {
 
 impl ShardedColumn {
     pub fn from_sharded_table(table: &ShardedTable, columns: &[&str]) -> Option<Self> {
-        if let Some(index) = columns.iter().position(|c| *c == table.column.as_str()) {
-            Some(ShardedColumn {
+        columns
+            .iter()
+            .position(|c| *c == table.column.as_str())
+            .map(|index| ShardedColumn {
                 data_type: table.data_type,
                 position: index,
                 centroids: table.centroids.clone(),
                 centroid_probes: table.centroid_probes,
             })
-        } else {
-            None
-        }
     }
 }
