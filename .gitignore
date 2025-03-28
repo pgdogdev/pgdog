@@ -33,3 +33,7 @@ queries.txt
 __pycache__
 venv
 .pytest_cache
+toxiproxy
+toxiproxy-cli
+toxiproxy-server
+toxi.log

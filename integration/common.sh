@@ -22,3 +22,11 @@ function stop_pgdog() {
     cat ${SCRIPT_DIR}/log.txt
     rm ${SCRIPT_DIR}/log.txt
 }
+
+function start_toxi() {
+    ./toxiproxy > /dev/null &
+}
+
+function stop_toxi() {
+    killall -TERM toxiproxy
+}

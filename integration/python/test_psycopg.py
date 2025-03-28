@@ -1,24 +1,6 @@
 import psycopg
-import pytest
-import random
+from globals import no_out_of_sync, sharded_sync, normal_sync
 
-from globals import admin, no_out_of_sync
-
-def sharded():
-    return psycopg.connect(
-		user='pgdog',
-		password='pgdog',
-		dbname='pgdog_sharded',
-		host='127.0.0.1',
-		port=6432)
-
-def normal():
-    return psycopg.connect(
-		user='pgdog',
-		password='pgdog',
-		dbname='pgdog',
-		host='127.0.0.1',
-		port=6432)
 
 def setup(conn):
     try:
@@ -35,7 +17,7 @@ def setup(conn):
     conn.commit()
 
 def test_connect():
-    for conn in [normal(), sharded()]:
+    for conn in [normal_sync(), sharded_sync()]:
         cur = conn.cursor()
         cur.execute("SELECT 1::bigint")
         one = cur.fetchall()
@@ -44,7 +26,7 @@ def test_connect():
     no_out_of_sync()
 
 def test_insert():
-    for conn in [normal(), sharded()]:
+    for conn in [normal_sync(), sharded_sync()]:
         setup(conn)
 
         for start in [1, 10_000, 100_000, 1_000_000_000, 10_000_000_000, 10_000_000_000_000]:
