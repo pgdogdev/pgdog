@@ -17,6 +17,7 @@ done
 
 for db in shard_0 shard_1; do
     psql -c 'CREATE TABLE IF NOT EXISTS sharded (id BIGINT, value TEXT)' ${db}
+    psql -f ${SCRIPT_DIR}/../pgdog/src/backend/schema/setup.sql ${db}
 done
 
 pushd ${SCRIPT_DIR}

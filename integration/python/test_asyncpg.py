@@ -1,31 +1,10 @@
-import asyncio
 import asyncpg
 import pytest
-import random
-import psycopg
 from datetime import datetime
-from globals import admin, no_out_of_sync
-
-async def sharded():
-    return await asyncpg.connect(
-		user='pgdog',
-		password='pgdog',
-		database='pgdog_sharded',
-		host='127.0.0.1',
-		port=6432,
-		statement_cache_size=250)
-
-async def normal():
-    return await asyncpg.connect(
-		user='pgdog',
-		password='pgdog',
-		database='pgdog',
-		host='127.0.0.1',
-		port=6432,
-		statement_cache_size=250)
+from globals import normal_async, sharded_async, no_out_of_sync
 
 async def both():
-    return [await sharded(), await normal()]
+    return [await sharded_async(), await normal_async()]
 
 async def setup(conn):
     try:
@@ -45,7 +24,7 @@ async def test_connect():
         result = await c.fetch("SELECT 1")
         assert result[0][0] == 1
 
-    conn = await normal()
+    conn = await normal_async()
     result = await conn.fetch("SELECT 1")
     assert result[0][0] == 1
     no_out_of_sync()
@@ -85,7 +64,7 @@ async def test_error_transaction():
 
 @pytest.mark.asyncio
 async def test_insert_allshard():
-    conn = await sharded();
+    conn = await sharded_async();
     try:
         async with conn.transaction():
             await conn.execute("""CREATE TABLE pytest (
@@ -113,7 +92,7 @@ async def test_insert_allshard():
 
 @pytest.mark.asyncio
 async def test_direct_shard():
-    conn = await sharded()
+    conn = await sharded_async()
     try:
         await conn.execute("DROP TABLE sharded")
     except asyncpg.exceptions.UndefinedTableError:
@@ -157,7 +136,7 @@ async def test_direct_shard():
 
 @pytest.mark.asyncio
 async def test_delete():
-    conn = await sharded()
+    conn = await sharded_async()
     await setup(conn)
 
     for id in range(250):

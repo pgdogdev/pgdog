@@ -5,7 +5,7 @@ use std::{
 };
 
 use crate::{
-    backend::{databases::databases, Cluster, ShardingSchema},
+    backend::{databases::databases, replication::ShardedColumn, Cluster, ShardingSchema},
     frontend::{
         buffer::BufferedQuery,
         router::{
@@ -419,27 +419,51 @@ impl QueryParser {
             .into_iter()
             .map(|column| column.name)
             .collect::<Vec<_>>();
-        let table = insert.table().unwrap().name;
-        let sharding_column = sharding_schema.tables.sharded_column(table, &columns);
         let mut shards = BTreeSet::new();
-        if let Some(column) = sharding_column {
-            for tuple in insert.tuples() {
-                if let Some(value) = tuple.get(column.position) {
-                    shards.insert(if let Some(bind) = params {
-                        value.shard_placeholder(bind, sharding_schema, &column)
-                    } else {
-                        value.shard(sharding_schema, &column)
-                    });
+        let table = insert.table().unwrap().name;
+        if let Some(sharded_table) = sharding_schema.tables.table(table) {
+            if let Some(column) = ShardedColumn::from_sharded_table(&sharded_table, &columns) {
+                for tuple in insert.tuples() {
+                    if let Some(value) = tuple.get(column.position) {
+                        shards.insert(if let Some(bind) = params {
+                            value.shard_placeholder(bind, sharding_schema, &column)
+                        } else {
+                            value.shard(sharding_schema, &column)
+                        });
+                    }
                 }
             }
-        }
-
-        // TODO: support sending inserts to multiple shards.
-        if shards.len() == 1 {
-            Ok(Command::Query(Route::write(shards.pop_last().unwrap())))
+            match shards.len() {
+                0 => Ok(Command::Query(Route::write(Some(
+                    round_robin::next() % sharding_schema.shards,
+                )))),
+                1 => Ok(Command::Query(Route::write(shards.pop_last().unwrap()))),
+                // TODO: support sending inserts to multiple shards.
+                _ => Ok(Command::Query(Route::write(None))),
+            }
         } else {
             Ok(Command::Query(Route::write(None)))
         }
+        // let sharding_column = sharding_schema.tables.sharded_column(table, &columns);
+        // let mut shards = BTreeSet::new();
+        // if let Some(column) = sharding_column {
+        //     for tuple in insert.tuples() {
+        //         if let Some(value) = tuple.get(column.position) {
+        //             shards.insert(if let Some(bind) = params {
+        //                 value.shard_placeholder(bind, sharding_schema, &column)
+        //             } else {
+        //                 value.shard(sharding_schema, &column)
+        //             });
+        //         }
+        //     }
+        // }
+
+        // // TODO: support sending inserts to multiple shards.
+        // if shards.len() == 1 {
+        //     Ok(Command::Query(Route::write(shards.pop_last().unwrap())))
+        // } else {
+        //     Ok(Command::Query(Route::write(None)))
+        // }
     }
 
     fn update(_stmt: &UpdateStmt) -> Result<Command, Error> {
