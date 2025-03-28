@@ -32,3 +32,9 @@ min_pool_size = 0
 name = "pgdog"
 database = "pgdog_sharded"
 password = "pgdog"
+
+[[users]]
+name = "pgdog"
+database = "failover"
+password = "pgdog"
+min_pool_size = 0

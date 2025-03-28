@@ -204,14 +204,15 @@ impl Config {
         for database in self.databases.clone() {
             let id = (
                 database.name.clone(),
-                database.role == Role::Primary,
+                database.role,
                 database.shard,
+                database.port,
             );
             let new = duplicate_primaries.insert(id);
             if !new {
                 warn!(
-                    "database \"{}\" (shard={}) has more than one primary, only the first one will be used",
-                    database.name, database.shard,
+                    "database \"{}\" (shard={}) has a duplicate {}",
+                    database.name, database.shard, database.role,
                 );
             }
         }
@@ -390,6 +391,7 @@ pub enum LoadBalancingStrategy {
 
 /// Database server proxied by pgDog.
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Ord, PartialOrd, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct Database {
     /// Database name visible to the clients.
     pub name: String,
@@ -426,12 +428,23 @@ impl Database {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Ord, PartialOrd, Eq)]
+#[derive(
+    Serialize, Deserialize, Debug, Clone, Default, PartialEq, Ord, PartialOrd, Eq, Hash, Copy,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum Role {
     #[default]
     Primary,
     Replica,
+}
+
+impl std::fmt::Display for Role {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Primary => write!(f, "primary"),
+            Self::Replica => write!(f, "replica"),
+        }
+    }
 }
 
 /// pgDog plugin.

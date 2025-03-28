@@ -203,7 +203,7 @@ impl QueryParser {
             }
         }
 
-        debug!("{:#?}", command);
+        trace!("{:#?}", command);
 
         Ok(command)
     }
