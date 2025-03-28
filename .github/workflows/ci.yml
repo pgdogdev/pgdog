@@ -71,8 +71,10 @@ jobs:
           toolchain: stable
           override: true
       - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: release
       - name: Build PgDog
-        run: cargo build
+        run: cargo build --release
       - name: Python
         run: bash integration/python/run.sh
       - name: pgbench
