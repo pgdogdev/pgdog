@@ -81,3 +81,5 @@ jobs:
         run: bash integration/pgbench/run.sh
       - name: Ruby
         run: bash integration/ruby/run.sh
+      - name: Java
+        run: bash integration/java/run.sh
