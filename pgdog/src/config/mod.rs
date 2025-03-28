@@ -581,6 +581,10 @@ pub struct ShardedTable {
 }
 
 impl ShardedTable {
+    /// Load centroids from file, if provided.
+    ///
+    /// Centroids can be very large vectors (1000+ columns).
+    /// Hardcoding them in pgdog.toml is then impractical.
     pub fn load_centroids(&mut self) -> Result<(), Error> {
         if let Some(centroids_path) = &self.centroids_path {
             if let Ok(f) = std::fs::read_to_string(centroids_path) {

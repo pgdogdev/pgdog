@@ -159,6 +159,11 @@ impl Databases {
         self.manual_queries.get(fingerprint)
     }
 
+    /// Manual queries collection, keyed by query fingerprint.
+    pub fn manual_queries(&self) -> &HashMap<String, ManualQuery> {
+        &self.manual_queries
+    }
+
     /// Create new identical databases.
     fn duplicate(&self) -> Databases {
         Self {

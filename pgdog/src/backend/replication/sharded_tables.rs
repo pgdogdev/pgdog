@@ -3,10 +3,11 @@ use crate::{
     config::{DataType, ShardedTable},
     net::messages::Vector,
 };
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Default)]
 pub struct ShardedTables {
-    tables: Vec<ShardedTable>,
+    tables: Arc<Vec<ShardedTable>>,
 }
 
 impl From<&[ShardedTable]> for ShardedTables {
@@ -17,7 +18,9 @@ impl From<&[ShardedTable]> for ShardedTables {
 
 impl ShardedTables {
     pub fn new(tables: Vec<ShardedTable>) -> Self {
-        Self { tables }
+        Self {
+            tables: Arc::new(tables),
+        }
     }
 
     pub fn tables(&self) -> &[ShardedTable] {
