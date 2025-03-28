@@ -1,6 +1,5 @@
 //! Bind (F) message.
 use crate::net::c_string_buf;
-use pgdog_plugin::bindings::Parameter as PluginParameter;
 use uuid::Uuid;
 
 use super::code;

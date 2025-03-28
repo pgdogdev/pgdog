@@ -291,7 +291,7 @@ impl Client {
         for request in self.prepared_statements.requests() {
             match &request {
                 PreparedRequest::PrepareNew { name } => {
-                    if let Err(err) = inner.backend.prepare(&name).await {
+                    if let Err(err) = inner.backend.prepare(name).await {
                         self.stream.error(ErrorResponse::from_err(&err)).await?;
                         return Ok(false);
                     }
@@ -299,13 +299,13 @@ impl Client {
                     buffer.remove('P');
                 }
                 PreparedRequest::Prepare { name } => {
-                    if let Err(err) = inner.backend.prepare(&name).await {
+                    if let Err(err) = inner.backend.prepare(name).await {
                         self.stream.error(ErrorResponse::from_err(&err)).await?;
                         return Ok(false);
                     }
                 }
                 PreparedRequest::Describe { name } => {
-                    let messages = inner.backend.describe(&name).await?;
+                    let messages = inner.backend.describe(name).await?;
                     for message in messages {
                         self.stream.send(message).await?;
                     }

@@ -1,6 +1,6 @@
 use std::ops::Add;
 
-use super::{bind::Format, data_row::Data, Error, ToBytes, ToDataRowColumn};
+use super::{bind::Format, data_row::Data, Error, ToDataRowColumn};
 use ::uuid::Uuid;
 use bytes::Bytes;
 

@@ -77,10 +77,7 @@ impl GlobalCache {
     }
 
     pub fn row_description(&self, name: &str) -> Option<RowDescription> {
-        self.names
-            .get(name)
-            .map(|p| p.row_description.clone())
-            .flatten()
+        self.names.get(name).and_then(|p| p.row_description.clone())
     }
 
     pub fn len(&self) -> usize {
