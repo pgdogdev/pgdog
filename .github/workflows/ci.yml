@@ -76,3 +76,5 @@ jobs:
         run: bash integration/python/run.sh
       - name: pgbench
         run: bash integration/pgbench/run.sh
+      - name: Ruby
+        run: bash integration/ruby/run.sh
