@@ -286,13 +286,8 @@ impl Server {
         let diff = params.merge(&mut self.params);
         if !diff.is_empty() {
             debug!("syncing {} params", diff.len());
-            self.execute_batch(
-                &diff
-                    .iter()
-                    .map(|query| query.query.as_str())
-                    .collect::<Vec<_>>(),
-            )
-            .await?;
+            self.execute_batch(&diff.iter().map(|query| query.query()).collect::<Vec<_>>())
+                .await?;
         }
         Ok(())
     }

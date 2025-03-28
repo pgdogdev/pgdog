@@ -1,47 +1,70 @@
 //! Query (F) message.
-use crate::net::c_string_buf;
-
-use super::code;
 use super::prelude::*;
 
+use bytes::Bytes;
+use std::str::from_utf8;
+
 /// Query (F) message.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Query {
     /// Query string.
-    pub query: String,
+    pub payload: Bytes,
+}
+
+impl std::fmt::Debug for Query {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Query")
+            .field("query", &self.query())
+            .finish()
+    }
 }
 
 impl Query {
     /// Create new query.
     pub fn new(query: impl ToString) -> Self {
-        Self {
-            query: query.to_string(),
-        }
+        let mut payload = Payload::named('Q');
+        payload.put_string(&query.to_string());
+        let payload = payload.freeze();
+
+        Self { payload }
+    }
+
+    pub fn query(&self) -> &str {
+        // SAFETY:  We check for valid UTF-8 on creation.
+        //          Don't read the trailing null byte.
+        from_utf8(&self.payload[5..self.payload.len() - 1]).unwrap()
     }
 }
 
 impl FromBytes for Query {
-    fn from_bytes(mut bytes: Bytes) -> Result<Self, Error> {
-        code!(bytes, 'Q');
-        let _len = bytes.get_i32();
+    fn from_bytes(payload: Bytes) -> Result<Self, Error> {
+        // Check for UTF-8 so we don't have to later.
+        from_utf8(&payload[5..payload.len() - 1])?;
 
-        let query = c_string_buf(&mut bytes);
-
-        Ok(Query { query })
+        Ok(Query { payload })
     }
 }
 
 impl ToBytes for Query {
     fn to_bytes(&self) -> Result<Bytes, Error> {
-        let mut payload = Payload::named(self.code());
-        payload.put_string(&self.query);
-
-        Ok(payload.freeze())
+        Ok(self.payload.clone())
     }
 }
 
 impl Protocol for Query {
     fn code(&self) -> char {
         'Q'
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_query() {
+        let query = Query::new("SELECT 1, 2, 3");
+        let query = Query::from_bytes(query.to_bytes().unwrap()).unwrap();
+        assert_eq!(query.query(), "SELECT 1, 2, 3");
     }
 }
