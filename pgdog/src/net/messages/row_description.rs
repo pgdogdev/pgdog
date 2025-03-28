@@ -1,6 +1,7 @@
 //! RowDescription (B) message.
 
 use std::ops::Deref;
+use std::sync::Arc;
 
 use crate::net::c_string_buf;
 
@@ -111,14 +112,14 @@ impl Field {
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct RowDescription {
     /// Fields.
-    pub fields: Vec<Field>,
+    pub fields: Arc<Vec<Field>>,
 }
 
 impl RowDescription {
     /// Create new row description from fields.
     pub fn new(fields: &[Field]) -> Self {
         Self {
-            fields: fields.to_vec(),
+            fields: Arc::new(fields.to_vec()),
         }
     }
 
@@ -180,7 +181,9 @@ impl FromBytes for RowDescription {
             })
             .collect();
 
-        Ok(Self { fields })
+        Ok(Self {
+            fields: Arc::new(fields),
+        })
     }
 }
 
@@ -189,7 +192,7 @@ impl ToBytes for RowDescription {
         let mut payload = Payload::named(self.code());
         payload.put_i16(self.fields.len() as i16);
 
-        for field in &self.fields {
+        for field in self.fields.iter() {
             payload.put_string(&field.name);
             payload.put_i32(field.table_oid);
             payload.put_i16(field.column);
