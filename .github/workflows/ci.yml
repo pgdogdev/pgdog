@@ -65,6 +65,7 @@ jobs:
           sudo -u postgres createdb $USER
           bash integration/setup.sh
           sudo apt update && sudo apt install -y python3-virtualenv
+          sudo gem install bundler
       - uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
