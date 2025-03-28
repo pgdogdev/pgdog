@@ -1,6 +1,7 @@
 //! Parse (F) message.
 
 use crate::net::c_string_buf;
+use std::sync::Arc;
 
 use super::code;
 use super::prelude::*;
@@ -9,35 +10,63 @@ use super::prelude::*;
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
 pub struct Parse {
     /// Prepared statement name.
-    pub name: String,
+    name: Arc<String>,
     /// Prepared statement query.
-    pub query: String,
+    query: Arc<String>,
     /// List of data types if any are declared.
-    pub data_types: Vec<i32>,
+    data_types: Arc<Vec<i32>>,
 }
 
 impl Parse {
     /// New anonymous prepared statement.
+    #[cfg(test)]
     pub fn new_anonymous(query: &str) -> Self {
         Self {
-            name: "".into(),
-            query: query.to_string(),
-            data_types: vec![],
+            name: Arc::new("".into()),
+            query: Arc::new(query.to_string()),
+            data_types: Arc::new(vec![]),
         }
     }
 
     /// New prepared statement.
     pub fn named(name: impl ToString, query: impl ToString) -> Self {
         Self {
-            name: name.to_string(),
-            query: query.to_string(),
-            data_types: vec![],
+            name: Arc::new(name.to_string()),
+            query: Arc::new(query.to_string()),
+            data_types: Arc::new(vec![]),
         }
     }
 
     /// Anonymous prepared statement.
     pub fn anonymous(&self) -> bool {
         self.name.is_empty()
+    }
+
+    pub fn query(&self) -> &str {
+        &self.query
+    }
+
+    /// Get query reference.
+    pub fn query_ref(&self) -> Arc<String> {
+        self.query.clone()
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn rename(&self, name: &str) -> Parse {
+        let mut parse = self.clone();
+        parse.name = Arc::new(name.to_owned());
+        parse
+    }
+
+    pub fn data_types(&self) -> &[i32] {
+        &self.data_types
+    }
+
+    pub fn data_types_ref(&self) -> Arc<Vec<i32>> {
+        self.data_types.clone()
     }
 }
 
@@ -51,9 +80,9 @@ impl FromBytes for Parse {
         let data_types = (0..params).map(|_| bytes.get_i32()).collect::<Vec<_>>();
 
         Ok(Self {
-            name,
-            query,
-            data_types,
+            name: Arc::new(name),
+            query: Arc::new(query),
+            data_types: Arc::new(data_types),
         })
     }
 }
@@ -66,7 +95,7 @@ impl ToBytes for Parse {
         payload.put_string(&self.query);
         payload.put_i16(self.data_types.len() as i16);
 
-        for type_ in &self.data_types {
+        for type_ in self.data_types() {
             payload.put_i32(*type_);
         }
 

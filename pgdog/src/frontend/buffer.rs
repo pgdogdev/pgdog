@@ -208,7 +208,7 @@ impl BufferedQuery {
     pub fn query(&self) -> &str {
         match self {
             Self::Query(query) => query.query(),
-            Self::Prepared(query) => &query.query,
+            Self::Prepared(parse) => parse.query(),
         }
     }
 }

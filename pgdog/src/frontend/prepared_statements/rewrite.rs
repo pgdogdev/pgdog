@@ -37,7 +37,7 @@ impl<'a> Rewrite<'a> {
             Ok(message.message()?)
         } else {
             let parse = self.statements.insert(parse);
-            self.requests.push(PreparedRequest::new(&parse.name, true));
+            self.requests.push(PreparedRequest::new(parse.name(), true));
             Ok(parse.message()?)
         }
     }
@@ -97,8 +97,8 @@ mod test {
         let parse = Parse::from_bytes(rewrite.rewrite(parse).unwrap().to_bytes().unwrap()).unwrap();
 
         assert!(!parse.anonymous());
-        assert_eq!(parse.name, "__pgdog_1");
-        assert_eq!(parse.query, "SELECT * FROM users");
+        assert_eq!(parse.name(), "__pgdog_1");
+        assert_eq!(parse.query(), "SELECT * FROM users");
         let requests = rewrite.requests();
         let request = requests.first().unwrap();
         assert_eq!(request.name(), "__pgdog_1");
@@ -143,7 +143,7 @@ mod test {
         let parse = Parse::from_bytes(rewrite.rewrite(parse).unwrap().to_bytes().unwrap()).unwrap();
 
         assert!(parse.anonymous());
-        assert_eq!(parse.query, "SELECT * FROM users");
+        assert_eq!(parse.query(), "SELECT * FROM users");
 
         assert!(statements.is_empty());
         assert!(statements.global.lock().is_empty());
