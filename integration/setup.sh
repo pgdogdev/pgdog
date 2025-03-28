@@ -1,7 +1,11 @@
 #!/bin/bash
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
-ARCH=$(arch)
+if [[ "$OS" == "darwin" ]]; then
+    ARCH=arm64
+else
+    ARCH=amd64
+fi
 
 psql -c "CREATE USER pgdog LOGIN SUPERUSER PASSWORD 'pgdog'"
 
@@ -25,12 +29,5 @@ for bin in toxiproxy-server toxiproxy-cli; do
         chmod +x ${bin}
     fi
 done
-
-killall -TERM toxiproxy || true
-./toxiproxy-server > toxi.log &
-
-./toxiproxy-cli create --listen :5433 --upstream :5432 primary
-./toxiproxy-cli create --listen :5434 --upstream :5432 replica_1
-./toxiproxy-cli create --listen :5435 --upstream :5432 replica_2
 
 popd
