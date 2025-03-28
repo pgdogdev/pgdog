@@ -440,7 +440,7 @@ impl Server {
             .parse(name)
             .ok_or(Error::PreparedStatementMissing(name.to_string()))?;
 
-        debug!("preparing \"{}\" [{}]", parse.name, self.addr());
+        debug!("preparing \"{}\" [{}]", parse.name(), self.addr());
 
         self.send(vec![parse.message()?, Flush.message()?]).await?;
         let response = self.read().await?;

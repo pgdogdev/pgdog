@@ -1,5 +1,6 @@
 use crate::net::messages::{Parse, RowDescription};
 use std::collections::hash_map::{Entry, HashMap};
+use std::sync::Arc;
 
 fn global_name(counter: usize) -> String {
     format!("__pgdog_{}", counter)
@@ -12,29 +13,36 @@ struct StoredParse {
 }
 
 impl StoredParse {
-    pub fn query(&self) -> &String {
-        &self.parse.query
+    pub fn query(&self) -> &str {
+        self.parse.query()
     }
 }
 
+/// Prepared statements cache key.
+///
+/// If these match, it's effectively the same statement.
+/// If they don't, e.g. client sent the same query but
+/// with different data types, we can't re-use it and
+/// need to plan a new one.
+///
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
-struct ParseKey {
-    query: String,
-    data_types: Vec<i32>,
+struct CacheKey {
+    query: Arc<String>,
+    data_types: Arc<Vec<i32>>,
 }
 
 #[derive(Default, Debug)]
 pub struct GlobalCache {
-    statements: HashMap<ParseKey, usize>,
+    statements: HashMap<CacheKey, usize>,
     names: HashMap<String, StoredParse>, // Ideally this holds an entry to `statements`. Maybe an Arc?
     counter: usize,
 }
 
 impl GlobalCache {
     pub(super) fn insert(&mut self, parse: &Parse) -> (bool, String) {
-        let parse_key = ParseKey {
-            query: parse.query.clone(),
-            data_types: parse.data_types.clone(),
+        let parse_key = CacheKey {
+            query: parse.query_ref(),
+            data_types: parse.data_types_ref(),
         };
         match self.statements.entry(parse_key) {
             Entry::Occupied(entry) => (false, global_name(*entry.get())),
@@ -42,8 +50,7 @@ impl GlobalCache {
                 self.counter += 1;
                 entry.insert(self.counter);
                 let name = global_name(self.counter);
-                let mut parse = parse.clone();
-                parse.name = name.clone();
+                let parse = parse.rename(&name);
                 self.names.insert(
                     name.clone(),
                     StoredParse {
@@ -67,7 +74,7 @@ impl GlobalCache {
 
     /// Get query stored in the global cache.
     #[inline]
-    pub fn query(&self, name: &str) -> Option<&String> {
+    pub fn query(&self, name: &str) -> Option<&str> {
         self.names.get(name).map(|s| s.query())
     }
 

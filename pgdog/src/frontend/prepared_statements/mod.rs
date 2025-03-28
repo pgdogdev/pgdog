@@ -53,9 +53,9 @@ impl PreparedStatements {
     /// Register prepared statement with the global cache.
     fn insert(&mut self, parse: Parse) -> Parse {
         let (_new, name) = { self.global.lock().insert(&parse) };
-        self.local.insert(parse.name.clone(), name.clone());
+        self.local.insert(parse.name().to_owned(), name.clone());
 
-        Parse::named(name, parse.query)
+        parse.rename(&name)
     }
 
     /// Get global statement counter.
@@ -63,7 +63,7 @@ impl PreparedStatements {
         self.local.get(name)
     }
 
-    /// Number of prepared stamenets in the local cache.
+    /// Number of prepared statements in the local cache.
     pub fn len(&self) -> usize {
         self.local.len()
     }

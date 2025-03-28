@@ -138,7 +138,7 @@ impl QueryParser {
 
         let ast = match query {
             BufferedQuery::Prepared(query) => {
-                Cache::get().parse(&query.query).map_err(Error::PgQuery)?
+                Cache::get().parse(query.query()).map_err(Error::PgQuery)?
             }
             // Don't cache simple queries, they contain parameter values.
             BufferedQuery::Query(query) => Arc::new(parse(query.query()).map_err(Error::PgQuery)?),
