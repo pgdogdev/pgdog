@@ -59,7 +59,7 @@ impl Decoder {
             0 => Format::Text,
             1 => self.formats[0],
             n => {
-                if n < position {
+                if position < n {
                     self.formats[position]
                 } else {
                     Format::Text
