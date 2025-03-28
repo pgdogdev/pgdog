@@ -44,14 +44,21 @@ def test_connect():
     no_out_of_sync()
 
 def test_insert():
-    for conn in [sharded()]:
+    for conn in [normal(), sharded()]:
         setup(conn)
 
         for start in [1, 10_000, 100_000, 1_000_000_000, 10_000_000_000, 10_000_000_000_000]:
-            for _ in range(250):
-                id = random.randint(start, start + 100)
+            for offset in range(250):
+                id = start + offset
                 cur = conn.cursor()
                 cur.execute("INSERT INTO sharded (id, value) VALUES (%s, %s) RETURNING *", (id, 'test'))
+                results = cur.fetchall()
+
+                assert len(results) == 1
+                assert results[0][0] == id
+                conn.commit()
+
+                cur.execute("SELECT * FROM sharded WHERE id = %s", (id,))
                 results = cur.fetchall()
 
                 assert len(results) == 1

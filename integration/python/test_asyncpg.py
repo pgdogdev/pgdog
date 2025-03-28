@@ -3,6 +3,7 @@ import asyncpg
 import pytest
 import random
 import psycopg
+from datetime import datetime
 from globals import admin, no_out_of_sync
 
 async def sharded():
@@ -163,3 +164,14 @@ async def test_delete():
         await conn.execute("DELETE FROM sharded WHERE id = $1", id)
 
     no_out_of_sync()
+
+@pytest.mark.asyncio
+async def test_copy():
+    records = 250
+    for conn in await both():
+        await setup(conn)
+        rows = [[x, f"value_{x}", datetime.now()] for x in range(records)]
+        await conn.copy_records_to_table("sharded", records=rows, columns=['id', 'value', 'created_at'])
+        count = await conn.fetch("SELECT COUNT(*) FROM sharded")
+        assert len(count) == 1
+        assert count[0][0] == records

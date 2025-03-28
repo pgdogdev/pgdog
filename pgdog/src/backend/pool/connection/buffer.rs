@@ -4,7 +4,10 @@ use std::{cmp::Ordering, collections::VecDeque};
 
 use crate::{
     frontend::router::parser::{Aggregate, OrderBy},
-    net::messages::{DataRow, FromBytes, Message, Protocol, RowDescription, ToBytes, Vector},
+    net::{
+        messages::{DataRow, FromBytes, Message, Protocol, ToBytes, Vector},
+        Decoder,
+    },
 };
 
 use super::Aggregates;
@@ -33,7 +36,7 @@ impl Buffer {
     }
 
     /// Sort the buffer.
-    pub(super) fn sort(&mut self, columns: &[OrderBy], rd: &RowDescription) {
+    pub(super) fn sort(&mut self, columns: &[OrderBy], decoder: &Decoder) {
         // Calculate column indices once, since
         // fetching indices by name is O(number of columns).
         let mut cols = vec![];
@@ -41,19 +44,19 @@ impl Buffer {
             match column {
                 OrderBy::Asc(_) => cols.push(column.clone()),
                 OrderBy::AscColumn(name) => {
-                    if let Some(index) = rd.field_index(name) {
+                    if let Some(index) = decoder.rd().field_index(name) {
                         cols.push(OrderBy::Asc(index + 1));
                     }
                 }
                 OrderBy::Desc(_) => cols.push(column.clone()),
                 OrderBy::DescColumn(name) => {
-                    if let Some(index) = rd.field_index(name) {
+                    if let Some(index) = decoder.rd().field_index(name) {
                         cols.push(OrderBy::Desc(index + 1));
                     }
                 }
                 OrderBy::AscVectorL2(_, _) => cols.push(column.clone()),
                 OrderBy::AscVectorL2Column(name, vector) => {
-                    if let Some(index) = rd.field_index(name) {
+                    if let Some(index) = decoder.rd().field_index(name) {
                         cols.push(OrderBy::AscVectorL2(index + 1, vector.clone()));
                     }
                 }
@@ -70,8 +73,8 @@ impl Buffer {
                 } else {
                     continue;
                 };
-                let left = a.get_column(index, rd);
-                let right = b.get_column(index, rd);
+                let left = a.get_column(index, decoder);
+                let right = b.get_column(index, decoder);
 
                 let ordering = match (left, right) {
                     (Ok(Some(left)), Ok(Some(right))) => {
@@ -120,13 +123,13 @@ impl Buffer {
     pub(super) fn aggregate(
         &mut self,
         aggregate: &Aggregate,
-        rd: &RowDescription,
+        decoder: &Decoder,
     ) -> Result<(), super::Error> {
         let buffer: VecDeque<DataRow> = std::mem::take(&mut self.buffer);
         if aggregate.is_empty() {
             self.buffer = buffer;
         } else {
-            let aggregates = Aggregates::new(&buffer, rd, aggregate);
+            let aggregates = Aggregates::new(&buffer, decoder, aggregate);
             let result = aggregates.aggregate()?;
 
             if !result.is_empty() {
@@ -161,7 +164,7 @@ impl Buffer {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::net::messages::{Field, Format};
+    use crate::net::{Field, Format, RowDescription};
 
     #[test]
     fn test_sort_buffer() {
@@ -175,7 +178,9 @@ mod test {
             buf.add(dr.message().unwrap()).unwrap();
         }
 
-        buf.sort(&columns, &rd);
+        let decoder = Decoder::from(&rd);
+
+        buf.sort(&columns, &decoder);
         buf.full();
 
         let mut i = 1;
@@ -203,7 +208,7 @@ mod test {
             buf.add(dr.message().unwrap()).unwrap();
         }
 
-        buf.aggregate(&agg, &rd).unwrap();
+        buf.aggregate(&agg, &Decoder::from(&rd)).unwrap();
         buf.full();
 
         assert_eq!(buf.len(), 1);
@@ -229,7 +234,7 @@ mod test {
             }
         }
 
-        buf.aggregate(&agg, &rd).unwrap();
+        buf.aggregate(&agg, &Decoder::from(&rd)).unwrap();
         buf.full();
 
         assert_eq!(buf.len(), 2);

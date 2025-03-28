@@ -1,5 +1,7 @@
 //! RowDescription (B) message.
 
+use std::ops::Deref;
+
 use crate::net::c_string_buf;
 
 use super::{code, DataType};
@@ -106,7 +108,7 @@ impl Field {
 }
 
 /// RowDescription message.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct RowDescription {
     /// Fields.
     pub fields: Vec<Field>,
@@ -150,6 +152,14 @@ impl RowDescription {
         }
 
         true
+    }
+}
+
+impl Deref for RowDescription {
+    type Target = Vec<Field>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.fields
     }
 }
 

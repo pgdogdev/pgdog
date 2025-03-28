@@ -1,15 +1,21 @@
 //! Multi-shard connection state.
 
-use tracing::warn;
+use context::Context;
 
 use crate::{
     frontend::router::Route,
-    net::messages::{
-        command_complete::CommandComplete, FromBytes, Message, Protocol, RowDescription, ToBytes,
+    net::{
+        messages::{
+            command_complete::CommandComplete, FromBytes, Message, Protocol, RowDescription,
+            ToBytes,
+        },
+        Decoder,
     },
 };
 
 use super::buffer::Buffer;
+
+mod context;
 
 /// Multi-shard state.
 #[derive(Default, Debug)]
@@ -28,13 +34,12 @@ pub(super) struct MultiShard {
     nd: usize,
     /// Number of CopyInResponse messages.
     ci: usize,
-    /// First RowDescription we received from any shard.
-    rd: Option<RowDescription>,
     er: usize,
     /// Rewritten CommandComplete message.
     command_complete: Option<Message>,
     /// Sorting/aggregate buffer.
     buffer: Buffer,
+    decoder: Decoder,
 }
 
 impl MultiShard {
@@ -79,10 +84,9 @@ impl MultiShard {
 
                 if self.cc == self.shards {
                     self.buffer.full();
-                    if let Some(ref rd) = self.rd {
-                        self.buffer.aggregate(self.route.aggregate(), rd)?;
-                        self.buffer.sort(self.route.order_by(), rd);
-                    }
+                    self.buffer
+                        .aggregate(self.route.aggregate(), &self.decoder)?;
+                    self.buffer.sort(self.route.order_by(), &self.decoder);
 
                     if has_rows {
                         let rows = if self.route.should_buffer() {
@@ -99,12 +103,8 @@ impl MultiShard {
 
             'T' => {
                 let rd = RowDescription::from_bytes(message.to_bytes()?)?;
-                if let Some(ref prev) = self.rd {
-                    if !prev.equivalent(&rd) {
-                        warn!("RowDescription across shards doesn't match");
-                    }
-                } else {
-                    self.rd = Some(rd);
+                if self.decoder.rd().is_empty() {
+                    self.decoder.row_description(&rd);
                     forward = Some(message);
                 }
             }
@@ -150,6 +150,14 @@ impl MultiShard {
             Some(data_row)
         } else {
             self.command_complete.take()
+        }
+    }
+
+    pub(super) fn set_context<'a>(&mut self, message: impl Into<Context<'a>>) {
+        let context = message.into();
+        match context {
+            Context::Bind(bind) => self.decoder.bind(bind),
+            Context::RowDescription(rd) => self.decoder.row_description(rd),
         }
     }
 }

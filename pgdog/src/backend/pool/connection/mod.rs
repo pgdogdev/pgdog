@@ -10,10 +10,7 @@ use crate::{
     },
     config::PoolerMode,
     frontend::router::{parser::Shard, CopyRow, Route},
-    net::{
-        messages::{Message, ParameterStatus, Protocol},
-        parameter::Parameters,
-    },
+    net::{Bind, Message, ParameterStatus, Parameters, Protocol},
 };
 
 use super::{
@@ -257,6 +254,17 @@ impl Connection {
             }
 
             _ => Err(Error::NotInSync),
+        }
+    }
+
+    pub async fn bind(&mut self, bind: &Bind) -> Result<(), Error> {
+        match self.binding {
+            Binding::MultiShard(_, ref mut state) => {
+                state.set_context(bind);
+                Ok(())
+            }
+
+            _ => Ok(()),
         }
     }
 

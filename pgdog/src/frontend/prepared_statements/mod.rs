@@ -14,7 +14,7 @@ pub mod rewrite;
 
 pub use error::Error;
 pub use global_cache::GlobalCache;
-pub use request::Request;
+pub use request::PreparedRequest;
 pub use rewrite::Rewrite;
 
 static CACHE: Lazy<PreparedStatements> = Lazy::new(PreparedStatements::default);
@@ -23,7 +23,7 @@ static CACHE: Lazy<PreparedStatements> = Lazy::new(PreparedStatements::default);
 pub struct PreparedStatements {
     pub(super) global: Arc<Mutex<GlobalCache>>,
     pub(super) local: HashMap<String, String>,
-    pub(super) requests: Vec<Request>,
+    pub(super) requests: Vec<PreparedRequest>,
 }
 
 impl PreparedStatements {
@@ -75,11 +75,11 @@ impl PreparedStatements {
     }
 
     /// Get requests.
-    pub fn requests(&mut self) -> Vec<Request> {
+    pub fn requests(&mut self) -> Vec<PreparedRequest> {
         std::mem::take(&mut self.requests).into_iter().collect()
     }
 
-    pub fn exists(&self, request: &Request) -> bool {
+    pub fn exists(&self, request: &PreparedRequest) -> bool {
         for r in self.requests.iter() {
             if r.name() == request.name() && r.is_prepare() && request.is_prepare() {
                 return true;
@@ -115,9 +115,12 @@ mod test {
         }
 
         let requests = statements.requests();
-        assert_eq!(requests.len(), 1);
+        assert_eq!(requests.len(), 2);
         let request = requests.first().unwrap();
         assert_eq!(request.name(), "__pgdog_1");
         assert!(request.is_new());
+        let request = requests.last().unwrap();
+        assert_eq!(request.name(), "__pgdog_1");
+        assert!(!request.is_new());
     }
 }

@@ -1,13 +1,13 @@
 //! Rerwrite messages if using prepared statements.
 use crate::net::messages::{Bind, Describe, FromBytes, Message, Parse, Protocol};
 
-use super::{request::Request, Error, PreparedStatements};
+use super::{request::PreparedRequest, Error, PreparedStatements};
 
 /// Rewrite messages.
 #[derive(Debug)]
 pub struct Rewrite<'a> {
     statements: &'a mut PreparedStatements,
-    requests: Vec<Request>,
+    requests: Vec<PreparedRequest>,
 }
 
 impl<'a> Rewrite<'a> {
@@ -37,7 +37,7 @@ impl<'a> Rewrite<'a> {
             Ok(message.message()?)
         } else {
             let parse = self.statements.insert(parse);
-            self.requests.push(Request::new(&parse.name, true));
+            self.requests.push(PreparedRequest::new(&parse.name, true));
             Ok(parse.message()?)
         }
     }
@@ -52,8 +52,11 @@ impl<'a> Rewrite<'a> {
                 .statements
                 .name(&bind.statement)
                 .ok_or(Error::MissingPreparedStatement(bind.statement.clone()))?;
-            self.requests.push(Request::new(name, false));
-            Ok(bind.rename(name).message()?)
+            self.requests.push(PreparedRequest::new(name, false));
+            let bind = bind.rename(name);
+            self.requests
+                .push(PreparedRequest::Bind { bind: bind.clone() });
+            Ok(bind.message()?)
         }
     }
 
@@ -67,14 +70,14 @@ impl<'a> Rewrite<'a> {
                 .statements
                 .name(&describe.statement)
                 .ok_or(Error::MissingPreparedStatement(describe.statement.clone()))?;
-            self.requests.push(Request::new(name, false));
-            self.requests.push(Request::new_describe(name));
+            self.requests.push(PreparedRequest::new(name, false));
+            self.requests.push(PreparedRequest::new_describe(name));
             Ok(describe.rename(name).message()?)
         }
     }
 
     /// Consume request.
-    pub(super) fn requests(&mut self) -> Vec<Request> {
+    pub(super) fn requests(&mut self) -> Vec<PreparedRequest> {
         std::mem::take(&mut self.requests)
     }
 }
