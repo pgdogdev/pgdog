@@ -1,5 +1,7 @@
 //! Binding between frontend client and a connection on the backend.
 
+use futures::{stream::FuturesUnordered, StreamExt};
+
 use crate::net::parameter::Parameters;
 
 use super::*;
@@ -124,9 +126,17 @@ impl Binding {
 
             Binding::Admin(backend) => Ok(backend.send(messages).await?),
             Binding::MultiShard(servers, _state) => {
+                let messages = messages
+                    .iter()
+                    .map(|m| m.message().unwrap())
+                    .collect::<Vec<_>>();
+                let mut futures = FuturesUnordered::new();
                 for server in servers.iter_mut() {
-                    let messages = messages.iter().map(|m| m.message().unwrap()).collect();
-                    server.send(messages).await?;
+                    futures.push(server.send(messages.clone()));
+                }
+
+                while let Some(result) = futures.next().await {
+                    result?;
                 }
 
                 Ok(())
