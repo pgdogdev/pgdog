@@ -47,6 +47,7 @@ pub enum Command {
     RollbackTransaction,
     StartReplication,
     ReplicationMeta,
+    Set { name: String, value: String },
 }
 
 #[derive(Debug)]
@@ -99,6 +100,9 @@ impl QueryParser {
         cluster: &Cluster,
         params: Option<Bind>,
     ) -> Result<Command, Error> {
+        // Replication protocol commands
+        // don't have a node in pg_query,
+        // so we have to parse them using a regex.
         if self.replication_mode {
             if query.starts_with("START_REPLICATION") {
                 return Ok(Command::StartReplication);
@@ -109,7 +113,11 @@ impl QueryParser {
             }
         }
 
-        // Shortcut single shard clusters that don't require read/write separation.
+        // Don't use the parser if the cluster has only one shard
+        // and only one kind of database (either primary or just replicas).
+        //
+        // We know what the routing decision is in this case and we don't
+        // need to invoke the parser.
         if cluster.shards().len() == 1 {
             if cluster.read_only() {
                 return Ok(Command::Query(Route::read(Some(0))));
@@ -121,7 +129,7 @@ impl QueryParser {
 
         let sharding_schema = cluster.sharding_schema();
 
-        // Hardcoded shard from a comment.
+        // Parse hardcoded shard from a query comment.
         let shard = super::comment::shard(query, &sharding_schema).map_err(Error::PgQuery)?;
 
         // Cluster is read only or write only, traffic split isn't needed,
@@ -136,21 +144,43 @@ impl QueryParser {
             }
         }
 
+        // Get the AST from cache or parse the statement live.
         let ast = match query {
+            // Only prepared statements (or just extended) are cached.
             BufferedQuery::Prepared(query) => {
                 Cache::get().parse(query.query()).map_err(Error::PgQuery)?
             }
-            // Don't cache simple queries, they contain parameter values.
+            // Don't cache simple queries.
+            //
+            // They contain parameter values, which makes the cache
+            // too large to be practical.
+            //
+            // Make your clients use prepared statements
+            // or at least send statements with placeholders using the
+            // extended protocol.
             BufferedQuery::Query(query) => Arc::new(parse(query.query()).map_err(Error::PgQuery)?),
         };
 
         debug!("{}", query.query());
         trace!("{:#?}", ast);
 
-        let stmt = ast.protobuf.stmts.first().ok_or(Error::EmptyQuery)?;
-        let root = stmt.stmt.as_ref().ok_or(Error::EmptyQuery)?;
+        //
+        // Get the root AST node.
+        //
+        // We don't expect clients to send multiple queries. If they do
+        // only the first one is used for routing.
+        //
+        let root = ast
+            .protobuf
+            .stmts
+            .first()
+            .ok_or(Error::EmptyQuery)?
+            .stmt
+            .as_ref()
+            .ok_or(Error::EmptyQuery)?;
 
         let mut command = match root.node {
+            // SELECT statements.
             Some(NodeEnum::SelectStmt(ref stmt)) => {
                 if matches!(shard, Shard::Direct(_)) {
                     return Ok(Command::Query(Route::read(shard)));
@@ -164,10 +194,18 @@ impl QueryParser {
                     Self::select(stmt, &sharding_schema, params)
                 }
             }
+            // SET statements.
+            Some(NodeEnum::VariableSetStmt(ref stmt)) => Self::set(stmt),
+            // COPY statements.
             Some(NodeEnum::CopyStmt(ref stmt)) => Self::copy(stmt, cluster),
+            // INSERT statements.
             Some(NodeEnum::InsertStmt(ref stmt)) => Self::insert(stmt, &sharding_schema, &params),
+            // UPDATE statements.
             Some(NodeEnum::UpdateStmt(ref stmt)) => Self::update(stmt),
+            // DELETE statements.
             Some(NodeEnum::DeleteStmt(ref stmt)) => Self::delete(stmt),
+            // Transaction control statements,
+            // e.g. BEGIN, COMMIT, etc.
             Some(NodeEnum::TransactionStmt(ref stmt)) => match stmt.kind() {
                 TransactionStmtKind::TransStmtCommit => return Ok(Command::CommitTransaction),
                 TransactionStmtKind::TransStmtRollback => return Ok(Command::RollbackTransaction),
@@ -176,29 +214,48 @@ impl QueryParser {
                 }
                 _ => Ok(Command::Query(Route::write(None))),
             },
+            // All others are not handled.
+            // They are sent to all shards concurrently.
             _ => Ok(Command::Query(Route::write(None))),
         }?;
 
+        // Overwrite shard using shard we got from a comment, if any.
         if let Shard::Direct(shard) = shard {
             if let Command::Query(ref mut route) = command {
                 route.set_shard(shard);
             }
         }
 
+        // If we only have one shard, set it.
+        //
+        // If the query parser couldn't figure it out,
+        // there is no point of doing a multi-shard query with only one shard
+        // in the set.
+        //
         if cluster.shards().len() == 1 {
             if let Command::Query(ref mut route) = command {
                 route.set_shard(0);
             }
         }
 
+        // Last ditch attempt to route a query to a specific shard.
+        //
+        // Looking through manual queries to see if we have any
+        // with the fingerprint.
+        //
         if let Command::Query(ref mut route) = command {
             if route.shard().all() {
-                let fingerprint = fingerprint(query).map_err(Error::PgQuery)?;
-                let manual_route = databases().manual_query(&fingerprint.hex).cloned();
+                let databases = databases();
+                // Only fingerprint the query if some manual queries are configured.
+                // Otherwise, we're wasting time parsing SQL.
+                if !databases.manual_queries().is_empty() {
+                    let fingerprint = fingerprint(query).map_err(Error::PgQuery)?;
+                    let manual_route = databases.manual_query(&fingerprint.hex).cloned();
 
-                // TODO: check routing logic required by config.
-                if manual_route.is_some() {
-                    route.set_shard(round_robin::next() % cluster.shards().len());
+                    // TODO: check routing logic required by config.
+                    if manual_route.is_some() {
+                        route.set_shard(round_robin::next() % cluster.shards().len());
+                    }
                 }
             }
         }
@@ -206,6 +263,11 @@ impl QueryParser {
         trace!("{:#?}", command);
 
         Ok(command)
+    }
+
+    fn set(stmt: &VariableSetStmt) -> Result<Command, Error> {
+        println!("{:?}", stmt);
+        Ok(Command::Query(Route::write(None)))
     }
 
     fn select(
