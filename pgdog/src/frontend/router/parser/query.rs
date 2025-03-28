@@ -265,9 +265,8 @@ impl QueryParser {
         Ok(command)
     }
 
-    fn set(stmt: &VariableSetStmt) -> Result<Command, Error> {
-        println!("{:?}", stmt);
-        Ok(Command::Query(Route::write(None)))
+    fn set(_stmt: &VariableSetStmt) -> Result<Command, Error> {
+        Ok(Command::Query(Route::write(Shard::All)))
     }
 
     fn select(
