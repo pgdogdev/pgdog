@@ -11,14 +11,14 @@ function wait_for_pgdog() {
 
 function run_pgdog() {
     pushd ${SCRIPT_DIR}/../../
-    cargo build
-    target/debug/pgdog --config integration/pgdog.toml --users integration/users.toml > ${SCRIPT_DIR}/log.txt &
+    cargo build --release
+    target/release/pgdog --config integration/pgdog.toml --users integration/users.toml > ${SCRIPT_DIR}/log.txt &
     PID=$!
     popd
 }
 
 function stop_pgdog() {
-    kill -TERM ${PID}
+    killall -TERM pgdog
     cat ${SCRIPT_DIR}/log.txt
     rm ${SCRIPT_DIR}/log.txt
 }

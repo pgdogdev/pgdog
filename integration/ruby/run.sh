@@ -8,11 +8,10 @@ wait_for_pgdog
 
 pushd ${SCRIPT_DIR}
 
-virtualenv venv
-source venv/bin/activate
-pip install -r requirements.txt
-
-pytest
+export GEM_HOME=~/.gem
+mkdir -p ${GEM_HOME}
+bundle install
+bundle exec rspec pg_spec.rb
 
 popd
 

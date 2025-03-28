@@ -65,14 +65,19 @@ jobs:
           sudo -u postgres createdb $USER
           bash integration/setup.sh
           sudo apt update && sudo apt install -y python3-virtualenv
+          sudo gem install bundler
       - uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
           override: true
       - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: release
       - name: Build PgDog
-        run: cargo build
+        run: cargo build --release
       - name: Python
         run: bash integration/python/run.sh
       - name: pgbench
         run: bash integration/pgbench/run.sh
+      - name: Ruby
+        run: bash integration/ruby/run.sh
