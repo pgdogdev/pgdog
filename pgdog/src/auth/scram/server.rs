@@ -163,7 +163,7 @@ impl Server {
                                 }
                             };
                             let reply = Authentication::SaslContinue(reply);
-                            stream.send_flush(reply).await?;
+                            stream.send_flush(&reply).await?;
                         }
 
                         Password::PasswordMessage { response } => {
@@ -180,7 +180,7 @@ impl Server {
 
                                 match status {
                                     AuthenticationStatus::Authenticated => {
-                                        stream.send(Authentication::SaslFinal(reply)).await?;
+                                        stream.send(&Authentication::SaslFinal(reply)).await?;
                                         return Ok(true);
                                     }
 

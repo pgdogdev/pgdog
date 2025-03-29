@@ -75,12 +75,12 @@ impl AsyncWrite for Stream {
 impl Stream {
     /// Wrap an unencrypted TCP stream.
     pub fn plain(stream: TcpStream) -> Self {
-        Self::Plain(BufStream::new(stream))
+        Self::Plain(BufStream::with_capacity(9126, 9126, stream))
     }
 
     /// Wrap an encrypted TCP stream.
     pub fn tls(stream: tokio_rustls::TlsStream<TcpStream>) -> Self {
-        Self::Tls(BufStream::new(stream))
+        Self::Tls(BufStream::with_capacity(9126, 9126, stream))
     }
 
     /// This is a TLS stream.
@@ -103,7 +103,7 @@ impl Stream {
     ///
     /// This is fast because the stream is buffered. Make sure to call [`Stream::send_flush`]
     /// for the last message in the exchange.
-    pub async fn send(&mut self, message: impl Protocol) -> Result<usize, crate::net::Error> {
+    pub async fn send(&mut self, message: &impl Protocol) -> Result<usize, crate::net::Error> {
         let bytes = message.to_bytes()?;
 
         match self {
@@ -134,7 +134,10 @@ impl Stream {
     ///
     /// This will flush all buffers and ensure the data is actually sent via the socket.
     /// Use this only for the last message in the exchange to avoid bottlenecks.
-    pub async fn send_flush(&mut self, message: impl Protocol) -> Result<usize, crate::net::Error> {
+    pub async fn send_flush(
+        &mut self,
+        message: &impl Protocol,
+    ) -> Result<usize, crate::net::Error> {
         let sent = self.send(message).await?;
         self.flush().await?;
         trace!("😳");
@@ -145,7 +148,7 @@ impl Stream {
     /// Send multiple messages and flush the buffer.
     pub async fn send_many(
         &mut self,
-        messages: Vec<impl Protocol>,
+        messages: &[impl Protocol],
     ) -> Result<usize, crate::net::Error> {
         let mut sent = 0;
         for message in messages {
@@ -185,8 +188,8 @@ impl Stream {
 
     /// Send an error to the client and disconnect gracefully.
     pub async fn fatal(&mut self, error: ErrorResponse) -> Result<(), crate::net::Error> {
-        self.send(error).await?;
-        self.send_flush(Terminate).await?;
+        self.send(&error).await?;
+        self.send_flush(&Terminate).await?;
 
         Ok(())
     }
@@ -194,8 +197,8 @@ impl Stream {
     /// Send an error to the client and let them know we are ready
     /// for more queries.
     pub async fn error(&mut self, error: ErrorResponse) -> Result<(), crate::net::Error> {
-        self.send(error).await?;
-        self.send_flush(ReadyForQuery::idle()).await?;
+        self.send(&error).await?;
+        self.send_flush(&ReadyForQuery::idle()).await?;
 
         Ok(())
     }

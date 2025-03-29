@@ -94,21 +94,21 @@ impl Server {
                         Authentication::Ok => break,
                         Authentication::Sasl(_) => {
                             let initial = Password::sasl_initial(&scram.first()?);
-                            stream.send_flush(initial).await?;
+                            stream.send_flush(&initial).await?;
                         }
                         Authentication::SaslContinue(data) => {
                             scram.server_first(&data)?;
                             let response = Password::PasswordMessage {
                                 response: scram.last()?,
                             };
-                            stream.send_flush(response).await?;
+                            stream.send_flush(&response).await?;
                         }
                         Authentication::SaslFinal(data) => {
                             scram.server_last(&data)?;
                         }
                         Authentication::Md5(salt) => {
                             let client = md5::Client::new_salt(&addr.user, &addr.password, &salt)?;
-                            stream.send_flush(client.response()).await?;
+                            stream.send_flush(&client.response()).await?;
                         }
                     }
                 }
@@ -210,7 +210,7 @@ impl Server {
 
         trace!("→ {:#?}", message);
 
-        match self.stream().send(message).await {
+        match self.stream().send(&message).await {
             Ok(sent) => self.stats.send(sent),
             Err(err) => {
                 self.stats.state(State::Error);

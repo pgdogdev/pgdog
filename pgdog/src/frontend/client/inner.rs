@@ -1,3 +1,5 @@
+use std::ops::{Deref, DerefMut};
+
 use crate::{
     backend::{
         pool::{Connection, Request},
@@ -26,7 +28,7 @@ pub(super) struct Inner {
     pub(super) stats: Stats,
     /// Protocol is async.
     pub(super) async_: bool,
-    /// Start transactio statement, intercepted by the router.
+    /// Start transaction statement, intercepted by the router.
     pub(super) start_transaction: Option<BufferedQuery>,
     /// Client-wide comms.
     pub(super) comms: Comms,
@@ -88,16 +90,17 @@ impl Inner {
         self.backend.disconnect();
     }
 
+    /// Connect to a backend (or multiple).
     pub(super) async fn connect(&mut self, request: &Request) -> Result<(), BackendError> {
         // Use currently determined route.
         let route = self.router.route();
 
-        self.comms.stats(self.stats.waiting(request.created_at));
+        self.stats.waiting(request.created_at);
 
         let result = self.backend.connect(request, &route).await;
 
         if result.is_ok() {
-            self.comms.stats(self.stats.connected());
+            self.stats.connected();
             if let Ok(addr) = self.backend.addr() {
                 let addrs = addr
                     .into_iter()
@@ -111,9 +114,48 @@ impl Inner {
                 );
             }
         } else {
-            self.comms.stats(self.stats.error());
+            self.stats.error();
         }
 
+        self.comms.stats(self.stats);
+
         result
+    }
+
+    /// Mutably borrow this,
+    /// while ensuring maintenance tasks are performed when
+    /// the borrow is finished.
+    #[inline(always)]
+    pub(super) fn get(&mut self) -> InnerBorrow {
+        InnerBorrow { inner: self }
+    }
+}
+
+/// Makes sure that when Inner reference is dropped,
+/// tasks that maintain the global state are performed.
+///
+/// e.g. updating client stats after every request by the client
+/// or response by the server.
+pub(super) struct InnerBorrow<'a> {
+    inner: &'a mut Inner,
+}
+
+impl Deref for InnerBorrow<'_> {
+    type Target = Inner;
+
+    fn deref(&self) -> &Self::Target {
+        self.inner
+    }
+}
+
+impl DerefMut for InnerBorrow<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.inner
+    }
+}
+
+impl Drop for InnerBorrow<'_> {
+    fn drop(&mut self) {
+        self.comms.stats(self.inner.stats);
     }
 }

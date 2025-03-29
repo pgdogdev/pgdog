@@ -39,3 +39,5 @@ toxiproxy-server
 toxi.log
 *.jar
 *.class
+*.zip
+*.gz
