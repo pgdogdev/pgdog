@@ -183,7 +183,7 @@ impl Client {
 
         loop {
             select! {
-                _ = shutdown.cancelled() => {
+                _ = shutdown.notified() => {
                     if !inner.backend.connected() {
                         break;
                     }
