@@ -8,7 +8,6 @@ use tokio::signal::ctrl_c;
 use tokio::sync::Notify;
 use tokio::time::timeout;
 use tokio::{select, spawn};
-use tokio_util::task::TaskTracker;
 
 use crate::backend::databases::{databases, shutdown};
 use crate::config::config;
@@ -28,7 +27,6 @@ use super::{
 #[derive(Debug, Clone)]
 pub struct Listener {
     addr: String,
-    clients: TaskTracker,
     shutdown: Arc<Notify>,
 }
 
@@ -37,7 +35,6 @@ impl Listener {
     pub fn new(addr: impl ToString) -> Self {
         Self {
             addr: addr.to_string(),
-            clients: TaskTracker::new(),
             shutdown: Arc::new(Notify::new()),
         }
     }
@@ -47,6 +44,7 @@ impl Listener {
         let listener = TcpListener::bind(&self.addr).await?;
         info!("🐕 PgDog listening on {}", self.addr);
         let comms = comms();
+        let shutdown_signal = comms.shutting_down();
 
         loop {
             let comms = comms.clone();
@@ -59,8 +57,9 @@ impl Listener {
                    // Disable the Nagle algorithm.
                    stream.set_nodelay(true)?;
 
+                   let client_comms = comms.clone();
                    let future = async move {
-                       match Self::handle_client(stream, addr, comms).await {
+                       match Self::handle_client(stream, addr, client_comms).await {
                            Ok(_) => (),
                            Err(err) => {
                                error!("client crashed: {:?}", err);
@@ -71,19 +70,16 @@ impl Listener {
                    if offline {
                        spawn(future);
                    } else {
-                       self.clients.spawn(future);
+                       comms.tracker().spawn(future);
                    }
                 }
 
-                _ = ctrl_c() => {
-                    self.clients.close();
-                    comms.shutdown();
-                    shutdown();
+                _ = shutdown_signal.notified() => {
+                    self.start_shutdown();
+                }
 
-                    let listener = self.clone();
-                    spawn(async move {
-                        listener.shutdown().await;
-                    });
+                _ = ctrl_c() => {
+                    self.start_shutdown();
                 }
 
                 _ = self.shutdown.notified() => {
@@ -95,6 +91,16 @@ impl Listener {
         Ok(())
     }
 
+    fn start_shutdown(&self) {
+        shutdown();
+        comms().shutdown();
+
+        let listener = self.clone();
+        spawn(async move {
+            listener.shutdown().await;
+        });
+    }
+
     async fn shutdown(&self) {
         let shutdown_timeout = config().config.general.shutdown_timeout();
 
@@ -103,13 +109,15 @@ impl Listener {
             shutdown_timeout.as_secs_f64()
         );
 
-        if timeout(shutdown_timeout, self.clients.wait())
+        let comms = comms();
+
+        if timeout(shutdown_timeout, comms.tracker().wait())
             .await
             .is_err()
         {
             warn!(
                 "terminating {} client connections due to shutdown timeout",
-                self.clients.len()
+                comms.tracker().len()
             );
         }
 

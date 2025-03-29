@@ -184,7 +184,7 @@ impl Client {
         loop {
             select! {
                 _ = shutdown.notified() => {
-                    if !inner.backend.connected() {
+                    if !inner.backend.connected() && inner.start_transaction.is_none() {
                         break;
                     }
                 }
