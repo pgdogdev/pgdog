@@ -46,7 +46,6 @@ uuid = { version = "1", features = ["v4"] }
 url = "2"
 ratatui = { version = "0.30.0-alpha.1", optional = true }
 rmp-serde = "1"
-nohash-hasher = "*"
 
 
 [build-dependencies]
