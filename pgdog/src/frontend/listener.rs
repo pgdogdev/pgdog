@@ -126,12 +126,12 @@ impl Listener {
             match startup {
                 Startup::Ssl => {
                     if let Some(tls) = tls {
-                        stream.send_flush(SslReply::Yes).await?;
+                        stream.send_flush(&SslReply::Yes).await?;
                         let plain = stream.take()?;
                         let cipher = tls.accept(plain).await?;
                         stream = Stream::tls(tokio_rustls::TlsStream::Server(cipher));
                     } else {
-                        stream.send_flush(SslReply::No).await?;
+                        stream.send_flush(&SslReply::No).await?;
                     }
                 }
 

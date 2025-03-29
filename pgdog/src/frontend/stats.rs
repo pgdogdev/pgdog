@@ -52,32 +52,28 @@ impl Stats {
         }
     }
 
-    pub(super) fn transaction(&mut self) -> Self {
+    pub(super) fn transaction(&mut self) {
         self.last_transaction_time = self.transaction_timer.elapsed();
         self.transactions += 1;
         self.transaction_time += self.last_transaction_time;
         self.state = State::Idle;
-        *self
     }
 
-    pub(super) fn error(&mut self) -> Self {
+    pub(super) fn error(&mut self) {
         self.errors += 1;
         self.state = State::Idle;
-        *self
     }
 
-    pub(super) fn query(&mut self) -> Self {
+    pub(super) fn query(&mut self) {
         let now = Instant::now();
         self.queries += 1;
         self.query_time += now.duration_since(self.query_timer);
         self.query_timer = now;
-        *self
     }
 
-    pub(super) fn waiting(&mut self, instant: Instant) -> Self {
+    pub(super) fn waiting(&mut self, instant: Instant) {
         self.state = State::Waiting;
         self.wait_timer = instant;
-        *self
     }
 
     /// Get wait time if waiting.
@@ -89,21 +85,27 @@ impl Stats {
         }
     }
 
-    pub(super) fn connected(&mut self) -> Self {
+    pub(super) fn connected(&mut self) {
         let now = Instant::now();
         self.state = State::Active;
         self.transaction_timer = now;
         self.query_timer = now;
         self.wait_time = now.duration_since(self.wait_timer);
-        *self
     }
 
-    pub(super) fn sent(&mut self, bytes: usize) -> Self {
+    pub(super) fn sent(&mut self, bytes: usize) {
         self.bytes_sent += bytes;
-        *self
     }
 
-    pub(super) fn received(&mut self, bytes: usize) -> Self {
+    pub(super) fn idle(&mut self, in_transaction: bool) {
+        if in_transaction {
+            self.state = State::IdleInTransaction;
+        } else {
+            self.state = State::Idle;
+        }
+    }
+
+    pub(super) fn received(&mut self, bytes: usize) {
         self.bytes_received += bytes;
         // In session mode, we stay connected to the server
         // until client disconnects, so we need to reset timers every time
@@ -113,6 +115,7 @@ impl Stats {
             self.transaction_timer = now;
             self.query_timer = now;
         }
-        *self
+
+        self.state = State::Active;
     }
 }

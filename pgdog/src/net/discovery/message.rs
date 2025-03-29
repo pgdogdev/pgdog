@@ -30,7 +30,7 @@ impl Message {
         Message::deserialize(&mut Deserializer::new(buf))
     }
 
-    /// Healtcheck message.
+    /// Healthcheck message.
     pub fn healthcheck(node_id: u64) -> Self {
         Self {
             node_id,

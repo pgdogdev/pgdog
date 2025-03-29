@@ -24,7 +24,7 @@ use crate::net::{parameter::Parameters, Stream};
 pub mod counter;
 pub mod inner;
 
-use inner::Inner;
+use inner::{Inner, InnerBorrow};
 
 /// Frontend client.
 #[allow(dead_code)]
@@ -75,7 +75,7 @@ impl Client {
 
         let auth_ok = if stream.is_tls() {
             let md5 = md5::Client::new(user, password);
-            stream.send_flush(md5.challenge()).await?;
+            stream.send_flush(&md5.challenge()).await?;
             let password = Password::from_bytes(stream.read().await?.to_bytes()?)?;
             if let Password::PasswordMessage { response } = password {
                 md5.check(&response)
@@ -83,7 +83,7 @@ impl Client {
                 false
             }
         } else {
-            stream.send_flush(Authentication::scram()).await?;
+            stream.send_flush(&Authentication::scram()).await?;
 
             let scram = Server::new(password);
             let res = scram.handle(&mut stream).await;
@@ -94,7 +94,7 @@ impl Client {
             stream.fatal(ErrorResponse::auth(user, database)).await?;
             return Ok(());
         } else {
-            stream.send(Authentication::Ok).await?;
+            stream.send(&Authentication::Ok).await?;
         }
 
         // Check if the pooler is shutting down.
@@ -117,11 +117,11 @@ impl Client {
         };
 
         for param in server_params {
-            stream.send(param).await?;
+            stream.send(&param).await?;
         }
 
-        stream.send(id).await?;
-        stream.send_flush(ReadyForQuery::idle()).await?;
+        stream.send(&id).await?;
+        stream.send_flush(&ReadyForQuery::idle()).await?;
         comms.connect(&id, addr);
         let shard = params.shard();
 
@@ -179,10 +179,11 @@ impl Client {
     /// Run the client.
     async fn run(&mut self) -> Result<(), Error> {
         let mut inner = Inner::new(self)?;
+        let shutdown = self.comms.shutting_down();
 
         loop {
             select! {
-                _ = inner.comms.shutting_down() => {
+                _ = shutdown.cancelled() => {
                     if !inner.backend.connected() {
                         break;
                     }
@@ -194,7 +195,7 @@ impl Client {
                         break;
                     }
 
-                    let disconnect = self.client_messages(&mut inner, buffer).await?;
+                    let disconnect = self.client_messages(inner.get(), buffer).await?;
                     if disconnect {
                         break;
                     }
@@ -202,7 +203,7 @@ impl Client {
 
                 message = inner.backend.read() => {
                     let message = message?;
-                    let disconnect = self.server_message(&mut inner, message).await?;
+                    let disconnect = self.server_message(inner.get(), message).await?;
                     if disconnect {
                         break;
                     }
@@ -212,7 +213,7 @@ impl Client {
 
         if inner.comms.offline() && !self.admin {
             self.stream
-                .send_flush(ErrorResponse::shutting_down())
+                .send_flush(&ErrorResponse::shutting_down())
                 .await?;
         }
 
@@ -222,11 +223,11 @@ impl Client {
     /// Handle client messages.
     async fn client_messages(
         &mut self,
-        inner: &mut Inner,
+        mut inner: InnerBorrow<'_>,
         mut buffer: Buffer,
     ) -> Result<bool, Error> {
         inner.async_ = buffer.async_();
-        inner.comms.stats(inner.stats.received(buffer.len()));
+        inner.stats.received(buffer.len());
 
         #[cfg(debug_assertions)]
         if let Some(query) = buffer.query()? {
@@ -295,7 +296,7 @@ impl Client {
                         self.stream.error(ErrorResponse::from_err(&err)).await?;
                         return Ok(false);
                     }
-                    self.stream.send(ParseComplete).await?;
+                    self.stream.send(&ParseComplete).await?;
                     buffer.remove('P');
                 }
                 PreparedRequest::Prepare { name } => {
@@ -307,7 +308,7 @@ impl Client {
                 PreparedRequest::Describe { name } => {
                     let messages = inner.backend.describe(name).await?;
                     for message in messages {
-                        self.stream.send(message).await?;
+                        self.stream.send(&message).await?;
                     }
                     buffer.remove('D');
                     if buffer.flush() {
@@ -326,7 +327,7 @@ impl Client {
         if buffer.only('S') {
             buffer.remove('S');
             self.stream
-                .send_flush(ReadyForQuery::in_transaction(self.in_transaction))
+                .send_flush(&ReadyForQuery::in_transaction(self.in_transaction))
                 .await?;
         }
 
@@ -366,40 +367,45 @@ impl Client {
     }
 
     /// Handle message from server(s).
-    async fn server_message(&mut self, inner: &mut Inner, message: Message) -> Result<bool, Error> {
+    async fn server_message(
+        &mut self,
+        mut inner: InnerBorrow<'_>,
+        message: Message,
+    ) -> Result<bool, Error> {
         let len = message.len();
         let code = message.code();
         let message = message.backend();
 
         // ReadyForQuery (B) | CopyInResponse (B)
         let flush = matches!(code, 'Z' | 'G' | 'E' | 'N');
-        // RowDescription (B) | ErrorResponse (B)
+        // RowDescription (B) | NoData(B)
         let async_flush = matches!(code, 'T' | 'n') && inner.async_;
         let streaming = message.streaming();
 
         if code == 'Z' {
-            inner.comms.stats(inner.stats.query());
+            inner.stats.query();
             self.in_transaction = message.in_transaction();
+            inner.stats.idle(self.in_transaction);
         }
 
         trace!("-> {:#?}", message);
 
         if flush || async_flush || streaming {
-            self.stream.send_flush(message).await?;
+            self.stream.send_flush(&message).await?;
             if async_flush {
                 inner.async_ = false;
             }
         } else {
-            self.stream.send(message).await?;
+            self.stream.send(&message).await?;
         }
 
-        inner.comms.stats(inner.stats.sent(len));
+        inner.stats.sent(len);
 
         if inner.backend.done() {
             if inner.transaction_mode() {
                 inner.disconnect();
             }
-            inner.comms.stats(inner.stats.transaction());
+            inner.stats.transaction();
             debug!(
                 "transaction finished [{}ms]",
                 inner.stats.last_transaction_time.as_secs_f64() * 1000.0
@@ -453,7 +459,7 @@ impl Client {
     /// Tell the client we started a transaction.
     async fn start_transaction(&mut self) -> Result<(), Error> {
         self.stream
-            .send_many(vec![
+            .send_many(&[
                 CommandComplete::new_begin().message()?,
                 ReadyForQuery::in_transaction(true).message()?,
             ])
@@ -473,7 +479,7 @@ impl Client {
             CommandComplete::new_commit()
         };
         self.stream
-            .send_many(vec![cmd.message()?, ReadyForQuery::idle().message()?])
+            .send_many(&[cmd.message()?, ReadyForQuery::idle().message()?])
             .await?;
         debug!("transaction ended");
         Ok(())
