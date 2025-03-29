@@ -5,7 +5,7 @@ use super::{
     reset_query_cache::ResetQueryCache, setup_schema::SetupSchema, show_clients::ShowClients,
     show_config::ShowConfig, show_peers::ShowPeers, show_pools::ShowPools,
     show_query_cache::ShowQueryCache, show_servers::ShowServers, show_stats::ShowStats,
-    show_version::ShowVersion, Command, Error,
+    show_version::ShowVersion, shutdown::Shutdown, Command, Error,
 };
 
 use tracing::debug;
@@ -25,6 +25,7 @@ pub enum ParseResult {
     ShowStats(ShowStats),
     ShowVersion(ShowVersion),
     SetupSchema(SetupSchema),
+    Shutdown(Shutdown),
 }
 
 impl ParseResult {
@@ -46,6 +47,7 @@ impl ParseResult {
             ShowStats(show_stats) => show_stats.execute().await,
             ShowVersion(show_version) => show_version.execute().await,
             SetupSchema(setup_schema) => setup_schema.execute().await,
+            Shutdown(shutdown) => shutdown.execute().await,
         }
     }
 
@@ -67,6 +69,7 @@ impl ParseResult {
             ShowStats(show_stats) => show_stats.name(),
             ShowVersion(show_version) => show_version.name(),
             SetupSchema(setup_schema) => setup_schema.name(),
+            Shutdown(shutdown) => shutdown.name(),
         }
     }
 }
@@ -82,6 +85,7 @@ impl Parser {
 
         Ok(match iter.next().ok_or(Error::Syntax)?.trim() {
             "pause" | "resume" => ParseResult::Pause(Pause::parse(&sql)?),
+            "shutdown" => ParseResult::Shutdown(Shutdown::parse(&sql)?),
             "reconnect" => ParseResult::Reconnect(Reconnect::parse(&sql)?),
             "reload" => ParseResult::Reload(Reload::parse(&sql)?),
             "show" => match iter.next().ok_or(Error::Syntax)?.trim() {

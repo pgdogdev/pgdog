@@ -1,5 +1,4 @@
 #!/bin/bash
-
 function wait_for_pgdog() {
     echo "Waiting for PgDog"
     while ! pg_isready -h 127.0.0.1 -p 6432 -U pgdog -d pgdog > /dev/null; do
@@ -18,7 +17,7 @@ function run_pgdog() {
 }
 
 function stop_pgdog() {
-    killall -TERM pgdog
+    killall -TERM pgdog || true
     cat ${SCRIPT_DIR}/log.txt
     rm ${SCRIPT_DIR}/log.txt
 }
@@ -29,4 +28,10 @@ function start_toxi() {
 
 function stop_toxi() {
     killall -TERM toxiproxy
+}
+
+function active_venv() {
+    pushd ${SCRIPT_DIR}/../python
+    source venv/bin/activate
+    popd
 }

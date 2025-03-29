@@ -83,3 +83,5 @@ jobs:
         run: bash integration/ruby/run.sh
       - name: Java
         run: bash integration/java/run.sh
+      - name: psql
+        run: bash integration/psql/run.sh

@@ -21,6 +21,7 @@ pub mod show_query_cache;
 pub mod show_servers;
 pub mod show_stats;
 pub mod show_version;
+pub mod shutdown;
 
 pub use error::Error;
 
