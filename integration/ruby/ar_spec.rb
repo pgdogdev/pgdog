@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative 'rspec_helper'
+require 'pp'
 
 class Sharded < ActiveRecord::Base
   self.table_name = 'sharded'
@@ -68,7 +69,7 @@ describe 'active record' do
       end
     end
 
-    it 'can assign to a shard' do
+    it 'assigns to shards using round robin' do
       250.times do |i|
         res = Sharded.new
         res.value = 'test'
@@ -106,6 +107,8 @@ describe 'active record' do
         # Automatic primary key assignment.
         ActiveRecord::Base.connection.execute "/* pgdog_shard: 0 */ SELECT pgdog.install_next_id('pgdog', 'sharded', 'id', 2, 0)"
         ActiveRecord::Base.connection.execute "/* pgdog_shard: 1 */ SELECT pgdog.install_next_id('pgdog', 'sharded', 'id', 2, 1)"
+        ActiveRecord::Base.connection.execute '/* pgdog_shard: 0 */ SELECT pgdog.install_shard_id(0)'
+        ActiveRecord::Base.connection.execute '/* pgdog_shard: 1 */ SELECT pgdog.install_shard_id(1)'
       end
 
       it 'can create and read record' do
@@ -115,6 +118,38 @@ describe 'active record' do
           expect(res.value).to eq("test_#{j}")
           count = Sharded.where(id: res.id).count
           expect(count).to eq(1)
+        end
+      end
+
+      it 'can do transaction' do
+        30.times do |i|
+          Sharded.transaction do
+            # The first query decides which shard this will go to.
+            # If it's an insert without a sharding key, pgdog will
+            # use round robin to split data evenly.
+            res = Sharded.create value: "val_#{i}"
+            res = Sharded.find(res.id)
+            expect(res.value).to eq("val_#{i}")
+          end
+        end
+        count = Sharded.count
+        expect(count).to eq(30)
+      end
+
+      it 'can use comments' do
+        30.times do |i|
+          # Haven't figured out how to annotate comments
+          Sharded.create value: "comment_#{i}"
+        end
+        count = Sharded.count
+        expect(count).to eq(30)
+        [0, 1].each do |shard|
+          count = Sharded.annotate("pgdog_shard: #{shard}").count
+          expect(count).to be < 30
+          shard_id = Sharded.annotate("pgdog_shard: #{shard}")
+                            .select('pgdog.shard_id() AS shard_id')
+                            .first
+          expect(shard_id.shard_id).to eq(shard)
         end
       end
     end

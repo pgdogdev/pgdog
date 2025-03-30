@@ -20,7 +20,7 @@ async def run(db):
         conns.append(conn)
 
     admin = psycopg.connect("dbname=admin user=admin host=127.0.0.1 port=6432 password=pgdog")
-    admin.autocommit = True
+    admin.autocommit = True # No transactions supported in admin DB.
     admin.execute("SHUTDOWN")
 
     for conn in conns:
