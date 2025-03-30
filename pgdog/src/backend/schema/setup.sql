@@ -204,5 +204,21 @@ BEGIN
 END;
 $body$ LANGUAGE plpgsql;
 
+--- Shard identifier.
+CREATE OR REPLACE FUNCTION pgdog.install_shard_id(shard INTEGER) RETURNS TEXT
+AS $body$
+BEGIN
+    EXECUTE format('CREATE OR REPLACE FUNCTION pgdog.shard_id() RETURNS INTEGER AS
+    $body2$
+    BEGIN
+        RETURN %s::integer;
+    END;
+    $body2$
+    LANGUAGE plpgsql', shard);
+
+    RETURN format('installed on shard %s', shard);
+END;
+$body$ LANGUAGE plpgsql;
+
 -- Allow functions to be executed by anyone.
 GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA pgdog TO PUBLIC;
