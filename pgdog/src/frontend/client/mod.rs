@@ -122,7 +122,7 @@ impl Client {
 
         stream.send(&id).await?;
         stream.send_flush(&ReadyForQuery::idle()).await?;
-        comms.connect(&id, addr);
+        comms.connect(&id, addr, &params);
         let shard = params.shard();
 
         info!(

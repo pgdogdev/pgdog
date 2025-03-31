@@ -16,7 +16,7 @@ pub struct Parameter {
 }
 
 /// List of parameters.
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 pub struct Parameters {
     params: Vec<Parameter>,
 }

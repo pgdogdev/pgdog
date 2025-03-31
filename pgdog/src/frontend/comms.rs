@@ -13,6 +13,7 @@ use tokio::sync::Notify;
 use tokio_util::task::TaskTracker;
 
 use crate::net::messages::BackendKeyData;
+use crate::net::Parameters;
 
 use super::{ConnectedClient, Stats};
 
@@ -81,11 +82,11 @@ impl Comms {
     }
 
     /// New client connected.
-    pub fn connect(&mut self, id: &BackendKeyData, addr: SocketAddr) -> Self {
+    pub fn connect(&mut self, id: &BackendKeyData, addr: SocketAddr, params: &Parameters) -> Self {
         self.global
             .clients
             .lock()
-            .insert(*id, ConnectedClient::new(addr));
+            .insert(*id, ConnectedClient::new(addr, params));
         self.id = Some(*id);
         self.clone()
     }
