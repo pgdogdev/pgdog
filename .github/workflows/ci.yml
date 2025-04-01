@@ -50,6 +50,8 @@ jobs:
           psql -c "GRANT ALL ON SCHEMA public TO pgdog;" pgdog
           psql -c "GRANT ALL ON DATABASE pgdog TO pgdog;"
           psql postgres://pgdog:pgdog@127.0.0.1:5432/pgdog -c "SELECT 1" > /dev/null
+          sudo apt remove -y cmake
+          sudo pip3 install cmake==3.31.6
       - uses: actions/checkout@v4
       - uses: actions-rs/toolchain@v1
         with:
@@ -76,7 +78,7 @@ jobs:
           bash integration/setup.sh
           sudo apt update && sudo apt install -y python3-virtualenv
           sudo gem install bundler
-          sudo apt remove cmake
+          sudo apt remove -y cmake
           sudo pip3 install cmake==3.31.6
           cmake --version
       - uses: actions-rs/toolchain@v1
