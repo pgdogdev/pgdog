@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::config::{Database, General, User};
+use crate::config::{Database, General, PoolerMode, User};
 
 /// Pool configuration.
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq)]
@@ -45,6 +45,8 @@ pub struct Config {
     pub statement_timeout: Option<u64>,
     /// Replication mode.
     pub replication_mode: bool,
+    /// Pooler mode.
+    pub pooler_mode: PoolerMode,
 }
 
 impl Config {
@@ -124,6 +126,7 @@ impl Config {
             rollback_timeout: general.rollback_timeout,
             statement_timeout: user.statement_timeout,
             replication_mode: user.replication_mode,
+            pooler_mode: user.pooler_mode.unwrap_or(general.pooler_mode),
             ..Default::default()
         }
     }
@@ -150,6 +153,7 @@ impl Default for Config {
             rollback_timeout: Duration::from_secs(5).as_millis() as u64,
             statement_timeout: None,
             replication_mode: false,
+            pooler_mode: PoolerMode::default(),
         }
     }
 }

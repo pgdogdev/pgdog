@@ -1,3 +1,7 @@
+use std::time::Duration;
+
+use crate::config::PoolerMode;
+
 use super::{Ban, Config, Pool, Stats};
 
 /// Pool state.
@@ -28,6 +32,10 @@ pub struct State {
     pub out_of_sync: usize,
     /// Statistics
     pub stats: Stats,
+    /// Max wait.
+    pub maxwait: Duration,
+    /// Pool mode
+    pub pooler_mode: PoolerMode,
 }
 
 impl State {
@@ -42,12 +50,19 @@ impl State {
             empty: guard.idle() == 0,
             config: guard.config,
             paused: guard.paused,
-            waiting: guard.waiting,
+            waiting: guard.waiting.len(),
             ban: guard.ban,
             banned: guard.ban.is_some(),
             errors: guard.errors,
             out_of_sync: guard.out_of_sync,
             stats: guard.stats,
+            maxwait: guard
+                .waiting
+                .iter()
+                .next()
+                .map(|req| req.created_at.elapsed())
+                .unwrap_or(Duration::ZERO),
+            pooler_mode: guard.config().pooler_mode,
         }
     }
 }

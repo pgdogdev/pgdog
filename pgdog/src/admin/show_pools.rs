@@ -20,14 +20,15 @@ impl Command for ShowPools {
 
     async fn execute(&self) -> Result<Vec<Message>, Error> {
         let rd = RowDescription::new(&[
-            Field::text("host"),
-            Field::numeric("port"),
             Field::text("database"),
             Field::text("user"),
-            Field::numeric("idle"),
-            Field::numeric("active"),
-            Field::numeric("total"),
-            Field::numeric("clients_waiting"),
+            Field::numeric("cl_waiting"),
+            Field::numeric("sv_idle"),
+            Field::numeric("sv_active"),
+            Field::numeric("sv_total"),
+            Field::numeric("maxwait"),
+            Field::numeric("maxwait_us"),
+            Field::text("pool_mode"),
             Field::bool("paused"),
             Field::bool("banned"),
             Field::numeric("errors"),
@@ -38,16 +39,18 @@ impl Command for ShowPools {
             for shard in cluster.shards() {
                 for pool in shard.pools() {
                     let mut row = DataRow::new();
-                    let addr = pool.addr();
                     let state = pool.state();
-                    row.add(addr.host.as_str())
-                        .add(addr.port.to_string().as_str())
-                        .add(user.database.as_str())
+                    let maxwait = state.maxwait.as_secs() as i64;
+                    let maxwait_us = state.maxwait.subsec_micros() as i64;
+                    row.add(user.database.as_str())
                         .add(user.user.as_str())
+                        .add(state.waiting)
                         .add(state.idle)
                         .add(state.checked_out)
                         .add(state.total)
-                        .add(state.waiting)
+                        .add(maxwait)
+                        .add(maxwait_us)
+                        .add(state.pooler_mode.to_string())
                         .add(state.paused)
                         .add(state.banned)
                         .add(state.errors)

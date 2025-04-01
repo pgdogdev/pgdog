@@ -3,6 +3,7 @@ use std::time::Instant;
 use crate::net::messages::BackendKeyData;
 
 /// Connection request.
+#[derive(Clone, Debug)]
 pub struct Request {
     pub id: BackendKeyData,
     pub created_at: Instant,

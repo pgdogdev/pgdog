@@ -72,7 +72,7 @@ impl Pool {
                 }
 
                 let conn = guard
-                    .take(&request.id)
+                    .take(request)
                     .map(|server| Guard::new(self.clone(), server));
 
                 if conn.is_some() {
@@ -101,7 +101,7 @@ impl Pool {
             // Slow path, pool is empty, will create new connection
             // or wait for one to be returned if the pool is maxed out.
             self.comms().request.notify_one();
-            let _waiting = Waiting::new(self.clone());
+            let _waiting = Waiting::new(self.clone(), request);
 
             select! {
                 // A connection may be available.
