@@ -62,32 +62,32 @@ impl Pools {
 
                     cl_waiting.push(Measurement {
                         labels: labels.clone(),
-                        measurement: state.waiting as f64,
+                        measurement: state.waiting.into(),
                     });
 
                     sv_active.push(Measurement {
                         labels: labels.clone(),
-                        measurement: state.checked_out as f64,
+                        measurement: state.checked_out.into(),
                     });
 
                     sv_idle.push(Measurement {
                         labels: labels.clone(),
-                        measurement: state.idle as f64,
+                        measurement: state.idle.into(),
                     });
 
                     maxwait.push(Measurement {
                         labels: labels.clone(),
-                        measurement: state.maxwait.as_secs_f64(),
+                        measurement: state.maxwait.as_secs_f64().into(),
                     });
 
                     errors.push(Measurement {
                         labels: labels.clone(),
-                        measurement: state.errors as f64,
+                        measurement: state.errors.into(),
                     });
 
                     out_of_sync.push(Measurement {
                         labels: labels.clone(),
-                        measurement: state.out_of_sync as f64,
+                        measurement: state.out_of_sync.into(),
                     });
                 }
             }
@@ -165,7 +165,7 @@ mod test {
             metrics: vec![Metric::new(PoolMetric {
                 name: "maxwait".into(),
                 measurements: vec![Measurement {
-                    measurement: 45.0,
+                    measurement: 45.0.into(),
                     labels: vec![
                         ("database".into(), "test_db".into()),
                         ("user".into(), "test_user".into()),

@@ -20,9 +20,33 @@ pub trait OpenMetric: Send + Sync {
 }
 
 #[derive(Debug, Clone)]
+pub enum MeasurementType {
+    Float(f64),
+    Integer(i64),
+}
+
+impl From<f64> for MeasurementType {
+    fn from(value: f64) -> Self {
+        Self::Float(value)
+    }
+}
+
+impl From<i64> for MeasurementType {
+    fn from(value: i64) -> Self {
+        Self::Integer(value)
+    }
+}
+
+impl From<usize> for MeasurementType {
+    fn from(value: usize) -> Self {
+        Self::Integer(value as i64)
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct Measurement {
     pub labels: Vec<(String, String)>,
-    pub measurement: f64,
+    pub measurement: MeasurementType,
 }
 
 impl Measurement {
@@ -37,7 +61,15 @@ impl Measurement {
                 .collect::<Vec<_>>();
             format!("{{{}}}", labels.join(","))
         };
-        format!("{}{} {:.3}", name, labels, self.measurement)
+        format!(
+            "{}{} {}",
+            name,
+            labels,
+            match self.measurement {
+                MeasurementType::Float(f) => format!("{:.3}", f),
+                MeasurementType::Integer(i) => i.to_string(),
+            }
+        )
     }
 }
 

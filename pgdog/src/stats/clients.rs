@@ -5,15 +5,13 @@ use crate::frontend::comms::comms;
 use super::{Measurement, Metric, OpenMetric};
 
 pub struct Clients {
-    total: f64,
+    total: usize,
 }
 
 impl Clients {
     pub fn load() -> Metric {
         let total = comms().clients_len();
-        Metric::new(Self {
-            total: total as f64,
-        })
+        Metric::new(Self { total })
     }
 }
 
@@ -25,7 +23,7 @@ impl OpenMetric for Clients {
     fn measurements(&self) -> Vec<Measurement> {
         vec![Measurement {
             labels: vec![],
-            measurement: self.total,
+            measurement: self.total.into(),
         }]
     }
 
@@ -42,7 +40,7 @@ mod test {
 
     #[test]
     fn test_clients() {
-        let clients = Clients { total: 25.0 };
+        let clients = Clients { total: 25 };
         let metric = Metric::new(clients);
         let metric = metric.to_string();
         let mut lines = metric.lines();
@@ -51,6 +49,6 @@ mod test {
             lines.next().unwrap(),
             "# HELP clients Total number of connected clients."
         );
-        assert_eq!(lines.next().unwrap(), "clients 25.000");
+        assert_eq!(lines.next().unwrap(), "clients 25");
     }
 }
