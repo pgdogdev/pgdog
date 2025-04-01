@@ -76,7 +76,7 @@ jobs:
           bash integration/setup.sh
           sudo apt update && sudo apt install -y python3-virtualenv
           sudo gem install bundler
-          sudo apt remove cmake
+          sudo apt remove -y cmake
           sudo pip3 install cmake==3.31.6
           cmake --version
       - uses: actions-rs/toolchain@v1
