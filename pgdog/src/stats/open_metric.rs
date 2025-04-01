@@ -33,11 +33,11 @@ impl Measurement {
             let labels = self
                 .labels
                 .iter()
-                .map(|(name, value)| format!("{}={}", name, value))
+                .map(|(name, value)| format!("{}=\"{}\"", name, value))
                 .collect::<Vec<_>>();
             format!("{{{}}}", labels.join(","))
         };
-        format!("{} {} {:.3}", name, labels, self.measurement)
+        format!("{}{} {:.3}", name, labels, self.measurement)
     }
 }
 

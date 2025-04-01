@@ -54,9 +54,9 @@ impl Pools {
                 for pool in shard.pools() {
                     let state = pool.state();
                     let labels = vec![
-                        ("user".into(), format!("\"{}\"", user.user.clone())),
-                        ("database".into(), format!("\"{}\"", user.database.clone())),
-                        ("host".into(), format!("\"{}\"", pool.addr().host.clone())),
+                        ("user".into(), user.user.clone()),
+                        ("database".into(), user.database.clone()),
+                        ("host".into(), pool.addr().host.clone()),
                         ("port".into(), pool.addr().port.to_string()),
                     ];
 
@@ -152,5 +152,41 @@ impl std::fmt::Display for Pools {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_pools() {
+        let pools = Pools {
+            metrics: vec![Metric::new(PoolMetric {
+                name: "maxwait".into(),
+                measurements: vec![Measurement {
+                    measurement: 45.0,
+                    labels: vec![
+                        ("database".into(), "test_db".into()),
+                        ("user".into(), "test_user".into()),
+                    ],
+                }],
+                help: "How long clients wait.".into(),
+                unit: Some("seconds".into()),
+                metric_type: Some("counter".into()), // Not correct, just testing display.
+            })],
+        };
+        let rendered = pools.to_string();
+        let mut lines = rendered.lines();
+        assert_eq!(lines.next().unwrap(), "# TYPE maxwait counter");
+        assert_eq!(lines.next().unwrap(), "# UNIT maxwait seconds");
+        assert_eq!(
+            lines.next().unwrap(),
+            "# HELP maxwait How long clients wait."
+        );
+        assert_eq!(
+            lines.next().unwrap(),
+            r#"maxwait{database="test_db",user="test_user"} 45.000"#
+        );
     }
 }
