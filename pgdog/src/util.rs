@@ -1,7 +1,12 @@
 //! What's a project without a util module.
 
+use chrono::{DateTime, Local};
 use rand::{distributions::Alphanumeric, Rng};
 use std::time::Duration; // 0.8
+
+pub fn format_time(time: DateTime<Local>) -> String {
+    time.format("%Y-%m-%d %H:%M:%S%.3f %Z").to_string()
+}
 
 /// Get a human-readable duration for amounts that
 /// a human would use.

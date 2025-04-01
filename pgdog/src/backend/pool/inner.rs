@@ -6,19 +6,19 @@ use std::{cmp::max, time::Instant};
 use crate::backend::Server;
 use crate::net::messages::BackendKeyData;
 
-use super::{Ban, Config, Error, Mapping, Oids, Stats};
+use super::{Ban, Config, Error, Mapping, Oids, Request, Stats};
 
 /// Pool internals protected by a mutex.
 #[derive(Default)]
 pub(super) struct Inner {
     /// Idle server connections.
     conns: VecDeque<Server>,
-    /// Server connectios currently checked out.
+    /// Server connections currently checked out.
     taken: Vec<Mapping>,
     /// Pool configuration.
     pub(super) config: Config,
     /// Number of clients waiting for a connection.
-    pub(super) waiting: usize,
+    pub(super) waiting: VecDeque<Request>,
     /// Pool ban status.
     pub(super) ban: Option<Ban>,
     /// Pool is online and available to clients.
@@ -44,7 +44,7 @@ impl std::fmt::Debug for Inner {
             .field("paused", &self.paused)
             .field("taken", &self.taken.len())
             .field("conns", &self.conns.len())
-            .field("waiting", &self.waiting)
+            .field("waiting", &self.waiting.len())
             .field("online", &self.online)
             .finish()
     }
@@ -57,7 +57,7 @@ impl Inner {
             conns: VecDeque::new(),
             taken: Vec::new(),
             config,
-            waiting: 0,
+            waiting: VecDeque::new(),
             ban: None,
             online: false,
             paused: false,
@@ -124,7 +124,7 @@ impl Inner {
         let below_min = self.total() < self.min();
         let below_max = self.total() < self.max();
         let maintain_min = below_min && below_max;
-        let client_needs = below_max && self.waiting > 0 && self.conns.is_empty();
+        let client_needs = below_max && !self.waiting.is_empty() && self.conns.is_empty();
         let maintenance_on = self.online && !self.paused;
 
         !self.banned() && maintenance_on && (maintain_min || client_needs)
@@ -192,10 +192,10 @@ impl Inner {
     }
 
     /// Take connection from the idle pool.
-    pub(super) fn take(&mut self, id: &BackendKeyData) -> Option<Server> {
+    pub(super) fn take(&mut self, request: &Request) -> Option<Server> {
         if let Some(conn) = self.conns.pop_back() {
             self.taken.push(Mapping {
-                client: *id,
+                client: request.id,
                 server: *(conn.id()),
             });
 
@@ -384,7 +384,7 @@ mod test {
         inner.ban = None;
 
         inner.config.max = 5;
-        inner.waiting = 1;
+        inner.waiting.push_back(Request::default());
         assert_eq!(inner.idle(), 1);
         assert!(!inner.should_create());
 

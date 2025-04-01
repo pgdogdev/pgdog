@@ -36,7 +36,6 @@ use std::time::{Duration, Instant};
 
 use super::{Error, Guard, Healtcheck, Oids, Pool, Request};
 use crate::backend::Server;
-use crate::net::messages::BackendKeyData;
 
 use tokio::time::{interval, sleep, timeout};
 use tokio::{select, task::spawn};
@@ -285,7 +284,7 @@ impl Monitor {
                 return Ok(());
             }
             (
-                guard.take(&BackendKeyData::new()),
+                guard.take(&Request::default()),
                 guard.config.healthcheck_timeout(),
             )
         };

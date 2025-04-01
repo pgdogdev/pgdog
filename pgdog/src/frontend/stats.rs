@@ -1,6 +1,6 @@
 //! Frontend client statistics.
 
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use crate::state::State;
 
@@ -30,6 +30,7 @@ pub struct Stats {
     transaction_timer: Instant,
     query_timer: Instant,
     wait_timer: Instant,
+    pub last_request: SystemTime,
 }
 
 impl Stats {
@@ -49,6 +50,7 @@ impl Stats {
             transaction_timer: now,
             query_timer: now,
             wait_timer: now,
+            last_request: SystemTime::now(),
         }
     }
 
@@ -114,6 +116,7 @@ impl Stats {
             let now = Instant::now();
             self.transaction_timer = now;
             self.query_timer = now;
+            self.last_request = SystemTime::now();
         }
 
         self.state = State::Active;

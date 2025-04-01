@@ -175,7 +175,7 @@ impl Binding {
 
     pub(super) fn done(&self) -> bool {
         match self {
-            Binding::Admin(_) => true,
+            Binding::Admin(admin) => admin.done(),
             Binding::Server(Some(server)) => server.done(),
             Binding::MultiShard(servers, _state) => servers.iter().all(|s| s.done()),
             Binding::Replication(Some(server), _) => server.done(),

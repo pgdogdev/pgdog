@@ -1,6 +1,9 @@
 //! Keep track of server stats.
 
-use std::{ops::Add, time::Instant};
+use std::{
+    ops::Add,
+    time::{Instant, SystemTime},
+};
 
 use fnv::FnvHashMap as HashMap;
 use once_cell::sync::Lazy;
@@ -71,13 +74,14 @@ impl Add for Counts {
 /// Server statistics.
 #[derive(Copy, Clone, Debug)]
 pub struct Stats {
-    id: BackendKeyData,
+    pub id: BackendKeyData,
     /// Number of bytes sent.
     pub healthchecks: usize,
     pub state: State,
     pub last_used: Instant,
     pub last_healthcheck: Option<Instant>,
     pub created_at: Instant,
+    pub created_at_time: SystemTime,
     pub total: Counts,
     pub last_checkout: Counts,
 }
@@ -93,6 +97,7 @@ impl Stats {
             last_used: now,
             last_healthcheck: None,
             created_at: now,
+            created_at_time: SystemTime::now(),
             total: Counts::default(),
             last_checkout: Counts::default(),
         };

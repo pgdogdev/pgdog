@@ -5,8 +5,7 @@
 [general]
 host = "0.0.0.0"
 port = 6432
-shutdown_timeout = 100
-idle_healthcheck_delay = 100000000000
+shutdown_timeout = 5_000
 # query_log = "queries.txt"
 # broadcast_address = "224.0.0.1"
 # broadcast_port = 6435
