@@ -11,6 +11,11 @@ jobs:
         with:
           toolchain: stable
           override: true
+      - name: Install latest CMake
+        run: |
+          sudo apt remove cmake
+          sudo pip3 install cmake
+          cmake --version
       - name: Format
         run: cargo fmt --all -- --check
       - name: Clippy
@@ -23,6 +28,11 @@ jobs:
         with:
           toolchain: stable
           override: true
+      - name: Install latest CMake
+        run: |
+          sudo apt remove cmake
+          sudo pip3 install cmake
+          cmake --version
       - name: Build
         run: cargo build
       - name: Check release
@@ -66,6 +76,9 @@ jobs:
           bash integration/setup.sh
           sudo apt update && sudo apt install -y python3-virtualenv
           sudo gem install bundler
+          sudo apt remove cmake
+          sudo pip3 install cmake
+          cmake --version
       - uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
