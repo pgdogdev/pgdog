@@ -67,6 +67,11 @@ impl Comms {
         self.global.clients.lock().clone()
     }
 
+    /// Number of connected clients.
+    pub fn clients_len(&self) -> usize {
+        self.global.clients.lock().len()
+    }
+
     pub fn tracker(&self) -> &TaskTracker {
         &self.global.tracker
     }

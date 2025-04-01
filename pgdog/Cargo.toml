@@ -47,6 +47,9 @@ url = "2"
 ratatui = { version = "0.30.0-alpha.1", optional = true }
 rmp-serde = "1"
 chrono = "0.4"
+hyper = { version = "1", features = ["full"] }
+http-body-util = "0.1"
+hyper-util = { version = "0.1", features = ["full"] }
 
 
 [build-dependencies]
