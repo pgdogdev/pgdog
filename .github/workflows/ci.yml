@@ -50,6 +50,8 @@ jobs:
           psql -c "GRANT ALL ON SCHEMA public TO pgdog;" pgdog
           psql -c "GRANT ALL ON DATABASE pgdog TO pgdog;"
           psql postgres://pgdog:pgdog@127.0.0.1:5432/pgdog -c "SELECT 1" > /dev/null
+          sudo apt remove -y cmake
+          sudo pip3 install cmake==3.31.6
       - uses: actions/checkout@v4
       - uses: actions-rs/toolchain@v1
         with:
