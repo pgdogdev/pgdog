@@ -272,6 +272,7 @@ pub struct General {
     /// Load queries to file (warning: slow, don't use in production).
     #[serde(default)]
     pub query_log: Option<PathBuf>,
+    pub openmetrics_port: Option<u16>,
 }
 
 impl Default for General {
@@ -295,6 +296,7 @@ impl Default for General {
             broadcast_address: None,
             broadcast_port: Self::broadcast_port(),
             query_log: None,
+            openmetrics_port: None,
         }
     }
 }

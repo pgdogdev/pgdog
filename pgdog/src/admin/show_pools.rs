@@ -22,6 +22,8 @@ impl Command for ShowPools {
         let rd = RowDescription::new(&[
             Field::text("database"),
             Field::text("user"),
+            Field::text("addr"),
+            Field::numeric("port"),
             Field::numeric("cl_waiting"),
             Field::numeric("sv_idle"),
             Field::numeric("sv_active"),
@@ -44,6 +46,8 @@ impl Command for ShowPools {
                     let maxwait_us = state.maxwait.subsec_micros() as i64;
                     row.add(user.database.as_str())
                         .add(user.user.as_str())
+                        .add(pool.addr().host.as_str())
+                        .add(pool.addr().port as i64)
                         .add(state.waiting)
                         .add(state.idle)
                         .add(state.checked_out)

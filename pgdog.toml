@@ -6,12 +6,13 @@
 host = "0.0.0.0"
 port = 6432
 shutdown_timeout = 5_000
+# default_pool_size = 1
 # query_log = "queries.txt"
 # broadcast_address = "224.0.0.1"
 # broadcast_port = 6435
 # tls_certificate = "pgdog/tests/tls/cert.pem"
 # tls_private_key = "pgdog/tests/tls/key.pem"
-
+openmetrics_port = 9090
 #
 # Admin database password.
 #

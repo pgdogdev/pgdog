@@ -123,6 +123,10 @@ async fn pgdog() -> Result<(), Box<dyn std::error::Error>> {
         net::discovery::Listener::get().run(broadcast_addr, general.broadcast_port);
     }
 
+    if let Some(openmetrics_port) = general.openmetrics_port {
+        tokio::spawn(async move { stats::http_server::server(openmetrics_port).await });
+    }
+
     let mut listener = Listener::new(format!("{}:{}", general.host, general.port));
     listener.listen().await?;
 
