@@ -43,6 +43,8 @@ use tracing::info;
 
 use tracing::{debug, error};
 
+static MAINTENANCE: Duration = Duration::from_millis(333);
+
 /// Pool maintenance.
 ///
 /// See [`crate::backend::pool::monitor`] module documentation
@@ -109,7 +111,6 @@ impl Monitor {
                             guard.should_create(),
                             guard.config().connect_timeout(),
                             guard.online,
-
                         )
                     };
 
@@ -191,13 +192,7 @@ impl Monitor {
 
     /// Perform maintenance on the pool periodically.
     async fn maintenance(pool: Pool) {
-        let maintenance_interval = if pool.lock().banned() {
-            Duration::from_secs(1)
-        } else {
-            Duration::from_millis(333)
-        };
-
-        let mut tick = interval(maintenance_interval);
+        let mut tick = interval(MAINTENANCE);
         let comms = pool.comms();
 
         debug!("maintenance started [{}]", pool.addr());
@@ -249,12 +244,10 @@ impl Monitor {
             }
 
             Ok(Err(err)) => {
-                self.pool.ban(Error::ServerError);
                 error!("error connecting to server: {} [{}]", err, self.pool.addr());
             }
 
             Err(_) => {
-                self.pool.ban(Error::ServerError);
                 error!("server connection timeout [{}]", self.pool.addr());
             }
         }
