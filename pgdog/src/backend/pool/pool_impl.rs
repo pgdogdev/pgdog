@@ -10,8 +10,9 @@ use tracing::{error, info};
 
 use crate::backend::Server;
 use crate::net::messages::BackendKeyData;
-use crate::net::Parameter;
+use crate::net::{Parameter, PgLsn};
 
+use super::events::Listener;
 use super::{
     Address, Comms, Config, Error, Guard, Healtcheck, Inner, Monitor, Oids, PoolConfig, Request,
     State, Waiting,
@@ -22,6 +23,7 @@ pub struct Pool {
     inner: Arc<Mutex<Inner>>,
     comms: Arc<Comms>,
     addr: Address,
+    listener: Option<Listener>,
 }
 
 impl std::fmt::Debug for Pool {
@@ -36,6 +38,7 @@ impl Clone for Pool {
             inner: self.inner.clone(),
             comms: self.comms.clone(),
             addr: self.addr.clone(),
+            listener: self.listener.clone(),
         }
     }
 }
@@ -43,11 +46,19 @@ impl Clone for Pool {
 impl Pool {
     /// Create new connection pool.
     pub fn new(config: &PoolConfig) -> Self {
-        Self {
+        let mut pool = Self {
             inner: Arc::new(Mutex::new(Inner::new(config.config))),
             comms: Arc::new(Comms::new()),
             addr: config.address.clone(),
+            listener: None,
+        };
+
+        if config.config.synchronous_commit {
+            let listener = Listener::new(&pool);
+            pool.listener = Some(listener);
         }
+
+        pool
     }
 
     /// Launch the maintenance loop, bringing the pool online.
@@ -232,6 +243,9 @@ impl Pool {
         guard.dump_idle();
         self.comms().shutdown.notify_waiters();
         self.comms().ready.notify_waiters();
+        if let Some(ref listener) = self.listener {
+            listener.shutdown();
+        }
     }
 
     /// Pool exclusive lock.
@@ -293,5 +307,28 @@ impl Pool {
     /// Fetch OIDs for user-defined data types.
     pub fn oids(&self) -> Option<Oids> {
         self.lock().oids
+    }
+
+    /// Get the latest known LSN.
+    pub fn lsn(&self) -> Option<PgLsn> {
+        self.listener.as_ref().map(|l| l.lsn())
+    }
+
+    /// Wait for the expected LSN to show up on the database.
+    pub async fn wait_for_lsn(&mut self, lsn: PgLsn) -> Result<(), Error> {
+        loop {
+            if let Some(ref mut listener) = self.listener {
+                let latest_lsn = listener.lsn();
+                if latest_lsn <= lsn {
+                    break;
+                } else {
+                    listener.lsn_changed().await?;
+                }
+            } else {
+                break;
+            }
+        }
+
+        Ok(())
     }
 }

@@ -12,6 +12,7 @@ fn replicas() -> Replicas {
             user: "pgdog".into(),
             password: "pgdog".into(),
             database_name: "pgdog".into(),
+            shard: 0,
         },
         config: Config {
             max: 1,

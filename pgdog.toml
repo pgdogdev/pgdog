@@ -26,41 +26,47 @@ password = "pgdog"
 name = "pgdog"
 host = "127.0.0.1"
 
+[[databases]]
+name = "pgdog"
+host = "127.0.0.1"
+port = 5433
+role = "replica"
+
 #
 # Sharded cluster with two primaries.
 #
-[[databases]]
-name = "pgdog_sharded"
-host = "127.0.0.1"
-database_name = "shard_0"
-shard = 0
+# [[databases]]
+# name = "pgdog_sharded"
+# host = "127.0.0.1"
+# database_name = "shard_0"
+# shard = 0
 
-[[databases]]
-name = "pgdog_sharded"
-host = "127.0.0.1"
-database_name = "shard_1"
-shard = 1
+# [[databases]]
+# name = "pgdog_sharded"
+# host = "127.0.0.1"
+# database_name = "shard_1"
+# shard = 1
 
-[[databases]]
-name = "failover"
-host = "127.0.0.1"
-port = 5433
-role = "primary"
-database_name = "pgdog"
+# [[databases]]
+# name = "failover"
+# host = "127.0.0.1"
+# port = 5433
+# role = "primary"
+# database_name = "pgdog"
 
-[[databases]]
-name = "failover"
-host = "127.0.0.1"
-port = 5434
-role = "replica"
-database_name = "pgdog"
+# [[databases]]
+# name = "failover"
+# host = "127.0.0.1"
+# port = 5434
+# role = "replica"
+# database_name = "pgdog"
 
-[[databases]]
-name = "failover"
-host = "127.0.0.1"
-port = 5435
-role = "replica"
-database_name = "pgdog"
+# [[databases]]
+# name = "failover"
+# host = "127.0.0.1"
+# port = 5435
+# role = "replica"
+# database_name = "pgdog"
 
 #
 # Read/write access to theses tables will be automatically
