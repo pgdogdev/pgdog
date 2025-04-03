@@ -272,7 +272,7 @@ impl Connection {
     }
 
     pub async fn sync_commit(&mut self) -> Result<(), Error> {
-        if self.replica {
+        if self.replica || self.admin() {
             return Ok(());
         }
 

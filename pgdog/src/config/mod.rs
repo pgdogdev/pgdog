@@ -516,6 +516,9 @@ pub struct User {
     /// Sync commit.
     #[serde(default)]
     pub synchronous_commit: bool,
+    /// Superuser.
+    #[serde(default)]
+    pub superuser: bool,
 }
 
 /// Admin database settings.

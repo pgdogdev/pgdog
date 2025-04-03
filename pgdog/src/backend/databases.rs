@@ -202,7 +202,10 @@ pub fn from_config(config: &ConfigAndUsers) -> Databases {
     let sharded_tables = config.config.sharded_tables();
     let general = &config.config.general;
 
-    for user in &config.users.users {
+    // All user/database pairs have their own connection pools.
+    // Exception is the superuser, which PgDog uses to create connections on demand,
+    // and doesn't have a connection pool.
+    for user in config.users.users.iter().filter(|user| !user.superuser) {
         if let Some(shards) = config_databases.get(&user.database) {
             let mut shard_configs = vec![];
             for user_databases in shards {

@@ -392,7 +392,11 @@ impl Client {
 
         if inner.backend.done() {
             // Wait for replica(s) before telling the client we finished.
-            if inner.backend.cluster()?.synchronous_commit() {
+            if let Ok(true) = inner
+                .backend
+                .cluster()
+                .map(|cluster| cluster.synchronous_commit())
+            {
                 inner.backend.sync_commit().await?;
             }
 
