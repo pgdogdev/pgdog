@@ -17,6 +17,8 @@ pub struct Address {
     pub user: String,
     /// Password.
     pub password: String,
+    /// Shard number.
+    pub shard: usize,
 }
 
 impl Address {
@@ -44,6 +46,7 @@ impl Address {
             } else {
                 user.password.clone()
             },
+            shard: database.shard,
         }
     }
 

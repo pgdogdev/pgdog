@@ -146,6 +146,16 @@ impl Bind {
             })
             .collect()
     }
+
+    pub fn new(statement: &str) -> Self {
+        Self {
+            portal: "".to_string(),
+            statement: statement.to_owned(),
+            codes: vec![],
+            params: vec![],
+            results: vec![],
+        }
+    }
 }
 
 impl FromBytes for Bind {

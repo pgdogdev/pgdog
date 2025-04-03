@@ -53,9 +53,10 @@ impl Guard {
             let cleanup = Cleanup::new(self, &server);
             let reset = cleanup.needed();
             let schema_changed = server.schema_changed();
+            let in_sync = server.in_sync();
 
             // No need to delay checkin unless we have to.
-            if rollback || reset {
+            if (rollback || reset) && in_sync {
                 let rollback_timeout = pool.lock().config.rollback_timeout();
                 spawn(async move {
                     // Rollback any unfinished transactions,

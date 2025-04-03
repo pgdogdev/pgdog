@@ -36,6 +36,7 @@ pub struct Connection {
     database: String,
     binding: Binding,
     cluster: Option<Cluster>,
+    replica: bool,
 }
 
 impl Connection {
@@ -50,6 +51,7 @@ impl Connection {
             cluster: None,
             user: user.to_owned(),
             database: database.to_owned(),
+            replica: false,
         };
 
         if !admin {
@@ -108,6 +110,7 @@ impl Connection {
             } else {
                 self.cluster()?.primary(*shard, request).await?
             };
+            self.replica = route.is_read();
 
             // Cleanup session mode connections when
             // they are done.
@@ -266,6 +269,26 @@ impl Connection {
 
             _ => Ok(()),
         }
+    }
+
+    pub async fn sync_commit(&mut self) -> Result<(), Error> {
+        if self.replica {
+            return Ok(());
+        }
+
+        let cluster = self.cluster()?.clone();
+        if let Binding::Server(Some(ref mut server)) = self.binding {
+            let replicas = cluster
+                .shard(server.addr().shard)
+                .map(|shard| shard.replica_pools())
+                .ok_or(Error::NotConnected)?;
+            let lsn = server.lsn(false).await?;
+            for mut replica in replicas {
+                replica.wait_for_lsn(lsn).await?;
+            }
+        };
+
+        Ok(())
     }
 
     /// We are done and can disconnect from this server.

@@ -244,6 +244,7 @@ pub fn from_config(config: &ConfigAndUsers) -> Databases {
                     user.pooler_mode.unwrap_or(general.pooler_mode),
                     sharded_tables,
                     user.replication_sharding.clone(),
+                    user.synchronous_commit,
                 ),
             );
         }

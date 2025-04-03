@@ -47,6 +47,8 @@ pub struct Config {
     pub replication_mode: bool,
     /// Pooler mode.
     pub pooler_mode: PoolerMode,
+    /// Sync commit.
+    pub synchronous_commit: bool,
 }
 
 impl Config {
@@ -127,6 +129,7 @@ impl Config {
             statement_timeout: user.statement_timeout,
             replication_mode: user.replication_mode,
             pooler_mode: user.pooler_mode.unwrap_or(general.pooler_mode),
+            synchronous_commit: user.synchronous_commit,
             ..Default::default()
         }
     }
@@ -154,6 +157,7 @@ impl Default for Config {
             statement_timeout: None,
             replication_mode: false,
             pooler_mode: PoolerMode::default(),
+            synchronous_commit: false,
         }
     }
 }

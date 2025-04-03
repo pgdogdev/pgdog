@@ -70,9 +70,13 @@ impl Shard {
         if let Some(primary) = self.primary.clone() {
             pools.push(primary);
         }
-        pools.extend(self.replicas.pools().to_vec());
+        pools.extend(self.replica_pools());
 
         pools
+    }
+
+    pub fn replica_pools(&self) -> Vec<Pool> {
+        self.replicas.pools().to_vec()
     }
 
     /// Launch the shard, bringing all pools online.

@@ -15,7 +15,7 @@ use crate::net::{
     messages::{DataRow, Describe, Flush, NoticeResponse, RowDescription},
     parameter::Parameters,
     tls::connector,
-    Parameter, Stream,
+    Parameter, PgLsn, Stream,
 };
 use crate::state::State;
 use crate::{
@@ -409,6 +409,24 @@ impl Server {
         self.stats.healthcheck();
 
         Ok(())
+    }
+
+    /// Fetch the latest LSN.
+    pub async fn lsn(&mut self, replica: bool) -> Result<PgLsn, Error> {
+        let query = if replica {
+            "SELECT pg_last_wal_replay_lsn()"
+        } else {
+            "SELECT pg_current_wal_lsn()"
+        };
+
+        let lsn = self
+            .fetch_all::<Option<PgLsn>>(query)
+            .await?
+            .first()
+            .cloned()
+            .flatten();
+
+        lsn.ok_or(Error::NoLsn)
     }
 
     /// Attempt to rollback the transaction on this server, if any has been started.

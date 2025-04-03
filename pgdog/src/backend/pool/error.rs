@@ -44,4 +44,7 @@ pub enum Error {
 
     #[error("all replicas down")]
     AllReplicasDown,
+
+    #[error("{0}")]
+    Listener(#[from] crate::backend::pool::events::Error),
 }

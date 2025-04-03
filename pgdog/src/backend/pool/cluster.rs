@@ -34,6 +34,7 @@ pub struct Cluster {
     pooler_mode: PoolerMode,
     sharded_tables: ShardedTables,
     replication_sharding: Option<String>,
+    synchronous_commit: bool,
 }
 
 /// Sharding configuration from the cluster.
@@ -60,6 +61,7 @@ impl Cluster {
         pooler_mode: PoolerMode,
         sharded_tables: ShardedTables,
         replication_sharding: Option<String>,
+        synchronous_commit: bool,
     ) -> Self {
         Self {
             shards: shards
@@ -71,6 +73,7 @@ impl Cluster {
             pooler_mode,
             sharded_tables,
             replication_sharding,
+            synchronous_commit,
         }
     }
 
@@ -98,6 +101,7 @@ impl Cluster {
             pooler_mode: self.pooler_mode,
             sharded_tables: self.sharded_tables.clone(),
             replication_sharding: self.replication_sharding.clone(),
+            synchronous_commit: self.synchronous_commit,
         }
     }
 
@@ -113,6 +117,10 @@ impl Cluster {
     /// Get all shards.
     pub fn shards(&self) -> &[Shard] {
         &self.shards
+    }
+
+    pub fn shard(&self, shard: usize) -> Option<&Shard> {
+        self.shards.get(shard)
     }
 
     /// Plugin input.
@@ -216,6 +224,10 @@ impl Cluster {
             shards: self.shards.len(),
             tables: self.sharded_tables.clone(),
         }
+    }
+
+    pub fn synchronous_commit(&self) -> bool {
+        self.synchronous_commit
     }
 }
 

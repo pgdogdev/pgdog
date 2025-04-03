@@ -390,6 +390,23 @@ impl Client {
 
         trace!("-> {:#?}", message);
 
+        if inner.backend.done() {
+            // Wait for replica(s) before telling the client we finished.
+            if inner.backend.cluster()?.synchronous_commit() {
+                inner.backend.sync_commit().await?;
+            }
+
+            if inner.transaction_mode() {
+                inner.disconnect();
+            }
+            inner.stats.transaction();
+            debug!(
+                "transaction finished [{}ms]",
+                inner.stats.last_transaction_time.as_secs_f64() * 1000.0
+            );
+            inner.backend.changed_params().merge(&mut self.params);
+        }
+
         if flush || async_flush || streaming {
             self.stream.send_flush(&message).await?;
             if async_flush {
@@ -401,19 +418,8 @@ impl Client {
 
         inner.stats.sent(len);
 
-        if inner.backend.done() {
-            if inner.transaction_mode() {
-                inner.disconnect();
-            }
-            inner.stats.transaction();
-            debug!(
-                "transaction finished [{}ms]",
-                inner.stats.last_transaction_time.as_secs_f64() * 1000.0
-            );
-            inner.backend.changed_params().merge(&mut self.params);
-            if inner.comms.offline() && !self.admin {
-                return Ok(true);
-            }
+        if inner.backend.done() && inner.comms.offline() && !self.admin {
+            return Ok(true);
         }
 
         Ok(false)

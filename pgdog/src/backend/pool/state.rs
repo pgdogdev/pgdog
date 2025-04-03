@@ -51,7 +51,7 @@ impl State {
             config: guard.config,
             paused: guard.paused,
             waiting: guard.waiting.len(),
-            ban: guard.ban,
+            ban: guard.ban.clone(),
             banned: guard.ban.is_some(),
             errors: guard.errors,
             out_of_sync: guard.out_of_sync,

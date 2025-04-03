@@ -8,6 +8,7 @@ pub mod comms;
 pub mod config;
 pub mod connection;
 pub mod error;
+pub mod events;
 pub mod guard;
 pub mod healthcheck;
 pub mod inner;
