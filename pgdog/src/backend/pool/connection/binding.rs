@@ -1,6 +1,6 @@
 //! Binding between frontend client and a connection on the backend.
 
-use crate::net::parameter::Parameters;
+use crate::{backend::ProtocolMessage, net::parameter::Parameters};
 
 use super::*;
 
@@ -112,7 +112,10 @@ impl Binding {
         }
     }
 
-    pub(super) async fn send(&mut self, messages: Vec<impl Protocol>) -> Result<(), Error> {
+    pub(super) async fn send(
+        &mut self,
+        messages: Vec<impl Into<ProtocolMessage> + Clone>,
+    ) -> Result<(), Error> {
         match self {
             Binding::Server(server) => {
                 if let Some(server) = server {
@@ -125,8 +128,7 @@ impl Binding {
             Binding::Admin(backend) => Ok(backend.send(messages).await?),
             Binding::MultiShard(servers, _state) => {
                 for server in servers.iter_mut() {
-                    let messages = messages.iter().map(|m| m.message().unwrap()).collect();
-                    server.send(messages).await?;
+                    server.send(messages.clone()).await?;
                 }
 
                 Ok(())

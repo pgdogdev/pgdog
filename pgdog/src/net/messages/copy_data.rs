@@ -13,6 +13,10 @@ pub struct CopyData {
 }
 
 impl CopyData {
+    pub fn len(&self) -> usize {
+        self.data.len()
+    }
+
     /// New copy data row.
     pub fn new(data: &[u8]) -> Self {
         Self {

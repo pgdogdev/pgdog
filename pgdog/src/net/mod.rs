@@ -6,13 +6,14 @@ pub mod parameter;
 pub mod stream;
 pub mod tls;
 
+use bytes::Buf;
 pub use decoder::Decoder;
 pub use error::Error;
 pub use messages::*;
 pub use parameter::{Parameter, Parameters};
 pub use stream::Stream;
 
-use std::marker::Unpin;
+use std::{io::Cursor, marker::Unpin};
 use tokio::io::{AsyncRead, AsyncReadExt};
 
 static MAX_C_STRING_LEN: usize = 4096;
@@ -62,6 +63,23 @@ pub fn c_string_buf(buf: &mut impl bytes::Buf) -> String {
     result
 }
 
+/// Get the length of a C-String including terminating NULL.
+pub fn c_string_buf_len(buf: &[u8]) -> usize {
+    let mut cursor = Cursor::new(buf);
+    let mut len = 0;
+
+    while cursor.has_remaining() {
+        let c = cursor.get_u8();
+        len += 1;
+
+        if c == 0 {
+            break;
+        }
+    }
+
+    len
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -73,5 +91,13 @@ mod test {
         assert_eq!(c_string_buf(&mut buf), "hello");
         assert_eq!(c_string_buf(&mut buf), "world");
         assert_eq!(c_string_buf(&mut buf), "");
+    }
+
+    #[test]
+    fn test_c_string_buf_len() {
+        let buf = Bytes::from("hello\0test");
+        let len = c_string_buf_len(&buf);
+
+        assert_eq!(len, buf.len() - 4);
     }
 }

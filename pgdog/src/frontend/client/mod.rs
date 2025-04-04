@@ -11,6 +11,7 @@ use super::prepared_statements::PreparedRequest;
 use super::{Buffer, Command, Comms, Error, PreparedStatements};
 use crate::auth::{md5, scram::Server};
 use crate::backend::pool::{Connection, Request};
+use crate::backend::ProtocolMessage;
 use crate::config::config;
 use crate::frontend::buffer::BufferedQuery;
 #[cfg(debug_assertions)]
@@ -224,7 +225,7 @@ impl Client {
     async fn client_messages(
         &mut self,
         mut inner: InnerBorrow<'_>,
-        mut buffer: Buffer,
+        buffer: Buffer,
     ) -> Result<bool, Error> {
         inner.async_ = buffer.async_();
         inner.stats.received(buffer.len());
@@ -286,57 +287,6 @@ impl Client {
                     }
                 }
             };
-        }
-
-        // Handle any prepared statements.
-        for request in self.prepared_statements.requests() {
-            match &request {
-                PreparedRequest::PrepareNew { name } => {
-                    if let Err(err) = inner.backend.prepare(name).await {
-                        self.stream.error(ErrorResponse::from_err(&err)).await?;
-                        return Ok(false);
-                    }
-                    self.stream.send(&ParseComplete).await?;
-                    buffer.remove('P');
-                }
-                PreparedRequest::Prepare { name } => {
-                    if let Err(err) = inner.backend.prepare(name).await {
-                        self.stream.error(ErrorResponse::from_err(&err)).await?;
-                        return Ok(false);
-                    }
-                }
-                PreparedRequest::Describe { name } => {
-                    let messages = inner.backend.describe(name).await?;
-                    for message in messages {
-                        self.stream.send(&message).await?;
-                    }
-                    buffer.remove('D');
-                    if buffer.flush() {
-                        self.stream.flush().await?;
-                    }
-                    if buffer.only('H') {
-                        buffer.remove('H');
-                    }
-                }
-                PreparedRequest::Bind { bind } => {
-                    inner.backend.bind(bind).await?;
-                }
-            }
-        }
-
-        if buffer.only('S') {
-            buffer.remove('S');
-            self.stream
-                .send_flush(&ReadyForQuery::in_transaction(self.in_transaction))
-                .await?;
-        }
-
-        if buffer.is_empty() {
-            if !self.in_transaction {
-                debug!("client finished extended exchange, disconnecting from servers");
-                inner.disconnect();
-            }
-            return Ok(false);
         }
 
         // Simulate a transaction until the client
@@ -444,7 +394,12 @@ impl Client {
             if message.code() == 'X' {
                 return Ok(vec![].into());
             } else {
-                buffer.push(self.prepared_statements.maybe_rewrite(message)?);
+                let message = ProtocolMessage::from_bytes(message.to_bytes()?)?;
+                if message.extended() {
+                    buffer.push(self.prepared_statements.maybe_rewrite(message)?);
+                } else {
+                    buffer.push(message)
+                }
             }
         }
 

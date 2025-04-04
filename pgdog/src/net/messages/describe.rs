@@ -39,6 +39,10 @@ impl Protocol for Describe {
 }
 
 impl Describe {
+    pub fn len(&self) -> usize {
+        self.statement.len() + 1 + 1 + 1 + 4
+    }
+
     pub fn anonymous(&self) -> bool {
         self.kind != 'S' || self.statement.is_empty()
     }

@@ -529,7 +529,7 @@ mod test {
             r#"START_REPLICATION SLOT "sharded" LOGICAL 0/1E2C3B0 (proto_version '4', origin 'any', publication_names '"sharded"')"#,
         );
         let mut buffer = Buffer::new();
-        buffer.push(query.message().unwrap());
+        buffer.push(query.message().unwrap().into());
 
         let mut query_parser = QueryParser::default();
         query_parser.replication_mode();
@@ -544,7 +544,7 @@ mod test {
     fn test_replication_meta() {
         let query = Query::new(r#"IDENTIFY_SYSTEM"#);
         let mut buffer = Buffer::new();
-        buffer.push(query.message().unwrap());
+        buffer.push(query.message().unwrap().into());
 
         let mut query_parser = QueryParser::default();
         query_parser.replication_mode();
@@ -575,8 +575,8 @@ mod test {
             results: vec![],
         };
         let mut buffer = Buffer::new();
-        buffer.push(query.message().unwrap());
-        buffer.push(params.message().unwrap());
+        buffer.push(query.into());
+        buffer.push(params.into());
 
         let mut parser = QueryParser::default();
         let cluster = Cluster::new_test();
@@ -591,7 +591,7 @@ mod test {
     #[test]
     fn test_order_by_vector() {
         let query = Query::new("SELECT * FROM embeddings ORDER BY embedding <-> '[1,2,3]'");
-        let buffer = Buffer::from(vec![query.message().unwrap()]);
+        let buffer = Buffer::from(vec![query.into()]);
         let route = QueryParser::default()
             .parse(&buffer, &Cluster::default())
             .unwrap()
@@ -621,7 +621,7 @@ mod test {
             }],
             results: vec![],
         };
-        let buffer = Buffer::from(vec![query.message().unwrap(), bind.message().unwrap()]);
+        let buffer = Buffer::from(vec![query.into(), bind.into()]);
         let route = QueryParser::default()
             .parse(&buffer, &Cluster::default())
             .unwrap()

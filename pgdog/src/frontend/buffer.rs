@@ -2,11 +2,14 @@
 
 use std::ops::{Deref, DerefMut};
 
-use crate::net::{
-    messages::{
-        parse::Parse, Bind, CopyData, Describe, FromBytes, Message, Protocol, Query, ToBytes,
+use crate::{
+    backend::ProtocolMessage,
+    net::{
+        messages::{
+            parse::Parse, Bind, CopyData, Describe, FromBytes, Message, Protocol, Query, ToBytes,
+        },
+        Error,
     },
-    Error,
 };
 
 use super::PreparedStatements;
@@ -14,7 +17,7 @@ use super::PreparedStatements;
 /// Message buffer.
 #[derive(Debug, Clone)]
 pub struct Buffer {
-    buffer: Vec<Message>,
+    buffer: Vec<ProtocolMessage>,
 }
 
 impl Default for Buffer {
@@ -172,20 +175,20 @@ impl Buffer {
     }
 }
 
-impl From<Buffer> for Vec<Message> {
+impl From<Buffer> for Vec<ProtocolMessage> {
     fn from(val: Buffer) -> Self {
         val.buffer
     }
 }
 
-impl From<Vec<Message>> for Buffer {
-    fn from(value: Vec<Message>) -> Self {
+impl From<Vec<ProtocolMessage>> for Buffer {
+    fn from(value: Vec<ProtocolMessage>) -> Self {
         Buffer { buffer: value }
     }
 }
 
 impl Deref for Buffer {
-    type Target = Vec<Message>;
+    type Target = Vec<ProtocolMessage>;
 
     fn deref(&self) -> &Self::Target {
         &self.buffer

@@ -18,6 +18,10 @@ pub struct Parse {
 }
 
 impl Parse {
+    pub fn len(&self) -> usize {
+        self.name.len() + 1 + self.query.len() + 1 + self.data_types().len() * 4 + 4 + 1
+    }
+
     /// New anonymous prepared statement.
     #[cfg(test)]
     pub fn new_anonymous(query: &str) -> Self {
