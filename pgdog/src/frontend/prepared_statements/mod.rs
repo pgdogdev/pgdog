@@ -50,6 +50,20 @@ impl PreparedStatements {
         Ok(message)
     }
 
+    /// Record a statement prepared manually.
+    pub fn manual_prepare(&mut self, name: &str, statement: &str) {
+        let parse = Parse::named(name, statement);
+        self.insert(parse);
+    }
+
+    pub fn manual_execute(&mut self, name: &str) {
+        let actual = self.name(name);
+        println!("actual: {:?}, name: {}", actual, name);
+        if let Some(actual) = actual {
+            self.requests.push(PreparedRequest::new(actual, false));
+        }
+    }
+
     /// Register prepared statement with the global cache.
     fn insert(&mut self, parse: Parse) -> Parse {
         let (_new, name) = { self.global.lock().insert(&parse) };

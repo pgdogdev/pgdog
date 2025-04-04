@@ -22,6 +22,7 @@ use crate::net::messages::{
 use crate::net::{parameter::Parameters, Stream};
 
 pub mod counter;
+pub mod extended;
 pub mod inner;
 
 use inner::{Inner, InnerBorrow};
@@ -248,6 +249,30 @@ impl Client {
 
         self.streaming = matches!(command, Some(Command::StartReplication));
 
+        match command {
+            Some(Command::Prepare { name, statement }) => {
+                self.prepared_statements.manual_prepare(&name, &statement)
+            }
+            Some(Command::Execute { name, params }) => {
+                self.prepared_statements.manual_execute(&name);
+            }
+            Some(Command::Multiple(ref commands)) => {
+                for command in commands {
+                    match command {
+                        Command::Prepare { name, statement } => {
+                            self.prepared_statements.manual_prepare(&name, &statement)
+                        }
+                        Command::Execute { name, params } => {
+                            self.prepared_statements.manual_execute(&name);
+                        }
+                        _ => (),
+                    }
+                }
+            }
+
+            _ => (),
+        }
+
         if !connected {
             match command {
                 Some(Command::StartTransaction(query)) => {
@@ -452,6 +477,8 @@ impl Client {
             "request buffered [{:.4}ms]",
             timer.unwrap().elapsed().as_secs_f64() * 1000.0
         );
+
+        println!("buffer: {:?}", buffer);
 
         Ok(buffer)
     }

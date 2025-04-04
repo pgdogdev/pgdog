@@ -459,6 +459,10 @@ impl Server {
         }
     }
 
+    pub fn mark_prepared(&mut self, name: &str) {
+        self.prepared_statements.prepared(name);
+    }
+
     pub async fn describe_statement(&mut self, name: &str) -> Result<Vec<Message>, Error> {
         if !self.in_sync() {
             return Err(Error::NotInSync);
