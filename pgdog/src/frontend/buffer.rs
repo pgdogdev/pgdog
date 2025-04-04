@@ -5,9 +5,7 @@ use std::ops::{Deref, DerefMut};
 use crate::{
     backend::ProtocolMessage,
     net::{
-        messages::{
-            parse::Parse, Bind, CopyData, Describe, FromBytes, Message, Protocol, Query, ToBytes,
-        },
+        messages::{parse::Parse, Bind, CopyData, Describe, FromBytes, Protocol, Query, ToBytes},
         Error,
     },
 };

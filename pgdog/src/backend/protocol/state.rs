@@ -1,5 +1,3 @@
-use tracing::error;
-
 use super::super::Error;
 use std::collections::VecDeque;
 
@@ -70,14 +68,11 @@ impl ProtocolState {
             ExecutionCode::Untracked => return Ok(Action::Forward),
             ExecutionCode::Error => {
                 while let Some(op) = self.queue.pop_front() {
-                    match op {
-                        ExecutionItem::Code(code) => {
-                            if code == ExecutionCode::ReadyForQuery {
-                                self.queue.push_front(ExecutionItem::Code(code));
-                                break;
-                            }
+                    if let ExecutionItem::Code(code) = op {
+                        if code == ExecutionCode::ReadyForQuery {
+                            self.queue.push_front(ExecutionItem::Code(code));
+                            break;
                         }
-                        _ => (),
                     }
                 }
                 return Ok(Action::Forward);

@@ -10,7 +10,7 @@ use crate::{
 use super::Error;
 use super::{
     protocol::{state::Action, ProtocolMessage, ProtocolState},
-    state::{ExecutionCode, ExecutionItem},
+    state::ExecutionCode,
 };
 
 /// Server-specific prepared statements.
@@ -104,7 +104,7 @@ impl PreparedStatements {
             }
 
             ProtocolMessage::Parse(parse) => {
-                self.prepared(&parse.name());
+                self.prepared(parse.name());
                 self.state.add('1');
             }
 

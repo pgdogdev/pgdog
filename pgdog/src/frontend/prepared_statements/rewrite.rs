@@ -4,7 +4,7 @@ use crate::{
     net::messages::{Bind, Describe, Parse},
 };
 
-use super::{request::PreparedRequest, Error, PreparedStatements};
+use super::{Error, PreparedStatements};
 
 /// Rewrite messages.
 #[derive(Debug)]

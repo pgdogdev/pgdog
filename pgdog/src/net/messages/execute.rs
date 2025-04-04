@@ -11,6 +11,12 @@ pub struct Execute {
     portal_len: usize,
 }
 
+impl Default for Execute {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Execute {
     pub fn new() -> Self {
         let mut payload = Payload::named('E');

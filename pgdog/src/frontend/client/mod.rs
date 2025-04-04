@@ -3,11 +3,9 @@
 use std::net::SocketAddr;
 use std::time::Instant;
 
-use tokio::io::AsyncWriteExt;
 use tokio::{select, spawn};
 use tracing::{debug, error, info, trace};
 
-use super::prepared_statements::PreparedRequest;
 use super::{Buffer, Command, Comms, Error, PreparedStatements};
 use crate::auth::{md5, scram::Server};
 use crate::backend::pool::{Connection, Request};
@@ -17,8 +15,8 @@ use crate::frontend::buffer::BufferedQuery;
 #[cfg(debug_assertions)]
 use crate::frontend::QueryLogger;
 use crate::net::messages::{
-    Authentication, BackendKeyData, CommandComplete, ErrorResponse, FromBytes, Message,
-    ParseComplete, Password, Protocol, ReadyForQuery, ToBytes,
+    Authentication, BackendKeyData, CommandComplete, ErrorResponse, FromBytes, Message, Password,
+    Protocol, ReadyForQuery, ToBytes,
 };
 use crate::net::{parameter::Parameters, Stream};
 

@@ -799,7 +799,7 @@ mod test {
         use crate::net::bind::Parameter;
 
         for i in 0..25 {
-            let parse = Parse::named(&format!("test_{}", i), "SELECT $1");
+            let parse = Parse::named(format!("test_{}", i), "SELECT $1");
             let describe = Describe::new_statement(&format!("test_{}", i));
             let bind = Bind {
                 statement: format!("test_{}", i),

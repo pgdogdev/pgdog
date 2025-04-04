@@ -4,6 +4,12 @@ use super::prelude::*;
 #[derive(Debug, Clone)]
 pub struct Sync;
 
+impl Default for Sync {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Sync {
     pub fn len(&self) -> usize {
         5
