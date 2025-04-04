@@ -163,7 +163,7 @@ impl Connection {
         match &self.binding {
             Binding::Admin(_) => Ok(ParameterStatus::fake()),
             _ => {
-                self.connect(request, &Route::write(Some(0))).await?; // Get params from primary.
+                self.connect(request, &Route::read(Some(0))).await?; // Get params from any replica.
                 let params = self
                     .server()?
                     .params()
