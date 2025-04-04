@@ -3,3 +3,5 @@ docs
 web
 .github
 .ropeproject
+integration
+pgdog/tests

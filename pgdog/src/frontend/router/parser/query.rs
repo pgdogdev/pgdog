@@ -1,6 +1,7 @@
 //! Route queries to correct shards.
 use std::{
     collections::{BTreeSet, HashSet},
+    string::String, // We wildcard import pg_query::protobuf which has its own String.
     sync::Arc,
 };
 
@@ -48,6 +49,21 @@ pub enum Command {
     StartReplication,
     ReplicationMeta,
     Set { name: String, value: String },
+    Prepare { name: String, statement: String },
+    Deallocate(String),
+    Execute { name: String, params: Vec<String> },
+    Multiple(Vec<Command>),
+}
+
+impl Command {
+    pub fn to_sql(&self) -> Option<String> {
+        match self {
+            Command::Execute { name, params } => {
+                Some(format!("EXECUTE \"{}\" ({})", name, params.join(", ")))
+            }
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -118,31 +134,35 @@ impl QueryParser {
         //
         // We know what the routing decision is in this case and we don't
         // need to invoke the parser.
-        if cluster.shards().len() == 1 {
-            if cluster.read_only() {
-                return Ok(Command::Query(Route::read(Some(0))));
-            }
-            if cluster.write_only() {
-                return Ok(Command::Query(Route::write(Some(0))));
-            }
-        }
+        // if cluster.shards().len() == 1 {
+        //     if cluster.read_only() {
+        //         return Ok(Command::Query(Route::read(Some(0))));
+        //     }
+        //     if cluster.write_only() {
+        //         return Ok(Command::Query(Route::write(Some(0))));
+        //     }
+        // }
 
         let sharding_schema = cluster.sharding_schema();
 
         // Parse hardcoded shard from a query comment.
-        let shard = super::comment::shard(query, &sharding_schema).map_err(Error::PgQuery)?;
+        let shard = if cluster.shards().len() > 1 {
+            super::comment::shard(query, &sharding_schema).map_err(Error::PgQuery)?
+        } else {
+            Shard::Direct(0)
+        };
 
         // Cluster is read only or write only, traffic split isn't needed,
         // so don't parse the query further.
-        if let Shard::Direct(_) = shard {
-            if cluster.read_only() {
-                return Ok(Command::Query(Route::read(shard)));
-            }
+        // if let Shard::Direct(_) = shard {
+        //     if cluster.read_only() {
+        //         return Ok(Command::Query(Route::read(shard)));
+        //     }
 
-            if cluster.write_only() {
-                return Ok(Command::Query(Route::write(shard)));
-            }
-        }
+        //     if cluster.write_only() {
+        //         return Ok(Command::Query(Route::write(shard)));
+        //     }
+        // }
 
         // Get the AST from cache or parse the statement live.
         let ast = match query {
@@ -162,7 +182,7 @@ impl QueryParser {
         };
 
         debug!("{}", query.query());
-        trace!("{:#?}", ast);
+        // trace!("{:#?}", ast);
 
         //
         // Get the root AST node.
@@ -170,20 +190,85 @@ impl QueryParser {
         // We don't expect clients to send multiple queries. If they do
         // only the first one is used for routing.
         //
-        let root = ast
-            .protobuf
-            .stmts
-            .first()
-            .ok_or(Error::EmptyQuery)?
-            .stmt
-            .as_ref()
-            .ok_or(Error::EmptyQuery)?;
+        let mut commands = vec![];
+        for stmt in &ast.protobuf.stmts {
+            let command = Self::command(
+                stmt.stmt.as_ref().ok_or(Error::EmptyQuery)?,
+                &shard,
+                cluster,
+                &params,
+                &ast,
+                &query,
+            )?;
+            commands.push(command);
+        }
 
-        let mut command = match root.node {
+        let first = commands.first_mut().ok_or(Error::EmptyQuery)?;
+
+        // Overwrite shard using shard we got from a comment, if any.
+        if let Shard::Direct(shard) = shard {
+            if let Command::Query(ref mut route) = first {
+                route.set_shard(shard);
+            }
+        }
+
+        // If we only have one shard, set it.
+        //
+        // If the query parser couldn't figure it out,
+        // there is no point of doing a multi-shard query with only one shard
+        // in the set.
+        //
+        if cluster.shards().len() == 1 {
+            if let Command::Query(ref mut route) = first {
+                route.set_shard(0);
+            }
+        }
+
+        // Last ditch attempt to route a query to a specific shard.
+        //
+        // Looking through manual queries to see if we have any
+        // with the fingerprint.
+        //
+        if let Command::Query(ref mut route) = first {
+            if route.shard().all() {
+                let databases = databases();
+                // Only fingerprint the query if some manual queries are configured.
+                // Otherwise, we're wasting time parsing SQL.
+                if !databases.manual_queries().is_empty() {
+                    let fingerprint = fingerprint(query).map_err(Error::PgQuery)?;
+                    let manual_route = databases.manual_query(&fingerprint.hex).cloned();
+
+                    // TODO: check routing logic required by config.
+                    if manual_route.is_some() {
+                        route.set_shard(round_robin::next() % cluster.shards().len());
+                    }
+                }
+            }
+        }
+
+        trace!("{:#?}", first);
+
+        Ok(if commands.len() == 1 {
+            commands.pop().unwrap()
+        } else {
+            Command::Multiple(commands)
+        })
+    }
+
+    fn command(
+        root: &Box<Node>,
+        shard: &Shard,
+        cluster: &Cluster,
+        params: &Option<Bind>,
+        ast: &pg_query::ParseResult,
+        query: &BufferedQuery,
+    ) -> Result<Command, Error> {
+        let sharding_schema = cluster.sharding_schema();
+        let command = match root.node {
             // SELECT statements.
             Some(NodeEnum::SelectStmt(ref stmt)) => {
                 if matches!(shard, Shard::Direct(_)) {
-                    return Ok(Command::Query(Route::read(shard)));
+                    return Ok(Command::Query(Route::read(shard.clone())));
                 }
                 // `SELECT NOW()`, `SELECT 1`, etc.
                 else if ast.tables().is_empty() {
@@ -214,53 +299,29 @@ impl QueryParser {
                 }
                 _ => Ok(Command::Query(Route::write(None))),
             },
+            Some(NodeEnum::PrepareStmt(ref stmt)) => {
+                let statement = stmt
+                    .query
+                    .as_ref()
+                    .map(|q| q.deparse().unwrap())
+                    .ok_or(Error::EmptyQuery)?;
+                Ok(Command::Prepare {
+                    name: stmt.name.to_string(),
+                    statement,
+                })
+            }
+            Some(NodeEnum::ExecuteStmt(ref stmt)) => Ok(Command::Execute {
+                name: stmt.name.to_string(),
+                params: stmt
+                    .params
+                    .iter()
+                    .map(|n| n.deparse().unwrap().to_string())
+                    .collect(),
+            }),
             // All others are not handled.
             // They are sent to all shards concurrently.
             _ => Ok(Command::Query(Route::write(None))),
         }?;
-
-        // Overwrite shard using shard we got from a comment, if any.
-        if let Shard::Direct(shard) = shard {
-            if let Command::Query(ref mut route) = command {
-                route.set_shard(shard);
-            }
-        }
-
-        // If we only have one shard, set it.
-        //
-        // If the query parser couldn't figure it out,
-        // there is no point of doing a multi-shard query with only one shard
-        // in the set.
-        //
-        if cluster.shards().len() == 1 {
-            if let Command::Query(ref mut route) = command {
-                route.set_shard(0);
-            }
-        }
-
-        // Last ditch attempt to route a query to a specific shard.
-        //
-        // Looking through manual queries to see if we have any
-        // with the fingerprint.
-        //
-        if let Command::Query(ref mut route) = command {
-            if route.shard().all() {
-                let databases = databases();
-                // Only fingerprint the query if some manual queries are configured.
-                // Otherwise, we're wasting time parsing SQL.
-                if !databases.manual_queries().is_empty() {
-                    let fingerprint = fingerprint(query).map_err(Error::PgQuery)?;
-                    let manual_route = databases.manual_query(&fingerprint.hex).cloned();
-
-                    // TODO: check routing logic required by config.
-                    if manual_route.is_some() {
-                        route.set_shard(round_robin::next() % cluster.shards().len());
-                    }
-                }
-            }
-        }
-
-        trace!("{:#?}", command);
 
         Ok(command)
     }
@@ -272,7 +333,7 @@ impl QueryParser {
     fn select(
         stmt: &SelectStmt,
         sharding_schema: &ShardingSchema,
-        params: Option<Bind>,
+        params: &Option<Bind>,
     ) -> Result<Command, Error> {
         let order_by = Self::select_sort(&stmt.sort_clause, &params);
         let mut shards = HashSet::new();
@@ -407,11 +468,13 @@ impl QueryParser {
                     NodeEnum::AExpr(expr) => {
                         if expr.kind() == AExprKind::AexprOp {
                             if let Some(node) = expr.name.first() {
-                                if let Some(NodeEnum::String(String { sval })) = &node.node {
+                                if let Some(NodeEnum::String(pg_query::protobuf::String { sval })) =
+                                    &node.node
+                                {
                                     match sval.as_str() {
                                         "<->" => {
                                             let mut vector: Option<Vector> = None;
-                                            let mut column: Option<std::string::String> = None;
+                                            let mut column: Option<String> = None;
 
                                             for e in
                                                 [&expr.lexpr, &expr.rexpr].iter().copied().flatten()
@@ -603,7 +666,7 @@ mod test {
                 order_by.vector().unwrap(),
                 (
                     &Vector::from(&[1.0, 2.0, 3.0][..]),
-                    &std::string::String::from("embedding")
+                    &String::from("embedding")
                 ),
             );
         } else {
@@ -633,11 +696,69 @@ mod test {
                 order_by.vector().unwrap(),
                 (
                     &Vector::from(&[4.0, 5.0, 6.0][..]),
-                    &std::string::String::from("embedding")
+                    &String::from("embedding")
                 )
             );
         } else {
             panic!("not a route");
         }
+    }
+
+    #[test]
+    fn test_multiple_statements() {
+        let query = r#"CREATE TEMPORARY TABLE _edgecon_state (
+            name text NOT NULL,
+            value jsonb NOT NULL,
+            type text NOT NULL CHECK(
+                type = 'C' OR type = 'B' OR type = 'A' OR type = 'E'
+                OR type = 'F'),
+            UNIQUE(name, type)
+        );
+        CREATE TEMPORARY TABLE _config_cache (
+            source edgedb._sys_config_source_t,
+            value edgedb._sys_config_val_t NOT NULL
+        );
+        CREATE TEMPORARY TABLE _dml_dummy (
+            id int8,
+            flag bool,
+            unique(id)
+        );
+        INSERT INTO _dml_dummy VALUES (0, false);
+
+        PREPARE _clear_state AS
+            WITH x1 AS (
+                DELETE FROM _config_cache
+            )
+            DELETE FROM _edgecon_state WHERE type = 'C' OR type = 'B';
+
+        PREPARE _apply_state(jsonb) AS
+            INSERT INTO
+                _edgecon_state(name, value, type)
+            SELECT
+                (CASE
+                    WHEN e->'type' = '"B"'::jsonb
+                    THEN edgedb._apply_session_config(e->>'name', e->'value')
+                    ELSE e->>'name'
+                END) AS name,
+                e->'value' AS value,
+                e->>'type' AS type
+            FROM
+                jsonb_array_elements($1::jsonb) AS e;
+
+        PREPARE _reset_session_config AS
+            SELECT edgedb._reset_session_config();
+
+        PREPARE _apply_sql_state(jsonb) AS
+            SELECT
+                e.key AS name,
+                pg_catalog.set_config(e.key, e.value, false) AS value
+            FROM
+                jsonb_each_text($1::jsonb) AS e;"#;
+
+        let buffer = Buffer::from(vec![Query::new(query).message().unwrap()]);
+        let _command = QueryParser::default()
+            .parse(&buffer, &Cluster::default())
+            .unwrap()
+            .clone();
     }
 }

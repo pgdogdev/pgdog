@@ -7,9 +7,9 @@ fn global_name(counter: usize) -> String {
 }
 
 #[derive(Debug, Clone)]
-struct StoredParse {
-    parse: Parse,
-    row_description: Option<RowDescription>,
+pub struct StoredParse {
+    pub parse: Parse,
+    pub row_description: Option<RowDescription>,
 }
 
 impl StoredParse {
@@ -31,7 +31,7 @@ struct CacheKey {
     data_types: Arc<Vec<i32>>,
 }
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 pub struct GlobalCache {
     statements: HashMap<CacheKey, usize>,
     names: HashMap<String, StoredParse>, // Ideally this holds an entry to `statements`. Maybe an Arc?
@@ -93,5 +93,9 @@ impl GlobalCache {
 
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    pub fn names(&self) -> &HashMap<String, StoredParse> {
+        &self.names
     }
 }

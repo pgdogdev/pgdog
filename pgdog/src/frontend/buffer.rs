@@ -39,7 +39,7 @@ impl Buffer {
     pub fn full(&self) -> bool {
         if let Some(message) = self.buffer.last() {
             // Flush (F) | Sync (F) | Query (F) | CopyDone (F) | CopyFail (F)
-            if matches!(message.code(), 'H' | 'S' | 'Q' | 'c' | 'f') {
+            if matches!(message.code(), 'H' | 'S' | 'Q' | 'c' | 'f' | 'E') {
                 return true;
             }
 

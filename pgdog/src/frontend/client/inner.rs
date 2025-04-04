@@ -12,7 +12,7 @@ use crate::{
 
 use tracing::debug;
 
-use super::{Client, Error};
+use super::{extended::Extended, Client, Error};
 
 /// Mutable internals used by both client and server message handlers.
 ///
@@ -32,6 +32,8 @@ pub(super) struct Inner {
     pub(super) start_transaction: Option<BufferedQuery>,
     /// Client-wide comms.
     pub(super) comms: Comms,
+    /// Extended queue.
+    pub(super) extended: Extended,
 }
 
 impl Inner {
@@ -63,6 +65,7 @@ impl Inner {
             async_: false,
             start_transaction: None,
             comms: client.comms.clone(),
+            extended: Extended::default(),
         })
     }
 

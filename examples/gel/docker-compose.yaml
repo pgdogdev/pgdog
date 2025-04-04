@@ -1,0 +1,23 @@
+services:
+  gel:
+    image: geldata/gel:latest
+    environment:
+      GEL_SERVER_PASSWORD: gel
+      GEL_SERVER_TLS_CERT_MODE: generate_self_signed
+      GEL_SERVER_BACKEND_DSN: postgres://postgres:postgres@pgdog:6432/postgres
+  postgres:
+    image: postgres:latest
+    environment:
+      POSTGRES_PASSWORD: postgres
+  pgdog:
+    build:
+      dockerfile: Dockerfile
+      context: ../../
+    environment:
+      RUST_LOG: trace
+    command:
+      - "/usr/local/bin/pgdog"
+      - "--database-url=postgres://postgres:postgres@postgres:5432/E___edgedbsys__"
+      - "--database-url=postgres://postgres:postgres@postgres:5432/postgres"
+      - "run"
+      - "--min-pool-size=0"
