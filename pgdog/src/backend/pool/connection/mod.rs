@@ -224,49 +224,6 @@ impl Connection {
         Ok(())
     }
 
-    /// Make sure a prepared statement exists on the connection.
-    pub async fn prepare(&mut self, name: &str) -> Result<(), Error> {
-        match self.binding {
-            Binding::Server(Some(ref mut server)) => {
-                server.prepare_statement(name).await?;
-            }
-            Binding::MultiShard(ref mut servers, _) => {
-                for server in servers {
-                    server.prepare_statement(name).await?;
-                }
-            }
-            _ => (),
-        }
-
-        Ok(())
-    }
-
-    pub async fn describe(&mut self, name: &str) -> Result<Vec<Message>, Error> {
-        match self.binding {
-            Binding::Server(Some(ref mut server)) => Ok(server.describe_statement(name).await?),
-
-            Binding::MultiShard(ref mut servers, _) => {
-                let mut result: Option<Vec<Message>> = None;
-                for server in servers {
-                    let messages = server.describe_statement(name).await?;
-                    if let Some(ref _res) = result {
-                        // TODO: check for equivalency.
-                    } else {
-                        result = Some(messages);
-                    }
-                }
-
-                if let Some(result) = result {
-                    Ok(result)
-                } else {
-                    Err(Error::NotInSync)
-                }
-            }
-
-            _ => Err(Error::NotInSync),
-        }
-    }
-
     pub fn bind(&mut self, bind: &Bind) -> Result<(), Error> {
         match self.binding {
             Binding::MultiShard(_, ref mut state) => {

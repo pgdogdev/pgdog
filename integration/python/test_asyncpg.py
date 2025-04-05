@@ -2,25 +2,42 @@ import asyncpg
 import pytest
 from datetime import datetime
 from globals import normal_async, sharded_async, no_out_of_sync
+import random
+import string
+import pytest_asyncio
+
+@pytest_asyncio.fixture
+async def conns():
+    schema = ''.join(random.choice(string.ascii_uppercase + string.digits) for _ in range(5))
+    conns = await both()
+    for conn in conns:
+        await setup(conn, schema)
+
+    yield conns
+
+    for conn in conns:
+        await conn.execute(f"DROP SCHEMA \"{schema}\" CASCADE")
+
 
 async def both():
     return [await normal_async(), await sharded_async()]
 
-async def setup(conn):
+async def setup(conn, schema):
+    await conn.execute(f"CREATE SCHEMA IF NOT EXISTS \"{schema}\"")
+    await conn.execute(f"SET search_path TO \"{schema}\",public")
     try:
-        await conn.execute("DROP TABLE sharded")
+        await conn.execute("DROP TABLE IF EXISTS sharded")
     except asyncpg.exceptions.UndefinedTableError:
         pass
     await conn.execute("""CREATE TABLE sharded (
-        id BIGINT,
+        id BIGSERIAL PRIMARY KEY,
         value TEXT,
         created_at TIMESTAMPTZ
     )""")
-    await conn.execute("TRUNCATE TABLE sharded")
 
 @pytest.mark.asyncio
-async def test_connect():
-    for c in await both():
+async def test_connect(conns):
+    for c in conns:
         result = await c.fetch("SELECT 1")
         assert result[0][0] == 1
 
@@ -30,8 +47,8 @@ async def test_connect():
     no_out_of_sync()
 
 @pytest.mark.asyncio
-async def test_transaction():
-    for c in await both():
+async def test_transaction(conns):
+    for c in conns:
         for j in range(50):
             async with c.transaction():
                 for i in range(25):
@@ -41,8 +58,8 @@ async def test_transaction():
 
 
 @pytest.mark.asyncio
-async def test_error():
-    for c in await both():
+async def test_error(conns):
+    for c in conns:
         for _ in range(250):
             try:
                 await c.execute("SELECT sdfsf")
@@ -51,8 +68,8 @@ async def test_error():
     no_out_of_sync()
 
 @pytest.mark.asyncio
-async def test_error_transaction():
-    for c in await both():
+async def test_error_transaction(conns):
+    for c in conns:
         for _ in range(250):
             async with c.transaction():
                 try:
@@ -63,8 +80,8 @@ async def test_error_transaction():
     no_out_of_sync()
 
 @pytest.mark.asyncio
-async def test_insert_allshard():
-    conn = await sharded_async();
+async def test_insert_allshard(conns):
+    conn = conns[1];
     try:
         async with conn.transaction():
             await conn.execute("""CREATE TABLE pytest (
@@ -91,8 +108,8 @@ async def test_insert_allshard():
     no_out_of_sync()
 
 @pytest.mark.asyncio
-async def test_direct_shard():
-    conn = await sharded_async()
+async def test_direct_shard(conns):
+    conn = conns[1]
     try:
         await conn.execute("DROP TABLE sharded")
     except asyncpg.exceptions.UndefinedTableError:
@@ -135,9 +152,8 @@ async def test_direct_shard():
     no_out_of_sync()
 
 @pytest.mark.asyncio
-async def test_delete():
-    conn = await sharded_async()
-    await setup(conn)
+async def test_delete(conns):
+    conn = conns[1]
 
     for id in range(250):
         await conn.execute("DELETE FROM sharded WHERE id = $1", id)
@@ -145,13 +161,13 @@ async def test_delete():
     no_out_of_sync()
 
 @pytest.mark.asyncio
-async def test_copy():
+async def test_copy(conns):
     records = 250
     for i in range(50):
-        for conn in await both():
-            await setup(conn)
+        for conn in conns:
             rows = [[x, f"value_{x}", datetime.now()] for x in range(records)]
             await conn.copy_records_to_table("sharded", records=rows, columns=['id', 'value', 'created_at'])
             count = await conn.fetch("SELECT COUNT(*) FROM sharded")
             assert len(count) == 1
             assert count[0][0] == records
+            await conn.execute("DELETE FROM sharded")

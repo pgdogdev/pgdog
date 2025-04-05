@@ -36,6 +36,9 @@ pub struct PreparedStatements {
     global_cache: Arc<Mutex<GlobalCache>>,
     local_cache: HashSet<String>,
     state: ProtocolState,
+    // Prepared statements being prepared now on the connection.
+    parses: VecDeque<String>,
+    // Describes being executed now on the connection.
     describes: VecDeque<String>,
 }
 
@@ -52,6 +55,7 @@ impl PreparedStatements {
             global_cache: frontend::PreparedStatements::global(),
             local_cache: HashSet::new(),
             state: ProtocolState::default(),
+            parses: VecDeque::new(),
             describes: VecDeque::new(),
         }
     }
@@ -82,7 +86,6 @@ impl PreparedStatements {
             ProtocolMessage::Describe(describe) => {
                 if !describe.anonymous() {
                     let message = self.check_prepared(&describe.statement)?;
-                    self.describes.push_back(describe.statement.clone());
 
                     match message {
                         Some(message) => {
@@ -99,6 +102,8 @@ impl PreparedStatements {
                             // T
                         }
                     }
+
+                    self.describes.push_back(describe.statement.clone());
                 } else {
                     self.state.add(ExecutionCode::DescriptionOrNothing); // t
                     self.state.add(ExecutionCode::DescriptionOrNothing); // T
@@ -127,6 +132,7 @@ impl PreparedStatements {
                     } else {
                         self.prepared(parse.name());
                         self.state.add('1');
+                        self.parses.push_back(parse.name().to_string());
                     }
                 } else {
                     self.state.add('1');
@@ -150,18 +156,34 @@ impl PreparedStatements {
         let code = message.code();
         let action = self.state.action(code)?;
 
-        if matches!(code, 'E' | 'T') {
-            // Handle saving the RowDescription message.
-            let describe = self.describes.pop_front();
+        // Cleanup prepared statements state.
+        match code {
+            'E' => {
+                let parse = self.parses.pop_front();
+                let describe = self.describes.pop_front();
+                if let Some(parse) = parse {
+                    self.remove(&parse);
+                }
+                if let Some(describe) = describe {
+                    self.remove(&describe);
+                }
+            }
 
-            if let Some(describe) = describe {
-                if code == 'T' {
+            'T' => {
+                if let Some(describe) = self.describes.pop_front() {
                     self.global_cache.lock().insert_row_description(
                         &describe,
                         &RowDescription::from_bytes(message.to_bytes()?)?,
                     );
-                }
+                    println!("inserted row");
+                };
             }
+
+            '1' => {
+                self.parses.pop_front();
+            }
+
+            _ => (),
         }
 
         match action {
@@ -177,7 +199,7 @@ impl PreparedStatements {
     }
 
     pub fn done(&self) -> bool {
-        self.state.is_empty()
+        self.state.is_empty() && self.parses.is_empty() && self.describes.is_empty()
     }
 
     fn check_prepared(&mut self, name: &str) -> Result<Option<ProtocolMessage>, Error> {
@@ -192,12 +214,12 @@ impl PreparedStatements {
     }
 
     /// The server has prepared this statement already.
-    pub fn contains(&self, name: &str) -> bool {
+    fn contains(&self, name: &str) -> bool {
         self.local_cache.contains(name)
     }
 
     /// Indicate this statement is prepared on the connection.
-    pub fn prepared(&mut self, name: &str) {
+    fn prepared(&mut self, name: &str) {
         self.local_cache.insert(name.to_owned());
     }
 
@@ -230,5 +252,13 @@ impl PreparedStatements {
 
     pub fn state_mut(&mut self) -> &mut ProtocolState {
         &mut self.state
+    }
+
+    pub fn len(&self) -> usize {
+        self.local_cache.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 }

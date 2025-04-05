@@ -298,7 +298,9 @@ impl Client {
         }
 
         for msg in buffer.iter() {
-            if let ProtocolMessage::Bind(bind) = msg { inner.backend.bind(bind)? }
+            if let ProtocolMessage::Bind(bind) = msg {
+                inner.backend.bind(bind)?
+            }
         }
 
         // inner.backend.wait_in_sync().await;

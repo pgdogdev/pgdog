@@ -7,7 +7,7 @@ use super::code;
 use super::prelude::*;
 
 /// Parse (F) message.
-#[derive(Debug, Clone, Hash, Eq, PartialEq)]
+#[derive(Debug, Clone, Hash, Eq, PartialEq, Default)]
 pub struct Parse {
     /// Prepared statement name.
     name: Arc<String>,

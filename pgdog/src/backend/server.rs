@@ -15,7 +15,7 @@ use super::{
     ProtocolState, Stats,
 };
 use crate::net::{
-    messages::{DataRow, Describe, Flush, NoticeResponse, RowDescription},
+    messages::{DataRow, NoticeResponse},
     parameter::Parameters,
     tls::connector,
     Parameter, Stream,
@@ -462,83 +462,6 @@ impl Server {
         }
     }
 
-    /// Prepare a statement on this connection if it doesn't exist already.
-    pub async fn prepare_statement(&mut self, name: &str) -> Result<bool, Error> {
-        if self.prepared_statements.contains(name) {
-            return Ok(false);
-        }
-
-        if !self.in_sync() {
-            return Err(Error::NotInSync);
-        }
-
-        let parse = self
-            .prepared_statements
-            .parse(name)
-            .ok_or(Error::PreparedStatementMissing(name.to_string()))?;
-
-        debug!("preparing \"{}\" [{}]", parse.name(), self.addr());
-
-        self.send(vec![parse.message()?, Flush.message()?]).await?;
-        let response = self.read().await?;
-
-        match response.code() {
-            'E' => {
-                let error = ErrorResponse::from_bytes(response.to_bytes()?)?;
-                Err(Error::PreparedStatementError(Box::new(error)))
-            }
-            '1' => {
-                self.prepared_statements.prepared(name);
-                self.stats.prepared_statement();
-                Ok(true)
-            }
-            code => Err(Error::ExpectedParseComplete(code)),
-        }
-    }
-
-    pub async fn describe_statement(&mut self, name: &str) -> Result<Vec<Message>, Error> {
-        if !self.in_sync() {
-            return Err(Error::NotInSync);
-        }
-
-        debug!("describing \"{}\" [{}]", name, self.addr());
-
-        self.send(vec![
-            Describe::new_statement(name).message()?,
-            Flush.message()?,
-        ])
-        .await?;
-
-        let mut messages = vec![];
-
-        loop {
-            let response = self.read().await?;
-            match response.code() {
-                'T' => {
-                    let row_description = RowDescription::from_bytes(response.to_bytes()?)?;
-                    self.prepared_statements.describe(name, &row_description);
-                    messages.push(response.backend());
-                    break;
-                }
-
-                'n' | 'E' => {
-                    messages.push(response.backend());
-                    break;
-                }
-
-                't' => {
-                    messages.push(response.backend());
-                }
-
-                c => return Err(Error::UnexpectedMessage(c)),
-            }
-        }
-
-        self.stats.state(State::Idle);
-
-        Ok(messages)
-    }
-
     /// Reset error state caused by schema change.
     #[inline]
     pub fn reset_schema_changed(&mut self) {
@@ -641,10 +564,7 @@ impl Drop for Server {
 // Used for testing.
 #[cfg(test)]
 mod test {
-    use crate::{
-        frontend::PreparedStatements,
-        net::{Bind, Execute, Parse, Sync},
-    };
+    use crate::{frontend::PreparedStatements, net::*};
 
     use super::*;
 
@@ -811,10 +731,16 @@ mod test {
         use crate::net::bind::Parameter;
 
         for i in 0..25 {
-            let parse = Parse::named(format!("test_{}", i), "SELECT $1");
-            let describe = Describe::new_statement(&format!("test_{}", i));
+            let name = format!("test_prepared_{}", i);
+            let parse = Parse::named(&name, &format!("SELECT $1, 'test_{}'", name));
+            let (new, new_name) = PreparedStatements::global().lock().insert(&parse);
+            let name = new_name;
+            let parse = parse.rename(&name);
+            assert!(new);
+
+            let describe = Describe::new_statement(&name);
             let bind = Bind {
-                statement: format!("test_{}", i),
+                statement: name.clone(),
                 params: vec![Parameter {
                     len: 1,
                     data: "1".as_bytes().to_vec(),
@@ -836,6 +762,13 @@ mod test {
                 let msg = server.read().await.unwrap();
                 assert_eq!(c, msg.code());
             }
+
+            // RowDescription saved.
+            let global = server.prepared_statements.parse(&name).unwrap();
+            server
+                .prepared_statements
+                .row_description(global.name())
+                .unwrap();
 
             server
                 .send(vec![
@@ -926,12 +859,12 @@ mod test {
                 ])
                 .await
                 .unwrap();
-            assert_eq!(server.prepared_statements.state().len(), 4);
             for c in ['E', 'Z'] {
                 let msg = server.read().await.unwrap();
                 assert_eq!(msg.code(), c);
             }
             assert!(server.done());
+            assert!(server.prepared_statements.is_empty());
         }
     }
 
@@ -963,5 +896,63 @@ mod test {
 
             assert!(server.done());
         }
+    }
+
+    #[tokio::test]
+    async fn test_already_prepared() {
+        let mut server = test_server().await;
+        let name = "test".to_string();
+        let parse = Parse::named(&name, "SELECT $1");
+        let describe = Describe::new_statement(&name);
+
+        for _ in 0..25 {
+            server
+                .send(vec![
+                    ProtocolMessage::from(parse.clone()),
+                    describe.clone().into(),
+                    Flush.into(),
+                ])
+                .await
+                .unwrap();
+
+            for c in ['1', 't', 'T'] {
+                let msg = server.read().await.unwrap();
+                assert_eq!(msg.code(), c);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_bad_parse_removed() {
+        let mut server = test_server().await;
+        let name = "test".to_string();
+        let parse = Parse::named(&name, "SELECT bad syntax");
+
+        server
+            .send(vec![ProtocolMessage::from(parse.clone()), Sync.into()])
+            .await
+            .unwrap();
+        for c in ['E', 'Z'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), c);
+        }
+        assert!(server.prepared_statements.is_empty());
+
+        server
+            .send(vec![
+                ProtocolMessage::from(Parse::named("test", "SELECT $1")),
+                Flush.into(),
+            ])
+            .await
+            .unwrap();
+
+        for c in ['1'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), c);
+        }
+
+        assert_eq!(server.prepared_statements.len(), 1);
+
+        assert!(server.done());
     }
 }

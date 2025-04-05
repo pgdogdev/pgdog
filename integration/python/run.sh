@@ -6,14 +6,6 @@ source ${SCRIPT_DIR}/../common.sh
 run_pgdog
 wait_for_pgdog
 
-pushd ${SCRIPT_DIR}
-
-virtualenv venv
-source venv/bin/activate
-pip install -r requirements.txt
-
-pytest
-
-popd
+source run.sh
 
 stop_pgdog
