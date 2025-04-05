@@ -2,7 +2,7 @@
 use super::prelude::*;
 
 use bytes::Bytes;
-use std::str::from_utf8;
+use std::str::{from_utf8, from_utf8_unchecked};
 
 /// Query (F) message.
 #[derive(Clone)]
@@ -20,6 +20,10 @@ impl std::fmt::Debug for Query {
 }
 
 impl Query {
+    pub fn len(&self) -> usize {
+        self.payload.len()
+    }
+
     /// Create new query.
     pub fn new(query: impl ToString) -> Self {
         let mut payload = Payload::named('Q');
@@ -32,7 +36,7 @@ impl Query {
     pub fn query(&self) -> &str {
         // SAFETY:  We check for valid UTF-8 on creation.
         //          Don't read the trailing null byte.
-        from_utf8(&self.payload[5..self.payload.len() - 1]).unwrap()
+        unsafe { from_utf8_unchecked(&self.payload[5..self.payload.len() - 1]) }
     }
 }
 

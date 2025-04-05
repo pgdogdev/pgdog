@@ -1,6 +1,6 @@
 //! Binding between frontend client and a connection on the backend.
 
-use crate::net::parameter::Parameters;
+use crate::{backend::ProtocolMessage, net::parameter::Parameters};
 
 use super::*;
 
@@ -35,6 +35,28 @@ impl Binding {
             Binding::MultiShard(servers, _) => !servers.is_empty(),
             Binding::Admin(_) => true,
             Binding::Replication(server, _) => server.is_some(),
+        }
+    }
+
+    pub(super) async fn wait_in_sync(&self) {
+        match self {
+            Binding::Server(Some(ref server)) => {
+                if !server.in_sync() {
+                    sleep(Duration::MAX).await;
+                }
+            }
+
+            Binding::MultiShard(ref servers, _) => {
+                if servers.iter().any(|s| !s.in_sync()) {
+                    sleep(Duration::MAX).await;
+                }
+            }
+            Binding::Replication(Some(ref server), _) => {
+                if !server.in_sync() {
+                    sleep(Duration::MAX).await;
+                }
+            }
+            _ => (),
         }
     }
 
@@ -83,7 +105,7 @@ impl Binding {
                     }
 
                     loop {
-                        *state = state.new_reset();
+                        state.reset();
                         sleep(Duration::MAX).await;
                     }
                 }
@@ -112,7 +134,10 @@ impl Binding {
         }
     }
 
-    pub(super) async fn send(&mut self, messages: Vec<impl Protocol>) -> Result<(), Error> {
+    pub(super) async fn send(
+        &mut self,
+        messages: Vec<impl Into<ProtocolMessage> + Clone>,
+    ) -> Result<(), Error> {
         match self {
             Binding::Server(server) => {
                 if let Some(server) = server {
@@ -125,8 +150,7 @@ impl Binding {
             Binding::Admin(backend) => Ok(backend.send(messages).await?),
             Binding::MultiShard(servers, _state) => {
                 for server in servers.iter_mut() {
-                    let messages = messages.iter().map(|m| m.message().unwrap()).collect();
-                    server.send(messages).await?;
+                    server.send(messages.clone()).await?;
                 }
 
                 Ok(())

@@ -5,8 +5,10 @@ use std::time::Duration;
 
 use tokio::time::sleep;
 
+use crate::backend::ProtocolMessage;
 use crate::net::messages::command_complete::CommandComplete;
 use crate::net::messages::{ErrorResponse, FromBytes, Protocol, Query, ReadyForQuery};
+use crate::net::ToBytes;
 
 use super::parser::Parser;
 use super::prelude::Message;
@@ -33,8 +35,12 @@ impl Backend {
     }
 
     /// Handle command.
-    pub async fn send(&mut self, messages: Vec<impl Protocol>) -> Result<(), Error> {
+    pub async fn send(
+        &mut self,
+        messages: Vec<impl Into<ProtocolMessage> + Clone>,
+    ) -> Result<(), Error> {
         let message = messages.first().ok_or(Error::Empty)?;
+        let message: ProtocolMessage = message.clone().into();
 
         if message.code() != 'Q' {
             return Err(Error::SimpleOnly);

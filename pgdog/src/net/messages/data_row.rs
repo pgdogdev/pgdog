@@ -35,6 +35,15 @@ impl From<Bytes> for Data {
     }
 }
 
+impl From<(Bytes, bool)> for Data {
+    fn from(value: (Bytes, bool)) -> Self {
+        Self {
+            data: value.0,
+            is_null: value.1,
+        }
+    }
+}
+
 impl Data {
     pub fn null() -> Self {
         Self {
@@ -245,14 +254,14 @@ impl FromBytes for DataRow {
                 let mut column = BytesMut::new();
 
                 if len < 0 {
-                    return column.freeze();
+                    return (column.freeze(), true);
                 }
 
                 for _ in 0..len {
                     column.put_u8(bytes.get_u8());
                 }
 
-                column.freeze()
+                (column.freeze(), false)
             })
             .map(Data::from)
             .collect();

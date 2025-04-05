@@ -17,6 +17,13 @@ impl Close {
             name: name.to_owned(),
         }
     }
+
+    pub fn len(&self) -> usize {
+        self.name.len() + 1 // NULL
+        + 4 // len
+        + 1 // code
+        + 1 // kind
+    }
 }
 
 impl FromBytes for Close {

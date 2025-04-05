@@ -21,6 +21,9 @@ def conn(db, prepared)
 end
 
 describe 'active record' do
+  after do
+    ensure_done
+  end
   describe 'normal' do
     before do
       conn('pgdog', false)

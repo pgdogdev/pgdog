@@ -34,6 +34,12 @@ pub struct Parameter {
     pub data: Vec<u8>,
 }
 
+impl Parameter {
+    pub fn len(&self) -> usize {
+        4 + self.data.len()
+    }
+}
+
 /// Parameter with encoded format.
 #[derive(Debug, Clone)]
 pub struct ParameterWithFormat<'a> {
@@ -92,6 +98,18 @@ pub struct Bind {
 }
 
 impl Bind {
+    pub fn len(&self) -> usize {
+        self.portal.len()
+            + 1 // NULL
+            + self.statement.len()
+            + 1 // NULL
+            + self.codes.len() * std::mem::size_of::<i16>()
+            + self.params.iter().map(|p| p.len()).sum::<usize>()
+            + self.results.len() * std::mem::size_of::<i16>()
+            + 4 // len
+            + 1 // code
+    }
+
     /// Format a parameter is using.
     pub fn parameter_format(&self, index: usize) -> Result<Format, Error> {
         let code = if self.codes.len() == self.params.len() {

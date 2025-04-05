@@ -7,6 +7,10 @@ def connect(dbname = 'pgdog')
 end
 
 describe 'pg' do
+  after do
+    ensure_done
+  end
+
   it 'simple query' do
     %w[pgdog pgdog_sharded].each do |db|
       conn = connect db

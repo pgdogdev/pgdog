@@ -35,6 +35,11 @@ impl Buffer {
         self.full = true;
     }
 
+    pub(super) fn reset(&mut self) {
+        self.buffer.clear();
+        self.full = false;
+    }
+
     /// Sort the buffer.
     pub(super) fn sort(&mut self, columns: &[OrderBy], decoder: &Decoder) {
         // Calculate column indices once, since

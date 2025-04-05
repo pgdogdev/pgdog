@@ -7,6 +7,7 @@ use crate::{
     backend::{
         databases::databases,
         replication::{Buffer, ReplicationConfig},
+        ProtocolMessage,
     },
     config::PoolerMode,
     frontend::router::{parser::Shard, CopyRow, Route},
@@ -190,8 +191,17 @@ impl Connection {
         self.binding.read().await
     }
 
+    /// Wait until server(s) are done.
+    /// Ensures messages are not sent too quickly in multi-sharded contexts.
+    pub async fn wait_in_sync(&self) {
+        self.binding.wait_in_sync().await
+    }
+
     /// Send messages to the server.
-    pub async fn send(&mut self, messages: Vec<impl Protocol>) -> Result<(), Error> {
+    pub async fn send(
+        &mut self,
+        messages: Vec<impl Into<ProtocolMessage> + Clone>,
+    ) -> Result<(), Error> {
         self.binding.send(messages).await
     }
 
@@ -257,7 +267,7 @@ impl Connection {
         }
     }
 
-    pub async fn bind(&mut self, bind: &Bind) -> Result<(), Error> {
+    pub fn bind(&mut self, bind: &Bind) -> Result<(), Error> {
         match self.binding {
             Binding::MultiShard(_, ref mut state) => {
                 state.set_context(bind);
