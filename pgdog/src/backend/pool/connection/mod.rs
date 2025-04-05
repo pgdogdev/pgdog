@@ -261,7 +261,7 @@ impl Connection {
         }
     }
 
-    pub async fn bind(&mut self, bind: &Bind) -> Result<(), Error> {
+    pub fn bind(&mut self, bind: &Bind) -> Result<(), Error> {
         match self.binding {
             Binding::MultiShard(_, ref mut state) => {
                 state.set_context(bind);

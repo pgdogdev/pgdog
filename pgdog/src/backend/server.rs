@@ -10,7 +10,10 @@ use tokio::{
 };
 use tracing::{debug, error, info, trace, warn};
 
-use super::{pool::Address, Error, PreparedStatements, ProtocolMessage, ProtocolState, Stats};
+use super::{
+    pool::Address, prepared_statements::HandleResult, Error, PreparedStatements, ProtocolMessage,
+    ProtocolState, Stats,
+};
 use crate::net::{
     messages::{DataRow, Describe, Flush, NoticeResponse, RowDescription},
     parameter::Parameters,
@@ -210,9 +213,15 @@ impl Server {
     pub async fn send_one(&mut self, message: impl Into<ProtocolMessage>) -> Result<(), Error> {
         self.stats.state(State::Active);
         let message: ProtocolMessage = message.into();
-        let prepare = self.prepared_statements.handle(&message)?;
+        let result = self.prepared_statements.handle(&message)?;
 
-        for message in [prepare, Some(message)] {
+        let queue = match result {
+            HandleResult::Drop => [None, None],
+            HandleResult::Prepend(prepare) => [Some(prepare), Some(message)],
+            HandleResult::Forward => [Some(message), None],
+        };
+
+        for message in queue {
             if let Some(message) = message {
                 trace!("→ {:#?}", message);
 
@@ -242,10 +251,13 @@ impl Server {
     /// Read a single message from the server.
     pub async fn read(&mut self) -> Result<Message, Error> {
         let message = loop {
+            if let Some(message) = self.prepared_statements.state_mut().get_simulated() {
+                return Ok(message);
+            }
             match self.stream().read().await {
                 Ok(message) => {
                     let message = message.stream(self.streaming).backend();
-                    match self.prepared_statements.forward(message.code()) {
+                    match self.prepared_statements.forward(&message) {
                         Ok(forward) => {
                             if forward {
                                 break message;
@@ -327,6 +339,7 @@ impl Server {
     /// Server sent everything.
     #[inline]
     pub fn done(&self) -> bool {
+        println!("{:?}", self.prepared_statements.state());
         self.prepared_statements.done() && !self.in_transaction()
     }
 

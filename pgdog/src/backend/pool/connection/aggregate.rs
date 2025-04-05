@@ -62,7 +62,9 @@ impl<'a> Accumulator<'a> {
 
     /// Transform COUNT(*), MIN, MAX, etc., from multiple shards into a single value.
     fn accumulate(&mut self, row: &DataRow, decoder: &Decoder) -> Result<(), Error> {
+        println!("aggr: {:?}", decoder);
         let column = row.get_column(self.target.column(), decoder)?;
+        println!("column: {:?}, target: {}", column, self.target.column());
         if let Some(column) = column {
             match self.target.function() {
                 AggregateFunction::Count => self.datum = self.datum.clone() + column.value,

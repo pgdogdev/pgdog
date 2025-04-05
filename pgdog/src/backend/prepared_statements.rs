@@ -1,10 +1,16 @@
-use std::{collections::HashSet, sync::Arc};
+use std::{
+    collections::{HashSet, VecDeque},
+    sync::Arc,
+};
 
 use parking_lot::Mutex;
 
 use crate::{
     frontend::{self, prepared_statements::GlobalCache},
-    net::messages::{parse::Parse, RowDescription},
+    net::{
+        messages::{parse::Parse, RowDescription},
+        FromBytes, Message, ParseComplete, Protocol, ToBytes,
+    },
 };
 
 use super::Error;
@@ -12,6 +18,13 @@ use super::{
     protocol::{state::Action, ProtocolMessage, ProtocolState},
     state::ExecutionCode,
 };
+
+#[derive(Debug, Clone)]
+pub enum HandleResult {
+    Forward,
+    Drop,
+    Prepend(ProtocolMessage),
+}
 
 /// Server-specific prepared statements.
 ///
@@ -23,6 +36,7 @@ pub struct PreparedStatements {
     global_cache: Arc<Mutex<GlobalCache>>,
     local_cache: HashSet<String>,
     state: ProtocolState,
+    describes: VecDeque<String>,
 }
 
 impl Default for PreparedStatements {
@@ -38,11 +52,12 @@ impl PreparedStatements {
             global_cache: frontend::PreparedStatements::global(),
             local_cache: HashSet::new(),
             state: ProtocolState::default(),
+            describes: VecDeque::new(),
         }
     }
 
     /// Handle extended protocol message.
-    pub fn handle(&mut self, request: &ProtocolMessage) -> Result<Option<ProtocolMessage>, Error> {
+    pub fn handle(&mut self, request: &ProtocolMessage) -> Result<HandleResult, Error> {
         match request {
             ProtocolMessage::Bind(bind) => {
                 if !bind.anonymous() {
@@ -52,7 +67,7 @@ impl PreparedStatements {
                             self.state.add_ignore('1', &bind.statement);
                             self.prepared(&bind.statement);
                             self.state.add('2');
-                            return Ok(Some(message));
+                            return Ok(HandleResult::Prepend(message));
                         }
 
                         None => {
@@ -67,6 +82,7 @@ impl PreparedStatements {
             ProtocolMessage::Describe(describe) => {
                 if !describe.anonymous() {
                     let message = self.check_prepared(&describe.statement)?;
+                    self.describes.push_back(describe.statement.clone());
 
                     match message {
                         Some(message) => {
@@ -74,7 +90,7 @@ impl PreparedStatements {
                             self.prepared(&describe.statement);
                             self.state.add(ExecutionCode::DescriptionOrNothing); // t
                             self.state.add(ExecutionCode::DescriptionOrNothing); // T
-                            return Ok(Some(message));
+                            return Ok(HandleResult::Prepend(message));
                         }
 
                         None => {
@@ -104,8 +120,17 @@ impl PreparedStatements {
             }
 
             ProtocolMessage::Parse(parse) => {
-                self.prepared(parse.name());
-                self.state.add('1');
+                if !parse.anonymous() {
+                    if self.contains(parse.name()) {
+                        self.state.add_simulated(ParseComplete.message()?);
+                        return Ok(HandleResult::Drop);
+                    } else {
+                        self.prepared(parse.name());
+                        self.state.add('1');
+                    }
+                } else {
+                    self.state.add('1');
+                }
             }
 
             ProtocolMessage::CopyData(_) => (),
@@ -117,12 +142,27 @@ impl PreparedStatements {
             ProtocolMessage::Prepare { .. } => (),
         }
 
-        Ok(None)
+        Ok(HandleResult::Forward)
     }
 
     /// Should we forward the message to the client.
-    pub fn forward(&mut self, code: char) -> Result<bool, Error> {
+    pub fn forward(&mut self, message: &Message) -> Result<bool, Error> {
+        let code = message.code();
         let action = self.state.action(code)?;
+
+        if matches!(code, 'E' | 'T') {
+            // Handle saving the RowDescription message.
+            let describe = self.describes.pop_front();
+
+            if let Some(describe) = describe {
+                if code == 'T' {
+                    self.global_cache.lock().insert_row_description(
+                        &describe,
+                        &RowDescription::from_bytes(message.to_bytes()?)?,
+                    );
+                }
+            }
+        }
 
         match action {
             Action::Ignore => Ok(false),
@@ -186,5 +226,9 @@ impl PreparedStatements {
 
     pub fn state(&self) -> &ProtocolState {
         &self.state
+    }
+
+    pub fn state_mut(&mut self) -> &mut ProtocolState {
+        &mut self.state
     }
 }

@@ -3,7 +3,7 @@
 use context::Context;
 
 use crate::{
-    frontend::router::Route,
+    frontend::{router::Route, PreparedStatements},
     net::{
         messages::{
             command_complete::CommandComplete, FromBytes, Message, Protocol, RowDescription,
@@ -27,14 +27,18 @@ pub(super) struct MultiShard {
     /// How many rows we received so far.
     rows: usize,
     /// Number of ReadyForQuery messages.
-    rfq: usize,
+    ready_for_query: usize,
     /// Number of CommandComplete messages.
-    cc: usize,
+    command_complete_count: usize,
     /// Number of NoData messages.
-    nd: usize,
+    empty_query_response: usize,
     /// Number of CopyInResponse messages.
-    ci: usize,
-    er: usize,
+    copy_in: usize,
+    error_response: usize,
+    parse_complete: usize,
+    parameter_description: usize,
+    no_data: usize,
+    row_description: usize,
     /// Rewritten CommandComplete message.
     command_complete: Option<Message>,
     /// Sorting/aggregate buffer.
@@ -64,8 +68,8 @@ impl MultiShard {
 
         match message.code() {
             'Z' => {
-                self.rfq += 1;
-                forward = if self.rfq == self.shards {
+                self.ready_for_query += 1;
+                forward = if self.ready_for_query == self.shards {
                     Some(message)
                 } else {
                     None
@@ -80,9 +84,9 @@ impl MultiShard {
                 } else {
                     false
                 };
-                self.cc += 1;
+                self.command_complete_count += 1;
 
-                if self.cc == self.shards {
+                if self.command_complete_count == self.shards {
                     self.buffer.full();
                     self.buffer
                         .aggregate(self.route.aggregate(), &self.decoder)?;
@@ -102,22 +106,24 @@ impl MultiShard {
             }
 
             'T' => {
-                let rd = RowDescription::from_bytes(message.to_bytes()?)?;
-                if self.decoder.rd().is_empty() {
-                    self.decoder.row_description(&rd);
+                self.row_description += 1;
+                if self.row_description == 1 {
                     forward = Some(message);
+                } else if self.row_description == self.shards {
+                    let rd = RowDescription::from_bytes(message.to_bytes()?)?;
+                    self.decoder.row_description(&rd);
                 }
             }
 
             'I' => {
-                self.nd += 1;
-                if self.nd == self.shards {
+                self.empty_query_response += 1;
+                if self.empty_query_response == self.shards {
                     forward = Some(message);
                 }
             }
 
             'D' => {
-                if !self.route.should_buffer() {
+                if !self.route.should_buffer() && self.row_description == self.shards {
                     forward = Some(message);
                 } else {
                     self.buffer.add(message)?;
@@ -125,15 +131,29 @@ impl MultiShard {
             }
 
             'G' => {
-                self.ci += 1;
-                if self.ci == self.shards {
+                self.copy_in += 1;
+                if self.copy_in == self.shards {
                     forward = Some(message);
                 }
             }
 
             'n' => {
-                self.er += 1;
-                if self.er == self.shards {
+                self.no_data += 1;
+                if self.no_data == self.shards {
+                    forward = Some(message);
+                }
+            }
+
+            '1' => {
+                self.parse_complete += 1;
+                if self.parse_complete == self.shards {
+                    forward = Some(message);
+                }
+            }
+
+            't' => {
+                self.parameter_description += 1;
+                if self.parameter_description == self.shards {
                     forward = Some(message);
                 }
             }
@@ -156,7 +176,19 @@ impl MultiShard {
     pub(super) fn set_context<'a>(&mut self, message: impl Into<Context<'a>>) {
         let context = message.into();
         match context {
-            Context::Bind(bind) => self.decoder.bind(bind),
+            Context::Bind(bind) => {
+                if self.decoder.rd().fields.is_empty() {
+                    if !bind.anonymous() {
+                        if let Some(rd) = PreparedStatements::global()
+                            .lock()
+                            .row_description(&bind.statement)
+                        {
+                            self.decoder.row_description(&rd);
+                        }
+                    }
+                }
+                self.decoder.bind(bind);
+            }
             Context::RowDescription(rd) => self.decoder.row_description(rd),
         }
     }

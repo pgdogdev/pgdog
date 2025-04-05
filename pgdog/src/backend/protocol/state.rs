@@ -1,3 +1,5 @@
+use crate::net::Message;
+
 use super::super::Error;
 use std::collections::VecDeque;
 
@@ -47,6 +49,7 @@ pub enum ExecutionItem {
 pub struct ProtocolState {
     queue: VecDeque<ExecutionItem>,
     names: VecDeque<String>,
+    simulated: VecDeque<Message>,
 }
 
 impl ProtocolState {
@@ -58,6 +61,14 @@ impl ProtocolState {
 
     pub fn add(&mut self, code: impl Into<ExecutionCode>) {
         self.queue.push_back(ExecutionItem::Code(code.into()));
+    }
+
+    pub fn add_simulated(&mut self, message: Message) {
+        self.simulated.push_back(message);
+    }
+
+    pub fn get_simulated(&mut self) -> Option<Message> {
+        self.simulated.pop_front()
     }
 
     /// Should we ignore the message we just received

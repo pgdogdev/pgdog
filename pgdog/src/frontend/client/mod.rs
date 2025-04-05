@@ -294,6 +294,13 @@ impl Client {
             inner.backend.execute(&query).await?;
         }
 
+        for msg in buffer.iter() {
+            match msg {
+                ProtocolMessage::Bind(bind) => inner.backend.bind(&bind)?,
+                _ => (),
+            }
+        }
+
         // Handle COPY subprotocol in a potentially sharded context.
         if buffer.copy() && !self.streaming {
             let rows = inner.router.copy_data(&buffer)?;
@@ -400,6 +407,8 @@ impl Client {
                 }
             }
         }
+
+        println!("buffer: {:?}", buffer);
 
         trace!(
             "request buffered [{:.4}ms]",
