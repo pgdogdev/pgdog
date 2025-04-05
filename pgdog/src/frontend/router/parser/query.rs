@@ -98,7 +98,7 @@ impl QueryParser {
         &self,
         query: &BufferedQuery,
         cluster: &Cluster,
-        params: Option<Bind>,
+        params: Option<&Bind>,
     ) -> Result<Command, Error> {
         // Replication protocol commands
         // don't have a node in pg_query,
@@ -199,7 +199,7 @@ impl QueryParser {
             // COPY statements.
             Some(NodeEnum::CopyStmt(ref stmt)) => Self::copy(stmt, cluster),
             // INSERT statements.
-            Some(NodeEnum::InsertStmt(ref stmt)) => Self::insert(stmt, &sharding_schema, &params),
+            Some(NodeEnum::InsertStmt(ref stmt)) => Self::insert(stmt, &sharding_schema, params),
             // UPDATE statements.
             Some(NodeEnum::UpdateStmt(ref stmt)) => Self::update(stmt),
             // DELETE statements.
@@ -272,9 +272,9 @@ impl QueryParser {
     fn select(
         stmt: &SelectStmt,
         sharding_schema: &ShardingSchema,
-        params: Option<Bind>,
+        params: Option<&Bind>,
     ) -> Result<Command, Error> {
-        let order_by = Self::select_sort(&stmt.sort_clause, &params);
+        let order_by = Self::select_sort(&stmt.sort_clause, params);
         let mut shards = HashSet::new();
         let table_name = stmt
             .from_clause
@@ -308,7 +308,7 @@ impl QueryParser {
                         }
 
                         Key::Parameter(param) => {
-                            if let Some(ref params) = params {
+                            if let Some(params) = params {
                                 if let Some(param) = params.parameter(param)? {
                                     shards.insert(shard_param(
                                         &param,
@@ -368,7 +368,7 @@ impl QueryParser {
     }
 
     /// Parse the `ORDER BY` clause of a `SELECT` statement.
-    fn select_sort(nodes: &[Node], params: &Option<Bind>) -> Vec<OrderBy> {
+    fn select_sort(nodes: &[Node], params: Option<&Bind>) -> Vec<OrderBy> {
         let mut order_by = vec![];
         for clause in nodes {
             if let Some(NodeEnum::SortBy(ref sort_by)) = clause.node {
@@ -472,7 +472,7 @@ impl QueryParser {
     fn insert(
         stmt: &InsertStmt,
         sharding_schema: &ShardingSchema,
-        params: &Option<Bind>,
+        params: Option<&Bind>,
     ) -> Result<Command, Error> {
         let insert = Insert::new(stmt);
         let columns = insert

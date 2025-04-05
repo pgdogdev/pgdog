@@ -28,9 +28,11 @@ def test_connect():
 def test_insert():
     for conn in [normal_sync(), sharded_sync()]:
         setup(conn)
+        # conn.autocommit = True;
 
         for start in [1, 10_000, 100_000, 1_000_000_000, 10_000_000_000, 10_000_000_000_000]:
             for offset in range(250):
+                print(offset)
                 id = start + offset
                 cur = conn.cursor()
                 cur.execute("INSERT INTO sharded (id, value) VALUES (%s, %s) RETURNING *", (id, 'test'))

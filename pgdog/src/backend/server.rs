@@ -316,7 +316,7 @@ impl Server {
             _ => (),
         }
 
-        trace!("← {:#?}", message);
+        trace!("[{}] ← {:#?}", self.addr(), message);
 
         Ok(message.backend())
     }
@@ -339,7 +339,6 @@ impl Server {
     /// Server sent everything.
     #[inline]
     pub fn done(&self) -> bool {
-        println!("{:?}", self.prepared_statements.state());
         self.prepared_statements.done() && !self.in_transaction()
     }
 

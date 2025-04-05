@@ -188,6 +188,14 @@ impl Client {
                     }
                 }
 
+                message = inner.backend.read() => {
+                    let message = message?;
+                    let disconnect = self.server_message(inner.get(), message).await?;
+                    if disconnect {
+                        break;
+                    }
+                }
+
                 buffer = self.buffer() => {
                     let buffer = buffer?;
                     if buffer.is_empty() {
@@ -195,14 +203,6 @@ impl Client {
                     }
 
                     let disconnect = self.client_messages(inner.get(), buffer).await?;
-                    if disconnect {
-                        break;
-                    }
-                }
-
-                message = inner.backend.read() => {
-                    let message = message?;
-                    let disconnect = self.server_message(inner.get(), message).await?;
                     if disconnect {
                         break;
                     }
@@ -225,7 +225,7 @@ impl Client {
         mut inner: InnerBorrow<'_>,
         buffer: Buffer,
     ) -> Result<bool, Error> {
-        inner.async_ = buffer.async_();
+        inner.is_async = buffer.is_async();
         inner.stats.received(buffer.len());
 
         #[cfg(debug_assertions)]
@@ -287,19 +287,21 @@ impl Client {
             };
         }
 
-        // Simulate a transaction until the client
-        // sends a query over. This ensures that we don't
-        // connect to all shards for no reason.
-        if let Some(query) = inner.start_transaction.take() {
-            inner.backend.execute(&query).await?;
+        // We don't start a transaction on the servers until
+        // a client is actually executing something.
+        //
+        // This prevents us holding open connections to multiple servers
+        if buffer.executable() {
+            if let Some(query) = inner.start_transaction.take() {
+                inner.backend.execute(&query).await?;
+            }
         }
 
         for msg in buffer.iter() {
-            match msg {
-                ProtocolMessage::Bind(bind) => inner.backend.bind(&bind)?,
-                _ => (),
-            }
+            if let ProtocolMessage::Bind(bind) = msg { inner.backend.bind(bind)? }
         }
+
+        // inner.backend.wait_in_sync().await;
 
         // Handle COPY subprotocol in a potentially sharded context.
         if buffer.copy() && !self.streaming {
@@ -334,7 +336,7 @@ impl Client {
         // ReadyForQuery (B) | CopyInResponse (B)
         let flush = matches!(code, 'Z' | 'G' | 'E' | 'N');
         // RowDescription (B) | NoData(B)
-        let async_flush = matches!(code, 'T' | 'n') && inner.async_;
+        let async_flush = matches!(code, 'T' | 'n') && inner.is_async;
         let streaming = message.streaming();
 
         if code == 'Z' {
@@ -343,12 +345,12 @@ impl Client {
             inner.stats.idle(self.in_transaction);
         }
 
-        trace!("-> {:#?}", message);
+        trace!("[{}] -> {:#?}", self.addr, message);
 
         if flush || async_flush || streaming {
             self.stream.send_flush(&message).await?;
             if async_flush {
-                inner.async_ = false;
+                inner.is_async = false;
             }
         } else {
             self.stream.send(&message).await?;
@@ -408,11 +410,10 @@ impl Client {
             }
         }
 
-        println!("buffer: {:?}", buffer);
-
         trace!(
-            "request buffered [{:.4}ms]",
-            timer.unwrap().elapsed().as_secs_f64() * 1000.0
+            "request buffered [{:.4}ms]\n{:#?}",
+            timer.unwrap().elapsed().as_secs_f64() * 1000.0,
+            buffer,
         );
 
         Ok(buffer)

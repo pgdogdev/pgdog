@@ -4,7 +4,7 @@ from datetime import datetime
 from globals import normal_async, sharded_async, no_out_of_sync
 
 async def both():
-    return [await sharded_async(), await normal_async()]
+    return [await normal_async(), await sharded_async()]
 
 async def setup(conn):
     try:
@@ -147,10 +147,11 @@ async def test_delete():
 @pytest.mark.asyncio
 async def test_copy():
     records = 250
-    for conn in await both():
-        await setup(conn)
-        rows = [[x, f"value_{x}", datetime.now()] for x in range(records)]
-        await conn.copy_records_to_table("sharded", records=rows, columns=['id', 'value', 'created_at'])
-        count = await conn.fetch("SELECT COUNT(*) FROM sharded")
-        assert len(count) == 1
-        assert count[0][0] == records
+    for i in range(50):
+        for conn in await both():
+            await setup(conn)
+            rows = [[x, f"value_{x}", datetime.now()] for x in range(records)]
+            await conn.copy_records_to_table("sharded", records=rows, columns=['id', 'value', 'created_at'])
+            count = await conn.fetch("SELECT COUNT(*) FROM sharded")
+            assert len(count) == 1
+            assert count[0][0] == records

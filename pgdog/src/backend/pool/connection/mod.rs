@@ -191,6 +191,12 @@ impl Connection {
         self.binding.read().await
     }
 
+    /// Wait until server(s) are done.
+    /// Ensures messages are not sent too quickly in multi-sharded contexts.
+    pub async fn wait_in_sync(&self) {
+        self.binding.wait_in_sync().await
+    }
+
     /// Send messages to the server.
     pub async fn send(
         &mut self,

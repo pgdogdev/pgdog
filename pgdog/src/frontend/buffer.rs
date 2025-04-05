@@ -5,7 +5,7 @@ use std::ops::{Deref, DerefMut};
 use crate::{
     backend::ProtocolMessage,
     net::{
-        messages::{parse::Parse, Bind, CopyData, Describe, FromBytes, Protocol, Query, ToBytes},
+        messages::{parse::Parse, Bind, CopyData, Protocol, Query},
         Error,
     },
 };
@@ -31,7 +31,7 @@ impl Buffer {
     }
 
     /// Client likely wants to communicate asynchronously.
-    pub fn async_(&self) -> bool {
+    pub fn is_async(&self) -> bool {
         self.buffer.last().map(|m| m.code() == 'H').unwrap_or(false)
     }
 
@@ -72,19 +72,14 @@ impl Buffer {
     /// If this buffer contains a query, retrieve it.
     pub fn query(&self) -> Result<Option<BufferedQuery>, Error> {
         for message in &self.buffer {
-            match message.code() {
-                'Q' => {
-                    let query = Query::from_bytes(message.to_bytes()?)?;
-                    return Ok(Some(BufferedQuery::Query(query)));
+            match message {
+                ProtocolMessage::Query(query) => {
+                    return Ok(Some(BufferedQuery::Query(query.clone())))
                 }
-
-                'P' => {
-                    let parse = Parse::from_bytes(message.to_bytes()?)?;
-                    return Ok(Some(BufferedQuery::Prepared(parse)));
+                ProtocolMessage::Parse(parse) => {
+                    return Ok(Some(BufferedQuery::Prepared(parse.clone())))
                 }
-
-                'B' => {
-                    let bind = Bind::from_bytes(message.to_bytes()?)?;
+                ProtocolMessage::Bind(bind) => {
                     if !bind.anonymous() {
                         return Ok(PreparedStatements::global()
                             .lock()
@@ -92,9 +87,7 @@ impl Buffer {
                             .map(BufferedQuery::Prepared));
                     }
                 }
-
-                'D' => {
-                    let describe = Describe::from_bytes(message.to_bytes()?)?;
+                ProtocolMessage::Describe(describe) => {
                     if !describe.anonymous() {
                         return Ok(PreparedStatements::global()
                             .lock()
@@ -102,19 +95,17 @@ impl Buffer {
                             .map(BufferedQuery::Prepared));
                     }
                 }
-
                 _ => (),
-            };
+            }
         }
 
         Ok(None)
     }
 
     /// If this buffer contains bound parameters, retrieve them.
-    pub fn parameters(&self) -> Result<Option<Bind>, Error> {
+    pub fn parameters(&self) -> Result<Option<&Bind>, Error> {
         for message in &self.buffer {
-            if message.code() == 'B' {
-                let bind = Bind::from_bytes(message.to_bytes()?)?;
+            if let ProtocolMessage::Bind(bind) = message {
                 return Ok(Some(bind));
             }
         }
@@ -122,13 +113,12 @@ impl Buffer {
         Ok(None)
     }
 
-    /// Get all CopyData (F & B) messages.
+    /// Get all CopyData messages.
     pub fn copy_data(&self) -> Result<Vec<CopyData>, Error> {
         let mut rows = vec![];
         for message in &self.buffer {
-            if message.code() == 'd' {
-                let copy_data = CopyData::from_bytes(message.to_bytes()?)?;
-                rows.push(copy_data);
+            if let ProtocolMessage::CopyData(copy_data) = message {
+                rows.push(copy_data.clone())
             }
         }
 
@@ -142,11 +132,7 @@ impl Buffer {
         Self { buffer }
     }
 
-    pub fn remove(&mut self, code: char) {
-        self.buffer.retain(|m| m.code() != code);
-    }
-
-    /// The buffer has CopyData messages.
+    /// The buffer has COPY messages.
     pub fn copy(&self) -> bool {
         self.buffer
             .last()
@@ -154,17 +140,17 @@ impl Buffer {
             .unwrap_or(false)
     }
 
+    /// The client is expecting a reply now.
     pub fn flush(&self) -> bool {
         self.buffer.last().map(|m| m.code() == 'H').unwrap_or(false)
     }
 
-    pub fn only(&self, code: char) -> bool {
-        self.buffer.len() == 1
-            && self
-                .buffer
-                .last()
-                .map(|m| m.code() == code)
-                .unwrap_or(false)
+    /// The client is setting state on the connection
+    /// which we can no longer ignore.
+    pub fn executable(&self) -> bool {
+        self.buffer
+            .iter()
+            .any(|m| ['E', 'Q', 'B'].contains(&m.code()))
     }
 
     /// Client told us the copy failed.

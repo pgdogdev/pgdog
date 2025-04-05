@@ -38,6 +38,28 @@ impl Binding {
         }
     }
 
+    pub(super) async fn wait_in_sync(&self) {
+        match self {
+            Binding::Server(Some(ref server)) => {
+                if !server.in_sync() {
+                    sleep(Duration::MAX).await;
+                }
+            }
+
+            Binding::MultiShard(ref servers, _) => {
+                if servers.iter().any(|s| !s.in_sync()) {
+                    sleep(Duration::MAX).await;
+                }
+            }
+            Binding::Replication(Some(ref server), _) => {
+                if !server.in_sync() {
+                    sleep(Duration::MAX).await;
+                }
+            }
+            _ => (),
+        }
+    }
+
     pub(super) async fn read(&mut self) -> Result<Message, Error> {
         match self {
             Binding::Server(guard) => {
@@ -83,7 +105,7 @@ impl Binding {
                     }
 
                     loop {
-                        *state = state.new_reset();
+                        state.reset();
                         sleep(Duration::MAX).await;
                     }
                 }
