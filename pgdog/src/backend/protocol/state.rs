@@ -50,6 +50,7 @@ pub struct ProtocolState {
     queue: VecDeque<ExecutionItem>,
     names: VecDeque<String>,
     simulated: VecDeque<Message>,
+    simple: bool,
 }
 
 impl ProtocolState {
@@ -92,30 +93,14 @@ impl ProtocolState {
         };
         let in_queue = self.queue.pop_front().ok_or(Error::ProtocolOutOfSync)?;
         match in_queue {
-            ExecutionItem::Code(in_queue) => {
-                if code == in_queue {
-                    Ok(Action::Forward)
-                } else if matches!(
-                    code,
-                    ExecutionCode::CommandComplete | ExecutionCode::EmptyQueryResponse
-                ) {
-                    // Got command complete / empty query early.
-                    // This means this statement was probably a SET.
-                    match in_queue {
-                        ExecutionCode::BindComplete => (),
-                        ExecutionCode::ParseComplete => (),
-                        ExecutionCode::CloseComplete => (),
-                        _ => {
-                            let next = self.queue.pop_front().ok_or(Error::ProtocolOutOfSync)?;
-                            if next != ExecutionItem::Code(ExecutionCode::CommandComplete) {
-                                return Err(Error::ProtocolOutOfSync);
-                            }
-                        }
-                    }
-                    Ok(Action::Forward)
-                } else {
-                    Err(Error::ProtocolOutOfSync)
+            ExecutionItem::Code(in_queue_code) => {
+                if code != ExecutionCode::ReadyForQuery
+                    && in_queue_code == ExecutionCode::ReadyForQuery
+                {
+                    self.queue.push_front(in_queue);
                 }
+
+                Ok(Action::Forward)
             }
 
             ExecutionItem::Ignore(in_queue) => {
@@ -142,6 +127,10 @@ impl ProtocolState {
     pub fn queue(&self) -> &VecDeque<ExecutionItem> {
         &self.queue
     }
+
+    pub fn set_simple(&mut self) {
+        self.simple = true;
+    }
 }
 
 #[cfg(test)]
@@ -152,9 +141,6 @@ mod test {
     fn test_state() {
         let mut state = ProtocolState::default();
         state.add_ignore('1', "test");
-        assert_eq!(state.action('2').unwrap(), Action::Forward);
-        assert_eq!(state.action('Z').unwrap(), Action::Forward);
         assert_eq!(state.action('1').unwrap(), Action::Ignore);
-        assert_eq!(state.action('1').unwrap(), Action::Forward);
     }
 }

@@ -119,8 +119,6 @@ impl PreparedStatements {
             }
 
             ProtocolMessage::Query(_) => {
-                self.state.add(ExecutionCode::DescriptionOrNothing);
-                self.state.add('C');
                 self.state.add('Z');
             }
 
@@ -175,7 +173,6 @@ impl PreparedStatements {
                         &describe,
                         &RowDescription::from_bytes(message.to_bytes()?)?,
                     );
-                    println!("inserted row");
                 };
             }
 

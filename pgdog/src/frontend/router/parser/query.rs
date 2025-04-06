@@ -529,7 +529,7 @@ mod test {
             r#"START_REPLICATION SLOT "sharded" LOGICAL 0/1E2C3B0 (proto_version '4', origin 'any', publication_names '"sharded"')"#,
         );
         let mut buffer = Buffer::new();
-        buffer.push(query.message().unwrap().into());
+        buffer.push(query.into());
 
         let mut query_parser = QueryParser::default();
         query_parser.replication_mode();
@@ -544,7 +544,7 @@ mod test {
     fn test_replication_meta() {
         let query = Query::new(r#"IDENTIFY_SYSTEM"#);
         let mut buffer = Buffer::new();
-        buffer.push(query.message().unwrap().into());
+        buffer.push(query.into());
 
         let mut query_parser = QueryParser::default();
         query_parser.replication_mode();

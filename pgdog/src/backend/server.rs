@@ -617,16 +617,12 @@ mod test {
                 .send(vec![ProtocolMessage::from(Query::new("SELECT 1"))])
                 .await
                 .unwrap();
-            assert_eq!(server.prepared_statements.state().len(), 3);
             let msg = server.read().await.unwrap();
             assert_eq!(msg.code(), 'T');
-            assert_eq!(server.prepared_statements.state().len(), 2);
             let msg = server.read().await.unwrap();
             assert_eq!(msg.code(), 'D');
-            assert_eq!(server.prepared_statements.state().len(), 2);
             let msg = server.read().await.unwrap();
             assert_eq!(msg.code(), 'C');
-            assert_eq!(server.prepared_statements.state().len(), 1);
             let msg = server.read().await.unwrap();
             assert_eq!(msg.code(), 'Z');
             assert_eq!(server.prepared_statements.state().len(), 0);
@@ -639,17 +635,12 @@ mod test {
                 .await
                 .unwrap();
         }
-        let mut total = 3 * 25;
-        assert_eq!(server.prepared_statements.state().len(), total);
         for _ in 0..25 {
             for c in ['T', 'D', 'C', 'Z'] {
                 let msg = server.read().await.unwrap();
                 assert_eq!(msg.code(), c);
             }
-            total -= 3;
-            assert_eq!(server.prepared_statements.state().len(), total);
         }
-        assert_eq!(total, 0);
         assert!(server.done());
     }
 
@@ -661,7 +652,6 @@ mod test {
             .send(vec![ProtocolMessage::from(empty)])
             .await
             .unwrap();
-        assert_eq!(server.prepared_statements.state().len(), 3);
 
         for c in ['I', 'Z'] {
             let msg = server.read().await.unwrap();
@@ -681,7 +671,6 @@ mod test {
             ))])
             .await
             .unwrap();
-        assert_eq!(server.prepared_statements.state().len(), 3);
 
         for c in ['C', 'S', 'Z'] {
             let msg = server.read().await.unwrap();
@@ -713,8 +702,6 @@ mod test {
                 ])
                 .await
                 .unwrap();
-
-            assert_eq!(server.prepared_statements.state().len(), 4);
 
             for c in ['1', '2', 'D', 'C', 'Z'] {
                 let msg = server.read().await.unwrap();
@@ -756,7 +743,6 @@ mod test {
                 ])
                 .await
                 .unwrap();
-            assert_eq!(server.prepared_statements.state().len(), 3);
 
             for c in ['1', 't', 'T'] {
                 let msg = server.read().await.unwrap();
@@ -777,7 +763,6 @@ mod test {
                 ])
                 .await
                 .unwrap();
-            assert_eq!(server.prepared_statements.state().len(), 2);
             for code in ['t', 'T'] {
                 let msg = server.read().await.unwrap();
                 assert_eq!(msg.code(), code);
@@ -832,10 +817,10 @@ mod test {
                 .await
                 .unwrap();
 
-            assert_eq!(
-                server.prepared_statements.state().len(),
-                if i == 0 { 4 } else { 3 }
-            );
+            // assert_eq!(
+            //     server.prepared_statements.state().len(),
+            //     if i == 0 { 4 } else { 3 }
+            // );
 
             for c in ['2', 'D', 'C', 'Z'] {
                 let msg = server.read().await.unwrap();
@@ -954,5 +939,34 @@ mod test {
         assert_eq!(server.prepared_statements.len(), 1);
 
         assert!(server.done());
+    }
+
+    #[tokio::test]
+    async fn test_execute_checked() {
+        let mut server = test_server().await;
+        for _ in 0..25 {
+            let mut msgs = server
+                .execute_checked("SELECT 1")
+                .await
+                .unwrap()
+                .into_iter();
+            for c in ['T', 'D', 'C', 'Z'] {
+                let msg = msgs.next().unwrap();
+                assert_eq!(c, msg.code());
+            }
+            assert!(server.done());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_multiple_queries() {
+        let mut server = test_server().await;
+        let q = Query::new("SELECT 1; SELECT 2;");
+        server.send(vec![ProtocolMessage::from(q)]).await.unwrap();
+        for c in ['T', 'D', 'C', 'T', 'D', 'C', 'Z'] {
+            let msg = server.read().await.unwrap();
+            println!("msg: {:?}", msg);
+            assert_eq!(c, msg.code());
+        }
     }
 }

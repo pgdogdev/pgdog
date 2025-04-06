@@ -30,7 +30,7 @@ async def setup(conn, schema):
     except asyncpg.exceptions.UndefinedTableError:
         pass
     await conn.execute("""CREATE TABLE sharded (
-        id BIGSERIAL PRIMARY KEY,
+        id BIGINT PRIMARY KEY,
         value TEXT,
         created_at TIMESTAMPTZ
     )""")
@@ -45,6 +45,14 @@ async def test_connect(conns):
     result = await conn.fetch("SELECT 1")
     assert result[0][0] == 1
     no_out_of_sync()
+
+@pytest.mark.asyncio
+async def test_multiple_queries(conns):
+    for c in conns:
+        try:
+            await c.fetch("SELECT 1;SELECT 2;")
+        except asyncpg.exceptions.PostgresSyntaxError as e:
+            assert str(e) == "cannot insert multiple commands into a prepared statement"
 
 @pytest.mark.asyncio
 async def test_transaction(conns):
