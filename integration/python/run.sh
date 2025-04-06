@@ -6,6 +6,6 @@ source ${SCRIPT_DIR}/../common.sh
 run_pgdog
 wait_for_pgdog
 
-source run.sh
+source ${SCRIPT_DIR}/dev.sh
 
 stop_pgdog

@@ -13,7 +13,6 @@ CLASS_PATH="$PWD:$PWD/postgres.jar"
 
 javac pgdog.java
 
-
 run_pgdog
 wait_for_pgdog
 
