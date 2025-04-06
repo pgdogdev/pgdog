@@ -27,6 +27,7 @@ pub fn pool() -> Pool {
             database_name: "pgdog".into(),
             user: "pgdog".into(),
             password: "pgdog".into(),
+            shard: 0,
         },
         config,
     });

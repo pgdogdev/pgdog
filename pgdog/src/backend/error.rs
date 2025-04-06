@@ -77,6 +77,9 @@ pub enum Error {
 
     #[error("{0}")]
     Auth(#[from] crate::auth::Error),
+
+    #[error("no lsn")]
+    NoLsn,
 }
 
 impl Error {

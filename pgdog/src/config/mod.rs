@@ -513,6 +513,12 @@ pub struct User {
     pub replication_mode: bool,
     /// Sharding into this database.
     pub replication_sharding: Option<String>,
+    /// Sync commit.
+    #[serde(default)]
+    pub synchronous_commit: bool,
+    /// Superuser.
+    #[serde(default)]
+    pub superuser: bool,
 }
 
 /// Admin database settings.

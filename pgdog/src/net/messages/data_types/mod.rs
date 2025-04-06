@@ -5,9 +5,11 @@ use ::uuid::Uuid;
 use bytes::Bytes;
 
 pub mod bigint;
+pub mod bool;
 pub mod integer;
 pub mod interval;
 pub mod numeric;
+pub mod pg_lsn;
 pub mod text;
 pub mod timestamp;
 pub mod timestamptz;
@@ -16,6 +18,7 @@ pub mod vector;
 
 pub use interval::Interval;
 pub use numeric::Numeric;
+pub use pg_lsn::PgLsn;
 pub use timestamp::Timestamp;
 pub use timestamptz::TimestampTz;
 pub use vector::Vector;
