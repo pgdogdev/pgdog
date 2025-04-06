@@ -11,7 +11,7 @@ use crate::{
     },
     config::PoolerMode,
     frontend::router::{parser::Shard, CopyRow, Route},
-    net::{Bind, Message, ParameterStatus, Parameters, Protocol},
+    net::{Bind, Message, ParameterStatus, Parameters},
 };
 
 use super::{

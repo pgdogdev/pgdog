@@ -12,7 +12,7 @@ use tracing::{debug, error, info, trace, warn};
 
 use super::{
     pool::Address, prepared_statements::HandleResult, Error, PreparedStatements, ProtocolMessage,
-    ProtocolState, Stats,
+    Stats,
 };
 use crate::net::{
     messages::{DataRow, NoticeResponse},
@@ -42,7 +42,6 @@ pub struct Server {
     dirty: bool,
     streaming: bool,
     schema_changed: bool,
-    protocol_state: ProtocolState,
 }
 
 impl Server {
@@ -173,7 +172,6 @@ impl Server {
             dirty: false,
             streaming: false,
             schema_changed: false,
-            protocol_state: ProtocolState::default(),
         })
     }
 
@@ -223,7 +221,7 @@ impl Server {
 
         for message in queue {
             if let Some(message) = message {
-                trace!("→ {:#?}", message);
+                trace!("{:#?} → [{}]", message, self.addr());
 
                 match self.stream().send(&message).await {
                     Ok(sent) => self.stats.send(sent),
@@ -316,7 +314,7 @@ impl Server {
             _ => (),
         }
 
-        trace!("[{}] ← {:#?}", self.addr(), message);
+        trace!("{:#?} ← [{}]", message, self.addr());
 
         Ok(message.backend())
     }
@@ -583,7 +581,6 @@ mod test {
                 dirty: false,
                 streaming: false,
                 schema_changed: false,
-                protocol_state: ProtocolState::default(),
             }
         }
     }
@@ -965,8 +962,76 @@ mod test {
         server.send(vec![ProtocolMessage::from(q)]).await.unwrap();
         for c in ['T', 'D', 'C', 'T', 'D', 'C', 'Z'] {
             let msg = server.read().await.unwrap();
-            println!("msg: {:?}", msg);
             assert_eq!(c, msg.code());
         }
+    }
+
+    #[tokio::test]
+    async fn test_extended() {
+        let mut server = test_server().await;
+        let msgs = vec![
+            ProtocolMessage::from(Parse::named("test_1", "SELECT $1")),
+            Describe::new_statement("test_1").into(),
+            Flush.into(),
+            Query::new("BEGIN").into(),
+            Bind {
+                statement: "test_1".into(),
+                params: vec![crate::net::bind::Parameter {
+                    len: 1,
+                    data: "1".as_bytes().to_vec(),
+                }],
+                ..Default::default()
+            }
+            .into(),
+            Describe {
+                statement: "".into(),
+                kind: 'P',
+            }
+            .into(),
+            Execute::new().into(),
+            Sync.into(),
+            Query::new("COMMIT").into(),
+        ];
+        server.send(msgs).await.unwrap();
+
+        for c in ['1', 't', 'T', 'C', 'Z', '2', 'T', 'D', 'C', 'Z', 'C'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(c, msg.code());
+            assert!(!server.done());
+        }
+        let msg = server.read().await.unwrap();
+        assert_eq!(msg.code(), 'Z');
+
+        assert!(server.done());
+    }
+
+    #[tokio::test]
+    async fn test_delete() {
+        let mut server = test_server().await;
+
+        let msgs = vec![
+            Query::new("BEGIN").into(),
+            Query::new("CREATE TABLE IF NOT EXISTS test_delete (id BIGINT PRIMARY KEY)").into(),
+            ProtocolMessage::from(Parse::named("test", "DELETE FROM test_delete")),
+            Describe::new_statement("test").into(),
+            Bind {
+                statement: "test".into(),
+                ..Default::default()
+            }
+            .into(),
+            Execute::new().into(),
+            Sync.into(),
+            Query::new("ROLLBACK").into(),
+        ];
+
+        server.send(msgs).await.unwrap();
+        for code in ['C', 'Z', 'C', 'Z', '1', 't', 'n', '2', 'C', 'Z', 'C'] {
+            assert!(!server.done());
+            let msg = server.read().await.unwrap();
+            assert_eq!(code, msg.code());
+        }
+        let msg = server.read().await.unwrap();
+        assert_eq!(msg.code(), 'Z');
+        assert!(server.done());
     }
 }

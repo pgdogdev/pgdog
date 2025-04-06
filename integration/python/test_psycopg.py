@@ -21,29 +21,35 @@ def test_connect():
         cur = conn.cursor()
         cur.execute("SELECT 1::bigint")
         one = cur.fetchall()
+        conn.commit()
         assert len(one) == 1
         assert one[0][0] == 1
     no_out_of_sync()
 
-def test_insert():
-    for conn in [normal_sync(), sharded_sync()]:
-        setup(conn)
+def test_insert_sharded():
+    _run_insert_test(sharded_sync())
 
-        for start in [1, 10_000, 100_000, 1_000_000_000, 10_000_000_000, 10_000_000_000_000]:
-            for offset in range(250):
-                id = start + offset
-                cur = conn.cursor()
-                cur.execute("INSERT INTO sharded (id, value) VALUES (%s, %s) RETURNING *", (id, 'test'))
-                results = cur.fetchall()
+def test_insert_normal():
+    _run_insert_test(normal_sync())
 
-                assert len(results) == 1
-                assert results[0][0] == id
-                conn.commit()
+def _run_insert_test(conn):
+    setup(conn)
 
-                cur.execute("SELECT * FROM sharded WHERE id = %s", (id,))
-                results = cur.fetchall()
+    for start in [1, 10_000, 100_000, 1_000_000_000, 10_000_000_000, 10_000_000_000_000]:
+        for offset in range(250):
+            id = start + offset
+            cur = conn.cursor()
+            cur.execute("INSERT INTO sharded (id, value) VALUES (%s, %s) RETURNING *", (id, 'test'))
+            results = cur.fetchall()
+            conn.commit()
 
-                assert len(results) == 1
-                assert results[0][0] == id
-                conn.commit()
+            assert len(results) == 1
+            assert results[0][0] == id
+
+            cur.execute("SELECT * FROM sharded WHERE id = %s", (id,))
+            results = cur.fetchall()
+            conn.commit()
+
+            assert len(results) == 1
+            assert results[0][0] == id
     no_out_of_sync()

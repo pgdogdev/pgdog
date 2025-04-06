@@ -105,8 +105,7 @@ impl PreparedStatements {
 
                     self.describes.push_back(describe.statement.clone());
                 } else {
-                    self.state.add(ExecutionCode::DescriptionOrNothing); // t
-                    self.state.add(ExecutionCode::DescriptionOrNothing); // T
+                    self.state.add(ExecutionCode::DescriptionOrNothing);
                 }
             }
 
@@ -174,6 +173,11 @@ impl PreparedStatements {
                         &RowDescription::from_bytes(message.to_bytes()?)?,
                     );
                 };
+            }
+
+            // No data for DELETEs
+            'n' => {
+                self.describes.pop_front();
             }
 
             '1' => {

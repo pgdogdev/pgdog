@@ -79,13 +79,14 @@ impl ProtocolState {
         match code {
             ExecutionCode::Untracked => return Ok(Action::Forward),
             ExecutionCode::Error => {
-                while let Some(op) = self.queue.pop_front() {
-                    if let ExecutionItem::Code(code) = op {
-                        if code == ExecutionCode::ReadyForQuery {
-                            self.queue.push_front(ExecutionItem::Code(code));
-                            break;
-                        }
-                    }
+                // Remove everything from the execution queue.
+                // If client sent a Sync or Query, we will still answer
+                // with ReadyForQuery.
+                let last = self.queue.pop_back();
+                self.queue.clear();
+                if let Some(ExecutionItem::Code(ExecutionCode::ReadyForQuery)) = last {
+                    self.queue
+                        .push_back(ExecutionItem::Code(ExecutionCode::ReadyForQuery));
                 }
                 return Ok(Action::Forward);
             }
@@ -93,6 +94,9 @@ impl ProtocolState {
         };
         let in_queue = self.queue.pop_front().ok_or(Error::ProtocolOutOfSync)?;
         match in_queue {
+            // The queue is waiting for the server to send ReadyForQuery,
+            // but it sent something else. That means the execution pipeline
+            // isn't done. We are not tracking every single message, so this is expected.
             ExecutionItem::Code(in_queue_code) => {
                 if code != ExecutionCode::ReadyForQuery
                     && in_queue_code == ExecutionCode::ReadyForQuery
@@ -103,6 +107,7 @@ impl ProtocolState {
                 Ok(Action::Forward)
             }
 
+            // Used for preparing statements that the client expects to be there.
             ExecutionItem::Ignore(in_queue) => {
                 self.names.pop_front().ok_or(Error::ProtocolOutOfSync)?;
                 if code == in_queue {
