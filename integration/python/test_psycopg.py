@@ -8,13 +8,16 @@ def setup(conn):
     except psycopg.errors.UndefinedTable:
         conn.rollback()
         pass
-    conn.cursor().execute("""CREATE TABLE sharded (
+    conn.cursor().execute(
+        """CREATE TABLE sharded (
         id BIGINT,
         value TEXT,
         created_at TIMESTAMPTZ
-    )""")
+    )"""
+    )
     conn.cursor().execute("TRUNCATE TABLE sharded")
     conn.commit()
+
 
 def test_connect():
     for conn in [normal_sync(), sharded_sync()]:
@@ -26,20 +29,33 @@ def test_connect():
         assert one[0][0] == 1
     no_out_of_sync()
 
+
 def test_insert_sharded():
     _run_insert_test(sharded_sync())
+
 
 def test_insert_normal():
     _run_insert_test(normal_sync())
 
+
 def _run_insert_test(conn):
     setup(conn)
 
-    for start in [1, 10_000, 100_000, 1_000_000_000, 10_000_000_000, 10_000_000_000_000]:
+    for start in [
+        1,
+        10_000,
+        100_000,
+        1_000_000_000,
+        10_000_000_000,
+        10_000_000_000_000,
+    ]:
         for offset in range(250):
             id = start + offset
             cur = conn.cursor()
-            cur.execute("INSERT INTO sharded (id, value) VALUES (%s, %s) RETURNING *", (id, 'test'))
+            cur.execute(
+                "INSERT INTO sharded (id, value) VALUES (%s, %s) RETURNING *",
+                (id, "test"),
+            )
             results = cur.fetchall()
             conn.commit()
 
