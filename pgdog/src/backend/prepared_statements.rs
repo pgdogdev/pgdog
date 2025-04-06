@@ -200,7 +200,7 @@ impl PreparedStatements {
     }
 
     pub fn done(&self) -> bool {
-        self.state.is_empty() && self.parses.is_empty() && self.describes.is_empty()
+        self.state.done() && self.parses.is_empty() && self.describes.is_empty()
     }
 
     fn check_prepared(&mut self, name: &str) -> Result<Option<ProtocolMessage>, Error> {

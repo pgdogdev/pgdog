@@ -23,6 +23,12 @@ pub enum ExecutionCode {
     EmptyQueryResponse,
 }
 
+impl ExecutionCode {
+    fn extended(&self) -> bool {
+        matches!(self, Self::ParseComplete | Self::BindComplete)
+    }
+}
+
 impl From<char> for ExecutionCode {
     fn from(value: char) -> Self {
         match value {
@@ -50,18 +56,23 @@ pub struct ProtocolState {
     queue: VecDeque<ExecutionItem>,
     names: VecDeque<String>,
     simulated: VecDeque<Message>,
-    simple: bool,
+    extended: bool,
+    out_of_sync: bool,
 }
 
 impl ProtocolState {
     /// Add a message to the ignore list.
     pub fn add_ignore(&mut self, code: impl Into<ExecutionCode>, name: &str) {
-        self.queue.push_back(ExecutionItem::Ignore(code.into()));
+        let code = code.into();
+        self.extended = self.extended || code.extended();
+        self.queue.push_back(ExecutionItem::Ignore(code));
         self.names.push_back(name.to_owned());
     }
 
     pub fn add(&mut self, code: impl Into<ExecutionCode>) {
-        self.queue.push_back(ExecutionItem::Code(code.into()));
+        let code = code.into();
+        self.extended = self.extended || code.extended();
+        self.queue.push_back(ExecutionItem::Code(code))
     }
 
     pub fn add_simulated(&mut self, message: Message) {
@@ -82,6 +93,9 @@ impl ProtocolState {
                 // Remove everything from the execution queue.
                 // If client sent a Sync or Query, we will still answer
                 // with ReadyForQuery.
+                if self.extended {
+                    self.out_of_sync = true;
+                }
                 let last = self.queue.pop_back();
                 self.queue.clear();
                 if let Some(ExecutionItem::Code(ExecutionCode::ReadyForQuery)) = last {
@@ -89,6 +103,10 @@ impl ProtocolState {
                         .push_back(ExecutionItem::Code(ExecutionCode::ReadyForQuery));
                 }
                 return Ok(Action::Forward);
+            }
+
+            ExecutionCode::ReadyForQuery => {
+                self.out_of_sync = false;
             }
             _ => (),
         };
@@ -133,8 +151,13 @@ impl ProtocolState {
         &self.queue
     }
 
-    pub fn set_simple(&mut self) {
-        self.simple = true;
+    pub(crate) fn done(&self) -> bool {
+        self.is_empty() && !self.out_of_sync
+    }
+
+    #[cfg(test)]
+    pub(crate) fn in_sync(&self) -> bool {
+        !self.out_of_sync
     }
 }
 

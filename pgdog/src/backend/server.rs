@@ -797,7 +797,7 @@ mod test {
 
         let mut server = test_server().await;
 
-        for i in 0..25 {
+        for _ in 0..25 {
             server
                 .send(vec![
                     ProtocolMessage::from(Bind {
@@ -813,11 +813,6 @@ mod test {
                 ])
                 .await
                 .unwrap();
-
-            // assert_eq!(
-            //     server.prepared_statements.state().len(),
-            //     if i == 0 { 4 } else { 3 }
-            // );
 
             for c in ['2', 'D', 'C', 'Z'] {
                 let msg = server.read().await.unwrap();
@@ -1032,6 +1027,69 @@ mod test {
         }
         let msg = server.read().await.unwrap();
         assert_eq!(msg.code(), 'Z');
+        assert!(server.done());
+    }
+
+    #[tokio::test]
+    async fn test_error_in_long_chain() {
+        let mut server = test_server().await;
+
+        let msgs = vec![
+            ProtocolMessage::from(Query::new("SET statement_timeout TO 5000")),
+            Parse::named("test", "SELECT $1").into(),
+            Parse::named("test_2", "SELECT $1, $2, $3").into(),
+            Describe::new_statement("test_2").into(),
+            Bind {
+                statement: "test".into(),
+                params: vec![crate::net::bind::Parameter {
+                    len: 1,
+                    data: "1".as_bytes().to_vec(),
+                }],
+                ..Default::default()
+            }
+            .into(),
+            Bind {
+                // Should error out
+                statement: "test_2".into(),
+                ..Default::default()
+            }
+            .into(),
+            Execute::new().into(), // Will be ignored
+            Bind {
+                // Will be ignored
+                statement: "test".into(),
+                ..Default::default()
+            }
+            .into(),
+            Flush.into(),
+        ];
+
+        server.send(msgs).await.unwrap();
+
+        for c in ['C', 'Z', '1', '1', 't', 'T', '2', 'E'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(c, msg.code());
+        }
+
+        assert!(!server.done()); // We're not in sync (extended protocol)
+        assert_eq!(server.stats().state, State::Idle);
+        assert!(server.prepared_statements.state().queue().is_empty()); // Queue is empty
+        assert!(!server.prepared_statements.state().in_sync());
+
+        server
+            .send(vec![
+                ProtocolMessage::from(Sync),
+                Query::new("SELECT 1").into(),
+            ])
+            .await
+            .unwrap();
+
+        for c in ['Z', 'T', 'D', 'C', 'Z'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), c);
+        }
+
+        println!("{:?}", server.prepared_statements);
         assert!(server.done());
     }
 }
