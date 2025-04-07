@@ -70,6 +70,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
       - name: Setup dependencies
         run: |
           sudo service postgresql start
@@ -81,10 +85,7 @@ jobs:
           sudo apt remove -y cmake
           sudo pip3 install cmake==3.31.6
           cmake --version
-      - uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          override: true
+          cargo install cargo-nextest --version "0.9.78" --locked
       - uses: Swatinem/rust-cache@v2
         with:
           prefix-key: release
