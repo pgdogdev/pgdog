@@ -100,3 +100,5 @@ jobs:
         run: bash integration/java/run.sh
       - name: More complex stuff
         run: bash integration/complex/run.sh
+      - name: Rust
+        run: bash integration/rust/run.sh
