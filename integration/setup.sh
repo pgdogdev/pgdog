@@ -16,9 +16,11 @@ for db in pgdog shard_0 shard_1; do
 done
 
 for db in pgdog shard_0 shard_1; do
-    psql -c 'DROP TABLE IF EXISTS sharded' ${db} -U pgdog
-    psql -c 'CREATE TABLE IF NOT EXISTS sharded (id BIGINT PRIMARY KEY, value TEXT)' ${db} -U pgdog
-    psql -f ${SCRIPT_DIR}/../pgdog/src/backend/schema/setup.sql ${db} -U pgdog
+    for user in pgdog ${USER}; do
+        psql -c 'DROP TABLE IF EXISTS sharded' ${db} -U ${user}
+        psql -c 'CREATE TABLE IF NOT EXISTS sharded (id BIGINT PRIMARY KEY, value TEXT)' ${db} -U ${user}
+        psql -f ${SCRIPT_DIR}/../pgdog/src/backend/schema/setup.sql ${db} -U ${user}
+    done
 done
 
 pushd ${SCRIPT_DIR}
