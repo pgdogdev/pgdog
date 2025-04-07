@@ -6,7 +6,6 @@
 host = "0.0.0.0"
 port = 6432
 shutdown_timeout = 5_000
-default_pool_size = 1
 # default_pool_size = 1
 # query_log = "queries.txt"
 # broadcast_address = "224.0.0.1"
