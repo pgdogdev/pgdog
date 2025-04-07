@@ -138,11 +138,15 @@ impl PreparedStatements {
 
             ProtocolMessage::CopyData(_) => (),
             ProtocolMessage::Other(_) => (),
-            ProtocolMessage::Close(_) => {
-                // We don't allow clients to close prepared statements.
-                // We manage them ourselves.
-                self.state.add_simulated(CloseComplete.message()?);
-                return Ok(HandleResult::Drop);
+            ProtocolMessage::Close(close) => {
+                if !close.anonymous() {
+                    // We don't allow clients to close prepared statements.
+                    // We manage them ourselves.
+                    self.state.add_simulated(CloseComplete.message()?);
+                    return Ok(HandleResult::Drop);
+                } else {
+                    self.state.add('3');
+                }
             }
             ProtocolMessage::Prepare { .. } => (),
         }

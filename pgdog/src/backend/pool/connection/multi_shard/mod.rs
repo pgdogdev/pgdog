@@ -77,7 +77,7 @@ impl MultiShard {
         match message.code() {
             'Z' => {
                 self.counters.ready_for_query += 1;
-                forward = if self.counters.ready_for_query == self.shards {
+                forward = if self.counters.ready_for_query % self.shards == 0 {
                     Some(message)
                 } else {
                     None
@@ -98,7 +98,7 @@ impl MultiShard {
                 };
                 self.counters.command_complete_count += 1;
 
-                if self.counters.command_complete_count == self.shards {
+                if self.counters.command_complete_count % self.shards == 0 {
                     self.buffer.full();
                     self.buffer
                         .aggregate(self.route.aggregate(), &self.decoder)?;
@@ -133,13 +133,13 @@ impl MultiShard {
 
             'I' => {
                 self.counters.empty_query_response += 1;
-                if self.counters.empty_query_response == self.shards {
+                if self.counters.empty_query_response % self.shards == 0 {
                     forward = Some(message);
                 }
             }
 
             'D' => {
-                if !self.route.should_buffer() && self.counters.row_description == self.shards {
+                if !self.route.should_buffer() && self.counters.row_description % self.shards == 0 {
                     forward = Some(message);
                 } else {
                     self.buffer.add(message)?;
@@ -148,28 +148,28 @@ impl MultiShard {
 
             'G' => {
                 self.counters.copy_in += 1;
-                if self.counters.copy_in == self.shards {
+                if self.counters.copy_in % self.shards == 0 {
                     forward = Some(message);
                 }
             }
 
             'n' => {
                 self.counters.no_data += 1;
-                if self.counters.no_data == self.shards {
+                if self.counters.no_data % self.shards == 0 {
                     forward = Some(message);
                 }
             }
 
             '1' => {
                 self.counters.parse_complete += 1;
-                if self.counters.parse_complete == self.shards {
+                if self.counters.parse_complete % self.shards == 0 {
                     forward = Some(message);
                 }
             }
 
             '3' => {
                 self.counters.close_complete += 1;
-                if self.counters.close_complete == self.shards {
+                if self.counters.close_complete % self.shards == 0 {
                     forward = Some(message);
                 }
             }
@@ -177,14 +177,14 @@ impl MultiShard {
             '2' => {
                 self.counters.bind_complete += 1;
 
-                if self.counters.bind_complete == self.shards {
+                if self.counters.bind_complete % self.shards == 0 {
                     forward = Some(message);
                 }
             }
 
             't' => {
                 self.counters.parameter_description += 1;
-                if self.counters.parameter_description == self.shards {
+                if self.counters.parameter_description % self.shards == 0 {
                     forward = Some(message);
                 }
             }

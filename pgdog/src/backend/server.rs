@@ -346,7 +346,7 @@ impl Server {
         !matches!(
             self.stats.state,
             State::Idle | State::IdleInTransaction | State::TransactionError
-        )
+        ) || !self.prepared_statements.done()
     }
 
     /// Server connection is synchronized and can receive more messages.
@@ -1142,5 +1142,49 @@ mod test {
             assert_eq!(msg.code(), 'Z');
             assert!(server.done());
         }
+    }
+
+    #[tokio::test]
+    async fn test_just_sync() {
+        let mut server = test_server().await;
+        server
+            .send(vec![ProtocolMessage::from(Sync)])
+            .await
+            .unwrap();
+        assert!(!server.done());
+        let msg = server.read().await.unwrap();
+        assert_eq!(msg.code(), 'Z');
+        assert!(server.done());
+    }
+
+    #[tokio::test]
+    async fn test_portal() {
+        let mut server = test_server().await;
+        server
+            .send(vec![
+                ProtocolMessage::from(Parse::named("test", "SELECT 1")),
+                Bind {
+                    statement: "test".into(),
+                    portal: "test1".into(),
+                    ..Default::default()
+                }
+                .into(),
+                Execute::new_portal("test1").into(),
+                Close::portal("test1").into(),
+                Sync.into(),
+            ])
+            .await
+            .unwrap();
+
+        for c in ['1', '2', 'D', 'C', '3'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), c);
+            assert!(!server.done());
+            assert!(server.has_more_messages());
+        }
+        let msg = server.read().await.unwrap();
+        assert_eq!(msg.code(), 'Z');
+        assert!(server.done());
+        assert!(!server.has_more_messages());
     }
 }

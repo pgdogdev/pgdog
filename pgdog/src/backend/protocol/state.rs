@@ -144,6 +144,7 @@ impl ProtocolState {
                 if code != ExecutionCode::ReadyForQuery
                     && in_queue_code == ExecutionCode::ReadyForQuery
                 {
+                    println!("this");
                     self.queue.push_front(in_queue);
                 }
 

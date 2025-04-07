@@ -1,6 +1,7 @@
+use sqlx::{Postgres, pool::Pool, postgres::PgPoolOptions};
 use tokio_postgres::*;
 
-pub async fn connections() -> Vec<Client> {
+pub async fn connections_tokio() -> Vec<Client> {
     let mut results = vec![];
 
     for db in ["pgdog", "pgdog_sharded"] {
@@ -24,4 +25,18 @@ pub async fn connections() -> Vec<Client> {
     }
 
     results
+}
+
+pub async fn connections_sqlx() -> Vec<Pool<Postgres>> {
+    let mut pools = vec![];
+    for db in ["pgdog", "pgdog_sharded"] {
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&format!("postgres://pgdog:pgdog@127.0.0.1:6432/{}", db))
+            .await
+            .unwrap();
+        pools.push(pool);
+    }
+
+    pools
 }

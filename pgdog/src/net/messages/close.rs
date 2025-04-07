@@ -18,6 +18,17 @@ impl Close {
         }
     }
 
+    pub fn portal(name: &str) -> Self {
+        Self {
+            kind: 'P',
+            name: name.to_owned(),
+        }
+    }
+
+    pub fn anonymous(&self) -> bool {
+        self.name.is_empty() || self.kind != 'S'
+    }
+
     pub fn len(&self) -> usize {
         self.name.len() + 1 // NULL
         + 4 // len
