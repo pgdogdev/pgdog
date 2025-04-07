@@ -1,7 +1,7 @@
 use crate::net::{Message, Protocol};
 
 use super::super::Error;
-use std::collections::VecDeque;
+use std::{collections::VecDeque, fmt::Debug};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Action {
@@ -13,14 +13,13 @@ pub enum Action {
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub enum ExecutionCode {
     ReadyForQuery,
-    CommandComplete,
+    ExecutionCompleted,
     ParseComplete,
     BindComplete,
     CloseComplete,
     DescriptionOrNothing,
     Error,
     Untracked,
-    EmptyQueryResponse,
 }
 
 impl ExecutionCode {
@@ -33,13 +32,12 @@ impl From<char> for ExecutionCode {
     fn from(value: char) -> Self {
         match value {
             'Z' => Self::ReadyForQuery,
-            'C' => Self::CommandComplete,
+            'C' | 's' | 'I' => Self::ExecutionCompleted, // CommandComplete or PortalSuspended
             '1' => Self::ParseComplete,
             '2' => Self::BindComplete,
             '3' => Self::CloseComplete,
             'T' | 'n' | 't' => Self::DescriptionOrNothing,
             'E' => Self::Error,
-            'I' => Self::EmptyQueryResponse,
             _ => Self::Untracked,
         }
     }
@@ -111,7 +109,7 @@ impl ProtocolState {
 
     /// Should we ignore the message we just received
     /// and not forward it to the client.
-    pub fn action(&mut self, code: impl Into<ExecutionCode>) -> Result<Action, Error> {
+    pub fn action(&mut self, code: impl Into<ExecutionCode> + Debug) -> Result<Action, Error> {
         let code = code.into();
         match code {
             ExecutionCode::Untracked => return Ok(Action::Forward),
@@ -144,7 +142,6 @@ impl ProtocolState {
                 if code != ExecutionCode::ReadyForQuery
                     && in_queue_code == ExecutionCode::ReadyForQuery
                 {
-                    println!("this");
                     self.queue.push_front(in_queue);
                 }
 

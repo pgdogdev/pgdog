@@ -19,26 +19,30 @@ async fn test_insert() {
         conn.batch_execute(
             "DROP SCHEMA IF EXISTS rust_test_insert CASCADE;
             CREATE SCHEMA rust_test_insert;
-            CREATE TABLE rust_test_insert.sharded (id BIGINT PRIMARY KEY, value VARCHAR);
-            SET search_path TO rust_test_insert,public;",
+            CREATE TABLE rust_test_insert.sharded (id BIGINT PRIMARY KEY, value VARCHAR);",
         )
         .await
         .unwrap();
 
         for _ in 0..25 {
-            let rows = conn.query("SELECT * FROM sharded", &[]).await.unwrap();
+            let rows = conn
+                .query("SELECT * FROM rust_test_insert.sharded", &[])
+                .await
+                .unwrap();
             assert_eq!(rows.len(), 0);
 
             let results = conn
                 .query(
-                    "INSERT INTO sharded (id, value) VALUES ($1, $2) RETURNING *",
+                    "INSERT INTO rust_test_insert.sharded (id, value) VALUES ($1, $2) RETURNING *",
                     &[&1_i64, &"test"],
                 )
                 .await
                 .unwrap();
             assert_eq!(results.len(), 1);
 
-            conn.execute("DELETE FROM sharded", &[]).await.unwrap();
+            conn.execute("DELETE FROM rust_test_insert.sharded", &[])
+                .await
+                .unwrap();
         }
 
         conn.execute("DROP SCHEMA IF EXISTS rust_test_insert CASCADE", &[])

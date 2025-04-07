@@ -7,7 +7,7 @@ pub async fn connections_tokio() -> Vec<Client> {
     for db in ["pgdog", "pgdog_sharded"] {
         let (client, connection) = tokio_postgres::connect(
             &format!(
-                "host=127.0.0.1 user=pgdog dbname={} password=pgdog port=6432",
+                "host=127.0.0.1 user=pgdog dbname={} password=pgdog port=6432 options=--search_path%3D$user,public",
                 db
             ),
             NoTls,

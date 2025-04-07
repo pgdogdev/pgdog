@@ -12,5 +12,7 @@ async fn test_connect() {
 
             assert_eq!(row.0, i);
         }
+
+        conn.close().await;
     }
 }

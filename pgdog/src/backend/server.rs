@@ -1090,7 +1090,6 @@ mod test {
             assert_eq!(msg.code(), c);
         }
 
-        println!("{:?}", server.prepared_statements);
         assert!(server.done());
     }
 

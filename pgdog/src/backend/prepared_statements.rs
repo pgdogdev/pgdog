@@ -110,7 +110,7 @@ impl PreparedStatements {
             }
 
             ProtocolMessage::Execute(_) => {
-                self.state.add('C');
+                self.state.add(ExecutionCode::ExecutionCompleted);
             }
 
             ProtocolMessage::Sync(_) => {
