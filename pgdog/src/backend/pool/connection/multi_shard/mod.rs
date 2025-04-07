@@ -28,6 +28,8 @@ struct Counters {
     parameter_description: usize,
     no_data: usize,
     row_description: usize,
+    close_complete: usize,
+    bind_complete: usize,
     command_complete: Option<Message>,
 }
 
@@ -161,6 +163,21 @@ impl MultiShard {
             '1' => {
                 self.counters.parse_complete += 1;
                 if self.counters.parse_complete == self.shards {
+                    forward = Some(message);
+                }
+            }
+
+            '3' => {
+                self.counters.close_complete += 1;
+                if self.counters.close_complete == self.shards {
+                    forward = Some(message);
+                }
+            }
+
+            '2' => {
+                self.counters.bind_complete += 1;
+
+                if self.counters.bind_complete == self.shards {
                     forward = Some(message);
                 }
             }

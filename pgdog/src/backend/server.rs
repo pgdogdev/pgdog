@@ -263,7 +263,8 @@ impl Server {
                         }
                         Err(err) => {
                             error!(
-                                "got: {}, extended buffer: {:?}",
+                                "{:?} got: {}, extended buffer: {:?}",
+                                err,
                                 message.code(),
                                 self.prepared_statements.state(),
                             );
@@ -716,7 +717,7 @@ mod test {
 
         for i in 0..25 {
             let name = format!("test_prepared_{}", i);
-            let parse = Parse::named(&name, &format!("SELECT $1, 'test_{}'", name));
+            let parse = Parse::named(&name, format!("SELECT $1, 'test_{}'", name));
             let (new, new_name) = PreparedStatements::global().lock().insert(&parse);
             let name = new_name;
             let parse = parse.rename(&name);
@@ -1091,5 +1092,55 @@ mod test {
 
         println!("{:?}", server.prepared_statements);
         assert!(server.done());
+    }
+
+    #[tokio::test]
+    async fn test_close() {
+        let mut server = test_server().await;
+
+        for _ in 0..5 {
+            server
+                .send(vec![
+                    ProtocolMessage::from(Parse::named("test", "SELECT $1")),
+                    Sync.into(),
+                ])
+                .await
+                .unwrap();
+
+            assert!(!server.done());
+            for c in ['1', 'Z'] {
+                let msg = server.read().await.unwrap();
+                assert_eq!(c, msg.code());
+            }
+            assert!(server.done());
+
+            server
+                .send(vec![
+                    Bind {
+                        statement: "test".into(),
+                        params: vec![crate::net::bind::Parameter {
+                            len: 1,
+                            data: "1".as_bytes().to_vec(),
+                        }],
+                        ..Default::default()
+                    }
+                    .into(),
+                    Execute::new().into(),
+                    Close::named("test_sdf").into(),
+                    ProtocolMessage::from(Parse::named("test", "SELECT $1")),
+                    Sync.into(),
+                ])
+                .await
+                .unwrap();
+            assert!(!server.done());
+            for c in ['2', 'D', 'C', '3', '1'] {
+                let msg = server.read().await.unwrap();
+                assert_eq!(msg.code(), c);
+                assert!(!server.done());
+            }
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), 'Z');
+            assert!(server.done());
+        }
     }
 }

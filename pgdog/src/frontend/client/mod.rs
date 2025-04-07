@@ -347,7 +347,7 @@ impl Client {
             inner.stats.idle(self.in_transaction);
         }
 
-        trace!("[{}] -> {:#?}", self.addr, message);
+        trace!("[{}] <- {:#?}", self.addr, message);
 
         if flush || async_flush || streaming {
             self.stream.send_flush(&message).await?;

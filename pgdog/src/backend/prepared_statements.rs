@@ -9,7 +9,7 @@ use crate::{
     frontend::{self, prepared_statements::GlobalCache},
     net::{
         messages::{parse::Parse, RowDescription},
-        FromBytes, Message, ParseComplete, Protocol, ToBytes,
+        CloseComplete, FromBytes, Message, ParseComplete, Protocol, ToBytes,
     },
 };
 
@@ -138,9 +138,11 @@ impl PreparedStatements {
 
             ProtocolMessage::CopyData(_) => (),
             ProtocolMessage::Other(_) => (),
-            ProtocolMessage::Close(c) => {
-                self.remove(&c.name);
-                self.state.add('3');
+            ProtocolMessage::Close(_) => {
+                // We don't allow clients to close prepared statements.
+                // We manage them ourselves.
+                self.state.add_simulated(CloseComplete.message()?);
+                return Ok(HandleResult::Drop);
             }
             ProtocolMessage::Prepare { .. } => (),
         }
@@ -168,7 +170,7 @@ impl PreparedStatements {
 
             'T' => {
                 if let Some(describe) = self.describes.pop_front() {
-                    self.global_cache.lock().insert_row_description(
+                    self.add_row_description(
                         &describe,
                         &RowDescription::from_bytes(message.to_bytes()?)?,
                     );
@@ -199,7 +201,8 @@ impl PreparedStatements {
         }
     }
 
-    pub fn done(&self) -> bool {
+    /// Extended protocol is in sync.
+    pub(crate) fn done(&self) -> bool {
         self.state.done() && self.parses.is_empty() && self.describes.is_empty()
     }
 
@@ -224,41 +227,56 @@ impl PreparedStatements {
         self.local_cache.insert(name.to_owned());
     }
 
-    pub fn parse(&self, name: &str) -> Option<Parse> {
+    /// Get the Parse message stored in the global prepared statements
+    /// cache for this statement.
+    pub(crate) fn parse(&self, name: &str) -> Option<Parse> {
         self.global_cache.lock().parse(name)
     }
 
+    /// Get the globally stored RowDescription for this prepared statement,
+    /// if any.
     pub fn row_description(&self, name: &str) -> Option<RowDescription> {
         self.global_cache.lock().row_description(name)
     }
 
-    pub fn describe(&self, name: &str, row_description: &RowDescription) {
+    /// Handle a Describe message, storing the RowDescription for the
+    /// statement in the global cache.
+    fn add_row_description(&self, name: &str, row_description: &RowDescription) {
         self.global_cache
             .lock()
             .insert_row_description(name, row_description);
     }
 
-    pub fn remove(&mut self, name: &str) -> bool {
+    /// Remove statement from local cache.
+    ///
+    /// This should only be done when a statement has been closed,
+    /// or failed to parse.
+    pub(crate) fn remove(&mut self, name: &str) -> bool {
         self.local_cache.remove(name)
     }
 
-    /// Indicate all prepared statements have been removed.
+    /// Indicate all prepared statements have been removed
+    /// from the server connection.
     pub fn clear(&mut self) {
         self.local_cache.clear();
     }
 
+    /// Get current extended protocol state.
     pub fn state(&self) -> &ProtocolState {
         &self.state
     }
 
+    /// Get mutable reference to protocol state.
     pub fn state_mut(&mut self) -> &mut ProtocolState {
         &mut self.state
     }
 
+    /// Number of prepared statements in local (connection) cache.
     pub fn len(&self) -> usize {
         self.local_cache.len()
     }
 
+    /// True if the local (connection) prepared statement cache is empty.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }

@@ -1,7 +1,7 @@
 [workspace]
 
 members = [
-    "examples/routing-plugin",
+    "examples/routing-plugin", "integration/rust",
     "pgdog",
     "pgdog-plugin",
     "plugins/pgdog-routing",

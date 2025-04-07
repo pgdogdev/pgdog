@@ -1,4 +1,4 @@
-use crate::net::Message;
+use crate::net::{Message, Protocol};
 
 use super::super::Error;
 use std::collections::VecDeque;
@@ -62,25 +62,51 @@ pub struct ProtocolState {
 
 impl ProtocolState {
     /// Add a message to the ignore list.
-    pub fn add_ignore(&mut self, code: impl Into<ExecutionCode>, name: &str) {
+    ///
+    /// The server will return this message, but we won't send it to the client.
+    /// This is used for preparing statements that the client expects to be there
+    /// but the server connection doesn't have yet.
+    ///
+    pub(crate) fn add_ignore(&mut self, code: impl Into<ExecutionCode>, name: &str) {
         let code = code.into();
         self.extended = self.extended || code.extended();
         self.queue.push_back(ExecutionItem::Ignore(code));
         self.names.push_back(name.to_owned());
     }
 
-    pub fn add(&mut self, code: impl Into<ExecutionCode>) {
+    /// Add a message to the execution queue. We expect this message
+    /// to be returned by the server.
+    pub(crate) fn add(&mut self, code: impl Into<ExecutionCode>) {
         let code = code.into();
         self.extended = self.extended || code.extended();
         self.queue.push_back(ExecutionItem::Code(code))
     }
 
-    pub fn add_simulated(&mut self, message: Message) {
+    /// Add a message we will return to the client but the server
+    /// won't send. This is used for telling the client we did something,
+    /// e.g. closed a prepared statement, when we actually did not.
+    pub(crate) fn add_simulated(&mut self, message: Message) {
+        self.queue
+            .push_back(ExecutionItem::Code(message.code().into()));
         self.simulated.push_back(message);
     }
 
+    /// Get a simulated message from the execution queue.
+    ///
+    /// Returns a message only if it should be returned at the current state
+    /// of the extended pipeline.
     pub fn get_simulated(&mut self) -> Option<Message> {
-        self.simulated.pop_front()
+        let code = self.queue.front();
+        let message = self.simulated.front();
+        if let Some(ExecutionItem::Code(code)) = code {
+            if let Some(message) = message {
+                if code == &ExecutionCode::from(message.code()) {
+                    let _ = self.queue.pop_front();
+                    return self.simulated.pop_front();
+                }
+            }
+        }
+        None
     }
 
     /// Should we ignore the message we just received
@@ -91,8 +117,7 @@ impl ProtocolState {
             ExecutionCode::Untracked => return Ok(Action::Forward),
             ExecutionCode::Error => {
                 // Remove everything from the execution queue.
-                // If client sent a Sync or Query, we will still answer
-                // with ReadyForQuery.
+                // The connection is out of sync until client re-syncs it.
                 if self.extended {
                     self.out_of_sync = true;
                 }
@@ -139,15 +164,16 @@ impl ProtocolState {
         }
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.queue.is_empty()
+    pub(crate) fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.queue.len()
     }
 
-    pub fn queue(&self) -> &VecDeque<ExecutionItem> {
+    #[cfg(test)]
+    pub(crate) fn queue(&self) -> &VecDeque<ExecutionItem> {
         &self.queue
     }
 

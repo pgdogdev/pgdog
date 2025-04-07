@@ -1,0 +1,12 @@
+[package]
+name = "rust"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+test = true
+
+[dependencies]
+tokio-postgres = "*"
+sqlx = { version = "*", features = ["postgres"]}
+tokio = { version = "1", features = ["full"]}

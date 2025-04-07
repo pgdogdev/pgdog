@@ -518,7 +518,7 @@ impl QueryParser {
 
 #[cfg(test)]
 mod test {
-    use crate::net::messages::{parse::Parse, Parameter, Protocol};
+    use crate::net::messages::{parse::Parse, Parameter};
 
     use super::{super::Shard, *};
     use crate::net::messages::Query;
