@@ -7,7 +7,7 @@ use super::code;
 use super::prelude::*;
 
 /// Parse (F) message.
-#[derive(Debug, Clone, Hash, Eq, PartialEq)]
+#[derive(Debug, Clone, Hash, Eq, PartialEq, Default)]
 pub struct Parse {
     /// Prepared statement name.
     name: Arc<String>,
@@ -18,6 +18,15 @@ pub struct Parse {
 }
 
 impl Parse {
+    pub fn len(&self) -> usize {
+        self.name.len() + 1
+        + self.query.len() + 1
+        + 2 // number of params
+        + self.data_types().len() * 4
+        + 4 // len
+        + 1 // code
+    }
+
     /// New anonymous prepared statement.
     #[cfg(test)]
     pub fn new_anonymous(query: &str) -> Self {
@@ -106,5 +115,17 @@ impl ToBytes for Parse {
 impl Protocol for Parse {
     fn code(&self) -> char {
         'P'
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_parse() {
+        let parse = Parse::named("test", "SELECT $1");
+        let b = parse.to_bytes().unwrap();
+        assert_eq!(parse.len(), b.len());
     }
 }

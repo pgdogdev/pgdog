@@ -39,6 +39,10 @@ impl Protocol for Describe {
 }
 
 impl Describe {
+    pub fn len(&self) -> usize {
+        self.statement.len() + 1 + 1 + 1 + 4
+    }
+
     pub fn anonymous(&self) -> bool {
         self.kind != 'S' || self.statement.is_empty()
     }
@@ -76,5 +80,8 @@ mod test {
         let res = conn.read().await.unwrap();
         let err = ErrorResponse::from_bytes(res.to_bytes().unwrap()).unwrap();
         assert_eq!(err.code, "34000");
+
+        let describe = Describe::new_statement("test");
+        assert_eq!(describe.len(), describe.to_bytes().unwrap().len());
     }
 }

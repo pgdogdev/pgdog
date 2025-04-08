@@ -34,6 +34,12 @@ pub struct Parameter {
     pub data: Vec<u8>,
 }
 
+impl Parameter {
+    pub fn len(&self) -> usize {
+        4 + self.data.len()
+    }
+}
+
 /// Parameter with encoded format.
 #[derive(Debug, Clone)]
 pub struct ParameterWithFormat<'a> {
@@ -92,8 +98,20 @@ pub struct Bind {
 }
 
 impl Bind {
+    pub(crate) fn len(&self) -> usize {
+        self.portal.len()
+            + 1 // NULL
+            + self.statement.len()
+            + 1 // NULL
+            + self.codes.len() * std::mem::size_of::<i16>() + 2 // num codes
+            + self.params.iter().map(|p| p.len()).sum::<usize>() + 2 // num params
+            + self.results.len() * std::mem::size_of::<i16>() + 2 // num results
+            + 4 // len
+            + 1 // code
+    }
+
     /// Format a parameter is using.
-    pub fn parameter_format(&self, index: usize) -> Result<Format, Error> {
+    pub(crate) fn parameter_format(&self, index: usize) -> Result<Format, Error> {
         let code = if self.codes.len() == self.params.len() {
             self.codes.get(index).copied()
         } else if self.codes.len() == 1 {
@@ -114,7 +132,7 @@ impl Bind {
     }
 
     /// Get parameter at index.
-    pub fn parameter(&self, index: usize) -> Result<Option<ParameterWithFormat<'_>>, Error> {
+    pub(crate) fn parameter(&self, index: usize) -> Result<Option<ParameterWithFormat<'_>>, Error> {
         let format = self.parameter_format(index)?;
         Ok(self
             .params
@@ -237,6 +255,7 @@ mod test {
 
         let bytes = bind.to_bytes().unwrap();
         assert_eq!(Bind::from_bytes(bytes.clone()).unwrap(), bind);
+        assert_eq!(bind.len(), bytes.len());
         let mut c = bytes.clone();
         let _ = c.get_u8();
         let len = c.get_i32();

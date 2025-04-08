@@ -98,7 +98,7 @@ impl QueryParser {
         &self,
         query: &BufferedQuery,
         cluster: &Cluster,
-        params: Option<Bind>,
+        params: Option<&Bind>,
     ) -> Result<Command, Error> {
         // Replication protocol commands
         // don't have a node in pg_query,
@@ -199,7 +199,7 @@ impl QueryParser {
             // COPY statements.
             Some(NodeEnum::CopyStmt(ref stmt)) => Self::copy(stmt, cluster),
             // INSERT statements.
-            Some(NodeEnum::InsertStmt(ref stmt)) => Self::insert(stmt, &sharding_schema, &params),
+            Some(NodeEnum::InsertStmt(ref stmt)) => Self::insert(stmt, &sharding_schema, params),
             // UPDATE statements.
             Some(NodeEnum::UpdateStmt(ref stmt)) => Self::update(stmt),
             // DELETE statements.
@@ -272,9 +272,9 @@ impl QueryParser {
     fn select(
         stmt: &SelectStmt,
         sharding_schema: &ShardingSchema,
-        params: Option<Bind>,
+        params: Option<&Bind>,
     ) -> Result<Command, Error> {
-        let order_by = Self::select_sort(&stmt.sort_clause, &params);
+        let order_by = Self::select_sort(&stmt.sort_clause, params);
         let mut shards = HashSet::new();
         let table_name = stmt
             .from_clause
@@ -308,7 +308,7 @@ impl QueryParser {
                         }
 
                         Key::Parameter(param) => {
-                            if let Some(ref params) = params {
+                            if let Some(params) = params {
                                 if let Some(param) = params.parameter(param)? {
                                     shards.insert(shard_param(
                                         &param,
@@ -368,7 +368,7 @@ impl QueryParser {
     }
 
     /// Parse the `ORDER BY` clause of a `SELECT` statement.
-    fn select_sort(nodes: &[Node], params: &Option<Bind>) -> Vec<OrderBy> {
+    fn select_sort(nodes: &[Node], params: Option<&Bind>) -> Vec<OrderBy> {
         let mut order_by = vec![];
         for clause in nodes {
             if let Some(NodeEnum::SortBy(ref sort_by)) = clause.node {
@@ -472,7 +472,7 @@ impl QueryParser {
     fn insert(
         stmt: &InsertStmt,
         sharding_schema: &ShardingSchema,
-        params: &Option<Bind>,
+        params: Option<&Bind>,
     ) -> Result<Command, Error> {
         let insert = Insert::new(stmt);
         let columns = insert
@@ -518,7 +518,7 @@ impl QueryParser {
 
 #[cfg(test)]
 mod test {
-    use crate::net::messages::{parse::Parse, Parameter, Protocol};
+    use crate::net::messages::{parse::Parse, Parameter};
 
     use super::{super::Shard, *};
     use crate::net::messages::Query;
@@ -529,7 +529,7 @@ mod test {
             r#"START_REPLICATION SLOT "sharded" LOGICAL 0/1E2C3B0 (proto_version '4', origin 'any', publication_names '"sharded"')"#,
         );
         let mut buffer = Buffer::new();
-        buffer.push(query.message().unwrap());
+        buffer.push(query.into());
 
         let mut query_parser = QueryParser::default();
         query_parser.replication_mode();
@@ -544,7 +544,7 @@ mod test {
     fn test_replication_meta() {
         let query = Query::new(r#"IDENTIFY_SYSTEM"#);
         let mut buffer = Buffer::new();
-        buffer.push(query.message().unwrap());
+        buffer.push(query.into());
 
         let mut query_parser = QueryParser::default();
         query_parser.replication_mode();
@@ -575,8 +575,8 @@ mod test {
             results: vec![],
         };
         let mut buffer = Buffer::new();
-        buffer.push(query.message().unwrap());
-        buffer.push(params.message().unwrap());
+        buffer.push(query.into());
+        buffer.push(params.into());
 
         let mut parser = QueryParser::default();
         let cluster = Cluster::new_test();
@@ -591,7 +591,7 @@ mod test {
     #[test]
     fn test_order_by_vector() {
         let query = Query::new("SELECT * FROM embeddings ORDER BY embedding <-> '[1,2,3]'");
-        let buffer = Buffer::from(vec![query.message().unwrap()]);
+        let buffer = Buffer::from(vec![query.into()]);
         let route = QueryParser::default()
             .parse(&buffer, &Cluster::default())
             .unwrap()
@@ -621,7 +621,7 @@ mod test {
             }],
             results: vec![],
         };
-        let buffer = Buffer::from(vec![query.message().unwrap(), bind.message().unwrap()]);
+        let buffer = Buffer::from(vec![query.into(), bind.into()]);
         let route = QueryParser::default()
             .parse(&buffer, &Cluster::default())
             .unwrap()

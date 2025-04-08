@@ -3,21 +3,20 @@
 use std::net::SocketAddr;
 use std::time::Instant;
 
-use tokio::io::AsyncWriteExt;
 use tokio::{select, spawn};
 use tracing::{debug, error, info, trace};
 
-use super::prepared_statements::PreparedRequest;
 use super::{Buffer, Command, Comms, Error, PreparedStatements};
 use crate::auth::{md5, scram::Server};
 use crate::backend::pool::{Connection, Request};
+use crate::backend::ProtocolMessage;
 use crate::config::config;
 use crate::frontend::buffer::BufferedQuery;
 #[cfg(debug_assertions)]
 use crate::frontend::QueryLogger;
 use crate::net::messages::{
-    Authentication, BackendKeyData, CommandComplete, ErrorResponse, FromBytes, Message,
-    ParseComplete, Password, Protocol, ReadyForQuery, ToBytes,
+    Authentication, BackendKeyData, CommandComplete, ErrorResponse, FromBytes, Message, Password,
+    Protocol, ReadyForQuery, ToBytes,
 };
 use crate::net::{parameter::Parameters, Stream};
 
@@ -189,6 +188,14 @@ impl Client {
                     }
                 }
 
+                message = inner.backend.read() => {
+                    let message = message?;
+                    let disconnect = self.server_message(inner.get(), message).await?;
+                    if disconnect {
+                        break;
+                    }
+                }
+
                 buffer = self.buffer() => {
                     let buffer = buffer?;
                     if buffer.is_empty() {
@@ -196,14 +203,6 @@ impl Client {
                     }
 
                     let disconnect = self.client_messages(inner.get(), buffer).await?;
-                    if disconnect {
-                        break;
-                    }
-                }
-
-                message = inner.backend.read() => {
-                    let message = message?;
-                    let disconnect = self.server_message(inner.get(), message).await?;
                     if disconnect {
                         break;
                     }
@@ -224,9 +223,9 @@ impl Client {
     async fn client_messages(
         &mut self,
         mut inner: InnerBorrow<'_>,
-        mut buffer: Buffer,
+        buffer: Buffer,
     ) -> Result<bool, Error> {
-        inner.async_ = buffer.async_();
+        inner.is_async = buffer.is_async();
         inner.stats.received(buffer.len());
 
         #[cfg(debug_assertions)]
@@ -288,63 +287,23 @@ impl Client {
             };
         }
 
-        // Handle any prepared statements.
-        for request in self.prepared_statements.requests() {
-            match &request {
-                PreparedRequest::PrepareNew { name } => {
-                    if let Err(err) = inner.backend.prepare(name).await {
-                        self.stream.error(ErrorResponse::from_err(&err)).await?;
-                        return Ok(false);
-                    }
-                    self.stream.send(&ParseComplete).await?;
-                    buffer.remove('P');
-                }
-                PreparedRequest::Prepare { name } => {
-                    if let Err(err) = inner.backend.prepare(name).await {
-                        self.stream.error(ErrorResponse::from_err(&err)).await?;
-                        return Ok(false);
-                    }
-                }
-                PreparedRequest::Describe { name } => {
-                    let messages = inner.backend.describe(name).await?;
-                    for message in messages {
-                        self.stream.send(&message).await?;
-                    }
-                    buffer.remove('D');
-                    if buffer.flush() {
-                        self.stream.flush().await?;
-                    }
-                    if buffer.only('H') {
-                        buffer.remove('H');
-                    }
-                }
-                PreparedRequest::Bind { bind } => {
-                    inner.backend.bind(bind).await?;
-                }
+        // We don't start a transaction on the servers until
+        // a client is actually executing something.
+        //
+        // This prevents us holding open connections to multiple servers
+        if buffer.executable() {
+            if let Some(query) = inner.start_transaction.take() {
+                inner.backend.execute(&query).await?;
             }
         }
 
-        if buffer.only('S') {
-            buffer.remove('S');
-            self.stream
-                .send_flush(&ReadyForQuery::in_transaction(self.in_transaction))
-                .await?;
-        }
-
-        if buffer.is_empty() {
-            if !self.in_transaction {
-                debug!("client finished extended exchange, disconnecting from servers");
-                inner.disconnect();
+        for msg in buffer.iter() {
+            if let ProtocolMessage::Bind(bind) = msg {
+                inner.backend.bind(bind)?
             }
-            return Ok(false);
         }
 
-        // Simulate a transaction until the client
-        // sends a query over. This ensures that we don't
-        // connect to all shards for no reason.
-        if let Some(query) = inner.start_transaction.take() {
-            inner.backend.execute(&query).await?;
-        }
+        // inner.backend.wait_in_sync().await;
 
         // Handle COPY subprotocol in a potentially sharded context.
         if buffer.copy() && !self.streaming {
@@ -379,7 +338,7 @@ impl Client {
         // ReadyForQuery (B) | CopyInResponse (B)
         let flush = matches!(code, 'Z' | 'G' | 'E' | 'N');
         // RowDescription (B) | NoData(B)
-        let async_flush = matches!(code, 'T' | 'n') && inner.async_;
+        let async_flush = matches!(code, 'T' | 'n') && inner.is_async;
         let streaming = message.streaming();
 
         if code == 'Z' {
@@ -388,12 +347,12 @@ impl Client {
             inner.stats.idle(self.in_transaction);
         }
 
-        trace!("-> {:#?}", message);
+        trace!("[{}] <- {:#?}", self.addr, message);
 
         if flush || async_flush || streaming {
             self.stream.send_flush(&message).await?;
             if async_flush {
-                inner.async_ = false;
+                inner.is_async = false;
             }
         } else {
             self.stream.send(&message).await?;
@@ -444,13 +403,19 @@ impl Client {
             if message.code() == 'X' {
                 return Ok(vec![].into());
             } else {
-                buffer.push(self.prepared_statements.maybe_rewrite(message)?);
+                let message = ProtocolMessage::from_bytes(message.to_bytes()?)?;
+                if message.extended() {
+                    buffer.push(self.prepared_statements.maybe_rewrite(message)?);
+                } else {
+                    buffer.push(message)
+                }
             }
         }
 
         trace!(
-            "request buffered [{:.4}ms]",
-            timer.unwrap().elapsed().as_secs_f64() * 1000.0
+            "request buffered [{:.4}ms]\n{:#?}",
+            timer.unwrap().elapsed().as_secs_f64() * 1000.0,
+            buffer,
         );
 
         Ok(buffer)

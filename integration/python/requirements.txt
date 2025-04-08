@@ -12,3 +12,4 @@ pytest-asyncio==0.26.0
 SQLAlchemy==2.0.39
 sqlparse==0.5.3
 typing_extensions==4.13.0
+pytest-xdist

@@ -15,9 +15,12 @@ for db in pgdog shard_0 shard_1; do
     psql -c "GRANT ALL ON SCHEMA public TO pgdog" ${db}
 done
 
-for db in shard_0 shard_1; do
-    psql -c 'CREATE TABLE IF NOT EXISTS sharded (id BIGINT, value TEXT)' ${db}
-    psql -f ${SCRIPT_DIR}/../pgdog/src/backend/schema/setup.sql ${db}
+for db in pgdog shard_0 shard_1; do
+    for user in pgdog ${USER}; do
+        psql -c 'DROP TABLE IF EXISTS sharded' ${db} -U ${user}
+        psql -c 'CREATE TABLE IF NOT EXISTS sharded (id BIGINT PRIMARY KEY, value TEXT)' ${db} -U ${user}
+        psql -f ${SCRIPT_DIR}/../pgdog/src/backend/schema/setup.sql ${db} -U ${user}
+    done
 done
 
 pushd ${SCRIPT_DIR}

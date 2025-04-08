@@ -7,10 +7,11 @@ use crate::{
     backend::{
         databases::databases,
         replication::{Buffer, ReplicationConfig},
+        ProtocolMessage,
     },
     config::PoolerMode,
     frontend::router::{parser::Shard, CopyRow, Route},
-    net::{Bind, Message, ParameterStatus, Parameters, Protocol},
+    net::{Bind, Message, ParameterStatus, Parameters},
 };
 
 use super::{
@@ -40,7 +41,7 @@ pub struct Connection {
 
 impl Connection {
     /// Create new server connection handler.
-    pub fn new(user: &str, database: &str, admin: bool) -> Result<Self, Error> {
+    pub(crate) fn new(user: &str, database: &str, admin: bool) -> Result<Self, Error> {
         let mut conn = Self {
             binding: if admin {
                 Binding::Admin(Backend::new())
@@ -60,12 +61,12 @@ impl Connection {
     }
 
     /// Check if the connection is available.
-    pub fn connected(&self) -> bool {
+    pub(crate) fn connected(&self) -> bool {
         self.binding.connected()
     }
 
     /// Create a server connection if one doesn't exist already.
-    pub async fn connect(&mut self, request: &Request, route: &Route) -> Result<(), Error> {
+    pub(crate) async fn connect(&mut self, request: &Request, route: &Route) -> Result<(), Error> {
         let connect = match &self.binding {
             Binding::Server(None) | Binding::Replication(None, _) => true,
             Binding::MultiShard(shards, _) => shards.is_empty(),
@@ -87,7 +88,7 @@ impl Connection {
     }
 
     /// Set the connection into replication mode.
-    pub fn replication_mode(
+    pub(crate) fn replication_mode(
         &mut self,
         shard: Shard,
         replication_config: &ReplicationConfig,
@@ -159,7 +160,10 @@ impl Connection {
     }
 
     /// Get server parameters.
-    pub async fn parameters(&mut self, request: &Request) -> Result<Vec<ParameterStatus>, Error> {
+    pub(crate) async fn parameters(
+        &mut self,
+        request: &Request,
+    ) -> Result<Vec<ParameterStatus>, Error> {
         match &self.binding {
             Binding::Admin(_) => Ok(ParameterStatus::fake()),
             _ => {
@@ -177,7 +181,7 @@ impl Connection {
     }
 
     /// Disconnect from a server.
-    pub fn disconnect(&mut self) {
+    pub(crate) fn disconnect(&mut self) {
         self.binding.disconnect();
     }
 
@@ -186,22 +190,25 @@ impl Connection {
     /// Only await this future inside a `select!`. One of the conditions
     /// suspends this loop indefinitely and expects another `select!` branch
     /// to cancel it.
-    pub async fn read(&mut self) -> Result<Message, Error> {
+    pub(crate) async fn read(&mut self) -> Result<Message, Error> {
         self.binding.read().await
     }
 
     /// Send messages to the server.
-    pub async fn send(&mut self, messages: Vec<impl Protocol>) -> Result<(), Error> {
+    pub(crate) async fn send(
+        &mut self,
+        messages: Vec<impl Into<ProtocolMessage> + Clone>,
+    ) -> Result<(), Error> {
         self.binding.send(messages).await
     }
 
     /// Send COPY subprotocol data to the right shards.
-    pub async fn send_copy(&mut self, rows: Vec<CopyRow>) -> Result<(), Error> {
+    pub(crate) async fn send_copy(&mut self, rows: Vec<CopyRow>) -> Result<(), Error> {
         self.binding.send_copy(rows).await
     }
 
     /// Fetch the cluster from the global database store.
-    pub fn reload(&mut self) -> Result<(), Error> {
+    pub(crate) fn reload(&mut self) -> Result<(), Error> {
         match self.binding {
             Binding::Server(_) | Binding::MultiShard(_, _) | Binding::Replication(_, _) => {
                 let cluster = databases().cluster((self.user.as_str(), self.database.as_str()))?;
@@ -214,50 +221,7 @@ impl Connection {
         Ok(())
     }
 
-    /// Make sure a prepared statement exists on the connection.
-    pub async fn prepare(&mut self, name: &str) -> Result<(), Error> {
-        match self.binding {
-            Binding::Server(Some(ref mut server)) => {
-                server.prepare_statement(name).await?;
-            }
-            Binding::MultiShard(ref mut servers, _) => {
-                for server in servers {
-                    server.prepare_statement(name).await?;
-                }
-            }
-            _ => (),
-        }
-
-        Ok(())
-    }
-
-    pub async fn describe(&mut self, name: &str) -> Result<Vec<Message>, Error> {
-        match self.binding {
-            Binding::Server(Some(ref mut server)) => Ok(server.describe_statement(name).await?),
-
-            Binding::MultiShard(ref mut servers, _) => {
-                let mut result: Option<Vec<Message>> = None;
-                for server in servers {
-                    let messages = server.describe_statement(name).await?;
-                    if let Some(ref _res) = result {
-                        // TODO: check for equivalency.
-                    } else {
-                        result = Some(messages);
-                    }
-                }
-
-                if let Some(result) = result {
-                    Ok(result)
-                } else {
-                    Err(Error::NotInSync)
-                }
-            }
-
-            _ => Err(Error::NotInSync),
-        }
-    }
-
-    pub async fn bind(&mut self, bind: &Bind) -> Result<(), Error> {
+    pub(crate) fn bind(&mut self, bind: &Bind) -> Result<(), Error> {
         match self.binding {
             Binding::MultiShard(_, ref mut state) => {
                 state.set_context(bind);
@@ -269,12 +233,12 @@ impl Connection {
     }
 
     /// We are done and can disconnect from this server.
-    pub fn done(&self) -> bool {
+    pub(crate) fn done(&self) -> bool {
         self.binding.done()
     }
 
     /// Get connected servers addresses.
-    pub fn addr(&mut self) -> Result<Vec<&Address>, Error> {
+    pub(crate) fn addr(&mut self) -> Result<Vec<&Address>, Error> {
         Ok(match self.binding {
             Binding::Server(Some(ref server)) => vec![server.addr()],
             Binding::MultiShard(ref servers, _) => servers.iter().map(|s| s.addr()).collect(),
@@ -296,19 +260,13 @@ impl Connection {
 
     /// Get cluster if any.
     #[inline]
-    pub fn cluster(&self) -> Result<&Cluster, Error> {
+    pub(crate) fn cluster(&self) -> Result<&Cluster, Error> {
         self.cluster.as_ref().ok_or(Error::NotConnected)
-    }
-
-    /// This is an admin database connection.
-    #[inline]
-    pub fn admin(&self) -> bool {
-        matches!(self.binding, Binding::Admin(_))
     }
 
     /// Transaction mode pooling.
     #[inline]
-    pub fn transaction_mode(&self) -> bool {
+    pub(crate) fn transaction_mode(&self) -> bool {
         self.cluster()
             .map(|c| c.pooler_mode() == PoolerMode::Transaction)
             .unwrap_or(true)
@@ -316,20 +274,20 @@ impl Connection {
 
     /// Pooler is in session mod
     #[inline]
-    pub fn session_mode(&self) -> bool {
+    pub(crate) fn session_mode(&self) -> bool {
         !self.transaction_mode()
     }
 
     /// Execute a query on the binding, if it's connected.
-    pub async fn execute(&mut self, query: &str) -> Result<(), Error> {
+    pub(crate) async fn execute(&mut self, query: &str) -> Result<(), Error> {
         self.binding.execute(query).await
     }
 
-    pub async fn sync_params(&mut self, params: &Parameters) -> Result<(), Error> {
+    pub(crate) async fn sync_params(&mut self, params: &Parameters) -> Result<(), Error> {
         self.binding.sync_params(params).await
     }
 
-    pub fn changed_params(&mut self) -> Parameters {
+    pub(crate) fn changed_params(&mut self) -> Parameters {
         self.binding.changed_params()
     }
 }

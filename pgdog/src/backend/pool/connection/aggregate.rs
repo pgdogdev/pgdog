@@ -62,37 +62,37 @@ impl<'a> Accumulator<'a> {
 
     /// Transform COUNT(*), MIN, MAX, etc., from multiple shards into a single value.
     fn accumulate(&mut self, row: &DataRow, decoder: &Decoder) -> Result<(), Error> {
-        let column = row.get_column(self.target.column(), decoder)?;
-        if let Some(column) = column {
-            match self.target.function() {
-                AggregateFunction::Count => self.datum = self.datum.clone() + column.value,
-                AggregateFunction::Max => {
-                    if !self.datum.is_null() {
-                        if self.datum < column.value {
-                            self.datum = column.value;
-                        }
-                    } else {
+        let column = row
+            .get_column(self.target.column(), decoder)?
+            .ok_or(Error::DecoderRowError)?;
+        match self.target.function() {
+            AggregateFunction::Count => self.datum = self.datum.clone() + column.value,
+            AggregateFunction::Max => {
+                if !self.datum.is_null() {
+                    if self.datum < column.value {
                         self.datum = column.value;
                     }
+                } else {
+                    self.datum = column.value;
                 }
-                AggregateFunction::Min => {
-                    if !self.datum.is_null() {
-                        if self.datum > column.value {
-                            self.datum = column.value;
-                        }
-                    } else {
-                        self.datum = column.value;
-                    }
-                }
-                AggregateFunction::Sum => {
-                    if !self.datum.is_null() {
-                        self.datum = self.datum.clone() + column.value;
-                    } else {
-                        self.datum = column.value;
-                    }
-                }
-                _ => (),
             }
+            AggregateFunction::Min => {
+                if !self.datum.is_null() {
+                    if self.datum > column.value {
+                        self.datum = column.value;
+                    }
+                } else {
+                    self.datum = column.value;
+                }
+            }
+            AggregateFunction::Sum => {
+                if !self.datum.is_null() {
+                    self.datum = self.datum.clone() + column.value;
+                } else {
+                    self.datum = column.value;
+                }
+            }
+            _ => (),
         }
 
         Ok(())
@@ -143,7 +143,7 @@ impl<'a> Aggregates<'a> {
             // 1. part of the GROUP BY, which means they are
             //    stored in the grouping
             // 2. are aggregate functions, which means they
-            //    are stored in the accunmulator
+            //    are stored in the accumulator
             //
             let mut row = DataRow::new();
             for (idx, datum) in grouping.columns {

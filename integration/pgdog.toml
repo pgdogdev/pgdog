@@ -37,6 +37,7 @@ database = "pgdog_sharded"
 name = "sharded"
 column = "id"
 data_type = "bigint"
+primary = true
 
 [admin]
 password = "pgdog"

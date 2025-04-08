@@ -77,6 +77,12 @@ pub enum Error {
 
     #[error("{0}")]
     Auth(#[from] crate::auth::Error),
+
+    #[error("protocol is out of sync")]
+    ProtocolOutOfSync,
+
+    #[error("decoder is missing required data to decode row")]
+    DecoderRowError,
 }
 
 impl Error {

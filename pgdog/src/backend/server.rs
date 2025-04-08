@@ -8,11 +8,14 @@ use tokio::{
     net::TcpStream,
     spawn,
 };
-use tracing::{debug, info, trace, warn};
+use tracing::{debug, error, info, trace, warn};
 
-use super::{pool::Address, Error, PreparedStatements, Stats};
+use super::{
+    pool::Address, prepared_statements::HandleResult, Error, PreparedStatements, ProtocolMessage,
+    Stats,
+};
 use crate::net::{
-    messages::{DataRow, Describe, Flush, NoticeResponse, RowDescription},
+    messages::{DataRow, NoticeResponse},
     parameter::Parameters,
     tls::connector,
     Parameter, Stream,
@@ -190,7 +193,7 @@ impl Server {
     }
 
     /// Send messages to the server and flush the buffer.
-    pub async fn send(&mut self, messages: Vec<impl Protocol>) -> Result<(), Error> {
+    pub async fn send(&mut self, messages: Vec<impl Into<ProtocolMessage>>) -> Result<(), Error> {
         let timer = Instant::now();
         for message in messages {
             self.send_one(message).await?;
@@ -205,18 +208,31 @@ impl Server {
 
     /// Send one message to the server but don't flush the buffer,
     /// accelerating bulk transfers.
-    pub async fn send_one(&mut self, message: impl Protocol) -> Result<(), Error> {
+    pub async fn send_one(&mut self, message: impl Into<ProtocolMessage>) -> Result<(), Error> {
         self.stats.state(State::Active);
+        let message: ProtocolMessage = message.into();
+        let result = self.prepared_statements.handle(&message)?;
 
-        trace!("→ {:#?}", message);
+        let queue = match result {
+            HandleResult::Drop => [None, None],
+            HandleResult::Prepend(prepare) => [Some(prepare), Some(message)],
+            HandleResult::Forward => [Some(message), None],
+        };
 
-        match self.stream().send(&message).await {
-            Ok(sent) => self.stats.send(sent),
-            Err(err) => {
-                self.stats.state(State::Error);
-                return Err(err.into());
+        for message in queue {
+            if let Some(message) = message {
+                trace!("{:#?} → [{}]", message, self.addr());
+
+                match self.stream().send(&message).await {
+                    Ok(sent) => self.stats.send(sent),
+                    Err(err) => {
+                        self.stats.state(State::Error);
+                        return Err(err.into());
+                    }
+                }
             }
         }
+
         Ok(())
     }
 
@@ -232,11 +248,34 @@ impl Server {
 
     /// Read a single message from the server.
     pub async fn read(&mut self) -> Result<Message, Error> {
-        let message = match self.stream().read().await {
-            Ok(message) => message.stream(self.streaming).backend(),
-            Err(err) => {
-                self.stats.state(State::Error);
-                return Err(err.into());
+        let message = loop {
+            if let Some(message) = self.prepared_statements.state_mut().get_simulated() {
+                return Ok(message);
+            }
+            match self.stream().read().await {
+                Ok(message) => {
+                    let message = message.stream(self.streaming).backend();
+                    match self.prepared_statements.forward(&message) {
+                        Ok(forward) => {
+                            if forward {
+                                break message;
+                            }
+                        }
+                        Err(err) => {
+                            error!(
+                                "{:?} got: {}, extended buffer: {:?}",
+                                err,
+                                message.code(),
+                                self.prepared_statements.state(),
+                            );
+                            return Err(err);
+                        }
+                    }
+                }
+                Err(err) => {
+                    self.stats.state(State::Error);
+                    return Err(err.into());
+                }
             }
         };
 
@@ -276,7 +315,7 @@ impl Server {
             _ => (),
         }
 
-        trace!("← {:#?}", message);
+        trace!("{:#?} ← [{}]", message, self.addr());
 
         Ok(message.backend())
     }
@@ -299,7 +338,7 @@ impl Server {
     /// Server sent everything.
     #[inline]
     pub fn done(&self) -> bool {
-        matches!(self.stats.state, State::Idle | State::ParseComplete)
+        self.prepared_statements.done() && !self.in_transaction()
     }
 
     #[inline]
@@ -307,16 +346,13 @@ impl Server {
         !matches!(
             self.stats.state,
             State::Idle | State::IdleInTransaction | State::TransactionError
-        )
+        ) || !self.prepared_statements.done()
     }
 
     /// Server connection is synchronized and can receive more messages.
     #[inline]
     pub fn in_sync(&self) -> bool {
-        matches!(
-            self.stats.state,
-            State::IdleInTransaction | State::TransactionError | State::Idle | State::ParseComplete
-        ) && !self.streaming
+        self.prepared_statements.done() && !self.streaming
     }
 
     /// Server is still inside a transaction.
@@ -425,83 +461,6 @@ impl Server {
         }
     }
 
-    /// Prepare a statement on this connection if it doesn't exist already.
-    pub async fn prepare_statement(&mut self, name: &str) -> Result<bool, Error> {
-        if self.prepared_statements.contains(name) {
-            return Ok(false);
-        }
-
-        if !self.in_sync() {
-            return Err(Error::NotInSync);
-        }
-
-        let parse = self
-            .prepared_statements
-            .parse(name)
-            .ok_or(Error::PreparedStatementMissing(name.to_string()))?;
-
-        debug!("preparing \"{}\" [{}]", parse.name(), self.addr());
-
-        self.send(vec![parse.message()?, Flush.message()?]).await?;
-        let response = self.read().await?;
-
-        match response.code() {
-            'E' => {
-                let error = ErrorResponse::from_bytes(response.to_bytes()?)?;
-                Err(Error::PreparedStatementError(Box::new(error)))
-            }
-            '1' => {
-                self.prepared_statements.prepared(name);
-                self.stats.prepared_statement();
-                Ok(true)
-            }
-            code => Err(Error::ExpectedParseComplete(code)),
-        }
-    }
-
-    pub async fn describe_statement(&mut self, name: &str) -> Result<Vec<Message>, Error> {
-        if !self.in_sync() {
-            return Err(Error::NotInSync);
-        }
-
-        debug!("describing \"{}\" [{}]", name, self.addr());
-
-        self.send(vec![
-            Describe::new_statement(name).message()?,
-            Flush.message()?,
-        ])
-        .await?;
-
-        let mut messages = vec![];
-
-        loop {
-            let response = self.read().await?;
-            match response.code() {
-                'T' => {
-                    let row_description = RowDescription::from_bytes(response.to_bytes()?)?;
-                    self.prepared_statements.describe(name, &row_description);
-                    messages.push(response.backend());
-                    break;
-                }
-
-                'n' | 'E' => {
-                    messages.push(response.backend());
-                    break;
-                }
-
-                't' => {
-                    messages.push(response.backend());
-                }
-
-                c => return Err(Error::UnexpectedMessage(c)),
-            }
-        }
-
-        self.stats.state(State::Idle);
-
-        Ok(messages)
-    }
-
     /// Reset error state caused by schema change.
     #[inline]
     pub fn reset_schema_changed(&mut self) {
@@ -604,6 +563,8 @@ impl Drop for Server {
 // Used for testing.
 #[cfg(test)]
 mod test {
+    use crate::{frontend::PreparedStatements, net::*};
+
     use super::*;
 
     impl Default for Server {
@@ -616,7 +577,7 @@ mod test {
                 params: Parameters::default(),
                 changed_params: Parameters::default(),
                 stats: Stats::connect(id, &addr),
-                prepared_statements: PreparedStatements::new(),
+                prepared_statements: super::PreparedStatements::new(),
                 addr,
                 dirty: false,
                 streaming: false,
@@ -632,5 +593,597 @@ mod test {
 
             server
         }
+    }
+
+    async fn test_server() -> Server {
+        let address = Address {
+            host: "127.0.0.1".into(),
+            port: 5432,
+            user: "pgdog".into(),
+            password: "pgdog".into(),
+            database_name: "pgdog".into(),
+        };
+
+        Server::connect(&address, vec![]).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_simple_query() {
+        let mut server = test_server().await;
+        for _ in 0..25 {
+            server
+                .send(vec![ProtocolMessage::from(Query::new("SELECT 1"))])
+                .await
+                .unwrap();
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), 'T');
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), 'D');
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), 'C');
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), 'Z');
+            assert_eq!(server.prepared_statements.state().len(), 0);
+            assert!(server.done());
+        }
+
+        for _ in 0..25 {
+            server
+                .send(vec![ProtocolMessage::from(Query::new("SELECT 1"))])
+                .await
+                .unwrap();
+        }
+        for _ in 0..25 {
+            for c in ['T', 'D', 'C', 'Z'] {
+                let msg = server.read().await.unwrap();
+                assert_eq!(msg.code(), c);
+            }
+        }
+        assert!(server.done());
+    }
+
+    #[tokio::test]
+    async fn test_empty_query() {
+        let mut server = test_server().await;
+        let empty = Query::new(";");
+        server
+            .send(vec![ProtocolMessage::from(empty)])
+            .await
+            .unwrap();
+
+        for c in ['I', 'Z'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), c);
+        }
+
+        assert_eq!(server.prepared_statements.state().len(), 0);
+        assert!(server.done());
+    }
+
+    #[tokio::test]
+    async fn test_set() {
+        let mut server = test_server().await;
+        server
+            .send(vec![ProtocolMessage::from(Query::new(
+                "SET application_name TO 'test'",
+            ))])
+            .await
+            .unwrap();
+
+        for c in ['C', 'S', 'Z'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), c);
+        }
+
+        assert!(server.done());
+    }
+
+    #[tokio::test]
+    async fn test_extended_anonymous() {
+        let mut server = test_server().await;
+        use crate::net::bind::Parameter;
+        for _ in 0..25 {
+            let bind = Bind {
+                params: vec![Parameter {
+                    len: 1,
+                    data: "1".as_bytes().to_vec(),
+                }],
+                codes: vec![0],
+                ..Default::default()
+            };
+            server
+                .send(vec![
+                    ProtocolMessage::from(Parse::new_anonymous("SELECT $1")),
+                    ProtocolMessage::from(bind),
+                    ProtocolMessage::from(Execute::new()),
+                    ProtocolMessage::from(Sync::new()),
+                ])
+                .await
+                .unwrap();
+
+            for c in ['1', '2', 'D', 'C', 'Z'] {
+                let msg = server.read().await.unwrap();
+                assert_eq!(msg.code(), c);
+            }
+
+            assert!(server.done())
+        }
+    }
+
+    #[tokio::test]
+    async fn test_prepared() {
+        let mut server = test_server().await;
+        use crate::net::bind::Parameter;
+
+        for i in 0..25 {
+            let name = format!("test_prepared_{}", i);
+            let parse = Parse::named(&name, format!("SELECT $1, 'test_{}'", name));
+            let (new, new_name) = PreparedStatements::global().lock().insert(&parse);
+            let name = new_name;
+            let parse = parse.rename(&name);
+            assert!(new);
+
+            let describe = Describe::new_statement(&name);
+            let bind = Bind {
+                statement: name.clone(),
+                params: vec![Parameter {
+                    len: 1,
+                    data: "1".as_bytes().to_vec(),
+                }],
+                ..Default::default()
+            };
+
+            server
+                .send(vec![
+                    ProtocolMessage::from(parse.clone()),
+                    ProtocolMessage::from(describe.clone()),
+                    Flush {}.into(),
+                ])
+                .await
+                .unwrap();
+
+            for c in ['1', 't', 'T'] {
+                let msg = server.read().await.unwrap();
+                assert_eq!(c, msg.code());
+            }
+
+            // RowDescription saved.
+            let global = server.prepared_statements.parse(&name).unwrap();
+            server
+                .prepared_statements
+                .row_description(global.name())
+                .unwrap();
+
+            server
+                .send(vec![
+                    ProtocolMessage::from(describe.clone()),
+                    ProtocolMessage::from(Flush),
+                ])
+                .await
+                .unwrap();
+            for code in ['t', 'T'] {
+                let msg = server.read().await.unwrap();
+                assert_eq!(msg.code(), code);
+            }
+
+            assert_eq!(server.prepared_statements.state().len(), 0);
+
+            server
+                .send(vec![
+                    ProtocolMessage::from(bind.clone()),
+                    ProtocolMessage::from(Execute::new()),
+                    ProtocolMessage::from(Sync {}),
+                ])
+                .await
+                .unwrap();
+
+            for code in ['2', 'D', 'C', 'Z'] {
+                let msg = server.read().await.unwrap();
+                assert_eq!(msg.code(), code);
+            }
+
+            assert!(server.done());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_prepared_in_cache() {
+        use crate::net::bind::Parameter;
+        let global = PreparedStatements::global();
+        let parse = Parse::named("random_name", "SELECT $1");
+        let (new, name) = global.lock().insert(&parse);
+        assert!(new);
+        let parse = parse.rename(&name);
+        assert_eq!(parse.name(), "__pgdog_1");
+
+        let mut server = test_server().await;
+
+        for _ in 0..25 {
+            server
+                .send(vec![
+                    ProtocolMessage::from(Bind {
+                        statement: "__pgdog_1".into(),
+                        params: vec![Parameter {
+                            len: 1,
+                            data: "1".as_bytes().to_vec(),
+                        }],
+                        ..Default::default()
+                    }),
+                    Execute::new().into(),
+                    Sync {}.into(),
+                ])
+                .await
+                .unwrap();
+
+            for c in ['2', 'D', 'C', 'Z'] {
+                let msg = server.read().await.unwrap();
+                assert_eq!(msg.code(), c);
+            }
+
+            assert!(server.done());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_bad_parse() {
+        let mut server = test_server().await;
+        for _ in 0..25 {
+            let parse = Parse::named("test", "SELECT bad syntax;");
+            server
+                .send(vec![
+                    ProtocolMessage::from(parse),
+                    Describe::new_statement("test").into(),
+                    Sync {}.into(),
+                ])
+                .await
+                .unwrap();
+            for c in ['E', 'Z'] {
+                let msg = server.read().await.unwrap();
+                assert_eq!(msg.code(), c);
+            }
+            assert!(server.done());
+            assert!(server.prepared_statements.is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_bad_bind() {
+        let mut server = test_server().await;
+        for i in 0..25 {
+            let name = format!("test_{}", i);
+            let parse = Parse::named(&name, "SELECT $1");
+            let describe = Describe::new_statement(&name);
+            let bind = Bind {
+                statement: name.clone(),
+                ..Default::default() // Missing params.
+            };
+            server
+                .send(vec![
+                    ProtocolMessage::from(parse),
+                    describe.into(),
+                    bind.into(),
+                    Sync.into(),
+                ])
+                .await
+                .unwrap();
+
+            for c in ['1', 't', 'T', 'E', 'Z'] {
+                let msg = server.read().await.unwrap();
+                assert_eq!(c, msg.code());
+            }
+
+            assert!(server.done());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_already_prepared() {
+        let mut server = test_server().await;
+        let name = "test".to_string();
+        let parse = Parse::named(&name, "SELECT $1");
+        let describe = Describe::new_statement(&name);
+
+        for _ in 0..25 {
+            server
+                .send(vec![
+                    ProtocolMessage::from(parse.clone()),
+                    describe.clone().into(),
+                    Flush.into(),
+                ])
+                .await
+                .unwrap();
+
+            for c in ['1', 't', 'T'] {
+                let msg = server.read().await.unwrap();
+                assert_eq!(msg.code(), c);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_bad_parse_removed() {
+        let mut server = test_server().await;
+        let name = "test".to_string();
+        let parse = Parse::named(&name, "SELECT bad syntax");
+
+        server
+            .send(vec![ProtocolMessage::from(parse.clone()), Sync.into()])
+            .await
+            .unwrap();
+        for c in ['E', 'Z'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), c);
+        }
+        assert!(server.prepared_statements.is_empty());
+
+        server
+            .send(vec![
+                ProtocolMessage::from(Parse::named("test", "SELECT $1")),
+                Flush.into(),
+            ])
+            .await
+            .unwrap();
+
+        for c in ['1'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), c);
+        }
+
+        assert_eq!(server.prepared_statements.len(), 1);
+
+        assert!(server.done());
+    }
+
+    #[tokio::test]
+    async fn test_execute_checked() {
+        let mut server = test_server().await;
+        for _ in 0..25 {
+            let mut msgs = server
+                .execute_checked("SELECT 1")
+                .await
+                .unwrap()
+                .into_iter();
+            for c in ['T', 'D', 'C', 'Z'] {
+                let msg = msgs.next().unwrap();
+                assert_eq!(c, msg.code());
+            }
+            assert!(server.done());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_multiple_queries() {
+        let mut server = test_server().await;
+        let q = Query::new("SELECT 1; SELECT 2;");
+        server.send(vec![ProtocolMessage::from(q)]).await.unwrap();
+        for c in ['T', 'D', 'C', 'T', 'D', 'C', 'Z'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(c, msg.code());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_extended() {
+        let mut server = test_server().await;
+        let msgs = vec![
+            ProtocolMessage::from(Parse::named("test_1", "SELECT $1")),
+            Describe::new_statement("test_1").into(),
+            Flush.into(),
+            Query::new("BEGIN").into(),
+            Bind {
+                statement: "test_1".into(),
+                params: vec![crate::net::bind::Parameter {
+                    len: 1,
+                    data: "1".as_bytes().to_vec(),
+                }],
+                ..Default::default()
+            }
+            .into(),
+            Describe {
+                statement: "".into(),
+                kind: 'P',
+            }
+            .into(),
+            Execute::new().into(),
+            Sync.into(),
+            Query::new("COMMIT").into(),
+        ];
+        server.send(msgs).await.unwrap();
+
+        for c in ['1', 't', 'T', 'C', 'Z', '2', 'T', 'D', 'C', 'Z', 'C'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(c, msg.code());
+            assert!(!server.done());
+        }
+        let msg = server.read().await.unwrap();
+        assert_eq!(msg.code(), 'Z');
+
+        assert!(server.done());
+    }
+
+    #[tokio::test]
+    async fn test_delete() {
+        let mut server = test_server().await;
+
+        let msgs = vec![
+            Query::new("BEGIN").into(),
+            Query::new("CREATE TABLE IF NOT EXISTS test_delete (id BIGINT PRIMARY KEY)").into(),
+            ProtocolMessage::from(Parse::named("test", "DELETE FROM test_delete")),
+            Describe::new_statement("test").into(),
+            Bind {
+                statement: "test".into(),
+                ..Default::default()
+            }
+            .into(),
+            Execute::new().into(),
+            Sync.into(),
+            Query::new("ROLLBACK").into(),
+        ];
+
+        server.send(msgs).await.unwrap();
+        for code in ['C', 'Z', 'C', 'Z', '1', 't', 'n', '2', 'C', 'Z', 'C'] {
+            assert!(!server.done());
+            let msg = server.read().await.unwrap();
+            assert_eq!(code, msg.code());
+        }
+        let msg = server.read().await.unwrap();
+        assert_eq!(msg.code(), 'Z');
+        assert!(server.done());
+    }
+
+    #[tokio::test]
+    async fn test_error_in_long_chain() {
+        let mut server = test_server().await;
+
+        let msgs = vec![
+            ProtocolMessage::from(Query::new("SET statement_timeout TO 5000")),
+            Parse::named("test", "SELECT $1").into(),
+            Parse::named("test_2", "SELECT $1, $2, $3").into(),
+            Describe::new_statement("test_2").into(),
+            Bind {
+                statement: "test".into(),
+                params: vec![crate::net::bind::Parameter {
+                    len: 1,
+                    data: "1".as_bytes().to_vec(),
+                }],
+                ..Default::default()
+            }
+            .into(),
+            Bind {
+                // Should error out
+                statement: "test_2".into(),
+                ..Default::default()
+            }
+            .into(),
+            Execute::new().into(), // Will be ignored
+            Bind {
+                // Will be ignored
+                statement: "test".into(),
+                ..Default::default()
+            }
+            .into(),
+            Flush.into(),
+        ];
+
+        server.send(msgs).await.unwrap();
+
+        for c in ['C', 'Z', '1', '1', 't', 'T', '2', 'E'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(c, msg.code());
+        }
+
+        assert!(!server.done()); // We're not in sync (extended protocol)
+        assert_eq!(server.stats().state, State::Idle);
+        assert!(server.prepared_statements.state().queue().is_empty()); // Queue is empty
+        assert!(!server.prepared_statements.state().in_sync());
+
+        server
+            .send(vec![
+                ProtocolMessage::from(Sync),
+                Query::new("SELECT 1").into(),
+            ])
+            .await
+            .unwrap();
+
+        for c in ['Z', 'T', 'D', 'C', 'Z'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), c);
+        }
+
+        assert!(server.done());
+    }
+
+    #[tokio::test]
+    async fn test_close() {
+        let mut server = test_server().await;
+
+        for _ in 0..5 {
+            server
+                .send(vec![
+                    ProtocolMessage::from(Parse::named("test", "SELECT $1")),
+                    Sync.into(),
+                ])
+                .await
+                .unwrap();
+
+            assert!(!server.done());
+            for c in ['1', 'Z'] {
+                let msg = server.read().await.unwrap();
+                assert_eq!(c, msg.code());
+            }
+            assert!(server.done());
+
+            server
+                .send(vec![
+                    Bind {
+                        statement: "test".into(),
+                        params: vec![crate::net::bind::Parameter {
+                            len: 1,
+                            data: "1".as_bytes().to_vec(),
+                        }],
+                        ..Default::default()
+                    }
+                    .into(),
+                    Execute::new().into(),
+                    Close::named("test_sdf").into(),
+                    ProtocolMessage::from(Parse::named("test", "SELECT $1")),
+                    Sync.into(),
+                ])
+                .await
+                .unwrap();
+            assert!(!server.done());
+            for c in ['2', 'D', 'C', '3', '1'] {
+                let msg = server.read().await.unwrap();
+                assert_eq!(msg.code(), c);
+                assert!(!server.done());
+            }
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), 'Z');
+            assert!(server.done());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_just_sync() {
+        let mut server = test_server().await;
+        server
+            .send(vec![ProtocolMessage::from(Sync)])
+            .await
+            .unwrap();
+        assert!(!server.done());
+        let msg = server.read().await.unwrap();
+        assert_eq!(msg.code(), 'Z');
+        assert!(server.done());
+    }
+
+    #[tokio::test]
+    async fn test_portal() {
+        let mut server = test_server().await;
+        server
+            .send(vec![
+                ProtocolMessage::from(Parse::named("test", "SELECT 1")),
+                Bind {
+                    statement: "test".into(),
+                    portal: "test1".into(),
+                    ..Default::default()
+                }
+                .into(),
+                Execute::new_portal("test1").into(),
+                Close::portal("test1").into(),
+                Sync.into(),
+            ])
+            .await
+            .unwrap();
+
+        for c in ['1', '2', 'D', 'C', '3'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), c);
+            assert!(!server.done());
+            assert!(server.has_more_messages());
+        }
+        let msg = server.read().await.unwrap();
+        assert_eq!(msg.code(), 'Z');
+        assert!(server.done());
+        assert!(!server.has_more_messages());
     }
 }

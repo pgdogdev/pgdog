@@ -5,7 +5,7 @@ use std::{collections::HashMap, sync::Arc};
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 
-use crate::net::messages::{Message, Parse, Protocol};
+use crate::{backend::ProtocolMessage, net::Parse};
 
 pub mod error;
 pub mod global_cache;
@@ -23,7 +23,6 @@ static CACHE: Lazy<PreparedStatements> = Lazy::new(PreparedStatements::default);
 pub struct PreparedStatements {
     pub(super) global: Arc<Mutex<GlobalCache>>,
     pub(super) local: HashMap<String, String>,
-    pub(super) requests: Vec<PreparedRequest>,
 }
 
 impl PreparedStatements {
@@ -38,15 +37,9 @@ impl PreparedStatements {
     }
 
     /// Maybe rewrite message.
-    pub fn maybe_rewrite(&mut self, message: impl Protocol) -> Result<Message, Error> {
+    pub fn maybe_rewrite(&mut self, message: ProtocolMessage) -> Result<ProtocolMessage, Error> {
         let mut rewrite = Rewrite::new(self);
         let message = rewrite.rewrite(message)?;
-        let requests = rewrite.requests();
-        for request in requests {
-            if !self.exists(&request) {
-                self.requests.push(request);
-            }
-        }
         Ok(message)
     }
 
@@ -72,21 +65,6 @@ impl PreparedStatements {
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
-
-    /// Get requests.
-    pub fn requests(&mut self) -> Vec<PreparedRequest> {
-        std::mem::take(&mut self.requests).into_iter().collect()
-    }
-
-    pub fn exists(&self, request: &PreparedRequest) -> bool {
-        for r in self.requests.iter() {
-            if r.name() == request.name() && r.is_prepare() && request.is_prepare() {
-                return true;
-            }
-        }
-
-        false
-    }
 }
 
 #[cfg(test)]
@@ -100,26 +78,16 @@ mod test {
         let mut statements = PreparedStatements::default();
 
         let messages = vec![
-            Parse::named("__sqlx_1", "SELECT 1").message().unwrap(),
+            Parse::named("__sqlx_1", "SELECT 1").into(),
             Bind {
                 statement: "__sqlx_1".into(),
                 ..Default::default()
             }
-            .message()
-            .unwrap(),
+            .into(),
         ];
 
         for message in messages {
             statements.maybe_rewrite(message).unwrap();
         }
-
-        let requests = statements.requests();
-        assert_eq!(requests.len(), 2);
-        let request = requests.first().unwrap();
-        assert_eq!(request.name(), "__pgdog_1");
-        assert!(request.is_new());
-        let request = requests.last().unwrap();
-        assert_eq!(request.name(), "__pgdog_1");
-        assert!(!request.is_new());
     }
 }

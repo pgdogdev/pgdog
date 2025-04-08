@@ -17,6 +17,24 @@ impl Close {
             name: name.to_owned(),
         }
     }
+
+    pub fn portal(name: &str) -> Self {
+        Self {
+            kind: 'P',
+            name: name.to_owned(),
+        }
+    }
+
+    pub fn anonymous(&self) -> bool {
+        self.name.is_empty() || self.kind != 'S'
+    }
+
+    pub fn len(&self) -> usize {
+        self.name.len() + 1 // NULL
+        + 4 // len
+        + 1 // code
+        + 1 // kind
+    }
 }
 
 impl FromBytes for Close {
@@ -43,5 +61,16 @@ impl ToBytes for Close {
 impl Protocol for Close {
     fn code(&self) -> char {
         'C'
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_close() {
+        let close = Close::named("test");
+        assert_eq!(close.len(), close.to_bytes().unwrap().len());
     }
 }
