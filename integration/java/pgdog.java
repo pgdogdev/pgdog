@@ -3,30 +3,47 @@ import java.sql.*;
 abstract class TestCase {
 
     protected Connection connection;
-    protected String name;
+    protected String test_name;
+    protected String database;
 
-    TestCase(String database, String name) throws Exception {
+    TestCase(String database) throws Exception {
+        this.database = database;
         String url =
             "jdbc:postgresql://127.0.0.1:6432/" +
             database +
             "?user=pgdog&password=pgdog&ssl=false";
         Connection conn = DriverManager.getConnection(url);
         this.connection = conn;
-        this.name = name;
     }
 
     public void execute() throws Exception {
-        System.out.println("Executing " + this.name);
+        String className = this.getClass().getSimpleName();
+        System.out.println(
+            "Executing " + className + " [" + this.database + "]"
+        );
         run();
     }
 
     abstract void run() throws Exception;
+
+    public static void assert_equals(int left, int right) throws Exception {
+        if (left != right) {
+            throw new Exception(left + " != " + right);
+        }
+    }
+
+    public static void assert_equals(String left, String right)
+        throws Exception {
+        if (!left.equals(right)) {
+            throw new Exception(left + " != " + right);
+        }
+    }
 }
 
 class SelectOne extends TestCase {
 
-    SelectOne() throws Exception {
-        super("pgdog", "SelectOne");
+    SelectOne(String database) throws Exception {
+        super(database);
     }
 
     void run() throws Exception {
@@ -37,14 +54,14 @@ class SelectOne extends TestCase {
             rows += 1;
             assert rs.getInt("one") == 1;
         }
-        assert rows == 1;
+        TestCase.assert_equals(rows, 1);
     }
 }
 
 class Prepared extends TestCase {
 
-    Prepared() throws Exception {
-        super("pgdog", "Prepared");
+    Prepared(String database) throws Exception {
+        super(database);
     }
 
     void run() throws Exception {
@@ -82,7 +99,9 @@ class Pgdog {
     }
 
     public static void main(String[] args) throws Exception {
-        new SelectOne().execute();
-        new Prepared().execute();
+        new SelectOne("pgdog").execute();
+        new SelectOne("pgdog_sharded").execute();
+        new Prepared("pgdog").execute();
+        new Prepared("pgdog_sharded").execute();
     }
 }
