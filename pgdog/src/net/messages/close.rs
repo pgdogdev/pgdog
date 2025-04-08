@@ -63,3 +63,14 @@ impl Protocol for Close {
         'C'
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_close() {
+        let close = Close::named("test");
+        assert_eq!(close.len(), close.to_bytes().unwrap().len());
+    }
+}

@@ -38,3 +38,13 @@ impl Protocol for Sync {
         'S'
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_sync() {
+        assert_eq!(Sync.len(), Sync.to_bytes().unwrap().len());
+    }
+}
