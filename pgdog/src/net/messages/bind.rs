@@ -178,8 +178,13 @@ impl FromBytes for Bind {
         let params = (0..num_params)
             .map(|_| {
                 let len = bytes.get_i32();
-                let mut data = Vec::with_capacity(len as usize);
-                (0..len).for_each(|_| data.push(bytes.get_u8()));
+                let data = if len >= 0 {
+                    let mut data = Vec::with_capacity(len as usize);
+                    (0..len).for_each(|_| data.push(bytes.get_u8()));
+                    data
+                } else {
+                    vec![]
+                };
                 Parameter { len, data }
             })
             .collect();
