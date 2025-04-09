@@ -76,7 +76,7 @@ jobs:
           override: true
       - uses: Swatinem/rust-cache@v2
         with:
-          prefix-key: release
+          prefix-key: release-1
       - name: Setup dependencies
         run: |
           sudo service postgresql start
