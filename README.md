@@ -8,7 +8,7 @@ PgDog is a transaction pooler and logical replication manager that can shard Pos
 
 ## Documentation
 
-&#128216; PgDog documentation can be **[found here](https://docs.pgdog.dev/)**. Any questions? Join our **[Discord](https://discord.gg/D6EDExgU)**.
+&#128216; PgDog documentation can be **[found here](https://docs.pgdog.dev/)**. Any questions? Join our **[Discord](https://discord.com/invite/CcBZkjSJdd)**.
 
 ## Quick start
 
