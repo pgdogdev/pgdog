@@ -74,6 +74,9 @@ jobs:
         with:
           toolchain: stable
           override: true
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: release
       - name: Setup dependencies
         run: |
           sudo service postgresql start
@@ -86,9 +89,6 @@ jobs:
           sudo pip3 install cmake==3.31.6
           cmake --version
           cargo install cargo-nextest --version "0.9.78" --locked
-      - uses: Swatinem/rust-cache@v2
-        with:
-          prefix-key: release
       - name: Build PgDog
         run: cargo build --release
       - name: Python
