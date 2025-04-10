@@ -334,6 +334,7 @@ impl Server {
         let diff = params.merge(&mut self.params);
         if !diff.is_empty() {
             debug!("syncing {} params", diff.len());
+            println!("sync: {:?}", diff);
             self.execute_batch(&diff.iter().map(|query| query.query()).collect::<Vec<_>>())
                 .await?;
         }

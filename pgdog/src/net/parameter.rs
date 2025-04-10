@@ -4,7 +4,7 @@ use std::ops::{Deref, DerefMut};
 
 use super::{messages::Query, Error};
 
-static IMMUTABLE_PARAMS: &[&str] = &["database", "user"];
+static IMMUTABLE_PARAMS: &[&str] = &["database", "user", "client_encoding"];
 
 /// Startup parameter.
 #[derive(Debug, Clone, PartialEq)]
@@ -67,7 +67,8 @@ impl Parameters {
             if changed {
                 queries.push(Query::new(format!(
                     "SET \"{}\" TO '{}'",
-                    param.name, param.value
+                    param.name,
+                    param.value.replace("'", ""),
                 )));
             }
         }
