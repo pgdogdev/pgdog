@@ -222,12 +222,12 @@ impl PreparedStatements {
     }
 
     /// The server has prepared this statement already.
-    fn contains(&self, name: &str) -> bool {
+    pub fn contains(&self, name: &str) -> bool {
         self.local_cache.contains(name)
     }
 
     /// Indicate this statement is prepared on the connection.
-    fn prepared(&mut self, name: &str) {
+    pub fn prepared(&mut self, name: &str) {
         self.local_cache.insert(name.to_owned());
     }
 

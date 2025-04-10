@@ -124,7 +124,8 @@ impl MultiShard {
                 if self.counters.row_description == 1 {
                     let rd = RowDescription::from_bytes(message.to_bytes()?)?;
                     self.decoder.row_description(&rd);
-                } else if self.counters.row_description == self.shards {
+                }
+                if self.counters.row_description == self.shards {
                     // Only send it to the client once all shards sent it,
                     // so we don't get early requests from clients.
                     forward = Some(message);

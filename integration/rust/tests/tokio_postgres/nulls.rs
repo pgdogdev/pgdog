@@ -22,7 +22,7 @@ async fn test_nulls() {
             .unwrap();
 
         assert_eq!(results.len(), 1);
-        let row = results.iter().next().unwrap();
+        let row = results.first().unwrap();
         let id: i64 = row.get(0);
         let value: Option<String> = row.get(1);
         assert_eq!(id, 1_i64);

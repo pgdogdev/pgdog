@@ -23,6 +23,8 @@ impl Rewrite {
                 if let Some(ref node) = stmt.node {
                     match node {
                         NodeEnum::PrepareStmt(_) => return true,
+                        NodeEnum::ExecuteStmt(_) => return true,
+                        NodeEnum::DeallocateStmt(_) => return true,
                         _ => (),
                     }
                 }
@@ -47,13 +49,27 @@ impl Rewrite {
                             stmt.name = parse.name().to_string();
                         }
 
+                        NodeEnum::ExecuteStmt(ref mut stmt) => {
+                            let name = prepared_statements.name(&stmt.name);
+                            if let Some(name) = name {
+                                stmt.name = name.to_string();
+                            }
+                        }
+
+                        NodeEnum::DeallocateStmt(ref mut stmt) => {
+                            let name = prepared_statements.name(&stmt.name);
+                            if let Some(name) = name {
+                                stmt.name = name.to_string();
+                            }
+                        }
+
                         _ => (),
                     }
                 }
             }
         }
 
-        Ok(ast.deparse().map_err(|_| Error::EmptyQuery)?)
+        ast.deparse().map_err(|_| Error::EmptyQuery)
     }
 }
 

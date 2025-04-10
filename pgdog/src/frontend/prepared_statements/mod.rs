@@ -59,7 +59,7 @@ impl PreparedStatements {
     }
 
     /// Get global statement counter.
-    fn name(&self, name: &str) -> Option<&String> {
+    pub fn name(&self, name: &str) -> Option<&String> {
         self.local.get(name)
     }
 

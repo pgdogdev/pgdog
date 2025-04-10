@@ -38,7 +38,6 @@ mod test {
             .protobuf
             .stmts
             .first()
-            .clone()
             .unwrap()
             .stmt
             .clone()

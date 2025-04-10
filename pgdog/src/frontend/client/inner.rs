@@ -70,14 +70,21 @@ impl Inner {
     /// Get the query from the buffer and figure out what it wants to do.
     pub(super) fn command(
         &mut self,
-        buffer: &Buffer,
+        buffer: &mut Buffer,
         prepared_statements: &mut PreparedStatements,
     ) -> Result<Option<&Command>, RouterError> {
-        self.backend
+        let command = self
+            .backend
             .cluster()
             .ok()
             .map(|cluster| self.router.query(buffer, cluster, prepared_statements))
-            .transpose()
+            .transpose()?;
+
+        if let Some(Command::Rewrite(query)) = command {
+            buffer.rewrite(query)?;
+        }
+
+        Ok(command)
     }
 
     /// Client is connected to server(s).

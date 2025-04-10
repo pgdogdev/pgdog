@@ -9,7 +9,7 @@ fn global_name(counter: usize) -> String {
 }
 
 #[derive(Debug, Clone)]
-struct Statement {
+pub struct Statement {
     parse: Parse,
     row_description: Option<RowDescription>,
 }
@@ -45,7 +45,7 @@ struct CacheKey {
 ///    used to prepare the statement on server connections and to decode
 ///    results returned by executing those statements in a multi-shard context.
 ///
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 pub struct GlobalCache {
     statements: HashMap<CacheKey, usize>,
     names: HashMap<String, Statement>,
@@ -152,5 +152,9 @@ impl GlobalCache {
     /// True if the local cache is empty.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    pub fn names(&self) -> &HashMap<String, Statement> {
+        &self.names
     }
 }

@@ -18,7 +18,7 @@ use crate::net::{
     messages::{DataRow, NoticeResponse},
     parameter::Parameters,
     tls::connector,
-    Parameter, Stream,
+    CommandComplete, Parameter, Stream,
 };
 use crate::state::State;
 use crate::{
@@ -42,6 +42,7 @@ pub struct Server {
     dirty: bool,
     streaming: bool,
     schema_changed: bool,
+    sync_prepared: bool,
 }
 
 impl Server {
@@ -172,6 +173,7 @@ impl Server {
             dirty: false,
             streaming: false,
             schema_changed: false,
+            sync_prepared: false,
         })
     }
 
@@ -312,6 +314,13 @@ impl Server {
                 let ps = ParameterStatus::from_bytes(message.to_bytes()?)?;
                 self.changed_params.set(&ps.name, &ps.value);
             }
+            'C' => {
+                let cmd = CommandComplete::from_bytes(message.to_bytes()?)?;
+                match cmd.command.as_str() {
+                    "PREPARE" | "DEALLOCATE" => self.sync_prepared = true,
+                    _ => (),
+                }
+            }
             _ => (),
         }
 
@@ -373,6 +382,10 @@ impl Server {
     /// Did the schema change and prepared statements are broken.
     pub fn schema_changed(&self) -> bool {
         self.schema_changed
+    }
+
+    pub fn sync_prepared(&self) -> bool {
+        self.sync_prepared
     }
 
     /// Server parameters.
@@ -459,6 +472,20 @@ impl Server {
         if !self.in_sync() {
             self.stats.state(State::Error);
         }
+    }
+
+    pub async fn sync_prepared_statements(&mut self) -> Result<(), Error> {
+        let names = self
+            .fetch_all::<String>("SELECT name FROM pg_prepared_statements")
+            .await?;
+
+        for name in names {
+            self.prepared_statements.prepared(&name);
+        }
+
+        debug!("prepared statements synchronized [{}]", self.addr());
+
+        Ok(())
     }
 
     /// Reset error state caused by schema change.
@@ -582,6 +609,7 @@ mod test {
                 dirty: false,
                 streaming: false,
                 schema_changed: false,
+                sync_prepared: false,
             }
         }
     }
@@ -1185,5 +1213,83 @@ mod test {
         assert_eq!(msg.code(), 'Z');
         assert!(server.done());
         assert!(!server.has_more_messages());
+    }
+
+    #[tokio::test]
+    async fn test_manual_prepared() {
+        let mut server = test_server().await;
+
+        let mut prep = PreparedStatements::new();
+        let parse = prep.insert_anyway(Parse::named("test", "SELECT 1::bigint"));
+        assert_eq!(parse.name(), "__pgdog_1");
+
+        server
+            .send(vec![ProtocolMessage::from(Query::new(format!(
+                "PREPARE {} AS {}",
+                parse.name(),
+                parse.query()
+            )))])
+            .await
+            .unwrap();
+        for c in ['C', 'Z'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), c);
+        }
+        assert!(server.sync_prepared());
+        server.sync_prepared_statements().await.unwrap();
+        assert!(server.prepared_statements.contains("__pgdog_1"));
+
+        let describe = Describe::new_statement("__pgdog_1");
+        let bind = Bind {
+            statement: "__pgdog_1".into(),
+            ..Default::default()
+        };
+        let execute = Execute::new();
+        server
+            .send(vec![
+                describe.clone().into(),
+                bind.into(),
+                execute.into(),
+                ProtocolMessage::from(Sync),
+            ])
+            .await
+            .unwrap();
+
+        for c in ['t', 'T', '2', 'D', 'C', 'Z'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(c, msg.code());
+        }
+
+        let parse = Parse::named("__pgdog_1", "SELECT 2::bigint");
+        let describe = describe.clone();
+
+        server
+            .send(vec![
+                parse.into(),
+                describe.into(),
+                ProtocolMessage::from(Flush),
+            ])
+            .await
+            .unwrap();
+
+        for c in ['1', 't', 'T'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), c);
+        }
+
+        server
+            .send(vec![ProtocolMessage::from(Query::new("EXECUTE __pgdog_1"))])
+            .await
+            .unwrap();
+        for c in ['T', 'D', 'C', 'Z'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(c, msg.code());
+            if c == 'D' {
+                let data_row = DataRow::from_bytes(msg.to_bytes().unwrap()).unwrap();
+                let result: i64 = data_row.get(0, Format::Text).unwrap();
+                assert_eq!(result, 1); // We prepared SELECT 1, SELECT 2 is ignored.
+            }
+        }
+        assert!(server.done());
     }
 }

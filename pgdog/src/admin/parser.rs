@@ -4,8 +4,9 @@ use super::{
     pause::Pause, prelude::Message, reconnect::Reconnect, reload::Reload,
     reset_query_cache::ResetQueryCache, setup_schema::SetupSchema, show_clients::ShowClients,
     show_config::ShowConfig, show_lists::ShowLists, show_peers::ShowPeers, show_pools::ShowPools,
-    show_query_cache::ShowQueryCache, show_servers::ShowServers, show_stats::ShowStats,
-    show_version::ShowVersion, shutdown::Shutdown, Command, Error,
+    show_prepared_statements::ShowPreparedStatements, show_query_cache::ShowQueryCache,
+    show_servers::ShowServers, show_stats::ShowStats, show_version::ShowVersion,
+    shutdown::Shutdown, Command, Error,
 };
 
 use tracing::debug;
@@ -27,6 +28,7 @@ pub enum ParseResult {
     SetupSchema(SetupSchema),
     Shutdown(Shutdown),
     ShowLists(ShowLists),
+    ShowPrepared(ShowPreparedStatements),
 }
 
 impl ParseResult {
@@ -50,6 +52,7 @@ impl ParseResult {
             SetupSchema(setup_schema) => setup_schema.execute().await,
             Shutdown(shutdown) => shutdown.execute().await,
             ShowLists(show_lists) => show_lists.execute().await,
+            ShowPrepared(cmd) => cmd.execute().await,
         }
     }
 
@@ -73,6 +76,7 @@ impl ParseResult {
             SetupSchema(setup_schema) => setup_schema.name(),
             Shutdown(shutdown) => shutdown.name(),
             ShowLists(show_lists) => show_lists.name(),
+            ShowPrepared(show) => show.name(),
         }
     }
 }
@@ -101,6 +105,7 @@ impl Parser {
                 "stats" => ParseResult::ShowStats(ShowStats::parse(&sql)?),
                 "version" => ParseResult::ShowVersion(ShowVersion::parse(&sql)?),
                 "lists" => ParseResult::ShowLists(ShowLists::parse(&sql)?),
+                "prepared" => ParseResult::ShowPrepared(ShowPreparedStatements::parse(&sql)?),
                 command => {
                     debug!("unknown admin show command: '{}'", command);
                     return Err(Error::Syntax);

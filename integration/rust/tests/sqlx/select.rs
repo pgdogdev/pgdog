@@ -45,7 +45,7 @@ async fn test_concurrent() {
                 for id in i * 25..i * 25 + 100 {
                     let row: Option<(i64,)> =
                         sqlx::query_as("SELECT * FROM rust_test_concurrent.sharded WHERE id = $1")
-                            .bind(id as i64)
+                            .bind(id)
                             .fetch_optional(&conn)
                             .await
                             .unwrap();
@@ -54,7 +54,7 @@ async fn test_concurrent() {
                     let rows: Vec<(i64, String)> = sqlx::query_as(
                         "INSERT INTO rust_test_concurrent.sharded (id, value) VALUES ($1, $2) RETURNING *",
                     )
-                    .bind(id as i64)
+                    .bind(id)
                     .bind(format!("value_{}", id))
                     .fetch_all(&conn)
                     .await
@@ -64,7 +64,7 @@ async fn test_concurrent() {
                     assert_eq!(rows[0].1, format!("value_{}", id));
 
                     sqlx::query("DELETE FROM rust_test_concurrent.sharded WHERE id = $1")
-                        .bind(id as i64)
+                        .bind(id)
                         .execute(&conn)
                         .await
                         .unwrap();
