@@ -31,6 +31,7 @@ impl Statement {
 struct CacheKey {
     query: Arc<String>,
     data_types: Arc<Vec<i32>>,
+    version: usize,
 }
 
 /// Global prepared statements cache.
@@ -49,6 +50,7 @@ pub struct GlobalCache {
     statements: HashMap<CacheKey, usize>,
     names: HashMap<String, Statement>,
     counter: usize,
+    versions: usize,
 }
 
 impl GlobalCache {
@@ -61,6 +63,7 @@ impl GlobalCache {
         let parse_key = CacheKey {
             query: parse.query_ref(),
             data_types: parse.data_types_ref(),
+            version: 0,
         };
         match self.statements.entry(parse_key) {
             Entry::Occupied(entry) => (false, global_name(*entry.get())),
@@ -80,6 +83,31 @@ impl GlobalCache {
                 (true, name)
             }
         }
+    }
+
+    /// Insert a prepared statement into the global cache ignoring
+    /// duplicate check.
+    pub fn insert_anyway(&mut self, parse: &Parse) -> String {
+        self.counter += 1;
+        self.versions += 1;
+        let key = CacheKey {
+            query: parse.query_ref(),
+            data_types: parse.data_types_ref(),
+            version: self.versions,
+        };
+
+        self.statements.insert(key, self.counter);
+        let name = global_name(self.counter);
+        let parse = parse.rename(&name);
+        self.names.insert(
+            name.clone(),
+            Statement {
+                parse,
+                row_description: None,
+            },
+        );
+
+        name
     }
 
     /// Client sent a Describe for a prepared statement and received a RowDescription.

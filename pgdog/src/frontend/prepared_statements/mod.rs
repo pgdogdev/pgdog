@@ -44,10 +44,17 @@ impl PreparedStatements {
     }
 
     /// Register prepared statement with the global cache.
-    fn insert(&mut self, parse: Parse) -> Parse {
+    pub fn insert(&mut self, parse: Parse) -> Parse {
         let (_new, name) = { self.global.lock().insert(&parse) };
         self.local.insert(parse.name().to_owned(), name.clone());
 
+        parse.rename(&name)
+    }
+
+    /// Insert statement into the cache bypassing duplicate checks.
+    pub fn insert_anyway(&mut self, parse: Parse) -> Parse {
+        let (_, name) = self.global.lock().insert(&parse);
+        self.local.insert(parse.name().to_owned(), name.clone());
         parse.rename(&name)
     }
 

@@ -9,17 +9,17 @@ use crate::{
     frontend::{
         buffer::BufferedQuery,
         router::{
-            parser::{OrderBy, Shard},
+            parser::{rewrite::Rewrite, OrderBy, Shard},
             round_robin,
             sharding::{shard_param, shard_value, Centroids},
             CopyRow,
         },
-        Buffer,
+        Buffer, PreparedStatements,
     },
     net::messages::{Bind, CopyData, Vector},
 };
 
-use super::{Aggregate, Cache, Column, CopyParser, Error, Insert, Key, Route, Value, WhereClause};
+use super::*;
 
 use once_cell::sync::Lazy;
 use pg_query::{
@@ -36,19 +36,6 @@ static REPLICATION_REGEX: Lazy<Regex> = Lazy::new(|| {
     )
     .unwrap()
 });
-
-/// Command determined by the query parser.
-#[derive(Debug, Clone)]
-pub enum Command {
-    Query(Route),
-    Copy(Box<CopyParser>),
-    StartTransaction(BufferedQuery),
-    CommitTransaction,
-    RollbackTransaction,
-    StartReplication,
-    ReplicationMeta,
-    Set { name: String, value: String },
-}
 
 #[derive(Debug)]
 pub struct QueryParser {
@@ -71,9 +58,15 @@ impl QueryParser {
         self.replication_mode = true;
     }
 
-    pub fn parse(&mut self, buffer: &Buffer, cluster: &Cluster) -> Result<&Command, Error> {
+    pub fn parse(
+        &mut self,
+        buffer: &Buffer,
+        cluster: &Cluster,
+        prepared_statements: &mut PreparedStatements,
+    ) -> Result<&Command, Error> {
         if let Some(query) = buffer.query()? {
-            self.command = self.query(&query, cluster, buffer.parameters()?)?;
+            self.command =
+                self.query(&query, cluster, buffer.parameters()?, prepared_statements)?;
         }
         Ok(&self.command)
     }
@@ -99,6 +92,7 @@ impl QueryParser {
         query: &BufferedQuery,
         cluster: &Cluster,
         params: Option<&Bind>,
+        prepared_statements: &mut PreparedStatements,
     ) -> Result<Command, Error> {
         // Replication protocol commands
         // don't have a node in pg_query,
@@ -163,6 +157,11 @@ impl QueryParser {
 
         debug!("{}", query.query());
         trace!("{:#?}", ast);
+
+        let rewrite = Rewrite::new(ast.clone());
+        if rewrite.needs_rewrite() {
+            // let queries = rewrite.rewrite(prepared_statements)
+        }
 
         //
         // Get the root AST node.
