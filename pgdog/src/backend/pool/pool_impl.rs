@@ -254,10 +254,16 @@ impl Pool {
 
     /// Get startup parameters for new server connections.
     pub(super) fn startup_parameters(&self) -> Vec<Parameter> {
-        let mut params = vec![Parameter {
-            name: "application_name".into(),
-            value: "PgDog".into(),
-        }];
+        let mut params = vec![
+            Parameter {
+                name: "application_name".into(),
+                value: "PgDog".into(),
+            },
+            Parameter {
+                name: "client_encoding".into(),
+                value: "utf-8".into(),
+            },
+        ];
 
         let config = *self.lock().config();
 

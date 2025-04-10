@@ -13,7 +13,7 @@ pub use copy::CopyRow;
 pub use error::Error;
 pub use parser::{Command, QueryParser, Route};
 
-use super::Buffer;
+use super::{Buffer, PreparedStatements};
 
 /// Query router.
 pub struct Router {
@@ -45,8 +45,15 @@ impl Router {
     /// previous route is preserved. This is useful in case the client
     /// doesn't supply enough information in the buffer, e.g. just issued
     /// a Describe request to a previously submitted Parse.
-    pub fn query(&mut self, buffer: &Buffer, cluster: &Cluster) -> Result<&Command, Error> {
-        Ok(self.query_parser.parse(buffer, cluster)?)
+    pub fn query(
+        &mut self,
+        buffer: &Buffer,
+        cluster: &Cluster,
+        prepared_statements: &mut PreparedStatements,
+    ) -> Result<&Command, Error> {
+        Ok(self
+            .query_parser
+            .parse(buffer, cluster, prepared_statements)?)
     }
 
     /// Parse CopyData messages and shard them.

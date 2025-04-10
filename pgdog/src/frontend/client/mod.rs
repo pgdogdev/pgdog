@@ -223,7 +223,7 @@ impl Client {
     async fn client_messages(
         &mut self,
         mut inner: InnerBorrow<'_>,
-        buffer: Buffer,
+        mut buffer: Buffer,
     ) -> Result<bool, Error> {
         inner.is_async = buffer.is_async();
         inner.stats.received(buffer.len());
@@ -235,7 +235,7 @@ impl Client {
         }
 
         let connected = inner.connected();
-        let command = match inner.command(&buffer) {
+        let command = match inner.command(&mut buffer, &mut self.prepared_statements) {
             Ok(command) => command,
             Err(err) => {
                 self.stream

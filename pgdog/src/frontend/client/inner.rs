@@ -6,7 +6,8 @@ use crate::{
         Error as BackendError,
     },
     frontend::{
-        buffer::BufferedQuery, router::Error as RouterError, Buffer, Command, Comms, Router, Stats,
+        buffer::BufferedQuery, router::Error as RouterError, Buffer, Command, Comms,
+        PreparedStatements, Router, Stats,
     },
 };
 
@@ -67,12 +68,23 @@ impl Inner {
     }
 
     /// Get the query from the buffer and figure out what it wants to do.
-    pub(super) fn command(&mut self, buffer: &Buffer) -> Result<Option<&Command>, RouterError> {
-        self.backend
+    pub(super) fn command(
+        &mut self,
+        buffer: &mut Buffer,
+        prepared_statements: &mut PreparedStatements,
+    ) -> Result<Option<&Command>, RouterError> {
+        let command = self
+            .backend
             .cluster()
             .ok()
-            .map(|cluster| self.router.query(buffer, cluster))
-            .transpose()
+            .map(|cluster| self.router.query(buffer, cluster, prepared_statements))
+            .transpose()?;
+
+        if let Some(Command::Rewrite(query)) = command {
+            buffer.rewrite(query)?;
+        }
+
+        Ok(command)
     }
 
     /// Client is connected to server(s).

@@ -157,6 +157,16 @@ impl Buffer {
     pub fn copy_fail(&self) -> bool {
         self.buffer.last().map(|m| m.code() == 'f').unwrap_or(false)
     }
+
+    /// Rewrite query in buffer.
+    pub fn rewrite(&mut self, query: &str) -> Result<(), Error> {
+        if self.buffer.iter().any(|c| c.code() != 'Q') {
+            return Err(Error::OnlySimpleForRewrites);
+        }
+        self.buffer.clear();
+        self.buffer.push(Query::new(query).into());
+        Ok(())
+    }
 }
 
 impl From<Buffer> for Vec<ProtocolMessage> {

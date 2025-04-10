@@ -41,11 +41,7 @@ impl Parameter {
             return None;
         }
 
-        if let Ok(s) = from_utf8(self.as_bytes()) {
-            Some(s)
-        } else {
-            None
-        }
+        from_utf8(self.as_bytes()).ok()
     }
 
     /// Get parameter value as bytes.

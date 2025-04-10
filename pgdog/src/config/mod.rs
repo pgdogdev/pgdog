@@ -272,7 +272,25 @@ pub struct General {
     /// Load queries to file (warning: slow, don't use in production).
     #[serde(default)]
     pub query_log: Option<PathBuf>,
+    /// Enable OpenMetrics server on this port.
     pub openmetrics_port: Option<u16>,
+    /// Prepared statatements support.
+    #[serde(default)]
+    pub prepared_statements: PreparedStatements,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum PreparedStatements {
+    #[default]
+    Extended,
+    Full,
+}
+
+impl PreparedStatements {
+    pub fn full(&self) -> bool {
+        matches!(self, PreparedStatements::Full)
+    }
 }
 
 impl Default for General {
@@ -297,6 +315,7 @@ impl Default for General {
             broadcast_port: Self::broadcast_port(),
             query_log: None,
             openmetrics_port: None,
+            prepared_statements: PreparedStatements::default(),
         }
     }
 }

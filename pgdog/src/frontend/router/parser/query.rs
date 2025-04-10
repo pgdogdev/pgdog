@@ -6,20 +6,21 @@ use std::{
 
 use crate::{
     backend::{databases::databases, replication::ShardedColumn, Cluster, ShardingSchema},
+    config::config,
     frontend::{
         buffer::BufferedQuery,
         router::{
-            parser::{OrderBy, Shard},
+            parser::{rewrite::Rewrite, OrderBy, Shard},
             round_robin,
             sharding::{shard_param, shard_value, Centroids},
             CopyRow,
         },
-        Buffer,
+        Buffer, PreparedStatements,
     },
     net::messages::{Bind, CopyData, Vector},
 };
 
-use super::{Aggregate, Cache, Column, CopyParser, Error, Insert, Key, Route, Value, WhereClause};
+use super::*;
 
 use once_cell::sync::Lazy;
 use pg_query::{
@@ -36,19 +37,6 @@ static REPLICATION_REGEX: Lazy<Regex> = Lazy::new(|| {
     )
     .unwrap()
 });
-
-/// Command determined by the query parser.
-#[derive(Debug, Clone)]
-pub enum Command {
-    Query(Route),
-    Copy(Box<CopyParser>),
-    StartTransaction(BufferedQuery),
-    CommitTransaction,
-    RollbackTransaction,
-    StartReplication,
-    ReplicationMeta,
-    Set { name: String, value: String },
-}
 
 #[derive(Debug)]
 pub struct QueryParser {
@@ -71,9 +59,15 @@ impl QueryParser {
         self.replication_mode = true;
     }
 
-    pub fn parse(&mut self, buffer: &Buffer, cluster: &Cluster) -> Result<&Command, Error> {
+    pub fn parse(
+        &mut self,
+        buffer: &Buffer,
+        cluster: &Cluster,
+        prepared_statements: &mut PreparedStatements,
+    ) -> Result<&Command, Error> {
         if let Some(query) = buffer.query()? {
-            self.command = self.query(&query, cluster, buffer.parameters()?)?;
+            self.command =
+                self.query(&query, cluster, buffer.parameters()?, prepared_statements)?;
         }
         Ok(&self.command)
     }
@@ -99,6 +93,7 @@ impl QueryParser {
         query: &BufferedQuery,
         cluster: &Cluster,
         params: Option<&Bind>,
+        prepared_statements: &mut PreparedStatements,
     ) -> Result<Command, Error> {
         // Replication protocol commands
         // don't have a node in pg_query,
@@ -113,16 +108,33 @@ impl QueryParser {
             }
         }
 
+        let shards = cluster.shards().len();
+        let read_only = cluster.read_only();
+        let write_only = cluster.write_only();
+        let full_prepared_statements = config().config.general.prepared_statements.full();
+        let parser_disabled =
+            !full_prepared_statements && (shards == 1 && (read_only | write_only));
+
+        debug!(
+            "parser is {}",
+            if parser_disabled {
+                "disabled"
+            } else {
+                "enabled"
+            }
+        );
+
         // Don't use the parser if the cluster has only one shard
-        // and only one kind of database (either primary or just replicas).
+        // and only one kind of database (either primary or just replicas),
+        // and we don't expect prepared statements to arrive over the simple protocol.
         //
         // We know what the routing decision is in this case and we don't
         // need to invoke the parser.
-        if cluster.shards().len() == 1 {
-            if cluster.read_only() {
+        if parser_disabled {
+            if read_only {
                 return Ok(Command::Query(Route::read(Some(0))));
             }
-            if cluster.write_only() {
+            if write_only {
                 return Ok(Command::Query(Route::write(Some(0))));
             }
         }
@@ -133,14 +145,17 @@ impl QueryParser {
         let shard = super::comment::shard(query, &sharding_schema).map_err(Error::PgQuery)?;
 
         // Cluster is read only or write only, traffic split isn't needed,
-        // so don't parse the query further.
-        if let Shard::Direct(_) = shard {
-            if cluster.read_only() {
-                return Ok(Command::Query(Route::read(shard)));
-            }
+        // and prepared statements support is limited to the extended protocol,
+        // don't parse the query further.
+        if !full_prepared_statements {
+            if let Shard::Direct(_) = shard {
+                if cluster.read_only() {
+                    return Ok(Command::Query(Route::read(shard)));
+                }
 
-            if cluster.write_only() {
-                return Ok(Command::Query(Route::write(shard)));
+                if cluster.write_only() {
+                    return Ok(Command::Query(Route::write(shard)));
+                }
             }
         }
 
@@ -163,6 +178,12 @@ impl QueryParser {
 
         debug!("{}", query.query());
         trace!("{:#?}", ast);
+
+        let rewrite = Rewrite::new(ast.clone());
+        if rewrite.needs_rewrite() {
+            let queries = rewrite.rewrite(prepared_statements)?;
+            return Ok(Command::Rewrite(queries));
+        }
 
         //
         // Get the root AST node.
@@ -536,7 +557,9 @@ mod test {
 
         let cluster = Cluster::default();
 
-        let command = query_parser.parse(&buffer, &cluster).unwrap();
+        let command = query_parser
+            .parse(&buffer, &cluster, &mut PreparedStatements::default())
+            .unwrap();
         assert!(matches!(command, &Command::StartReplication));
     }
 
@@ -551,7 +574,9 @@ mod test {
 
         let cluster = Cluster::default();
 
-        let command = query_parser.parse(&buffer, &cluster).unwrap();
+        let command = query_parser
+            .parse(&buffer, &cluster, &mut PreparedStatements::default())
+            .unwrap();
         assert!(matches!(command, &Command::ReplicationMeta));
     }
 
@@ -580,7 +605,9 @@ mod test {
 
         let mut parser = QueryParser::default();
         let cluster = Cluster::new_test();
-        let command = parser.parse(&buffer, &cluster).unwrap();
+        let command = parser
+            .parse(&buffer, &cluster, &mut PreparedStatements::default())
+            .unwrap();
         if let Command::Query(route) = command {
             assert_eq!(route.shard(), &Shard::direct(1));
         } else {
@@ -593,7 +620,11 @@ mod test {
         let query = Query::new("SELECT * FROM embeddings ORDER BY embedding <-> '[1,2,3]'");
         let buffer = Buffer::from(vec![query.into()]);
         let route = QueryParser::default()
-            .parse(&buffer, &Cluster::default())
+            .parse(
+                &buffer,
+                &Cluster::default(),
+                &mut PreparedStatements::default(),
+            )
             .unwrap()
             .clone();
         if let Command::Query(route) = route {
@@ -623,7 +654,11 @@ mod test {
         };
         let buffer = Buffer::from(vec![query.into(), bind.into()]);
         let route = QueryParser::default()
-            .parse(&buffer, &Cluster::default())
+            .parse(
+                &buffer,
+                &Cluster::default(),
+                &mut PreparedStatements::default(),
+            )
             .unwrap()
             .clone();
         if let Command::Query(query) = route {
