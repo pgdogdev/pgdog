@@ -11,6 +11,7 @@ pub mod error;
 pub mod insert;
 pub mod key;
 pub mod order_by;
+pub mod prepare;
 pub mod query;
 pub mod route;
 pub mod table;

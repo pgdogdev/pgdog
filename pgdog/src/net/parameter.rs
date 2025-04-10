@@ -4,7 +4,7 @@ use std::ops::{Deref, DerefMut};
 
 use super::{messages::Query, Error};
 
-static CHANGEABLE_PARAMS: &[&str] = &["application_name", "statement_timeout", "lock_timeout"];
+static IMMUTABLE_PARAMS: &[&str] = &["database", "user"];
 
 /// Startup parameter.
 #[derive(Debug, Clone, PartialEq)]
@@ -35,7 +35,7 @@ impl Parameters {
     /// We don't use a HashMap because clients/servers have very few params
     /// and its faster to iterate through a list than to use a hash (in theory).
     pub fn set(&mut self, name: &str, value: &str) -> bool {
-        if !CHANGEABLE_PARAMS.contains(&name) {
+        if IMMUTABLE_PARAMS.contains(&name) {
             return false;
         }
 
