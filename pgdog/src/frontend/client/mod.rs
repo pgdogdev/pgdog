@@ -361,6 +361,7 @@ impl Client {
         inner.stats.sent(len);
 
         if inner.backend.done() {
+            let changed_params = inner.backend.changed_params();
             if inner.transaction_mode() {
                 inner.disconnect();
             }
@@ -369,7 +370,10 @@ impl Client {
                 "transaction finished [{}ms]",
                 inner.stats.last_transaction_time.as_secs_f64() * 1000.0
             );
-            inner.backend.changed_params().merge(&mut self.params);
+            for (name, value) in changed_params.iter() {
+                debug!("setting client's \"{}\" to '{}'", name, value);
+                self.params.insert(name.clone(), value.clone());
+            }
             if inner.comms.offline() && !self.admin {
                 return Ok(true);
             }

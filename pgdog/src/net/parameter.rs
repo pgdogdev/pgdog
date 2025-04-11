@@ -40,27 +40,10 @@ pub struct Parameters {
 }
 
 impl Parameters {
-    /// Set parameter to a value.
-    ///
-    /// We don't use a HashMap because clients/servers have very few params
-    /// and its faster to iterate through a list than to use a hash (in theory).
-    pub fn set(&mut self, name: &String, value: &str) -> bool {
-        if IMMUTABLE_PARAMS.contains(&name.as_str()) {
-            return false;
-        }
-
-        if let Some(ref mut entry) = self.params.get_mut(name) {
-            if entry.as_str() != value {
-                entry.clear();
-                entry.push_str(value);
-                true
-            } else {
-                false
-            }
-        } else {
-            self.params.insert(name.to_owned(), value.to_string());
-            true
-        }
+    /// Lowercase all param names.
+    pub fn insert(&mut self, name: String, value: String) -> Option<String> {
+        let name = name.to_lowercase();
+        self.params.insert(name, value)
     }
 
     /// Merge params from self into other, generating the queries

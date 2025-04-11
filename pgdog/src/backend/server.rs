@@ -309,7 +309,7 @@ impl Server {
             }
             'S' => {
                 let ps = ParameterStatus::from_bytes(message.to_bytes()?)?;
-                self.changed_params.set(&ps.name, &ps.value);
+                self.changed_params.insert(ps.name, ps.value);
             }
             'C' => {
                 let cmd = CommandComplete::from_bytes(message.to_bytes()?)?;
@@ -343,8 +343,12 @@ impl Server {
         Ok(diff.changed_params)
     }
 
-    pub fn changed_params(&mut self) -> Parameters {
-        std::mem::take(&mut self.changed_params)
+    pub fn changed_params(&self) -> &Parameters {
+        &self.changed_params
+    }
+
+    pub fn reset_changed_params(&mut self) {
+        self.changed_params.clear();
     }
 
     /// Server sent everything.

@@ -3,8 +3,13 @@ use super::{super::Server, Guard};
 
 /// Queries used to clean up server connections after
 /// client modifications.
+#[derive(Default)]
+#[allow(dead_code)]
 pub struct Cleanup {
     queries: Vec<&'static str>,
+    reset: bool,
+    dirty: bool,
+    deallocate: bool,
 }
 
 impl std::fmt::Display for Cleanup {
@@ -31,6 +36,8 @@ impl Cleanup {
     pub fn prepared_statements() -> Self {
         Self {
             queries: vec!["DEALLOCATE ALL"],
+            deallocate: true,
+            ..Default::default()
         }
     }
 
@@ -38,19 +45,27 @@ impl Cleanup {
     pub fn parameters() -> Self {
         Self {
             queries: vec!["RESET ALL", "DISCARD ALL"],
+            dirty: true,
+            ..Default::default()
         }
     }
 
     /// Cleanup everything.
     pub fn all() -> Self {
         Self {
+            reset: true,
+            dirty: true,
+            deallocate: true,
             queries: vec!["RESET ALL", "DISCARD ALL", "DEALLOCATE ALL"],
         }
     }
 
     /// Nothing to clean up.
     pub fn none() -> Self {
-        Self { queries: vec![] }
+        Self {
+            queries: vec![],
+            ..Default::default()
+        }
     }
 
     /// Cleanup needed?
@@ -64,9 +79,6 @@ impl Cleanup {
     }
 
     pub fn is_reset_params(&self) -> bool {
-        self.queries
-            .first()
-            .map(|q| q == &"RESET ALL")
-            .unwrap_or(false)
+        self.dirty
     }
 }

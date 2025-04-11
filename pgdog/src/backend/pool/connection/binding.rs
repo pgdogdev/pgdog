@@ -229,15 +229,15 @@ impl Binding {
 
     pub(super) fn changed_params(&mut self) -> Parameters {
         match self {
-            Binding::Server(Some(ref mut server)) => server.changed_params(),
+            Binding::Server(Some(ref mut server)) => server.changed_params().clone(),
             Binding::MultiShard(ref mut servers, _) => {
-                let mut params = Parameters::default();
-                for server in servers {
-                    server.changed_params().merge(&mut params);
+                if let Some(first) = servers.first() {
+                    first.changed_params().clone()
+                } else {
+                    Parameters::default()
                 }
-                params
             }
-            Binding::Replication(Some(ref mut server), _) => server.changed_params(),
+            Binding::Replication(Some(ref mut server), _) => server.changed_params().clone(),
             _ => Parameters::default(),
         }
     }
