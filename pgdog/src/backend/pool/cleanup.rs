@@ -44,7 +44,7 @@ impl Cleanup {
     /// Cleanup everything.
     pub fn all() -> Self {
         Self {
-            queries: vec!["RESET ALL", "DISCARD ALL"],
+            queries: vec!["RESET ALL", "DISCARD ALL", "DEALLOCATE ALL"],
         }
     }
 
