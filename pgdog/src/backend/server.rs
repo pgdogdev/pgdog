@@ -340,6 +340,7 @@ impl Server {
             )
             .await?;
         }
+        self.changed_params.clear();
         Ok(diff.changed_params)
     }
 

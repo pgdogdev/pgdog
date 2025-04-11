@@ -230,7 +230,12 @@ impl Client {
 
         #[cfg(debug_assertions)]
         if let Some(query) = buffer.query()? {
-            debug!("{} [{}]", query.query(), self.addr);
+            debug!(
+                "{} [{}] (in transaction: {})",
+                query.query(),
+                self.addr,
+                self.in_transaction
+            );
             QueryLogger::new(&buffer).log().await?;
         }
 
