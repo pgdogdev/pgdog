@@ -15,7 +15,7 @@ async fn test_params() {
     .unwrap();
 
     let handle1 = tokio::spawn(async move {
-        for _ in 0..250 {
+        for _ in 0..2500 {
             let row = conn1.fetch_one("SHOW intervalstyle").await.unwrap();
             assert_eq!(row.get::<String, usize>(0), "iso_8601");
 
@@ -28,7 +28,7 @@ async fn test_params() {
     });
 
     let handle2 = tokio::spawn(async move {
-        for _ in 0..250 {
+        for _ in 0..2500 {
             let row = conn2.fetch_one("SHOW intervalstyle").await.unwrap();
             assert_eq!(row.get::<String, usize>(0), "sql_standard");
 
