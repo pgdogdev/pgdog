@@ -51,7 +51,6 @@ impl Client {
         let user = params.get_default("user", "postgres");
         let database = params.get_default("database", user);
         let config = config();
-        println!("params: {:?}", params);
 
         let admin = database == config.config.admin.name && config.config.admin.user == user;
         let admin_password = &config.config.admin.password;
