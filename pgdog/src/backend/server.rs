@@ -218,16 +218,14 @@ impl Server {
             HandleResult::Forward => [Some(message), None],
         };
 
-        for message in queue {
-            if let Some(message) = message {
-                trace!("{:#?} → [{}]", message, self.addr());
+        for message in queue.into_iter().flatten() {
+            trace!("{:#?} → [{}]", message, self.addr());
 
-                match self.stream().send(&message).await {
-                    Ok(sent) => self.stats.send(sent),
-                    Err(err) => {
-                        self.stats.state(State::Error);
-                        return Err(err.into());
-                    }
+            match self.stream().send(&message).await {
+                Ok(sent) => self.stats.send(sent),
+                Err(err) => {
+                    self.stats.state(State::Error);
+                    return Err(err.into());
                 }
             }
         }
@@ -327,14 +325,20 @@ impl Server {
     }
 
     /// Synchronize parameters between client and server.
-    pub async fn sync_params(&mut self, params: &Parameters) -> Result<(), Error> {
+    pub async fn sync_params(&mut self, params: &Parameters) -> Result<usize, Error> {
         let diff = params.merge(&mut self.params);
-        if !diff.is_empty() {
-            debug!("syncing {} params", diff.len() - 1);
-            self.execute_batch(&diff.iter().map(|query| query.query()).collect::<Vec<_>>())
-                .await?;
+        if diff.changed_params > 0 {
+            debug!("syncing {} params", diff.changed_params);
+            self.execute_batch(
+                &diff
+                    .queries
+                    .iter()
+                    .map(|query| query.query())
+                    .collect::<Vec<_>>(),
+            )
+            .await?;
         }
-        Ok(())
+        Ok(diff.changed_params)
     }
 
     pub fn changed_params(&mut self) -> Parameters {
@@ -1298,5 +1302,20 @@ mod test {
             }
         }
         assert!(server.done());
+    }
+
+    #[tokio::test]
+    async fn test_sync_params() {
+        let mut server = test_server().await;
+        let mut params = Parameters::default();
+        params.insert("application_name".into(), "test_sync_params".into());
+        let changed = server.sync_params(&params).await.unwrap();
+        assert_eq!(changed, 1);
+
+        let app_name = server
+            .fetch_all::<String>("SHOW application_name")
+            .await
+            .unwrap();
+        assert_eq!(app_name[0], "test_sync_params");
     }
 }

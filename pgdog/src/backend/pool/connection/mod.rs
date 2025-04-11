@@ -168,12 +168,11 @@ impl Connection {
             Binding::Admin(_) => Ok(ParameterStatus::fake()),
             _ => {
                 self.connect(request, &Route::read(Some(0))).await?; // Get params from any replica.
-                let params = self.server()?.params();
                 let params = self
                     .server()?
                     .params()
                     .iter()
-                    .map(|p| ParameterStatus::from(p.clone()))
+                    .map(ParameterStatus::from)
                     .collect();
                 self.disconnect();
                 Ok(params)
@@ -284,7 +283,7 @@ impl Connection {
         self.binding.execute(query).await
     }
 
-    pub(crate) async fn sync_params(&mut self, params: &Parameters) -> Result<(), Error> {
+    pub(crate) async fn sync_params(&mut self, params: &Parameters) -> Result<usize, Error> {
         self.binding.sync_params(params).await
     }
 

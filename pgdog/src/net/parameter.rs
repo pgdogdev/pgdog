@@ -27,6 +27,12 @@ impl<T: ToString> From<(T, T)> for Parameter {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct MergeResult {
+    pub queries: Vec<Query>,
+    pub changed_params: usize,
+}
+
 /// List of parameters.
 #[derive(Default, Debug, Clone, PartialEq)]
 pub struct Parameters {
@@ -65,7 +71,7 @@ impl Parameters {
 
     /// Merge params from self into other, generating the queries
     /// needed to sync that state on the server.
-    pub fn merge(&self, other: &mut Self) -> Vec<Query> {
+    pub fn merge(&self, other: &mut Self) -> MergeResult {
         let mut different = vec![];
         for (k, v) in &self.params {
             if IMMUTABLE_PARAMS.contains(&k.as_str()) {
@@ -84,7 +90,7 @@ impl Parameters {
             other.insert(k.to_string(), v.to_string());
         }
 
-        if different.is_empty() {
+        let queries = if different.is_empty() {
             vec![]
         } else {
             let mut queries = vec![Query::new("RESET ALL")];
@@ -94,6 +100,15 @@ impl Parameters {
             }
 
             queries
+        };
+
+        MergeResult {
+            changed_params: if queries.is_empty() {
+                0
+            } else {
+                queries.len() - 1
+            },
+            queries,
         }
     }
 
@@ -148,10 +163,10 @@ impl From<Vec<Parameter>> for Parameters {
     }
 }
 
-impl Into<Vec<Parameter>> for &Parameters {
-    fn into(self) -> Vec<Parameter> {
+impl From<&Parameters> for Vec<Parameter> {
+    fn from(val: &Parameters) -> Self {
         let mut result = vec![];
-        for (key, value) in &self.params {
+        for (key, value) in &val.params {
             result.push(Parameter {
                 name: key.to_string(),
                 value: value.to_string(),
@@ -163,9 +178,4 @@ impl Into<Vec<Parameter>> for &Parameters {
 }
 
 #[cfg(test)]
-mod test {
-    use super::*;
-
-    #[test]
-    fn test_merge_params() {}
-}
+mod test {}

@@ -228,7 +228,7 @@ impl Client {
         inner.is_async = buffer.is_async();
         inner.stats.received(buffer.len());
 
-        // #[cfg(debug_assertions)]
+        #[cfg(debug_assertions)]
         if let Some(query) = buffer.query()? {
             debug!("{} [{}]", query.query(), self.addr);
             QueryLogger::new(&buffer).log().await?;
