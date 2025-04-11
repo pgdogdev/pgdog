@@ -212,10 +212,12 @@ impl PreparedStatements {
 
     fn check_prepared(&mut self, name: &str) -> Result<Option<ProtocolMessage>, Error> {
         if !self.contains(name) {
-            let parse = self
-                .parse(name)
-                .ok_or(Error::PreparedStatementMissing(name.to_owned()))?;
-            Ok(Some(ProtocolMessage::Parse(parse)))
+            let parse = self.parse(name);
+            if let Some(parse) = parse {
+                Ok(Some(ProtocolMessage::Parse(parse)))
+            } else {
+                Ok(None)
+            }
         } else {
             Ok(None)
         }
