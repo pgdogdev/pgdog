@@ -24,6 +24,15 @@ impl From<Parameter> for ParameterStatus {
     }
 }
 
+impl<T: ToString> From<(T, T)> for ParameterStatus {
+    fn from(value: (T, T)) -> Self {
+        Self {
+            name: value.0.to_string(),
+            value: value.1.to_string(),
+        }
+    }
+}
+
 impl From<ParameterStatus> for Parameter {
     fn from(value: ParameterStatus) -> Self {
         Parameter {

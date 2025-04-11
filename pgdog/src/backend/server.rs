@@ -133,10 +133,7 @@ impl Server {
                 // ParameterStatus (B)
                 'S' => {
                     let parameter = ParameterStatus::from_bytes(message.payload())?;
-                    params.push(Parameter {
-                        name: parameter.name,
-                        value: parameter.value,
-                    });
+                    params.insert(parameter.name, parameter.value);
                 }
                 // BackendKeyData (B)
                 'K' => {
@@ -333,8 +330,7 @@ impl Server {
     pub async fn sync_params(&mut self, params: &Parameters) -> Result<(), Error> {
         let diff = params.merge(&mut self.params);
         if !diff.is_empty() {
-            debug!("syncing {} params", diff.len());
-            println!("sync: {:?}", diff);
+            debug!("syncing {} params", diff.len() - 1);
             self.execute_batch(&diff.iter().map(|query| query.query()).collect::<Vec<_>>())
                 .await?;
         }
@@ -401,6 +397,11 @@ impl Server {
             return Err(Error::NotInSync);
         }
 
+        #[cfg(debug_assertions)]
+        for query in queries {
+            debug!("{} [{}]", query, self.addr());
+        }
+
         let mut messages = vec![];
         let queries = queries.iter().map(Query::new).collect::<Vec<Query>>();
         let expected = queries.len();
@@ -412,6 +413,11 @@ impl Server {
             let message = self.read().await?;
             if message.code() == 'Z' {
                 zs += 1;
+            }
+
+            if message.code() == 'E' {
+                let err = ErrorResponse::from_bytes(message.to_bytes()?)?;
+                return Err(Error::ExecutionError(Box::new(err)));
             }
             messages.push(message);
         }

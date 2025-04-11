@@ -45,7 +45,24 @@ impl Startup {
                     }
 
                     let value = c_string(stream).await?;
-                    params.push(Parameter { name, value });
+
+                    if name == "options" {
+                        let kvs = value.split("-c");
+                        for kv in kvs {
+                            let mut nvs = kv.split("=");
+                            let name = nvs.next();
+                            let value = nvs.next();
+
+                            if let Some(name) = name {
+                                if let Some(value) = value {
+                                    params
+                                        .insert(name.trim().to_string(), value.trim().to_string());
+                                }
+                            }
+                        }
+                    } else {
+                        params.insert(name, value);
+                    }
                 }
 
                 Ok(Startup::Startup { params })
@@ -68,10 +85,7 @@ impl Startup {
     pub fn parameter(&self, name: &str) -> Option<&str> {
         match self {
             Startup::Ssl | Startup::Cancel { .. } => None,
-            Startup::Startup { params } => params
-                .iter()
-                .find(|pair| pair.name == name)
-                .map(|pair| pair.value.as_str()),
+            Startup::Startup { params } => params.get(name).map(|s| s.as_str()),
         }
     }
 
@@ -123,11 +137,11 @@ impl super::ToBytes for Startup {
             Startup::Startup { params } => {
                 let mut params_buf = BytesMut::new();
 
-                for pair in params.deref() {
-                    params_buf.put_slice(pair.name.as_bytes());
+                for (name, value) in params.deref() {
+                    params_buf.put_slice(name.as_bytes());
                     params_buf.put_u8(0);
 
-                    params_buf.put_slice(pair.value.as_bytes());
+                    params_buf.put_slice(value.as_bytes());
                     params_buf.put_u8(0);
                 }
 

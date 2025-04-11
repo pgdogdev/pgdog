@@ -1,6 +1,9 @@
 //! Startup parameter.
 
-use std::ops::{Deref, DerefMut};
+use std::{
+    collections::HashMap,
+    ops::{Deref, DerefMut},
+};
 
 use super::{messages::Query, Error};
 
@@ -15,84 +18,106 @@ pub struct Parameter {
     pub value: String,
 }
 
+impl<T: ToString> From<(T, T)> for Parameter {
+    fn from(value: (T, T)) -> Self {
+        Self {
+            name: value.0.to_string(),
+            value: value.1.to_string(),
+        }
+    }
+}
+
 /// List of parameters.
-#[derive(Default, Debug, Clone)]
+#[derive(Default, Debug, Clone, PartialEq)]
 pub struct Parameters {
-    params: Vec<Parameter>,
+    params: HashMap<String, String>,
 }
 
 impl Parameters {
-    /// Find a parameter by name.
-    pub fn get(&self, name: &str) -> Option<&str> {
-        self.params
-            .iter()
-            .find(|p| p.name == name)
-            .map(|p| p.value.as_str())
-    }
-
     /// Set parameter to a value.
     ///
     /// We don't use a HashMap because clients/servers have very few params
     /// and its faster to iterate through a list than to use a hash (in theory).
     pub fn set(&mut self, name: &str, value: &str) -> bool {
-        if IMMUTABLE_PARAMS.contains(&name) {
+        let name = name.to_lowercase();
+        if IMMUTABLE_PARAMS.contains(&name.as_str()) {
             return false;
         }
 
-        for param in self.params.iter_mut() {
-            if param.name == name {
-                if param.value != value {
-                    param.value = value.to_string();
-                    return true;
-                } else {
-                    return false;
-                }
+        if let Some(ref mut entry) = self.params.get_mut(&name) {
+            if entry.as_str() != value {
+                entry.clear();
+                entry.push_str(value);
+                true
+            } else {
+                false
             }
+        } else {
+            self.params.insert(name, value.to_string());
+            true
         }
+    }
 
-        self.params.push(Parameter {
-            name: name.to_owned(),
-            value: value.to_string(),
-        });
-
-        true
+    pub fn get(&self, name: &str) -> Option<&String> {
+        let name = name.to_lowercase();
+        self.params.get(&name)
     }
 
     /// Merge params from self into other, generating the queries
     /// needed to sync that state on the server.
     pub fn merge(&self, other: &mut Self) -> Vec<Query> {
-        let mut queries = vec![];
-        for param in &self.params {
-            let changed = other.set(&param.name, &param.value);
-            if changed {
-                queries.push(Query::new(format!(
-                    "SET \"{}\" TO '{}'",
-                    param.name,
-                    param.value.replace("'", ""),
-                )));
+        let mut different = vec![];
+        for (k, v) in &self.params {
+            if IMMUTABLE_PARAMS.contains(&k.as_str()) {
+                continue;
+            }
+            if let Some(other) = other.get(k) {
+                if v != other {
+                    different.push((k, v));
+                }
+            } else {
+                different.push((k, v));
             }
         }
 
-        queries
+        for (k, v) in &different {
+            other.insert(k.to_string(), v.to_string());
+        }
+
+        if different.is_empty() {
+            vec![]
+        } else {
+            let mut queries = vec![Query::new("RESET ALL")];
+
+            for (k, v) in different {
+                queries.push(Query::new(format!(r#"SET "{}" TO '{}'"#, k, v)));
+            }
+
+            queries
+        }
     }
 
     /// Get self-declared shard number.
     pub fn shard(&self) -> Option<usize> {
-        self.params
-            .iter()
-            .find(|p| p.name == "application_name" && p.value.starts_with("pgdog_shard_"))
-            .and_then(|param| {
-                param
-                    .value
+        if let Some(application_name) = self.get("application_name") {
+            if application_name.starts_with("pgdog_shard_") {
+                application_name
                     .replace("pgdog_shard_", "")
                     .parse::<usize>()
                     .ok()
-            })
+            } else {
+                None
+            }
+        } else {
+            None
+        }
     }
 
     /// Get parameter value or returned an error.
     pub fn get_required(&self, name: &str) -> Result<&str, Error> {
-        self.get(name).ok_or(Error::MissingParameter(name.into()))
+        self.get(name)
+            .map(|s| s.as_str())
+            .ok_or(Error::MissingParameter(name.into()))
     }
 
     /// Get parameter value or returned a default value if it doesn't exist.
@@ -102,7 +127,7 @@ impl Parameters {
 }
 
 impl Deref for Parameters {
-    type Target = Vec<Parameter>;
+    type Target = HashMap<String, String>;
 
     fn deref(&self) -> &Self::Target {
         &self.params
@@ -117,6 +142,30 @@ impl DerefMut for Parameters {
 
 impl From<Vec<Parameter>> for Parameters {
     fn from(value: Vec<Parameter>) -> Self {
-        Self { params: value }
+        Self {
+            params: value.into_iter().map(|p| (p.name, p.value)).collect(),
+        }
     }
+}
+
+impl Into<Vec<Parameter>> for &Parameters {
+    fn into(self) -> Vec<Parameter> {
+        let mut result = vec![];
+        for (key, value) in &self.params {
+            result.push(Parameter {
+                name: key.to_string(),
+                value: value.to_string(),
+            });
+        }
+
+        result
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_merge_params() {}
 }

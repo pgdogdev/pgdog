@@ -168,6 +168,7 @@ impl Connection {
             Binding::Admin(_) => Ok(ParameterStatus::fake()),
             _ => {
                 self.connect(request, &Route::read(Some(0))).await?; // Get params from any replica.
+                let params = self.server()?.params();
                 let params = self
                     .server()?
                     .params()
