@@ -9,8 +9,6 @@
 name = "pgdog"
 database = "pgdog"
 password = "pgdog"
-# replication_mode = true
-# replication_sharding = "pgdog_sharded"
 
 [[users]]
 name = "pgdog_replication"

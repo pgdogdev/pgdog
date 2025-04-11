@@ -36,6 +36,7 @@ pub struct Server {
     stream: Option<Stream>,
     id: BackendKeyData,
     params: Parameters,
+    original_params: Parameters,
     changed_params: Parameters,
     stats: Stats,
     prepared_statements: PreparedStatements,
@@ -133,10 +134,7 @@ impl Server {
                 // ParameterStatus (B)
                 'S' => {
                     let parameter = ParameterStatus::from_bytes(message.payload())?;
-                    params.push(Parameter {
-                        name: parameter.name,
-                        value: parameter.value,
-                    });
+                    params.insert(parameter.name, parameter.value);
                 }
                 // BackendKeyData (B)
                 'K' => {
@@ -166,6 +164,7 @@ impl Server {
             addr: addr.clone(),
             stream: Some(stream),
             id,
+            original_params: params.clone(),
             params,
             changed_params: Parameters::default(),
             stats: Stats::connect(id, addr),
@@ -221,16 +220,14 @@ impl Server {
             HandleResult::Forward => [Some(message), None],
         };
 
-        for message in queue {
-            if let Some(message) = message {
-                trace!("{:#?} → [{}]", message, self.addr());
+        for message in queue.into_iter().flatten() {
+            trace!("{:#?} → [{}]", message, self.addr());
 
-                match self.stream().send(&message).await {
-                    Ok(sent) => self.stats.send(sent),
-                    Err(err) => {
-                        self.stats.state(State::Error);
-                        return Err(err.into());
-                    }
+            match self.stream().send(&message).await {
+                Ok(sent) => self.stats.send(sent),
+                Err(err) => {
+                    self.stats.state(State::Error);
+                    return Err(err.into());
                 }
             }
         }
@@ -312,7 +309,7 @@ impl Server {
             }
             'S' => {
                 let ps = ParameterStatus::from_bytes(message.to_bytes()?)?;
-                self.changed_params.set(&ps.name, &ps.value);
+                self.changed_params.insert(ps.name, ps.value);
             }
             'C' => {
                 let cmd = CommandComplete::from_bytes(message.to_bytes()?)?;
@@ -330,19 +327,28 @@ impl Server {
     }
 
     /// Synchronize parameters between client and server.
-    pub async fn sync_params(&mut self, params: &Parameters) -> Result<(), Error> {
+    pub async fn sync_params(&mut self, params: &Parameters) -> Result<usize, Error> {
         let diff = params.merge(&mut self.params);
-        if !diff.is_empty() {
-            debug!("syncing {} params", diff.len());
-            println!("sync: {:?}", diff);
-            self.execute_batch(&diff.iter().map(|query| query.query()).collect::<Vec<_>>())
-                .await?;
+        if diff.changed_params > 0 {
+            debug!("syncing {} params", diff.changed_params);
+            self.execute_batch(
+                &diff
+                    .queries
+                    .iter()
+                    .map(|query| query.query())
+                    .collect::<Vec<_>>(),
+            )
+            .await?;
         }
-        Ok(())
+        Ok(diff.changed_params)
     }
 
-    pub fn changed_params(&mut self) -> Parameters {
-        std::mem::take(&mut self.changed_params)
+    pub fn changed_params(&self) -> &Parameters {
+        &self.changed_params
+    }
+
+    pub fn reset_changed_params(&mut self) {
+        self.changed_params.clear();
     }
 
     /// Server sent everything.
@@ -401,6 +407,11 @@ impl Server {
             return Err(Error::NotInSync);
         }
 
+        #[cfg(debug_assertions)]
+        for query in queries {
+            debug!("{} [{}]", query, self.addr());
+        }
+
         let mut messages = vec![];
         let queries = queries.iter().map(Query::new).collect::<Vec<Query>>();
         let expected = queries.len();
@@ -412,6 +423,11 @@ impl Server {
             let message = self.read().await?;
             if message.code() == 'Z' {
                 zs += 1;
+            }
+
+            if message.code() == 'E' {
+                let err = ErrorResponse::from_bytes(message.to_bytes()?)?;
+                return Err(Error::ExecutionError(Box::new(err)));
             }
             messages.push(message);
         }
@@ -494,6 +510,11 @@ impl Server {
     pub fn reset_schema_changed(&mut self) {
         self.schema_changed = false;
         self.prepared_statements.clear();
+    }
+
+    #[inline]
+    pub fn reset_params(&mut self) {
+        self.params = self.original_params.clone();
     }
 
     /// Server connection unique identifier.
@@ -604,6 +625,7 @@ mod test {
                 id,
                 params: Parameters::default(),
                 changed_params: Parameters::default(),
+                original_params: Parameters::default(),
                 stats: Stats::connect(id, &addr),
                 prepared_statements: super::PreparedStatements::new(),
                 addr,
@@ -1292,5 +1314,23 @@ mod test {
             }
         }
         assert!(server.done());
+    }
+
+    #[tokio::test]
+    async fn test_sync_params() {
+        let mut server = test_server().await;
+        let mut params = Parameters::default();
+        params.insert("application_name".into(), "test_sync_params".into());
+        let changed = server.sync_params(&params).await.unwrap();
+        assert_eq!(changed, 1);
+
+        let app_name = server
+            .fetch_all::<String>("SHOW application_name")
+            .await
+            .unwrap();
+        assert_eq!(app_name[0], "test_sync_params");
+
+        let changed = server.sync_params(&params).await.unwrap();
+        assert_eq!(changed, 0);
     }
 }

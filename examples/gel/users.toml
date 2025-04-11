@@ -1,0 +1,11 @@
+[[users]]
+database = "E___edgedbsys__"
+name = "postgres"
+pooler_mode = "session"
+password = "postgres"
+
+[[users]]
+database = "postgres"
+name = "postgres"
+pooler_mode = "session"
+password = "postgres"

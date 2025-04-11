@@ -172,7 +172,7 @@ impl Connection {
                     .server()?
                     .params()
                     .iter()
-                    .map(|p| ParameterStatus::from(p.clone()))
+                    .map(ParameterStatus::from)
                     .collect();
                 self.disconnect();
                 Ok(params)
@@ -283,7 +283,7 @@ impl Connection {
         self.binding.execute(query).await
     }
 
-    pub(crate) async fn sync_params(&mut self, params: &Parameters) -> Result<(), Error> {
+    pub(crate) async fn sync_params(&mut self, params: &Parameters) -> Result<usize, Error> {
         self.binding.sync_params(params).await
     }
 

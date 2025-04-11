@@ -55,6 +55,8 @@ impl Guard {
             let schema_changed = server.schema_changed();
             let sync_prepared = server.sync_prepared();
 
+            server.reset_changed_params();
+
             // No need to delay checkin unless we have to.
             if rollback || reset || sync_prepared {
                 let rollback_timeout = pool.lock().config.rollback_timeout();
@@ -79,6 +81,10 @@ impl Guard {
 
                     if schema_changed {
                         server.reset_schema_changed();
+                    }
+
+                    if cleanup.is_reset_params() {
+                        server.reset_params();
                     }
 
                     if sync_prepared {

@@ -135,7 +135,9 @@ mod test {
     async fn test_schema() {
         let pool = pool();
         let mut conn = pool.get(&Request::default()).await.unwrap();
-        conn.execute("DROP SCHEMA pgdog CASCADE").await.unwrap();
+        conn.execute("DROP SCHEMA IF EXISTS pgdog CASCADE")
+            .await
+            .unwrap();
         let _schema = Schema::load(&mut conn).await.unwrap();
         Schema::setup(&mut conn).await.unwrap();
         let schema = Schema::load(&mut conn).await.unwrap();
