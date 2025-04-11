@@ -11,7 +11,7 @@ WORKDIR /build
 
 RUN rm /bin/sh && ln -s /bin/bash /bin/sh
 RUN source ~/.cargo/env && \
-    cargo build
+    cargo build --release
 
 FROM ubuntu:latest
 ENV RUST_LOG=info
@@ -19,7 +19,7 @@ RUN apt update && \
     apt install -y ca-certificates && \
     update-ca-certificates
 
-COPY --from=builder /build/target/debug/pgdog /usr/local/bin/pgdog
+COPY --from=builder /build/target/release/pgdog /usr/local/bin/pgdog
 
 WORKDIR /pgdog
 STOPSIGNAL SIGINT
