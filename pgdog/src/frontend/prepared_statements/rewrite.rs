@@ -43,12 +43,12 @@ impl<'a> Rewrite<'a> {
         if bind.anonymous() {
             Ok(bind)
         } else {
-            let name = self
-                .statements
-                .name(&bind.statement)
-                .ok_or(Error::MissingPreparedStatement(bind.statement.clone()))?;
-            let bind = bind.rename(name);
-            Ok(bind)
+            let name = self.statements.name(&bind.statement);
+            if let Some(name) = name {
+                Ok(bind.rename(name))
+            } else {
+                Ok(bind)
+            }
         }
     }
 
@@ -57,11 +57,12 @@ impl<'a> Rewrite<'a> {
         if describe.anonymous() {
             Ok(describe)
         } else {
-            let name = self
-                .statements
-                .name(&describe.statement)
-                .ok_or(Error::MissingPreparedStatement(describe.statement.clone()))?;
-            Ok(describe.rename(name))
+            let name = self.statements.name(&describe.statement);
+            if let Some(name) = name {
+                Ok(describe.rename(name))
+            } else {
+                Ok(describe)
+            }
         }
     }
 }
