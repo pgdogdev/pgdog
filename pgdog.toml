@@ -6,7 +6,7 @@
 host = "0.0.0.0"
 port = 6432
 shutdown_timeout = 5_000
-prepared_statements = "extended"
+prepared_statements = "full"
 # default_pool_size = 1
 # query_log = "queries.txt"
 # broadcast_address = "224.0.0.1"
@@ -27,6 +27,11 @@ password = "pgdog"
 [[databases]]
 name = "pgdog"
 host = "127.0.0.1"
+
+[[databases]]
+name = "E___edgedbsys__"
+host = "127.0.0.1"
+
 
 #
 # Sharded cluster with two primaries.

@@ -14,10 +14,14 @@ services:
       dockerfile: Dockerfile
       context: ../../
     environment:
-      RUST_LOG: trace
+      RUST_LOG: debug
     command:
       - "/usr/local/bin/pgdog"
-      - "--database-url=postgres://postgres:postgres@postgres:5432/E___edgedbsys__"
-      - "--database-url=postgres://postgres:postgres@postgres:5432/postgres"
+      - "--config"
+      - "/etc/pgdog/pgdog.toml"
+      - "--users"
+      - "/etc/pgdog/users.toml"
       - "run"
       - "--min-pool-size=0"
+    volumes:
+      - ./:/etc/pgdog

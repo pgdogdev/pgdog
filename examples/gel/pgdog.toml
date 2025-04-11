@@ -1,2 +1,7 @@
 [[databases]]
+name = "postgres"
+host = "postgres"
+
+[[databases]]
+name = "E___edgedbsys__"
 host = "postgres"
