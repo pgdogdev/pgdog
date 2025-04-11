@@ -11,14 +11,6 @@ database = "pgdog"
 password = "pgdog"
 
 [[users]]
-name = "pgdog"
-database = "E___edgedbsys__"
-password = "pgdog"
-# pooler_mode = "session"
-# replication_mode = true
-# replication_sharding = "pgdog_sharded"
-
-[[users]]
 name = "pgdog_replication"
 database = "pgdog"
 password = "pgdog"

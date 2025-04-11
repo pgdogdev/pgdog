@@ -28,11 +28,6 @@ password = "pgdog"
 name = "pgdog"
 host = "127.0.0.1"
 
-[[databases]]
-name = "E___edgedbsys__"
-host = "127.0.0.1"
-
-
 #
 # Sharded cluster with two primaries.
 #
