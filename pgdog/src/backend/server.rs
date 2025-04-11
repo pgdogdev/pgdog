@@ -149,7 +149,7 @@ impl Server {
                 // NoticeResponse (B)
                 'N' => {
                     let notice = NoticeResponse::from_bytes(message.payload())?;
-                    warn!("{}", notice.message);
+                    warn!("{} [{}]", notice.message, addr);
                 }
 
                 code => return Err(Error::UnexpectedMessage(code)),
