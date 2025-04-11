@@ -44,13 +44,12 @@ impl Parameters {
     ///
     /// We don't use a HashMap because clients/servers have very few params
     /// and its faster to iterate through a list than to use a hash (in theory).
-    pub fn set(&mut self, name: &str, value: &str) -> bool {
-        let name = name.to_lowercase();
+    pub fn set(&mut self, name: &String, value: &str) -> bool {
         if IMMUTABLE_PARAMS.contains(&name.as_str()) {
             return false;
         }
 
-        if let Some(ref mut entry) = self.params.get_mut(&name) {
+        if let Some(ref mut entry) = self.params.get_mut(name) {
             if entry.as_str() != value {
                 entry.clear();
                 entry.push_str(value);
@@ -59,14 +58,9 @@ impl Parameters {
                 false
             }
         } else {
-            self.params.insert(name, value.to_string());
+            self.params.insert(name.to_owned(), value.to_string());
             true
         }
-    }
-
-    pub fn get(&self, name: &str) -> Option<&String> {
-        let name = name.to_lowercase();
-        self.params.get(&name)
     }
 
     /// Merge params from self into other, generating the queries
@@ -93,7 +87,7 @@ impl Parameters {
         let queries = if different.is_empty() {
             vec![]
         } else {
-            let mut queries = vec![Query::new("RESET ALL")];
+            let mut queries = vec![];
 
             for (k, v) in different {
                 queries.push(Query::new(format!(r#"SET "{}" TO '{}'"#, k, v)));
@@ -103,11 +97,7 @@ impl Parameters {
         };
 
         MergeResult {
-            changed_params: if queries.is_empty() {
-                0
-            } else {
-                queries.len() - 1
-            },
+            changed_params: if queries.is_empty() { 0 } else { queries.len() },
             queries,
         }
     }
@@ -178,4 +168,23 @@ impl From<&Parameters> for Vec<Parameter> {
 }
 
 #[cfg(test)]
-mod test {}
+mod test {
+    use super::Parameters;
+
+    #[test]
+    fn test_merge() {
+        let mut me = Parameters::default();
+        me.insert("application_name".into(), "something".into());
+        me.insert("TimeZone".into(), "UTC".into());
+
+        let mut other = Parameters::default();
+        other.insert("TimeZone".into(), "UTC".into());
+
+        let diff = me.merge(&mut other);
+        assert_eq!(diff.changed_params, 1);
+        assert_eq!(
+            diff.queries[0].query(),
+            r#"SET "application_name" TO 'something'"#
+        );
+    }
+}

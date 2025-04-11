@@ -81,6 +81,10 @@ impl Guard {
                         server.reset_schema_changed();
                     }
 
+                    if cleanup.is_reset_params() {
+                        server.reset_params();
+                    }
+
                     if sync_prepared {
                         if let Err(err) = server.sync_prepared_statements().await {
                             error!(

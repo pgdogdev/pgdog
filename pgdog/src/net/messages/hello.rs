@@ -55,8 +55,11 @@ impl Startup {
 
                             if let Some(name) = name {
                                 if let Some(value) = value {
-                                    params
-                                        .insert(name.trim().to_string(), value.trim().to_string());
+                                    let name = name.trim().to_string();
+                                    let value = value.trim().to_string();
+                                    if !name.is_empty() && !value.is_empty() {
+                                        params.insert(name, value);
+                                    }
                                 }
                             }
                         }

@@ -62,4 +62,11 @@ impl Cleanup {
     pub fn queries(&self) -> &[&str] {
         &self.queries
     }
+
+    pub fn is_reset_params(&self) -> bool {
+        self.queries
+            .first()
+            .map(|q| q == &"RESET ALL")
+            .unwrap_or(false)
+    }
 }

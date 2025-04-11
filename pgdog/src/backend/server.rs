@@ -36,6 +36,7 @@ pub struct Server {
     stream: Option<Stream>,
     id: BackendKeyData,
     params: Parameters,
+    original_params: Parameters,
     changed_params: Parameters,
     stats: Stats,
     prepared_statements: PreparedStatements,
@@ -163,6 +164,7 @@ impl Server {
             addr: addr.clone(),
             stream: Some(stream),
             id,
+            original_params: params.clone(),
             params,
             changed_params: Parameters::default(),
             stats: Stats::connect(id, addr),
@@ -506,6 +508,11 @@ impl Server {
         self.prepared_statements.clear();
     }
 
+    #[inline]
+    pub fn reset_params(&mut self) {
+        self.params = self.original_params.clone();
+    }
+
     /// Server connection unique identifier.
     #[inline]
     pub fn id(&self) -> &BackendKeyData {
@@ -614,6 +621,7 @@ mod test {
                 id,
                 params: Parameters::default(),
                 changed_params: Parameters::default(),
+                original_params: Parameters::default(),
                 stats: Stats::connect(id, &addr),
                 prepared_statements: super::PreparedStatements::new(),
                 addr,
@@ -1317,5 +1325,8 @@ mod test {
             .await
             .unwrap();
         assert_eq!(app_name[0], "test_sync_params");
+
+        let changed = server.sync_params(&params).await.unwrap();
+        assert_eq!(changed, 0);
     }
 }
