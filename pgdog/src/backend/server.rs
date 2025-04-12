@@ -617,7 +617,7 @@ impl Drop for Server {
 
 // Used for testing.
 #[cfg(test)]
-mod test {
+pub mod test {
     use crate::{frontend::PreparedStatements, net::*};
 
     use super::*;
@@ -652,7 +652,7 @@ mod test {
         }
     }
 
-    async fn test_server() -> Server {
+    pub async fn test_server() -> Server {
         let address = Address {
             host: "127.0.0.1".into(),
             port: 5432,

@@ -131,6 +131,11 @@ impl ConfigAndUsers {
             users_path: users_path.to_owned(),
         })
     }
+
+    /// Prepared statements are enabled.
+    pub fn prepared_statements(&self) -> bool {
+        self.config.general.prepared_statements.enabled()
+    }
 }
 
 /// Configuration.
@@ -286,6 +291,7 @@ pub struct General {
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum PreparedStatements {
+    Disabled,
     #[default]
     Extended,
     Full,
@@ -294,6 +300,10 @@ pub enum PreparedStatements {
 impl PreparedStatements {
     pub fn full(&self) -> bool {
         matches!(self, PreparedStatements::Full)
+    }
+
+    pub fn enabled(&self) -> bool {
+        !matches!(self, PreparedStatements::Disabled)
     }
 }
 

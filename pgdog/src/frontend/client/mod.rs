@@ -413,6 +413,8 @@ impl Client {
         let mut buffer = Buffer::new();
         // Only start timer once we receive the first message.
         let mut timer = None;
+        // Read this once per request.
+        let prepared_statements = config().prepared_statements();
 
         while !buffer.full() {
             let message = match self.stream.read().await {
@@ -431,7 +433,7 @@ impl Client {
                 return Ok(vec![].into());
             } else {
                 let message = ProtocolMessage::from_bytes(message.to_bytes()?)?;
-                if message.extended() {
+                if prepared_statements && message.extended() {
                     buffer.push(self.prepared_statements.maybe_rewrite(message)?);
                 } else {
                     buffer.push(message)

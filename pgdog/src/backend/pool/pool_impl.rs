@@ -263,6 +263,10 @@ impl Pool {
                 name: "client_encoding".into(),
                 value: "utf-8".into(),
             },
+            Parameter {
+                name: "default_transaction_isolation".into(),
+                value: "repeatable read".into(),
+            },
         ];
 
         let config = *self.lock().config();

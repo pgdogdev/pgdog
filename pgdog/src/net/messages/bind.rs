@@ -8,6 +8,7 @@ use super::Error;
 use super::FromDataType;
 use super::Vector;
 
+use std::fmt::Debug;
 use std::str::from_utf8;
 
 #[derive(PartialEq, Debug, Copy, Clone)]
@@ -26,12 +27,25 @@ impl From<Format> for i16 {
 }
 
 /// Parameter data.
-#[derive(Debug, Clone, PartialEq, PartialOrd, Ord, Eq)]
+#[derive(Clone, PartialEq, PartialOrd, Ord, Eq)]
 pub struct Parameter {
     /// Parameter data length.
     pub len: i32,
     /// Parameter data.
     pub data: Vec<u8>,
+}
+
+impl Debug for Parameter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut debug = f.debug_struct("Parameter");
+        if let Ok(text) = from_utf8(&self.data) {
+            debug.field("data", &text);
+        } else {
+            debug.field("data", &self.data);
+        }
+        debug.field("len", &self.len);
+        debug.finish()
+    }
 }
 
 impl Parameter {
@@ -213,7 +227,7 @@ impl ToBytes for Bind {
         payload.put_i16(self.params.len() as i16);
         for param in &self.params {
             payload.put_i32(param.len);
-            payload.put_slice(param.data.as_slice());
+            payload.put(&param.data[..]);
         }
         payload.put_i16(self.results.len() as i16);
         for result in &self.results {
@@ -233,8 +247,12 @@ impl Protocol for Bind {
 mod test {
     use super::*;
     use crate::{
-        backend::pool::{test::pool, Request},
-        net::messages::ErrorResponse,
+        backend::{
+            pool::{test::pool, Request},
+            server::test::test_server,
+            ProtocolMessage,
+        },
+        net::{messages::ErrorResponse, DataRow, Execute, Parse, Sync},
     };
 
     #[tokio::test]
@@ -271,5 +289,48 @@ mod test {
         let res = conn.read().await.unwrap();
         let err = ErrorResponse::from_bytes(res.to_bytes().unwrap()).unwrap();
         assert_eq!(err.code, "26000");
+    }
+
+    #[tokio::test]
+    async fn test_jsonb() {
+        let mut server = test_server().await;
+        let parse = Parse::named("test", "SELECT $1::jsonb");
+        let binary_marker = String::from("\u{1}");
+        let json = r#"[{"name": "force_database_error", "type": "C", "value": "false"}, {"name": "__dbver__", "type": "C", "value": 2}]"#;
+        let jsonb = binary_marker + json;
+        let bind = Bind {
+            statement: "test".into(),
+            codes: vec![1],
+            params: vec![Parameter {
+                data: jsonb.as_bytes().to_vec(),
+                len: jsonb.as_bytes().len() as i32,
+            }],
+            ..Default::default()
+        };
+        let execute = Execute::new();
+        server
+            .send(vec![
+                ProtocolMessage::from(parse),
+                bind.into(),
+                execute.into(),
+                Sync.into(),
+            ])
+            .await
+            .unwrap();
+
+        for c in ['1', '2', 'D', 'C', 'Z'] {
+            let msg = server.read().await.unwrap();
+            if msg.code() == 'E' {
+                let err = ErrorResponse::from_bytes(msg.to_bytes().unwrap()).unwrap();
+                panic!("{:?}", err);
+            }
+
+            if msg.code() == 'D' {
+                let dr = DataRow::from_bytes(msg.to_bytes().unwrap()).unwrap();
+                let r = dr.get::<String>(0, Format::Binary).unwrap();
+                assert_eq!(r, json);
+            }
+            assert_eq!(msg.code(), c);
+        }
     }
 }
