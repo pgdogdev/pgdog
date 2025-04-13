@@ -13,7 +13,7 @@ def no_out_of_sync():
     pools = cur.fetchall()
     for pool in pools:
         print(pools)
-        assert pool[-1] == 0
+        assert pool[-2] == 0
 
 def sharded_sync():
     return psycopg.connect(
