@@ -18,7 +18,7 @@ shard = 2
 
 [[sharded_tables]]
 database = "postgres"
-table = "users"
+name = "users"
 column = "id"
 
 [[sharded_tables]]

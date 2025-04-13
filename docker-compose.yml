@@ -1,7 +1,6 @@
 services:
   pgdog:
-    build:
-      dockerfile: Dockerfile
+    image: ghcr.io/pgdogdev/pgdog:main
     volumes:
       - ./docker/pgdog.toml:/pgdog/pgdog.toml
       - ./docker/users.toml:/pgdog/users.toml
