@@ -8,10 +8,12 @@ use tracing::{debug, error, info, trace};
 
 use super::{Buffer, Command, Comms, Error, PreparedStatements};
 use crate::auth::{md5, scram::Server};
-use crate::backend::databases::databases;
-use crate::backend::pool::{Connection, Request};
-use crate::backend::{self, ProtocolMessage};
-use crate::config::config;
+use crate::backend::{
+    databases,
+    pool::{Connection, Request},
+    ProtocolMessage,
+};
+use crate::config;
 use crate::frontend::buffer::BufferedQuery;
 #[cfg(debug_assertions)]
 use crate::frontend::QueryLogger;
@@ -51,14 +53,15 @@ impl Client {
     ) -> Result<(), Error> {
         let user = params.get_default("user", "postgres");
         let database = params.get_default("database", user);
-        let config = config();
+        let config = config::config();
 
         let admin = database == config.config.admin.name && config.config.admin.user == user;
         let admin_password = &config.config.admin.password;
 
         let id = BackendKeyData::new();
 
-        let exists = databases().exists((user, database));
+        // Auto database.
+        let exists = databases::databases().exists((user, database));
         if !exists && config.config.general.autodb() {
             // Get the password.
             stream
@@ -66,9 +69,9 @@ impl Client {
                 .await?;
             let password = stream.read().await?;
             let password = Password::from_bytes(password.to_bytes()?)?;
-            let user = crate::config::User::from_params(&params, &password).ok();
+            let user = config::User::from_params(&params, &password).ok();
             if let Some(user) = user {
-                backend::databases::add(&user);
+                databases::add(&user);
             }
         }
 

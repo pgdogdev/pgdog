@@ -80,7 +80,11 @@ pub(crate) fn add(user: &crate::config::User) {
         let databases = (*databases()).clone();
         let (added, databases) = databases.add(user, cluster);
         if added {
-            replace_databases(databases);
+            // Launch the new pool (idempotent).
+            databases.launch();
+            // Don't use replace_databases because Arc refers to the same DBs,
+            // and we'll shut them down.
+            DATABASES.store(Arc::new(databases));
         }
     }
 }
@@ -133,7 +137,7 @@ pub struct Databases {
 
 impl Databases {
     /// Add new connection pools to the databases.
-    pub fn add(mut self, user: User, cluster: Cluster) -> (bool, Databases) {
+    fn add(mut self, user: User, cluster: Cluster) -> (bool, Databases) {
         if !self.databases.contains_key(&user) {
             self.databases.insert(user, cluster);
             (true, self)
