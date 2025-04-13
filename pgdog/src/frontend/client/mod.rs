@@ -59,7 +59,7 @@ impl Client {
         let id = BackendKeyData::new();
 
         let exists = databases().exists((user, database));
-        if !exists && config.config.general.autodb && stream.is_tls() {
+        if !exists && config.config.general.autodb() {
             // Get the password.
             stream
                 .send_flush(&Authentication::ClearTextPassword)
