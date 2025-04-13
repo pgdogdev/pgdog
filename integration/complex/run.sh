@@ -4,4 +4,5 @@ SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 
 pushd ${SCRIPT_DIR}
 bash shutdown.sh
+bash autodb/autodb.sh
 popd

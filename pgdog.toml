@@ -14,6 +14,7 @@ prepared_statements = "full"
 # tls_certificate = "pgdog/tests/tls/cert.pem"
 # tls_private_key = "pgdog/tests/tls/key.pem"
 openmetrics_port = 9090
+autodb = "disabled"
 # idle_healthcheck_delay = 10000000000
 #
 # Admin database password.

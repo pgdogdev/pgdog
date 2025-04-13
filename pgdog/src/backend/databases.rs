@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use arc_swap::ArcSwap;
 use once_cell::sync::Lazy;
+use parking_lot::Mutex;
 
 use crate::{
     backend::pool::PoolConfig,
@@ -13,13 +14,14 @@ use crate::{
 };
 
 use super::{
-    pool::{Address, Config},
+    pool::{Address, ClusterConfig, Config},
     replication::ReplicationConfig,
     Cluster, ClusterShardConfig, Error, ShardedTables,
 };
 
 static DATABASES: Lazy<ArcSwap<Databases>> =
     Lazy::new(|| ArcSwap::from_pointee(Databases::default()));
+static LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
 /// Get databases handle.
 ///
@@ -69,6 +71,24 @@ pub fn reload() -> Result<(), Error> {
     Ok(())
 }
 
+/// Add new user to pool.
+pub(crate) fn add(user: &crate::config::User) {
+    let config = config();
+    let pool = new_pool(user, &config.config);
+    if let Some((user, cluster)) = pool {
+        let _lock = LOCK.lock();
+        let databases = (*databases()).clone();
+        let (added, databases) = databases.add(user, cluster);
+        if added {
+            // Launch the new pool (idempotent).
+            databases.launch();
+            // Don't use replace_databases because Arc refers to the same DBs,
+            // and we'll shut them down.
+            DATABASES.store(Arc::new(databases));
+        }
+    }
+}
+
 /// Database/user pair that identifies a database cluster pool.
 #[derive(Debug, PartialEq, Hash, Eq, Clone)]
 pub struct User {
@@ -109,13 +129,28 @@ impl ToUser for (&str, Option<&str>) {
 }
 
 /// Databases.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct Databases {
     databases: HashMap<User, Cluster>,
     manual_queries: HashMap<String, ManualQuery>,
 }
 
 impl Databases {
+    /// Add new connection pools to the databases.
+    fn add(mut self, user: User, cluster: Cluster) -> (bool, Databases) {
+        if !self.databases.contains_key(&user) {
+            self.databases.insert(user, cluster);
+            (true, self)
+        } else {
+            (false, self)
+        }
+    }
+
+    /// Check if a cluster exists, quickly.
+    pub fn exists(&self, user: impl ToUser) -> bool {
+        self.databases.get(&user.to_user()).is_some()
+    }
+
     /// Get a cluster for the user/database pair if it's configured.
     pub fn cluster(&self, user: impl ToUser) -> Result<Cluster, Error> {
         let user = user.to_user();
@@ -179,73 +214,75 @@ impl Databases {
     /// Shutdown all pools.
     fn shutdown(&self) {
         for cluster in self.all().values() {
-            for shard in cluster.shards() {
-                shard.shutdown();
-            }
+            cluster.shutdown();
         }
     }
 
     /// Launch all pools.
     fn launch(&self) {
         for cluster in self.all().values() {
-            for shard in cluster.shards() {
-                shard.launch();
-            }
+            cluster.launch();
         }
+    }
+}
+
+pub(crate) fn new_pool(
+    user: &crate::config::User,
+    config: &crate::config::Config,
+) -> Option<(User, Cluster)> {
+    let sharded_tables = config.sharded_tables();
+    let general = &config.general;
+    let databases = config.databases();
+    let shards = databases.get(&user.database);
+
+    if let Some(shards) = shards {
+        let mut shard_configs = vec![];
+        for user_databases in shards {
+            let primary = user_databases
+                .iter()
+                .find(|d| d.role == Role::Primary)
+                .map(|primary| PoolConfig {
+                    address: Address::new(primary, user),
+                    config: Config::new(general, primary, user),
+                });
+            let replicas = user_databases
+                .iter()
+                .filter(|d| d.role == Role::Replica)
+                .map(|replica| PoolConfig {
+                    address: Address::new(replica, user),
+                    config: Config::new(general, replica, user),
+                })
+                .collect::<Vec<_>>();
+
+            shard_configs.push(ClusterShardConfig { primary, replicas });
+        }
+
+        let sharded_tables = sharded_tables
+            .get(&user.database)
+            .cloned()
+            .unwrap_or(vec![]);
+        let sharded_tables = ShardedTables::new(sharded_tables);
+        let cluster_config = ClusterConfig::new(general, &user, &shard_configs, sharded_tables);
+
+        Some((
+            User {
+                user: user.name.clone(),
+                database: user.database.clone(),
+            },
+            Cluster::new(cluster_config),
+        ))
+    } else {
+        None
     }
 }
 
 /// Load databases from config.
 pub fn from_config(config: &ConfigAndUsers) -> Databases {
     let mut databases = HashMap::new();
-    let config_databases = config.config.databases();
-    let sharded_tables = config.config.sharded_tables();
-    let general = &config.config.general;
 
     for user in &config.users.users {
-        if let Some(shards) = config_databases.get(&user.database) {
-            let mut shard_configs = vec![];
-            for user_databases in shards {
-                let primary =
-                    user_databases
-                        .iter()
-                        .find(|d| d.role == Role::Primary)
-                        .map(|primary| PoolConfig {
-                            address: Address::new(primary, user),
-                            config: Config::new(general, primary, user),
-                        });
-                let replicas = user_databases
-                    .iter()
-                    .filter(|d| d.role == Role::Replica)
-                    .map(|replica| PoolConfig {
-                        address: Address::new(replica, user),
-                        config: Config::new(general, replica, user),
-                    })
-                    .collect::<Vec<_>>();
-
-                shard_configs.push(ClusterShardConfig { primary, replicas });
-            }
-
-            let sharded_tables = sharded_tables
-                .get(&user.database)
-                .cloned()
-                .unwrap_or(vec![]);
-            let sharded_tables = ShardedTables::new(sharded_tables);
-            databases.insert(
-                User {
-                    user: user.name.clone(),
-                    database: user.database.clone(),
-                },
-                Cluster::new(
-                    &user.database,
-                    &shard_configs,
-                    general.load_balancing_strategy,
-                    &user.password,
-                    user.pooler_mode.unwrap_or(general.pooler_mode),
-                    sharded_tables,
-                    user.replication_sharding.clone(),
-                ),
-            );
+        if let Some((user, cluster)) = new_pool(user, &config.config) {
+            databases.insert(user, cluster);
         }
     }
 

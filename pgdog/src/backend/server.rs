@@ -97,6 +97,10 @@ impl Server {
 
                     match auth {
                         Authentication::Ok => break,
+                        Authentication::ClearTextPassword => {
+                            let password = Password::new_password(&addr.password);
+                            stream.send_flush(&password).await?;
+                        }
                         Authentication::Sasl(_) => {
                             let initial = Password::sasl_initial(&scram.first()?);
                             stream.send_flush(&initial).await?;

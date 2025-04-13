@@ -8,9 +8,12 @@ use tracing::{debug, error, info, trace};
 
 use super::{Buffer, Command, Comms, Error, PreparedStatements};
 use crate::auth::{md5, scram::Server};
-use crate::backend::pool::{Connection, Request};
-use crate::backend::ProtocolMessage;
-use crate::config::config;
+use crate::backend::{
+    databases,
+    pool::{Connection, Request},
+    ProtocolMessage,
+};
+use crate::config;
 use crate::frontend::buffer::BufferedQuery;
 #[cfg(debug_assertions)]
 use crate::frontend::QueryLogger;
@@ -50,12 +53,27 @@ impl Client {
     ) -> Result<(), Error> {
         let user = params.get_default("user", "postgres");
         let database = params.get_default("database", user);
-        let config = config();
+        let config = config::config();
 
         let admin = database == config.config.admin.name && config.config.admin.user == user;
         let admin_password = &config.config.admin.password;
 
         let id = BackendKeyData::new();
+
+        // Auto database.
+        let exists = databases::databases().exists((user, database));
+        if !exists && config.config.general.autodb() {
+            // Get the password.
+            stream
+                .send_flush(&Authentication::ClearTextPassword)
+                .await?;
+            let password = stream.read().await?;
+            let password = Password::from_bytes(password.to_bytes()?)?;
+            let user = config::User::from_params(&params, &password).ok();
+            if let Some(user) = user {
+                databases::add(&user);
+            }
+        }
 
         // Get server parameters and send them to the client.
         let mut conn = match Connection::new(user, database, admin) {

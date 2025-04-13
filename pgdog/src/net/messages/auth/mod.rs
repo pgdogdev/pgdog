@@ -22,6 +22,8 @@ pub enum Authentication {
     SaslFinal(String),
     /// Md5 authentication challenge (B).
     Md5(Bytes),
+    /// AuthenticationCleartextPassword (B).
+    ClearTextPassword,
 }
 
 impl Authentication {
@@ -41,6 +43,7 @@ impl FromBytes for Authentication {
 
         match status {
             0 => Ok(Authentication::Ok),
+            3 => Ok(Authentication::ClearTextPassword),
             5 => {
                 let mut salt = vec![0u8; 4];
                 bytes.copy_to_slice(&mut salt);
@@ -77,6 +80,11 @@ impl ToBytes for Authentication {
             Authentication::Ok => {
                 payload.put_i32(0);
 
+                Ok(payload.freeze())
+            }
+
+            Authentication::ClearTextPassword => {
+                payload.put_i32(3);
                 Ok(payload.freeze())
             }
 

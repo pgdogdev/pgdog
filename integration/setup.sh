@@ -7,12 +7,18 @@ else
     ARCH=amd64
 fi
 
-psql -c "CREATE USER pgdog LOGIN SUPERUSER PASSWORD 'pgdog'"
+
+for user in pgdog pgdog1 pgdog2 pgdog3; do
+    psql -c "CREATE USER ${user} LOGIN SUPERUSER PASSWORD 'pgdog'"
+done
+
 
 for db in pgdog shard_0 shard_1; do
     psql -c "CREATE DATABASE $db"
-    psql -c "GRANT ALL ON DATABASE $db TO pgdog"
-    psql -c "GRANT ALL ON SCHEMA public TO pgdog" ${db}
+    for user in pgdog pgdog1 pgdog2 pgdog3; do
+        psql -c "GRANT ALL ON DATABASE $db TO ${user}"
+        psql -c "GRANT ALL ON SCHEMA public TO ${user}" ${db}
+    done
 done
 
 for db in pgdog shard_0 shard_1; do

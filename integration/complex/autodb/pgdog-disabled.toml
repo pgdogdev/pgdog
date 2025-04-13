@@ -1,0 +1,3 @@
+[[databases]]
+name = "pgdog"
+host = "127.0.0.1"

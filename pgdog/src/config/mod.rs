@@ -1,5 +1,6 @@
 //! Configuration.
 
+pub mod convert;
 pub mod error;
 pub mod overrides;
 pub mod url;
@@ -277,6 +278,9 @@ pub struct General {
     /// Prepared statatements support.
     #[serde(default)]
     pub prepared_statements: PreparedStatements,
+    /// Automatically add connection pools for user/database pairs we don't have.
+    #[serde(default)]
+    pub autodb: AutoDb,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -291,6 +295,15 @@ impl PreparedStatements {
     pub fn full(&self) -> bool {
         matches!(self, PreparedStatements::Full)
     }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum AutoDb {
+    #[default]
+    Disabled,
+    Enabled,
+    EnabledPlain,
 }
 
 impl Default for General {
@@ -316,6 +329,7 @@ impl Default for General {
             query_log: None,
             openmetrics_port: None,
             prepared_statements: PreparedStatements::default(),
+            autodb: AutoDb::default(),
         }
     }
 }
@@ -387,6 +401,11 @@ impl General {
         }
 
         None
+    }
+
+    pub fn autodb(&self) -> bool {
+        self.tls().is_some() && self.autodb == AutoDb::Enabled
+            || self.autodb == AutoDb::EnabledPlain
     }
 }
 

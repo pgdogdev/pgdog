@@ -1,0 +1,6 @@
+[general]
+autodb = "enabled_plain"
+
+[[databases]]
+name = "pgdog"
+host = "127.0.0.1"
