@@ -1,5 +1,6 @@
 //! Configuration.
 
+pub mod convert;
 pub mod error;
 pub mod overrides;
 pub mod url;
@@ -277,6 +278,9 @@ pub struct General {
     /// Prepared statatements support.
     #[serde(default)]
     pub prepared_statements: PreparedStatements,
+    /// Automatically add connection pools for user/database pairs we don't have.
+    #[serde(default)]
+    pub autodb: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -316,6 +320,7 @@ impl Default for General {
             query_log: None,
             openmetrics_port: None,
             prepared_statements: PreparedStatements::default(),
+            autodb: false,
         }
     }
 }

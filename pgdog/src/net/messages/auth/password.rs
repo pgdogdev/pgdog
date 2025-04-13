@@ -28,6 +28,13 @@ impl Password {
             response: response.to_string() + "\0",
         }
     }
+
+    pub fn password(&self) -> Option<&str> {
+        match self {
+            Password::SASLInitialResponse { .. } => None,
+            Password::PasswordMessage { response } => Some(response),
+        }
+    }
 }
 
 impl FromBytes for Password {

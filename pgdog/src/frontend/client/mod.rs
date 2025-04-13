@@ -8,8 +8,9 @@ use tracing::{debug, error, info, trace};
 
 use super::{Buffer, Command, Comms, Error, PreparedStatements};
 use crate::auth::{md5, scram::Server};
+use crate::backend::databases::databases;
 use crate::backend::pool::{Connection, Request};
-use crate::backend::ProtocolMessage;
+use crate::backend::{self, ProtocolMessage};
 use crate::config::config;
 use crate::frontend::buffer::BufferedQuery;
 #[cfg(debug_assertions)]
@@ -56,6 +57,20 @@ impl Client {
         let admin_password = &config.config.admin.password;
 
         let id = BackendKeyData::new();
+
+        let exists = databases().exists((user, database));
+        if !exists && config.config.general.autodb && stream.is_tls() {
+            // Get the password.
+            stream
+                .send_flush(&Authentication::ClearTextPassword)
+                .await?;
+            let password = stream.read().await?;
+            let password = Password::from_bytes(password.to_bytes()?)?;
+            let user = crate::config::User::from_params(&params, &password).ok();
+            if let Some(user) = user {
+                backend::databases::add(&user);
+            }
+        }
 
         // Get server parameters and send them to the client.
         let mut conn = match Connection::new(user, database, admin) {

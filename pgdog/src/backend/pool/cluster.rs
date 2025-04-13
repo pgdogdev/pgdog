@@ -6,7 +6,7 @@ use crate::{
         replication::{ReplicationConfig, ShardedColumn},
         ShardedTables,
     },
-    config::{PoolerMode, ShardedTable},
+    config::{General, PoolerMode, ShardedTable, User},
     net::messages::BackendKeyData,
 };
 
@@ -50,17 +50,49 @@ pub struct ClusterShardConfig {
     pub replicas: Vec<PoolConfig>,
 }
 
+/// Cluster creation config.
+pub struct ClusterConfig<'a> {
+    pub name: &'a str,
+    pub shards: &'a [ClusterShardConfig],
+    pub lb_strategy: LoadBalancingStrategy,
+    pub password: &'a str,
+    pub pooler_mode: PoolerMode,
+    pub sharded_tables: ShardedTables,
+    pub replication_sharding: Option<String>,
+}
+
+impl<'a> ClusterConfig<'a> {
+    pub(crate) fn new(
+        general: &'a General,
+        user: &'a User,
+        shards: &'a [ClusterShardConfig],
+        sharded_tables: ShardedTables,
+    ) -> Self {
+        Self {
+            name: &user.database,
+            password: &user.password,
+            replication_sharding: user.replication_sharding.clone(),
+            pooler_mode: user.pooler_mode.unwrap_or(general.pooler_mode),
+            lb_strategy: general.load_balancing_strategy,
+            shards,
+            sharded_tables,
+        }
+    }
+}
+
 impl Cluster {
     /// Create new cluster of shards.
-    pub fn new(
-        name: &str,
-        shards: &[ClusterShardConfig],
-        lb_strategy: LoadBalancingStrategy,
-        password: &str,
-        pooler_mode: PoolerMode,
-        sharded_tables: ShardedTables,
-        replication_sharding: Option<String>,
-    ) -> Self {
+    pub fn new(config: ClusterConfig) -> Self {
+        let ClusterConfig {
+            name,
+            shards,
+            lb_strategy,
+            password,
+            pooler_mode,
+            sharded_tables,
+            replication_sharding,
+        } = config;
+
         Self {
             shards: shards
                 .iter()
@@ -215,6 +247,20 @@ impl Cluster {
         ShardingSchema {
             shards: self.shards.len(),
             tables: self.sharded_tables.clone(),
+        }
+    }
+
+    /// Launch the connection pools.
+    pub(crate) fn launch(&self) {
+        for shard in self.shards() {
+            shard.launch();
+        }
+    }
+
+    /// Shutdown the connection pools.
+    pub(crate) fn shutdown(&self) {
+        for shard in self.shards() {
+            shard.shutdown();
         }
     }
 }

@@ -11,9 +11,10 @@ prepared_statements = "full"
 # query_log = "queries.txt"
 # broadcast_address = "224.0.0.1"
 # broadcast_port = 6435
-# tls_certificate = "pgdog/tests/tls/cert.pem"
-# tls_private_key = "pgdog/tests/tls/key.pem"
+tls_certificate = "pgdog/tests/tls/cert.pem"
+tls_private_key = "pgdog/tests/tls/key.pem"
 openmetrics_port = 9090
+autodb = true
 # idle_healthcheck_delay = 10000000000
 #
 # Admin database password.
