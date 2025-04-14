@@ -280,7 +280,7 @@ pub struct General {
     pub prepared_statements: PreparedStatements,
     /// Automatically add connection pools for user/database pairs we don't have.
     #[serde(default)]
-    pub autodb: AutoDb,
+    pub passthrough_auth: PassthoughAuth,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -299,7 +299,7 @@ impl PreparedStatements {
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
 #[serde(rename_all = "snake_case")]
-pub enum AutoDb {
+pub enum PassthoughAuth {
     #[default]
     Disabled,
     Enabled,
@@ -329,7 +329,7 @@ impl Default for General {
             query_log: None,
             openmetrics_port: None,
             prepared_statements: PreparedStatements::default(),
-            autodb: AutoDb::default(),
+            passthrough_auth: PassthoughAuth::default(),
         }
     }
 }
@@ -403,9 +403,9 @@ impl General {
         None
     }
 
-    pub fn autodb(&self) -> bool {
-        self.tls().is_some() && self.autodb == AutoDb::Enabled
-            || self.autodb == AutoDb::EnabledPlain
+    pub fn passthrough_auth(&self) -> bool {
+        self.tls().is_some() && self.passthrough_auth == PassthoughAuth::Enabled
+            || self.passthrough_auth == PassthoughAuth::EnabledPlain
     }
 }
 

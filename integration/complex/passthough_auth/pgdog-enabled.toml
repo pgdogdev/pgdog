@@ -1,5 +1,5 @@
 [general]
-autodb = "enabled_plain"
+passthough_auth = "enabled_plain"
 
 [[databases]]
 name = "pgdog"
