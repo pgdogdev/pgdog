@@ -1,8 +1,5 @@
 //! SHOW STATS.
-use crate::backend::{
-    databases::databases,
-    pool::{stats::Counts, Stats},
-};
+use crate::backend::databases::databases;
 
 use super::prelude::*;
 
