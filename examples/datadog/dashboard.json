@@ -1,0 +1,410 @@
+{
+  "title": "PgDog",
+  "description": null,
+  "widgets": [
+    {
+      "id": 8097007766727272,
+      "definition": {
+        "title": "Clients",
+        "show_title": true,
+        "type": "group",
+        "layout_type": "ordered",
+        "widgets": [
+          {
+            "id": 4263595811043970,
+            "definition": {
+              "title": "Clients",
+              "title_size": "16",
+              "title_align": "left",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "min", "max", "value", "sum"],
+              "time": {},
+              "type": "timeseries",
+              "requests": [
+                {
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "name": "query1",
+                      "data_source": "metrics",
+                      "query": "avg:pgdog.clients{*}"
+                    }
+                  ],
+                  "formulas": [{ "formula": "query1" }],
+                  "style": {
+                    "palette": "dog_classic",
+                    "order_by": "values",
+                    "line_type": "solid",
+                    "line_width": "normal"
+                  },
+                  "display_type": "bars"
+                }
+              ]
+            },
+            "layout": { "x": 0, "y": 0, "width": 4, "height": 2 }
+          },
+          {
+            "id": 2443165613681704,
+            "definition": {
+              "title": "Clients waiting",
+              "title_size": "16",
+              "title_align": "left",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "min", "max", "value", "sum"],
+              "time": {},
+              "type": "timeseries",
+              "requests": [
+                {
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "name": "query1",
+                      "data_source": "metrics",
+                      "query": "avg:pgdog.cl_waiting{$user, $database, $role}"
+                    }
+                  ],
+                  "formulas": [{ "formula": "query1" }],
+                  "style": {
+                    "palette": "warm",
+                    "order_by": "values",
+                    "line_type": "solid",
+                    "line_width": "normal"
+                  },
+                  "display_type": "bars"
+                }
+              ]
+            },
+            "layout": { "x": 4, "y": 0, "width": 4, "height": 2 }
+          },
+          {
+            "id": 7616740326647932,
+            "definition": {
+              "title": "Clients maximum wait time (s)",
+              "title_size": "16",
+              "title_align": "left",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "min", "max", "value", "sum"],
+              "time": {},
+              "type": "timeseries",
+              "requests": [
+                {
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "name": "query1",
+                      "data_source": "metrics",
+                      "query": "avg:pgdog.maxwait{$user, $database, $role}"
+                    }
+                  ],
+                  "formulas": [{ "formula": "query1" }],
+                  "style": {
+                    "palette": "orange",
+                    "order_by": "values",
+                    "line_type": "solid",
+                    "line_width": "normal"
+                  },
+                  "display_type": "line"
+                }
+              ]
+            },
+            "layout": { "x": 8, "y": 0, "width": 4, "height": 2 }
+          }
+        ]
+      },
+      "layout": { "x": 0, "y": 0, "width": 12, "height": 3 }
+    },
+    {
+      "id": 6604489953127841,
+      "definition": {
+        "title": "Servers",
+        "show_title": true,
+        "type": "group",
+        "layout_type": "ordered",
+        "widgets": [
+          {
+            "id": 490637341713377,
+            "definition": {
+              "title": "Total transactions",
+              "title_size": "16",
+              "title_align": "left",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "min", "max", "value", "sum"],
+              "time": {},
+              "type": "timeseries",
+              "requests": [
+                {
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "name": "query1",
+                      "data_source": "metrics",
+                      "query": "sum:pgdog.total_xact_count.count{$role, $user, $database}.as_count()"
+                    }
+                  ],
+                  "formulas": [{ "formula": "query1" }],
+                  "style": {
+                    "palette": "dog_classic",
+                    "order_by": "values",
+                    "line_type": "solid",
+                    "line_width": "normal"
+                  },
+                  "display_type": "area"
+                }
+              ]
+            },
+            "layout": { "x": 0, "y": 0, "width": 4, "height": 2 }
+          },
+          {
+            "id": 7098710186656581,
+            "definition": {
+              "title": "Total queries",
+              "title_size": "16",
+              "title_align": "left",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "min", "max", "value", "sum"],
+              "time": {},
+              "type": "timeseries",
+              "requests": [
+                {
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "name": "query1",
+                      "data_source": "metrics",
+                      "query": "sum:pgdog.total_query_count.count{$role, $user, $database}.as_count()"
+                    }
+                  ],
+                  "formulas": [{ "formula": "query1" }],
+                  "style": {
+                    "palette": "dog_classic",
+                    "order_by": "values",
+                    "line_type": "solid",
+                    "line_width": "normal"
+                  },
+                  "display_type": "area"
+                }
+              ]
+            },
+            "layout": { "x": 4, "y": 0, "width": 4, "height": 2 }
+          },
+          {
+            "id": 6371369344944380,
+            "definition": {
+              "title": "Active servers",
+              "title_size": "16",
+              "title_align": "left",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "min", "max", "value", "sum"],
+              "time": {},
+              "type": "timeseries",
+              "requests": [
+                {
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "name": "query1",
+                      "data_source": "metrics",
+                      "query": "avg:pgdog.sv_active{$role, $database, $user}"
+                    }
+                  ],
+                  "formulas": [{ "formula": "query1" }],
+                  "style": {
+                    "palette": "dog_classic",
+                    "order_by": "values",
+                    "line_type": "solid",
+                    "line_width": "normal"
+                  },
+                  "display_type": "line"
+                }
+              ]
+            },
+            "layout": { "x": 8, "y": 0, "width": 4, "height": 2 }
+          },
+          {
+            "id": 2241597944704282,
+            "definition": {
+              "title": "Idle servers",
+              "title_size": "16",
+              "title_align": "left",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "min", "max", "value", "sum"],
+              "time": {},
+              "type": "timeseries",
+              "requests": [
+                {
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "name": "query1",
+                      "data_source": "metrics",
+                      "query": "avg:pgdog.sv_idle{$role, $user, $database}"
+                    }
+                  ],
+                  "formulas": [{ "formula": "query1" }],
+                  "style": {
+                    "palette": "dog_classic",
+                    "order_by": "values",
+                    "line_type": "solid",
+                    "line_width": "normal"
+                  },
+                  "display_type": "line"
+                }
+              ]
+            },
+            "layout": { "x": 0, "y": 2, "width": 4, "height": 2 }
+          },
+          {
+            "id": 3121537562829546,
+            "definition": {
+              "title": "Errors",
+              "title_size": "16",
+              "title_align": "left",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "min", "max", "value", "sum"],
+              "time": {},
+              "type": "timeseries",
+              "requests": [
+                {
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "name": "query1",
+                      "data_source": "metrics",
+                      "query": "sum:pgdog.errors.count{$role, $user, $database}.as_count()"
+                    }
+                  ],
+                  "formulas": [{ "formula": "query1" }],
+                  "style": {
+                    "palette": "warm",
+                    "order_by": "values",
+                    "line_type": "solid",
+                    "line_width": "normal"
+                  },
+                  "display_type": "bars"
+                }
+              ]
+            },
+            "layout": { "x": 4, "y": 2, "width": 4, "height": 2 }
+          }
+        ]
+      },
+      "layout": { "x": 0, "y": 3, "width": 12, "height": 5 }
+    },
+    {
+      "id": 889975308741755,
+      "definition": {
+        "title": "Network",
+        "show_title": true,
+        "type": "group",
+        "layout_type": "ordered",
+        "widgets": []
+      },
+      "layout": { "x": 0, "y": 8, "width": 12, "height": 1 }
+    },
+    {
+      "id": 2900936540316585,
+      "definition": {
+        "title": "Total data sent (MB)",
+        "title_size": "16",
+        "title_align": "left",
+        "show_legend": true,
+        "legend_layout": "auto",
+        "legend_columns": ["avg", "min", "max", "value", "sum"],
+        "time": {},
+        "type": "timeseries",
+        "requests": [
+          {
+            "response_format": "timeseries",
+            "queries": [
+              {
+                "name": "query1",
+                "data_source": "metrics",
+                "query": "sum:pgdog.total_sent.count{$role, $user, $database}.as_count()"
+              }
+            ],
+            "formulas": [
+              { "formula": "query1" },
+              { "formula": "query1 / 1000 / 1000" }
+            ],
+            "style": {
+              "palette": "dog_classic",
+              "order_by": "values",
+              "line_type": "solid",
+              "line_width": "normal"
+            },
+            "display_type": "area"
+          }
+        ]
+      },
+      "layout": { "x": 0, "y": 0, "width": 4, "height": 2 }
+    },
+    {
+      "id": 2195641451473208,
+      "definition": {
+        "title": "Total received (MB)",
+        "title_size": "16",
+        "title_align": "left",
+        "show_legend": true,
+        "legend_layout": "auto",
+        "legend_columns": ["avg", "min", "max", "value", "sum"],
+        "time": {},
+        "type": "timeseries",
+        "requests": [
+          {
+            "response_format": "timeseries",
+            "queries": [
+              {
+                "name": "query1",
+                "data_source": "metrics",
+                "query": "sum:pgdog.total_received.count{$role, $user, $database}.as_count()"
+              }
+            ],
+            "formulas": [
+              { "formula": "query1" },
+              { "formula": "query1 / 1000 / 1000" }
+            ],
+            "style": {
+              "palette": "dog_classic",
+              "order_by": "values",
+              "line_type": "solid",
+              "line_width": "normal"
+            },
+            "display_type": "area"
+          }
+        ]
+      },
+      "layout": { "x": 4, "y": 0, "width": 4, "height": 2 }
+    }
+  ],
+  "template_variables": [
+    {
+      "name": "role",
+      "prefix": "role",
+      "available_values": [],
+      "default": "*"
+    },
+    {
+      "name": "user",
+      "prefix": "user",
+      "available_values": [],
+      "default": "*"
+    },
+    {
+      "name": "database",
+      "prefix": "database",
+      "available_values": [],
+      "default": "*"
+    }
+  ],
+  "layout_type": "ordered",
+  "notify_list": [],
+  "reflow_type": "fixed"
+}

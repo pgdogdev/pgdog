@@ -12,7 +12,7 @@ async fn test_bad_auth() {
                 .await
                 .err()
                 .unwrap();
-                println!("{}", err.to_string());
+                println!("{}", err);
                 assert!(err.to_string().contains(&format!(
                     "user \"{}\" and database \"{}\" is wrong, or the database does not exist",
                     user, db
