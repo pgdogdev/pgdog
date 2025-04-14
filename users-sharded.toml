@@ -1,4 +1,0 @@
-[[users]]
-name = "pgdog"
-database = "pgdog_sharded"
-password = "pgdog"
