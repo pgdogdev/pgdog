@@ -1,5 +1,5 @@
 [general]
-passthough_auth = "enabled_plain"
+passthrough_auth = "enabled_plain"
 
 [[databases]]
 name = "pgdog"
