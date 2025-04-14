@@ -138,8 +138,8 @@ pub struct Databases {
 impl Databases {
     /// Add new connection pools to the databases.
     fn add(mut self, user: User, cluster: Cluster) -> (bool, Databases) {
-        if !self.databases.contains_key(&user) {
-            self.databases.insert(user, cluster);
+        if let std::collections::hash_map::Entry::Vacant(e) = self.databases.entry(user) {
+            e.insert(cluster);
             (true, self)
         } else {
             (false, self)
@@ -262,7 +262,7 @@ pub(crate) fn new_pool(
             .cloned()
             .unwrap_or(vec![]);
         let sharded_tables = ShardedTables::new(sharded_tables);
-        let cluster_config = ClusterConfig::new(general, &user, &shard_configs, sharded_tables);
+        let cluster_config = ClusterConfig::new(general, user, &shard_configs, sharded_tables);
 
         Some((
             User {
