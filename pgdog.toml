@@ -6,16 +6,12 @@
 host = "0.0.0.0"
 port = 6432
 shutdown_timeout = 5_000
-prepared_statements = "full"
-# default_pool_size = 1
 # query_log = "queries.txt"
-# broadcast_address = "224.0.0.1"
-# broadcast_port = 6435
 # tls_certificate = "pgdog/tests/tls/cert.pem"
 # tls_private_key = "pgdog/tests/tls/key.pem"
 openmetrics_port = 9090
-autodb = "disabled"
 # idle_healthcheck_delay = 10000000000
+
 #
 # Admin database password.
 #
@@ -88,7 +84,7 @@ database = "pgdog_sharded"
 name = "embeddings"
 data_type = "vector"
 column = "embedding"
-centroids_path = "centroids.json"
+centroids_path = "examples/pgvector/centroids.json"
 
 #
 # ActiveRecord sends these queries

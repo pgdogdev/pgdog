@@ -62,7 +62,7 @@ impl Client {
 
         // Auto database.
         let exists = databases::databases().exists((user, database));
-        if !exists && config.config.general.autodb() {
+        if !exists && config.config.general.passthrough_auth() {
             // Get the password.
             stream
                 .send_flush(&Authentication::ClearTextPassword)
