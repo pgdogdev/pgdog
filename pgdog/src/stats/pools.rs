@@ -2,12 +2,12 @@ use crate::backend::databases::databases;
 
 use super::{Measurement, Metric, OpenMetric};
 
-struct PoolMetric {
-    name: String,
-    measurements: Vec<Measurement>,
-    help: String,
-    unit: Option<String>,
-    metric_type: Option<String>,
+pub struct PoolMetric {
+    pub name: String,
+    pub measurements: Vec<Measurement>,
+    pub help: String,
+    pub unit: Option<String>,
+    pub metric_type: Option<String>,
 }
 
 impl OpenMetric for PoolMetric {
@@ -49,15 +49,21 @@ impl Pools {
         let mut maxwait = vec![];
         let mut errors = vec![];
         let mut out_of_sync = vec![];
+        let mut total_xact_count = vec![];
+        let mut avg_xact_count = vec![];
+        let mut total_query_count = vec![];
+        let mut avg_query_count = vec![];
         for (user, cluster) in databases().all() {
-            for shard in cluster.shards() {
-                for pool in shard.pools() {
+            for (shard_num, shard) in cluster.shards().iter().enumerate() {
+                for (role, pool) in shard.pools_with_roles() {
                     let state = pool.state();
                     let labels = vec![
                         ("user".into(), user.user.clone()),
                         ("database".into(), user.database.clone()),
                         ("host".into(), pool.addr().host.clone()),
                         ("port".into(), pool.addr().port.to_string()),
+                        ("shard".into(), shard_num.to_string()),
+                        ("role".into(), role.to_string()),
                     ];
 
                     cl_waiting.push(Measurement {
@@ -88,6 +94,30 @@ impl Pools {
                     out_of_sync.push(Measurement {
                         labels: labels.clone(),
                         measurement: state.out_of_sync.into(),
+                    });
+
+                    let stats = state.stats;
+                    let totals = stats.counts;
+                    let averages = stats.averages;
+
+                    total_xact_count.push(Measurement {
+                        labels: labels.clone(),
+                        measurement: totals.xact_count.into(),
+                    });
+
+                    avg_xact_count.push(Measurement {
+                        labels: labels.clone(),
+                        measurement: averages.xact_count.into(),
+                    });
+
+                    total_query_count.push(Measurement {
+                        labels: labels.clone(),
+                        measurement: totals.query_count.into(),
+                    });
+
+                    avg_query_count.push(Measurement {
+                        labels: labels.clone(),
+                        measurement: averages.query_count.into(),
                     });
                 }
             }
@@ -139,6 +169,38 @@ impl Pools {
             help: "Connections that have been returned to the pool in a broken state.".into(),
             unit: None,
             metric_type: Some("counter".into()),
+        }));
+
+        metrics.push(Metric::new(PoolMetric {
+            name: "total_xact_count".into(),
+            measurements: total_xact_count,
+            help: "Total number of executed transactions.".into(),
+            unit: None,
+            metric_type: Some("counter".into()),
+        }));
+
+        metrics.push(Metric::new(PoolMetric {
+            name: "avg_xact_count".into(),
+            measurements: avg_xact_count,
+            help: "Average number of executed transactions per statistics period.".into(),
+            unit: None,
+            metric_type: None,
+        }));
+
+        metrics.push(Metric::new(PoolMetric {
+            name: "total_query_count".into(),
+            measurements: total_query_count,
+            help: "Total number of executed queries.".into(),
+            unit: None,
+            metric_type: Some("counter".into()),
+        }));
+
+        metrics.push(Metric::new(PoolMetric {
+            name: "avg_query_count".into(),
+            measurements: avg_query_count,
+            help: "Average number of executed queries per statistics period.".into(),
+            unit: None,
+            metric_type: None,
         }));
 
         Pools { metrics }

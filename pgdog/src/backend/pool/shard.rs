@@ -1,6 +1,9 @@
 //! A shard is a collection of replicas and a primary.
 
-use crate::{config::LoadBalancingStrategy, net::messages::BackendKeyData};
+use crate::{
+    config::{LoadBalancingStrategy, Role},
+    net::messages::BackendKeyData,
+};
 
 use super::{Error, Guard, Pool, PoolConfig, Replicas, Request};
 
@@ -66,11 +69,23 @@ impl Shard {
 
     /// Get all pools. Used for administrative tasks.
     pub fn pools(&self) -> Vec<Pool> {
+        self.pools_with_roles()
+            .into_iter()
+            .map(|(_, pool)| pool)
+            .collect()
+    }
+
+    pub fn pools_with_roles(&self) -> Vec<(Role, Pool)> {
         let mut pools = vec![];
         if let Some(primary) = self.primary.clone() {
-            pools.push(primary);
+            pools.push((Role::Primary, primary));
         }
-        pools.extend(self.replicas.pools().to_vec());
+        pools.extend(
+            self.replicas
+                .pools()
+                .iter()
+                .map(|p| (Role::Replica, p.clone())),
+        );
 
         pools
     }
