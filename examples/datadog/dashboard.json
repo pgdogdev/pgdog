@@ -99,10 +99,7 @@
                       "query": "avg:pgdog.maxwait{$user, $database, $role}"
                     }
                   ],
-                  "formulas": [
-                    { "formula": "query1" },
-                    { "formula": "query1 * 1000" }
-                  ],
+                  "formulas": [{ "formula": "query1" }],
                   "style": {
                     "palette": "orange",
                     "order_by": "values",
