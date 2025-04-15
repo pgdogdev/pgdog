@@ -2,7 +2,7 @@
 
 use std::{
     ops::Add,
-    time::{Instant, SystemTime},
+    time::{Duration, Instant, SystemTime},
 };
 
 use fnv::FnvHashMap as HashMap;
@@ -51,6 +51,8 @@ pub struct Counts {
     pub rollbacks: usize,
     pub errors: usize,
     pub prepared_statements: usize,
+    pub query_time: Duration,
+    pub transaction_time: Duration,
 }
 
 impl Add for Counts {
@@ -67,6 +69,8 @@ impl Add for Counts {
             prepared_statements: self
                 .prepared_statements
                 .saturating_add(rhs.prepared_statements),
+            query_time: self.query_time.saturating_add(rhs.query_time),
+            transaction_time: self.query_time.saturating_add(rhs.transaction_time),
         }
     }
 }
@@ -84,6 +88,8 @@ pub struct Stats {
     pub created_at_time: SystemTime,
     pub total: Counts,
     pub last_checkout: Counts,
+    query_timer: Option<Instant>,
+    transaction_timer: Option<Instant>,
 }
 
 impl Stats {
@@ -100,6 +106,8 @@ impl Stats {
             created_at_time: SystemTime::now(),
             total: Counts::default(),
             last_checkout: Counts::default(),
+            query_timer: None,
+            transaction_timer: None,
         };
 
         STATS.lock().insert(
@@ -113,21 +121,27 @@ impl Stats {
         stats
     }
 
-    /// A transaction has been completed.
-    pub fn transaction(&mut self) {
+    fn transaction_state(&mut self, now: Instant, state: State) {
         self.total.transactions += 1;
         self.last_checkout.transactions += 1;
-        self.state = State::Idle;
-        self.last_used = Instant::now();
+        self.state = state;
+        self.last_used = now;
+        if let Some(transaction_timer) = self.transaction_timer.take() {
+            let duration = now.duration_since(transaction_timer);
+            self.total.transaction_time += duration;
+            self.last_checkout.transaction_time += duration;
+        }
         self.update();
     }
 
+    /// A transaction has been completed.
+    pub fn transaction(&mut self, now: Instant) {
+        self.transaction_state(now, State::Idle);
+    }
+
     /// Error occurred in a transaction.
-    pub fn transaction_error(&mut self) {
-        self.total.transactions += 1;
-        self.last_checkout.transactions += 1;
-        self.state = State::TransactionError;
-        self.update();
+    pub fn transaction_error(&mut self, now: Instant) {
+        self.transaction_state(now, State::TransactionError);
     }
 
     /// An error occurred in general.
@@ -137,9 +151,14 @@ impl Stats {
     }
 
     /// A query has been completed.
-    pub fn query(&mut self) {
+    pub fn query(&mut self, now: Instant) {
         self.total.queries += 1;
         self.last_checkout.queries += 1;
+        if let Some(query_timer) = self.query_timer.take() {
+            let duration = now.duration_since(query_timer);
+            self.total.query_time += duration;
+            self.last_checkout.query_time += duration;
+        }
     }
 
     /// Manual state change.
@@ -147,6 +166,15 @@ impl Stats {
         let update = self.state != state;
         self.state = state;
         if update {
+            if state == State::Active {
+                let now = Instant::now();
+                if self.transaction_timer.is_none() {
+                    self.transaction_timer = Some(now);
+                }
+                if self.query_timer.is_none() {
+                    self.query_timer = Some(now);
+                }
+            }
             self.update();
         }
     }

@@ -5,6 +5,9 @@ use std::{
     ops::{Add, Div, Sub},
     time::Duration,
 };
+
+type Millis = u128;
+
 #[derive(Debug, Clone, Default, Copy)]
 pub struct Counts {
     pub xact_count: usize,
@@ -12,9 +15,9 @@ pub struct Counts {
     pub server_assignment_count: usize,
     pub received: usize,
     pub sent: usize,
-    pub xact_time: usize,
-    pub query_time: usize,
-    pub wait_time: u128,
+    pub xact_time: Millis,
+    pub query_time: Millis,
+    pub wait_time: Millis,
 }
 
 impl Sub for Counts {
@@ -22,7 +25,7 @@ impl Sub for Counts {
 
     fn sub(self, rhs: Self) -> Self::Output {
         Self {
-            xact_count: self.xact_time.saturating_sub(rhs.xact_time),
+            xact_count: self.xact_count.saturating_sub(rhs.xact_count),
             query_count: self.query_count.saturating_sub(rhs.query_count),
             server_assignment_count: self
                 .server_assignment_count
@@ -41,13 +44,13 @@ impl Div<usize> for Counts {
 
     fn div(self, rhs: usize) -> Self::Output {
         Self {
-            xact_count: self.xact_time.saturating_div(rhs),
+            xact_count: self.xact_count.saturating_div(rhs),
             query_count: self.query_count.saturating_div(rhs),
             server_assignment_count: self.server_assignment_count.saturating_div(rhs),
             received: self.received.saturating_div(rhs),
             sent: self.sent.saturating_div(rhs),
-            xact_time: self.xact_time.saturating_div(rhs),
-            query_time: self.query_time.saturating_div(rhs),
+            xact_time: self.xact_time.saturating_div(rhs as u128),
+            query_time: self.query_time.saturating_div(rhs as u128),
             wait_time: self.wait_time.saturating_div(rhs as u128),
         }
     }
@@ -63,8 +66,10 @@ impl Add<crate::backend::stats::Counts> for Counts {
             server_assignment_count: self.server_assignment_count + 1,
             received: self.received.saturating_add(rhs.bytes_received),
             sent: self.sent.saturating_add(rhs.bytes_sent),
-            query_time: self.query_time,
-            xact_time: self.xact_time,
+            query_time: self.query_time.saturating_add(rhs.query_time.as_millis()),
+            xact_time: self
+                .xact_time
+                .saturating_add(rhs.transaction_time.as_millis()),
             wait_time: self.wait_time,
         }
     }
