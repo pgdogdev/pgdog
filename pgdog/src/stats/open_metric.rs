@@ -23,6 +23,7 @@ pub trait OpenMetric: Send + Sync {
 pub enum MeasurementType {
     Float(f64),
     Integer(i64),
+    Millis(u128),
 }
 
 impl From<f64> for MeasurementType {
@@ -40,6 +41,12 @@ impl From<i64> for MeasurementType {
 impl From<usize> for MeasurementType {
     fn from(value: usize) -> Self {
         Self::Integer(value as i64)
+    }
+}
+
+impl From<u128> for MeasurementType {
+    fn from(value: u128) -> Self {
+        Self::Millis(value)
     }
 }
 
@@ -68,6 +75,7 @@ impl Measurement {
             match self.measurement {
                 MeasurementType::Float(f) => format!("{:.3}", f),
                 MeasurementType::Integer(i) => i.to_string(),
+                MeasurementType::Millis(i) => i.to_string(),
             }
         )
     }

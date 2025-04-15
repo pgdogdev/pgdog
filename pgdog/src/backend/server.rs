@@ -286,14 +286,15 @@ impl Server {
 
         match message.code() {
             'Z' => {
-                self.stats.query();
+                let now = Instant::now();
+                self.stats.query(now);
 
                 let rfq = ReadyForQuery::from_bytes(message.payload())?;
 
                 match rfq.status {
-                    'I' => self.stats.transaction(),
+                    'I' => self.stats.transaction(now),
                     'T' => self.stats.state(State::IdleInTransaction),
-                    'E' => self.stats.transaction_error(),
+                    'E' => self.stats.transaction_error(now),
                     status => {
                         self.stats.state(State::Error);
                         return Err(Error::UnexpectedTransactionStatus(status));
