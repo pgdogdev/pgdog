@@ -190,6 +190,12 @@ impl WhereClause {
                 keys.push(Output::Parameter(param.number));
             }
 
+            Some(NodeEnum::TypeCast(ref cast)) => {
+                if let Some(ref arg) = cast.arg {
+                    keys.extend(Self::parse(table_name, &arg));
+                }
+            }
+
             _ => (),
         };
 

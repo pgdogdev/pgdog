@@ -182,9 +182,7 @@ async def test_direct_shard(conns):
             assert result[0][1] == f"value_{id+1}"
 
             await conn.execute("""DELETE FROM sharded WHERE id = $1""", id)
-            result = await conn.fetch(
-                """SELECT * FROM sharded WHERE id = $1""", id
-            )
+            result = await conn.fetch("""SELECT * FROM sharded WHERE id = $1""", id)
             assert len(result) == 0
     no_out_of_sync()
 

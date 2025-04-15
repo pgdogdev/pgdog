@@ -675,4 +675,42 @@ mod test {
             panic!("not a route");
         }
     }
+
+    #[test]
+    fn test_parse_with_cast() {
+        let query = Parse::named(
+            "test",
+            r#"SELECT sharded.id, sharded.value
+        FROM sharded
+        WHERE sharded.id = $1::INTEGER ORDER BY sharded.id"#,
+        );
+        let bind = Bind {
+            statement: "test".into(),
+            codes: vec![1],
+            params: vec![Parameter {
+                data: vec![0, 0, 0, 1],
+                len: 4,
+            }],
+            ..Default::default()
+        };
+        let buf = Buffer::from(vec![query.into(), bind.into()]);
+
+        let route = QueryParser::default()
+            .parse(
+                &buf,
+                &Cluster::new_test(),
+                &mut PreparedStatements::default(),
+            )
+            .unwrap()
+            .clone();
+
+        match route {
+            Command::Query(route) => {
+                assert!(route.is_read());
+                assert_eq!(route.shard(), &Shard::Direct(0));
+            }
+
+            _ => panic!("should be a query"),
+        }
+    }
 }
