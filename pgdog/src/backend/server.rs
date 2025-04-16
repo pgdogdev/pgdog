@@ -14,18 +14,21 @@ use super::{
     pool::Address, prepared_statements::HandleResult, Error, PreparedStatements, ProtocolMessage,
     Stats,
 };
-use crate::net::{
-    messages::{DataRow, NoticeResponse},
-    parameter::Parameters,
-    tls::connector,
-    CommandComplete, Parameter, Stream,
-};
 use crate::state::State;
 use crate::{
     auth::{md5, scram::Client},
     net::messages::{
         hello::SslReply, Authentication, BackendKeyData, ErrorResponse, FromBytes, Message,
         ParameterStatus, Password, Protocol, Query, ReadyForQuery, Startup, Terminate, ToBytes,
+    },
+};
+use crate::{
+    config::config,
+    net::{
+        messages::{DataRow, NoticeResponse},
+        parameter::Parameters,
+        tls::connector,
+        CommandComplete, Parameter, Stream,
     },
 };
 
@@ -332,7 +335,12 @@ impl Server {
     }
 
     /// Synchronize parameters between client and server.
-    pub async fn sync_params(&mut self, params: &Parameters) -> Result<usize, Error> {
+    pub async fn link_client(&mut self, params: &Parameters) -> Result<usize, Error> {
+        // Toggle support for prepared statements
+        // only when client connects to this server.
+        self.prepared_statements
+            .toggle(config().prepared_statements());
+
         let diff = params.merge(&mut self.params);
         if diff.changed_params > 0 {
             debug!("syncing {} params", diff.changed_params);
@@ -617,7 +625,7 @@ impl Drop for Server {
 
 // Used for testing.
 #[cfg(test)]
-mod test {
+pub mod test {
     use crate::{frontend::PreparedStatements, net::*};
 
     use super::*;
@@ -652,7 +660,7 @@ mod test {
         }
     }
 
-    async fn test_server() -> Server {
+    pub async fn test_server() -> Server {
         let address = Address {
             host: "127.0.0.1".into(),
             port: 5432,
@@ -1327,7 +1335,7 @@ mod test {
         let mut server = test_server().await;
         let mut params = Parameters::default();
         params.insert("application_name".into(), "test_sync_params".into());
-        let changed = server.sync_params(&params).await.unwrap();
+        let changed = server.link_client(&params).await.unwrap();
         assert_eq!(changed, 1);
 
         let app_name = server
@@ -1336,7 +1344,7 @@ mod test {
             .unwrap();
         assert_eq!(app_name[0], "test_sync_params");
 
-        let changed = server.sync_params(&params).await.unwrap();
+        let changed = server.link_client(&params).await.unwrap();
         assert_eq!(changed, 0);
     }
 }

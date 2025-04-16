@@ -40,6 +40,7 @@ pub struct PreparedStatements {
     parses: VecDeque<String>,
     // Describes being executed now on the connection.
     describes: VecDeque<String>,
+    enabled: bool,
 }
 
 impl Default for PreparedStatements {
@@ -57,11 +58,20 @@ impl PreparedStatements {
             state: ProtocolState::default(),
             parses: VecDeque::new(),
             describes: VecDeque::new(),
+            enabled: true,
         }
+    }
+
+    pub fn toggle(&mut self, enabled: bool) {
+        self.enabled = enabled;
     }
 
     /// Handle extended protocol message.
     pub fn handle(&mut self, request: &ProtocolMessage) -> Result<HandleResult, Error> {
+        if !self.enabled {
+            return Ok(HandleResult::Forward);
+        }
+
         match request {
             ProtocolMessage::Bind(bind) => {
                 if !bind.anonymous() {
@@ -156,6 +166,10 @@ impl PreparedStatements {
 
     /// Should we forward the message to the client.
     pub fn forward(&mut self, message: &Message) -> Result<bool, Error> {
+        if !self.enabled {
+            return Ok(true);
+        }
+
         let code = message.code();
         let action = self.state.action(code)?;
 
