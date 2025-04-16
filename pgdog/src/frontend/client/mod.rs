@@ -296,7 +296,7 @@ impl Client {
             let request = Request::new(self.id);
             match inner.connect(&request).await {
                 Ok(()) => {
-                    inner.backend.sync_params(&self.params).await?;
+                    inner.backend.link_client(&self.params).await?;
                 }
                 Err(err) => {
                     if err.no_server() {
@@ -432,11 +432,15 @@ impl Client {
             if message.code() == 'X' {
                 return Ok(vec![].into());
             } else {
-                let message = ProtocolMessage::from_bytes(message.to_bytes()?)?;
-                if prepared_statements && message.extended() {
-                    buffer.push(self.prepared_statements.maybe_rewrite(message)?);
+                if prepared_statements {
+                    let message = ProtocolMessage::from_bytes(message.to_bytes()?)?;
+                    if message.extended() {
+                        buffer.push(self.prepared_statements.maybe_rewrite(message)?);
+                    } else {
+                        buffer.push(message);
+                    }
                 } else {
-                    buffer.push(message)
+                    buffer.push(message.into())
                 }
             }
         }
