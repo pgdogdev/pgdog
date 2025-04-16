@@ -5,6 +5,7 @@ pub mod messages;
 pub mod parameter;
 pub mod stream;
 pub mod tls;
+pub mod tweaks;
 
 use bytes::Buf;
 pub use decoder::Decoder;
@@ -12,6 +13,7 @@ pub use error::Error;
 pub use messages::*;
 pub use parameter::{Parameter, Parameters};
 pub use stream::Stream;
+pub use tweaks::tweak;
 
 use std::{io::Cursor, marker::Unpin};
 use tokio::io::{AsyncRead, AsyncReadExt};

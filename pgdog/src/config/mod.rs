@@ -147,6 +147,9 @@ pub struct Config {
     /// Statistics.
     #[serde(default)]
     pub stats: Stats,
+    /// TCP settings
+    #[serde(default)]
+    pub tcp: Tcp,
     /// Servers.
     #[serde(default)]
     pub databases: Vec<Database>,
@@ -682,6 +685,33 @@ pub enum DataType {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ManualQuery {
     pub fingerprint: String,
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Copy, Default)]
+#[serde(rename_all = "snake_case")]
+pub struct Tcp {
+    user_timeout: Option<u64>,
+    time: Option<u64>,
+    interval: Option<u64>,
+    retries: Option<u32>,
+}
+
+impl Tcp {
+    pub fn time(&self) -> Option<Duration> {
+        self.time.map(Duration::from_millis)
+    }
+
+    pub fn interval(&self) -> Option<Duration> {
+        self.interval.map(Duration::from_millis)
+    }
+
+    pub fn user_timeout(&self) -> Option<Duration> {
+        self.user_timeout.map(Duration::from_millis)
+    }
+
+    pub fn retries(&self) -> Option<u32> {
+        self.retries
+    }
 }
 
 #[cfg(test)]

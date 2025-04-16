@@ -14,7 +14,6 @@ use super::{
     pool::Address, prepared_statements::HandleResult, Error, PreparedStatements, ProtocolMessage,
     Stats,
 };
-use crate::state::State;
 use crate::{
     auth::{md5, scram::Client},
     net::messages::{
@@ -31,6 +30,7 @@ use crate::{
         CommandComplete, Parameter, Stream,
     },
 };
+use crate::{net::tweak, state::State};
 
 /// PostgreSQL server connection.
 #[derive(Debug)]
@@ -54,9 +54,7 @@ impl Server {
     pub async fn connect(addr: &Address, params: Vec<Parameter>) -> Result<Self, Error> {
         debug!("=> {}", addr);
         let stream = TcpStream::connect(addr.addr()).await?;
-
-        // Disable the Nagle algorithm.
-        stream.set_nodelay(true)?;
+        tweak(&stream)?;
 
         let mut stream = Stream::plain(stream);
 
