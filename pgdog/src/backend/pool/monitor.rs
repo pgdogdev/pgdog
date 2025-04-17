@@ -173,7 +173,7 @@ impl Monitor {
                     }
 
                     // If the server is okay, remove the ban if it had one.
-                    if Self::healthcheck(&pool).await.is_ok() {
+                    if let Ok(true) = Self::healthcheck(&pool).await {
                         unbanned = pool.lock().maybe_unban();
                     }
                 }
@@ -183,7 +183,7 @@ impl Monitor {
             }
 
             if unbanned {
-                info!("pool unbanned [{}]", pool.addr());
+                info!("pool unbanned due to healtcheck [{}]", pool.addr());
             }
         }
 
@@ -221,7 +221,7 @@ impl Monitor {
                     }
 
                     if unbanned {
-                        info!("pool unbanned [{}]", pool.addr());
+                        info!("pool unbanned due to maintenance [{}]", pool.addr());
                     }
                 }
 
@@ -270,11 +270,11 @@ impl Monitor {
     }
 
     /// Perform a periodic healthcheck on the pool.
-    async fn healthcheck(pool: &Pool) -> Result<(), Error> {
+    async fn healthcheck(pool: &Pool) -> Result<bool, Error> {
         let (conn, healthcheck_timeout, connect_timeout) = {
             let mut guard = pool.lock();
-            if !guard.online {
-                return Ok(());
+            if !guard.online || guard.banned() {
+                return Ok(false);
             }
             (
                 guard.take(&Request::default()),
@@ -293,7 +293,7 @@ impl Monitor {
             .healthcheck()
             .await?;
 
-            Ok(())
+            Ok(true)
         } else {
             // Create a new one and close it. once done.
             info!("creating new healthcheck connection [{}]", pool.addr());

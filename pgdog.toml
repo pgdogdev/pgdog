@@ -7,6 +7,7 @@ host = "0.0.0.0"
 port = 6432
 shutdown_timeout = 5_000
 openmetrics_port = 9090
+query_timeout = 5_000
 
 #
 # Admin database password.
@@ -26,6 +27,7 @@ port = 5432
 retries = 3
 time = 1000
 interval = 1000
+user_timeout = 1000
 
 
 #

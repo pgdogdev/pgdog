@@ -204,7 +204,7 @@ impl Pool {
     pub fn unban(&self) {
         let unbanned = self.lock().maybe_unban();
         if unbanned {
-            info!("pool unbanned [{}]", self.addr());
+            info!("pool unbanned manually [{}]", self.addr());
         }
     }
 

@@ -389,7 +389,7 @@ impl General {
     }
 
     fn ban_timeout() -> u64 {
-        5 * 60_000
+        Duration::from_secs(300).as_millis() as u64
     }
 
     fn rollback_timeout() -> u64 {

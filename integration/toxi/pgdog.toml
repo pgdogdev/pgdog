@@ -1,0 +1,16 @@
+[general]
+query_timeout = 5_000
+
+[[databases]]
+name = "pgdog"
+host = "127.0.0.1"
+port = 5435
+
+[tcp]
+keepalive = true
+interval = 1_000
+time =  1_000
+retries = 3
+
+[admin]
+password = "pgdog"
