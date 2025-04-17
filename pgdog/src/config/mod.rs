@@ -289,6 +289,9 @@ pub struct General {
     /// Automatically add connection pools for user/database pairs we don't have.
     #[serde(default)]
     pub passthrough_auth: PassthoughAuth,
+    /// Server connect timeout.
+    #[serde(default = "General::default_connect_timeout")]
+    pub connect_timeout: u64,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -343,6 +346,7 @@ impl Default for General {
             openmetrics_port: None,
             prepared_statements: PreparedStatements::default(),
             passthrough_auth: PassthoughAuth::default(),
+            connect_timeout: Self::default_connect_timeout(),
         }
     }
 }
@@ -394,6 +398,10 @@ impl General {
 
     fn default_shutdown_timeout() -> u64 {
         60_000
+    }
+
+    fn default_connect_timeout() -> u64 {
+        5_000
     }
 
     fn broadcast_port() -> u16 {

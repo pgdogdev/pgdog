@@ -32,11 +32,17 @@ impl Command for ShowConfig {
 
         // Reflection using JSON.
         let general = serde_json::to_value(&config.config.general)?;
-        if let Some(map) = general.as_object() {
-            for (key, value) in map {
-                let mut dr = DataRow::new();
-                dr.add(key.as_str()).add(pretty_value(key.as_str(), value)?);
-                messages.push(dr.message()?);
+        let tcp = serde_json::to_value(&config.config.tcp)?;
+        let objects = [("", general.as_object()), ("tcp_", tcp.as_object())];
+
+        for (prefix, object) in objects.iter() {
+            if let Some(object) = object {
+                for (key, value) in *object {
+                    let mut dr = DataRow::new();
+                    let name = prefix.to_string() + key.as_str();
+                    dr.add(&name).add(pretty_value(&name, value)?);
+                    messages.push(dr.message()?);
+                }
             }
         }
 
@@ -48,17 +54,26 @@ impl Command for ShowConfig {
 fn pretty_value(name: &str, value: &serde_json::Value) -> Result<String, serde_json::Error> {
     let s = serde_json::to_string(value)?;
 
-    let value =
-        if name.contains("_timeout") || name.contains("_interval") || name.contains("_delay") {
-            match s.parse::<u64>() {
-                Ok(v) => human_duration(Duration::from_millis(v)),
-                Err(_) => s,
+    let value = if name.contains("_timeout")
+        || name.contains("_interval")
+        || name.contains("_delay")
+        || name.contains("_time")
+    {
+        match s.parse::<u64>() {
+            Ok(v) => human_duration(Duration::from_millis(v)),
+            Err(_) => {
+                if s == "null" {
+                    "default".to_string()
+                } else {
+                    s
+                }
             }
-        } else if s == "null" {
-            "not configured".to_string()
-        } else {
-            s.replace("\"", "")
-        };
+        }
+    } else if s == "null" {
+        "default".to_string()
+    } else {
+        s.replace("\"", "")
+    };
 
     Ok(value)
 }

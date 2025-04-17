@@ -122,18 +122,20 @@ impl Pool {
     /// Perform a healtcheck on the connection if one is needed.
     async fn maybe_healthcheck(
         &self,
-        conn: Guard,
+        mut conn: Guard,
         healthcheck_timeout: Duration,
         healthcheck_interval: Duration,
     ) -> Result<Guard, Error> {
-        let healthcheck = Healtcheck::conditional(
-            conn,
+        let mut healthcheck = Healtcheck::conditional(
+            &mut conn,
             self.clone(),
             healthcheck_interval,
             healthcheck_timeout,
         );
 
-        healthcheck.healthcheck().await
+        healthcheck.healthcheck().await?;
+
+        Ok(conn)
     }
 
     /// Create new identical connection pool.
