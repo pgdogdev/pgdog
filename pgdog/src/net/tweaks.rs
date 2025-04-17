@@ -1,17 +1,10 @@
-use std::{
-    ffi::c_void,
-    io::Result,
-    os::fd::{AsFd, AsRawFd},
-};
+use std::io::Result;
 
 use socket2::{SockRef, TcpKeepalive};
 use tokio::net::TcpStream;
 use tracing::debug;
 
 use crate::config::config;
-
-#[cfg(target_os = "linux")]
-use libc::{setsockopt, IPPROTO_TCP, TCP_USER_TIMEOUT};
 
 pub fn tweak(socket: &TcpStream) -> Result<()> {
     let config = config().config.tcp;
@@ -35,19 +28,7 @@ pub fn tweak(socket: &TcpStream) -> Result<()> {
     sock_ref.set_tcp_keepalive(&params)?;
 
     #[cfg(target_os = "linux")]
-    if let Some(user_timeout) = config.user_timeout() {
-        let timeout = user_timeout.as_millis() as u64;
-        unsafe {
-            let sock = sock_ref.as_fd().as_raw_fd();
-            setsockopt(
-                sock,
-                IPPROTO_TCP,
-                TCP_USER_TIMEOUT,
-                timeout as *const c_void,
-                std::mem::size_of::<u64>() as u32,
-            );
-        }
-    }
+    socket.set_tcp_user_timeout(config.user_timeout());
 
     Ok(())
 }
