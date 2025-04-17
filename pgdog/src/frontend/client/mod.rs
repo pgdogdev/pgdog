@@ -156,6 +156,9 @@ impl Client {
             }
         );
 
+        let mut prepared_statements = PreparedStatements::new();
+        prepared_statements.enabled = config.prepared_statements();
+
         let mut client = Self {
             addr,
             stream,
@@ -303,7 +306,10 @@ impl Client {
             let request = Request::new(self.id);
             match inner.connect(&request).await {
                 Ok(()) => {
-                    inner.backend.link_client(&self.params).await?;
+                    inner
+                        .backend
+                        .link_client(&self.params, self.prepared_statements.enabled)
+                        .await?;
                 }
                 Err(err) => {
                     if err.no_server() {
@@ -423,7 +429,7 @@ impl Client {
 
         // Check config once per request.
         let config = config();
-        let prepared_statements = config.prepared_statements();
+        self.prepared_statements.enabled = config.prepared_statements();
         self.timeouts = Timeouts::from_config(&config.config.general);
 
         while !buffer.full() {
@@ -442,7 +448,7 @@ impl Client {
             if message.code() == 'X' {
                 return Ok(vec![].into());
             } else {
-                if prepared_statements {
+                if self.prepared_statements.enabled {
                     let message = ProtocolMessage::from_bytes(message.to_bytes()?)?;
                     if message.extended() {
                         buffer.push(self.prepared_statements.maybe_rewrite(message)?);

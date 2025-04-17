@@ -283,8 +283,12 @@ impl Connection {
         self.binding.execute(query).await
     }
 
-    pub(crate) async fn link_client(&mut self, params: &Parameters) -> Result<usize, Error> {
-        self.binding.link_client(params).await
+    pub(crate) async fn link_client(
+        &mut self,
+        params: &Parameters,
+        prepared_statements: bool,
+    ) -> Result<usize, Error> {
+        self.binding.link_client(params, prepared_statements).await
     }
 
     pub(crate) fn changed_params(&mut self) -> Parameters {

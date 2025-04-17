@@ -14,20 +14,17 @@ use super::{
     pool::Address, prepared_statements::HandleResult, Error, PreparedStatements, ProtocolMessage,
     ServerOptions, Stats,
 };
+use crate::net::{
+    messages::{DataRow, NoticeResponse},
+    parameter::Parameters,
+    tls::connector,
+    CommandComplete, Stream,
+};
 use crate::{
     auth::{md5, scram::Client},
     net::messages::{
         hello::SslReply, Authentication, BackendKeyData, ErrorResponse, FromBytes, Message,
         ParameterStatus, Password, Protocol, Query, ReadyForQuery, Startup, Terminate, ToBytes,
-    },
-};
-use crate::{
-    config::config,
-    net::{
-        messages::{DataRow, NoticeResponse},
-        parameter::Parameters,
-        tls::connector,
-        CommandComplete, Stream,
     },
 };
 use crate::{net::tweak, state::State};
@@ -337,11 +334,14 @@ impl Server {
     }
 
     /// Synchronize parameters between client and server.
-    pub async fn link_client(&mut self, params: &Parameters) -> Result<usize, Error> {
+    pub async fn link_client(
+        &mut self,
+        params: &Parameters,
+        prepared_statements: bool,
+    ) -> Result<usize, Error> {
         // Toggle support for prepared statements
         // only when client connects to this server.
-        self.prepared_statements
-            .toggle(config().prepared_statements());
+        self.prepared_statements.toggle(prepared_statements);
 
         let diff = params.merge(&mut self.params);
         if diff.changed_params > 0 {
