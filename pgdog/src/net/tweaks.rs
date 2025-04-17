@@ -14,7 +14,7 @@ pub fn tweak(socket: &TcpStream) -> Result<()> {
     socket.set_nodelay(true)?;
 
     let sock_ref = SockRef::from(socket);
-    sock_ref.set_keepalive(true)?;
+    sock_ref.set_keepalive(config.keepalive())?;
     let mut params = TcpKeepalive::new();
     if let Some(time) = config.time() {
         params = params.with_time(time);

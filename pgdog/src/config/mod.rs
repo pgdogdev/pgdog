@@ -687,16 +687,33 @@ pub struct ManualQuery {
     pub fingerprint: String,
 }
 
-#[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Copy, Default)]
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Copy)]
 #[serde(rename_all = "snake_case")]
 pub struct Tcp {
+    keepalive: bool,
     user_timeout: Option<u64>,
     time: Option<u64>,
     interval: Option<u64>,
     retries: Option<u32>,
 }
 
+impl Default for Tcp {
+    fn default() -> Self {
+        Self {
+            keepalive: true,
+            user_timeout: None,
+            time: None,
+            interval: None,
+            retries: None,
+        }
+    }
+}
+
 impl Tcp {
+    pub fn keepalive(&self) -> bool {
+        self.keepalive
+    }
+
     pub fn time(&self) -> Option<Duration> {
         self.time.map(Duration::from_millis)
     }
