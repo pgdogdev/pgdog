@@ -41,8 +41,8 @@ pub fn tweak(socket: &TcpStream) -> Result<()> {
             let sock = sock_ref.as_fd().as_raw_fd();
             setsockopt(
                 sock,
+                IPPROTO_TCP,
                 TCP_USER_TIMEOUT,
-                1,
                 timeout as *const c_void,
                 std::mem::size_of::<u64>() as u32,
             );
