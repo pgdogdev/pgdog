@@ -1339,7 +1339,7 @@ pub mod test {
         let mut server = test_server().await;
         let mut params = Parameters::default();
         params.insert("application_name".into(), "test_sync_params".into());
-        let changed = server.link_client(&params).await.unwrap();
+        let changed = server.link_client(&params, true).await.unwrap();
         assert_eq!(changed, 1);
 
         let app_name = server
@@ -1348,7 +1348,7 @@ pub mod test {
             .unwrap();
         assert_eq!(app_name[0], "test_sync_params");
 
-        let changed = server.link_client(&params).await.unwrap();
+        let changed = server.link_client(&params, true).await.unwrap();
         assert_eq!(changed, 0);
     }
 }
