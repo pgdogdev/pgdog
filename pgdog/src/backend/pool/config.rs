@@ -100,6 +100,15 @@ impl Config {
         Duration::from_millis(self.rollback_timeout)
     }
 
+    /// Read timeout.
+    pub fn read_timeout(&self) -> Duration {
+        Duration::from_millis(self.read_timeout)
+    }
+
+    pub fn query_timeout(&self) -> Duration {
+        Duration::from_millis(self.query_timeout)
+    }
+
     /// Default config for a primary.
     ///
     /// The ban is ignored by the shard router
@@ -128,6 +137,7 @@ impl Config {
             replication_mode: user.replication_mode,
             pooler_mode: user.pooler_mode.unwrap_or(general.pooler_mode),
             connect_timeout: general.connect_timeout,
+            query_timeout: general.query_timeout,
             ..Default::default()
         }
     }

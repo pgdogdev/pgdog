@@ -8,6 +8,14 @@ pub fn format_time(time: DateTime<Local>) -> String {
     time.format("%Y-%m-%d %H:%M:%S%.3f %Z").to_string()
 }
 
+pub fn human_duration_optional(duration: Option<Duration>) -> String {
+    if let Some(duration) = duration {
+        human_duration(duration)
+    } else {
+        "default".into()
+    }
+}
+
 /// Get a human-readable duration for amounts that
 /// a human would use.
 pub fn human_duration(duration: Duration) -> String {

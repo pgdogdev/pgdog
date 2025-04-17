@@ -8,7 +8,7 @@ use tokio::select;
 use tokio::time::sleep;
 use tracing::{error, info};
 
-use crate::backend::Server;
+use crate::backend::{Server, ServerOptions};
 use crate::net::messages::BackendKeyData;
 use crate::net::Parameter;
 
@@ -255,7 +255,7 @@ impl Pool {
     }
 
     /// Get startup parameters for new server connections.
-    pub(super) fn startup_parameters(&self) -> Vec<Parameter> {
+    pub(super) fn server_options(&self) -> ServerOptions {
         let mut params = vec![
             Parameter {
                 name: "application_name".into(),
@@ -283,7 +283,7 @@ impl Pool {
             });
         }
 
-        params
+        ServerOptions { params }
     }
 
     /// Pool state.

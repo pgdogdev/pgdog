@@ -13,6 +13,7 @@ use std::fs::read_to_string;
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::time::Duration;
+use std::u64;
 use std::{collections::HashMap, path::PathBuf};
 
 use arc_swap::ArcSwap;
@@ -22,7 +23,7 @@ use tracing::info;
 use tracing::warn;
 
 use crate::net::messages::Vector;
-use crate::util::random_string;
+use crate::util::{human_duration_optional, random_string};
 
 static CONFIG: Lazy<ArcSwap<ConfigAndUsers>> =
     Lazy::new(|| ArcSwap::from_pointee(ConfigAndUsers::default()));
@@ -292,6 +293,8 @@ pub struct General {
     /// Server connect timeout.
     #[serde(default = "General::default_connect_timeout")]
     pub connect_timeout: u64,
+    #[serde(default = "General::default_query_timeout")]
+    pub query_timeout: u64,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -347,6 +350,7 @@ impl Default for General {
             prepared_statements: PreparedStatements::default(),
             passthrough_auth: PassthoughAuth::default(),
             connect_timeout: Self::default_connect_timeout(),
+            query_timeout: Self::default_query_timeout(),
         }
     }
 }
@@ -390,6 +394,14 @@ impl General {
 
     fn rollback_timeout() -> u64 {
         5_000
+    }
+
+    fn default_query_timeout() -> u64 {
+        Duration::MAX.as_millis() as u64
+    }
+
+    pub(crate) fn query_timeout(&self) -> Duration {
+        Duration::from_millis(self.query_timeout)
     }
 
     fn load_balancing_strategy() -> LoadBalancingStrategy {
@@ -704,6 +716,24 @@ pub struct Tcp {
     time: Option<u64>,
     interval: Option<u64>,
     retries: Option<u32>,
+}
+
+impl std::fmt::Display for Tcp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "keepalive={} user_timeout={} time={} interval={}, retries={}",
+            self.keepalive(),
+            human_duration_optional(self.user_timeout()),
+            human_duration_optional(self.time()),
+            human_duration_optional(self.interval()),
+            if let Some(retries) = self.retries() {
+                retries.to_string()
+            } else {
+                "default".into()
+            }
+        )
+    }
 }
 
 impl Default for Tcp {

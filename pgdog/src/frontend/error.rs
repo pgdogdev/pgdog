@@ -37,6 +37,9 @@ pub enum Error {
 
     #[error("prepared staatement \"{0}\" is missing")]
     MissingPreparedStatement(String),
+
+    #[error("query timeout")]
+    Timeout(#[from] tokio::time::error::Elapsed),
 }
 
 impl Error {
