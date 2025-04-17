@@ -271,7 +271,7 @@ impl Monitor {
 
     /// Perform a periodic healthcheck on the pool.
     async fn healthcheck(pool: &Pool) -> Result<(), Error> {
-        let (conn, healthcheck_timeout) = {
+        let (conn, healthcheck_timeout, connect_timeout) = {
             let mut guard = pool.lock();
             if !guard.online {
                 return Ok(());
@@ -279,13 +279,14 @@ impl Monitor {
             (
                 guard.take(&Request::default()),
                 guard.config.healthcheck_timeout(),
+                guard.config.connect_timeout(),
             )
         };
 
-        // Have an idle connection, use that for the healtcheck.
+        // Have an idle connection, use that for the healthcheck.
         if let Some(conn) = conn {
             Healtcheck::mandatory(
-                Guard::new(pool.clone(), conn),
+                &mut Guard::new(pool.clone(), conn),
                 pool.clone(),
                 healthcheck_timeout,
             )
@@ -296,15 +297,23 @@ impl Monitor {
         } else {
             // Create a new one and close it. once done.
             info!("creating new healthcheck connection [{}]", pool.addr());
-            match Server::connect(pool.addr(), pool.startup_parameters()).await {
-                Ok(mut server) => {
-                    if let Ok(()) = server.healthcheck(";").await {
-                        return Ok(());
-                    }
+            match timeout(
+                connect_timeout,
+                Server::connect(pool.addr(), pool.startup_parameters()),
+            )
+            .await
+            {
+                Ok(Ok(mut server)) => {
+                    Healtcheck::mandatory(&mut server, pool.clone(), healthcheck_timeout)
+                        .healthcheck()
+                        .await?
+                }
+                Ok(Err(err)) => {
+                    error!("healthcheck error: {} [{}]", err, pool.addr());
                 }
 
-                Err(err) => {
-                    error!("healthcheck error: {} [{}]", err, pool.addr());
+                Err(_) => {
+                    error!("healthcheck timeout [{}]", pool.addr());
                 }
             }
 

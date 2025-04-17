@@ -127,6 +127,7 @@ impl Config {
             statement_timeout: user.statement_timeout,
             replication_mode: user.replication_mode,
             pooler_mode: user.pooler_mode.unwrap_or(general.pooler_mode),
+            connect_timeout: general.connect_timeout,
             ..Default::default()
         }
     }
