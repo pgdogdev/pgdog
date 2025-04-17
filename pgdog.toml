@@ -6,11 +6,7 @@
 host = "0.0.0.0"
 port = 6432
 shutdown_timeout = 5_000
-# query_log = "queries.txt"
-# tls_certificate = "pgdog/tests/tls/cert.pem"
-# tls_private_key = "pgdog/tests/tls/key.pem"
 openmetrics_port = 9090
-# idle_healthcheck_delay = 10000000000
 
 #
 # Admin database password.
@@ -24,6 +20,13 @@ password = "pgdog"
 [[databases]]
 name = "pgdog"
 host = "127.0.0.1"
+port = 5432
+
+[tcp]
+retries = 3
+time = 1000
+interval = 1000
+
 
 #
 # Sharded cluster with two primaries.

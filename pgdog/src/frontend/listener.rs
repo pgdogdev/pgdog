@@ -14,7 +14,7 @@ use crate::config::config;
 use crate::net::messages::BackendKeyData;
 use crate::net::messages::{hello::SslReply, Startup};
 use crate::net::tls::acceptor;
-use crate::net::Stream;
+use crate::net::{tweak, Stream};
 
 use tracing::{error, info, warn};
 
@@ -53,9 +53,6 @@ impl Listener {
                 connection = listener.accept() => {
                    let (stream, addr) = connection?;
                    let offline = comms.offline();
-
-                   // Disable the Nagle algorithm.
-                   stream.set_nodelay(true)?;
 
                    let client_comms = comms.clone();
                    let future = async move {
@@ -125,6 +122,8 @@ impl Listener {
     }
 
     async fn handle_client(stream: TcpStream, addr: SocketAddr, comms: Comms) -> Result<(), Error> {
+        tweak(&stream)?;
+
         let mut stream = Stream::plain(stream);
         let tls = acceptor();
 

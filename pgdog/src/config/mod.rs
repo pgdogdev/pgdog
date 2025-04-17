@@ -147,6 +147,9 @@ pub struct Config {
     /// Statistics.
     #[serde(default)]
     pub stats: Stats,
+    /// TCP settings
+    #[serde(default)]
+    pub tcp: Tcp,
     /// Servers.
     #[serde(default)]
     pub databases: Vec<Database>,
@@ -684,6 +687,55 @@ pub struct ManualQuery {
     pub fingerprint: String,
 }
 
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
+pub struct Tcp {
+    #[serde(default = "Tcp::default_keepalive")]
+    keepalive: bool,
+    user_timeout: Option<u64>,
+    time: Option<u64>,
+    interval: Option<u64>,
+    retries: Option<u32>,
+}
+
+impl Default for Tcp {
+    fn default() -> Self {
+        Self {
+            keepalive: Self::default_keepalive(),
+            user_timeout: None,
+            time: None,
+            interval: None,
+            retries: None,
+        }
+    }
+}
+
+impl Tcp {
+    fn default_keepalive() -> bool {
+        true
+    }
+
+    pub fn keepalive(&self) -> bool {
+        self.keepalive
+    }
+
+    pub fn time(&self) -> Option<Duration> {
+        self.time.map(Duration::from_millis)
+    }
+
+    pub fn interval(&self) -> Option<Duration> {
+        self.interval.map(Duration::from_millis)
+    }
+
+    pub fn user_timeout(&self) -> Option<Duration> {
+        self.user_timeout.map(Duration::from_millis)
+    }
+
+    pub fn retries(&self) -> Option<u32> {
+        self.retries
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -704,6 +756,13 @@ host = "127.0.0.1"
 port = 5432
 database_name = "postgres"
 
+[tcp]
+keepalive = true
+interval = 5000
+time = 1000
+user_timeout = 1000
+retries = 5
+
 [[plugins]]
 name = "pgdog_routing"
 "#;
@@ -711,5 +770,13 @@ name = "pgdog_routing"
         let config: Config = toml::from_str(source).unwrap();
         assert_eq!(config.databases[0].name, "production");
         assert_eq!(config.plugins[0].name, "pgdog_routing");
+        assert!(config.tcp.keepalive());
+        assert_eq!(config.tcp.interval().unwrap(), Duration::from_millis(5000));
+        assert_eq!(
+            config.tcp.user_timeout().unwrap(),
+            Duration::from_millis(1000)
+        );
+        assert_eq!(config.tcp.time().unwrap(), Duration::from_millis(1000));
+        assert_eq!(config.tcp.retries().unwrap(), 5);
     }
 }
