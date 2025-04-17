@@ -690,6 +690,7 @@ pub struct ManualQuery {
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Copy)]
 #[serde(rename_all = "snake_case")]
 pub struct Tcp {
+    #[serde(default = "Tcp::default_keepalive")]
     keepalive: bool,
     user_timeout: Option<u64>,
     time: Option<u64>,
@@ -700,7 +701,7 @@ pub struct Tcp {
 impl Default for Tcp {
     fn default() -> Self {
         Self {
-            keepalive: true,
+            keepalive: Self::default_keepalive(),
             user_timeout: None,
             time: None,
             interval: None,
@@ -710,6 +711,10 @@ impl Default for Tcp {
 }
 
 impl Tcp {
+    fn default_keepalive() -> bool {
+        true
+    }
+
     pub fn keepalive(&self) -> bool {
         self.keepalive
     }
