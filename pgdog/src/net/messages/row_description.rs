@@ -142,6 +142,10 @@ impl RowDescription {
 
     /// Check if the two row descriptions are materially the same.
     pub fn equivalent(&self, other: &RowDescription) -> bool {
+        if self.fields.len() != other.fields.len() {
+            return false;
+        }
+
         for (a, b) in self.fields.iter().zip(other.fields.iter()) {
             if a.name != b.name {
                 return false;
