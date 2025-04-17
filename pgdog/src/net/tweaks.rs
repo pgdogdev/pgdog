@@ -28,7 +28,7 @@ pub fn tweak(socket: &TcpStream) -> Result<()> {
     sock_ref.set_tcp_keepalive(&params)?;
 
     #[cfg(target_os = "linux")]
-    socket.set_tcp_user_timeout(config.user_timeout());
+    sock_ref.set_tcp_user_timeout(config.user_timeout());
 
     Ok(())
 }
