@@ -53,7 +53,6 @@ impl Listener {
                 connection = listener.accept() => {
                    let (stream, addr) = connection?;
                    let offline = comms.offline();
-                   let _ = tweak(&stream);
 
                    let client_comms = comms.clone();
                    let future = async move {
@@ -123,6 +122,8 @@ impl Listener {
     }
 
     async fn handle_client(stream: TcpStream, addr: SocketAddr, comms: Comms) -> Result<(), Error> {
+        tweak(&stream)?;
+
         let mut stream = Stream::plain(stream);
         let tls = acceptor();
 
