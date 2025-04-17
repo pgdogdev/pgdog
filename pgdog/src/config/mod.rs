@@ -756,6 +756,13 @@ host = "127.0.0.1"
 port = 5432
 database_name = "postgres"
 
+[tcp]
+keepalive = true
+interval = 5000
+time = 1000
+user_timeout = 1000
+retries = 5
+
 [[plugins]]
 name = "pgdog_routing"
 "#;
@@ -763,5 +770,13 @@ name = "pgdog_routing"
         let config: Config = toml::from_str(source).unwrap();
         assert_eq!(config.databases[0].name, "production");
         assert_eq!(config.plugins[0].name, "pgdog_routing");
+        assert!(config.tcp.keepalive());
+        assert_eq!(config.tcp.interval().unwrap(), Duration::from_millis(5000));
+        assert_eq!(
+            config.tcp.user_timeout().unwrap(),
+            Duration::from_millis(1000)
+        );
+        assert_eq!(config.tcp.time().unwrap(), Duration::from_millis(1000));
+        assert_eq!(config.tcp.retries().unwrap(), 5);
     }
 }
