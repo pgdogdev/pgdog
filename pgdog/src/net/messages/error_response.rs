@@ -8,7 +8,7 @@ use super::prelude::*;
 /// ErrorResponse (B) message.
 #[derive(Debug)]
 pub struct ErrorResponse {
-    pub severity: String,
+    severity: String,
     pub code: String,
     pub message: String,
     pub detail: Option<String>,
@@ -20,7 +20,7 @@ pub struct ErrorResponse {
 impl Default for ErrorResponse {
     fn default() -> Self {
         Self {
-            severity: "NOTICE".into(),
+            severity: "ERROR".into(),
             code: String::default(),
             message: String::default(),
             detail: None,
@@ -89,7 +89,7 @@ impl ErrorResponse {
     pub fn from_err(err: &impl std::error::Error) -> Self {
         let message = err.to_string();
         Self {
-            severity: "FATAL".into(),
+            severity: "ERROR".into(),
             code: "58000".into(),
             message,
             detail: None,

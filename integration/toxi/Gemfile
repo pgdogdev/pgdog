@@ -1,9 +1,9 @@
 # frozen_string_literal: true
 
 source 'https://rubygems.org'
+gem 'concurrent-ruby'
 gem 'pg'
 gem 'rails'
 gem 'rspec', '~> 3.4'
 gem 'rubocop'
 gem 'toxiproxy'
-gem 'concurrent-ruby'

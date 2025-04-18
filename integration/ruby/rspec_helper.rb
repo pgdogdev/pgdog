@@ -5,6 +5,24 @@ require 'rspec'
 require 'pg'
 require 'toxiproxy'
 
+def admin
+  PG.connect('postgres://admin:pgdog@127.0.0.1:6432/admin')
+end
+
+def failover
+  PG.connect('postgres://pgdog:pgdog@127.0.0.1:6432/failover')
+end
+
+def admin_stats(database, column = nil)
+  conn = admin
+  stats = conn.exec 'SHOW STATS'
+  conn.close
+  stats = stats.select { |item| item['database'] == database }
+  return stats.map { |item| item[column].to_i } unless column.nil?
+
+  stats
+end
+
 def ensure_done
   conn =  PG.connect(dbname: 'admin', user: 'admin', password: 'pgdog', port: 6432, host: '127.0.0.1')
   pools = conn.exec 'SHOW POOLS'
