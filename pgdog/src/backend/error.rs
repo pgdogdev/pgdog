@@ -83,6 +83,9 @@ pub enum Error {
 
     #[error("decoder is missing required data to decode row")]
     DecoderRowError,
+
+    #[error("read timeout")]
+    ReadTimeout,
 }
 
 impl Error {

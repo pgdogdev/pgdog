@@ -12,22 +12,19 @@ use tracing::{debug, error, info, trace, warn};
 
 use super::{
     pool::Address, prepared_statements::HandleResult, Error, PreparedStatements, ProtocolMessage,
-    Stats,
+    ServerOptions, Stats,
+};
+use crate::net::{
+    messages::{DataRow, NoticeResponse},
+    parameter::Parameters,
+    tls::connector,
+    CommandComplete, Stream,
 };
 use crate::{
     auth::{md5, scram::Client},
     net::messages::{
         hello::SslReply, Authentication, BackendKeyData, ErrorResponse, FromBytes, Message,
         ParameterStatus, Password, Protocol, Query, ReadyForQuery, Startup, Terminate, ToBytes,
-    },
-};
-use crate::{
-    config::config,
-    net::{
-        messages::{DataRow, NoticeResponse},
-        parameter::Parameters,
-        tls::connector,
-        CommandComplete, Parameter, Stream,
     },
 };
 use crate::{net::tweak, state::State};
@@ -39,7 +36,7 @@ pub struct Server {
     stream: Option<Stream>,
     id: BackendKeyData,
     params: Parameters,
-    original_params: Parameters,
+    options: ServerOptions,
     changed_params: Parameters,
     stats: Stats,
     prepared_statements: PreparedStatements,
@@ -51,7 +48,7 @@ pub struct Server {
 
 impl Server {
     /// Create new PostgreSQL server connection.
-    pub async fn connect(addr: &Address, params: Vec<Parameter>) -> Result<Self, Error> {
+    pub async fn connect(addr: &Address, options: ServerOptions) -> Result<Self, Error> {
         debug!("=> {}", addr);
         let stream = TcpStream::connect(addr.addr()).await?;
         tweak(&stream)?;
@@ -79,7 +76,10 @@ impl Server {
         }
 
         stream
-            .write_all(&Startup::new(&addr.user, &addr.database_name, params).to_bytes()?)
+            .write_all(
+                &Startup::new(&addr.user, &addr.database_name, options.params.clone())
+                    .to_bytes()?,
+            )
             .await?;
         stream.flush().await?;
 
@@ -169,7 +169,7 @@ impl Server {
             addr: addr.clone(),
             stream: Some(stream),
             id,
-            original_params: params.clone(),
+            options,
             params,
             changed_params: Parameters::default(),
             stats: Stats::connect(id, addr),
@@ -276,6 +276,7 @@ impl Server {
                         }
                     }
                 }
+
                 Err(err) => {
                     self.stats.state(State::Error);
                     return Err(err.into());
@@ -333,11 +334,14 @@ impl Server {
     }
 
     /// Synchronize parameters between client and server.
-    pub async fn link_client(&mut self, params: &Parameters) -> Result<usize, Error> {
+    pub async fn link_client(
+        &mut self,
+        params: &Parameters,
+        prepared_statements: bool,
+    ) -> Result<usize, Error> {
         // Toggle support for prepared statements
         // only when client connects to this server.
-        self.prepared_statements
-            .toggle(config().prepared_statements());
+        self.prepared_statements.toggle(prepared_statements);
 
         let diff = params.merge(&mut self.params);
         if diff.changed_params > 0 {
@@ -526,7 +530,7 @@ impl Server {
 
     #[inline]
     pub fn reset_params(&mut self) {
-        self.params = self.original_params.clone();
+        self.params = self.options.params.clone().into();
     }
 
     /// Server connection unique identifier.
@@ -637,7 +641,7 @@ pub mod test {
                 id,
                 params: Parameters::default(),
                 changed_params: Parameters::default(),
-                original_params: Parameters::default(),
+                options: ServerOptions::default(),
                 stats: Stats::connect(id, &addr),
                 prepared_statements: super::PreparedStatements::new(),
                 addr,
@@ -667,7 +671,9 @@ pub mod test {
             database_name: "pgdog".into(),
         };
 
-        Server::connect(&address, vec![]).await.unwrap()
+        Server::connect(&address, ServerOptions::default())
+            .await
+            .unwrap()
     }
 
     #[tokio::test]
@@ -1333,7 +1339,7 @@ pub mod test {
         let mut server = test_server().await;
         let mut params = Parameters::default();
         params.insert("application_name".into(), "test_sync_params".into());
-        let changed = server.link_client(&params).await.unwrap();
+        let changed = server.link_client(&params, true).await.unwrap();
         assert_eq!(changed, 1);
 
         let app_name = server
@@ -1342,7 +1348,7 @@ pub mod test {
             .unwrap();
         assert_eq!(app_name[0], "test_sync_params");
 
-        let changed = server.link_client(&params).await.unwrap();
+        let changed = server.link_client(&params, true).await.unwrap();
         assert_eq!(changed, 0);
     }
 }

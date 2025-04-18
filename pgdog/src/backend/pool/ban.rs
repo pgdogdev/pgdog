@@ -14,13 +14,21 @@ pub struct Ban {
     pub(super) ban_timeout: Duration,
 }
 
+impl std::fmt::Display for Ban {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} ({:.3}ms)", self.reason, self.ban_timeout.as_millis())
+    }
+}
+
 impl Ban {
     /// Check if the ban has expired.
     pub(super) fn expired(&self, now: Instant) -> bool {
         if self.reason == Error::ManualBan {
             false
         } else {
-            now.duration_since(self.created_at) > self.ban_timeout
+            let duration = now.duration_since(self.created_at);
+            let expired = duration > self.ban_timeout;
+            expired
         }
     }
 }

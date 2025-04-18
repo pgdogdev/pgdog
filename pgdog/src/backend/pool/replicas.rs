@@ -50,7 +50,8 @@ impl Replicas {
         .await
         {
             Ok(Ok(conn)) => Ok(conn),
-            _ => Err(Error::ReplicaCheckoutTimeout),
+            Ok(Err(err)) => Err(err),
+            Err(_) => Err(Error::ReplicaCheckoutTimeout),
         }
     }
 

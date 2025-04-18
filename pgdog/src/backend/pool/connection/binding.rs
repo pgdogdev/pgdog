@@ -208,20 +208,28 @@ impl Binding {
         Ok(())
     }
 
-    pub(super) async fn link_client(&mut self, params: &Parameters) -> Result<usize, Error> {
+    pub(super) async fn link_client(
+        &mut self,
+        params: &Parameters,
+        prepared_statements: bool,
+    ) -> Result<usize, Error> {
         match self {
-            Binding::Server(Some(ref mut server)) => server.link_client(params).await,
+            Binding::Server(Some(ref mut server)) => {
+                server.link_client(params, prepared_statements).await
+            }
             Binding::MultiShard(ref mut servers, _) => {
                 let mut max = 0;
                 for server in servers {
-                    let synced = server.link_client(params).await?;
+                    let synced = server.link_client(params, prepared_statements).await?;
                     if max < synced {
                         max = synced;
                     }
                 }
                 Ok(max)
             }
-            Binding::Replication(Some(ref mut server), _) => server.link_client(params).await,
+            Binding::Replication(Some(ref mut server), _) => {
+                server.link_client(params, prepared_statements).await
+            }
 
             _ => Ok(0),
         }

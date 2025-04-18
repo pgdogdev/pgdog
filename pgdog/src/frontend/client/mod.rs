@@ -3,6 +3,8 @@
 use std::net::SocketAddr;
 use std::time::Instant;
 
+use timeouts::Timeouts;
+use tokio::time::timeout;
 use tokio::{select, spawn};
 use tracing::{debug, error, info, trace};
 
@@ -25,6 +27,7 @@ use crate::net::{parameter::Parameters, Stream};
 
 pub mod counter;
 pub mod inner;
+pub mod timeouts;
 
 use inner::{Inner, InnerBorrow};
 
@@ -41,6 +44,7 @@ pub struct Client {
     shard: Option<usize>,
     prepared_statements: PreparedStatements,
     in_transaction: bool,
+    timeouts: Timeouts,
 }
 
 impl Client {
@@ -152,6 +156,9 @@ impl Client {
             }
         );
 
+        let mut prepared_statements = PreparedStatements::new();
+        prepared_statements.enabled = config.prepared_statements();
+
         let mut client = Self {
             addr,
             stream,
@@ -163,6 +170,7 @@ impl Client {
             params,
             prepared_statements: PreparedStatements::new(),
             in_transaction: false,
+            timeouts: Timeouts::from_config(&config.config.general),
         };
 
         if client.admin {
@@ -199,6 +207,8 @@ impl Client {
         let shutdown = self.comms.shutting_down();
 
         loop {
+            let query_timeout = self.timeouts.query_timeout(&inner.stats.state);
+
             select! {
                 _ = shutdown.notified() => {
                     if !inner.backend.connected() && inner.start_transaction.is_none() {
@@ -206,8 +216,8 @@ impl Client {
                     }
                 }
 
-                message = inner.backend.read() => {
-                    let message = message?;
+                message = timeout(query_timeout, inner.backend.read()) => {
+                    let message = message??;
                     let disconnect = self.server_message(inner.get(), message).await?;
                     if disconnect {
                         break;
@@ -296,7 +306,10 @@ impl Client {
             let request = Request::new(self.id);
             match inner.connect(&request).await {
                 Ok(()) => {
-                    inner.backend.link_client(&self.params).await?;
+                    inner
+                        .backend
+                        .link_client(&self.params, self.prepared_statements.enabled)
+                        .await?;
                 }
                 Err(err) => {
                     if err.no_server() {
@@ -413,8 +426,11 @@ impl Client {
         let mut buffer = Buffer::new();
         // Only start timer once we receive the first message.
         let mut timer = None;
-        // Read this once per request.
-        let prepared_statements = config().prepared_statements();
+
+        // Check config once per request.
+        let config = config();
+        self.prepared_statements.enabled = config.prepared_statements();
+        self.timeouts = Timeouts::from_config(&config.config.general);
 
         while !buffer.full() {
             let message = match self.stream.read().await {
@@ -432,7 +448,7 @@ impl Client {
             if message.code() == 'X' {
                 return Ok(vec![].into());
             } else {
-                if prepared_statements {
+                if self.prepared_statements.enabled {
                     let message = ProtocolMessage::from_bytes(message.to_bytes()?)?;
                     if message.extended() {
                         buffer.push(self.prepared_statements.maybe_rewrite(message)?);

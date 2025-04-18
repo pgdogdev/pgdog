@@ -130,6 +130,8 @@ impl Monitor {
                             // available.
                             self.pool.lock().created();
                             comms.ready.notify_waiters();
+                        } else {
+                            self.pool.ban(Error::ServerError);
                         }
                     }
                 }
@@ -173,7 +175,7 @@ impl Monitor {
                     }
 
                     // If the server is okay, remove the ban if it had one.
-                    if Self::healthcheck(&pool).await.is_ok() {
+                    if let Ok(true) = Self::healthcheck(&pool).await {
                         unbanned = pool.lock().maybe_unban();
                     }
                 }
@@ -183,7 +185,7 @@ impl Monitor {
             }
 
             if unbanned {
-                info!("pool unbanned [{}]", pool.addr());
+                info!("pool unbanned due to healtcheck [{}]", pool.addr());
             }
         }
 
@@ -221,7 +223,7 @@ impl Monitor {
                     }
 
                     if unbanned {
-                        info!("pool unbanned [{}]", pool.addr());
+                        info!("pool unbanned due to maintenance [{}]", pool.addr());
                     }
                 }
 
@@ -235,9 +237,9 @@ impl Monitor {
     /// Replenish pool with one new connection.
     async fn replenish(&self, connect_timeout: Duration) -> bool {
         let mut ok = false;
-        let params = self.pool.startup_parameters();
+        let options = self.pool.server_options();
 
-        match timeout(connect_timeout, Server::connect(self.pool.addr(), params)).await {
+        match timeout(connect_timeout, Server::connect(self.pool.addr(), options)).await {
             Ok(Ok(conn)) => {
                 ok = true;
                 self.pool.lock().put(conn);
@@ -270,11 +272,11 @@ impl Monitor {
     }
 
     /// Perform a periodic healthcheck on the pool.
-    async fn healthcheck(pool: &Pool) -> Result<(), Error> {
+    async fn healthcheck(pool: &Pool) -> Result<bool, Error> {
         let (conn, healthcheck_timeout, connect_timeout) = {
             let mut guard = pool.lock();
-            if !guard.online {
-                return Ok(());
+            if !guard.online || guard.banned() {
+                return Ok(false);
             }
             (
                 guard.take(&Request::default()),
@@ -293,13 +295,13 @@ impl Monitor {
             .healthcheck()
             .await?;
 
-            Ok(())
+            Ok(true)
         } else {
             // Create a new one and close it. once done.
             info!("creating new healthcheck connection [{}]", pool.addr());
             match timeout(
                 connect_timeout,
-                Server::connect(pool.addr(), pool.startup_parameters()),
+                Server::connect(pool.addr(), pool.server_options()),
             )
             .await
             {

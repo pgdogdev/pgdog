@@ -19,10 +19,21 @@ pub use rewrite::Rewrite;
 
 static CACHE: Lazy<PreparedStatements> = Lazy::new(PreparedStatements::default);
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct PreparedStatements {
     pub(super) global: Arc<Mutex<GlobalCache>>,
     pub(super) local: HashMap<String, String>,
+    pub(super) enabled: bool,
+}
+
+impl Default for PreparedStatements {
+    fn default() -> Self {
+        Self {
+            global: Arc::new(Mutex::new(GlobalCache::default())),
+            local: HashMap::default(),
+            enabled: true,
+        }
+    }
 }
 
 impl PreparedStatements {

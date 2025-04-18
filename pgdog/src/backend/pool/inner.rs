@@ -3,6 +3,8 @@
 use std::collections::VecDeque;
 use std::{cmp::max, time::Instant};
 
+use tracing::debug;
+
 use crate::backend::Server;
 use crate::net::messages::BackendKeyData;
 
@@ -272,12 +274,12 @@ impl Inner {
     #[inline]
     pub fn maybe_ban(&mut self, now: Instant, reason: Error) -> bool {
         if self.config.bannable || reason == Error::ManualBan {
-            self.ban = Some(Ban {
+            let ban = Ban {
                 created_at: now,
                 reason,
                 ban_timeout: self.config.ban_timeout(),
-            });
-
+            };
+            self.ban = Some(ban);
             true
         } else {
             false

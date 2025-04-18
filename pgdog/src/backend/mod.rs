@@ -8,6 +8,7 @@ pub mod protocol;
 pub mod replication;
 pub mod schema;
 pub mod server;
+pub mod server_options;
 pub mod stats;
 
 pub use error::Error;
@@ -17,4 +18,5 @@ pub use protocol::*;
 pub use replication::ShardedTables;
 pub use schema::Schema;
 pub use server::Server;
+pub use server_options::ServerOptions;
 pub use stats::Stats;

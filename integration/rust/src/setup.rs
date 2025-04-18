@@ -40,3 +40,40 @@ pub async fn connections_sqlx() -> Vec<Pool<Postgres>> {
 
     pools
 }
+
+pub async fn connection_failover() -> Pool<Postgres> {
+    let pool = PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&format!("postgres://pgdog:pgdog@127.0.0.1:6432/failover"))
+        .await
+        .unwrap();
+
+    pool
+}
+
+pub async fn admin_tokio() -> Client {
+    let (client, connection) = tokio_postgres::connect(
+        &format!("host=127.0.0.1 user=admin dbname=admin password=pgdog port=6432",),
+        NoTls,
+    )
+    .await
+    .unwrap();
+
+    tokio::spawn(async move {
+        if let Err(e) = connection.await {
+            eprintln!("connection error: {}", e);
+        }
+    });
+
+    client
+}
+
+pub async fn admin_sqlx() -> Pool<Postgres> {
+    let pool = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&format!("postgres://admin:pgdog@127.0.0.1:6432/admin"))
+        .await
+        .unwrap();
+
+    pool
+}

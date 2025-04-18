@@ -76,11 +76,13 @@ impl Connection {
         if connect {
             match self.try_conn(request, route).await {
                 Ok(()) => (),
-                Err(Error::Pool(super::Error::Offline)) => {
+                Err(Error::Pool(super::Error::Offline | super::Error::AllReplicasDown)) => {
                     self.reload()?;
                     return self.try_conn(request, route).await;
                 }
-                Err(err) => return Err(err),
+                Err(err) => {
+                    return Err(err);
+                }
             }
         }
 
@@ -283,8 +285,12 @@ impl Connection {
         self.binding.execute(query).await
     }
 
-    pub(crate) async fn link_client(&mut self, params: &Parameters) -> Result<usize, Error> {
-        self.binding.link_client(params).await
+    pub(crate) async fn link_client(
+        &mut self,
+        params: &Parameters,
+        prepared_statements: bool,
+    ) -> Result<usize, Error> {
+        self.binding.link_client(params, prepared_statements).await
     }
 
     pub(crate) fn changed_params(&mut self) -> Parameters {

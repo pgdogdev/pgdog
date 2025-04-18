@@ -8,7 +8,7 @@ use crate::config::config;
 
 pub fn tweak(socket: &TcpStream) -> Result<()> {
     let config = config().config.tcp;
-    debug!("TCP settings: {:?}", config);
+    debug!("TCP settings: {}", config);
 
     // Disable the Nagle algorithm.
     socket.set_nodelay(true)?;
@@ -28,7 +28,7 @@ pub fn tweak(socket: &TcpStream) -> Result<()> {
     sock_ref.set_tcp_keepalive(&params)?;
 
     #[cfg(target_os = "linux")]
-    sock_ref.set_tcp_user_timeout(config.user_timeout());
+    sock_ref.set_tcp_user_timeout(config.user_timeout())?;
 
     Ok(())
 }
