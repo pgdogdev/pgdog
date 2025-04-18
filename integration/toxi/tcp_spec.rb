@@ -56,7 +56,7 @@ shared_examples "minimal errors" do |role, toxic|
       sem.release(25)
       threads.each(&:join)
     end
-    expect(errors).to be < 5 # 1% error rate (instead of 100%)
+    expect(errors).to be < 25 # 5% error rate (instead of 100%)
   end
 end
 

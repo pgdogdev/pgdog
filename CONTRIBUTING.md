@@ -7,7 +7,3 @@ Contributions are welcome. If you see a bug, feel free to submit a PR with a fix
 1. Please format your code with `cargo fmt`
 2. If you're feeeling generous, `cargo clippy` as well
 3. Please write and include tests. This is production software used in one of the most important areas of the stack.
-
-## Contributor License Agreement
-
-PgDog is a company sponsoring the development of this tool. Therefore, we require that all contributors agree to our [CLA](CLA.md). While PgDog is open source and will stay so, it's important that our project continues to have financial backing. Otherwise, there will be no PgDog. :dog:
