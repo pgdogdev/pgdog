@@ -76,11 +76,13 @@ impl Connection {
         if connect {
             match self.try_conn(request, route).await {
                 Ok(()) => (),
-                Err(Error::Pool(super::Error::Offline)) => {
+                Err(Error::Pool(super::Error::Offline | super::Error::AllReplicasDown)) => {
                     self.reload()?;
                     return self.try_conn(request, route).await;
                 }
-                Err(err) => return Err(err),
+                Err(err) => {
+                    return Err(err);
+                }
             }
         }
 

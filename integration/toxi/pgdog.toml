@@ -5,6 +5,13 @@ query_timeout = 5_000
 name = "pgdog"
 host = "127.0.0.1"
 port = 5435
+role = "primary"
+
+[[databases]]
+name = "pgdog"
+host = "127.0.0.1"
+port = 5436
+role = "replica"
 
 [tcp]
 keepalive = true

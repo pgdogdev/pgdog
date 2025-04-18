@@ -17,20 +17,16 @@ shard = 1
 [[databases]]
 name = "failover"
 host = "127.0.0.1"
-port = 5433
+port = 5432
 role = "primary"
+database_name = "pgdog"
 
 [[databases]]
 name = "failover"
 host = "127.0.0.1"
-port = 5434
+port = 5432
 role = "replica"
-
-[[databases]]
-name = "failover"
-host = "127.0.0.1"
-port = 5435
-role = "replica"
+database_name = "pgdog"
 
 [[sharded_tables]]
 database = "pgdog_sharded"

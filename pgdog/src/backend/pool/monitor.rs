@@ -130,6 +130,8 @@ impl Monitor {
                             // available.
                             self.pool.lock().created();
                             comms.ready.notify_waiters();
+                        } else {
+                            self.pool.ban(Error::ServerError);
                         }
                     }
                 }
