@@ -128,7 +128,10 @@ impl Parser {
                     return Err(Error::Syntax);
                 }
             },
-            "set" => ParseResult::Set(Set::parse(&sql)?),
+            // TODO: This is not ready yet. We have a race and
+            // also the changed settings need to be propagated
+            // into the pools.
+            // "set" => ParseResult::Set(Set::parse(&sql)?),
             command => {
                 debug!("unknown admin command: {}", command);
                 return Err(Error::Syntax);
