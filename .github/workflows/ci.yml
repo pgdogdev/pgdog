@@ -89,8 +89,11 @@ jobs:
           sudo pip3 install cmake==3.31.6
           cmake --version
           cargo install cargo-nextest --version "0.9.78" --locked
+          bash integration/toxi/setup.sh
       - name: Build PgDog
         run: cargo build --release
+      - name: Run Toxi
+        run: bash integration/toxi/run.sh
       - name: Python
         run: bash integration/python/run.sh
       - name: pgbench
