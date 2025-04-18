@@ -1,4 +1,4 @@
-use crate::config::{config, update_general};
+use crate::config::config;
 
 use super::prelude::*;
 use pg_query::{parse, protobuf::a_const, NodeEnum};
@@ -58,7 +58,6 @@ impl Command for Set {
             _ => return Err(Error::Syntax),
         }
 
-        update_general(general);
         Ok(vec![])
     }
 }

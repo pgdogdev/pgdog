@@ -53,12 +53,6 @@ pub fn from_urls(urls: &[String]) -> Result<ConfigAndUsers, Error> {
     Ok(config)
 }
 
-pub fn update_general(general: General) {
-    let mut config = (*config()).clone();
-    config.config.general = general;
-    CONFIG.store(Arc::new(config));
-}
-
 /// Override some settings.
 pub fn overrides(overrides: Overrides) {
     let mut config = (*config()).clone();
