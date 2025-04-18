@@ -35,4 +35,3 @@ password = "pgdog"
 name = "pgdog"
 database = "failover"
 password = "pgdog"
-min_pool_size = 0

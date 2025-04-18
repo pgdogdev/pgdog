@@ -2,11 +2,11 @@
 
 use super::{
     pause::Pause, prelude::Message, reconnect::Reconnect, reload::Reload,
-    reset_query_cache::ResetQueryCache, setup_schema::SetupSchema, show_clients::ShowClients,
-    show_config::ShowConfig, show_lists::ShowLists, show_peers::ShowPeers, show_pools::ShowPools,
-    show_prepared_statements::ShowPreparedStatements, show_query_cache::ShowQueryCache,
-    show_servers::ShowServers, show_stats::ShowStats, show_version::ShowVersion,
-    shutdown::Shutdown, Command, Error,
+    reset_query_cache::ResetQueryCache, set::Set, setup_schema::SetupSchema,
+    show_clients::ShowClients, show_config::ShowConfig, show_lists::ShowLists,
+    show_peers::ShowPeers, show_pools::ShowPools, show_prepared_statements::ShowPreparedStatements,
+    show_query_cache::ShowQueryCache, show_servers::ShowServers, show_stats::ShowStats,
+    show_version::ShowVersion, shutdown::Shutdown, Command, Error,
 };
 
 use tracing::debug;
@@ -29,6 +29,7 @@ pub enum ParseResult {
     Shutdown(Shutdown),
     ShowLists(ShowLists),
     ShowPrepared(ShowPreparedStatements),
+    Set(Set),
 }
 
 impl ParseResult {
@@ -53,6 +54,7 @@ impl ParseResult {
             Shutdown(shutdown) => shutdown.execute().await,
             ShowLists(show_lists) => show_lists.execute().await,
             ShowPrepared(cmd) => cmd.execute().await,
+            Set(set) => set.execute().await,
         }
     }
 
@@ -77,6 +79,7 @@ impl ParseResult {
             Shutdown(shutdown) => shutdown.name(),
             ShowLists(show_lists) => show_lists.name(),
             ShowPrepared(show) => show.name(),
+            Set(set) => set.name(),
         }
     }
 }
@@ -125,6 +128,10 @@ impl Parser {
                     return Err(Error::Syntax);
                 }
             },
+            // TODO: This is not ready yet. We have a race and
+            // also the changed settings need to be propagated
+            // into the pools.
+            // "set" => ParseResult::Set(Set::parse(&sql)?),
             command => {
                 debug!("unknown admin command: {}", command);
                 return Err(Error::Syntax);

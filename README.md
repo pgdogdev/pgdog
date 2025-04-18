@@ -194,15 +194,4 @@ those organizations to share any modifications they make to PgDog, including new
 
 ## Contributions
 
-Contributions are welcome. If you see a bug, feel free to submit a PR with a fix or an issue to discuss. For any features,
-please open an issue to discuss first.
-
-The code has tests, make sure they pass first with:
-
-```
-cargo nextest run && \
-cargo fmt --check --all && \
-cargo clippy
-```
-
-`cargo-nextest` is better because it runs tests in parallel and can help surface concurrency bugs.
+Please read our [Contribution Guidelines](CONTRIBUTING.md).

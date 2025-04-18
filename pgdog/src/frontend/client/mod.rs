@@ -306,10 +306,16 @@ impl Client {
             let request = Request::new(self.id);
             match inner.connect(&request).await {
                 Ok(()) => {
-                    inner
-                        .backend
-                        .link_client(&self.params, self.prepared_statements.enabled)
-                        .await?;
+                    let query_timeout = self.timeouts.query_timeout(&inner.stats.state);
+                    // We may need to sync params with the server
+                    // and that reads from the socket.
+                    timeout(
+                        query_timeout,
+                        inner
+                            .backend
+                            .link_client(&self.params, self.prepared_statements.enabled),
+                    )
+                    .await??;
                 }
                 Err(err) => {
                     if err.no_server() {

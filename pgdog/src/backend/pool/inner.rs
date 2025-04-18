@@ -3,8 +3,6 @@
 use std::collections::VecDeque;
 use std::{cmp::max, time::Instant};
 
-use tracing::debug;
-
 use crate::backend::Server;
 use crate::net::messages::BackendKeyData;
 

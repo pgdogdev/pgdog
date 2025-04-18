@@ -71,6 +71,10 @@ impl Pool {
                     return Err(Error::Offline);
                 }
 
+                if guard.banned() {
+                    return Err(Error::Banned);
+                }
+
                 let conn = guard
                     .take(request)
                     .map(|server| Guard::new(self.clone(), server));
@@ -158,6 +162,8 @@ impl Pool {
 
         if banned {
             error!("pool banned: {} [{}]", Error::ServerError, self.addr());
+            // Tell everyone to stop waiting, this pool is broken.
+            self.comms().ready.notify_waiters();
         }
 
         // Notify clients that a connection may be available
@@ -197,6 +203,7 @@ impl Pool {
 
         if banned {
             error!("pool banned: {} [{}]", reason, self.addr());
+            self.comms().ready.notify_waiters();
         }
     }
 
