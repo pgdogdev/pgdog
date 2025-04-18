@@ -33,9 +33,13 @@ pub struct Replicas {
 impl Replicas {
     /// Create new replicas pools.
     pub fn new(addrs: &[PoolConfig], lb_strategy: LoadBalancingStrategy) -> Replicas {
+        let checkout_timeout = addrs
+            .iter()
+            .map(|c| c.config.checkout_timeout())
+            .sum::<Duration>();
         Self {
             pools: addrs.iter().map(Pool::new).collect(),
-            checkout_timeout: Duration::from_millis(5_000),
+            checkout_timeout,
             round_robin: Arc::new(AtomicUsize::new(0)),
             lb_strategy,
         }
@@ -43,12 +47,7 @@ impl Replicas {
 
     /// Get a live connection from the pool.
     pub async fn get(&self, request: &Request, primary: &Option<Pool>) -> Result<Guard, Error> {
-        match timeout(
-            self.checkout_timeout * self.pools.len() as u32,
-            self.get_internal(request, primary),
-        )
-        .await
-        {
+        match timeout(self.checkout_timeout, self.get_internal(request, primary)).await {
             Ok(Ok(conn)) => Ok(conn),
             Ok(Err(err)) => Err(err),
             Err(_) => Err(Error::ReplicaCheckoutTimeout),

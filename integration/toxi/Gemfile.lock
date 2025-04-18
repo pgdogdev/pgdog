@@ -248,6 +248,7 @@ PLATFORMS
   x86_64-linux-musl
 
 DEPENDENCIES
+  concurrent-ruby
   pg
   rails
   rspec (~> 3.4)

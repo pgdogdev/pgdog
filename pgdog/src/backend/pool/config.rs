@@ -138,6 +138,7 @@ impl Config {
             pooler_mode: user.pooler_mode.unwrap_or(general.pooler_mode),
             connect_timeout: general.connect_timeout,
             query_timeout: general.query_timeout,
+            checkout_timeout: general.checkout_timeout,
             ..Default::default()
         }
     }

@@ -51,6 +51,10 @@ impl Command for Set {
                 general.query_timeout = self.value;
             }
 
+            "checkout_timeout" => {
+                general.checkout_timeout = self.value;
+            }
+
             _ => return Err(Error::Syntax),
         }
 

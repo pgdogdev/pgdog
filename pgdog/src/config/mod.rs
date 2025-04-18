@@ -303,6 +303,9 @@ pub struct General {
     pub connect_timeout: u64,
     #[serde(default = "General::default_query_timeout")]
     pub query_timeout: u64,
+    /// Checkout timeout.
+    #[serde(default = "General::checkout_timeout")]
+    pub checkout_timeout: u64,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -359,6 +362,7 @@ impl Default for General {
             passthrough_auth: PassthoughAuth::default(),
             connect_timeout: Self::default_connect_timeout(),
             query_timeout: Self::default_query_timeout(),
+            checkout_timeout: Self::checkout_timeout(),
         }
     }
 }
@@ -426,6 +430,10 @@ impl General {
 
     fn broadcast_port() -> u16 {
         Self::port() + 1
+    }
+
+    fn checkout_timeout() -> u64 {
+        Duration::from_secs(5).as_millis() as u64
     }
 
     /// Get shutdown timeout as a duration.
