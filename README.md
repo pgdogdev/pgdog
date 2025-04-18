@@ -194,6 +194,8 @@ those organizations to share any modifications they make to PgDog, including new
 
 ## Contributions
 
+Please read our [Contribution Guidelines](CONTRIBUTING.md).
+
 Contributions are welcome. If you see a bug, feel free to submit a PR with a fix or an issue to discuss. For any features,
 please open an issue to discuss first.
 
