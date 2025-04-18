@@ -280,8 +280,6 @@ impl Inner {
                 ban_timeout: self.config.ban_timeout(),
             };
             self.ban = Some(ban);
-            debug!("{}", ban);
-
             true
         } else {
             false
