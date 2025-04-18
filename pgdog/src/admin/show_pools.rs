@@ -25,6 +25,7 @@ impl Command for ShowPools {
             Field::text("addr"),
             Field::numeric("port"),
             Field::numeric("shard"),
+            Field::text("role"),
             Field::numeric("cl_waiting"),
             Field::numeric("sv_idle"),
             Field::numeric("sv_active"),
@@ -41,7 +42,7 @@ impl Command for ShowPools {
         let mut messages = vec![rd.message()?];
         for (user, cluster) in databases().all() {
             for (shard_num, shard) in cluster.shards().iter().enumerate() {
-                for pool in shard.pools() {
+                for (role, pool) in shard.pools_with_roles() {
                     let mut row = DataRow::new();
                     let state = pool.state();
                     let maxwait = state.maxwait.as_secs() as i64;
@@ -51,6 +52,7 @@ impl Command for ShowPools {
                         .add(pool.addr().host.as_str())
                         .add(pool.addr().port as i64)
                         .add(shard_num as i64)
+                        .add(role.to_string())
                         .add(state.waiting)
                         .add(state.idle)
                         .add(state.checked_out)
