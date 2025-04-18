@@ -28,6 +28,8 @@ use crate::util::{human_duration_optional, random_string};
 static CONFIG: Lazy<ArcSwap<ConfigAndUsers>> =
     Lazy::new(|| ArcSwap::from_pointee(ConfigAndUsers::default()));
 
+// static LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+
 /// Load configuration.
 pub fn config() -> Arc<ConfigAndUsers> {
     CONFIG.load().clone()
@@ -49,6 +51,12 @@ pub fn from_urls(urls: &[String]) -> Result<ConfigAndUsers, Error> {
     let config = ConfigAndUsers::from_urls(urls)?;
     CONFIG.store(Arc::new(config.clone()));
     Ok(config)
+}
+
+pub fn update_general(general: General) {
+    let mut config = (*config()).clone();
+    config.config.general = general;
+    CONFIG.store(Arc::new(config));
 }
 
 /// Override some settings.

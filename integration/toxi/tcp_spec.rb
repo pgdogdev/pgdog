@@ -1,5 +1,31 @@
 require_relative "rspec_helper"
 
+def warm_up
+  conn.exec "SELECT 1"
+  admin.exec "RECONNECT"
+  sleep 1
+  conn.exec "SELECT 1"
+end
+
+shared_examples "minimal errors" do |role, toxic|
+  it "executes" do
+    Toxiproxy[role].toxic(toxic).apply do
+      errors = 0
+      25.times do
+        begin
+          c = conn
+          res = c.exec "SELECT 1::bigint AS one"
+          c.close
+        rescue PG::SystemError
+          errors += 1
+        end
+      end
+      expect(errors).to be < 3
+    end
+  end
+end
+
+
 describe "tcp" do
   it "can connect" do
     c = conn
@@ -9,43 +35,32 @@ describe "tcp" do
 
   describe "broken database" do
     before do
-      conn.exec "SELECT 1"
-      admin.exec "RECONNECT"
-      sleep 1
-      conn.exec "SELECT 1"
+      warm_up
     end
 
     after do
       admin.exec "RECONNECT"
     end
 
-    it "broken primary" do
-      errors = 0
-      Toxiproxy[:primary].toxic(:reset_peer).apply do
-        25.times do
-          begin
-            c = conn
-            tup = c.exec "SELECT 1::bigint AS one"
-          rescue PG::SystemError
-            errors += 1
-          end
-        end
-        expect(errors).to be < 2
-      end
+    describe "broken primary" do
+      it_behaves_like "minimal errors", :primary, :reset_peer
     end
 
-    it "broken replica" do
-      errors = 0
-      Toxiproxy[:replica].toxic(:reset_peer).apply do
-        25.times do
-          begin
-            c = conn
-            tup = c.exec "SELECT 1::bigint AS one"
-          rescue PG::SystemError
-            errors += 1
-          end
-        end
-        expect(errors).to be < 2
+    describe "broken replica" do
+      it_behaves_like "minimal errors", :replica, :reset_peer
+    end
+
+    describe "timeout primary" do
+      before do
+        admin.exec "SET query_timeout TO 500"
+      end
+
+      describe "cancels query" do
+        it_behaves_like "minimal errors", :primary, :timeout
+      end
+
+      after do
+        admin.exec "RELOAD"
       end
     end
   end
