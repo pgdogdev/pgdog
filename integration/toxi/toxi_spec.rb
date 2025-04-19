@@ -154,6 +154,9 @@ describe 'tcp' do
     end
 
     it 'primary ban is ignored' do
+      banned = admin.exec('SHOW POOLS').select do |pool|
+        pool['database'] == 'failover'
+      end.select { |item| item['banned'] == 'f' }
       Toxiproxy[:primary].toxic(:reset_peer).apply do
         c = conn
         c.exec 'BEGIN'
