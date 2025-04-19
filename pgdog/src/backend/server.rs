@@ -182,8 +182,8 @@ impl Server {
     }
 
     /// Request query cancellation for the given backend server identifier.
-    pub async fn cancel(addr: &str, id: &BackendKeyData) -> Result<(), Error> {
-        let mut stream = TcpStream::connect(addr).await?;
+    pub async fn cancel(addr: &Address, id: &BackendKeyData) -> Result<(), Error> {
+        let mut stream = TcpStream::connect(addr.addr()).await?;
         stream
             .write_all(
                 &Startup::Cancel {

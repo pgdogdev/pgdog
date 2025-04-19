@@ -207,7 +207,7 @@ impl Pool {
     /// Send a cancellation request if the client is connected to a server.
     pub async fn cancel(&self, id: &BackendKeyData) -> Result<(), super::super::Error> {
         if let Some(server) = self.peer(id) {
-            Server::cancel("127.0.0.1:5432", &server).await?;
+            Server::cancel(self.addr(), &server).await?;
         }
 
         Ok(())
