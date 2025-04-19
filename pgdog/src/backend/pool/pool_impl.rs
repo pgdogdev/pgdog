@@ -84,7 +84,7 @@ impl Pool {
                 // return error.
                 if unban {
                     unban = false;
-                    guard.ban = None;
+                    guard.maybe_unban();
                 }
 
                 if guard.banned() {
