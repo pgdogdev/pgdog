@@ -3,6 +3,7 @@
 require 'toxiproxy'
 require 'pg'
 require 'concurrent'
+require 'active_record'
 
 def conn
   PG.connect 'postgres://pgdog:pgdog@127.0.0.1:6432/failover'

@@ -2,6 +2,23 @@
 
 require_relative 'rspec_helper'
 
+class Sharded < ActiveRecord::Base
+  self.table_name = 'sharded'
+  self.primary_key = 'id'
+end
+
+def ar_conn(db, prepared)
+  ActiveRecord::Base.establish_connection(
+    adapter: 'postgresql',
+    host: '127.0.0.1',
+    port: 6432,
+    database: db,
+    password: 'pgdog',
+    user: 'pgdog',
+    prepared_statements: prepared
+  )
+end
+
 def warm_up
   conn.exec 'SELECT 1'
   admin.exec 'RECONNECT'
@@ -53,6 +70,24 @@ shared_examples 'minimal errors' do |role, toxic|
       threads.each(&:join)
     end
     expect(errors).to be < 25 # 5% error rate (instead of 100%)
+  end
+
+  it 'active record works' do
+    # Create connection pool.
+    ar_conn('failover', true)
+    # Connect (the pool is lazy)
+    Sharded.where(id: 1).first
+    errors = 0
+    # Can't ban primary because it issues SET queries
+    # that we currently route to primary.
+    Toxiproxy[role].toxic(toxic).apply do
+      25.times do
+        Sharded.where(id: 1).first
+      rescue StandardError
+        errors += 1
+      end
+    end
+    expect(errors).to eq(1)
   end
 end
 
@@ -116,6 +151,52 @@ describe 'tcp' do
           expect(banned.size).to eq(0)
         end
       end
+    end
+
+    it 'primary ban is ignored' do
+      banned = admin.exec('SHOW POOLS').select do |pool|
+        pool['database'] == 'failover'
+      end.select { |item| item['banned'] == 'f' }
+      Toxiproxy[:primary].toxic(:reset_peer).apply do
+        c = conn
+        c.exec 'BEGIN'
+        c.exec 'CREATE TABLE test(id BIGINT)'
+        c.exec 'ROLLBACK'
+      rescue StandardError
+      end
+      banned = admin.exec('SHOW POOLS').select do |pool|
+        pool['database'] == 'failover' && pool['role'] == 'primary'
+      end
+      expect(banned[0]['banned']).to eq('t')
+
+      c = conn
+      c.exec 'BEGIN'
+      c.exec 'CREATE TABLE test(id BIGINT)'
+      c.exec 'SELECT * FROM test'
+      c.exec 'ROLLBACK'
+
+      banned = admin.exec('SHOW POOLS').select do |pool|
+        pool['database'] == 'failover' && pool['role'] == 'primary'
+      end
+      expect(banned[0]['banned']).to eq('t')
+    end
+
+    it 'active record works' do
+      # Create connection pool.
+      ar_conn('failover', true)
+      # Connect (the pool is lazy)
+      Sharded.where(id: 1).first
+      errors = 0
+      # Can't ban primary because it issues SET queries
+      # that we currently route to primary.
+      Toxiproxy[:primary].toxic(:reset_peer).apply do
+        25.times do
+          Sharded.where(id: 1).first
+        rescue StandardError
+          errors += 1
+        end
+      end
+      expect(errors).to eq(1)
     end
   end
 end

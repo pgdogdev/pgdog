@@ -59,8 +59,16 @@ impl Pool {
         }
     }
 
-    /// Get a connection from the pool.
     pub async fn get(&self, request: &Request) -> Result<Guard, Error> {
+        self.get_internal(request, false).await
+    }
+
+    pub async fn get_forced(&self, request: &Request) -> Result<Guard, Error> {
+        self.get_internal(request, true).await
+    }
+
+    /// Get a connection from the pool.
+    async fn get_internal(&self, request: &Request, bypass_ban: bool) -> Result<Guard, Error> {
         loop {
             // Fast path, idle connection probably available.
             let (checkout_timeout, healthcheck_timeout, healthcheck_interval, server) = {
@@ -71,7 +79,7 @@ impl Pool {
                     return Err(Error::Offline);
                 }
 
-                if guard.banned() {
+                if guard.banned() && !bypass_ban {
                     return Err(Error::Banned);
                 }
 

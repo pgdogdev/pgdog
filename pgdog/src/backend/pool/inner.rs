@@ -127,7 +127,7 @@ impl Inner {
         let client_needs = below_max && !self.waiting.is_empty() && self.conns.is_empty();
         let maintenance_on = self.online && !self.paused;
 
-        !self.banned() && maintenance_on && (maintain_min || client_needs)
+        maintenance_on && (maintain_min || client_needs)
     }
 
     /// Check if the pool ban should be removed.
