@@ -19,7 +19,6 @@ def ar_conn(db, prepared)
   )
 end
 
-
 def warm_up
   conn.exec 'SELECT 1'
   admin.exec 'RECONNECT'
@@ -75,7 +74,7 @@ shared_examples 'minimal errors' do |role, toxic|
 
   it 'active record works' do
     # Create connection pool.
-    ar_conn("failover", true)
+    ar_conn('failover', true)
     # Connect (the pool is lazy)
     Sharded.where(id: 1).first
     errors = 0
@@ -83,11 +82,9 @@ shared_examples 'minimal errors' do |role, toxic|
     # that we currently route to primary.
     Toxiproxy[role].toxic(toxic).apply do
       25.times do
-        begin
-          Sharded.where(id: 1).first
-        rescue StandardError
-          errors += 1
-        end
+        Sharded.where(id: 1).first
+      rescue StandardError
+        errors += 1
       end
     end
     expect(errors).to eq(1)
@@ -156,36 +153,34 @@ describe 'tcp' do
       end
     end
 
-    it "primary ban is ignored" do
+    it 'primary ban is ignored' do
       Toxiproxy[:primary].toxic(:reset_peer).apply do
-        begin
-          c = conn
-          c.exec "BEGIN"
-          c.exec "CREATE TABLE test(id BIGINT)"
-          c.exec "ROLLBACK"
-        rescue StandardError
-        end
+        c = conn
+        c.exec 'BEGIN'
+        c.exec 'CREATE TABLE test(id BIGINT)'
+        c.exec 'ROLLBACK'
+      rescue StandardError
       end
-      banned = admin.exec("SHOW POOLS").select do |pool|
-        pool["database"] == "failover" && pool["role"] == "primary"
+      banned = admin.exec('SHOW POOLS').select do |pool|
+        pool['database'] == 'failover' && pool['role'] == 'primary'
       end
-      expect(banned[0]["banned"]).to eq("t")
+      expect(banned[0]['banned']).to eq('t')
 
       c = conn
-      c.exec "BEGIN"
-      c.exec "CREATE TABLE test(id BIGINT)"
-      c.exec "SELECT * FROM test"
-      c.exec "ROLLBACK"
+      c.exec 'BEGIN'
+      c.exec 'CREATE TABLE test(id BIGINT)'
+      c.exec 'SELECT * FROM test'
+      c.exec 'ROLLBACK'
 
-      banned = admin.exec("SHOW POOLS").select do |pool|
-        pool["database"] == "failover" && pool["role"] == "primary"
+      banned = admin.exec('SHOW POOLS').select do |pool|
+        pool['database'] == 'failover' && pool['role'] == 'primary'
       end
-      expect(banned[0]["banned"]).to eq("t")
+      expect(banned[0]['banned']).to eq('t')
     end
 
     it 'active record works' do
       # Create connection pool.
-      ar_conn("failover", true)
+      ar_conn('failover', true)
       # Connect (the pool is lazy)
       Sharded.where(id: 1).first
       errors = 0
@@ -193,11 +188,9 @@ describe 'tcp' do
       # that we currently route to primary.
       Toxiproxy[:primary].toxic(:reset_peer).apply do
         25.times do
-          begin
-            Sharded.where(id: 1).first
-          rescue StandardError
-            errors += 1
-          end
+          Sharded.where(id: 1).first
+        rescue StandardError
+          errors += 1
         end
       end
       expect(errors).to eq(1)
