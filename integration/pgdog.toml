@@ -33,6 +33,20 @@ port = 5436
 role = "replica"
 database_name = "pgdog"
 
+[[databases]]
+name = "failover"
+host = "127.0.0.1"
+port = 5437
+role = "replica"
+database_name = "pgdog"
+
+[[databases]]
+name = "failover"
+host = "127.0.0.1"
+port = 5438
+role = "replica"
+database_name = "pgdog"
+
 [[sharded_tables]]
 database = "pgdog_sharded"
 name = "sharded"
