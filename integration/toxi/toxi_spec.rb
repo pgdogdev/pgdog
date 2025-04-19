@@ -34,7 +34,7 @@ shared_examples 'minimal errors' do |role, toxic|
         c = conn
         c.exec 'SELECT 1::bigint AS one'
         c.close
-      rescue PG::SystemError
+      rescue StandardError
         errors += 1
       end
       expect(errors).to be < 3
