@@ -287,7 +287,7 @@ impl QueryParser {
     }
 
     fn set(_stmt: &VariableSetStmt) -> Result<Command, Error> {
-        Ok(Command::Query(Route::write(Shard::All)))
+        Ok(Command::Query(Route::read(Shard::All)))
     }
 
     fn select(

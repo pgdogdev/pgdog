@@ -319,7 +319,7 @@ impl Client {
                 }
                 Err(err) => {
                     if err.no_server() {
-                        error!("connection pool is down");
+                        error!("connection pool is down [{}]", self.addr);
                         self.stream.error(ErrorResponse::connection()).await?;
                         return Ok(false);
                     } else {
