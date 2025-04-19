@@ -117,6 +117,8 @@ describe 'tcp' do
 
     describe 'broken replica' do
       it_behaves_like 'minimal errors', :replica, :reset_peer
+      it_behaves_like 'minimal errors', :replica2, :reset_peer
+      it_behaves_like 'minimal errors', :replica3, :reset_peer
     end
 
     describe 'timeout primary' do
@@ -134,14 +136,18 @@ describe 'tcp' do
         25.times do
           Toxiproxy[:primary].toxic(:reset_peer).apply do
             Toxiproxy[:replica].toxic(:reset_peer).apply do
-              2.times do
-                conn.exec_params 'SELECT $1::bigint', [1]
-              rescue StandardError
+              Toxiproxy[:replica2].toxic(:reset_peer).apply do
+                Toxiproxy[:replica3].toxic(:reset_peer).apply do
+                  4.times do
+                    conn.exec_params 'SELECT $1::bigint', [1]
+                  rescue StandardError
+                  end
+                  banned = admin.exec('SHOW POOLS').select do |pool|
+                    pool['database'] == 'failover'
+                  end.select { |item| item['banned'] == 't' }
+                  expect(banned.size).to eq(4)
+                end
               end
-              banned = admin.exec('SHOW POOLS').select do |pool|
-                pool['database'] == 'failover'
-              end.select { |item| item['banned'] == 't' }
-              expect(banned.size).to eq(2)
             end
           end
           conn.exec 'SELECT $1::bigint', [25]
@@ -154,7 +160,7 @@ describe 'tcp' do
     end
 
     it 'primary ban is ignored' do
-      banned = admin.exec('SHOW POOLS').select do |pool|
+      admin.exec('SHOW POOLS').select do |pool|
         pool['database'] == 'failover'
       end.select { |item| item['banned'] == 'f' }
       Toxiproxy[:primary].toxic(:reset_peer).apply do
@@ -178,7 +184,7 @@ describe 'tcp' do
       banned = admin.exec('SHOW POOLS').select do |pool|
         pool['database'] == 'failover' && pool['role'] == 'primary'
       end
-      expect(banned[0]['banned']).to eq('t')
+      expect(banned[0]['banned']).to eq('f')
     end
 
     it 'active record works' do

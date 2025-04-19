@@ -59,16 +59,16 @@ impl Pool {
         }
     }
 
-    pub async fn get(&self, request: &Request) -> Result<Guard, Error> {
-        self.get_internal(request, false).await
-    }
-
     pub async fn get_forced(&self, request: &Request) -> Result<Guard, Error> {
         self.get_internal(request, true).await
     }
 
+    pub async fn get(&self, request: &Request) -> Result<Guard, Error> {
+        self.get_internal(request, false).await
+    }
+
     /// Get a connection from the pool.
-    async fn get_internal(&self, request: &Request, bypass_ban: bool) -> Result<Guard, Error> {
+    async fn get_internal(&self, request: &Request, mut unban: bool) -> Result<Guard, Error> {
         loop {
             // Fast path, idle connection probably available.
             let (checkout_timeout, healthcheck_timeout, healthcheck_interval, server) = {
@@ -79,7 +79,15 @@ impl Pool {
                     return Err(Error::Offline);
                 }
 
-                if guard.banned() && !bypass_ban {
+                // Try this only once. If the pool still
+                // has an error after a checkout attempt,
+                // return error.
+                if unban {
+                    unban = false;
+                    guard.ban = None;
+                }
+
+                if guard.banned() {
                     return Err(Error::Banned);
                 }
 
@@ -118,6 +126,10 @@ impl Pool {
             select! {
                 // A connection may be available.
                 _ =  self.comms().ready.notified() => {
+                    let waited_for = request.created_at.elapsed();
+                    if waited_for >= checkout_timeout {
+                        return Err(Error::CheckoutTimeout);
+                    }
                     continue;
                 }
 
@@ -145,7 +157,11 @@ impl Pool {
             healthcheck_timeout,
         );
 
-        healthcheck.healthcheck().await?;
+        if let Err(err) = healthcheck.healthcheck().await {
+            drop(conn);
+            self.ban(Error::HealthcheckError);
+            return Err(err);
+        }
 
         Ok(conn)
     }
@@ -169,7 +185,11 @@ impl Pool {
         let banned = self.lock().maybe_check_in(server, now);
 
         if banned {
-            error!("pool banned: {} [{}]", Error::ServerError, self.addr());
+            error!(
+                "pool banned on check in: {} [{}]",
+                Error::ServerError,
+                self.addr()
+            );
             // Tell everyone to stop waiting, this pool is broken.
             self.comms().ready.notify_waiters();
         }
@@ -210,7 +230,7 @@ impl Pool {
         let banned = self.lock().maybe_ban(now, reason);
 
         if banned {
-            error!("pool banned: {} [{}]", reason, self.addr());
+            error!("pool banned explicitly: {} [{}]", reason, self.addr());
             self.comms().ready.notify_waiters();
         }
     }

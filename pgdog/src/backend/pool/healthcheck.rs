@@ -48,16 +48,10 @@ impl<'a> Healtcheck<'a> {
         match timeout(self.healthcheck_timeout, self.conn.healthcheck(";")).await {
             Ok(Ok(())) => Ok(()),
             Ok(Err(err)) => {
-                // drop(self.conn); // Check the connection in first.
-                self.pool.ban(Error::HealthcheckError);
                 error!("server error: {} [{}]", err, self.pool.addr());
                 Err(Error::ServerError)
             }
-            Err(_) => {
-                // drop(self.conn); // Check the connection in first.
-                self.pool.ban(Error::HealthcheckTimeout);
-                Err(Error::HealthcheckError)
-            }
+            Err(_) => Err(Error::HealthcheckError),
         }
     }
 }

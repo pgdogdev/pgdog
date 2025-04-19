@@ -11,4 +11,6 @@ ${CLI} delete primary || true
 ${CLI} delete replica || true
 ${CLI} create --listen :5435 --upstream :5432 primary
 ${CLI} create --listen :5436 --upstream :5432 replica
+${CLI} create --listen :5437 --upstream :5432 replica2
+${CLI} create --listen :5438 --upstream :5432 replica3
 ${CLI} list
