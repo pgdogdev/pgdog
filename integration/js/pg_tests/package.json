@@ -1,0 +1,17 @@
+{
+  "name": "pg_tests",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "test": "mocha"
+  },
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "pg": "^8.14.1"
+  },
+  "devDependencies": {
+    "mocha": "^11.1.0"
+  }
+}
