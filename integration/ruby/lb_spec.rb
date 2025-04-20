@@ -10,7 +10,7 @@ describe 'load balancer' do
   end
 
   describe 'random' do
-    it 'distributes traffic roughly evenly' do
+    it 'distributes traffic evenly' do
       conn = failover
 
       before = admin_stats('failover')
@@ -23,9 +23,9 @@ describe 'load balancer' do
       end
 
       transactions.each do |transaction|
-        expect(transaction).to be > 100
-        expect(transaction - 250 / 2).to be < 25
+        expect(transaction - 250 / 4).to be < 5
       end
     end
+
   end
 end

@@ -2,6 +2,7 @@
 query_timeout = 1_000
 checkout_timeout = 1_000
 connect_timeout = 1_000
+load_balancing_strategy = "round_robin"
 
 [[databases]]
 name = "pgdog"
