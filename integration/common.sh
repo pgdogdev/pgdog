@@ -3,6 +3,7 @@
 # N.B.: Scripts using this are expected to define $SCRIPT_DIR
 #       correctly.
 #
+COMMON_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 function wait_for_pgdog() {
     echo "Waiting for PgDog"
     while ! pg_isready -h 127.0.0.1 -p 6432 -U pgdog -d pgdog > /dev/null; do
@@ -14,7 +15,7 @@ function wait_for_pgdog() {
 
 function run_pgdog() {
     # We expect all test scripts to define $SCRIPT_DIR.
-    pushd ${SCRIPT_DIR}/../../
+    pushd ${COMMON_DIR}/../
     # Testing in release is faster
     # and a more reliable test of what happens
     # in prod.
@@ -22,14 +23,14 @@ function run_pgdog() {
     target/release/pgdog \
         --config integration/pgdog.toml \
         --users integration/users.toml \
-        > ${SCRIPT_DIR}/log.txt &
+        > ${COMMON_DIR}/log.txt &
     popd
 }
 
 function stop_pgdog() {
     killall -TERM pgdog 2> /dev/null || true
-    cat ${SCRIPT_DIR}/log.txt
-    rm ${SCRIPT_DIR}/log.txt
+    cat ${COMMON_DIR}/log.txt
+    rm ${COMMON_DIR}/log.txt
 }
 
 function start_toxi() {
@@ -41,7 +42,7 @@ function stop_toxi() {
 }
 
 function active_venv() {
-    pushd ${SCRIPT_DIR}/../python
+    pushd ${COMMON_DIR}/python
     source venv/bin/activate
     popd
 }
