@@ -44,7 +44,8 @@ impl Command for ShowClients {
         let mut rows = vec![];
         let clients = comms().clients();
 
-        for client in clients.values() {
+        for entry in clients.iter() {
+            let client = entry.value();
             let user = client.paramters.get_default("user", "postgres");
             let mut row = DataRow::new();
             row.add(user)

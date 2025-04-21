@@ -10,7 +10,7 @@ pub struct Clients {
 
 impl Clients {
     pub fn load() -> Metric {
-        let total = comms().clients_len();
+        let total = comms().len();
         Metric::new(Self { total })
     }
 }
