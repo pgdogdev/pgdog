@@ -48,7 +48,7 @@ SELECT * FROM payments WHERE user_id = 1;
 
 ### Monitoring
 
-PgDog exposes both the standard "PgBouncer"-style admin database and an OpenMetrics endpoint. The admin database isn't 100% compatible with Pgb,
+PgDog exposes both the standard PgBouncer-style admin database and an OpenMetrics endpoint. The admin database isn't 100% compatible,
 so we recommend you use OpenMetrics for monitoring. Example Datadog configuration and dashboard are [included](examples/datadog).
 
 ## Features
