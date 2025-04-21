@@ -46,6 +46,11 @@ SELECT * FROM users WHERE id = 1;
 SELECT * FROM payments WHERE user_id = 1;
 ```
 
+### Monitoring
+
+PgDog exposes both the standard "PgBouncer"-style admin database and an OpenMetrics endpoint. The admin database isn't 100% compatible with Pgb,
+so we recommend you use OpenMetrics for monitoring. Example Datadog configuration and dashboard are [included](examples/datadog).
+
 ## Features
 
 
@@ -91,7 +96,7 @@ to restart the process and break PostgreSQL connections. If you've used PgBounce
 will be familiar. If not, they are documented with examples.
 
 &#128216; **[Configuration](https://docs.pgdog.dev/configuration/)**
-
+-
 ## Running PgDog locally
 
 Install the latest version of the Rust compiler from [rust-lang.org](https://rust-lang.org).
