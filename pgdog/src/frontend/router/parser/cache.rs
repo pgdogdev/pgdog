@@ -4,13 +4,12 @@
 
 use dashmap::DashMap;
 use once_cell::sync::Lazy;
-use parking_lot::RwLock;
 use pg_query::*;
 use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 
 use std::sync::Arc;
 
-static CACHE: Lazy<RwLock<Cache>> = Lazy::new(|| RwLock::new(Cache::default()));
+static CACHE: Lazy<Cache> = Lazy::new(Cache::default);
 
 /// AST cache statistics.
 #[derive(Default, Debug, Clone)]
@@ -84,7 +83,7 @@ impl Cache {
 
     /// Get global cache instance.
     pub fn get() -> Self {
-        CACHE.read().clone()
+        CACHE.clone()
     }
 
     /// Get cache stats.
@@ -99,8 +98,7 @@ impl Cache {
 
     /// Reset cache.
     pub fn reset() {
-        // This is the only place we acquire the write lock, in order to synchronize clearing the cache
-        let cache = CACHE.write();
+        let cache = Self::get();
         cache.inner.queries.clear();
         cache.inner.queries.shrink_to_fit();
         cache.inner.stats.hits.store(0, Relaxed);
