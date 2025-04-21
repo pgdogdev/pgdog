@@ -440,7 +440,7 @@
     {
       "id": 2900936540316585,
       "definition": {
-        "title": "Total data sent (MB)",
+        "title": "Total data sent (bytes)",
         "title_size": "16",
         "title_align": "left",
         "show_legend": true,
@@ -458,10 +458,7 @@
                 "query": "sum:pgdog.total_sent.count{$role, $user, $database} by {host}.as_count()"
               }
             ],
-            "formulas": [
-              { "formula": "query1" },
-              { "formula": "query1 / 1000 / 1000" }
-            ],
+            "formulas": [{ "formula": "query1" }],
             "style": {
               "palette": "dog_classic",
               "order_by": "values",
@@ -483,7 +480,7 @@
     {
       "id": 2195641451473208,
       "definition": {
-        "title": "Total received (MB)",
+        "title": "Total received (bytes)",
         "title_size": "16",
         "title_align": "left",
         "show_legend": true,
@@ -501,10 +498,7 @@
                 "query": "sum:pgdog.total_received.count{$role, $user, $database} by {host}.as_count()"
               }
             ],
-            "formulas": [
-              { "formula": "query1" },
-              { "formula": "query1 / 1000 / 1000" }
-            ],
+            "formulas": [{ "formula": "query1" }],
             "style": {
               "palette": "dog_classic",
               "order_by": "values",
