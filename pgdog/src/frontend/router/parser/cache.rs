@@ -2,22 +2,33 @@
 //!
 //! Shared between all clients and databases.
 
+use dashmap::DashMap;
 use once_cell::sync::Lazy;
+use parking_lot::RwLock;
 use pg_query::*;
-use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 
-use parking_lot::Mutex;
 use std::sync::Arc;
 
-static CACHE: Lazy<Cache> = Lazy::new(Cache::default);
+static CACHE: Lazy<RwLock<Cache>> = Lazy::new(|| RwLock::new(Cache::default()));
 
 /// AST cache statistics.
-#[derive(Default, Debug, Copy, Clone)]
+#[derive(Default, Debug, Clone)]
 pub struct Stats {
     /// Cache hits.
-    pub hits: usize,
+    hits: Arc<AtomicUsize>,
     /// Cache misses (new queries).
-    pub misses: usize,
+    misses: Arc<AtomicUsize>,
+}
+
+impl Stats {
+    pub fn hits(&self) -> usize {
+        self.hits.load(Relaxed)
+    }
+
+    pub fn misses(&self) -> usize {
+        self.misses.load(Relaxed)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -35,16 +46,16 @@ impl CachedAst {
     }
 }
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 struct Inner {
-    queries: HashMap<String, CachedAst>,
+    queries: Arc<DashMap<String, CachedAst>>,
     stats: Stats,
 }
 
 /// AST cache.
 #[derive(Default, Clone, Debug)]
 pub struct Cache {
-    inner: Arc<Mutex<Inner>>,
+    inner: Inner,
 }
 
 impl Cache {
@@ -55,52 +66,45 @@ impl Cache {
     /// parse the same query. That's better imo than locking the data structure
     /// while we parse the query.
     pub fn parse(&mut self, query: &str) -> Result<Arc<ParseResult>> {
-        {
-            let mut guard = self.inner.lock();
-            let ast = guard.queries.get_mut(query).map(|entry| {
-                entry.hits += 1;
-                entry.ast.clone()
-            });
-            if let Some(ast) = ast {
-                guard.stats.hits += 1;
-                return Ok(ast);
-            }
+        if let Some(mut entry) = self.inner.queries.get_mut(query) {
+            entry.hits += 1;
+            self.inner.stats.hits.fetch_add(1, Relaxed);
+            return Ok(entry.ast.clone());
         }
 
         // Parse query without holding lock.
         let entry = CachedAst::new(parse(query)?);
         let ast = entry.ast.clone();
 
-        let mut guard = self.inner.lock();
-        guard.queries.insert(query.to_owned(), entry);
-        guard.stats.misses += 1;
+        self.inner.queries.insert(query.to_owned(), entry);
+        self.inner.stats.misses.fetch_add(1, Relaxed);
 
         Ok(ast)
     }
 
     /// Get global cache instance.
     pub fn get() -> Self {
-        CACHE.clone()
+        CACHE.read().clone()
     }
 
     /// Get cache stats.
     pub fn stats() -> Stats {
-        Self::get().inner.lock().stats
+        Self::get().inner.stats.clone()
     }
 
     /// Get a copy of all queries stored in the cache.
-    pub fn queries() -> HashMap<String, CachedAst> {
-        Self::get().inner.lock().queries.clone()
+    pub fn queries() -> Arc<DashMap<String, CachedAst>> {
+        Self::get().inner.queries.clone()
     }
 
     /// Reset cache.
     pub fn reset() {
-        let cache = Self::get();
-        let mut guard = cache.inner.lock();
-        guard.queries.clear();
-        guard.queries.shrink_to_fit();
-        guard.stats.hits = 0;
-        guard.stats.misses = 0;
+        // This is the only place we acquire the write lock, in order to synchronize clearing the cache
+        let cache = CACHE.write();
+        cache.inner.queries.clear();
+        cache.inner.queries.shrink_to_fit();
+        cache.inner.stats.hits.store(0, Relaxed);
+        cache.inner.stats.misses.store(0, Relaxed);
     }
 }
 

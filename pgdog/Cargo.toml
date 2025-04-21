@@ -51,7 +51,7 @@ hyper = { version = "1", features = ["full"] }
 http-body-util = "0.1"
 hyper-util = { version = "0.1", features = ["full"] }
 socket2 = "0.5.9"
-
+dashmap = "6.1.0"
 
 [build-dependencies]
 cc = "1"

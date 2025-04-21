@@ -31,12 +31,14 @@ impl Command for ShowQueryCache {
         let mut messages =
             vec![RowDescription::new(&[Field::text("query"), Field::numeric("hits")]).message()?];
 
-        for query in queries {
-            if !self.filter.is_empty() && !query.0.to_lowercase().contains(&self.filter) {
+        for entry in queries.iter() {
+            let (query, ast) = entry.pair();
+
+            if !self.filter.is_empty() && !query.to_lowercase().contains(&self.filter) {
                 continue;
             }
             let mut data_row = DataRow::new();
-            data_row.add(query.0).add(query.1.hits);
+            data_row.add(query).add(ast.hits);
             messages.push(data_row.message()?);
         }
 
