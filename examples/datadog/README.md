@@ -7,5 +7,5 @@ by specifying the port number in `pgdog.toml`:
 openmetrics_port = 9090
 ```
 
-A sample config is included in [`openmetrics.d/conf.yaml`](openmetrics/conf.yaml). We've also included a Datadog dashboard
+A sample config is included in [`openmetrics.d/conf.yaml`](openmetrics.d/conf.yaml). We've also included a Datadog dashboard
 you can import in [`dashboard.json`](dashboard.json).
