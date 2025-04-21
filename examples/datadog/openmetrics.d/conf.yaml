@@ -1,0 +1,7 @@
+init_config:
+instances:
+  -
+    openmetrics_endpoint: http://127.0.0.1:9090 # Change this to host/port where PgDog is running
+    namespace: pgdog
+    metrics:
+      - .*
