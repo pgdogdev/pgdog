@@ -59,6 +59,10 @@ impl ParameterStatus {
                 name: "client_encoding".into(),
                 value: "UTF8".into(),
             },
+            ParameterStatus {
+                name: "server_version".into(),
+                value: env!("CARGO_PKG_VERSION").to_string() + " (PgDog)",
+            },
         ]
     }
 }
