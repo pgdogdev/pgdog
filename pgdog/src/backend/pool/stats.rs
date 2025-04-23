@@ -18,6 +18,8 @@ pub struct Counts {
     pub xact_time: Millis,
     pub query_time: Millis,
     pub wait_time: Millis,
+    pub parse_count: usize,
+    pub bind_count: usize,
 }
 
 impl Sub for Counts {
@@ -35,6 +37,8 @@ impl Sub for Counts {
             xact_time: self.xact_time.saturating_sub(rhs.xact_time),
             query_time: self.query_time.saturating_sub(rhs.query_time),
             wait_time: self.wait_time.saturating_sub(rhs.wait_time),
+            parse_count: self.parse_count.saturating_add(rhs.parse_count),
+            bind_count: self.parse_count.saturating_add(rhs.bind_count),
         }
     }
 }
@@ -52,6 +56,8 @@ impl Div<usize> for Counts {
             xact_time: self.xact_time.saturating_div(rhs as u128),
             query_time: self.query_time.saturating_div(rhs as u128),
             wait_time: self.wait_time.saturating_div(rhs as u128),
+            parse_count: self.parse_count.saturating_div(rhs),
+            bind_count: self.parse_count.saturating_div(rhs),
         }
     }
 }
@@ -71,6 +77,8 @@ impl Add<crate::backend::stats::Counts> for Counts {
                 .xact_time
                 .saturating_add(rhs.transaction_time.as_millis()),
             wait_time: self.wait_time,
+            parse_count: self.parse_count.saturating_add(rhs.parse),
+            bind_count: self.parse_count.saturating_add(rhs.bind),
         }
     }
 }
@@ -101,6 +109,8 @@ impl Add for Counts {
             xact_time: self.xact_time.saturating_add(rhs.xact_time),
             query_time: self.query_time.saturating_add(rhs.query_time),
             wait_time: self.wait_time.saturating_add(rhs.wait_time),
+            parse_count: self.parse_count.saturating_add(rhs.parse_count),
+            bind_count: self.parse_count.saturating_add(rhs.bind_count),
         }
     }
 }
