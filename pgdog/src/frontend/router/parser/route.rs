@@ -121,4 +121,9 @@ impl Route {
     pub fn limit(&self) -> Option<Limit> {
         self.limit
     }
+
+    pub fn with_lock(mut self, lock: bool) -> Self {
+        self.read = !lock;
+        self
+    }
 }

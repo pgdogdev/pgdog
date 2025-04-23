@@ -385,7 +385,9 @@ impl QueryParser {
 
         let aggregates = Aggregate::parse(stmt)?;
 
-        Ok(Command::Query(Route::select(shard, &order_by, &aggregates)))
+        Ok(Command::Query(
+            Route::select(shard, &order_by, &aggregates).with_lock(!stmt.locking_clause.is_empty()),
+        ))
     }
 
     /// Parse the `ORDER BY` clause of a `SELECT` statement.
@@ -708,6 +710,26 @@ mod test {
             Command::Query(route) => {
                 assert!(route.is_read());
                 assert_eq!(route.shard(), &Shard::Direct(0));
+            }
+
+            _ => panic!("should be a query"),
+        }
+    }
+
+    #[test]
+    fn test_select_for_update() {
+        let query = "SELECT * FROM sharded WHERE id = $1 FOR UPDATE";
+        let route = QueryParser::default()
+            .parse(
+                &Buffer::from(vec![Query::new(query).into()]),
+                &Cluster::new_test(),
+                &mut PreparedStatements::default(),
+            )
+            .unwrap()
+            .clone();
+        match route {
+            Command::Query(query) => {
+                assert!(query.is_write());
             }
 
             _ => panic!("should be a query"),
