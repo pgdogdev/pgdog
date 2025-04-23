@@ -53,6 +53,8 @@ pub struct Counts {
     pub prepared_statements: usize,
     pub query_time: Duration,
     pub transaction_time: Duration,
+    pub parse: usize,
+    pub bind: usize,
 }
 
 impl Add for Counts {
@@ -71,6 +73,8 @@ impl Add for Counts {
                 .saturating_add(rhs.prepared_statements),
             query_time: self.query_time.saturating_add(rhs.query_time),
             transaction_time: self.query_time.saturating_add(rhs.transaction_time),
+            parse: self.parse.saturating_add(rhs.parse),
+            bind: self.bind.saturating_add(rhs.bind),
         }
     }
 }
@@ -132,6 +136,16 @@ impl Stats {
             self.last_checkout.transaction_time += duration;
         }
         self.update();
+    }
+
+    pub fn parse_complete(&mut self) {
+        self.total.parse += 1;
+        self.last_checkout.parse += 1;
+    }
+
+    pub fn bind_complete(&mut self) {
+        self.total.bind += 1;
+        self.last_checkout.bind += 1;
     }
 
     /// A transaction has been completed.

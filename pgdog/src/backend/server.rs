@@ -325,6 +325,8 @@ impl Server {
                     _ => (),
                 }
             }
+            '1' => self.stats.parse_complete(),
+            '2' => self.stats.bind_complete(),
             _ => (),
         }
 

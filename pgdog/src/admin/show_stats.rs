@@ -37,7 +37,7 @@ impl Command for ShowStats {
                         Field::numeric(&format!("{}_xact_time", prefix)),
                         Field::numeric(&format!("{}_query_time", prefix)),
                         Field::numeric(&format!("{}_wait_time", prefix)),
-                        Field::numeric(&format!("{}_client_parse_count", prefix)),
+                        // Field::numeric(&format!("{}_client_parse_count", prefix)),
                         Field::numeric(&format!("{}_server_parse_count", prefix)),
                         Field::numeric(&format!("{}_bind_count", prefix)),
                     ]
@@ -77,9 +77,9 @@ impl Command for ShowStats {
                             .add(stat.xact_time)
                             .add(stat.query_time)
                             .add(stat.wait_time)
-                            .add(0_i64)
-                            .add(0_i64)
-                            .add(0_i64);
+                            // .add(0_i64)
+                            .add(stat.parse_count)
+                            .add(stat.bind_count);
                     }
 
                     messages.push(dr.message()?);

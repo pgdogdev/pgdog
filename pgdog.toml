@@ -10,6 +10,7 @@ openmetrics_port = 9090
 query_timeout = 1_000
 checkout_timeout = 1_000
 connect_timeout = 1_000
+passthrough_auth = "enabled_plain"
 
 #
 # Admin database password.
@@ -30,6 +31,16 @@ role = "primary"
 name = "pgdog"
 host = "127.0.0.1"
 port = 5432
+role = "replica"
+
+[[databases]]
+name = "mastodon_development"
+host = "127.0.0.1"
+role = "primary"
+
+[[databases]]
+name = "mastodon_development"
+host = "127.0.0.1"
 role = "replica"
 
 [tcp]
