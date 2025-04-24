@@ -75,7 +75,7 @@ impl Client {
             let password = Password::from_bytes(password.to_bytes()?)?;
             let user = config::User::from_params(&params, &password).ok();
             if let Some(user) = user {
-                databases::add(&user);
+                databases::add(user);
             }
         }
 

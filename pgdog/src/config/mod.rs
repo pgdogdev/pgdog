@@ -116,7 +116,8 @@ impl ConfigAndUsers {
         }
 
         let users: Users = if let Ok(users) = read_to_string(users_path) {
-            let users = toml::from_str(&users)?;
+            let mut users: Users = toml::from_str(&users)?;
+            users.check();
             info!("loaded \"{}\"", users_path.display());
             users
         } else {
@@ -573,6 +574,20 @@ impl Users {
         }
 
         users
+    }
+
+    pub fn check(&mut self) {
+        for user in &mut self.users {
+            if user.password().is_empty() {
+                if let Some(min_pool_size) = user.min_pool_size {
+                    if min_pool_size > 0 {
+                        warn!("user \"{}\" (database \"{}\") doesn't have a password configured, \
+                            so we can't connect to the server to maintain min_pool_size of {}; setting it to 0", user.name, user.database, min_pool_size);
+                        user.min_pool_size = Some(0);
+                    }
+                }
+            }
+        }
     }
 }
 

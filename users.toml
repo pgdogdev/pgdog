@@ -11,6 +11,12 @@ database = "pgdog"
 password = "pgdog"
 
 [[users]]
+name = "lev"
+database = "pgdog"
+pool_size = 20
+statement_timeout = 100
+
+[[users]]
 name = "pgdog_replication"
 database = "pgdog"
 password = "pgdog"
