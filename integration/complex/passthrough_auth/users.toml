@@ -2,3 +2,8 @@
 name = "pgdog"
 database = "pgdog"
 password = "pgdog"
+
+[[users]]
+name = "pgdog1"
+database = "pgdog"
+statement_timeout = 100

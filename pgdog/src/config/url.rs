@@ -42,7 +42,7 @@ impl From<&Url> for User {
 
         User {
             name: user,
-            password,
+            password: Some(password),
             database: database_name(value),
             ..Default::default()
         }

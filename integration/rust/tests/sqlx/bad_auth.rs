@@ -3,7 +3,7 @@ use sqlx::{Connection, PgConnection};
 #[tokio::test]
 async fn test_bad_auth() {
     for user in ["pgdog", "pgdog_bad_user"] {
-        for password in ["bad_password", "another_password"] {
+        for password in ["bad_password", "another_password", ""] {
             for db in ["random_db", "pgdog"] {
                 let err = PgConnection::connect(&format!(
                     "postgres://{}:{}@127.0.0.1:6432/{}",

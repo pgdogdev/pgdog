@@ -124,18 +124,28 @@ impl Config {
     }
 
     /// Create from database/user configuration.
-    pub fn new(general: &General, _database: &Database, user: &User) -> Self {
+    pub fn new(general: &General, database: &Database, user: &User) -> Self {
         Config {
-            min: user.min_pool_size.unwrap_or(general.min_pool_size),
-            max: user.pool_size.unwrap_or(general.default_pool_size),
+            min: database
+                .min_pool_size
+                .unwrap_or(user.min_pool_size.unwrap_or(general.min_pool_size)),
+            max: database
+                .pool_size
+                .unwrap_or(user.pool_size.unwrap_or(general.default_pool_size)),
             healthcheck_interval: general.healthcheck_interval,
             idle_healthcheck_interval: general.idle_healthcheck_interval,
             idle_healthcheck_delay: general.idle_healthcheck_delay,
             ban_timeout: general.ban_timeout,
             rollback_timeout: general.rollback_timeout,
-            statement_timeout: user.statement_timeout,
+            statement_timeout: if let Some(statement_timeout) = database.statement_timeout {
+                Some(statement_timeout)
+            } else {
+                user.statement_timeout
+            },
             replication_mode: user.replication_mode,
-            pooler_mode: user.pooler_mode.unwrap_or(general.pooler_mode),
+            pooler_mode: database
+                .pooler_mode
+                .unwrap_or(user.pooler_mode.unwrap_or(general.pooler_mode)),
             connect_timeout: general.connect_timeout,
             query_timeout: general.query_timeout,
             checkout_timeout: general.checkout_timeout,

@@ -116,7 +116,8 @@ impl ConfigAndUsers {
         }
 
         let users: Users = if let Ok(users) = read_to_string(users_path) {
-            let users = toml::from_str(&users)?;
+            let mut users: Users = toml::from_str(&users)?;
+            users.check(&config);
             info!("loaded \"{}\"", users_path.display());
             users
         } else {
@@ -507,6 +508,14 @@ pub struct Database {
     // Maximum number of connections to this database from this pooler.
     // #[serde(default = "Database::max_connections")]
     // pub max_connections: usize,
+    /// Pool size for this database pools, overriding `default_pool_size`.
+    pub pool_size: Option<usize>,
+    /// Minimum pool size for this database pools, overriding `min_pool_size`.
+    pub min_pool_size: Option<usize>,
+    /// Pooler mode.
+    pub pooler_mode: Option<PoolerMode>,
+    /// Statement timeout.
+    pub statement_timeout: Option<u64>,
 }
 
 impl Database {
@@ -566,6 +575,27 @@ impl Users {
 
         users
     }
+
+    pub fn check(&mut self, config: &Config) {
+        for user in &mut self.users {
+            if user.password().is_empty() {
+                if !config.general.passthrough_auth() {
+                    warn!(
+                        "user \"{}\" doesn't have a password and passthrough auth is disabled",
+                        user.name
+                    );
+                }
+
+                if let Some(min_pool_size) = user.min_pool_size {
+                    if min_pool_size > 0 {
+                        warn!("user \"{}\" (database \"{}\") doesn't have a password configured, \
+                            so we can't connect to the server to maintain min_pool_size of {}; setting it to 0", user.name, user.database, min_pool_size);
+                        user.min_pool_size = Some(0);
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// User allowed to connect to pgDog.
@@ -576,7 +606,7 @@ pub struct User {
     /// Database name, from pgdog.toml.
     pub database: String,
     /// User's password.
-    pub password: String,
+    pub password: Option<String>,
     /// Pool size for this user pool, overriding `default_pool_size`.
     pub pool_size: Option<usize>,
     /// Minimum pool size for this user pool, overriding `min_pool_size`.
@@ -594,6 +624,16 @@ pub struct User {
     pub replication_mode: bool,
     /// Sharding into this database.
     pub replication_sharding: Option<String>,
+}
+
+impl User {
+    pub fn password(&self) -> &str {
+        if let Some(ref s) = self.password {
+            s.as_str()
+        } else {
+            ""
+        }
+    }
 }
 
 /// Admin database settings.

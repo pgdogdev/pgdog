@@ -1,6 +1,6 @@
 //! Databases behind pgDog.
 
-use std::collections::HashMap;
+use std::collections::{hash_map::Entry, HashMap};
 use std::sync::Arc;
 
 use arc_swap::ArcSwap;
@@ -72,9 +72,16 @@ pub fn reload() -> Result<(), Error> {
 }
 
 /// Add new user to pool.
-pub(crate) fn add(user: &crate::config::User) {
+pub(crate) fn add(mut user: crate::config::User) {
     let config = config();
-    let pool = new_pool(user, &config.config);
+    for existing in &config.users.users {
+        if existing.name == user.name && existing.database == user.database {
+            let mut existing = existing.clone();
+            existing.password = user.password.clone();
+            user = existing;
+        }
+    }
+    let pool = new_pool(&user, &config.config);
     if let Some((user, cluster)) = pool {
         let _lock = LOCK.lock();
         let databases = (*databases()).clone();
@@ -138,17 +145,29 @@ pub struct Databases {
 impl Databases {
     /// Add new connection pools to the databases.
     fn add(mut self, user: User, cluster: Cluster) -> (bool, Databases) {
-        if let std::collections::hash_map::Entry::Vacant(e) = self.databases.entry(user) {
-            e.insert(cluster);
-            (true, self)
-        } else {
-            (false, self)
+        match self.databases.entry(user) {
+            Entry::Vacant(e) => {
+                e.insert(cluster);
+                (true, self)
+            }
+            Entry::Occupied(mut e) => {
+                if e.get().password().is_empty() {
+                    e.insert(cluster);
+                    (true, self)
+                } else {
+                    (false, self)
+                }
+            }
         }
     }
 
     /// Check if a cluster exists, quickly.
     pub fn exists(&self, user: impl ToUser) -> bool {
-        self.databases.get(&user.to_user()).is_some()
+        if let Some(cluster) = self.databases.get(&user.to_user()) {
+            !cluster.password().is_empty()
+        } else {
+            false
+        }
     }
 
     /// Get a cluster for the user/database pair if it's configured.
