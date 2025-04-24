@@ -117,7 +117,7 @@ impl ConfigAndUsers {
 
         let users: Users = if let Ok(users) = read_to_string(users_path) {
             let mut users: Users = toml::from_str(&users)?;
-            users.check();
+            users.check(&config);
             info!("loaded \"{}\"", users_path.display());
             users
         } else {
@@ -576,9 +576,16 @@ impl Users {
         users
     }
 
-    pub fn check(&mut self) {
+    pub fn check(&mut self, config: &Config) {
         for user in &mut self.users {
             if user.password().is_empty() {
+                if !config.general.passthrough_auth() {
+                    warn!(
+                        "user \"{}\" doesn't have a password and passthrough auth is disabled",
+                        user.name
+                    );
+                }
+
                 if let Some(min_pool_size) = user.min_pool_size {
                     if min_pool_size > 0 {
                         warn!("user \"{}\" (database \"{}\") doesn't have a password configured, \
