@@ -12,7 +12,7 @@ impl User {
         Ok(Self {
             name: user.to_owned(),
             database: database.to_owned(),
-            password: password.to_owned(),
+            password: Some(password.to_owned()),
             ..Default::default()
         })
     }

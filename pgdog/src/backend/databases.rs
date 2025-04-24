@@ -1,6 +1,6 @@
 //! Databases behind pgDog.
 
-use std::collections::HashMap;
+use std::collections::{hash_map::Entry, HashMap};
 use std::sync::Arc;
 
 use arc_swap::ArcSwap;
@@ -138,11 +138,19 @@ pub struct Databases {
 impl Databases {
     /// Add new connection pools to the databases.
     fn add(mut self, user: User, cluster: Cluster) -> (bool, Databases) {
-        if let std::collections::hash_map::Entry::Vacant(e) = self.databases.entry(user) {
-            e.insert(cluster);
-            (true, self)
-        } else {
-            (false, self)
+        match self.databases.entry(user) {
+            Entry::Vacant(e) => {
+                e.insert(cluster);
+                (true, self)
+            }
+            Entry::Occupied(mut e) => {
+                if e.get().password().is_empty() {
+                    e.insert(cluster);
+                    (true, self)
+                } else {
+                    (false, self)
+                }
+            }
         }
     }
 

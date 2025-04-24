@@ -507,6 +507,14 @@ pub struct Database {
     // Maximum number of connections to this database from this pooler.
     // #[serde(default = "Database::max_connections")]
     // pub max_connections: usize,
+    /// Pool size for this database pools, overriding `default_pool_size`.
+    pub pool_size: Option<usize>,
+    /// Minimum pool size for this database pools, overriding `min_pool_size`.
+    pub min_pool_size: Option<usize>,
+    /// Pooler mode.
+    pub pooler_mode: Option<PoolerMode>,
+    /// Statement timeout.
+    pub statement_timeout: Option<u64>,
 }
 
 impl Database {
@@ -576,7 +584,7 @@ pub struct User {
     /// Database name, from pgdog.toml.
     pub database: String,
     /// User's password.
-    pub password: String,
+    pub password: Option<String>,
     /// Pool size for this user pool, overriding `default_pool_size`.
     pub pool_size: Option<usize>,
     /// Minimum pool size for this user pool, overriding `min_pool_size`.
@@ -594,6 +602,16 @@ pub struct User {
     pub replication_mode: bool,
     /// Sharding into this database.
     pub replication_sharding: Option<String>,
+}
+
+impl User {
+    pub fn password(&self) -> &str {
+        if let Some(ref s) = self.password {
+            s.as_str()
+        } else {
+            ""
+        }
+    }
 }
 
 /// Admin database settings.

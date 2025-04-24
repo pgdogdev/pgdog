@@ -70,7 +70,7 @@ impl<'a> ClusterConfig<'a> {
     ) -> Self {
         Self {
             name: &user.database,
-            password: &user.password,
+            password: user.password(),
             replication_sharding: user.replication_sharding.clone(),
             pooler_mode: user.pooler_mode.unwrap_or(general.pooler_mode),
             lb_strategy: general.load_balancing_strategy,

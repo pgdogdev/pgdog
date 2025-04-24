@@ -42,7 +42,7 @@ impl Address {
             } else if let Some(password) = user.server_password.clone() {
                 password
             } else {
-                user.password.clone()
+                user.password().to_string()
             },
         }
     }
@@ -74,7 +74,7 @@ mod test {
 
         let user = User {
             name: "pgdog".into(),
-            password: "hunter2".into(),
+            password: Some("hunter2".into()),
             database: "pgdog".into(),
             ..Default::default()
         };
