@@ -39,4 +39,7 @@ pub enum Error {
 
     #[error("unexpected header extension")]
     BinaryHeaderExtension,
+
+    #[error("set shard syntax error")]
+    SetShard,
 }

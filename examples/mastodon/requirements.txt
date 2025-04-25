@@ -1,2 +1,2 @@
 psycopg
-pandas
+mastodon

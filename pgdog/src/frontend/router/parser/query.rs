@@ -12,7 +12,7 @@ use crate::{
         router::{
             parser::{rewrite::Rewrite, OrderBy, Shard},
             round_robin,
-            sharding::{shard_param, shard_value, Centroids},
+            sharding::{shard_param, shard_str, shard_value, Centroids},
             CopyRow,
         },
         Buffer, PreparedStatements,
@@ -236,7 +236,7 @@ impl QueryParser {
                 }
             }
             // SET statements.
-            Some(NodeEnum::VariableSetStmt(ref stmt)) => Self::set(stmt),
+            Some(NodeEnum::VariableSetStmt(ref stmt)) => Self::set(stmt, &sharding_schema),
             // COPY statements.
             Some(NodeEnum::CopyStmt(ref stmt)) => Self::copy(stmt, cluster),
             // INSERT statements.
@@ -318,8 +318,54 @@ impl QueryParser {
         }
     }
 
-    fn set(_stmt: &VariableSetStmt) -> Result<Command, Error> {
+    fn set(stmt: &VariableSetStmt, sharding_schema: &ShardingSchema) -> Result<Command, Error> {
+        match stmt.name.as_str() {
+            "pgdog.shard" => {
+                let node = stmt
+                    .args
+                    .first()
+                    .ok_or(Error::SetShard)?
+                    .node
+                    .as_ref()
+                    .ok_or(Error::SetShard)?;
+                if let NodeEnum::AConst(AConst {
+                    val: Some(a_const::Val::Ival(Integer { ival })),
+                    ..
+                }) = node
+                {
+                    return Ok(Command::Query(Route::write(Some(*ival as usize))));
+                }
+            }
+
+            "pgdog.sharding_key" => {
+                println!("{:?}", stmt.args);
+            }
+
+            _ => (),
+        }
+
         Ok(Command::Query(Route::read(Shard::All)))
+    }
+
+    fn shard_from_set(nodes: &[Node], sharding_schema: &ShardingSchema) -> Result<usize, Error> {
+        let node = nodes
+            .first()
+            .ok_or(Error::SetShard)?
+            .node
+            .as_ref()
+            .ok_or(Error::SetShard)?;
+
+        if let NodeEnum::AConst(AConst { val: Some(val), .. }) = node {
+            match val {
+                Val::Sval(String { sval }) => todo!(),
+
+                Val::Ival(Integer { ival }) => todo!(),
+
+                _ => (),
+            }
+        }
+
+        todo!()
     }
 
     fn select(
