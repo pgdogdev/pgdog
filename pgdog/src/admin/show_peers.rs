@@ -42,7 +42,9 @@ impl Command for ShowPeers {
 
         let now = SystemTime::now();
 
-        for (adder, state) in peers {
+        for entry in peers.iter() {
+            let (adder, state) = entry.pair();
+
             let mut row = DataRow::new();
             row.add(adder.to_string())
                 .add(format!(

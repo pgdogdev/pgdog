@@ -1,11 +1,11 @@
 //! Service discovery listener.
 
+use dashmap::DashMap;
 use once_cell::sync::Lazy;
-use parking_lot::Mutex;
+
 use rand::Rng;
 use tracing::{debug, error, info};
 
-use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -20,7 +20,7 @@ use super::{Error, Message, Payload};
 #[derive(Clone, Debug)]
 pub struct Listener {
     id: u64,
-    inner: Arc<Mutex<Inner>>,
+    inner: Inner,
 }
 
 #[derive(Debug, Clone)]
@@ -31,9 +31,9 @@ pub struct State {
     pub last_message: SystemTime,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Default)]
 struct Inner {
-    peers: HashMap<SocketAddr, State>,
+    peers: Arc<DashMap<SocketAddr, State>>,
 }
 
 static LISTENER: Lazy<Listener> = Lazy::new(Listener::new);
@@ -43,9 +43,7 @@ impl Listener {
     fn new() -> Self {
         Self {
             id: rand::thread_rng().gen(),
-            inner: Arc::new(Mutex::new(Inner {
-                peers: HashMap::new(),
-            })),
+            inner: Inner::default(),
         }
     }
 
@@ -55,8 +53,8 @@ impl Listener {
     }
 
     /// Get peers.
-    pub fn peers(&self) -> HashMap<SocketAddr, State> {
-        self.inner.lock().peers.clone()
+    pub fn peers(&self) -> Arc<DashMap<SocketAddr, State>> {
+        self.inner.peers.clone()
     }
 
     /// Run the listener.
@@ -92,7 +90,7 @@ impl Listener {
                         if let Payload::Stats {
                                 clients
                             } = message.payload {
-                            self.inner.lock().peers.insert(addr, State {
+                            self.inner.peers.insert(addr, State {
                                 clients,
                                 last_message: now,
                             });
