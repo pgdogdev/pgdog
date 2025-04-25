@@ -28,15 +28,27 @@ impl Command for ShowQueryCache {
 
     async fn execute(&self) -> Result<Vec<Message>, Error> {
         let queries = Cache::queries();
-        let mut messages =
-            vec![RowDescription::new(&[Field::text("query"), Field::numeric("hits")]).message()?];
+        let mut messages = vec![RowDescription::new(&[
+            Field::text("query"),
+            Field::numeric("hits"),
+            Field::numeric("direct"),
+            Field::numeric("multi"),
+        ])
+        .message()?];
 
-        for query in queries {
+        let mut queries: Vec<_> = queries.into_iter().map(|(k, v)| (k, v)).collect();
+        queries.sort_by_key(|v| v.1.hits);
+
+        for query in queries.into_iter().rev() {
             if !self.filter.is_empty() && !query.0.to_lowercase().contains(&self.filter) {
                 continue;
             }
             let mut data_row = DataRow::new();
-            data_row.add(query.0).add(query.1.hits);
+            data_row
+                .add(query.0)
+                .add(query.1.hits)
+                .add(query.1.direct)
+                .add(query.1.multi);
             messages.push(data_row.message()?);
         }
 

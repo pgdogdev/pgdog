@@ -301,6 +301,9 @@ pub struct General {
     /// Checkout timeout.
     #[serde(default = "General::checkout_timeout")]
     pub checkout_timeout: u64,
+    /// Dry run for sharding. Parse the query, route to shard 0.
+    #[serde(default)]
+    pub dry_run: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -358,6 +361,7 @@ impl Default for General {
             connect_timeout: Self::default_connect_timeout(),
             query_timeout: Self::default_query_timeout(),
             checkout_timeout: Self::checkout_timeout(),
+            dry_run: bool::default(),
         }
     }
 }
@@ -695,6 +699,7 @@ pub struct ShardedTable {
     /// column are considered sharded.
     pub name: Option<String>,
     /// Table sharded on this column.
+    #[serde(default)]
     pub column: String,
     /// This table is the primary sharding anchor (e.g. "users").
     #[serde(default)]
@@ -710,6 +715,9 @@ pub struct ShardedTable {
     /// How many centroids to probe.
     #[serde(default)]
     pub centroid_probes: usize,
+    /// Table is the same on all shards.
+    #[serde(default)]
+    pub omnisharded: bool,
 }
 
 impl ShardedTable {

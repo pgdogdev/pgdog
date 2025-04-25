@@ -102,6 +102,10 @@ impl Route {
         matches!(self.shard, Shard::All)
     }
 
+    pub fn is_multi_shard(&self) -> bool {
+        matches!(self.shard, Shard::Multi(_))
+    }
+
     pub fn order_by(&self) -> &[OrderBy] {
         &self.order_by
     }

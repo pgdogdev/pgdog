@@ -112,8 +112,10 @@ impl QueryParser {
         let read_only = cluster.read_only();
         let write_only = cluster.write_only();
         let full_prepared_statements = config().config.general.prepared_statements.full();
-        let parser_disabled =
-            !full_prepared_statements && (shards == 1 && (read_only | write_only));
+        let sharding_schema = cluster.sharding_schema();
+        let dry_run = sharding_schema.tables.dry_run();
+        let router_disabled = shards == 1 && (read_only || write_only);
+        let parser_disabled = !full_prepared_statements && router_disabled && !dry_run;
 
         debug!(
             "parser is {}",
@@ -139,8 +141,6 @@ impl QueryParser {
             }
         }
 
-        let sharding_schema = cluster.sharding_schema();
-
         // Parse hardcoded shard from a query comment.
         let shard = super::comment::shard(query, &sharding_schema).map_err(Error::PgQuery)?;
 
@@ -159,12 +159,12 @@ impl QueryParser {
             }
         }
 
+        let cache = Cache::get();
+
         // Get the AST from cache or parse the statement live.
         let ast = match query {
             // Only prepared statements (or just extended) are cached.
-            BufferedQuery::Prepared(query) => {
-                Cache::get().parse(query.query()).map_err(Error::PgQuery)?
-            }
+            BufferedQuery::Prepared(query) => cache.parse(query.query()).map_err(Error::PgQuery)?,
             // Don't cache simple queries.
             //
             // They contain parameter values, which makes the cache
@@ -212,7 +212,27 @@ impl QueryParser {
                         round_robin::next() % cluster.shards().len(),
                     ))));
                 } else {
-                    Self::select(stmt, &sharding_schema, params)
+                    let mut command = Self::select(stmt, &sharding_schema, params)?;
+                    let mut omni = false;
+                    if let Command::Query(query) = &mut command {
+                        if query.is_all_shards() {
+                            let tables = ast.tables();
+                            for table in tables {
+                                let is_omni =
+                                    sharding_schema.tables.omnishards().contains_key(&table);
+                                omni = is_omni;
+                                if !omni {
+                                    break;
+                                }
+                            }
+                        }
+
+                        if omni {
+                            query.set_shard(round_robin::next() % cluster.shards().len());
+                        }
+                    }
+
+                    Ok(command)
                 }
             }
             // SET statements.
@@ -253,7 +273,7 @@ impl QueryParser {
         // there is no point of doing a multi-shard query with only one shard
         // in the set.
         //
-        if cluster.shards().len() == 1 {
+        if cluster.shards().len() == 1 && !dry_run {
             if let Command::Query(ref mut route) = command {
                 route.set_shard(0);
             }
@@ -283,7 +303,19 @@ impl QueryParser {
 
         trace!("{:#?}", command);
 
-        Ok(command)
+        if dry_run {
+            let default_route = Route::write(None);
+            cache.record_command(
+                query,
+                match &command {
+                    Command::Query(ref route) => route,
+                    _ => &default_route,
+                },
+            )?;
+            Ok(command.dry_run())
+        } else {
+            Ok(command)
+        }
     }
 
     fn set(_stmt: &VariableSetStmt) -> Result<Command, Error> {

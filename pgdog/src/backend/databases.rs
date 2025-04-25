@@ -280,7 +280,7 @@ pub(crate) fn new_pool(
             .get(&user.database)
             .cloned()
             .unwrap_or(vec![]);
-        let sharded_tables = ShardedTables::new(sharded_tables);
+        let sharded_tables = ShardedTables::new(sharded_tables, general.dry_run);
         let cluster_config = ClusterConfig::new(general, user, &shard_configs, sharded_tables);
 
         Some((

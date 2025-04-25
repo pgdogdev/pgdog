@@ -3,28 +3,48 @@ use crate::{
     config::{DataType, ShardedTable},
     net::messages::Vector,
 };
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 #[derive(Debug, Clone, Default)]
 pub struct ShardedTables {
     tables: Arc<Vec<ShardedTable>>,
+    omnisharded: Arc<HashMap<String, ShardedTable>>,
+    dry_run: bool,
 }
 
 impl From<&[ShardedTable]> for ShardedTables {
     fn from(value: &[ShardedTable]) -> Self {
-        Self::new(value.to_vec())
+        Self::new(value.to_vec(), false)
     }
 }
 
 impl ShardedTables {
-    pub fn new(tables: Vec<ShardedTable>) -> Self {
+    pub fn new(tables: Vec<ShardedTable>, dry_run: bool) -> Self {
         Self {
-            tables: Arc::new(tables),
+            tables: Arc::new(
+                tables
+                    .iter()
+                    .filter(|t| !t.omnisharded)
+                    .map(|t| t.clone())
+                    .collect(),
+            ),
+            omnisharded: Arc::new(
+                tables
+                    .iter()
+                    .filter(|t| t.omnisharded && t.name.is_some())
+                    .map(|t| (t.name.as_ref().unwrap().clone(), t.clone()))
+                    .collect(),
+            ),
+            dry_run,
         }
     }
 
     pub fn tables(&self) -> &[ShardedTable] {
         &self.tables
+    }
+
+    pub fn omnishards(&self) -> &HashMap<String, ShardedTable> {
+        &self.omnisharded
     }
 
     /// Find a specific sharded table.
@@ -56,6 +76,10 @@ impl ShardedTables {
         }
 
         None
+    }
+
+    pub(crate) fn dry_run(&self) -> bool {
+        self.dry_run
     }
 }
 

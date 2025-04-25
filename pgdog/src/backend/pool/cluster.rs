@@ -277,16 +277,20 @@ mod test {
     impl Cluster {
         pub fn new_test() -> Self {
             Cluster {
-                sharded_tables: ShardedTables::new(vec![ShardedTable {
-                    database: "pgdog".into(),
-                    name: Some("sharded".into()),
-                    column: "id".into(),
-                    primary: true,
-                    centroids: vec![],
-                    data_type: DataType::Bigint,
-                    centroids_path: None,
-                    centroid_probes: 1,
-                }]),
+                sharded_tables: ShardedTables::new(
+                    vec![ShardedTable {
+                        database: "pgdog".into(),
+                        name: Some("sharded".into()),
+                        column: "id".into(),
+                        primary: true,
+                        centroids: vec![],
+                        data_type: DataType::Bigint,
+                        centroids_path: None,
+                        centroid_probes: 1,
+                        omnisharded: false,
+                    }],
+                    false,
+                ),
                 shards: vec![Shard::default(), Shard::default()],
                 ..Default::default()
             }

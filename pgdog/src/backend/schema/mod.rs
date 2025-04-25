@@ -34,6 +34,12 @@ impl Schema {
         Ok(Self { relations })
     }
 
+    /// Load schema from primary database.
+    pub async fn from_cluster(cluster: &Cluster, shard: usize) -> Result<Self, Error> {
+        let mut primary = cluster.primary(shard, &Request::default()).await?;
+        Self::load(&mut primary).await
+    }
+
     /// Install PgDog functions and schema.
     pub async fn setup(server: &mut Server) -> Result<(), Error> {
         server.execute_checked(SETUP).await?;

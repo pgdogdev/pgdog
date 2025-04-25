@@ -9,6 +9,9 @@ use std::collections::HashMap;
 use parking_lot::Mutex;
 use std::sync::Arc;
 
+use super::{Error, Route};
+use crate::frontend::buffer::BufferedQuery;
+
 static CACHE: Lazy<Cache> = Lazy::new(Cache::default);
 
 /// AST cache statistics.
@@ -18,12 +21,18 @@ pub struct Stats {
     pub hits: usize,
     /// Cache misses (new queries).
     pub misses: usize,
+    /// Direct shard queries.
+    pub direct: usize,
+    /// Multi-shard queries.
+    pub multi: usize,
 }
 
 #[derive(Debug, Clone)]
 pub struct CachedAst {
     pub ast: Arc<ParseResult>,
     pub hits: usize,
+    pub direct: usize,
+    pub multi: usize,
 }
 
 impl CachedAst {
@@ -31,6 +40,8 @@ impl CachedAst {
         Self {
             ast: Arc::new(ast),
             hits: 1,
+            direct: 0,
+            multi: 0,
         }
     }
 }
@@ -54,7 +65,7 @@ impl Cache {
     /// N.B. There is a race here that allows multiple threads to
     /// parse the same query. That's better imo than locking the data structure
     /// while we parse the query.
-    pub fn parse(&mut self, query: &str) -> Result<Arc<ParseResult>> {
+    pub fn parse(&self, query: &str) -> Result<Arc<ParseResult>> {
         {
             let mut guard = self.inner.lock();
             let ast = guard.queries.get_mut(query).map(|entry| {
@@ -81,6 +92,67 @@ impl Cache {
     /// Get global cache instance.
     pub fn get() -> Self {
         CACHE.clone()
+    }
+
+    pub fn record_command(
+        &self,
+        query: &BufferedQuery,
+        route: &Route,
+    ) -> std::result::Result<(), Error> {
+        match query {
+            BufferedQuery::Prepared(parse) => self
+                .record_command_for_normalized(parse.query(), route, false)
+                .map_err(|e| Error::PgQuery(e)),
+            BufferedQuery::Query(query) => {
+                let query = normalize(query.query()).map_err(|e| Error::PgQuery(e))?;
+                self.record_command_for_normalized(&query, route, true)
+                    .map_err(|e| Error::PgQuery(e))
+            }
+        }
+    }
+
+    fn record_command_for_normalized(
+        &self,
+        query: &str,
+        route: &Route,
+        normalized: bool,
+    ) -> Result<()> {
+        // Fast path for prepared statements.
+        {
+            let mut guard = self.inner.lock();
+            let multi = route.is_all_shards() || route.is_multi_shard();
+            if multi {
+                guard.stats.multi += 1;
+            } else {
+                guard.stats.direct += 1;
+            }
+            if let Some(ast) = guard.queries.get_mut(query) {
+                if multi {
+                    ast.multi += 1;
+                } else {
+                    ast.direct += 1;
+                }
+
+                if normalized {
+                    ast.hits += 1;
+                }
+
+                return Ok(());
+            }
+        }
+
+        // Slow path for simple queries.
+        let mut entry = CachedAst::new(parse(query)?);
+        let mut guard = self.inner.lock();
+        if route.is_all_shards() || route.is_multi_shard() {
+            entry.multi += 1;
+        } else {
+            entry.direct += 1;
+        }
+
+        guard.queries.insert(query.to_string(), entry);
+
+        Ok(())
     }
 
     /// Get cache stats.
@@ -190,5 +262,12 @@ mod test {
         ); // 32x on my M1
 
         assert!(faster > 10.0);
+    }
+
+    #[test]
+    fn test_normalize() {
+        let q = "SELECT * FROM users WHERE id = 1";
+        let normalized = normalize(q).unwrap();
+        assert_eq!(normalized, "SELECT * FROM users WHERE id = $1");
     }
 }
