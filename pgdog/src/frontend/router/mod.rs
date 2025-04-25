@@ -65,4 +65,9 @@ impl Router {
     pub fn route(&self) -> Route {
         self.query_parser.route()
     }
+
+    /// Reset sharding context.
+    pub fn reset(&mut self) {
+        self.query_parser.reset()
+    }
 }

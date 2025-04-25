@@ -42,6 +42,7 @@ static REPLICATION_REGEX: Lazy<Regex> = Lazy::new(|| {
 pub struct QueryParser {
     command: Command,
     replication_mode: bool,
+    routed: bool,
 }
 
 impl Default for QueryParser {
@@ -49,6 +50,7 @@ impl Default for QueryParser {
         Self {
             command: Command::Query(Route::default()),
             replication_mode: false,
+            routed: false,
         }
     }
 }
@@ -88,8 +90,14 @@ impl QueryParser {
         }
     }
 
+    /// Reset shard.
+    pub fn reset(&mut self) {
+        self.routed = false;
+        self.command = Command::Query(Route::default());
+    }
+
     fn query(
-        &self,
+        &mut self,
         query: &BufferedQuery,
         cluster: &Cluster,
         params: Option<&Bind>,
@@ -139,6 +147,16 @@ impl QueryParser {
             if write_only {
                 return Ok(Command::Query(Route::write(Some(0))));
             }
+        }
+
+        // We already decided where all queries for this
+        // transaction are going to go.
+        if self.routed {
+            if dry_run {
+                Cache::get().record_route(&self.route());
+            }
+
+            return Ok(self.command.clone());
         }
 
         // Parse hardcoded shard from a query comment.
@@ -260,6 +278,8 @@ impl QueryParser {
             _ => Ok(Command::Query(Route::write(None))),
         }?;
 
+        self.routed = true;
+
         // Overwrite shard using shard we got from a comment, if any.
         if let Shard::Direct(shard) = shard {
             if let Command::Query(ref mut route) = command {
@@ -301,7 +321,7 @@ impl QueryParser {
             }
         }
 
-        trace!("{:#?}", command);
+        debug!("{:#?}", command);
 
         if dry_run {
             let default_route = Route::write(None);
@@ -338,34 +358,30 @@ impl QueryParser {
             }
 
             "pgdog.sharding_key" => {
-                println!("{:?}", stmt.args);
+                let node = stmt
+                    .args
+                    .first()
+                    .ok_or(Error::SetShard)?
+                    .node
+                    .as_ref()
+                    .ok_or(Error::SetShard)?;
+
+                if let NodeEnum::AConst(AConst { val: Some(val), .. }) = node {
+                    match val {
+                        Val::Sval(String { sval }) => {
+                            let shard = shard_str(&sval, sharding_schema, &vec![], 0);
+                            return Ok(Command::Query(Route::write(shard)));
+                        }
+
+                        _ => (),
+                    }
+                }
             }
 
             _ => (),
         }
 
         Ok(Command::Query(Route::read(Shard::All)))
-    }
-
-    fn shard_from_set(nodes: &[Node], sharding_schema: &ShardingSchema) -> Result<usize, Error> {
-        let node = nodes
-            .first()
-            .ok_or(Error::SetShard)?
-            .node
-            .as_ref()
-            .ok_or(Error::SetShard)?;
-
-        if let NodeEnum::AConst(AConst { val: Some(val), .. }) = node {
-            match val {
-                Val::Sval(String { sval }) => todo!(),
-
-                Val::Ival(Integer { ival }) => todo!(),
-
-                _ => (),
-            }
-        }
-
-        todo!()
     }
 
     fn select(

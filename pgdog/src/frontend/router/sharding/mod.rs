@@ -6,6 +6,7 @@ use crate::{
     net::messages::{Format, FromDataType, ParameterWithFormat, Vector},
 };
 
+// pub mod context;
 pub mod ffi;
 pub mod vector;
 
