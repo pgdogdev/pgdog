@@ -22,3 +22,4 @@ def read():
 
 if __name__ == "__main__":
     post()
+    read()

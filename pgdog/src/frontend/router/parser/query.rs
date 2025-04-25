@@ -509,7 +509,9 @@ impl QueryParser {
                     }
 
                     NodeEnum::ColumnRef(column_ref) => {
-                        let Some(field) = column_ref.fields.first() else {
+                        // TODO: save the entire column and disambiguate
+                        // when reading data with RowDescription as context.
+                        let Some(field) = column_ref.fields.last() else {
                             continue;
                         };
                         if let Some(NodeEnum::String(ref string)) = field.node {

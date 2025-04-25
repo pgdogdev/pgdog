@@ -1,0 +1,15 @@
+Gem::Specification.new do |s|
+  s.name        = "pgdog"
+  s.version     = "0.1.0"
+  s.summary     = "PgDog plugin for Ruby on Rails."
+  s.description = "Add routing hints to the application to enable direct-to-shard transaction routing in ambiguous contexts."
+  s.authors     = ["Lev Kokotov"]
+  s.email       = "hi@pgdog.dev"
+  s.files       = ["lib/pgdog.rb"]
+  s.homepage    =
+    "https://rubygems.org/gems/pgdog"
+  s.license       = "MIT"
+  s.add_dependency 'active_record', '>= 5.0'
+  spec.add_development_dependency 'rspec', '~> 3.13'
+  spec.add_development_dependency 'pg', '>= 1.0'
+end
