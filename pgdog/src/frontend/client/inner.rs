@@ -87,6 +87,11 @@ impl Inner {
         Ok(command)
     }
 
+    /// Reset query router context.
+    pub(super) fn reset_router(&mut self) {
+        self.router.reset();
+    }
+
     /// Client is connected to server(s).
     pub(super) fn connected(&self) -> bool {
         self.backend.connected()

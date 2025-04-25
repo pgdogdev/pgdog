@@ -24,6 +24,7 @@ use crate::net::messages::{
     Protocol, ReadyForQuery, ToBytes,
 };
 use crate::net::{parameter::Parameters, Stream};
+use crate::state::State;
 
 pub mod counter;
 pub mod inner;
@@ -281,22 +282,33 @@ impl Client {
         self.streaming = matches!(command, Some(Command::StartReplication));
 
         if !connected {
+            // Simulate transaction starting
+            // until client sends an actual query.
+            //
+            // This ensures we:
+            //
+            // 1. Don't connect to servers unnecessarily.
+            // 2. Can use the first query sent by the client to route the transaction.
+            //
             match command {
                 Some(Command::StartTransaction(query)) => {
                     if let BufferedQuery::Query(_) = query {
                         self.start_transaction().await?;
                         inner.start_transaction = Some(query.clone());
+                        inner.stats.state = State::IdleInTransaction;
                         return Ok(false);
                     }
                 }
                 Some(Command::RollbackTransaction) => {
                     inner.start_transaction = None;
                     self.end_transaction(true).await?;
+                    inner.stats.state = State::IdleInTransaction;
                     return Ok(false);
                 }
                 Some(Command::CommitTransaction) => {
                     inner.start_transaction = None;
                     self.end_transaction(false).await?;
+                    inner.stats.state = State::IdleInTransaction;
                     return Ok(false);
                 }
                 _ => (),
@@ -344,8 +356,6 @@ impl Client {
                 inner.backend.bind(bind)?
             }
         }
-
-        // inner.backend.wait_in_sync().await;
 
         // Handle COPY subprotocol in a potentially sharded context.
         if buffer.copy() && !self.streaming {
@@ -408,6 +418,7 @@ impl Client {
                 inner.disconnect();
             }
             inner.stats.transaction();
+            inner.reset_router();
             debug!(
                 "transaction finished [{}ms]",
                 inner.stats.last_transaction_time.as_secs_f64() * 1000.0
