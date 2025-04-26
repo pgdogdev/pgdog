@@ -641,6 +641,77 @@ mod test {
     use super::{super::Shard, *};
     use crate::net::messages::Query;
 
+    macro_rules! command {
+        ($query:expr) => {{
+            let query = $query;
+            let command = QueryParser::default()
+                .parse(
+                    &Buffer::from(vec![Query::new(query).into()]),
+                    &Cluster::new_test(),
+                    &mut PreparedStatements::default(),
+                )
+                .unwrap()
+                .clone();
+
+            command
+        }};
+    }
+
+    macro_rules! query {
+        ($query:expr) => {{
+            let query = $query;
+            let command = command!(query);
+
+            match command {
+                Command::Query(query) => query,
+
+                _ => panic!("should be a query"),
+            }
+        }};
+    }
+
+    macro_rules! parse {
+        ($query: expr, $params: expr) => {
+            parse!("", $query, $params)
+        };
+
+        ($name:expr, $query:expr, $params:expr, $codes:expr) => {{
+            let parse = Parse::named($name, $query);
+            let params = $params
+                .into_iter()
+                .map(|p| Parameter {
+                    len: p.as_bytes().len() as i32,
+                    data: p.as_bytes().to_vec(),
+                })
+                .collect::<Vec<_>>();
+            let bind = Bind {
+                portal: "".into(),
+                statement: $name.into(),
+                codes: $codes.to_vec(),
+                params,
+                results: vec![],
+            };
+            let route = QueryParser::default()
+                .parse(
+                    &Buffer::from(vec![parse.into(), bind.into()]),
+                    &Cluster::new_test(),
+                    &mut PreparedStatements::default(),
+                )
+                .unwrap()
+                .clone();
+
+            match route {
+                Command::Query(query) => query,
+
+                _ => panic!("should be a query"),
+            }
+        }};
+
+        ($name:expr, $query:expr, $params: expr) => {
+            parse!($name, $query, $params, [])
+        };
+    }
+
     #[test]
     fn test_start_replication() {
         let query = Query::new(
@@ -679,98 +750,39 @@ mod test {
 
     #[test]
     fn test_insert() {
-        let query = Parse::new_anonymous("INSERT INTO sharded (id, email) VALUES ($1, $2)");
-        let params = Bind {
-            portal: "".into(),
-            statement: "".into(),
-            codes: vec![],
-            params: vec![
-                Parameter {
-                    len: 2,
-                    data: "11".as_bytes().to_vec(),
-                },
-                Parameter {
-                    len: "test@test.com".len() as i32,
-                    data: "test@test.com".as_bytes().to_vec(),
-                },
-            ],
-            results: vec![],
-        };
-        let mut buffer = Buffer::new();
-        buffer.push(query.into());
-        buffer.push(params.into());
-
-        let mut parser = QueryParser::default();
-        let cluster = Cluster::new_test();
-        let command = parser
-            .parse(&buffer, &cluster, &mut PreparedStatements::default())
-            .unwrap();
-        if let Command::Query(route) = command {
-            assert_eq!(route.shard(), &Shard::direct(1));
-        } else {
-            panic!("not a route");
-        }
+        let route = parse!(
+            "INSERT INTO sharded (id, email) VALUES ($1, $2)",
+            ["11", "test@test.com"]
+        );
+        assert_eq!(route.shard(), &Shard::direct(1));
     }
 
     #[test]
     fn test_order_by_vector() {
-        let query = Query::new("SELECT * FROM embeddings ORDER BY embedding <-> '[1,2,3]'");
-        let buffer = Buffer::from(vec![query.into()]);
-        let route = QueryParser::default()
-            .parse(
-                &buffer,
-                &Cluster::default(),
-                &mut PreparedStatements::default(),
-            )
-            .unwrap()
-            .clone();
-        if let Command::Query(route) = route {
-            let order_by = route.order_by().first().unwrap();
-            assert!(order_by.asc());
-            assert_eq!(
-                order_by.vector().unwrap(),
-                (
-                    &Vector::from(&[1.0, 2.0, 3.0][..]),
-                    &std::string::String::from("embedding")
-                ),
-            );
-        } else {
-            panic!("not a route");
-        }
+        let route = query!("SELECT * FROM embeddings ORDER BY embedding <-> '[1,2,3]'");
+        let order_by = route.order_by().first().unwrap();
+        assert!(order_by.asc());
+        assert_eq!(
+            order_by.vector().unwrap(),
+            (
+                &Vector::from(&[1.0, 2.0, 3.0][..]),
+                &std::string::String::from("embedding")
+            ),
+        );
 
-        let query = Parse::new_anonymous("SELECT * FROM embeddings ORDER BY embedding  <-> $1");
-        let bind = Bind {
-            portal: "".into(),
-            statement: "".into(),
-            codes: vec![],
-            params: vec![Parameter {
-                len: 7,
-                data: "[4,5,6]".as_bytes().to_vec(),
-            }],
-            results: vec![],
-        };
-        let buffer = Buffer::from(vec![query.into(), bind.into()]);
-        let route = QueryParser::default()
-            .parse(
-                &buffer,
-                &Cluster::default(),
-                &mut PreparedStatements::default(),
+        let route = parse!(
+            "SELECT * FROM embeddings ORDER BY embedding  <-> $1",
+            ["[4.0,5.0,6.0]"]
+        );
+        let order_by = route.order_by().first().unwrap();
+        assert!(order_by.asc());
+        assert_eq!(
+            order_by.vector().unwrap(),
+            (
+                &Vector::from(&[4.0, 5.0, 6.0][..]),
+                &std::string::String::from("embedding")
             )
-            .unwrap()
-            .clone();
-        if let Command::Query(query) = route {
-            let order_by = query.order_by().first().unwrap();
-            assert!(order_by.asc());
-            assert_eq!(
-                order_by.vector().unwrap(),
-                (
-                    &Vector::from(&[4.0, 5.0, 6.0][..]),
-                    &std::string::String::from("embedding")
-                )
-            );
-        } else {
-            panic!("not a route");
-        }
+        );
     }
 
     #[test]
@@ -813,21 +825,36 @@ mod test {
 
     #[test]
     fn test_select_for_update() {
-        let query = "SELECT * FROM sharded WHERE id = $1 FOR UPDATE";
-        let route = QueryParser::default()
-            .parse(
-                &Buffer::from(vec![Query::new(query).into()]),
-                &Cluster::new_test(),
-                &mut PreparedStatements::default(),
-            )
-            .unwrap()
-            .clone();
-        match route {
-            Command::Query(query) => {
-                assert!(query.is_write());
-            }
+        let route = query!("SELECT * FROM sharded WHERE id = $1 FOR UPDATE");
+        assert!(route.is_write());
+        assert!(matches!(route.shard(), Shard::All));
 
-            _ => panic!("should be a query"),
-        }
+        let route = parse!("SELECT * FROM sharded WHERE id = $1 FOR UPDATE", ["1"]);
+        assert!(matches!(route.shard(), Shard::Direct(_)));
+        assert!(route.is_write());
+    }
+
+    #[test]
+    fn test_omni() {
+        let route = query!("SELECT * FROM sharded_omni WHERE id = $1");
+        assert!(matches!(route.shard(), Shard::Direct(_)));
+    }
+
+    #[test]
+    fn test_set() {
+        let route = query!(r#"SET "pgdog.shard" TO 1"#);
+        assert_eq!(route.shard(), &Shard::Direct(1));
+
+        let route = query!(r#"SET "pgdog.sharding_key" TO '11'"#);
+        assert_eq!(route.shard(), &Shard::Direct(1));
+    }
+
+    #[test]
+    fn test_transaction() {
+        let command = command!("BEGIN");
+        assert!(matches!(
+            command,
+            Command::StartTransaction(BufferedQuery::Query(_))
+        ))
     }
 }
