@@ -680,8 +680,8 @@ mod test {
             let params = $params
                 .into_iter()
                 .map(|p| Parameter {
-                    len: p.as_bytes().len() as i32,
-                    data: p.as_bytes().to_vec(),
+                    len: p.len() as i32,
+                    data: p.to_vec(),
                 })
                 .collect::<Vec<_>>();
             let bind = Bind {
@@ -752,7 +752,7 @@ mod test {
     fn test_insert() {
         let route = parse!(
             "INSERT INTO sharded (id, email) VALUES ($1, $2)",
-            ["11", "test@test.com"]
+            ["11".as_bytes(), "test@test.com".as_bytes()]
         );
         assert_eq!(route.shard(), &Shard::direct(1));
     }
@@ -772,7 +772,7 @@ mod test {
 
         let route = parse!(
             "SELECT * FROM embeddings ORDER BY embedding  <-> $1",
-            ["[4.0,5.0,6.0]"]
+            ["[4.0,5.0,6.0]".as_bytes()]
         );
         let order_by = route.order_by().first().unwrap();
         assert!(order_by.asc());
@@ -787,40 +787,16 @@ mod test {
 
     #[test]
     fn test_parse_with_cast() {
-        let query = Parse::named(
+        let route = parse!(
             "test",
             r#"SELECT sharded.id, sharded.value
-        FROM sharded
-        WHERE sharded.id = $1::INTEGER ORDER BY sharded.id"#,
+    FROM sharded
+    WHERE sharded.id = $1::INTEGER ORDER BY sharded.id"#,
+            [[0, 0, 0, 1]],
+            [1]
         );
-        let bind = Bind {
-            statement: "test".into(),
-            codes: vec![1],
-            params: vec![Parameter {
-                data: vec![0, 0, 0, 1],
-                len: 4,
-            }],
-            ..Default::default()
-        };
-        let buf = Buffer::from(vec![query.into(), bind.into()]);
-
-        let route = QueryParser::default()
-            .parse(
-                &buf,
-                &Cluster::new_test(),
-                &mut PreparedStatements::default(),
-            )
-            .unwrap()
-            .clone();
-
-        match route {
-            Command::Query(route) => {
-                assert!(route.is_read());
-                assert_eq!(route.shard(), &Shard::Direct(0));
-            }
-
-            _ => panic!("should be a query"),
-        }
+        assert!(route.is_read());
+        assert_eq!(route.shard(), &Shard::Direct(0))
     }
 
     #[test]
@@ -829,14 +805,17 @@ mod test {
         assert!(route.is_write());
         assert!(matches!(route.shard(), Shard::All));
 
-        let route = parse!("SELECT * FROM sharded WHERE id = $1 FOR UPDATE", ["1"]);
+        let route = parse!(
+            "SELECT * FROM sharded WHERE id = $1 FOR UPDATE",
+            ["1".as_bytes()]
+        );
         assert!(matches!(route.shard(), Shard::Direct(_)));
         assert!(route.is_write());
     }
 
     #[test]
     fn test_omni() {
-        let route = query!("SELECT * FROM sharded_omni WHERE id = $1");
+        let route = query!("SELECT sharded_omni.* FROM sharded_omni WHERE sharded_omni.id = $1");
         assert!(matches!(route.shard(), Shard::Direct(_)));
     }
 
