@@ -118,36 +118,6 @@ column = "id"
 
 [[sharded_tables]]
 database = "mastodon_development"
-name = "settings"
-omnisharded = true
-
-[[sharded_tables]]
-database = "mastodon_development"
-name = "settings"
-omnisharded = true
-
-[[sharded_tables]]
-database = "mastodon_development"
-name = "site_uploads"
-omnisharded = true
-
-[[sharded_tables]]
-database = "mastodon_development"
-name = "ip_blocks"
-omnisharded = true
-
-[[sharded_tables]]
-database = "mastodon_development"
-name = "terms_of_services"
-omnisharded = true
-
-[[sharded_tables]]
-database = "mastodon_development"
-name = "account_statuses_cleanup_policies"
-omnisharded = true
-
-[[sharded_tables]]
-database = "mastodon_development"
 column = "remote_account_id"
 
 [[sharded_tables]]
@@ -165,6 +135,17 @@ column = "from_account_id"
 [[sharded_tables]]
 database = "mastodon_development"
 column = "action_taken_by_account_id"
+
+[[omnisharded_tables]]
+database = "mastodon_development"
+tables = [
+    "settings",
+    "settings",
+    "site_uploads",
+    "ip_blocks",
+    "terms_of_services",
+    "account_statuses_cleanup_policies",
+]
 
 
 #
@@ -188,3 +169,6 @@ fingerprint = "23cd60d5972d1712" #[2579824632033777426]
 
 [[manual_queries]]
 fingerprint = "bb38525ebeb46656" #[13490623250668217942]
+
+[[manual_query]]
+fingerprint = "f4814b6fadabc4c1" #[17618446160277259457]

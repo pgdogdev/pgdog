@@ -3,38 +3,26 @@ use crate::{
     config::{DataType, ShardedTable},
     net::messages::Vector,
 };
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashSet, sync::Arc};
 
 #[derive(Debug, Clone, Default)]
 pub struct ShardedTables {
     tables: Arc<Vec<ShardedTable>>,
-    omnisharded: Arc<HashMap<String, ShardedTable>>,
+    omnisharded: Arc<HashSet<String>>,
     dry_run: bool,
 }
 
 impl From<&[ShardedTable]> for ShardedTables {
     fn from(value: &[ShardedTable]) -> Self {
-        Self::new(value.to_vec(), false)
+        Self::new(value.to_vec(), vec![], false)
     }
 }
 
 impl ShardedTables {
-    pub fn new(tables: Vec<ShardedTable>, dry_run: bool) -> Self {
+    pub fn new(tables: Vec<ShardedTable>, omnisharded_tables: Vec<String>, dry_run: bool) -> Self {
         Self {
-            tables: Arc::new(
-                tables
-                    .iter()
-                    .filter(|t| !t.omnisharded)
-                    .map(|t| t.clone())
-                    .collect(),
-            ),
-            omnisharded: Arc::new(
-                tables
-                    .iter()
-                    .filter(|t| t.omnisharded && t.name.is_some())
-                    .map(|t| (t.name.as_ref().unwrap().clone(), t.clone()))
-                    .collect(),
-            ),
+            tables: Arc::new(tables.iter().map(|t| t.clone()).collect()),
+            omnisharded: Arc::new(omnisharded_tables.into_iter().collect()),
             dry_run,
         }
     }
@@ -43,7 +31,7 @@ impl ShardedTables {
         &self.tables
     }
 
-    pub fn omnishards(&self) -> &HashMap<String, ShardedTable> {
+    pub fn omnishards(&self) -> &HashSet<String> {
         &self.omnisharded
     }
 

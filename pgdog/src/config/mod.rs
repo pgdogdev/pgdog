@@ -165,6 +165,8 @@ pub struct Config {
     pub sharded_tables: Vec<ShardedTable>,
     #[serde(default)]
     pub manual_queries: Vec<ManualQuery>,
+    #[serde(default)]
+    pub omnisharded_tables: Vec<OmnishardedTables>,
 }
 
 impl Config {
@@ -195,6 +197,21 @@ impl Config {
                 .entry(table.database.clone())
                 .or_insert_with(Vec::new);
             entry.push(table.clone());
+        }
+
+        tables
+    }
+
+    pub fn omnisharded_tables(&self) -> HashMap<String, Vec<String>> {
+        let mut tables = HashMap::new();
+
+        for table in &self.omnisharded_tables {
+            let entry = tables
+                .entry(table.database.clone())
+                .or_insert_with(Vec::new);
+            for t in &table.tables {
+                entry.push(t.clone());
+            }
         }
 
         tables
@@ -233,6 +250,7 @@ impl Config {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct General {
     /// Run on this address.
     #[serde(default = "General::host")]
@@ -604,6 +622,7 @@ impl Users {
 
 /// User allowed to connect to pgDog.
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, Ord, PartialOrd)]
+#[serde(deny_unknown_fields)]
 pub struct User {
     /// User name.
     pub name: String,
@@ -642,6 +661,7 @@ impl User {
 
 /// Admin database settings.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct Admin {
     /// Admin database name.
     #[serde(default = "Admin::name")]
@@ -715,9 +735,6 @@ pub struct ShardedTable {
     /// How many centroids to probe.
     #[serde(default)]
     pub centroid_probes: usize,
-    /// Table is the same on all shards.
-    #[serde(default)]
-    pub omnisharded: bool,
 }
 
 impl ShardedTable {
@@ -757,6 +774,13 @@ pub enum DataType {
     Bigint,
     Uuid,
     Vector,
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Default)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct OmnishardedTables {
+    database: String,
+    tables: Vec<String>,
 }
 
 /// Queries with manual routing rules.

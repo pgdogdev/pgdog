@@ -250,6 +250,7 @@ pub(crate) fn new_pool(
     config: &crate::config::Config,
 ) -> Option<(User, Cluster)> {
     let sharded_tables = config.sharded_tables();
+    let omnisharded_tables = config.omnisharded_tables();
     let general = &config.general;
     let databases = config.databases();
     let shards = databases.get(&user.database);
@@ -280,7 +281,12 @@ pub(crate) fn new_pool(
             .get(&user.database)
             .cloned()
             .unwrap_or(vec![]);
-        let sharded_tables = ShardedTables::new(sharded_tables, general.dry_run);
+        let omnisharded_tables = omnisharded_tables
+            .get(&user.database)
+            .cloned()
+            .unwrap_or(vec![]);
+        let sharded_tables =
+            ShardedTables::new(sharded_tables, omnisharded_tables, general.dry_run);
         let cluster_config = ClusterConfig::new(general, user, &shard_configs, sharded_tables);
 
         Some((

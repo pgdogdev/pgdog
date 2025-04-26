@@ -236,8 +236,7 @@ impl QueryParser {
                         if query.is_all_shards() {
                             let tables = ast.tables();
                             for table in tables {
-                                let is_omni =
-                                    sharding_schema.tables.omnishards().contains_key(&table);
+                                let is_omni = sharding_schema.tables.omnishards().contains(&table);
                                 omni = is_omni;
                                 if !omni {
                                     break;

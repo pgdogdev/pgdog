@@ -289,6 +289,7 @@ mod test {
                         centroid_probes: 1,
                         omnisharded: false,
                     }],
+                    vec![],
                     false,
                 ),
                 shards: vec![Shard::default(), Shard::default()],
