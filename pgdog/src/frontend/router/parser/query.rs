@@ -399,28 +399,28 @@ impl QueryParser {
                             Val::Sval(String { sval }) => {
                                 return Ok(Command::Set {
                                     name: name.to_string(),
-                                    value: sval.clone().into(),
+                                    value: sval.to_string(),
                                 });
                             }
 
                             Val::Ival(Integer { ival }) => {
                                 return Ok(Command::Set {
                                     name: name.to_string(),
-                                    value: (*ival).into(),
+                                    value: ival.to_string(),
                                 });
                             }
 
                             Val::Fval(Float { fval }) => {
                                 return Ok(Command::Set {
                                     name: name.to_string(),
-                                    value: fval.clone().into(),
+                                    value: fval.to_string(),
                                 });
                             }
 
                             Val::Boolval(Boolean { boolval }) => {
                                 return Ok(Command::Set {
                                     name: name.to_string(),
-                                    value: (*boolval).into(),
+                                    value: boolval.to_string(),
                                 });
                             }
 
@@ -687,10 +687,7 @@ impl QueryParser {
 
 #[cfg(test)]
 mod test {
-    use crate::{
-        frontend::router::parser::command::SetVal,
-        net::messages::{parse::Parse, Parameter},
-    };
+    use crate::net::messages::{parse::Parse, Parameter};
 
     use super::{super::Shard, *};
     use crate::net::messages::Query;
@@ -888,7 +885,7 @@ mod test {
             match command {
                 Command::Set { name, value } => {
                     assert_eq!(name, "timezone");
-                    assert_eq!(value, SetVal::String("UTC".into()));
+                    assert_eq!(value, "UTC");
                 }
                 _ => panic!("not a set"),
             };
@@ -898,7 +895,7 @@ mod test {
         match command {
             Command::Set { name, value } => {
                 assert_eq!(name, "statement_timeout");
-                assert_eq!(value, SetVal::Integer(3000));
+                assert_eq!(value, "3000");
             }
             _ => panic!("not a set"),
         };
@@ -909,7 +906,7 @@ mod test {
         match command {
             Command::Set { name, value } => {
                 assert_eq!(name, "is_superuser");
-                assert_eq!(value, SetVal::String("true".into()));
+                assert_eq!(value, "true");
             }
             _ => panic!("not a set"),
         };
