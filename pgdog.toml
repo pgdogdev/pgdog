@@ -98,6 +98,12 @@ data_type = "bigint"
 column = "id"
 primary = true
 
+[[omnisharded_tables]]
+database = "pgdog_sharded"
+tables = [
+    "sharded_omni"
+]
+
 [[sharded_tables]]
 database = "pgdog_sharded"
 name = "embeddings"

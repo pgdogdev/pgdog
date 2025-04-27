@@ -5,5 +5,5 @@ export GEM_HOME=~/.gem
 
 pushd ${SCRIPT_DIR}
 bundle install
-bundle exec rspec *_spec.rb
+bundle exec rspec *_spec.rb -fd
 popd
