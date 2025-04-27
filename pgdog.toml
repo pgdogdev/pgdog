@@ -11,7 +11,7 @@ query_timeout = 1_000
 checkout_timeout = 1_000
 connect_timeout = 1_000
 passthrough_auth = "enabled_plain"
-dry_run = true
+# dry_run = true
 
 #
 # Admin database password.

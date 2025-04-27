@@ -126,6 +126,7 @@ async def test_insert_allshard(conns):
                 i * 25.0,
                 i * 50.0,
             )
+            print(result)
             for shard in range(2):
                 assert result[shard][0] == i
                 assert result[shard][1] == f"one_{i}"

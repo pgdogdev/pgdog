@@ -340,8 +340,15 @@ impl QueryParser {
         }
     }
 
+    /// Handle the SET command.
+    ///
+    /// We allow setting shard/sharding key manually outside
+    /// the normal protocol flow. This command is not forwarded to the server.
+    ///
+    /// All other SETs change the params on the client and are eventually sent to the server
+    /// when the client is connected to the server.
     fn set(
-        &self,
+        &mut self,
         stmt: &VariableSetStmt,
         sharding_schema: &ShardingSchema,
     ) -> Result<Command, Error> {
@@ -359,6 +366,7 @@ impl QueryParser {
                     ..
                 }) = node
                 {
+                    self.routed = true;
                     return Ok(Command::Query(Route::write(Some(*ival as usize))));
                 }
             }
@@ -376,6 +384,7 @@ impl QueryParser {
                     match val {
                         Val::Sval(String { sval }) => {
                             let shard = shard_str(&sval, sharding_schema, &vec![], 0);
+                            self.routed = true;
                             return Ok(Command::Query(Route::write(shard)));
                         }
 
@@ -695,7 +704,8 @@ mod test {
     macro_rules! command {
         ($query:expr) => {{
             let query = $query;
-            let command = QueryParser::default()
+            let mut query_parser = QueryParser::default();
+            let command = query_parser
                 .parse(
                     &Buffer::from(vec![Query::new(query).into()]),
                     &Cluster::new_test(),
@@ -704,14 +714,14 @@ mod test {
                 .unwrap()
                 .clone();
 
-            command
+            (command, query_parser)
         }};
     }
 
     macro_rules! query {
         ($query:expr) => {{
             let query = $query;
-            let command = command!(query);
+            let (command, _) = command!(query);
 
             match command {
                 Command::Query(query) => query,
@@ -866,19 +876,29 @@ mod test {
 
     #[test]
     fn test_omni() {
-        let route = query!("SELECT sharded_omni.* FROM sharded_omni WHERE sharded_omni.id = $1");
+        let q = "SELECT sharded_omni.* FROM sharded_omni WHERE sharded_omni.id = $1";
+        let route = query!(q);
         assert!(matches!(route.shard(), Shard::Direct(_)));
+        let (_, qp) = command!(q);
+        assert!(qp.routed);
+        assert!(!qp.in_transaction);
     }
 
     #[test]
     fn test_set() {
         let route = query!(r#"SET "pgdog.shard" TO 1"#);
         assert_eq!(route.shard(), &Shard::Direct(1));
+        let (_, qp) = command!(r#"SET "pgdog.shard" TO 1"#);
+        assert!(qp.routed);
+        assert!(!qp.in_transaction);
 
         let route = query!(r#"SET "pgdog.sharding_key" TO '11'"#);
         assert_eq!(route.shard(), &Shard::Direct(1));
+        let (_, qp) = command!(r#"SET "pgdog.sharding_key" TO '11'"#);
+        assert!(qp.routed);
+        assert!(!qp.in_transaction);
 
-        for command in [
+        for (command, qp) in [
             command!("SET TimeZone TO 'UTC'"),
             command!("SET TIME ZONE 'UTC'"),
         ] {
@@ -889,9 +909,11 @@ mod test {
                 }
                 _ => panic!("not a set"),
             };
+            assert!(!qp.routed);
+            assert!(!qp.in_transaction);
         }
 
-        let command = command!("SET statement_timeout TO 3000");
+        let (command, qp) = command!("SET statement_timeout TO 3000");
         match command {
             Command::Set { name, value } => {
                 assert_eq!(name, "statement_timeout");
@@ -899,10 +921,12 @@ mod test {
             }
             _ => panic!("not a set"),
         };
+        assert!(!qp.routed);
+        assert!(!qp.in_transaction);
 
         // TODO: user shouldn't be able to set these.
         // The server will report an error on synchronization.
-        let command = command!("SET is_superuser TO true");
+        let (command, qp) = command!("SET is_superuser TO true");
         match command {
             Command::Set { name, value } => {
                 assert_eq!(name, "is_superuser");
@@ -910,14 +934,19 @@ mod test {
             }
             _ => panic!("not a set"),
         };
+        assert!(!qp.routed);
+        assert!(!qp.in_transaction);
     }
 
     #[test]
     fn test_transaction() {
-        let command = command!("BEGIN");
+        let (command, qp) = command!("BEGIN");
         assert!(matches!(
             command,
             Command::StartTransaction(BufferedQuery::Query(_))
-        ))
+        ));
+
+        assert!(!qp.routed);
+        assert!(qp.in_transaction);
     }
 }

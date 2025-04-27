@@ -50,6 +50,7 @@ impl Parameters {
     /// needed to sync that state on the server.
     pub fn merge(&self, other: &mut Self) -> MergeResult {
         let mut different = vec![];
+        // let mut reset_to_default = vec![];
         for (k, v) in &self.params {
             if IMMUTABLE_PARAMS.contains(&k.as_str()) {
                 continue;
