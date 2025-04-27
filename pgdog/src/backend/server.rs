@@ -1340,7 +1340,7 @@ pub mod test {
     async fn test_sync_params() {
         let mut server = test_server().await;
         let mut params = Parameters::default();
-        params.insert("application_name".into(), "test_sync_params".into());
+        params.insert("application_name", "test_sync_params");
         let changed = server.link_client(&params, true).await.unwrap();
         assert_eq!(changed, 1);
 

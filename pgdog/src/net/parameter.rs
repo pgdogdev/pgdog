@@ -41,9 +41,9 @@ pub struct Parameters {
 
 impl Parameters {
     /// Lowercase all param names.
-    pub fn insert(&mut self, name: String, value: String) -> Option<String> {
-        let name = name.to_lowercase();
-        self.params.insert(name, value)
+    pub fn insert(&mut self, name: impl ToString, value: impl ToString) -> Option<String> {
+        let name = name.to_string().to_lowercase();
+        self.params.insert(name, value.to_string())
     }
 
     /// Merge params from self into other, generating the queries
@@ -157,11 +157,11 @@ mod test {
     #[test]
     fn test_merge() {
         let mut me = Parameters::default();
-        me.insert("application_name".into(), "something".into());
-        me.insert("TimeZone".into(), "UTC".into());
+        me.insert("application_name", "something");
+        me.insert("TimeZone", "UTC");
 
         let mut other = Parameters::default();
-        other.insert("TimeZone".into(), "UTC".into());
+        other.insert("TimeZone", "UTC");
 
         let diff = me.merge(&mut other);
         assert_eq!(diff.changed_params, 1);

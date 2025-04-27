@@ -43,6 +43,7 @@ pub struct QueryParser {
     command: Command,
     replication_mode: bool,
     routed: bool,
+    in_transaction: bool,
 }
 
 impl Default for QueryParser {
@@ -51,6 +52,7 @@ impl Default for QueryParser {
             command: Command::Query(Route::default()),
             replication_mode: false,
             routed: false,
+            in_transaction: false,
         }
     }
 }
@@ -93,6 +95,7 @@ impl QueryParser {
     /// Reset shard.
     pub fn reset(&mut self) {
         self.routed = false;
+        self.in_transaction = false;
         self.command = Command::Query(Route::default());
     }
 
@@ -233,15 +236,14 @@ impl QueryParser {
                     let mut command = Self::select(stmt, &sharding_schema, params)?;
                     let mut omni = false;
                     if let Command::Query(query) = &mut command {
+                        // Try to route an all-shard query to one
+                        // shard if the table(s) it's touching contain
+                        // the same data on all shards.
                         if query.is_all_shards() {
                             let tables = ast.tables();
-                            for table in tables {
-                                let is_omni = sharding_schema.tables.omnishards().contains(&table);
-                                omni = is_omni;
-                                if !omni {
-                                    break;
-                                }
-                            }
+                            omni = tables
+                                .iter()
+                                .all(|t| sharding_schema.tables.omnishards().contains(t));
                         }
 
                         if omni {
@@ -253,7 +255,7 @@ impl QueryParser {
                 }
             }
             // SET statements.
-            Some(NodeEnum::VariableSetStmt(ref stmt)) => Self::set(stmt, &sharding_schema),
+            Some(NodeEnum::VariableSetStmt(ref stmt)) => return self.set(stmt, &sharding_schema),
             // COPY statements.
             Some(NodeEnum::CopyStmt(ref stmt)) => Self::copy(stmt, cluster),
             // INSERT statements.
@@ -268,7 +270,8 @@ impl QueryParser {
                 TransactionStmtKind::TransStmtCommit => return Ok(Command::CommitTransaction),
                 TransactionStmtKind::TransStmtRollback => return Ok(Command::RollbackTransaction),
                 TransactionStmtKind::TransStmtBegin | TransactionStmtKind::TransStmtStart => {
-                    return Ok(Command::StartTransaction(query.clone()))
+                    self.in_transaction = true;
+                    return Ok(Command::StartTransaction(query.clone()));
                 }
                 _ => Ok(Command::Query(Route::write(None))),
             },
@@ -337,7 +340,11 @@ impl QueryParser {
         }
     }
 
-    fn set(stmt: &VariableSetStmt, sharding_schema: &ShardingSchema) -> Result<Command, Error> {
+    fn set(
+        &self,
+        stmt: &VariableSetStmt,
+        sharding_schema: &ShardingSchema,
+    ) -> Result<Command, Error> {
         match stmt.name.as_str() {
             "pgdog.shard" => {
                 let node = stmt
@@ -377,7 +384,51 @@ impl QueryParser {
                 }
             }
 
-            _ => (),
+            name => {
+                if !self.in_transaction {
+                    let node = stmt
+                        .args
+                        .first()
+                        .ok_or(Error::SetShard)?
+                        .node
+                        .as_ref()
+                        .ok_or(Error::SetShard)?;
+
+                    if let NodeEnum::AConst(AConst { val: Some(val), .. }) = node {
+                        match val {
+                            Val::Sval(String { sval }) => {
+                                return Ok(Command::Set {
+                                    name: name.to_string(),
+                                    value: sval.clone().into(),
+                                });
+                            }
+
+                            Val::Ival(Integer { ival }) => {
+                                return Ok(Command::Set {
+                                    name: name.to_string(),
+                                    value: (*ival).into(),
+                                });
+                            }
+
+                            Val::Fval(Float { fval }) => {
+                                return Ok(Command::Set {
+                                    name: name.to_string(),
+                                    value: fval.clone().into(),
+                                });
+                            }
+
+                            Val::Boolval(Boolean { boolval }) => {
+                                return Ok(Command::Set {
+                                    name: name.to_string(),
+                                    value: (*boolval).into(),
+                                });
+                            }
+
+                            _ => (),
+                        }
+                    }
+                }
+            }
         }
 
         Ok(Command::Query(Route::read(Shard::All)))
@@ -636,7 +687,10 @@ impl QueryParser {
 
 #[cfg(test)]
 mod test {
-    use crate::net::messages::{parse::Parse, Parameter};
+    use crate::{
+        frontend::router::parser::command::SetVal,
+        net::messages::{parse::Parse, Parameter},
+    };
 
     use super::{super::Shard, *};
     use crate::net::messages::Query;
@@ -826,6 +880,39 @@ mod test {
 
         let route = query!(r#"SET "pgdog.sharding_key" TO '11'"#);
         assert_eq!(route.shard(), &Shard::Direct(1));
+
+        for command in [
+            command!("SET TimeZone TO 'UTC'"),
+            command!("SET TIME ZONE 'UTC'"),
+        ] {
+            match command {
+                Command::Set { name, value } => {
+                    assert_eq!(name, "timezone");
+                    assert_eq!(value, SetVal::String("UTC".into()));
+                }
+                _ => panic!("not a set"),
+            };
+        }
+
+        let command = command!("SET statement_timeout TO 3000");
+        match command {
+            Command::Set { name, value } => {
+                assert_eq!(name, "statement_timeout");
+                assert_eq!(value, SetVal::Integer(3000));
+            }
+            _ => panic!("not a set"),
+        };
+
+        // TODO: user shouldn't be able to set these.
+        // The server will report an error on synchronization.
+        let command = command!("SET is_superuser TO true");
+        match command {
+            Command::Set { name, value } => {
+                assert_eq!(name, "is_superuser");
+                assert_eq!(value, SetVal::String("true".into()));
+            }
+            _ => panic!("not a set"),
+        };
     }
 
     #[test]

@@ -311,6 +311,18 @@ impl Client {
                     inner.stats.state = State::IdleInTransaction;
                     return Ok(false);
                 }
+                Some(Command::Set { name, value }) => {
+                    self.params.insert(name, value);
+                    self.stream.send(&CommandComplete::new("SET")).await?;
+                    self.stream
+                        .send_flush(&ReadyForQuery::in_transaction(self.in_transaction))
+                        .await?;
+                    let state = inner.stats.state;
+                    if state == State::Active {
+                        inner.stats.state = State::Idle;
+                    }
+                    return Ok(false);
+                }
                 _ => (),
             };
 
