@@ -32,7 +32,10 @@ pub async fn connections_sqlx() -> Vec<Pool<Postgres>> {
     for db in ["pgdog", "pgdog_sharded"] {
         let pool = PgPoolOptions::new()
             .max_connections(1)
-            .connect(&format!("postgres://pgdog:pgdog@127.0.0.1:6432/{}", db))
+            .connect(&format!(
+                "postgres://pgdog:pgdog@127.0.0.1:6432/{}?application_name=sqlx",
+                db
+            ))
             .await
             .unwrap();
         pools.push(pool);
@@ -44,7 +47,9 @@ pub async fn connections_sqlx() -> Vec<Pool<Postgres>> {
 pub async fn connection_failover() -> Pool<Postgres> {
     let pool = PgPoolOptions::new()
         .max_connections(5)
-        .connect(&format!("postgres://pgdog:pgdog@127.0.0.1:6432/failover"))
+        .connect(&format!(
+            "postgres://pgdog:pgdog@127.0.0.1:6432/failover?application_name=sqlx"
+        ))
         .await
         .unwrap();
 

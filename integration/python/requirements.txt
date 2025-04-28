@@ -2,10 +2,13 @@ asgiref==3.8.1
 asyncio==3.4.3
 asyncpg==0.30.0
 black==25.1.0
+certifi==2025.1.31
+charset-normalizer==3.4.1
 click==8.1.8
 Django==5.1.7
 execnet==2.1.1
 greenlet==3.1.1
+idna==3.10
 iniconfig==2.1.0
 mypy-extensions==1.0.0
 packaging==24.2
@@ -17,6 +20,8 @@ psycopg2==2.9.10
 pytest==8.3.5
 pytest-asyncio==0.26.0
 pytest-xdist==3.6.1
+requests==2.32.3
 SQLAlchemy==2.0.39
 sqlparse==0.5.3
 typing_extensions==4.13.0
+urllib3==2.4.0

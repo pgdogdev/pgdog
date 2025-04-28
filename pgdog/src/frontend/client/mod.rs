@@ -274,31 +274,58 @@ impl Client {
                 self.stream
                     .error(ErrorResponse::syntax(err.to_string().as_str()))
                     .await?;
-                return Ok(true);
+                inner.done(self.in_transaction);
+                return Ok(false);
             }
         };
 
         self.streaming = matches!(command, Some(Command::StartReplication));
 
         if !connected {
+            // Simulate transaction starting
+            // until client sends an actual query.
+            //
+            // This ensures we:
+            //
+            // 1. Don't connect to servers unnecessarily.
+            // 2. Can use the first query sent by the client to route the transaction.
+            //
             match command {
                 Some(Command::StartTransaction(query)) => {
                     if let BufferedQuery::Query(_) = query {
                         self.start_transaction().await?;
                         inner.start_transaction = Some(query.clone());
+                        inner.done(true);
                         return Ok(false);
                     }
                 }
                 Some(Command::RollbackTransaction) => {
                     inner.start_transaction = None;
                     self.end_transaction(true).await?;
+                    inner.done(false);
                     return Ok(false);
                 }
                 Some(Command::CommitTransaction) => {
                     inner.start_transaction = None;
                     self.end_transaction(false).await?;
+                    inner.done(false);
                     return Ok(false);
                 }
+                // TODO: Handling session variables requires a lot more work,
+                // e.g. we need to track RESET as well.
+                // Some(Command::Set { name, value }) => {
+                //     self.params.insert(name, value);
+                //     self.stream.send(&CommandComplete::new("SET")).await?;
+                //     self.stream
+                //         .send_flush(&ReadyForQuery::in_transaction(self.in_transaction))
+                //         .await?;
+                //     let state = inner.stats.state;
+                //     if state == State::Active {
+                //         inner.stats.state = State::Idle;
+                //     }
+
+                //     return Ok(false);
+                // }
                 _ => (),
             };
 
@@ -344,8 +371,6 @@ impl Client {
                 inner.backend.bind(bind)?
             }
         }
-
-        // inner.backend.wait_in_sync().await;
 
         // Handle COPY subprotocol in a potentially sharded context.
         if buffer.copy() && !self.streaming {
@@ -408,13 +433,18 @@ impl Client {
                 inner.disconnect();
             }
             inner.stats.transaction();
+            inner.reset_router();
             debug!(
                 "transaction finished [{}ms]",
                 inner.stats.last_transaction_time.as_secs_f64() * 1000.0
             );
-            for (name, value) in changed_params.iter() {
-                debug!("setting client's \"{}\" to '{}'", name, value);
-                self.params.insert(name.clone(), value.clone());
+
+            if !changed_params.is_empty() {
+                for (name, value) in changed_params.iter() {
+                    debug!("setting client's \"{}\" to '{}'", name, value);
+                    self.params.insert(name.clone(), value.clone());
+                }
+                inner.comms.update_params(&self.params);
             }
             if inner.comms.offline() && !self.admin {
                 return Ok(true);

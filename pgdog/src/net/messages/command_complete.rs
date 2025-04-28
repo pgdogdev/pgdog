@@ -56,6 +56,12 @@ impl CommandComplete {
             command: "COMMIT".into(),
         }
     }
+
+    pub fn new(command: impl ToString) -> Self {
+        Self {
+            command: command.to_string(),
+        }
+    }
 }
 
 impl ToBytes for CommandComplete {

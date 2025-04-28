@@ -1,0 +1,78 @@
+[general]
+dry_run = true
+passthrough_auth = "enabled_plain"
+openmetrics_port = 9090
+
+[admin]
+password = "pgdog"
+
+[[databases]]
+name = "mastodon_development"
+host = "127.0.0.1"
+role = "primary"
+
+[[databases]]
+name = "mastodon_development"
+host = "127.0.0.1"
+role = "replica"
+
+[[sharded_tables]]
+database = "mastodon_development"
+data_type = "bigint"
+column = "account_id"
+
+[[sharded_tables]]
+database = "mastodon_development"
+data_type = "bigint"
+name = "accounts"
+column = "id"
+
+[[sharded_tables]]
+database = "mastodon_development"
+name = "settings"
+omnisharded = true
+
+[[sharded_tables]]
+database = "mastodon_development"
+name = "settings"
+omnisharded = true
+
+[[sharded_tables]]
+database = "mastodon_development"
+name = "site_uploads"
+omnisharded = true
+
+[[sharded_tables]]
+database = "mastodon_development"
+name = "ip_blocks"
+omnisharded = true
+
+[[sharded_tables]]
+database = "mastodon_development"
+name = "terms_of_services"
+omnisharded = true
+
+[[sharded_tables]]
+database = "mastodon_development"
+name = "account_statuses_cleanup_policies"
+omnisharded = true
+
+[[sharded_tables]]
+database = "mastodon_development"
+column = "remote_account_id"
+
+[[sharded_tables]]
+database = "mastodon_development"
+column = "target_account_id"
+
+[[sharded_tables]]
+database = "mastodon_development"
+column = "reference_account_id"
+
+[[sharded_tables]]
+database = "mastodon_development"
+column = "from_account_id"
+
+[[sharded_tables]]
+database = "mastodon_development"
+column = "action_taken_by_account_id"

@@ -11,6 +11,7 @@ query_timeout = 1_000
 checkout_timeout = 1_000
 connect_timeout = 1_000
 passthrough_auth = "enabled_plain"
+# dry_run = true
 
 #
 # Admin database password.
@@ -97,12 +98,61 @@ data_type = "bigint"
 column = "id"
 primary = true
 
+[[omnisharded_tables]]
+database = "pgdog_sharded"
+tables = [
+    "sharded_omni"
+]
+
 [[sharded_tables]]
 database = "pgdog_sharded"
 name = "embeddings"
 data_type = "vector"
 column = "embedding"
 centroids_path = "examples/pgvector/centroids.json"
+
+[[sharded_tables]]
+database = "mastodon_development"
+data_type = "bigint"
+column = "account_id"
+
+[[sharded_tables]]
+database = "mastodon_development"
+data_type = "bigint"
+name = "accounts"
+column = "id"
+
+[[sharded_tables]]
+database = "mastodon_development"
+column = "remote_account_id"
+
+[[sharded_tables]]
+database = "mastodon_development"
+column = "target_account_id"
+
+[[sharded_tables]]
+database = "mastodon_development"
+column = "reference_account_id"
+
+[[sharded_tables]]
+database = "mastodon_development"
+column = "from_account_id"
+
+[[sharded_tables]]
+database = "mastodon_development"
+column = "action_taken_by_account_id"
+
+[[omnisharded_tables]]
+database = "mastodon_development"
+tables = [
+    "settings",
+    "settings",
+    "site_uploads",
+    "ip_blocks",
+    "terms_of_services",
+    "account_statuses_cleanup_policies",
+]
+
 
 #
 # ActiveRecord sends these queries
@@ -125,3 +175,6 @@ fingerprint = "23cd60d5972d1712" #[2579824632033777426]
 
 [[manual_queries]]
 fingerprint = "bb38525ebeb46656" #[13490623250668217942]
+
+[[manual_query]]
+fingerprint = "f4814b6fadabc4c1" #[17618446160277259457]

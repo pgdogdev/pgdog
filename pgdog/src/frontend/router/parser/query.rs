@@ -12,7 +12,7 @@ use crate::{
         router::{
             parser::{rewrite::Rewrite, OrderBy, Shard},
             round_robin,
-            sharding::{shard_param, shard_value, Centroids},
+            sharding::{shard_param, shard_str, shard_value, Centroids},
             CopyRow,
         },
         Buffer, PreparedStatements,
@@ -42,6 +42,8 @@ static REPLICATION_REGEX: Lazy<Regex> = Lazy::new(|| {
 pub struct QueryParser {
     command: Command,
     replication_mode: bool,
+    routed: bool,
+    in_transaction: bool,
 }
 
 impl Default for QueryParser {
@@ -49,6 +51,8 @@ impl Default for QueryParser {
         Self {
             command: Command::Query(Route::default()),
             replication_mode: false,
+            routed: false,
+            in_transaction: false,
         }
     }
 }
@@ -88,8 +92,15 @@ impl QueryParser {
         }
     }
 
+    /// Reset shard.
+    pub fn reset(&mut self) {
+        self.routed = false;
+        self.in_transaction = false;
+        self.command = Command::Query(Route::default());
+    }
+
     fn query(
-        &self,
+        &mut self,
         query: &BufferedQuery,
         cluster: &Cluster,
         params: Option<&Bind>,
@@ -112,8 +123,10 @@ impl QueryParser {
         let read_only = cluster.read_only();
         let write_only = cluster.write_only();
         let full_prepared_statements = config().config.general.prepared_statements.full();
-        let parser_disabled =
-            !full_prepared_statements && (shards == 1 && (read_only | write_only));
+        let sharding_schema = cluster.sharding_schema();
+        let dry_run = sharding_schema.tables.dry_run();
+        let router_disabled = shards == 1 && (read_only || write_only);
+        let parser_disabled = !full_prepared_statements && router_disabled && !dry_run;
 
         debug!(
             "parser is {}",
@@ -139,7 +152,15 @@ impl QueryParser {
             }
         }
 
-        let sharding_schema = cluster.sharding_schema();
+        // We already decided where all queries for this
+        // transaction are going to go.
+        if self.routed {
+            if dry_run {
+                Cache::get().record_route(&self.route());
+            }
+
+            return Ok(self.command.clone());
+        }
 
         // Parse hardcoded shard from a query comment.
         let shard = super::comment::shard(query, &sharding_schema).map_err(Error::PgQuery)?;
@@ -159,12 +180,12 @@ impl QueryParser {
             }
         }
 
+        let cache = Cache::get();
+
         // Get the AST from cache or parse the statement live.
         let ast = match query {
             // Only prepared statements (or just extended) are cached.
-            BufferedQuery::Prepared(query) => {
-                Cache::get().parse(query.query()).map_err(Error::PgQuery)?
-            }
+            BufferedQuery::Prepared(query) => cache.parse(query.query()).map_err(Error::PgQuery)?,
             // Don't cache simple queries.
             //
             // They contain parameter values, which makes the cache
@@ -212,11 +233,37 @@ impl QueryParser {
                         round_robin::next() % cluster.shards().len(),
                     ))));
                 } else {
-                    Self::select(stmt, &sharding_schema, params)
+                    let mut command = Self::select(stmt, &sharding_schema, params)?;
+                    let mut omni = false;
+                    if let Command::Query(query) = &mut command {
+                        // Try to route an all-shard query to one
+                        // shard if the table(s) it's touching contain
+                        // the same data on all shards.
+                        if query.is_all_shards() {
+                            let tables = ast.tables();
+                            omni = tables
+                                .iter()
+                                .all(|t| sharding_schema.tables.omnishards().contains(t));
+                        }
+
+                        if omni {
+                            query.set_shard(round_robin::next() % cluster.shards().len());
+                        }
+                    }
+
+                    Ok(command)
                 }
             }
             // SET statements.
-            Some(NodeEnum::VariableSetStmt(ref stmt)) => Self::set(stmt),
+            Some(NodeEnum::VariableSetStmt(ref stmt)) => {
+                let command = self.set(stmt, &sharding_schema);
+
+                if self.routed {
+                    return command;
+                } else {
+                    Ok(Command::Query(Route::read(Shard::All)))
+                }
+            }
             // COPY statements.
             Some(NodeEnum::CopyStmt(ref stmt)) => Self::copy(stmt, cluster),
             // INSERT statements.
@@ -231,7 +278,8 @@ impl QueryParser {
                 TransactionStmtKind::TransStmtCommit => return Ok(Command::CommitTransaction),
                 TransactionStmtKind::TransStmtRollback => return Ok(Command::RollbackTransaction),
                 TransactionStmtKind::TransStmtBegin | TransactionStmtKind::TransStmtStart => {
-                    return Ok(Command::StartTransaction(query.clone()))
+                    self.in_transaction = true;
+                    return Ok(Command::StartTransaction(query.clone()));
                 }
                 _ => Ok(Command::Query(Route::write(None))),
             },
@@ -239,6 +287,8 @@ impl QueryParser {
             // They are sent to all shards concurrently.
             _ => Ok(Command::Query(Route::write(None))),
         }?;
+
+        self.routed = true;
 
         // Overwrite shard using shard we got from a comment, if any.
         if let Shard::Direct(shard) = shard {
@@ -253,7 +303,7 @@ impl QueryParser {
         // there is no point of doing a multi-shard query with only one shard
         // in the set.
         //
-        if cluster.shards().len() == 1 {
+        if cluster.shards().len() == 1 && !dry_run {
             if let Command::Query(ref mut route) = command {
                 route.set_shard(0);
             }
@@ -281,12 +331,125 @@ impl QueryParser {
             }
         }
 
-        trace!("{:#?}", command);
+        debug!("{:#?}", command);
 
-        Ok(command)
+        if dry_run {
+            let default_route = Route::write(None);
+            cache.record_command(
+                query,
+                match &command {
+                    Command::Query(ref route) => route,
+                    _ => &default_route,
+                },
+            )?;
+            Ok(command.dry_run())
+        } else {
+            Ok(command)
+        }
     }
 
-    fn set(_stmt: &VariableSetStmt) -> Result<Command, Error> {
+    /// Handle the SET command.
+    ///
+    /// We allow setting shard/sharding key manually outside
+    /// the normal protocol flow. This command is not forwarded to the server.
+    ///
+    /// All other SETs change the params on the client and are eventually sent to the server
+    /// when the client is connected to the server.
+    fn set(
+        &mut self,
+        stmt: &VariableSetStmt,
+        sharding_schema: &ShardingSchema,
+    ) -> Result<Command, Error> {
+        match stmt.name.as_str() {
+            "pgdog.shard" => {
+                let node = stmt
+                    .args
+                    .first()
+                    .ok_or(Error::SetShard)?
+                    .node
+                    .as_ref()
+                    .ok_or(Error::SetShard)?;
+                if let NodeEnum::AConst(AConst {
+                    val: Some(a_const::Val::Ival(Integer { ival })),
+                    ..
+                }) = node
+                {
+                    self.routed = true;
+                    return Ok(Command::Query(Route::write(Some(*ival as usize))));
+                }
+            }
+
+            "pgdog.sharding_key" => {
+                let node = stmt
+                    .args
+                    .first()
+                    .ok_or(Error::SetShard)?
+                    .node
+                    .as_ref()
+                    .ok_or(Error::SetShard)?;
+
+                if let NodeEnum::AConst(AConst { val: Some(val), .. }) = node {
+                    match val {
+                        Val::Sval(String { sval }) => {
+                            let shard = shard_str(&sval, sharding_schema, &vec![], 0);
+                            self.routed = true;
+                            return Ok(Command::Query(Route::write(shard)));
+                        }
+
+                        _ => (),
+                    }
+                }
+            }
+
+            // TODO: Handle SET commands for updating client
+            // params without touching the server.
+            name => {
+                if !self.in_transaction {
+                    let node = stmt
+                        .args
+                        .first()
+                        .ok_or(Error::SetShard)?
+                        .node
+                        .as_ref()
+                        .ok_or(Error::SetShard)?;
+
+                    if let NodeEnum::AConst(AConst { val: Some(val), .. }) = node {
+                        match val {
+                            Val::Sval(String { sval }) => {
+                                return Ok(Command::Set {
+                                    name: name.to_string(),
+                                    value: sval.to_string(),
+                                });
+                            }
+
+                            Val::Ival(Integer { ival }) => {
+                                return Ok(Command::Set {
+                                    name: name.to_string(),
+                                    value: ival.to_string(),
+                                });
+                            }
+
+                            Val::Fval(Float { fval }) => {
+                                return Ok(Command::Set {
+                                    name: name.to_string(),
+                                    value: fval.to_string(),
+                                });
+                            }
+
+                            Val::Boolval(Boolean { boolval }) => {
+                                return Ok(Command::Set {
+                                    name: name.to_string(),
+                                    value: boolval.to_string(),
+                                });
+                            }
+
+                            _ => (),
+                        }
+                    }
+                }
+            }
+        }
+
         Ok(Command::Query(Route::read(Shard::All)))
     }
 
@@ -415,7 +578,9 @@ impl QueryParser {
                     }
 
                     NodeEnum::ColumnRef(column_ref) => {
-                        let Some(field) = column_ref.fields.first() else {
+                        // TODO: save the entire column and disambiguate
+                        // when reading data with RowDescription as context.
+                        let Some(field) = column_ref.fields.last() else {
                             continue;
                         };
                         if let Some(NodeEnum::String(ref string)) = field.node {
@@ -546,6 +711,78 @@ mod test {
     use super::{super::Shard, *};
     use crate::net::messages::Query;
 
+    macro_rules! command {
+        ($query:expr) => {{
+            let query = $query;
+            let mut query_parser = QueryParser::default();
+            let command = query_parser
+                .parse(
+                    &Buffer::from(vec![Query::new(query).into()]),
+                    &Cluster::new_test(),
+                    &mut PreparedStatements::default(),
+                )
+                .unwrap()
+                .clone();
+
+            (command, query_parser)
+        }};
+    }
+
+    macro_rules! query {
+        ($query:expr) => {{
+            let query = $query;
+            let (command, _) = command!(query);
+
+            match command {
+                Command::Query(query) => query,
+
+                _ => panic!("should be a query"),
+            }
+        }};
+    }
+
+    macro_rules! parse {
+        ($query: expr, $params: expr) => {
+            parse!("", $query, $params)
+        };
+
+        ($name:expr, $query:expr, $params:expr, $codes:expr) => {{
+            let parse = Parse::named($name, $query);
+            let params = $params
+                .into_iter()
+                .map(|p| Parameter {
+                    len: p.len() as i32,
+                    data: p.to_vec(),
+                })
+                .collect::<Vec<_>>();
+            let bind = Bind {
+                portal: "".into(),
+                statement: $name.into(),
+                codes: $codes.to_vec(),
+                params,
+                results: vec![],
+            };
+            let route = QueryParser::default()
+                .parse(
+                    &Buffer::from(vec![parse.into(), bind.into()]),
+                    &Cluster::new_test(),
+                    &mut PreparedStatements::default(),
+                )
+                .unwrap()
+                .clone();
+
+            match route {
+                Command::Query(query) => query,
+
+                _ => panic!("should be a query"),
+            }
+        }};
+
+        ($name:expr, $query:expr, $params: expr) => {
+            parse!($name, $query, $params, [])
+        };
+    }
+
     #[test]
     fn test_start_replication() {
         let query = Query::new(
@@ -584,155 +821,142 @@ mod test {
 
     #[test]
     fn test_insert() {
-        let query = Parse::new_anonymous("INSERT INTO sharded (id, email) VALUES ($1, $2)");
-        let params = Bind {
-            portal: "".into(),
-            statement: "".into(),
-            codes: vec![],
-            params: vec![
-                Parameter {
-                    len: 2,
-                    data: "11".as_bytes().to_vec(),
-                },
-                Parameter {
-                    len: "test@test.com".len() as i32,
-                    data: "test@test.com".as_bytes().to_vec(),
-                },
-            ],
-            results: vec![],
-        };
-        let mut buffer = Buffer::new();
-        buffer.push(query.into());
-        buffer.push(params.into());
-
-        let mut parser = QueryParser::default();
-        let cluster = Cluster::new_test();
-        let command = parser
-            .parse(&buffer, &cluster, &mut PreparedStatements::default())
-            .unwrap();
-        if let Command::Query(route) = command {
-            assert_eq!(route.shard(), &Shard::direct(1));
-        } else {
-            panic!("not a route");
-        }
+        let route = parse!(
+            "INSERT INTO sharded (id, email) VALUES ($1, $2)",
+            ["11".as_bytes(), "test@test.com".as_bytes()]
+        );
+        assert_eq!(route.shard(), &Shard::direct(1));
     }
 
     #[test]
     fn test_order_by_vector() {
-        let query = Query::new("SELECT * FROM embeddings ORDER BY embedding <-> '[1,2,3]'");
-        let buffer = Buffer::from(vec![query.into()]);
-        let route = QueryParser::default()
-            .parse(
-                &buffer,
-                &Cluster::default(),
-                &mut PreparedStatements::default(),
-            )
-            .unwrap()
-            .clone();
-        if let Command::Query(route) = route {
-            let order_by = route.order_by().first().unwrap();
-            assert!(order_by.asc());
-            assert_eq!(
-                order_by.vector().unwrap(),
-                (
-                    &Vector::from(&[1.0, 2.0, 3.0][..]),
-                    &std::string::String::from("embedding")
-                ),
-            );
-        } else {
-            panic!("not a route");
-        }
+        let route = query!("SELECT * FROM embeddings ORDER BY embedding <-> '[1,2,3]'");
+        let order_by = route.order_by().first().unwrap();
+        assert!(order_by.asc());
+        assert_eq!(
+            order_by.vector().unwrap(),
+            (
+                &Vector::from(&[1.0, 2.0, 3.0][..]),
+                &std::string::String::from("embedding")
+            ),
+        );
 
-        let query = Parse::new_anonymous("SELECT * FROM embeddings ORDER BY embedding  <-> $1");
-        let bind = Bind {
-            portal: "".into(),
-            statement: "".into(),
-            codes: vec![],
-            params: vec![Parameter {
-                len: 7,
-                data: "[4,5,6]".as_bytes().to_vec(),
-            }],
-            results: vec![],
-        };
-        let buffer = Buffer::from(vec![query.into(), bind.into()]);
-        let route = QueryParser::default()
-            .parse(
-                &buffer,
-                &Cluster::default(),
-                &mut PreparedStatements::default(),
+        let route = parse!(
+            "SELECT * FROM embeddings ORDER BY embedding  <-> $1",
+            ["[4.0,5.0,6.0]".as_bytes()]
+        );
+        let order_by = route.order_by().first().unwrap();
+        assert!(order_by.asc());
+        assert_eq!(
+            order_by.vector().unwrap(),
+            (
+                &Vector::from(&[4.0, 5.0, 6.0][..]),
+                &std::string::String::from("embedding")
             )
-            .unwrap()
-            .clone();
-        if let Command::Query(query) = route {
-            let order_by = query.order_by().first().unwrap();
-            assert!(order_by.asc());
-            assert_eq!(
-                order_by.vector().unwrap(),
-                (
-                    &Vector::from(&[4.0, 5.0, 6.0][..]),
-                    &std::string::String::from("embedding")
-                )
-            );
-        } else {
-            panic!("not a route");
-        }
+        );
     }
 
     #[test]
     fn test_parse_with_cast() {
-        let query = Parse::named(
+        let route = parse!(
             "test",
             r#"SELECT sharded.id, sharded.value
-        FROM sharded
-        WHERE sharded.id = $1::INTEGER ORDER BY sharded.id"#,
+    FROM sharded
+    WHERE sharded.id = $1::INTEGER ORDER BY sharded.id"#,
+            [[0, 0, 0, 1]],
+            [1]
         );
-        let bind = Bind {
-            statement: "test".into(),
-            codes: vec![1],
-            params: vec![Parameter {
-                data: vec![0, 0, 0, 1],
-                len: 4,
-            }],
-            ..Default::default()
-        };
-        let buf = Buffer::from(vec![query.into(), bind.into()]);
-
-        let route = QueryParser::default()
-            .parse(
-                &buf,
-                &Cluster::new_test(),
-                &mut PreparedStatements::default(),
-            )
-            .unwrap()
-            .clone();
-
-        match route {
-            Command::Query(route) => {
-                assert!(route.is_read());
-                assert_eq!(route.shard(), &Shard::Direct(0));
-            }
-
-            _ => panic!("should be a query"),
-        }
+        assert!(route.is_read());
+        assert_eq!(route.shard(), &Shard::Direct(0))
     }
 
     #[test]
     fn test_select_for_update() {
-        let query = "SELECT * FROM sharded WHERE id = $1 FOR UPDATE";
-        let route = QueryParser::default()
-            .parse(
-                &Buffer::from(vec![Query::new(query).into()]),
-                &Cluster::new_test(),
-                &mut PreparedStatements::default(),
-            )
-            .unwrap()
-            .clone();
-        match route {
-            Command::Query(query) => {
-                assert!(query.is_write());
-            }
+        let route = query!("SELECT * FROM sharded WHERE id = $1 FOR UPDATE");
+        assert!(route.is_write());
+        assert!(matches!(route.shard(), Shard::All));
 
-            _ => panic!("should be a query"),
+        let route = parse!(
+            "SELECT * FROM sharded WHERE id = $1 FOR UPDATE",
+            ["1".as_bytes()]
+        );
+        assert!(matches!(route.shard(), Shard::Direct(_)));
+        assert!(route.is_write());
+    }
+
+    #[test]
+    fn test_omni() {
+        let q = "SELECT sharded_omni.* FROM sharded_omni WHERE sharded_omni.id = $1";
+        let route = query!(q);
+        assert!(matches!(route.shard(), Shard::Direct(_)));
+        let (_, qp) = command!(q);
+        assert!(qp.routed);
+        assert!(!qp.in_transaction);
+    }
+
+    #[test]
+    fn test_set() {
+        let route = query!(r#"SET "pgdog.shard" TO 1"#);
+        assert_eq!(route.shard(), &Shard::Direct(1));
+        let (_, qp) = command!(r#"SET "pgdog.shard" TO 1"#);
+        assert!(qp.routed);
+        assert!(!qp.in_transaction);
+
+        let route = query!(r#"SET "pgdog.sharding_key" TO '11'"#);
+        assert_eq!(route.shard(), &Shard::Direct(1));
+        let (_, qp) = command!(r#"SET "pgdog.sharding_key" TO '11'"#);
+        assert!(qp.routed);
+        assert!(!qp.in_transaction);
+
+        for (_, qp) in [
+            command!("SET TimeZone TO 'UTC'"),
+            command!("SET TIME ZONE 'UTC'"),
+        ] {
+            // match command {
+            //     Command::Set { name, value } => {
+            //         assert_eq!(name, "timezone");
+            //         assert_eq!(value, "UTC");
+            //     }
+            //     _ => panic!("not a set"),
+            // };
+            assert!(qp.routed);
+            assert!(!qp.in_transaction);
         }
+
+        let (_, qp) = command!("SET statement_timeout TO 3000");
+        // match command {
+        //     Command::Set { name, value } => {
+        //         assert_eq!(name, "statement_timeout");
+        //         assert_eq!(value, "3000");
+        //     }
+        //     _ => panic!("not a set"),
+        // };
+        assert!(qp.routed);
+        assert!(!qp.in_transaction);
+
+        // TODO: user shouldn't be able to set these.
+        // The server will report an error on synchronization.
+        let (_, qp) = command!("SET is_superuser TO true");
+        // match command {
+        //     Command::Set { name, value } => {
+        //         assert_eq!(name, "is_superuser");
+        //         assert_eq!(value, "true");
+        //     }
+        //     _ => panic!("not a set"),
+        // };
+        assert!(qp.routed);
+        assert!(!qp.in_transaction);
+    }
+
+    #[test]
+    fn test_transaction() {
+        let (command, qp) = command!("BEGIN");
+        assert!(matches!(
+            command,
+            Command::StartTransaction(BufferedQuery::Query(_))
+        ));
+
+        assert!(!qp.routed);
+        assert!(qp.in_transaction);
     }
 }
