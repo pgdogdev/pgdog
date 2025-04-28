@@ -55,5 +55,11 @@ column = "id"
 data_type = "bigint"
 primary = true
 
+[[omnisharded_tables]]
+database = "pgdog_sharded"
+tables = [
+    "sharded_omni"
+]
+
 [admin]
 password = "pgdog"
