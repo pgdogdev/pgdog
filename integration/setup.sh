@@ -14,6 +14,8 @@ for user in pgdog pgdog1 pgdog2 pgdog3; do
 done
 
 export PGPASSWORD='pgdog'
+export PGHOST=127.0.0.1
+export PGPORT=5432
 
 for db in pgdog shard_0 shard_1; do
     psql -c "CREATE DATABASE $db" || true
@@ -24,13 +26,11 @@ for db in pgdog shard_0 shard_1; do
 done
 
 for db in pgdog shard_0 shard_1; do
-    for user in pgdog ${USER}; do
-        for table in sharded sharded_omni; do
-             psql -c "DROP TABLE IF EXISTS ${table}" ${db} -U ${user}
-             psql -c "CREATE TABLE IF NOT EXISTS ${table} (id BIGINT PRIMARY KEY, value TEXT)" ${db} -U ${user}
-        done
-        psql -f ${SCRIPT_DIR}/../pgdog/src/backend/schema/setup.sql ${db} -U ${user}
+    for table in sharded sharded_omni; do
+            psql -c "DROP TABLE IF EXISTS ${table}" ${db} -U pgdog
+            psql -c "CREATE TABLE IF NOT EXISTS ${table} (id BIGINT PRIMARY KEY, value TEXT)" ${db} -U pgdog
     done
+    psql -f ${SCRIPT_DIR}/../pgdog/src/backend/schema/setup.sql ${db} -U ${user}
 done
 
 pushd ${SCRIPT_DIR}
