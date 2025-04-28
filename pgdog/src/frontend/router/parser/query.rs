@@ -255,7 +255,15 @@ impl QueryParser {
                 }
             }
             // SET statements.
-            Some(NodeEnum::VariableSetStmt(ref stmt)) => return self.set(stmt, &sharding_schema),
+            Some(NodeEnum::VariableSetStmt(ref stmt)) => {
+                let command = self.set(stmt, &sharding_schema);
+
+                if self.routed {
+                    return command;
+                } else {
+                    command
+                }
+            }
             // COPY statements.
             Some(NodeEnum::CopyStmt(ref stmt)) => Self::copy(stmt, cluster),
             // INSERT statements.
@@ -393,52 +401,57 @@ impl QueryParser {
                 }
             }
 
-            name => {
-                if !self.in_transaction {
-                    let node = stmt
-                        .args
-                        .first()
-                        .ok_or(Error::SetShard)?
-                        .node
-                        .as_ref()
-                        .ok_or(Error::SetShard)?;
-
-                    if let NodeEnum::AConst(AConst { val: Some(val), .. }) = node {
-                        match val {
-                            Val::Sval(String { sval }) => {
-                                return Ok(Command::Set {
-                                    name: name.to_string(),
-                                    value: sval.to_string(),
-                                });
-                            }
-
-                            Val::Ival(Integer { ival }) => {
-                                return Ok(Command::Set {
-                                    name: name.to_string(),
-                                    value: ival.to_string(),
-                                });
-                            }
-
-                            Val::Fval(Float { fval }) => {
-                                return Ok(Command::Set {
-                                    name: name.to_string(),
-                                    value: fval.to_string(),
-                                });
-                            }
-
-                            Val::Boolval(Boolean { boolval }) => {
-                                return Ok(Command::Set {
-                                    name: name.to_string(),
-                                    value: boolval.to_string(),
-                                });
-                            }
-
-                            _ => (),
-                        }
-                    }
-                }
-            }
+            _ => (),
         }
+
+        // TODO: Handle SET commands for updating client
+        // params without touching the server.
+        //     name => {
+        //         if !self.in_transaction {
+        //             let node = stmt
+        //                 .args
+        //                 .first()
+        //                 .ok_or(Error::SetShard)?
+        //                 .node
+        //                 .as_ref()
+        //                 .ok_or(Error::SetShard)?;
+
+        //             if let NodeEnum::AConst(AConst { val: Some(val), .. }) = node {
+        //                 match val {
+        //                     Val::Sval(String { sval }) => {
+        //                         return Ok(Command::Set {
+        //                             name: name.to_string(),
+        //                             value: sval.to_string(),
+        //                         });
+        //                     }
+
+        //                     Val::Ival(Integer { ival }) => {
+        //                         return Ok(Command::Set {
+        //                             name: name.to_string(),
+        //                             value: ival.to_string(),
+        //                         });
+        //                     }
+
+        //                     Val::Fval(Float { fval }) => {
+        //                         return Ok(Command::Set {
+        //                             name: name.to_string(),
+        //                             value: fval.to_string(),
+        //                         });
+        //                     }
+
+        //                     Val::Boolval(Boolean { boolval }) => {
+        //                         return Ok(Command::Set {
+        //                             name: name.to_string(),
+        //                             value: boolval.to_string(),
+        //                         });
+        //                     }
+
+        //                     _ => (),
+        //                 }
+        //             }
+        //         }
+        //     }
+        // }
 
         Ok(Command::Query(Route::read(Shard::All)))
     }
