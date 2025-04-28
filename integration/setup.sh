@@ -13,6 +13,11 @@ for user in pgdog pgdog1 pgdog2 pgdog3; do
     psql -c "CREATE USER ${user} LOGIN SUPERUSER PASSWORD 'pgdog'" || true
 done
 
+# GitHub fix
+if [[ "$USER" == "runner" ]]; then
+    psql -c "ALTER USER runner PASSWORD 'pgdog' LOGIN;"
+fi
+
 export PGPASSWORD='pgdog'
 export PGHOST=127.0.0.1
 export PGPORT=5432
