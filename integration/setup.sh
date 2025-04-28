@@ -13,6 +13,7 @@ for user in pgdog pgdog1 pgdog2 pgdog3; do
     psql -c "CREATE USER ${user} LOGIN SUPERUSER PASSWORD 'pgdog'" || true
 done
 
+export PGPASSWORD='pgdog'
 
 for db in pgdog shard_0 shard_1; do
     psql -c "CREATE DATABASE $db" || true
