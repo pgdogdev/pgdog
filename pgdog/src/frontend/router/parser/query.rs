@@ -261,7 +261,7 @@ impl QueryParser {
                 if self.routed {
                     return command;
                 } else {
-                    command
+                    Ok(Command::Query(Route::read(Shard::All)))
                 }
             }
             // COPY statements.
@@ -401,57 +401,54 @@ impl QueryParser {
                 }
             }
 
-            _ => (),
+            // TODO: Handle SET commands for updating client
+            // params without touching the server.
+            name => {
+                if !self.in_transaction {
+                    let node = stmt
+                        .args
+                        .first()
+                        .ok_or(Error::SetShard)?
+                        .node
+                        .as_ref()
+                        .ok_or(Error::SetShard)?;
+
+                    if let NodeEnum::AConst(AConst { val: Some(val), .. }) = node {
+                        match val {
+                            Val::Sval(String { sval }) => {
+                                return Ok(Command::Set {
+                                    name: name.to_string(),
+                                    value: sval.to_string(),
+                                });
+                            }
+
+                            Val::Ival(Integer { ival }) => {
+                                return Ok(Command::Set {
+                                    name: name.to_string(),
+                                    value: ival.to_string(),
+                                });
+                            }
+
+                            Val::Fval(Float { fval }) => {
+                                return Ok(Command::Set {
+                                    name: name.to_string(),
+                                    value: fval.to_string(),
+                                });
+                            }
+
+                            Val::Boolval(Boolean { boolval }) => {
+                                return Ok(Command::Set {
+                                    name: name.to_string(),
+                                    value: boolval.to_string(),
+                                });
+                            }
+
+                            _ => (),
+                        }
+                    }
+                }
+            }
         }
-
-        // TODO: Handle SET commands for updating client
-        // params without touching the server.
-        //     name => {
-        //         if !self.in_transaction {
-        //             let node = stmt
-        //                 .args
-        //                 .first()
-        //                 .ok_or(Error::SetShard)?
-        //                 .node
-        //                 .as_ref()
-        //                 .ok_or(Error::SetShard)?;
-
-        //             if let NodeEnum::AConst(AConst { val: Some(val), .. }) = node {
-        //                 match val {
-        //                     Val::Sval(String { sval }) => {
-        //                         return Ok(Command::Set {
-        //                             name: name.to_string(),
-        //                             value: sval.to_string(),
-        //                         });
-        //                     }
-
-        //                     Val::Ival(Integer { ival }) => {
-        //                         return Ok(Command::Set {
-        //                             name: name.to_string(),
-        //                             value: ival.to_string(),
-        //                         });
-        //                     }
-
-        //                     Val::Fval(Float { fval }) => {
-        //                         return Ok(Command::Set {
-        //                             name: name.to_string(),
-        //                             value: fval.to_string(),
-        //                         });
-        //                     }
-
-        //                     Val::Boolval(Boolean { boolval }) => {
-        //                         return Ok(Command::Set {
-        //                             name: name.to_string(),
-        //                             value: boolval.to_string(),
-        //                         });
-        //                     }
-
-        //                     _ => (),
-        //                 }
-        //             }
-        //         }
-        //     }
-        // }
 
         Ok(Command::Query(Route::read(Shard::All)))
     }
@@ -911,43 +908,43 @@ mod test {
         assert!(qp.routed);
         assert!(!qp.in_transaction);
 
-        for (command, qp) in [
+        for (_, qp) in [
             command!("SET TimeZone TO 'UTC'"),
             command!("SET TIME ZONE 'UTC'"),
         ] {
-            match command {
-                Command::Set { name, value } => {
-                    assert_eq!(name, "timezone");
-                    assert_eq!(value, "UTC");
-                }
-                _ => panic!("not a set"),
-            };
-            assert!(!qp.routed);
+            // match command {
+            //     Command::Set { name, value } => {
+            //         assert_eq!(name, "timezone");
+            //         assert_eq!(value, "UTC");
+            //     }
+            //     _ => panic!("not a set"),
+            // };
+            assert!(qp.routed);
             assert!(!qp.in_transaction);
         }
 
-        let (command, qp) = command!("SET statement_timeout TO 3000");
-        match command {
-            Command::Set { name, value } => {
-                assert_eq!(name, "statement_timeout");
-                assert_eq!(value, "3000");
-            }
-            _ => panic!("not a set"),
-        };
-        assert!(!qp.routed);
+        let (_, qp) = command!("SET statement_timeout TO 3000");
+        // match command {
+        //     Command::Set { name, value } => {
+        //         assert_eq!(name, "statement_timeout");
+        //         assert_eq!(value, "3000");
+        //     }
+        //     _ => panic!("not a set"),
+        // };
+        assert!(qp.routed);
         assert!(!qp.in_transaction);
 
         // TODO: user shouldn't be able to set these.
         // The server will report an error on synchronization.
-        let (command, qp) = command!("SET is_superuser TO true");
-        match command {
-            Command::Set { name, value } => {
-                assert_eq!(name, "is_superuser");
-                assert_eq!(value, "true");
-            }
-            _ => panic!("not a set"),
-        };
-        assert!(!qp.routed);
+        let (_, qp) = command!("SET is_superuser TO true");
+        // match command {
+        //     Command::Set { name, value } => {
+        //         assert_eq!(name, "is_superuser");
+        //         assert_eq!(value, "true");
+        //     }
+        //     _ => panic!("not a set"),
+        // };
+        assert!(qp.routed);
         assert!(!qp.in_transaction);
     }
 
