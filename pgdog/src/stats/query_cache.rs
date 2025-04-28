@@ -6,6 +6,7 @@ pub struct QueryCacheMetric {
     name: String,
     help: String,
     value: usize,
+    gauge: bool,
 }
 
 pub struct QueryCache {
@@ -25,21 +26,31 @@ impl QueryCache {
                 name: "query_cache_hits".into(),
                 help: "Queries already present in the query cache".into(),
                 value: self.stats.hits,
+                gauge: false,
             }),
             Metric::new(QueryCacheMetric {
                 name: "query_cache_misses".into(),
                 help: "New queries added to the query cache".into(),
                 value: self.stats.misses,
+                gauge: false,
             }),
             Metric::new(QueryCacheMetric {
                 name: "query_cache_direct".into(),
                 help: "Queries sent directly to a single shard".into(),
                 value: self.stats.direct,
+                gauge: false,
             }),
             Metric::new(QueryCacheMetric {
                 name: "query_cache_cross".into(),
                 help: "Queries sent to multiple or all shards".into(),
                 value: self.stats.multi,
+                gauge: false,
+            }),
+            Metric::new(QueryCacheMetric {
+                name: "query_cache_size".into(),
+                help: "Number of queries in the cache".into(),
+                value: self.stats.size,
+                gauge: true,
             }),
         ]
     }
@@ -51,7 +62,11 @@ impl OpenMetric for QueryCacheMetric {
     }
 
     fn metric_type(&self) -> String {
-        "counter".into()
+        if self.gauge {
+            "gauge".into()
+        } else {
+            "counter".into()
+        }
     }
 
     fn help(&self) -> Option<String> {

@@ -25,6 +25,8 @@ pub struct Stats {
     pub direct: usize,
     /// Multi-shard queries.
     pub multi: usize,
+    /// Size of the cache.
+    pub size: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -166,7 +168,11 @@ impl Cache {
 
     /// Get cache stats.
     pub fn stats() -> Stats {
-        Self::get().inner.lock().stats
+        let cache = Self::get();
+        let guard = cache.inner.lock();
+        let mut stats = guard.stats;
+        stats.size = guard.queries.len();
+        stats
     }
 
     /// Get a copy of all queries stored in the cache.
