@@ -156,7 +156,10 @@ impl QueryParser {
         // transaction are going to go.
         if self.routed {
             if dry_run {
-                Cache::get().record_route(&self.route());
+                let cache = Cache::get();
+                let route = self.route();
+                cache.record_route(&route);
+                cache.record_command(query, &route)?;
             }
 
             return Ok(self.command.clone());

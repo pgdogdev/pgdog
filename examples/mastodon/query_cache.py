@@ -17,6 +17,7 @@ def fetch_data():
         direct INTEGER,
         multi INTEGER
     )""")
+    conn.execute("DELETE FROM query_cache");
     rows = data()
     for query in rows:
         query = list(query)
