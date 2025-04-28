@@ -24,7 +24,6 @@ use crate::net::messages::{
     Protocol, ReadyForQuery, ToBytes,
 };
 use crate::net::{parameter::Parameters, Stream};
-use crate::state::State;
 
 pub mod counter;
 pub mod inner;
@@ -275,7 +274,8 @@ impl Client {
                 self.stream
                     .error(ErrorResponse::syntax(err.to_string().as_str()))
                     .await?;
-                return Ok(true);
+                inner.done(self.in_transaction);
+                return Ok(false);
             }
         };
 
@@ -295,20 +295,20 @@ impl Client {
                     if let BufferedQuery::Query(_) = query {
                         self.start_transaction().await?;
                         inner.start_transaction = Some(query.clone());
-                        inner.stats.state = State::IdleInTransaction;
+                        inner.done(true);
                         return Ok(false);
                     }
                 }
                 Some(Command::RollbackTransaction) => {
                     inner.start_transaction = None;
                     self.end_transaction(true).await?;
-                    inner.stats.state = State::IdleInTransaction;
+                    inner.done(false);
                     return Ok(false);
                 }
                 Some(Command::CommitTransaction) => {
                     inner.start_transaction = None;
                     self.end_transaction(false).await?;
-                    inner.stats.state = State::IdleInTransaction;
+                    inner.done(false);
                     return Ok(false);
                 }
                 // TODO: Handling session variables requires a lot more work,

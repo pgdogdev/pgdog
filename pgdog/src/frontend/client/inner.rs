@@ -9,6 +9,7 @@ use crate::{
         buffer::BufferedQuery, router::Error as RouterError, Buffer, Command, Comms,
         PreparedStatements, Router, Stats,
     },
+    state::State,
 };
 
 use tracing::debug;
@@ -137,6 +138,14 @@ impl Inner {
         self.comms.stats(self.stats);
 
         result
+    }
+
+    pub(super) fn done(&mut self, in_transaction: bool) {
+        if in_transaction {
+            self.stats.state = State::IdleInTransaction;
+        } else {
+            self.stats.state = State::Idle;
+        }
     }
 
     /// Mutably borrow this,

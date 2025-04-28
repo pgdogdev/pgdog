@@ -4,7 +4,7 @@
 
 use once_cell::sync::Lazy;
 use pg_query::*;
-use std::collections::HashMap;
+use std::{collections::HashMap, time::Duration};
 
 use parking_lot::Mutex;
 use std::sync::Arc;
@@ -33,6 +33,12 @@ pub struct CachedAst {
     pub hits: usize,
     pub direct: usize,
     pub multi: usize,
+    /// Average duration.
+    pub avg_exec: Duration,
+    /// Max duration.
+    pub max_exec: Duration,
+    /// Min duration.
+    pub min_exec: Duration,
 }
 
 impl CachedAst {
@@ -42,6 +48,9 @@ impl CachedAst {
             hits: 1,
             direct: 0,
             multi: 0,
+            avg_exec: Duration::ZERO,
+            max_exec: Duration::ZERO,
+            min_exec: Duration::ZERO,
         }
     }
 }
