@@ -103,16 +103,6 @@ impl Cache {
         CACHE.clone()
     }
 
-    /// Record routing decision for query.
-    pub fn record_route(&self, route: &Route) {
-        let mut guard = self.inner.lock();
-        if route.is_all_shards() || route.is_multi_shard() {
-            guard.stats.multi += 1;
-        } else {
-            guard.stats.direct += 1;
-        }
-    }
-
     pub fn record_command(
         &self,
         query: &BufferedQuery,

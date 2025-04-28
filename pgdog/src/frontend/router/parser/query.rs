@@ -158,7 +158,6 @@ impl QueryParser {
             if dry_run {
                 let cache = Cache::get();
                 let route = self.route();
-                cache.record_route(&route);
                 cache.record_command(query, &route)?;
             }
 
