@@ -96,6 +96,16 @@ impl Comms {
         self.clone()
     }
 
+    /// Update client parameters.
+    pub fn update_params(&self, params: &Parameters) {
+        if let Some(id) = self.id {
+            let mut guard = self.global.clients.lock();
+            if let Some(entry) = guard.get_mut(&id) {
+                entry.paramters = params.clone();
+            }
+        }
+    }
+
     /// Client disconnected.
     pub fn disconnect(&mut self) {
         if let Some(id) = self.id.take() {

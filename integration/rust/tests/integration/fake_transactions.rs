@@ -7,6 +7,9 @@ async fn test_fake_transactions() {
     let admin = admin_sqlx().await;
 
     for _ in 0..5 {
+        conn.execute("SET application_name TO 'test_fake_transactions'")
+            .await
+            .unwrap();
         conn.execute("BEGIN").await.unwrap();
         check_state("idle in transaction", admin.clone()).await;
         conn.execute("ROLLBACK").await.unwrap();
@@ -21,8 +24,9 @@ async fn check_state(expected: &str, admin: Pool<Postgres>) {
     for client in clients {
         let state: String = client.get("state");
         let database: String = client.get("database");
+        let application_name: String = client.get("application_name");
 
-        if database == "pgdog_sharded" {
+        if database == "pgdog_sharded" && application_name == "test_fake_transactions" {
             assert_eq!(state, expected);
             ok = true;
         }

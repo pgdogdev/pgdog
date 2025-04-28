@@ -438,9 +438,13 @@ impl Client {
                 "transaction finished [{}ms]",
                 inner.stats.last_transaction_time.as_secs_f64() * 1000.0
             );
-            for (name, value) in changed_params.iter() {
-                debug!("setting client's \"{}\" to '{}'", name, value);
-                self.params.insert(name.clone(), value.clone());
+
+            if !changed_params.is_empty() {
+                for (name, value) in changed_params.iter() {
+                    debug!("setting client's \"{}\" to '{}'", name, value);
+                    self.params.insert(name.clone(), value.clone());
+                }
+                inner.comms.update_params(&self.params);
             }
             if inner.comms.offline() && !self.admin {
                 return Ok(true);
