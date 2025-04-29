@@ -6,6 +6,7 @@ use std::sync::Arc;
 use arc_swap::ArcSwap;
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
+use tracing::debug;
 
 use crate::{
     backend::pool::PoolConfig,
@@ -36,9 +37,13 @@ pub fn replace_databases(new_databases: Databases) {
     // to ensure zero downtime for clients.
     let old_databases = databases();
     let new_databases = Arc::new(new_databases);
+    // Move whatever connections we can over to new pools.
+    let moved = old_databases.move_conns_to(&new_databases);
     new_databases.launch();
     DATABASES.store(new_databases);
     old_databases.shutdown();
+
+    debug!("moved {} clusters", moved);
 }
 
 /// Re-create all connections.
@@ -216,6 +221,24 @@ impl Databases {
     /// Manual queries collection, keyed by query fingerprint.
     pub fn manual_queries(&self) -> &HashMap<String, ManualQuery> {
         &self.manual_queries
+    }
+
+    /// Move all connections we can from old databases config to new
+    /// databases config.
+    pub(crate) fn move_conns_to(&self, destination: &Databases) -> usize {
+        let mut moved = 0;
+        for (user, cluster) in &self.databases {
+            let dest = destination.databases.get(user);
+
+            if let Some(dest) = dest {
+                if cluster.can_move_conns_to(dest) {
+                    cluster.move_conns_to(dest);
+                    moved += 1;
+                }
+            }
+        }
+
+        moved
     }
 
     /// Create new identical databases.
