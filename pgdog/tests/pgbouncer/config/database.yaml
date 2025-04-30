@@ -1,0 +1,17 @@
+development:
+  pgdog:
+    pool: 10
+    database: pgdog
+    adapter: postgresql
+    username: pgdog
+    password: pgdog
+    host: 127.0.0.1
+    port: 6432
+  pgbouncer:
+    pool: 10
+    database: pgdog
+    adapter: postgresql
+    username: pgdog
+    password: pgdog
+    host: 127.0.0.1
+    port: 6433

@@ -372,7 +372,11 @@ impl Server {
     /// Server sent everything.
     #[inline]
     pub fn done(&self) -> bool {
-        self.prepared_statements.done() && !self.in_transaction()
+        if self.prepared_statements.enabled() {
+            self.prepared_statements.done() && !self.in_transaction()
+        } else {
+            self.stats.state == State::Idle
+        }
     }
 
     #[inline]

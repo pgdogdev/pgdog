@@ -66,6 +66,10 @@ impl PreparedStatements {
         self.enabled = enabled;
     }
 
+    pub(crate) fn enabled(&self) -> bool {
+        self.enabled
+    }
+
     /// Handle extended protocol message.
     pub fn handle(&mut self, request: &ProtocolMessage) -> Result<HandleResult, Error> {
         if !self.enabled {
