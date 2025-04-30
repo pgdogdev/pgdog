@@ -7,9 +7,15 @@ pub struct Sighup {
 }
 
 impl Sighup {
+    #[cfg(target_family = "unix")]
     pub(crate) fn new() -> std::io::Result<Self> {
         let sig = signal(SignalKind::hangup())?;
         Ok(Self { sig })
+    }
+
+    #[cfg(not(target_family = "unix"))]
+    pub(crate) fn new() -> std::io::Result<Self> {
+        Self {}
     }
 
     pub(crate) async fn listen(&mut self) {
