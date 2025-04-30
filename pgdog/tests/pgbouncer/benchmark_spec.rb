@@ -39,7 +39,7 @@ class BenchmarkPgBouncer < PgBouncer
 end
 
 # Measure timing of something
-def timing(name, statsd)
+def timing(name)
   start = Process.clock_gettime(Process::CLOCK_MONOTONIC)
   yield
   finish = Process.clock_gettime(Process::CLOCK_MONOTONIC)
