@@ -54,6 +54,25 @@ impl Replicas {
         }
     }
 
+    /// Move connections from this replica set to another.
+    pub fn move_conns_to(&self, destination: &Replicas) {
+        assert_eq!(self.pools.len(), destination.pools.len());
+
+        for (from, to) in self.pools.iter().zip(destination.pools.iter()) {
+            from.move_conns_to(to);
+        }
+    }
+
+    /// The two replica sets are referring to the same databases.
+    pub fn can_move_conns_to(&self, destination: &Replicas) -> bool {
+        self.pools.len() == destination.pools.len()
+            && self
+                .pools
+                .iter()
+                .zip(destination.pools.iter())
+                .all(|(a, b)| a.can_move_conns_to(b))
+    }
+
     /// How many replicas we are connected to.
     pub fn len(&self) -> usize {
         self.pools.len()

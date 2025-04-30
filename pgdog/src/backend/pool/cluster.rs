@@ -118,6 +118,23 @@ impl Cluster {
         shard.replica(request).await
     }
 
+    /// The two clusters have the same databases.
+    pub(crate) fn can_move_conns_to(&self, other: &Cluster) -> bool {
+        self.shards.len() == other.shards.len()
+            && self
+                .shards
+                .iter()
+                .zip(other.shards.iter())
+                .all(|(a, b)| a.can_move_conns_to(b))
+    }
+
+    /// Move connections from cluster to another, saving them.
+    pub(crate) fn move_conns_to(&self, other: &Cluster) {
+        for (from, to) in self.shards.iter().zip(other.shards.iter()) {
+            from.move_conns_to(to);
+        }
+    }
+
     /// Create new identical cluster connection pool.
     ///
     /// This will allocate new server connections. Use when reloading configuration

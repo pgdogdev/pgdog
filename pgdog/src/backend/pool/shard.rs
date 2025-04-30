@@ -49,6 +49,33 @@ impl Shard {
         }
     }
 
+    /// Move pool connections from self to destination.
+    /// This shuts down my pool.
+    pub fn move_conns_to(&self, destination: &Shard) {
+        if let Some(ref primary) = self.primary {
+            if let Some(ref other) = destination.primary {
+                primary.move_conns_to(other);
+            }
+        }
+
+        self.replicas.move_conns_to(&destination.replicas);
+    }
+
+    /// The two shards have the same databases.
+    pub(crate) fn can_move_conns_to(&self, other: &Shard) -> bool {
+        if let Some(ref primary) = self.primary {
+            if let Some(ref other) = other.primary {
+                if !primary.can_move_conns_to(other) {
+                    return false;
+                }
+            } else {
+                return false;
+            }
+        }
+
+        self.replicas.can_move_conns_to(&other.replicas)
+    }
+
     /// Create new identical connection pool.
     pub fn duplicate(&self) -> Self {
         Self {

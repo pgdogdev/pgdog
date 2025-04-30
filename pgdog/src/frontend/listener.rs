@@ -3,18 +3,18 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use tokio::net::{TcpListener, TcpStream};
-use tokio::signal::ctrl_c;
-use tokio::sync::Notify;
-use tokio::time::timeout;
-use tokio::{select, spawn};
-
-use crate::backend::databases::{databases, shutdown};
+use crate::backend::databases::{databases, reload, shutdown};
 use crate::config::config;
 use crate::net::messages::BackendKeyData;
 use crate::net::messages::{hello::SslReply, Startup};
 use crate::net::tls::acceptor;
 use crate::net::{tweak, Stream};
+use crate::sighup::Sighup;
+use tokio::net::{TcpListener, TcpStream};
+use tokio::signal::ctrl_c;
+use tokio::sync::Notify;
+use tokio::time::timeout;
+use tokio::{select, spawn};
 
 use tracing::{error, info, warn};
 
@@ -45,6 +45,7 @@ impl Listener {
         info!("🐕 PgDog listening on {}", self.addr);
         let comms = comms();
         let shutdown_signal = comms.shutting_down();
+        let mut sighup = Sighup::new()?;
 
         loop {
             let comms = comms.clone();
@@ -77,6 +78,12 @@ impl Listener {
 
                 _ = ctrl_c() => {
                     self.start_shutdown();
+                }
+
+                _ = sighup.listen() => {
+                    if let Err(err) = reload() {
+                        error!("configuration reload error: {}", err);
+                    }
                 }
 
                 _ = self.shutdown.notified() => {

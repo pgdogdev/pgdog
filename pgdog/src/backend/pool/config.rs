@@ -149,6 +149,9 @@ impl Config {
             connect_timeout: general.connect_timeout,
             query_timeout: general.query_timeout,
             checkout_timeout: general.checkout_timeout,
+            idle_timeout: user
+                .idle_timeout
+                .unwrap_or(database.idle_timeout.unwrap_or(general.idle_timeout)),
             ..Default::default()
         }
     }

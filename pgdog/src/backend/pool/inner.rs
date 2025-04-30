@@ -6,7 +6,7 @@ use std::{cmp::max, time::Instant};
 use crate::backend::Server;
 use crate::net::messages::BackendKeyData;
 
-use super::{Ban, Config, Error, Mapping, Oids, Request, Stats};
+use super::{Ban, Config, Error, Mapping, Oids, Pool, Request, Stats};
 
 /// Pool internals protected by a mutex.
 #[derive(Default)]
@@ -35,6 +35,10 @@ pub(super) struct Inner {
     pub(super) stats: Stats,
     /// OIDs.
     pub(super) oids: Option<Oids>,
+    /// The pool has been changed and connections should be returned
+    /// to the new pool.
+    moved: Option<Pool>,
+    id: u64,
 }
 
 impl std::fmt::Debug for Inner {
@@ -52,7 +56,7 @@ impl std::fmt::Debug for Inner {
 
 impl Inner {
     /// New inner structure.
-    pub(super) fn new(config: Config) -> Self {
+    pub(super) fn new(config: Config, id: u64) -> Self {
         Self {
             conns: VecDeque::new(),
             taken: Vec::new(),
@@ -66,6 +70,8 @@ impl Inner {
             errors: 0,
             stats: Stats::default(),
             oids: None,
+            moved: None,
+            id,
         }
     }
     /// Total number of connections managed by the pool.
@@ -211,10 +217,26 @@ impl Inner {
         self.conns.push_back(conn);
     }
 
+    #[inline]
+    pub(super) fn set_taken(&mut self, taken: Vec<Mapping>) {
+        self.taken = taken;
+    }
+
     /// Dump all idle connections.
     #[inline]
     pub(super) fn dump_idle(&mut self) {
         self.conns.clear();
+    }
+
+    /// Take all idle connections and tell active ones to
+    /// be returned to a different pool instance.
+    #[inline]
+    pub(super) fn move_conns_to(&mut self, destination: &Pool) -> (Vec<Server>, Vec<Mapping>) {
+        self.moved = Some(destination.clone());
+        let idle = std::mem::take(&mut self.conns).into_iter().collect();
+        let taken = std::mem::take(&mut self.taken);
+
+        (idle, taken)
     }
 
     #[inline]
@@ -223,6 +245,14 @@ impl Inner {
     ///
     /// Return: true if the pool should be banned, false otherwise.
     pub(super) fn maybe_check_in(&mut self, mut server: Server, now: Instant) -> bool {
+        if let Some(ref moved) = self.moved {
+            // Prevents deadlocks.
+            if moved.id() != self.id {
+                moved.lock().maybe_check_in(server, now);
+                return false;
+            }
+        }
+
         let id = *server.id();
 
         let index = self

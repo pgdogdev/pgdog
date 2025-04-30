@@ -322,6 +322,9 @@ pub struct General {
     /// Dry run for sharding. Parse the query, route to shard 0.
     #[serde(default)]
     pub dry_run: bool,
+    /// Idle timeout.
+    #[serde(default = "General::idle_timeout")]
+    pub idle_timeout: u64,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -380,6 +383,7 @@ impl Default for General {
             query_timeout: Self::default_query_timeout(),
             checkout_timeout: Self::checkout_timeout(),
             dry_run: bool::default(),
+            idle_timeout: Self::idle_timeout(),
         }
     }
 }
@@ -423,6 +427,10 @@ impl General {
 
     fn rollback_timeout() -> u64 {
         5_000
+    }
+
+    fn idle_timeout() -> u64 {
+        Duration::from_secs(60).as_millis() as u64
     }
 
     fn default_query_timeout() -> u64 {
@@ -538,6 +546,8 @@ pub struct Database {
     pub pooler_mode: Option<PoolerMode>,
     /// Statement timeout.
     pub statement_timeout: Option<u64>,
+    /// Idle timeout.
+    pub idle_timeout: Option<u64>,
 }
 
 impl Database {
@@ -647,6 +657,8 @@ pub struct User {
     pub replication_mode: bool,
     /// Sharding into this database.
     pub replication_sharding: Option<String>,
+    /// Idle timeout.
+    pub idle_timeout: Option<u64>,
 }
 
 impl User {

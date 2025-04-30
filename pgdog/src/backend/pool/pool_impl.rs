@@ -1,8 +1,10 @@
 //! Connection pool.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use once_cell::sync::Lazy;
 use parking_lot::{lock_api::MutexGuard, Mutex, RawMutex};
 use tokio::select;
 use tokio::time::sleep;
@@ -17,11 +19,17 @@ use super::{
     State, Waiting,
 };
 
+static ID_COUNTER: Lazy<Arc<AtomicU64>> = Lazy::new(|| Arc::new(AtomicU64::new(0)));
+fn next_pool_id() -> u64 {
+    ID_COUNTER.fetch_add(1, Ordering::SeqCst)
+}
+
 /// Connection pool.
 pub struct Pool {
     inner: Arc<Mutex<Inner>>,
     comms: Arc<Comms>,
     addr: Address,
+    id: u64,
 }
 
 impl std::fmt::Debug for Pool {
@@ -36,6 +44,7 @@ impl Clone for Pool {
             inner: self.inner.clone(),
             comms: self.comms.clone(),
             addr: self.addr.clone(),
+            id: self.id,
         }
     }
 }
@@ -43,10 +52,12 @@ impl Clone for Pool {
 impl Pool {
     /// Create new connection pool.
     pub fn new(config: &PoolConfig) -> Self {
+        let id = next_pool_id();
         Self {
-            inner: Arc::new(Mutex::new(Inner::new(config.config))),
+            inner: Arc::new(Mutex::new(Inner::new(config.config, id))),
             comms: Arc::new(Comms::new()),
             addr: config.address.clone(),
+            id,
         }
     }
 
@@ -243,6 +254,40 @@ impl Pool {
         }
     }
 
+    /// Connection pool unique identifier.
+    pub(crate) fn id(&self) -> u64 {
+        self.id
+    }
+
+    /// Take connections from the pool and tell all idle ones to be returned
+    /// to a new instance of the pool.
+    ///
+    /// This shuts down the pool.
+    pub(crate) fn move_conns_to(&self, destination: &Pool) {
+        // Ensure no deadlock.
+        assert!(self.id != destination.id());
+
+        {
+            let mut from_guard = self.lock();
+            let mut to_guard = destination.lock();
+
+            from_guard.online = false;
+            let (idle, taken) = from_guard.move_conns_to(destination);
+            for server in idle {
+                to_guard.put(server);
+            }
+            to_guard.set_taken(taken);
+        }
+
+        destination.launch();
+        self.shutdown();
+    }
+
+    /// The two pools refer to the same database.
+    pub(crate) fn can_move_conns_to(&self, destination: &Pool) -> bool {
+        self.addr() == destination.addr()
+    }
+
     /// Pause pool, closing all open connections.
     pub fn pause(&self) {
         let mut guard = self.lock();
@@ -265,6 +310,7 @@ impl Pool {
     /// Shutdown the pool.
     pub fn shutdown(&self) {
         let mut guard = self.lock();
+
         guard.online = false;
         guard.dump_idle();
         self.comms().shutdown.notify_waiters();
