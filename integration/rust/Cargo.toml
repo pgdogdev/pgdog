@@ -12,3 +12,4 @@ sqlx = { version = "*", features = ["postgres", "runtime-tokio", "tls-native-tls
 tokio = { version = "1", features = ["full"]}
 futures-util = "*"
 uuid  = "*"
+serial_test = "3"

@@ -5,12 +5,13 @@
 [general]
 host = "0.0.0.0"
 port = 6432
-shutdown_timeout = 1_000
+shutdown_timeout = 5_000
 openmetrics_port = 9090
 query_timeout = 1_000
 checkout_timeout = 1_000
 connect_timeout = 1_000
 passthrough_auth = "enabled_plain"
+idle_timeout = 30_000
 # dry_run = true
 
 #

@@ -258,24 +258,22 @@ impl Pool {
     ///
     /// This shuts down the pool.
     pub(crate) fn move_conns_to(&self, destination: &Pool) {
+        // Ensure no deadlock.
         assert!(self.id != destination.id());
 
-        let idle = {
-            let mut guard = self.lock();
-            guard.online = false;
-            guard.move_conns_to(destination)
-        };
-
         {
-            let mut destination_pool = destination.lock();
+            let mut from_guard = self.lock();
+            let mut to_guard = destination.lock();
+
+            from_guard.online = false;
+            let (idle, taken) = from_guard.move_conns_to(destination);
             for server in idle {
-                destination_pool.put(server);
+                to_guard.put(server);
             }
+            to_guard.set_taken(taken);
         }
 
         destination.launch();
-
-        // Notify all waiters on the old pool.
         self.shutdown();
     }
 

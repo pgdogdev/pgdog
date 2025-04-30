@@ -1,4 +1,4 @@
-use sqlx::{Postgres, pool::Pool, postgres::PgPoolOptions};
+use sqlx::{Executor, Postgres, Row, pool::Pool, postgres::PgPoolOptions};
 use tokio_postgres::*;
 
 pub async fn connections_tokio() -> Vec<Client> {
@@ -7,7 +7,7 @@ pub async fn connections_tokio() -> Vec<Client> {
     for db in ["pgdog", "pgdog_sharded"] {
         let (client, connection) = tokio_postgres::connect(
             &format!(
-                "host=127.0.0.1 user=pgdog dbname={} password=pgdog port=6432 options=-c%20search_path%3D$user,public",
+                "host=127.0.0.1 user=pgdog dbname={} password=pgdog port=6432 options=-c%20search_path%3D$user,public%20-capplication_name%3Dtokio",
                 db
             ),
             NoTls,
@@ -42,6 +42,34 @@ pub async fn connections_sqlx() -> Vec<Pool<Postgres>> {
     }
 
     pools
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub struct Backend {
+    pub pid: i32,
+    pub backend_start: String,
+}
+
+pub async fn backends(application_name: &str, pool: &Pool<Postgres>) -> Vec<Backend> {
+    pool.fetch_all(
+        format!(
+            "SELECT pid::INTEGER,
+            backend_start::TEXT
+        FROM pg_stat_activity
+        WHERE application_name = '{}'
+        ORDER BY backend_start",
+            application_name
+        )
+        .as_str(),
+    )
+    .await
+    .unwrap()
+    .into_iter()
+    .map(|r| Backend {
+        pid: r.get(0),
+        backend_start: r.get(1),
+    })
+    .collect()
 }
 
 pub async fn connection_failover() -> Pool<Postgres> {

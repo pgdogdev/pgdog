@@ -217,6 +217,11 @@ impl Inner {
         self.conns.push_back(conn);
     }
 
+    #[inline]
+    pub(super) fn set_taken(&mut self, taken: Vec<Mapping>) {
+        self.taken = taken;
+    }
+
     /// Dump all idle connections.
     #[inline]
     pub(super) fn dump_idle(&mut self) {
@@ -226,9 +231,12 @@ impl Inner {
     /// Take all idle connections and tell active ones to
     /// be returned to a different pool instance.
     #[inline]
-    pub(super) fn move_conns_to(&mut self, destination: &Pool) -> Vec<Server> {
+    pub(super) fn move_conns_to(&mut self, destination: &Pool) -> (Vec<Server>, Vec<Mapping>) {
         self.moved = Some(destination.clone());
-        std::mem::take(&mut self.conns).into_iter().collect()
+        let idle = std::mem::take(&mut self.conns).into_iter().collect();
+        let taken = std::mem::take(&mut self.taken);
+
+        (idle, taken)
     }
 
     #[inline]
