@@ -81,7 +81,9 @@ impl Listener {
                 }
 
                 _ = sighup.listen() => {
-                    reload()?;
+                    if let Err(err) = reload() {
+                        error!("configuration reload error: {}", err);
+                    }
                 }
 
                 _ = self.shutdown.notified() => {
