@@ -38,7 +38,7 @@ pub(super) struct Inner {
     /// The pool has been changed and connections should be returned
     /// to the new pool.
     moved: Option<Pool>,
-    id: i64,
+    id: u64,
 }
 
 impl std::fmt::Debug for Inner {
@@ -56,7 +56,7 @@ impl std::fmt::Debug for Inner {
 
 impl Inner {
     /// New inner structure.
-    pub(super) fn new(config: Config, id: i64) -> Self {
+    pub(super) fn new(config: Config, id: u64) -> Self {
         Self {
             conns: VecDeque::new(),
             taken: Vec::new(),

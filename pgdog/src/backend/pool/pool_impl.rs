@@ -1,10 +1,11 @@
 //! Connection pool.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use once_cell::sync::Lazy;
 use parking_lot::{lock_api::MutexGuard, Mutex, RawMutex};
-use rand::{thread_rng, Rng};
 use tokio::select;
 use tokio::time::sleep;
 use tracing::{error, info};
@@ -18,12 +19,17 @@ use super::{
     State, Waiting,
 };
 
+static ID_COUNTER: Lazy<Arc<AtomicU64>> = Lazy::new(|| Arc::new(AtomicU64::new(0)));
+fn next_pool_id() -> u64 {
+    ID_COUNTER.fetch_add(1, Ordering::SeqCst)
+}
+
 /// Connection pool.
 pub struct Pool {
     inner: Arc<Mutex<Inner>>,
     comms: Arc<Comms>,
     addr: Address,
-    id: i64,
+    id: u64,
 }
 
 impl std::fmt::Debug for Pool {
@@ -46,7 +52,7 @@ impl Clone for Pool {
 impl Pool {
     /// Create new connection pool.
     pub fn new(config: &PoolConfig) -> Self {
-        let id = thread_rng().gen();
+        let id = next_pool_id();
         Self {
             inner: Arc::new(Mutex::new(Inner::new(config.config, id))),
             comms: Arc::new(Comms::new()),
@@ -249,7 +255,7 @@ impl Pool {
     }
 
     /// Connection pool unique identifier.
-    pub(crate) fn id(&self) -> i64 {
+    pub(crate) fn id(&self) -> u64 {
         self.id
     }
 
