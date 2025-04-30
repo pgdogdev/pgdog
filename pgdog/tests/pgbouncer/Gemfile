@@ -1,0 +1,9 @@
+# frozen_string_literal: true
+
+source "https://rubygems.org"
+
+gem "dogstatsd-ruby"
+gem "datadog"
+gem "rails"
+gem "rspec"
+gem "pg"
