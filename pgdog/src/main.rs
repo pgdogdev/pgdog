@@ -26,6 +26,13 @@ pub mod stats;
 pub mod tui;
 pub mod util;
 
+#[cfg(not(target_env = "msvc"))]
+use tikv_jemallocator::Jemalloc;
+
+#[cfg(not(target_env = "msvc"))]
+#[global_allocator]
+static GLOBAL: Jemalloc = Jemalloc;
+
 /// Setup the logger, so `info!`, `debug!`
 /// and other macros actually output something.
 ///
