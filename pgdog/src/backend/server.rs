@@ -375,7 +375,7 @@ impl Server {
         if self.prepared_statements.enabled() {
             self.prepared_statements.done() && !self.in_transaction()
         } else {
-            self.stats.state == State::Idle
+            matches!(self.stats.state, State::Idle | State::Error)
         }
     }
 
