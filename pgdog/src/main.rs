@@ -19,6 +19,7 @@ pub mod config;
 pub mod frontend;
 pub mod net;
 pub mod plugin;
+pub mod sighup;
 pub mod state;
 pub mod stats;
 #[cfg(feature = "tui")]
