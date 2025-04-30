@@ -6,7 +6,6 @@ use std::sync::Arc;
 use arc_swap::ArcSwap;
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
-use tracing::debug;
 
 use crate::{
     backend::pool::PoolConfig,
@@ -32,29 +31,29 @@ pub fn databases() -> Arc<Databases> {
 }
 
 /// Replace databases pooler-wide.
-pub fn replace_databases(new_databases: Databases) {
+pub fn replace_databases(new_databases: Databases, reload: bool) {
     // Order of operations is important
     // to ensure zero downtime for clients.
     let old_databases = databases();
     let new_databases = Arc::new(new_databases);
-    // Move whatever connections we can over to new pools.
-    let moved = old_databases.move_conns_to(&new_databases);
+    if reload {
+        // Move whatever connections we can over to new pools.
+        old_databases.move_conns_to(&new_databases);
+    }
     new_databases.launch();
     DATABASES.store(new_databases);
     old_databases.shutdown();
-
-    debug!("moved {} clusters", moved);
 }
 
 /// Re-create all connections.
 pub fn reconnect() {
-    replace_databases(databases().duplicate());
+    replace_databases(databases().duplicate(), false);
 }
 
 /// Initialize the databases for the first time.
 pub fn init() {
     let config = config();
-    replace_databases(from_config(&config));
+    replace_databases(from_config(&config), false);
 }
 
 /// Shutdown all databases.
@@ -71,7 +70,7 @@ pub fn reload() -> Result<(), Error> {
     let new_config = load(&old_config.config_path, &old_config.users_path)?;
     let databases = from_config(&new_config);
 
-    replace_databases(databases);
+    replace_databases(databases, true);
 
     Ok(())
 }
