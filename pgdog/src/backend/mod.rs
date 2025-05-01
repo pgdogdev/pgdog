@@ -2,6 +2,7 @@
 
 pub mod databases;
 pub mod error;
+pub mod plans;
 pub mod pool;
 pub mod prepared_statements;
 pub mod protocol;

@@ -236,6 +236,10 @@ impl Pool {
         self.lock().banned()
     }
 
+    pub fn online(&self) -> bool {
+        self.lock().online
+    }
+
     /// Pool is available to serve connections.
     pub fn available(&self) -> bool {
         let guard = self.lock();
