@@ -120,14 +120,12 @@ impl Inner {
         if result.is_ok() {
             self.stats.connected();
             if let Ok(addr) = self.backend.addr() {
-                let addrs = addr
-                    .into_iter()
-                    .map(|a| a.to_string())
-                    .collect::<Vec<_>>()
-                    .join(",");
                 debug!(
                     "client paired with {} [{:.4}ms]",
-                    addrs,
+                    addr.into_iter()
+                        .map(|a| a.to_string())
+                        .collect::<Vec<_>>()
+                        .join(","),
                     self.stats.wait_time.as_secs_f64() * 1000.0
                 );
             }

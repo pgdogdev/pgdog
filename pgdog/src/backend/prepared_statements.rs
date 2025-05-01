@@ -79,11 +79,11 @@ impl PreparedStatements {
         match request {
             ProtocolMessage::Bind(bind) => {
                 if !bind.anonymous() {
-                    let message = self.check_prepared(&bind.statement)?;
+                    let message = self.check_prepared(bind.statement())?;
                     match message {
                         Some(message) => {
-                            self.state.add_ignore('1', &bind.statement);
-                            self.prepared(&bind.statement);
+                            self.state.add_ignore('1', bind.statement());
+                            self.prepared(bind.statement());
                             self.state.add('2');
                             return Ok(HandleResult::Prepend(message));
                         }
@@ -99,12 +99,12 @@ impl PreparedStatements {
 
             ProtocolMessage::Describe(describe) => {
                 if !describe.anonymous() {
-                    let message = self.check_prepared(&describe.statement)?;
+                    let message = self.check_prepared(describe.statement())?;
 
                     match message {
                         Some(message) => {
-                            self.state.add_ignore('1', &describe.statement);
-                            self.prepared(&describe.statement);
+                            self.state.add_ignore('1', describe.statement());
+                            self.prepared(describe.statement());
                             self.state.add(ExecutionCode::DescriptionOrNothing); // t
                             self.state.add(ExecutionCode::DescriptionOrNothing); // T
                             return Ok(HandleResult::Prepend(message));
@@ -117,7 +117,7 @@ impl PreparedStatements {
                         }
                     }
 
-                    self.describes.push_back(describe.statement.clone());
+                    self.describes.push_back(describe.statement().to_string());
                 } else {
                     self.state.add(ExecutionCode::DescriptionOrNothing);
                 }

@@ -27,7 +27,9 @@ impl Default for Buffer {
 impl Buffer {
     /// Create new buffer.
     pub fn new() -> Self {
-        Self { buffer: vec![] }
+        Self {
+            buffer: Vec::with_capacity(5),
+        }
     }
 
     /// Client likely wants to communicate asynchronously.
@@ -83,7 +85,7 @@ impl Buffer {
                     if !bind.anonymous() {
                         return Ok(PreparedStatements::global()
                             .lock()
-                            .parse(&bind.statement)
+                            .parse(bind.statement())
                             .map(BufferedQuery::Prepared));
                     }
                 }
@@ -91,7 +93,7 @@ impl Buffer {
                     if !describe.anonymous() {
                         return Ok(PreparedStatements::global()
                             .lock()
-                            .parse(&describe.statement)
+                            .parse(describe.statement())
                             .map(BufferedQuery::Prepared));
                     }
                 }

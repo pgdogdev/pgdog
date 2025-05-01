@@ -32,14 +32,12 @@ impl Decoder {
 
     /// Infer types from Bind, if any provided.
     pub fn bind(&mut self, bind: &Bind) {
-        if !bind.codes.is_empty() {
-            self.formats = bind.codes();
-        }
+        self.formats = bind.codes().to_vec();
 
         if self.rd.is_empty() {
             if let Some(rd) = PreparedStatements::global()
                 .lock()
-                .row_description(&bind.statement)
+                .row_description(bind.statement())
             {
                 self.rd = rd;
             }

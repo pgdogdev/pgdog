@@ -9,7 +9,9 @@ use super::prelude::*;
 #[derive(Clone, Debug)]
 pub struct CommandComplete {
     /// Name of the command that was executed.
-    pub command: String,
+    command: String,
+    /// Original payload.
+    original: Option<Bytes>,
 }
 
 impl CommandComplete {
@@ -24,6 +26,16 @@ impl CommandComplete {
             .ok())
     }
 
+    #[inline]
+    pub(crate) fn len(&self) -> usize {
+        self.command.len() + 1 + 1 + 4
+    }
+
+    #[inline]
+    pub(crate) fn command(&self) -> &str {
+        &self.command
+    }
+
     /// Rewrite the message with new number of rows.
     pub fn rewrite(&self, rows: usize) -> Result<Self, Error> {
         let mut parts = self.command.split(" ").collect::<Vec<_>>();
@@ -33,6 +45,7 @@ impl CommandComplete {
 
         Ok(Self {
             command: parts.join(" "),
+            original: None,
         })
     }
 
@@ -40,6 +53,7 @@ impl CommandComplete {
     pub fn new_begin() -> Self {
         Self {
             command: "BEGIN".into(),
+            original: None,
         }
     }
 
@@ -47,6 +61,7 @@ impl CommandComplete {
     pub fn new_rollback() -> Self {
         Self {
             command: "ROLLBACK".into(),
+            original: None,
         }
     }
 
@@ -54,19 +69,26 @@ impl CommandComplete {
     pub fn new_commit() -> Self {
         Self {
             command: "COMMIT".into(),
+            original: None,
         }
     }
 
     pub fn new(command: impl ToString) -> Self {
         Self {
             command: command.to_string(),
+            original: None,
         }
     }
 }
 
 impl ToBytes for CommandComplete {
     fn to_bytes(&self) -> Result<Bytes, Error> {
+        if let Some(ref original) = self.original {
+            return Ok(original.clone());
+        }
+
         let mut payload = Payload::named(self.code());
+        payload.reserve(self.len());
         payload.put_string(&self.command);
 
         Ok(payload.freeze())
@@ -75,12 +97,16 @@ impl ToBytes for CommandComplete {
 
 impl FromBytes for CommandComplete {
     fn from_bytes(mut bytes: Bytes) -> Result<Self, Error> {
+        let original = bytes.clone();
         code!(bytes, 'C');
 
         let _len = bytes.get_i32();
         let command = c_string_buf(&mut bytes);
 
-        Ok(Self { command })
+        Ok(Self {
+            command,
+            original: Some(original),
+        })
     }
 }
 

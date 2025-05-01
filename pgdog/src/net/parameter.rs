@@ -5,9 +5,19 @@ use std::{
     ops::{Deref, DerefMut},
 };
 
+use once_cell::sync::Lazy;
+
 use super::{messages::Query, Error};
 
-static IMMUTABLE_PARAMS: &[&str] = &["database", "user", "client_encoding"];
+static IMMUTABLE_PARAMS: Lazy<Vec<String>> = Lazy::new(|| {
+    Vec::from([
+        String::from("database"),
+        String::from("user"),
+        String::from("client_encoding"),
+    ])
+});
+
+// static IMMUTABLE_PARAMS: &[&str] = &["database", "user", "client_encoding"];
 
 /// Startup parameter.
 #[derive(Debug, Clone, PartialEq)]
@@ -50,9 +60,8 @@ impl Parameters {
     /// needed to sync that state on the server.
     pub fn merge(&self, other: &mut Self) -> MergeResult {
         let mut different = vec![];
-        // let mut reset_to_default = vec![];
         for (k, v) in &self.params {
-            if IMMUTABLE_PARAMS.contains(&k.as_str()) {
+            if IMMUTABLE_PARAMS.contains(&k) {
                 continue;
             }
             if let Some(other) = other.get(k) {

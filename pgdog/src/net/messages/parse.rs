@@ -15,6 +15,8 @@ pub struct Parse {
     query: Arc<String>,
     /// List of data types if any are declared.
     data_types: Arc<Vec<i32>>,
+    /// Original payload.
+    original: Option<Bytes>,
 }
 
 impl Parse {
@@ -34,6 +36,7 @@ impl Parse {
             name: Arc::new("".into()),
             query: Arc::new(query.to_string()),
             data_types: Arc::new(vec![]),
+            original: None,
         }
     }
 
@@ -43,6 +46,7 @@ impl Parse {
             name: Arc::new(name.to_string()),
             query: Arc::new(query.to_string()),
             data_types: Arc::new(vec![]),
+            original: None,
         }
     }
 
@@ -81,6 +85,7 @@ impl Parse {
 
 impl FromBytes for Parse {
     fn from_bytes(mut bytes: Bytes) -> Result<Self, Error> {
+        let original = bytes.clone();
         code!(bytes, 'P');
         let _len = bytes.get_i32();
         let name = c_string_buf(&mut bytes);
@@ -92,13 +97,20 @@ impl FromBytes for Parse {
             name: Arc::new(name),
             query: Arc::new(query),
             data_types: Arc::new(data_types),
+            original: Some(original),
         })
     }
 }
 
 impl ToBytes for Parse {
     fn to_bytes(&self) -> Result<Bytes, Error> {
+        // Fast path when the contents haven't been changed.
+        if let Some(ref original) = self.original {
+            return Ok(original.clone());
+        }
+
         let mut payload = Payload::named(self.code());
+        payload.reserve(self.len());
 
         payload.put_string(&self.name);
         payload.put_string(&self.query);

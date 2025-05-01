@@ -97,11 +97,7 @@ mod test {
 
         let messages = vec![
             Parse::named("__sqlx_1", "SELECT 1").into(),
-            Bind {
-                statement: "__sqlx_1".into(),
-                ..Default::default()
-            }
-            .into(),
+            Bind::test_statement("__sqlx_1").into(),
         ];
 
         for message in messages {

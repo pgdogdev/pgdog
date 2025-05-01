@@ -7,23 +7,33 @@ use super::prelude::*;
 /// Describe (F) message.
 #[derive(Debug, Clone)]
 pub struct Describe {
-    pub kind: char,
-    pub statement: String,
+    kind: char,
+    statement: String,
+    original: Option<Bytes>,
 }
 
 impl FromBytes for Describe {
     fn from_bytes(mut bytes: Bytes) -> Result<Self, Error> {
+        let original = bytes.clone();
         code!(bytes, 'D');
         let _len = bytes.get_i32();
         let kind = bytes.get_u8() as char;
         let statement = c_string_buf(&mut bytes);
 
-        Ok(Self { kind, statement })
+        Ok(Self {
+            kind,
+            statement,
+            original: Some(original),
+        })
     }
 }
 
 impl ToBytes for Describe {
     fn to_bytes(&self) -> Result<Bytes, Error> {
+        if let Some(ref original) = self.original {
+            return Ok(original.clone());
+        }
+
         let mut payload = Payload::named(self.code());
         payload.put_u8(self.kind as u8);
         payload.put_string(&self.statement);
@@ -49,6 +59,7 @@ impl Describe {
 
     pub fn rename(mut self, name: impl ToString) -> Self {
         self.statement = name.to_string();
+        self.original = None;
         self
     }
 
@@ -56,7 +67,27 @@ impl Describe {
         Describe {
             kind: 'S',
             statement: name.to_string(),
+            original: None,
         }
+    }
+
+    pub fn new_portal(name: &str) -> Describe {
+        Describe {
+            kind: 'P',
+            statement: name.to_string(),
+            original: None,
+        }
+    }
+
+    #[inline]
+    pub(crate) fn statement(&self) -> &str {
+        &self.statement
+    }
+
+    #[inline]
+    #[cfg(test)]
+    pub(crate) fn kind(&self) -> char {
+        self.kind
     }
 }
 
@@ -75,6 +106,7 @@ mod test {
         let describe = Describe {
             kind: 'P',
             statement: "".into(),
+            original: None,
         };
         conn.send(vec![describe.message().unwrap()]).await.unwrap();
         let res = conn.read().await.unwrap();

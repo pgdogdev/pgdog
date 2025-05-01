@@ -320,7 +320,7 @@ impl Server {
             }
             'C' => {
                 let cmd = CommandComplete::from_bytes(message.to_bytes()?)?;
-                match cmd.command.as_str() {
+                match cmd.command() {
                     "PREPARE" | "DEALLOCATE" => self.sync_prepared = true,
                     _ => (),
                 }
@@ -758,14 +758,15 @@ pub mod test {
         let mut server = test_server().await;
         use crate::net::bind::Parameter;
         for _ in 0..25 {
-            let bind = Bind {
-                params: vec![Parameter {
+            let bind = Bind::test_params_codes(
+                "",
+                &[Parameter {
                     len: 1,
                     data: "1".as_bytes().to_vec(),
                 }],
-                codes: vec![0],
-                ..Default::default()
-            };
+                &[Format::Text],
+            );
+
             server
                 .send(vec![
                     ProtocolMessage::from(Parse::new_anonymous("SELECT $1")),
@@ -799,14 +800,13 @@ pub mod test {
             assert!(new);
 
             let describe = Describe::new_statement(&name);
-            let bind = Bind {
-                statement: name.clone(),
-                params: vec![Parameter {
+            let bind = Bind::test_params(
+                &name,
+                &[Parameter {
                     len: 1,
                     data: "1".as_bytes().to_vec(),
                 }],
-                ..Default::default()
-            };
+            );
 
             server
                 .send(vec![
@@ -876,14 +876,13 @@ pub mod test {
         for _ in 0..25 {
             server
                 .send(vec![
-                    ProtocolMessage::from(Bind {
-                        statement: "__pgdog_1".into(),
-                        params: vec![Parameter {
+                    ProtocolMessage::from(Bind::test_params(
+                        "__pgdog_1",
+                        &[Parameter {
                             len: 1,
                             data: "1".as_bytes().to_vec(),
                         }],
-                        ..Default::default()
-                    }),
+                    )),
                     Execute::new().into(),
                     Sync {}.into(),
                 ])
@@ -928,10 +927,7 @@ pub mod test {
             let name = format!("test_{}", i);
             let parse = Parse::named(&name, "SELECT $1");
             let describe = Describe::new_statement(&name);
-            let bind = Bind {
-                statement: name.clone(),
-                ..Default::default() // Missing params.
-            };
+            let bind = Bind::test_statement(&name);
             server
                 .send(vec![
                     ProtocolMessage::from(parse),
@@ -1045,20 +1041,15 @@ pub mod test {
             Describe::new_statement("test_1").into(),
             Flush.into(),
             Query::new("BEGIN").into(),
-            Bind {
-                statement: "test_1".into(),
-                params: vec![crate::net::bind::Parameter {
+            Bind::test_params(
+                "test_1",
+                &[crate::net::bind::Parameter {
                     len: 1,
                     data: "1".as_bytes().to_vec(),
                 }],
-                ..Default::default()
-            }
+            )
             .into(),
-            Describe {
-                statement: "".into(),
-                kind: 'P',
-            }
-            .into(),
+            Describe::new_portal("").into(),
             Execute::new().into(),
             Sync.into(),
             Query::new("COMMIT").into(),
@@ -1085,11 +1076,7 @@ pub mod test {
             Query::new("CREATE TABLE IF NOT EXISTS test_delete (id BIGINT PRIMARY KEY)").into(),
             ProtocolMessage::from(Parse::named("test", "DELETE FROM test_delete")),
             Describe::new_statement("test").into(),
-            Bind {
-                statement: "test".into(),
-                ..Default::default()
-            }
-            .into(),
+            Bind::test_statement("test").into(),
             Execute::new().into(),
             Sync.into(),
             Query::new("ROLLBACK").into(),
@@ -1115,28 +1102,17 @@ pub mod test {
             Parse::named("test", "SELECT $1").into(),
             Parse::named("test_2", "SELECT $1, $2, $3").into(),
             Describe::new_statement("test_2").into(),
-            Bind {
-                statement: "test".into(),
-                params: vec![crate::net::bind::Parameter {
+            Bind::test_params(
+                "test",
+                &[crate::net::bind::Parameter {
                     len: 1,
                     data: "1".as_bytes().to_vec(),
                 }],
-                ..Default::default()
-            }
+            )
             .into(),
-            Bind {
-                // Should error out
-                statement: "test_2".into(),
-                ..Default::default()
-            }
-            .into(),
+            Bind::test_statement("test_2").into(),
             Execute::new().into(), // Will be ignored
-            Bind {
-                // Will be ignored
-                statement: "test".into(),
-                ..Default::default()
-            }
-            .into(),
+            Bind::test_statement("test").into(),
             Flush.into(),
         ];
 
@@ -1190,14 +1166,13 @@ pub mod test {
 
             server
                 .send(vec![
-                    Bind {
-                        statement: "test".into(),
-                        params: vec![crate::net::bind::Parameter {
+                    Bind::test_params(
+                        "test",
+                        &[crate::net::bind::Parameter {
                             len: 1,
                             data: "1".as_bytes().to_vec(),
                         }],
-                        ..Default::default()
-                    }
+                    )
                     .into(),
                     Execute::new().into(),
                     Close::named("test_sdf").into(),
@@ -1237,12 +1212,7 @@ pub mod test {
         server
             .send(vec![
                 ProtocolMessage::from(Parse::named("test", "SELECT 1")),
-                Bind {
-                    statement: "test".into(),
-                    portal: "test1".into(),
-                    ..Default::default()
-                }
-                .into(),
+                Bind::test_name_portal("test", "test1").into(),
                 Execute::new_portal("test1").into(),
                 Close::portal("test1").into(),
                 Sync.into(),
@@ -1287,10 +1257,7 @@ pub mod test {
         assert!(server.prepared_statements.contains("__pgdog_1"));
 
         let describe = Describe::new_statement("__pgdog_1");
-        let bind = Bind {
-            statement: "__pgdog_1".into(),
-            ..Default::default()
-        };
+        let bind = Bind::test_statement("__pgdog_1");
         let execute = Execute::new();
         server
             .send(vec![
