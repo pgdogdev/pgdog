@@ -2,6 +2,8 @@ use thiserror::Error;
 
 use crate::backend;
 
+use super::PlanRequest;
+
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("serde: {0}")]
@@ -18,4 +20,10 @@ pub enum Error {
 
     #[error("{0}")]
     Net(#[from] crate::net::Error),
+
+    #[error("{0}")]
+    Send(#[from] tokio::sync::mpsc::error::SendError<PlanRequest>),
+
+    #[error("plan channel is down")]
+    Recv,
 }
