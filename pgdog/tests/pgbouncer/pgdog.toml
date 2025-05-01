@@ -1,5 +1,6 @@
 [general]
 prepared_statements = "disabled"
+workers = 2
 
 [[databases]]
 name = "pgdog"

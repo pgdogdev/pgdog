@@ -44,3 +44,5 @@ toxi.log
 *.log
 *.gem
 *.sqlite3
+perf.data
+perf.data.old

@@ -27,6 +27,10 @@ impl Payload {
         }
     }
 
+    pub(crate) fn reserve(&mut self, capacity: usize) {
+        self.bytes.reserve(capacity);
+    }
+
     /// Create new named payload.
     pub fn named(name: char) -> Self {
         Self {
@@ -74,12 +78,16 @@ impl DerefMut for Payload {
 
 impl super::ToBytes for Payload {
     fn to_bytes(&self) -> Result<bytes::Bytes, crate::net::Error> {
-        let mut buf = BytesMut::new();
         let len = if self.with_len {
             Some(self.bytes.len() as i32 + 4) // self
         } else {
             None
         };
+
+        let mut buf = BytesMut::with_capacity(match len {
+            Some(len) => len as usize + 5,
+            None => 15,
+        });
 
         if let Some(name) = self.name {
             buf.put_u8(name as u8);

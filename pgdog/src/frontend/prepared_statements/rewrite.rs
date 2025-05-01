@@ -43,7 +43,7 @@ impl<'a> Rewrite<'a> {
         if bind.anonymous() {
             Ok(bind)
         } else {
-            let name = self.statements.name(&bind.statement);
+            let name = self.statements.name(bind.statement());
             if let Some(name) = name {
                 Ok(bind.rename(name))
             } else {
@@ -57,7 +57,7 @@ impl<'a> Rewrite<'a> {
         if describe.anonymous() {
             Ok(describe)
         } else {
-            let name = self.statements.name(&describe.statement);
+            let name = self.statements.name(describe.statement());
             if let Some(name) = name {
                 Ok(describe.rename(name))
             } else {
@@ -86,19 +86,13 @@ mod test {
         assert_eq!(parse.name(), "__pgdog_1");
         assert_eq!(parse.query(), "SELECT * FROM users");
 
-        let bind = Bind {
-            statement: "__sqlx_1".into(),
-            ..Default::default()
-        };
+        let bind = Bind::test_statement("__sqlx_1");
 
         let bind =
             Bind::from_bytes(rewrite.rewrite(bind.into()).unwrap().to_bytes().unwrap()).unwrap();
-        assert_eq!(bind.statement, "__pgdog_1");
+        assert_eq!(bind.statement(), "__pgdog_1");
 
-        let describe = Describe {
-            statement: "__sqlx_1".into(),
-            kind: 'S',
-        };
+        let describe = Describe::new_statement("__sqlx_1");
 
         let describe = Describe::from_bytes(
             rewrite
@@ -108,8 +102,8 @@ mod test {
                 .unwrap(),
         )
         .unwrap();
-        assert_eq!(describe.statement, "__pgdog_1");
-        assert_eq!(describe.kind, 'S');
+        assert_eq!(describe.statement(), "__pgdog_1");
+        assert_eq!(describe.kind(), 'S');
 
         assert_eq!(statements.len(), 1);
         assert_eq!(statements.global.lock().len(), 1);

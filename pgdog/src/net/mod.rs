@@ -7,7 +7,7 @@ pub mod stream;
 pub mod tls;
 pub mod tweaks;
 
-use bytes::Buf;
+use bytes::{Buf, Bytes};
 pub use decoder::Decoder;
 pub use error::Error;
 pub use messages::*;
@@ -50,8 +50,9 @@ pub async fn c_string(stream: &mut (impl AsyncRead + Unpin)) -> Result<String, E
 /// Read a C-Style String from the buffer.
 ///
 /// See [`c_string`] for how this works.
-pub fn c_string_buf(buf: &mut impl bytes::Buf) -> String {
-    let mut result = String::new();
+pub fn c_string_buf(buf: &mut Bytes) -> String {
+    let len = c_string_buf_len(&buf[..]);
+    let mut result = String::with_capacity(len);
     while buf.remaining() > 0 {
         let c = buf.get_u8();
 

@@ -212,7 +212,7 @@ impl MultiShard {
                 if self.decoder.rd().fields.is_empty() && !bind.anonymous() {
                     if let Some(rd) = PreparedStatements::global()
                         .lock()
-                        .row_description(&bind.statement)
+                        .row_description(bind.statement())
                     {
                         self.decoder.row_description(&rd);
                     }

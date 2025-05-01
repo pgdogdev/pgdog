@@ -25,27 +25,23 @@ fn next_pool_id() -> u64 {
 }
 
 /// Connection pool.
+#[derive(Clone)]
 pub struct Pool {
-    inner: Arc<Mutex<Inner>>,
-    comms: Arc<Comms>,
-    addr: Address,
     id: u64,
+    inner: Arc<InnerSync>,
+}
+
+struct InnerSync {
+    comms: Comms,
+    addr: Address,
+    inner: Mutex<Inner>,
 }
 
 impl std::fmt::Debug for Pool {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Pool").field("addr", &self.addr).finish()
-    }
-}
-
-impl Clone for Pool {
-    fn clone(&self) -> Self {
-        Self {
-            inner: self.inner.clone(),
-            comms: self.comms.clone(),
-            addr: self.addr.clone(),
-            id: self.id,
-        }
+        f.debug_struct("Pool")
+            .field("addr", &self.inner.addr)
+            .finish()
     }
 }
 
@@ -54,9 +50,11 @@ impl Pool {
     pub fn new(config: &PoolConfig) -> Self {
         let id = next_pool_id();
         Self {
-            inner: Arc::new(Mutex::new(Inner::new(config.config, id))),
-            comms: Arc::new(Comms::new()),
-            addr: config.address.clone(),
+            inner: Arc::new(InnerSync {
+                comms: Comms::new(),
+                addr: config.address.clone(),
+                inner: Mutex::new(Inner::new(config.config, id)),
+            }),
             id,
         }
     }
@@ -80,10 +78,18 @@ impl Pool {
 
     /// Get a connection from the pool.
     async fn get_internal(&self, request: &Request, mut unban: bool) -> Result<Guard, Error> {
+        let mut waited = false;
+
         loop {
             // Fast path, idle connection probably available.
             let (checkout_timeout, healthcheck_timeout, healthcheck_interval, server) = {
-                let elapsed = request.created_at.elapsed(); // Before the lock!
+                // Ask for time before we acquire the lock
+                // and only if we actually waited for a connection.
+                let elapsed = if waited {
+                    request.created_at.elapsed().as_micros()
+                } else {
+                    0
+                };
                 let mut guard = self.lock();
 
                 if !guard.online {
@@ -107,7 +113,7 @@ impl Pool {
                     .map(|server| Guard::new(self.clone(), server));
 
                 if conn.is_some() {
-                    guard.stats.counts.wait_time += elapsed.as_micros();
+                    guard.stats.counts.wait_time += elapsed;
                     guard.stats.counts.server_assignment_count += 1;
                 }
 
@@ -132,6 +138,7 @@ impl Pool {
             // Slow path, pool is empty, will create new connection
             // or wait for one to be returned if the pool is maxed out.
             self.comms().request.notify_one();
+            waited = true;
             let _waiting = Waiting::new(self.clone(), request);
 
             select! {
@@ -320,19 +327,19 @@ impl Pool {
     /// Pool exclusive lock.
     #[inline]
     pub(super) fn lock(&self) -> MutexGuard<'_, RawMutex, Inner> {
-        self.inner.lock()
+        self.inner.inner.lock()
     }
 
     /// Internal notifications.
     #[inline]
     pub(super) fn comms(&self) -> &Comms {
-        &self.comms
+        &self.inner.comms
     }
 
     /// Pool address.
     #[inline]
     pub fn addr(&self) -> &Address {
-        &self.addr
+        &self.inner.addr
     }
 
     /// Get startup parameters for new server connections.

@@ -11,7 +11,7 @@ use super::Vector;
 use std::fmt::Debug;
 use std::str::from_utf8;
 
-#[derive(PartialEq, Debug, Copy, Clone)]
+#[derive(PartialEq, Debug, Copy, Clone, PartialOrd, Ord, Eq)]
 pub enum Format {
     Text,
     Binary,
@@ -100,15 +100,17 @@ impl ParameterWithFormat<'_> {
 #[derive(Debug, Clone, Default, PartialEq, PartialOrd, Ord, Eq)]
 pub struct Bind {
     /// Portal name.
-    pub portal: String,
+    portal: String,
     /// Prepared statement name.
-    pub statement: String,
+    statement: String,
     /// Format codes.
-    pub codes: Vec<i16>,
+    codes: Vec<Format>,
     /// Parameters.
-    pub params: Vec<Parameter>,
+    params: Vec<Parameter>,
     /// Results format.
-    pub results: Vec<i16>,
+    results: Vec<i16>,
+    /// Original payload.
+    original: Option<Bytes>,
 }
 
 impl Bind {
@@ -131,18 +133,10 @@ impl Bind {
         } else if self.codes.len() == 1 {
             self.codes.first().copied()
         } else {
-            Some(0)
+            Some(Format::Text)
         };
 
-        if let Some(code) = code {
-            match code {
-                0 => Ok(Format::Text),
-                1 => Ok(Format::Binary),
-                _ => Err(Error::IncorrectParameterFormatCode(code)),
-            }
-        } else {
-            Ok(Format::Text)
-        }
+        Ok(code.unwrap_or(Format::Text))
     }
 
     /// Get parameter at index.
@@ -157,6 +151,7 @@ impl Bind {
     /// Rename this Bind message to a different prepared statement.
     pub fn rename(mut self, name: impl ToString) -> Self {
         self.statement = name.to_string();
+        self.original = None;
         self
     }
 
@@ -165,29 +160,66 @@ impl Bind {
         self.statement.is_empty()
     }
 
+    #[inline]
+    pub(crate) fn statement(&self) -> &str {
+        &self.statement
+    }
+
     /// Format codes, if any.
-    pub fn codes(&self) -> Vec<Format> {
-        self.codes
-            .iter()
-            .map(|c| {
-                if *c == 0 {
-                    Format::Text
-                } else {
-                    Format::Binary
-                }
-            })
-            .collect()
+    pub fn codes(&self) -> &[Format] {
+        &self.codes
+    }
+}
+
+#[cfg(test)]
+impl Bind {
+    pub(crate) fn test_statement(name: &str) -> Self {
+        Self {
+            statement: name.to_string(),
+            ..Default::default()
+        }
+    }
+
+    pub(crate) fn test_params(name: &str, params: &[Parameter]) -> Self {
+        Self {
+            statement: name.to_string(),
+            params: params.to_vec(),
+            ..Default::default()
+        }
+    }
+
+    pub(crate) fn test_name_portal(name: &str, portal: &str) -> Self {
+        Self {
+            statement: name.to_owned(),
+            portal: portal.to_owned(),
+            ..Default::default()
+        }
+    }
+
+    pub(crate) fn test_params_codes(name: &str, params: &[Parameter], codes: &[Format]) -> Self {
+        Self {
+            statement: name.to_string(),
+            codes: codes.to_vec(),
+            params: params.to_vec(),
+            ..Default::default()
+        }
     }
 }
 
 impl FromBytes for Bind {
     fn from_bytes(mut bytes: Bytes) -> Result<Self, Error> {
+        let original = bytes.clone();
         code!(bytes, 'B');
         let _len = bytes.get_i32();
         let portal = c_string_buf(&mut bytes);
         let statement = c_string_buf(&mut bytes);
         let num_codes = bytes.get_i16();
-        let codes = (0..num_codes).map(|_| bytes.get_i16()).collect();
+        let codes = (0..num_codes)
+            .map(|_| match bytes.get_i16() {
+                0 => Format::Text,
+                _ => Format::Binary,
+            })
+            .collect();
         let num_params = bytes.get_i16();
         let params = (0..num_params)
             .map(|_| {
@@ -211,18 +243,29 @@ impl FromBytes for Bind {
             codes,
             params,
             results,
+            original: Some(original),
         })
     }
 }
 
 impl ToBytes for Bind {
     fn to_bytes(&self) -> Result<Bytes, Error> {
+        // Fast path.
+        if let Some(ref original) = self.original {
+            return Ok(original.clone());
+        }
+
         let mut payload = Payload::named(self.code());
+        payload.reserve(self.len());
+
         payload.put_string(&self.portal);
         payload.put_string(&self.statement);
         payload.put_i16(self.codes.len() as i16);
         for code in &self.codes {
-            payload.put_i16(*code);
+            payload.put_i16(match code {
+                Format::Text => 0,
+                Format::Binary => 1,
+            });
         }
         payload.put_i16(self.params.len() as i16);
         for param in &self.params {
@@ -260,9 +303,10 @@ mod test {
         let pool = pool();
         let mut conn = pool.get(&Request::default()).await.unwrap();
         let bind = Bind {
+            original: None,
             portal: "".into(),
             statement: "__pgdog_1".into(),
-            codes: vec![1, 0],
+            codes: vec![Format::Binary, Format::Text],
             params: vec![
                 Parameter {
                     len: 2,
@@ -275,9 +319,10 @@ mod test {
             ],
             results: vec![0],
         };
-
         let bytes = bind.to_bytes().unwrap();
-        assert_eq!(Bind::from_bytes(bytes.clone()).unwrap(), bind);
+        let mut original = Bind::from_bytes(bytes.clone()).unwrap();
+        original.original = None;
+        assert_eq!(original, bind);
         assert_eq!(bind.len(), bytes.len());
         let mut c = bytes.clone();
         let _ = c.get_u8();
@@ -300,7 +345,7 @@ mod test {
         let jsonb = binary_marker + json;
         let bind = Bind {
             statement: "test".into(),
-            codes: vec![1],
+            codes: vec![Format::Binary],
             params: vec![Parameter {
                 data: jsonb.as_bytes().to_vec(),
                 len: jsonb.as_bytes().len() as i32,

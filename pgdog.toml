@@ -12,6 +12,7 @@ checkout_timeout = 1_000
 connect_timeout = 1_000
 passthrough_auth = "enabled_plain"
 idle_timeout = 30_000
+prepared_statements = "disabled"
 # dry_run = true
 
 #
@@ -29,11 +30,11 @@ host = "127.0.0.1"
 port = 5432
 role = "primary"
 
-[[databases]]
-name = "pgdog"
-host = "127.0.0.1"
-port = 5432
-role = "replica"
+# [[databases]]
+# name = "pgdog"
+# host = "127.0.0.1"
+# port = 5432
+# role = "replica"
 
 [[databases]]
 name = "mastodon_development"

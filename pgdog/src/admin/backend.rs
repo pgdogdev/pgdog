@@ -53,12 +53,7 @@ impl Backend {
         let messages = match Parser::parse(&query.query().to_lowercase()) {
             Ok(command) => {
                 let mut messages = command.execute().await?;
-                messages.push(
-                    CommandComplete {
-                        command: command.name(),
-                    }
-                    .message()?,
-                );
+                messages.push(CommandComplete::new(command.name()).message()?);
 
                 messages
             }

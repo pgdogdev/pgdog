@@ -708,7 +708,10 @@ impl QueryParser {
 
 #[cfg(test)]
 mod test {
-    use crate::net::messages::{parse::Parse, Parameter};
+    use crate::net::{
+        messages::{parse::Parse, Parameter},
+        Format,
+    };
 
     use super::{super::Shard, *};
     use crate::net::messages::Query;
@@ -757,13 +760,7 @@ mod test {
                     data: p.to_vec(),
                 })
                 .collect::<Vec<_>>();
-            let bind = Bind {
-                portal: "".into(),
-                statement: $name.into(),
-                codes: $codes.to_vec(),
-                params,
-                results: vec![],
-            };
+            let bind = Bind::test_params_codes($name, &params, $codes);
             let route = QueryParser::default()
                 .parse(
                     &Buffer::from(vec![parse.into(), bind.into()]),
@@ -781,7 +778,7 @@ mod test {
         }};
 
         ($name:expr, $query:expr, $params: expr) => {
-            parse!($name, $query, $params, [])
+            parse!($name, $query, $params, &[])
         };
     }
 
@@ -866,7 +863,7 @@ mod test {
     FROM sharded
     WHERE sharded.id = $1::INTEGER ORDER BY sharded.id"#,
             [[0, 0, 0, 1]],
-            [1]
+            &[Format::Binary]
         );
         assert!(route.is_read());
         assert_eq!(route.shard(), &Shard::Direct(0))
