@@ -71,6 +71,7 @@ impl Parse {
     pub fn rename(&self, name: &str) -> Parse {
         let mut parse = self.clone();
         parse.name = Arc::new(name.to_owned());
+        parse.original = None;
         parse
     }
 

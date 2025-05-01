@@ -12,6 +12,7 @@ checkout_timeout = 1_000
 connect_timeout = 1_000
 passthrough_auth = "enabled_plain"
 idle_timeout = 30_000
+prepared_statements = "disabled"
 # dry_run = true
 
 #
