@@ -398,7 +398,7 @@ impl General {
     }
 
     fn workers() -> usize {
-        0
+        2
     }
 
     fn default_pool_size() -> usize {
