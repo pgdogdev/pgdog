@@ -30,6 +30,11 @@ impl PlanCache {
         self.age.push(AgedKey::new(key.clone()));
         self.cache.insert(key.into(), plan);
     }
+
+    pub(crate) fn clear(&mut self) {
+        self.cache.clear();
+        self.age.clear();
+    }
 }
 
 #[derive(PartialEq, Debug, Clone, Eq, Hash)]

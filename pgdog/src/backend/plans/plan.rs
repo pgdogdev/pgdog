@@ -5,16 +5,50 @@ use serde::{Deserialize, Serialize};
 pub struct QueryPlan {
     #[serde(rename = "Plan")]
     plan: PlanNode,
+    #[serde(skip, default)]
+    estimate: Estimate,
 }
 
 impl QueryPlan {
-    pub fn from_json(plan: &str) -> Result<Self, Error> {
+    pub(crate) fn from_json(plan: &str) -> Result<Self, Error> {
         let value: serde_json::Value = serde_json::from_str(plan)?;
         if let Some(list) = value.as_array() {
-            Ok(serde_json::from_value(list[0].clone())?)
+            let plan: QueryPlan = serde_json::from_value(list.get(0).ok_or(Error::Deser)?.clone())?;
+            Ok(plan.calculate())
         } else {
             Err(Error::Deser)
         }
+    }
+
+    fn calculate(mut self) -> Self {
+        let mut stack = Vec::new();
+        let mut estimate = Estimate::default();
+        stack.push(self.plan.clone());
+
+        while let Some(plan) = stack.pop() {
+            match plan.node_type.as_str() {
+                "Seq Scan" => {
+                    estimate.plans.push(EstimateUnit::SeqScan {
+                        rows: plan.plan_rows,
+                        width: plan.plan_width,
+                    });
+                }
+                "Index Scan" => {
+                    estimate.plans.push(EstimateUnit::IndexScan {
+                        rows: plan.plan_rows,
+                        width: plan.plan_width,
+                    });
+                }
+
+                _ => (),
+            }
+
+            for plan in plan.plans {
+                stack.push(plan);
+            }
+        }
+        self.estimate = estimate;
+        self
     }
 }
 
@@ -30,13 +64,37 @@ pub struct PlanNode {
     pub plan_rows: i64,
     #[serde(rename = "Plan Width")]
     pub plan_width: i64,
-    #[serde(rename = "Plans", default = "Vec::new")]
+    #[serde(rename = "Plans", default)]
     pub plans: Vec<PlanNode>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct Estimate {
+    plans: Vec<EstimateUnit>,
+}
+
+impl Estimate {
+    pub(crate) fn calculate(&self) -> i64 {
+        self.plans
+            .iter()
+            .map(|unit| match unit {
+                EstimateUnit::SeqScan { rows, width } => *rows * 2 * *width,
+                EstimateUnit::IndexScan { rows, width } => *rows * *width,
+            })
+            .sum::<i64>()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum EstimateUnit {
+    SeqScan { rows: i64, width: i64 },
+    IndexScan { rows: i64, width: i64 },
 }
 
 #[cfg(test)]
 mod test {
-    use super::QueryPlan;
+
+    use super::*;
 
     #[test]
     fn test_deser() {
@@ -98,5 +156,12 @@ mod test {
         let de: QueryPlan = QueryPlan::from_json(original).unwrap();
         assert_eq!(de.plan.startup_cost, 37.0);
         assert_eq!(de.plan.total_cost, 66.83);
+        assert_eq!(
+            de.estimate.plans[1],
+            EstimateUnit::SeqScan {
+                rows: 1570,
+                width: 24
+            }
+        );
     }
 }
