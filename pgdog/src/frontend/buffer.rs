@@ -161,7 +161,7 @@ impl Buffer {
     }
 
     /// Rewrite query in buffer.
-    pub fn rewrite(&mut self, query: &str) -> Result<(), Error> {
+    pub(crate) fn rewrite(&mut self, query: &str) -> Result<(), Error> {
         if self.buffer.iter().any(|c| c.code() != 'Q') {
             return Err(Error::OnlySimpleForRewrites);
         }

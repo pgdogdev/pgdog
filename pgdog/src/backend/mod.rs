@@ -2,6 +2,7 @@
 
 pub mod databases;
 pub mod error;
+pub mod plans;
 pub mod pool;
 pub mod prepared_statements;
 pub mod protocol;
@@ -12,6 +13,7 @@ pub mod server_options;
 pub mod stats;
 
 pub use error::Error;
+pub use plans::Plans;
 pub use pool::{Cluster, ClusterShardConfig, Pool, Replicas, Shard, ShardingSchema};
 pub use prepared_statements::PreparedStatements;
 pub use protocol::*;

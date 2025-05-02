@@ -30,7 +30,6 @@ impl Parse {
     }
 
     /// New anonymous prepared statement.
-    #[cfg(test)]
     pub fn new_anonymous(query: &str) -> Self {
         Self {
             name: Arc::new("".into()),

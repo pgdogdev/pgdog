@@ -364,6 +364,11 @@ impl Client {
             if let Some(query) = inner.start_transaction.take() {
                 inner.backend.execute(&query).await?;
             }
+            let plan = inner.plan(&buffer).await?;
+            debug!(
+                "execution cost: {}",
+                plan.map(|p| p.estimate().calculate()).unwrap_or(0)
+            );
         }
 
         for msg in buffer.iter() {

@@ -1,7 +1,11 @@
-use std::ops::{Deref, DerefMut};
+use std::{
+    ops::{Deref, DerefMut},
+    sync::Arc,
+};
 
 use crate::{
     backend::{
+        plans::QueryPlan,
         pool::{Connection, Request},
         Error as BackendError,
     },
@@ -115,7 +119,7 @@ impl Inner {
 
         self.stats.waiting(request.created_at);
 
-        let result = self.backend.connect(request, &route).await;
+        let result = self.backend.connect(request, route).await;
 
         if result.is_ok() {
             self.stats.connected();
@@ -136,6 +140,11 @@ impl Inner {
         self.comms.stats(self.stats);
 
         result
+    }
+
+    pub(super) async fn plan(&self, buffer: &Buffer) -> Result<Option<Arc<QueryPlan>>, Error> {
+        let route = self.router.route();
+        Ok(self.backend.plan(route, buffer).await?)
     }
 
     pub(super) fn done(&mut self, in_transaction: bool) {
