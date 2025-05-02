@@ -270,6 +270,9 @@ pub struct General {
     /// Pooler mode, e.g. transaction.
     #[serde(default)]
     pub pooler_mode: PoolerMode,
+    /// Query to check a connection.
+    #[serde(default = "General::healthcheck_query")]
+    pub healthcheck_query: String,
     /// How often to check a connection.
     #[serde(default = "General::healthcheck_interval")]
     pub healthcheck_interval: u64,
@@ -364,6 +367,7 @@ impl Default for General {
             default_pool_size: Self::default_pool_size(),
             min_pool_size: Self::min_pool_size(),
             pooler_mode: PoolerMode::default(),
+            healthcheck_query: Self::healthcheck_query(),
             healthcheck_interval: Self::healthcheck_interval(),
             idle_healthcheck_interval: Self::idle_healthcheck_interval(),
             idle_healthcheck_delay: Self::idle_healthcheck_delay(),
@@ -407,6 +411,10 @@ impl General {
 
     fn min_pool_size() -> usize {
         1
+    }
+
+    fn healthcheck_query() -> String {
+        ";".into()
     }
 
     fn healthcheck_interval() -> u64 {
