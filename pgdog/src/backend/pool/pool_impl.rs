@@ -81,6 +81,8 @@ impl Pool {
         let mut waited = false;
 
         loop {
+            let pool = self.clone();
+
             // Fast path, idle connection probably available.
             let (checkout_timeout, healthcheck_timeout, healthcheck_interval, server) = {
                 // Ask for time before we acquire the lock
@@ -108,9 +110,7 @@ impl Pool {
                     return Err(Error::Banned);
                 }
 
-                let conn = guard
-                    .take(request)
-                    .map(|server| Guard::new(self.clone(), server));
+                let conn = guard.take(request).map(|server| Guard::new(pool, server));
 
                 if conn.is_some() {
                     guard.stats.counts.wait_time += elapsed;
@@ -121,10 +121,10 @@ impl Pool {
                     if guard.paused {
                         Duration::MAX // Wait forever if the pool is paused.
                     } else {
-                        guard.config.checkout_timeout()
+                        guard.config.checkout_timeout
                     },
-                    guard.config.healthcheck_timeout(),
-                    guard.config.healthcheck_interval(),
+                    guard.config.healthcheck_timeout,
+                    guard.config.healthcheck_interval,
                     conn,
                 )
             };
@@ -200,7 +200,7 @@ impl Pool {
 
         // Check everything and maybe check the connection
         // into the idle pool.
-        let banned = self.lock().maybe_check_in(server, now);
+        let banned = { self.lock().maybe_check_in(server, now) };
 
         if banned {
             error!(
@@ -355,12 +355,12 @@ impl Pool {
             },
         ];
 
-        let config = *self.lock().config();
+        let config = { *self.lock().config() };
 
         if let Some(statement_timeout) = config.statement_timeout {
             params.push(Parameter {
                 name: "statement_timeout".into(),
-                value: statement_timeout.to_string(),
+                value: statement_timeout.as_millis().to_string(),
             });
         }
 

@@ -6,9 +6,10 @@ pub(super) struct Waiting {
 
 impl Waiting {
     pub(super) fn new(pool: Pool, request: &Request) -> Self {
+        let request = request.clone();
         {
             let mut inner = pool.lock();
-            inner.waiting.push_back(request.clone());
+            inner.waiting.push_back(request);
         }
         Self { pool }
     }

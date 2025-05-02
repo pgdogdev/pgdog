@@ -121,7 +121,7 @@ async fn test_concurrency_with_gas() {
 async fn test_bans() {
     let pool = pool();
     let mut config = *pool.lock().config();
-    config.checkout_timeout = 100;
+    config.checkout_timeout = Duration::from_millis(100);
     pool.update_config(config);
 
     pool.ban(Error::CheckoutTimeout);
@@ -151,7 +151,7 @@ async fn test_pause() {
     let pool = pool();
     let tracker = TaskTracker::new();
     let config = Config {
-        checkout_timeout: 1_000,
+        checkout_timeout: Duration::from_millis(1_000),
         max: 1,
         ..Default::default()
     };
