@@ -484,15 +484,11 @@ impl Client {
             if message.code() == 'X' {
                 return Ok(vec![].into());
             } else {
-                if self.prepared_statements.enabled {
-                    let message = ProtocolMessage::from_bytes(message.to_bytes()?)?;
-                    if message.extended() {
-                        buffer.push(self.prepared_statements.maybe_rewrite(message)?);
-                    } else {
-                        buffer.push(message);
-                    }
+                let message = ProtocolMessage::from_bytes(message.to_bytes()?)?;
+                if message.extended() && self.prepared_statements.enabled {
+                    buffer.push(self.prepared_statements.maybe_rewrite(message)?);
                 } else {
-                    buffer.push(message.into())
+                    buffer.push(message);
                 }
             }
         }
