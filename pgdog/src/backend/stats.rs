@@ -213,7 +213,7 @@ impl Stats {
         self.update();
     }
 
-    /// Track healtchecks.
+    /// Track healthchecks.
     pub fn healthcheck(&mut self) {
         self.healthchecks += 1;
         self.last_healthcheck = Some(Instant::now());

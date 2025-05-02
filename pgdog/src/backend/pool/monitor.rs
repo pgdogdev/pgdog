@@ -34,7 +34,7 @@
 
 use std::time::{Duration, Instant};
 
-use super::{Error, Guard, Healtcheck, Oids, Pool, Request};
+use super::{Error, Guard, Healthcheck, Oids, Pool, Request};
 use crate::backend::Server;
 
 use tokio::time::{interval, sleep, timeout};
@@ -167,7 +167,7 @@ impl Monitor {
                             break;
                         }
 
-                        // Pool is paused, skip healtcheck.
+                        // Pool is paused, skip healthcheck.
                         if guard.paused {
                             continue;
                         }
@@ -185,7 +185,7 @@ impl Monitor {
             }
 
             if unbanned {
-                info!("pool unbanned due to healtcheck [{}]", pool.addr());
+                info!("pool unbanned due to healthcheck [{}]", pool.addr());
             }
         }
 
@@ -287,7 +287,7 @@ impl Monitor {
 
         // Have an idle connection, use that for the healthcheck.
         if let Some(conn) = conn {
-            Healtcheck::mandatory(
+            Healthcheck::mandatory(
                 &mut Guard::new(pool.clone(), conn),
                 pool.clone(),
                 healthcheck_timeout,
@@ -306,7 +306,7 @@ impl Monitor {
             .await
             {
                 Ok(Ok(mut server)) => {
-                    Healtcheck::mandatory(&mut server, pool.clone(), healthcheck_timeout)
+                    Healthcheck::mandatory(&mut server, pool.clone(), healthcheck_timeout)
                         .healthcheck()
                         .await?
                 }

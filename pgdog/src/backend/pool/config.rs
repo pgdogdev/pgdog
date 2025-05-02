@@ -25,7 +25,7 @@ pub struct Config {
     pub bannable: bool,
     /// Healtheck timeout.
     pub healthcheck_timeout: u64, // ms
-    /// Healtcheck interval.
+    /// Healthcheck interval.
     pub healthcheck_interval: u64, // ms
     /// Idle healthcheck interval.
     pub idle_healthcheck_interval: u64, // ms
@@ -75,17 +75,17 @@ impl Config {
         Duration::from_millis(self.healthcheck_timeout)
     }
 
-    /// How long to wait between healtchecks.
+    /// How long to wait between healthchecks.
     pub fn healthcheck_interval(&self) -> Duration {
         Duration::from_millis(self.healthcheck_interval)
     }
 
-    /// Idle healtcheck interval.
+    /// Idle healthcheck interval.
     pub fn idle_healthcheck_interval(&self) -> Duration {
         Duration::from_millis(self.idle_healthcheck_interval)
     }
 
-    /// Idle healtcheck delay.
+    /// Idle healthcheck delay.
     pub fn idle_healthcheck_delay(&self) -> Duration {
         Duration::from_millis(self.idle_healthcheck_delay)
     }
