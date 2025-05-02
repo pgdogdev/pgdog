@@ -14,35 +14,35 @@ pub struct Config {
     /// Maximum connections allowed in the pool.
     pub max: usize,
     /// How long to wait for a connection before giving up.
-    pub checkout_timeout: u64, // ms
+    pub checkout_timeout: Duration, // ms
     /// Close connections that have been idle for longer than this.
-    pub idle_timeout: u64, // ms
+    pub idle_timeout: Duration, // ms
     /// How long to wait for connections to be created.
-    pub connect_timeout: u64, // ms
+    pub connect_timeout: Duration, // ms
     /// How long a connection can be open.
-    pub max_age: u64,
+    pub max_age: Duration,
     /// Can this pool be banned from serving traffic?
     pub bannable: bool,
     /// Healtheck timeout.
-    pub healthcheck_timeout: u64, // ms
+    pub healthcheck_timeout: Duration, // ms
     /// Healtcheck interval.
-    pub healthcheck_interval: u64, // ms
+    pub healthcheck_interval: Duration, // ms
     /// Idle healthcheck interval.
-    pub idle_healthcheck_interval: u64, // ms
+    pub idle_healthcheck_interval: Duration, // ms
     /// Idle healthcheck delay.
-    pub idle_healthcheck_delay: u64, // ms
+    pub idle_healthcheck_delay: Duration, // ms
     /// Read timeout (dangerous).
-    pub read_timeout: u64, // ms
+    pub read_timeout: Duration, // ms
     /// Write timeout (dangerous).
-    pub write_timeout: u64, // ms
+    pub write_timeout: Duration, // ms
     /// Query timeout (dangerous).
-    pub query_timeout: u64, // ms
+    pub query_timeout: Duration, // ms
     /// Max ban duration.
-    pub ban_timeout: u64, // ms
+    pub ban_timeout: Duration, // ms
     /// Rollback timeout for dirty connections.
-    pub rollback_timeout: u64,
+    pub rollback_timeout: Duration,
     /// Statement timeout
-    pub statement_timeout: Option<u64>,
+    pub statement_timeout: Option<Duration>,
     /// Replication mode.
     pub replication_mode: bool,
     /// Pooler mode.
@@ -52,61 +52,61 @@ pub struct Config {
 impl Config {
     /// Connect timeout duration.
     pub fn connect_timeout(&self) -> Duration {
-        Duration::from_millis(self.checkout_timeout)
+        self.checkout_timeout
     }
 
     /// Checkout timeout duration.
     pub fn checkout_timeout(&self) -> Duration {
-        Duration::from_millis(self.checkout_timeout)
+        self.checkout_timeout
     }
 
     /// Idle timeout duration.
     pub fn idle_timeout(&self) -> Duration {
-        Duration::from_millis(self.idle_timeout)
+        self.idle_timeout
     }
 
     /// Max age duration.
     pub fn max_age(&self) -> Duration {
-        Duration::from_millis(self.max_age)
+        self.max_age
     }
 
     /// Healthcheck timeout.
     pub fn healthcheck_timeout(&self) -> Duration {
-        Duration::from_millis(self.healthcheck_timeout)
+        self.healthcheck_timeout
     }
 
     /// How long to wait between healtchecks.
     pub fn healthcheck_interval(&self) -> Duration {
-        Duration::from_millis(self.healthcheck_interval)
+        self.healthcheck_interval
     }
 
     /// Idle healtcheck interval.
     pub fn idle_healthcheck_interval(&self) -> Duration {
-        Duration::from_millis(self.idle_healthcheck_interval)
+        self.idle_healthcheck_interval
     }
 
     /// Idle healtcheck delay.
     pub fn idle_healthcheck_delay(&self) -> Duration {
-        Duration::from_millis(self.idle_healthcheck_delay)
+        self.idle_healthcheck_delay
     }
 
     /// Ban timeout.
     pub fn ban_timeout(&self) -> Duration {
-        Duration::from_millis(self.ban_timeout)
+        self.ban_timeout
     }
 
     /// Rollback timeout.
     pub fn rollback_timeout(&self) -> Duration {
-        Duration::from_millis(self.rollback_timeout)
+        self.rollback_timeout
     }
 
     /// Read timeout.
     pub fn read_timeout(&self) -> Duration {
-        Duration::from_millis(self.read_timeout)
+        self.read_timeout
     }
 
     pub fn query_timeout(&self) -> Duration {
-        Duration::from_millis(self.query_timeout)
+        self.query_timeout
     }
 
     /// Default config for a primary.
@@ -132,26 +132,28 @@ impl Config {
             max: database
                 .pool_size
                 .unwrap_or(user.pool_size.unwrap_or(general.default_pool_size)),
-            healthcheck_interval: general.healthcheck_interval,
-            idle_healthcheck_interval: general.idle_healthcheck_interval,
-            idle_healthcheck_delay: general.idle_healthcheck_delay,
-            ban_timeout: general.ban_timeout,
-            rollback_timeout: general.rollback_timeout,
+            healthcheck_interval: Duration::from_millis(general.healthcheck_interval),
+            idle_healthcheck_interval: Duration::from_millis(general.idle_healthcheck_interval),
+            idle_healthcheck_delay: Duration::from_millis(general.idle_healthcheck_delay),
+            ban_timeout: Duration::from_millis(general.ban_timeout),
+            rollback_timeout: Duration::from_millis(general.rollback_timeout),
             statement_timeout: if let Some(statement_timeout) = database.statement_timeout {
                 Some(statement_timeout)
             } else {
                 user.statement_timeout
-            },
+            }
+            .map(Duration::from_millis),
             replication_mode: user.replication_mode,
             pooler_mode: database
                 .pooler_mode
                 .unwrap_or(user.pooler_mode.unwrap_or(general.pooler_mode)),
-            connect_timeout: general.connect_timeout,
-            query_timeout: general.query_timeout,
-            checkout_timeout: general.checkout_timeout,
-            idle_timeout: user
-                .idle_timeout
-                .unwrap_or(database.idle_timeout.unwrap_or(general.idle_timeout)),
+            connect_timeout: Duration::from_millis(general.connect_timeout),
+            query_timeout: Duration::from_millis(general.query_timeout),
+            checkout_timeout: Duration::from_millis(general.checkout_timeout),
+            idle_timeout: Duration::from_millis(
+                user.idle_timeout
+                    .unwrap_or(database.idle_timeout.unwrap_or(general.idle_timeout)),
+            ),
             ..Default::default()
         }
     }
@@ -162,20 +164,20 @@ impl Default for Config {
         Self {
             min: 1,
             max: 10,
-            checkout_timeout: 5_000,
-            idle_timeout: 60_000,
-            connect_timeout: 5_000,
-            max_age: 24 * 3600 * 1000,
+            checkout_timeout: Duration::from_millis(5_000),
+            idle_timeout: Duration::from_millis(60_000),
+            connect_timeout: Duration::from_millis(5_000),
+            max_age: Duration::from_millis(24 * 3600 * 1000),
             bannable: true,
-            healthcheck_timeout: 5_000,
-            healthcheck_interval: 30_000,
-            idle_healthcheck_interval: 5_000,
-            idle_healthcheck_delay: 5_000,
-            read_timeout: Duration::MAX.as_millis() as u64,
-            write_timeout: Duration::MAX.as_millis() as u64,
-            query_timeout: Duration::MAX.as_millis() as u64,
-            ban_timeout: Duration::from_secs(300).as_millis() as u64,
-            rollback_timeout: Duration::from_secs(5).as_millis() as u64,
+            healthcheck_timeout: Duration::from_millis(5_000),
+            healthcheck_interval: Duration::from_millis(30_000),
+            idle_healthcheck_interval: Duration::from_millis(5_000),
+            idle_healthcheck_delay: Duration::from_millis(5_000),
+            read_timeout: Duration::MAX,
+            write_timeout: Duration::MAX,
+            query_timeout: Duration::MAX,
+            ban_timeout: Duration::from_secs(300),
+            rollback_timeout: Duration::from_secs(5),
             statement_timeout: None,
             replication_mode: false,
             pooler_mode: PoolerMode::default(),

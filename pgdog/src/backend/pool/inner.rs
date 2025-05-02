@@ -198,6 +198,7 @@ impl Inner {
     }
 
     /// Take connection from the idle pool.
+    #[inline(always)]
     pub(super) fn take(&mut self, request: &Request) -> Option<Server> {
         if let Some(conn) = self.conns.pop_back() {
             self.taken.push(Mapping {
@@ -239,7 +240,7 @@ impl Inner {
         (idle, taken)
     }
 
-    #[inline]
+    #[inline(always)]
     /// Check a connection back into the pool if it's ok to do so.
     /// Otherwise, drop the connection and close it.
     ///
@@ -282,7 +283,7 @@ impl Inner {
         }
 
         // Close connections exceeding max age.
-        if server.age(now) >= self.config.max_age() {
+        if server.age(now) >= self.config.max_age {
             return false;
         }
 
@@ -315,7 +316,7 @@ impl Inner {
     }
 
     /// Remove the pool ban unless it' been manually banned.
-    #[inline]
+    #[inline(always)]
     pub fn maybe_unban(&mut self) -> bool {
         let mut unbanned = false;
         if let Some(ban) = self.ban.take() {
@@ -329,7 +330,7 @@ impl Inner {
         unbanned
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn banned(&self) -> bool {
         self.ban.is_some()
     }
@@ -441,7 +442,7 @@ mod test {
         assert!(!inner.should_create());
 
         // Close idle connections.
-        inner.config.idle_timeout = 5_000; // 5 seconds.
+        inner.config.idle_timeout = Duration::from_millis(5_000); // 5 seconds.
         inner.close_idle(Instant::now());
         assert_eq!(inner.idle(), inner.config.max); // Didn't close any.
         for _ in 0..10 {
@@ -453,7 +454,7 @@ mod test {
         assert_eq!(inner.idle(), inner.config.min);
 
         // Close old connections.
-        inner.config.max_age = 60_000;
+        inner.config.max_age = Duration::from_millis(60_000);
         inner.close_old(Instant::now() + Duration::from_secs(59));
         assert_eq!(inner.idle(), 1);
         inner.close_old(Instant::now() + Duration::from_secs(61));
