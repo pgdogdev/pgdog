@@ -26,4 +26,7 @@ pub enum Error {
 
     #[error("plan channel is down")]
     Recv,
+
+    #[error("buffer has nothing to plan")]
+    NothingToPlan,
 }

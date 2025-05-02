@@ -6,9 +6,12 @@ use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::time::sleep;
 use tracing::{debug, error};
 
+use crate::backend::pool::Request;
 use crate::backend::{Pool, Server, ServerOptions};
+use crate::frontend::Buffer;
 
-use super::{Error, PlanCache, PlanRequest};
+use super::cache::Key;
+use super::{Error, PlanCache, PlanRequest, QueryPlan, Value};
 
 #[derive(Debug, Clone)]
 pub struct Plans {
@@ -37,9 +40,28 @@ impl Plans {
         }
     }
 
-    pub(crate) async fn plan(&self, req: PlanRequest) -> Result<(), Error> {
-        self.tx.send(req).await?;
-        Ok(())
+    pub(crate) async fn plan(
+        &self,
+        req: &Request,
+        buffer: &Buffer,
+    ) -> Result<Option<Arc<QueryPlan>>, Error> {
+        let plan_req = PlanRequest::from_buffer(buffer)?;
+        let key = Key::from(&plan_req);
+        if let Some(existing) = self.cache.lock().get(&key) {
+            match existing {
+                Value::Request(requested_at) => {
+                    if req.created_at.duration_since(requested_at) < Duration::from_secs(5) {
+                        return Ok(None);
+                    }
+                }
+
+                Value::Plan(plan) => return Ok(Some(plan)),
+            }
+        }
+        // Create a request to prevent a thundering herd.
+        self.cache.lock().requested(key, req.created_at);
+        self.tx.send(plan_req).await?;
+        Ok(None)
     }
 
     async fn run(pool: Pool, mut rx: Receiver<PlanRequest>, cache: Arc<Mutex<PlanCache>>) {
@@ -69,10 +91,11 @@ impl Plans {
                 if let Some(req) = req {
                     match req.load(&mut conn).await {
                         Ok(plan) => {
-                            cache.lock().insert(req, plan.into());
+                            cache.lock().insert(&req, plan);
                         }
 
                         Err(err) => {
+                            cache.lock().remove(&req);
                             error!("plan execution error: {}", err);
                             break; // reconnect.
                         }

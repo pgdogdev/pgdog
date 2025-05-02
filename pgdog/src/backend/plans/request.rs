@@ -1,5 +1,6 @@
 use crate::{
     backend::{ProtocolMessage, Server},
+    frontend::{buffer::BufferedQuery, Buffer},
     net::{Bind, DataRow, Execute, FromBytes, Parse, Protocol, Query, Sync, ToBytes},
 };
 
@@ -12,6 +13,26 @@ pub enum PlanRequest {
 }
 
 impl PlanRequest {
+    pub(crate) fn from_buffer(buffer: &Buffer) -> Result<PlanRequest, Error> {
+        let query = buffer.query()?;
+        let bind = buffer.parameters()?;
+
+        match query {
+            Some(BufferedQuery::Query(query)) => Ok(PlanRequest::Query(query)),
+            Some(BufferedQuery::Prepared(parse)) => {
+                if let Some(bind) = bind {
+                    Ok(PlanRequest::Prepared {
+                        parse,
+                        bind: bind.clone(),
+                    })
+                } else {
+                    Err(Error::NothingToPlan)
+                }
+            }
+            _ => Err(Error::NothingToPlan),
+        }
+    }
+
     pub(crate) async fn load(&self, server: &mut Server) -> Result<QueryPlan, Error> {
         if !server.in_sync() {
             return Err(Error::NotInSync);

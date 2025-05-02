@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use super::Error;
 use serde::{Deserialize, Serialize};
 
@@ -7,6 +9,8 @@ pub struct QueryPlan {
     plan: PlanNode,
     #[serde(skip, default)]
     estimate: Estimate,
+    #[serde(skip, default)]
+    meta: PlanMeta,
 }
 
 impl QueryPlan {
@@ -18,6 +22,14 @@ impl QueryPlan {
         } else {
             Err(Error::Deser)
         }
+    }
+
+    pub(crate) fn meta(&self) -> &PlanMeta {
+        &self.meta
+    }
+
+    pub(crate) fn estimate(&self) -> &Estimate {
+        &self.estimate
     }
 
     fn calculate(mut self) -> Self {
@@ -89,6 +101,19 @@ impl Estimate {
 pub enum EstimateUnit {
     SeqScan { rows: i64, width: i64 },
     IndexScan { rows: i64, width: i64 },
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct PlanMeta {
+    created_at: Instant,
+}
+
+impl Default for PlanMeta {
+    fn default() -> Self {
+        Self {
+            created_at: Instant::now(),
+        }
+    }
 }
 
 #[cfg(test)]
