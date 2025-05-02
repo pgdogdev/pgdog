@@ -6,6 +6,7 @@ use crate::{
     admin::backend::Backend,
     backend::{
         databases::databases,
+        plans::QueryPlan,
         replication::{Buffer, ReplicationConfig},
         ProtocolMessage,
     },
@@ -19,7 +20,7 @@ use super::{
     Address, Cluster, Request, ShardingSchema,
 };
 
-use std::{mem::replace, time::Duration};
+use std::{mem::replace, sync::Arc, time::Duration};
 
 pub mod aggregate;
 pub mod binding;
@@ -87,6 +88,18 @@ impl Connection {
         }
 
         Ok(())
+    }
+
+    pub(crate) async fn plan(
+        &self,
+        route: &Route,
+        buffer: &crate::frontend::Buffer,
+    ) -> Result<Option<Arc<QueryPlan>>, Error> {
+        if let Shard::Direct(shard) = route.shard() {
+            Ok(self.cluster()?.shard(*shard)?.plan(buffer).await)
+        } else {
+            Ok(None)
+        }
     }
 
     /// Set the connection into replication mode.

@@ -18,8 +18,14 @@ impl PlanCache {
         }
     }
 
-    pub(crate) fn insert(&mut self, key: impl Into<Key>, plan: QueryPlan) {
-        self.cache.insert(key.into(), Value::Plan(Arc::new(plan)));
+    pub(crate) fn insert(&mut self, key: impl Into<Key>, plan: QueryPlan, created_at: Instant) {
+        self.cache.insert(
+            key.into(),
+            Value::Plan {
+                plan: Arc::new(plan),
+                created_at,
+            },
+        );
     }
 
     pub(crate) fn requested(&mut self, key: impl Into<Key>, created_at: Instant) {
@@ -36,6 +42,10 @@ impl PlanCache {
 
     pub(crate) fn get(&self, key: &Key) -> Option<Value> {
         self.cache.get(key).cloned()
+    }
+
+    pub(crate) fn get_mut(&mut self, key: &Key) -> Option<&mut Value> {
+        self.cache.get_mut(key)
     }
 }
 
@@ -72,6 +82,18 @@ impl From<&PlanRequest> for Key {
 
 #[derive(Debug, Clone)]
 pub enum Value {
-    Plan(Arc<QueryPlan>),
+    Plan {
+        plan: Arc<QueryPlan>,
+        created_at: Instant,
+    },
     Request(Instant),
+}
+
+impl Value {
+    pub(crate) fn age(&mut self, now: Instant) {
+        match self {
+            Value::Plan { created_at, .. } => *created_at = now,
+            _ => (),
+        }
+    }
 }

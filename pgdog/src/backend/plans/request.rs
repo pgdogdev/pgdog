@@ -1,3 +1,6 @@
+use once_cell::sync::Lazy;
+use regex::Regex;
+
 use crate::{
     backend::{ProtocolMessage, Server},
     frontend::{buffer::BufferedQuery, Buffer},
@@ -5,6 +8,8 @@ use crate::{
 };
 
 use super::{plan::QueryPlan, Error};
+
+static EXPLAIN_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r#"(?i)^\s*EXPLAIN\b"#).unwrap());
 
 #[derive(Debug, Clone)]
 pub enum PlanRequest {
@@ -30,6 +35,13 @@ impl PlanRequest {
                 }
             }
             _ => Err(Error::NothingToPlan),
+        }
+    }
+
+    pub(crate) fn skip(&self) -> bool {
+        match self {
+            Self::Query(query) => EXPLAIN_RE.find(query.query()).is_some(),
+            Self::Prepared { parse, .. } => EXPLAIN_RE.find(parse.query()).is_some(),
         }
     }
 

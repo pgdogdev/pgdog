@@ -62,7 +62,7 @@ impl Router {
     }
 
     /// Get current route.
-    pub fn route(&self) -> Route {
+    pub fn route(&self) -> &Route {
         self.query_parser.route()
     }
 

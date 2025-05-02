@@ -1,8 +1,9 @@
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
+use tokio::sync::Notify;
 use tokio::time::sleep;
 use tracing::{debug, error};
 
@@ -18,50 +19,83 @@ pub struct Plans {
     pool: Pool,
     tx: Sender<PlanRequest>,
     cache: Arc<Mutex<PlanCache>>,
+    launch: Arc<Notify>,
 }
 
 impl Plans {
     pub(crate) fn new(pool: &Pool) -> Self {
-        let (req_tx, req_rx) = channel(4096);
+        let (tx, rx) = channel(4096);
 
         let pool = pool.clone();
         let task_pool = pool.clone();
         let cache = Arc::new(Mutex::new(PlanCache::new()));
         let task_cache = cache.clone();
+        let launch = Arc::new(Notify::new());
+        let launch_cache = launch.clone();
 
         tokio::spawn(async move {
-            Self::run(task_pool, req_rx, task_cache).await;
+            launch_cache.notified().await;
+            Self::run(task_pool, rx, task_cache).await;
         });
 
         Self {
             pool,
-            tx: req_tx,
+            tx,
             cache,
+            launch,
         }
     }
 
-    pub(crate) async fn plan(
-        &self,
-        req: &Request,
-        buffer: &Buffer,
-    ) -> Result<Option<Arc<QueryPlan>>, Error> {
+    pub(crate) fn launch(&self) {
+        self.launch.notify_one();
+    }
+
+    pub(crate) fn shutdown(&self) {
+        // The pool will be offline when this happens.
+        self.launch();
+    }
+
+    pub(crate) async fn plan(&self, buffer: &Buffer) -> Result<Option<Arc<QueryPlan>>, Error> {
         let plan_req = PlanRequest::from_buffer(buffer)?;
+        if plan_req.skip() {
+            return Ok(None);
+        }
+
         let key = Key::from(&plan_req);
-        if let Some(existing) = self.cache.lock().get(&key) {
-            match existing {
-                Value::Request(requested_at) => {
-                    if req.created_at.duration_since(requested_at) < Duration::from_secs(5) {
-                        return Ok(None);
+        let now = Instant::now();
+        let plan = {
+            let mut guard = self.cache.lock();
+            let plan = if let Some(existing) = guard.get_mut(&key) {
+                match existing {
+                    Value::Request(requested_at) => {
+                        // A plan was requested recently, don't request another one.
+                        if now.duration_since(*requested_at) < Duration::from_secs(5) {
+                            return Ok(None);
+                        }
+
+                        None
+                    }
+
+                    Value::Plan { plan, created_at } => {
+                        // Age the plan and request a new one.
+                        if now.duration_since(*created_at) > Duration::from_secs(300) {
+                            *created_at = now;
+                        }
+
+                        Some(plan.clone())
                     }
                 }
+            } else {
+                None
+            };
 
-                Value::Plan(plan) => return Ok(Some(plan)),
-            }
-        }
-        // Create a request to prevent a thundering herd.
-        self.cache.lock().requested(key, req.created_at);
+            // Create a request to prevent a thundering herd.
+            guard.requested(key, now);
+
+            plan
+        };
         self.tx.send(plan_req).await?;
-        Ok(None)
+        Ok(plan)
     }
 
     async fn run(pool: Pool, mut rx: Receiver<PlanRequest>, cache: Arc<Mutex<PlanCache>>) {
@@ -75,7 +109,7 @@ impl Plans {
                 continue;
             }
 
-            debug!("plan cache running");
+            debug!("plans cache running [{}]", pool.addr());
 
             let mut conn =
                 if let Ok(conn) = Server::connect(pool.addr(), ServerOptions::default()).await {
@@ -88,10 +122,13 @@ impl Plans {
             loop {
                 let req = rx.recv().await;
 
+                debug!("plans request {:?} [{}]", req, pool.addr());
+
                 if let Some(req) = req {
                     match req.load(&mut conn).await {
                         Ok(plan) => {
-                            cache.lock().insert(&req, plan);
+                            let created_at = Instant::now();
+                            cache.lock().insert(&req, plan, created_at);
                         }
 
                         Err(err) => {

@@ -38,6 +38,8 @@ static REPLICATION_REGEX: Lazy<Regex> = Lazy::new(|| {
     .unwrap()
 });
 
+static DEFAULT_ROUTE: Lazy<Route> = Lazy::new(|| Route::write(None));
+
 #[derive(Debug)]
 pub struct QueryParser {
     command: Command,
@@ -85,10 +87,10 @@ impl QueryParser {
     }
 
     /// Get the route currently determined by the parser.
-    pub fn route(&self) -> Route {
+    pub fn route(&self) -> &Route {
         match self.command {
-            Command::Query(ref route) => route.clone(),
-            _ => Route::write(None),
+            Command::Query(ref route) => route,
+            _ => &*DEFAULT_ROUTE,
         }
     }
 

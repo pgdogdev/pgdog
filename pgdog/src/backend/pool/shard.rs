@@ -1,7 +1,11 @@
 //! A shard is a collection of replicas and a primary.
 
+use std::sync::Arc;
+
 use crate::{
+    backend::{plans::QueryPlan, Plans},
     config::{LoadBalancingStrategy, Role},
+    frontend::Buffer,
     net::messages::BackendKeyData,
 };
 
@@ -12,6 +16,7 @@ use super::{Error, Guard, Pool, PoolConfig, Replicas, Request};
 pub struct Shard {
     pub(super) primary: Option<Pool>,
     pub(super) replicas: Replicas,
+    pub(super) plans: Option<Plans>,
 }
 
 impl Shard {
@@ -23,8 +28,18 @@ impl Shard {
     ) -> Self {
         let primary = primary.as_ref().map(Pool::new);
         let replicas = Replicas::new(replicas, lb_strategy);
-
-        Self { primary, replicas }
+        let plans = if let Some(ref primary) = primary {
+            Some(Plans::new(primary))
+        } else if !replicas.is_empty() {
+            Some(Plans::new(&replicas.pools()[0]))
+        } else {
+            None
+        };
+        Self {
+            primary,
+            replicas,
+            plans,
+        }
     }
 
     /// Get a connection to the shard primary database.
@@ -46,6 +61,14 @@ impl Shard {
                 .await
         } else {
             self.replicas.get(request, &self.primary).await
+        }
+    }
+
+    pub async fn plan(&self, buffer: &Buffer) -> Option<Arc<QueryPlan>> {
+        if let Some(ref plans) = self.plans {
+            plans.plan(buffer).await.ok().flatten()
+        } else {
+            None
         }
     }
 
@@ -81,6 +104,7 @@ impl Shard {
         Self {
             primary: self.primary.as_ref().map(|primary| primary.duplicate()),
             replicas: self.replicas.duplicate(),
+            plans: None,
         }
     }
 
@@ -120,10 +144,16 @@ impl Shard {
     /// Launch the shard, bringing all pools online.
     pub fn launch(&self) {
         self.pools().iter().for_each(|pool| pool.launch());
+        if let Some(ref plans) = self.plans {
+            plans.launch();
+        }
     }
 
     /// Shutdown all pools, taking the shard offline.
     pub fn shutdown(&self) {
         self.pools().iter().for_each(|pool| pool.shutdown());
+        if let Some(ref plans) = self.plans {
+            plans.shutdown();
+        }
     }
 }

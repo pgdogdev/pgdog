@@ -118,6 +118,11 @@ impl Cluster {
         shard.replica(request).await
     }
 
+    /// Get shard handler.
+    pub fn shard(&self, shard: usize) -> Result<&Shard, Error> {
+        self.shards.get(shard).ok_or(Error::NoShard(shard))
+    }
+
     /// The two clusters have the same databases.
     pub(crate) fn can_move_conns_to(&self, other: &Cluster) -> bool {
         self.shards.len() == other.shards.len()
