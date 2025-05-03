@@ -16,6 +16,7 @@ use super::{
 };
 use crate::{
     auth::{md5, scram::Client},
+    frontend::Buffer,
     net::messages::{
         hello::SslReply, Authentication, BackendKeyData, ErrorResponse, FromBytes, Message,
         ParameterStatus, Password, Protocol, Query, ReadyForQuery, Startup, Terminate, ToBytes,
@@ -204,10 +205,10 @@ impl Server {
     }
 
     /// Send messages to the server and flush the buffer.
-    pub async fn send(&mut self, messages: Vec<impl Into<ProtocolMessage>>) -> Result<(), Error> {
+    pub async fn send(&mut self, messages: &Buffer) -> Result<(), Error> {
         let timer = Instant::now();
-        for message in messages {
-            self.send_one(message).await?;
+        for message in messages.iter() {
+            self.send_one(message.clone()).await?;
         }
         self.flush().await?;
         trace!(
@@ -440,10 +441,14 @@ impl Server {
         }
 
         let mut messages = vec![];
-        let queries = queries.iter().map(Query::new).collect::<Vec<Query>>();
+        let queries = queries
+            .iter()
+            .map(Query::new)
+            .map(ProtocolMessage::Query)
+            .collect::<Vec<ProtocolMessage>>();
         let expected = queries.len();
 
-        self.send(queries).await?;
+        self.send(&queries.into()).await?;
 
         let mut zs = 0;
         while zs < expected {

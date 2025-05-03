@@ -7,6 +7,7 @@ use tokio::time::sleep;
 use tracing::debug;
 
 use crate::backend::ProtocolMessage;
+use crate::frontend::Buffer;
 use crate::net::messages::command_complete::CommandComplete;
 use crate::net::messages::{ErrorResponse, FromBytes, Protocol, Query, ReadyForQuery};
 use crate::net::ToBytes;
@@ -36,10 +37,7 @@ impl Backend {
     }
 
     /// Handle command.
-    pub async fn send(
-        &mut self,
-        messages: Vec<impl Into<ProtocolMessage> + Clone>,
-    ) -> Result<(), Error> {
+    pub async fn send(&mut self, messages: &Buffer) -> Result<(), Error> {
         let message = messages.first().ok_or(Error::Empty)?;
         let message: ProtocolMessage = message.clone().into();
 

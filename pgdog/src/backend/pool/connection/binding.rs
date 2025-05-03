@@ -112,10 +112,7 @@ impl Binding {
         }
     }
 
-    pub(super) async fn send(
-        &mut self,
-        messages: Vec<impl Into<ProtocolMessage> + Clone>,
-    ) -> Result<(), Error> {
+    pub(super) async fn send(&mut self, messages: &crate::frontend::Buffer) -> Result<(), Error> {
         match self {
             Binding::Server(server) => {
                 if let Some(server) = server {
@@ -128,7 +125,7 @@ impl Binding {
             Binding::Admin(backend) => Ok(backend.send(messages).await?),
             Binding::MultiShard(servers, _state) => {
                 for server in servers.iter_mut() {
-                    server.send(messages.clone()).await?;
+                    server.send(messages).await?;
                 }
 
                 Ok(())
