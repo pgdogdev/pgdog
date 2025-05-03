@@ -192,8 +192,6 @@ impl Stream {
 
         let message = Message::new(bytes.freeze());
 
-        // trace!("📡 => {}", message.code());
-
         Ok(message)
     }
 

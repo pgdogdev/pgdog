@@ -1,6 +1,7 @@
 //! CommandComplete (B) message.
 
-use crate::net::c_string_buf;
+use std::str::from_utf8;
+use std::str::from_utf8_unchecked;
 
 use super::code;
 use super::prelude::*;
@@ -8,17 +9,14 @@ use super::prelude::*;
 /// CommandComplete (B) message.
 #[derive(Clone, Debug)]
 pub struct CommandComplete {
-    /// Name of the command that was executed.
-    command: String,
-    /// Original payload.
-    original: Option<Bytes>,
+    payload: Bytes,
 }
 
 impl CommandComplete {
     /// Number of rows sent/received.
     pub fn rows(&self) -> Result<Option<usize>, Error> {
         Ok(self
-            .command
+            .command()
             .split(" ")
             .last()
             .ok_or(Error::UnexpectedPayload)?
@@ -27,71 +25,52 @@ impl CommandComplete {
     }
 
     #[inline]
-    pub(crate) fn len(&self) -> usize {
-        self.command.len() + 1 + 1 + 4
+    pub(crate) fn command(&self) -> &str {
+        unsafe { from_utf8_unchecked(&self.payload[5..self.payload.len() - 1]) }
     }
 
-    #[inline]
-    pub(crate) fn command(&self) -> &str {
-        &self.command
+    pub(crate) fn from_str(s: &str) -> Self {
+        let mut payload = Payload::named('C');
+        payload.put_string(s);
+
+        Self {
+            payload: payload.freeze(),
+        }
     }
 
     /// Rewrite the message with new number of rows.
     pub fn rewrite(&self, rows: usize) -> Result<Self, Error> {
-        let mut parts = self.command.split(" ").collect::<Vec<_>>();
+        let mut parts = self.command().split(" ").collect::<Vec<_>>();
         parts.pop();
         let rows = rows.to_string();
         parts.push(rows.as_str());
 
-        Ok(Self {
-            command: parts.join(" "),
-            original: None,
-        })
+        Ok(Self::from_str(&parts.join(" ")))
     }
 
     /// Start transaction.
     pub fn new_begin() -> Self {
-        Self {
-            command: "BEGIN".into(),
-            original: None,
-        }
+        Self::from_str("BEGIN")
     }
 
     /// Rollback transaction.
     pub fn new_rollback() -> Self {
-        Self {
-            command: "ROLLBACK".into(),
-            original: None,
-        }
+        Self::from_str("ROLLBACK")
     }
 
     /// Commit transaction.
     pub fn new_commit() -> Self {
-        Self {
-            command: "COMMIT".into(),
-            original: None,
-        }
+        Self::from_str("COMMIT")
     }
 
     pub fn new(command: impl ToString) -> Self {
-        Self {
-            command: command.to_string(),
-            original: None,
-        }
+        Self::from_str(command.to_string().as_str())
     }
 }
 
 impl ToBytes for CommandComplete {
     fn to_bytes(&self) -> Result<Bytes, Error> {
-        if let Some(ref original) = self.original {
-            return Ok(original.clone());
-        }
-
-        let mut payload = Payload::named(self.code());
-        payload.reserve(self.len());
-        payload.put_string(&self.command);
-
-        Ok(payload.freeze())
+        Ok(self.payload.clone())
     }
 }
 
@@ -100,13 +79,10 @@ impl FromBytes for CommandComplete {
         let original = bytes.clone();
         code!(bytes, 'C');
 
-        let _len = bytes.get_i32();
-        let command = c_string_buf(&mut bytes);
+        // Check UTF-8!
+        from_utf8(&original[5..original.len() - 1])?;
 
-        Ok(Self {
-            command,
-            original: Some(original),
-        })
+        Ok(Self { payload: original })
     }
 }
 

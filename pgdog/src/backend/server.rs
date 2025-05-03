@@ -14,17 +14,20 @@ use super::{
     pool::Address, prepared_statements::HandleResult, Error, PreparedStatements, ProtocolMessage,
     ServerOptions, Stats,
 };
-use crate::net::{
-    messages::{DataRow, NoticeResponse},
-    parameter::Parameters,
-    tls::connector,
-    CommandComplete, Stream,
-};
 use crate::{
     auth::{md5, scram::Client},
     net::messages::{
         hello::SslReply, Authentication, BackendKeyData, ErrorResponse, FromBytes, Message,
         ParameterStatus, Password, Protocol, Query, ReadyForQuery, Startup, Terminate, ToBytes,
+    },
+};
+use crate::{
+    config::PoolerMode,
+    net::{
+        messages::{DataRow, NoticeResponse},
+        parameter::Parameters,
+        tls::connector,
+        CommandComplete, Stream,
     },
 };
 use crate::{net::tweak, state::State};
@@ -44,6 +47,7 @@ pub struct Server {
     streaming: bool,
     schema_changed: bool,
     sync_prepared: bool,
+    pooler_mode: PoolerMode,
 }
 
 impl Server {
@@ -178,6 +182,7 @@ impl Server {
             streaming: false,
             schema_changed: false,
             sync_prepared: false,
+            pooler_mode: PoolerMode::Transaction,
         })
     }
 
@@ -606,6 +611,16 @@ impl Server {
     pub fn stats_mut(&mut self) -> &mut Stats {
         &mut self.stats
     }
+
+    #[inline]
+    pub fn set_pooler_mode(&mut self, pooler_mode: PoolerMode) {
+        self.pooler_mode = pooler_mode;
+    }
+
+    #[inline]
+    pub fn pooler_mode(&self) -> &PoolerMode {
+        &self.pooler_mode
+    }
 }
 
 impl Drop for Server {
@@ -655,6 +670,7 @@ pub mod test {
                 streaming: false,
                 schema_changed: false,
                 sync_prepared: false,
+                pooler_mode: PoolerMode::Transaction,
             }
         }
     }

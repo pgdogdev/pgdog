@@ -11,6 +11,7 @@ use tokio::time::sleep;
 use tracing::{error, info};
 
 use crate::backend::{Server, ServerOptions};
+use crate::config::PoolerMode;
 use crate::net::messages::BackendKeyData;
 use crate::net::Parameter;
 
@@ -110,7 +111,12 @@ impl Pool {
                     return Err(Error::Banned);
                 }
 
-                let conn = guard.take(request).map(|server| Guard::new(pool, server));
+                let conn = guard.take(request).map(|mut server| {
+                    Guard::new(pool, {
+                        server.set_pooler_mode(guard.config().pooler_mode);
+                        server
+                    })
+                });
 
                 if conn.is_some() {
                     guard.stats.counts.wait_time += elapsed;
@@ -193,10 +199,14 @@ impl Pool {
     }
 
     /// Check the connection back into the pool.
-    pub(super) fn checkin(&self, server: Server) {
-        // Ask for the time before locking.
-        // This can take some time on some systems, e.g. EC2.
-        let now = Instant::now();
+    pub(super) fn checkin(&self, server: Box<Server>) {
+        // Server is checked in right after transaction finished
+        // in transaction mode but can be checked in anytime in session mode.
+        let now = if server.pooler_mode() == &PoolerMode::Session {
+            Instant::now()
+        } else {
+            server.stats().last_used
+        };
 
         // Check everything and maybe check the connection
         // into the idle pool.

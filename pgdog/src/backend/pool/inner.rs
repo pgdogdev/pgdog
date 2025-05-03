@@ -12,7 +12,7 @@ use super::{Ban, Config, Error, Mapping, Oids, Pool, Request, Stats, Taken};
 #[derive(Default)]
 pub(super) struct Inner {
     /// Idle server connections.
-    conns: VecDeque<Server>,
+    conns: VecDeque<Box<Server>>,
     /// Server connections currently checked out.
     taken: Taken,
     /// Pool configuration.
@@ -196,7 +196,7 @@ impl Inner {
 
     /// Take connection from the idle pool.
     #[inline(always)]
-    pub(super) fn take(&mut self, request: &Request) -> Option<Server> {
+    pub(super) fn take(&mut self, request: &Request) -> Option<Box<Server>> {
         if let Some(conn) = self.conns.pop_back() {
             self.taken.take(&Mapping {
                 client: request.id,
@@ -211,7 +211,7 @@ impl Inner {
 
     /// Place connection back into the pool.
     #[inline]
-    pub(super) fn put(&mut self, conn: Server) {
+    pub(super) fn put(&mut self, conn: Box<Server>) {
         self.conns.push_back(conn);
     }
 
@@ -229,7 +229,7 @@ impl Inner {
     /// Take all idle connections and tell active ones to
     /// be returned to a different pool instance.
     #[inline]
-    pub(super) fn move_conns_to(&mut self, destination: &Pool) -> (Vec<Server>, Taken) {
+    pub(super) fn move_conns_to(&mut self, destination: &Pool) -> (Vec<Box<Server>>, Taken) {
         self.moved = Some(destination.clone());
         let idle = std::mem::take(&mut self.conns).into_iter().collect();
         let taken = std::mem::take(&mut self.taken);
@@ -242,7 +242,7 @@ impl Inner {
     /// Otherwise, drop the connection and close it.
     ///
     /// Return: true if the pool should be banned, false otherwise.
-    pub(super) fn maybe_check_in(&mut self, mut server: Server, now: Instant) -> bool {
+    pub(super) fn maybe_check_in(&mut self, mut server: Box<Server>, now: Instant) -> bool {
         if let Some(ref moved) = self.moved {
             // Prevents deadlocks.
             if moved.id() != self.id {
@@ -372,20 +372,20 @@ mod test {
         assert!(banned);
 
         // Testing check-in server.
-        let banned = inner.maybe_check_in(Server::default(), Instant::now());
+        let banned = inner.maybe_check_in(Box::new(Server::default()), Instant::now());
         assert!(!banned);
         assert_eq!(inner.idle(), 0); // pool offline
 
         inner.online = true;
         inner.paused = true;
-        inner.maybe_check_in(Server::default(), Instant::now());
+        inner.maybe_check_in(Box::new(Server::default()), Instant::now());
         assert_eq!(inner.total(), 0); // pool paused;
         inner.paused = false;
-        assert!(!inner.maybe_check_in(Server::default(), Instant::now()));
+        assert!(!inner.maybe_check_in(Box::new(Server::default()), Instant::now()));
         assert!(inner.idle() > 0);
         assert_eq!(inner.idle(), 1);
 
-        let server = Server::new_error();
+        let server = Box::new(Server::new_error());
 
         assert_eq!(inner.checked_out(), 0);
         inner.taken.take(&Mapping {
@@ -423,8 +423,8 @@ mod test {
 
         assert!(inner.should_create());
 
-        inner.conns.push_back(Server::default());
-        inner.conns.push_back(Server::default());
+        inner.conns.push_back(Box::new(Server::default()));
+        inner.conns.push_back(Box::new(Server::default()));
         assert!(!inner.should_create());
 
         // Close idle connections.
@@ -454,7 +454,7 @@ mod test {
         inner.taken.clear();
         assert_eq!(inner.total(), 0);
 
-        let server = Server::default();
+        let server = Box::new(Server::default());
         let banned = inner.maybe_check_in(server, Instant::now() + Duration::from_secs(61));
 
         assert!(!banned);

@@ -15,6 +15,7 @@ idle_timeout = 30_000
 prepared_statements = "disabled"
 default_pool_size = 1
 # dry_run = true
+workers = 0
 
 #
 # Admin database password.

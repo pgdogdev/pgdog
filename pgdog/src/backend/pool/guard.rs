@@ -12,7 +12,7 @@ use super::{cleanup::Cleanup, Pool};
 
 /// Connection guard.
 pub struct Guard {
-    server: Option<Server>,
+    server: Option<Box<Server>>,
     pub(super) pool: Pool,
     pub(super) reset: bool,
 }
@@ -34,7 +34,7 @@ impl std::fmt::Debug for Guard {
 
 impl Guard {
     /// Create new connection guard.
-    pub fn new(pool: Pool, server: Server) -> Self {
+    pub fn new(pool: Pool, server: Box<Server>) -> Self {
         Self {
             server: Some(server),
             pool,
