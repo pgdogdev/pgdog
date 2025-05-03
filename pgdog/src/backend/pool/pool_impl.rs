@@ -1,18 +1,18 @@
 //! Connection pool.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use once_cell::sync::Lazy;
-use parking_lot::{Mutex, RawMutex, lock_api::MutexGuard};
+use parking_lot::{lock_api::MutexGuard, Mutex, RawMutex};
 use tokio::select;
 use tokio::time::sleep;
 use tracing::{error, info};
 
 use crate::backend::{Server, ServerOptions};
-use crate::net::Parameter;
 use crate::net::messages::BackendKeyData;
+use crate::net::Parameter;
 
 use super::{
     Address, Comms, Config, Error, Guard, Healtcheck, Inner, Monitor, Oids, PoolConfig, Request,
@@ -129,7 +129,7 @@ impl Pool {
                     } else {
                         guard.config.checkout_timeout
                     },
-                    guard.config.healthcheck_query.to_string(),
+                    guard.config.healthcheck_query.clone(),
                     guard.config.healthcheck_timeout,
                     guard.config.healthcheck_interval,
                     conn,
@@ -177,7 +177,7 @@ impl Pool {
     async fn maybe_healthcheck(
         &self,
         mut conn: Guard,
-        healthcheck_query: String,
+        healthcheck_query: Arc<String>,
         healthcheck_timeout: Duration,
         healthcheck_interval: Duration,
     ) -> Result<Guard, Error> {
@@ -357,8 +357,8 @@ impl Pool {
     }
 
     #[inline]
-    pub fn healthcheck_query(&self) -> String {
-        self.lock().config.clone().healthcheck_query
+    pub fn healthcheck_query(&self) -> Arc<String> {
+        self.lock().config.clone().healthcheck_query.clone()
     }
 
     /// Get startup parameters for new server connections.
@@ -374,7 +374,7 @@ impl Pool {
             },
         ];
 
-        let config = { *self.lock().config() };
+        let config = { self.lock().config().clone() };
 
         if let Some(statement_timeout) = config.statement_timeout {
             params.push(Parameter {

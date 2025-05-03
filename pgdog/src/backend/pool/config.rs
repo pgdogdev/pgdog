@@ -1,5 +1,6 @@
 //! Pool configuration.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -24,7 +25,7 @@ pub struct Config {
     /// Can this pool be banned from serving traffic?
     pub bannable: bool,
     /// Healtcheck query.
-    pub healthcheck_query: String,
+    pub healthcheck_query: Arc<String>,
     /// Healtheck timeout.
     pub healthcheck_timeout: Duration, // ms
     /// Healtcheck interval.
@@ -73,8 +74,8 @@ impl Config {
     }
 
     /// Healthcheck query.
-    pub fn healthcheck_query(&self) -> &String {
-        &self.healthcheck_query
+    pub fn healthcheck_query(&self) -> Arc<String> {
+        self.healthcheck_query.clone()
     }
 
     /// Healthcheck timeout.
@@ -177,7 +178,7 @@ impl Default for Config {
             connect_timeout: Duration::from_millis(5_000),
             max_age: Duration::from_millis(24 * 3600 * 1000),
             bannable: true,
-            healthcheck_query: ";".into(),
+            healthcheck_query: Arc::new(";".into()),
             healthcheck_timeout: Duration::from_millis(5_000),
             healthcheck_interval: Duration::from_millis(30_000),
             idle_healthcheck_interval: Duration::from_millis(5_000),

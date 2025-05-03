@@ -272,7 +272,7 @@ pub struct General {
     pub pooler_mode: PoolerMode,
     /// Query to check a connection.
     #[serde(default = "General::healthcheck_query")]
-    pub healthcheck_query: String,
+    pub healthcheck_query: Arc<String>,
     /// How often to check a connection.
     #[serde(default = "General::healthcheck_interval")]
     pub healthcheck_interval: u64,
@@ -413,8 +413,8 @@ impl General {
         1
     }
 
-    fn healthcheck_query() -> String {
-        ";".into()
+    fn healthcheck_query() -> Arc<String> {
+        Arc::new(";".into())
     }
 
     fn healthcheck_interval() -> u64 {

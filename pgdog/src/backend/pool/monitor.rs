@@ -280,7 +280,7 @@ impl Monitor {
             }
             (
                 guard.take(&Request::default()),
-                guard.config.healthcheck_query().to_owned(),
+                guard.config.healthcheck_query().clone(),
                 guard.config.healthcheck_timeout(),
                 guard.config.connect_timeout(),
             )

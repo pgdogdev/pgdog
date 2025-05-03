@@ -1,5 +1,6 @@
 //! Healtcheck a connection.
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use tokio::time::timeout;
@@ -12,7 +13,7 @@ use crate::backend::Server;
 pub struct Healtcheck<'a> {
     conn: &'a mut Server,
     pool: Pool,
-    healthcheck_query: String,
+    healthcheck_query: Arc<String>,
     healthcheck_interval: Duration,
     healthcheck_timeout: Duration,
 }
@@ -22,7 +23,7 @@ impl<'a> Healtcheck<'a> {
     pub fn conditional(
         conn: &'a mut Server,
         pool: Pool,
-        healthcheck_query: String,
+        healthcheck_query: Arc<String>,
         healthcheck_interval: Duration,
         healthcheck_timeout: Duration,
     ) -> Self {
@@ -39,7 +40,7 @@ impl<'a> Healtcheck<'a> {
     pub fn mandatory(
         conn: &'a mut Server,
         pool: Pool,
-        healthcheck_query: String,
+        healthcheck_query: Arc<String>,
         healthcheck_timeout: Duration,
     ) -> Self {
         Self::conditional(
