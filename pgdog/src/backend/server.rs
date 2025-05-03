@@ -208,7 +208,7 @@ impl Server {
     pub async fn send(&mut self, messages: &Buffer) -> Result<(), Error> {
         let timer = Instant::now();
         for message in messages.iter() {
-            self.send_one(message.clone()).await?;
+            self.send_one(message).await?;
         }
         self.flush().await?;
         trace!(
@@ -220,21 +220,20 @@ impl Server {
 
     /// Send one message to the server but don't flush the buffer,
     /// accelerating bulk transfers.
-    pub async fn send_one(&mut self, message: impl Into<ProtocolMessage>) -> Result<(), Error> {
+    pub async fn send_one(&mut self, message: &ProtocolMessage) -> Result<(), Error> {
         self.stats.state(State::Active);
-        let message: ProtocolMessage = message.into();
         let result = self.prepared_statements.handle(&message)?;
 
         let queue = match result {
             HandleResult::Drop => [None, None],
-            HandleResult::Prepend(prepare) => [Some(prepare), Some(message)],
+            HandleResult::Prepend(ref prepare) => [Some(prepare), Some(&message)],
             HandleResult::Forward => [Some(message), None],
         };
 
         for message in queue.into_iter().flatten() {
             trace!("{:#?} → [{}]", message, self.addr());
 
-            match self.stream().send(&message).await {
+            match self.stream().send(message).await {
                 Ok(sent) => self.stats.send(sent),
                 Err(err) => {
                     self.stats.state(State::Error);

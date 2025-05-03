@@ -149,17 +149,23 @@ impl Binding {
                         match row.shard() {
                             Shard::Direct(row_shard) => {
                                 if shard == *row_shard {
-                                    server.send_one(row.message()).await?;
+                                    server
+                                        .send_one(&ProtocolMessage::from(row.message()))
+                                        .await?;
                                 }
                             }
 
                             Shard::All => {
-                                server.send_one(row.message()).await?;
+                                server
+                                    .send_one(&ProtocolMessage::from(row.message()))
+                                    .await?;
                             }
 
                             Shard::Multi(multi) => {
                                 if multi.contains(&shard) {
-                                    server.send_one(row.message()).await?;
+                                    server
+                                        .send_one(&ProtocolMessage::from(row.message()))
+                                        .await?;
                                 }
                             }
                         }

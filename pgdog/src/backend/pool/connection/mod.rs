@@ -7,7 +7,6 @@ use crate::{
     backend::{
         databases::databases,
         replication::{Buffer, ReplicationConfig},
-        ProtocolMessage,
     },
     config::PoolerMode,
     frontend::router::{parser::Shard, CopyRow, Route},
