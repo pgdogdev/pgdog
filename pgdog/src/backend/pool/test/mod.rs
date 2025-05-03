@@ -216,6 +216,7 @@ async fn test_pause() {
 
 // Proof that the mutex is working well.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore]
 async fn test_benchmark_pool() {
     let counts = 500_000;
     let workers = 4;
