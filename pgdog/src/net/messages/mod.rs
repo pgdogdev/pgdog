@@ -146,7 +146,7 @@ impl std::fmt::Debug for Message {
 
 impl ToBytes for Message {
     fn to_bytes(&self) -> Result<Bytes, Error> {
-        Ok(self.payload.clone())
+        Ok(Bytes::clone(&self.payload))
     }
 }
 

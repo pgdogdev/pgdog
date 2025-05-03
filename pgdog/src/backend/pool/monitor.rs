@@ -242,7 +242,7 @@ impl Monitor {
         match timeout(connect_timeout, Server::connect(self.pool.addr(), options)).await {
             Ok(Ok(conn)) => {
                 ok = true;
-                self.pool.lock().put(conn);
+                self.pool.lock().put(Box::new(conn));
             }
 
             Ok(Err(err)) => {

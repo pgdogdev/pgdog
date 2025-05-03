@@ -6,15 +6,15 @@ use std::{cmp::max, time::Instant};
 use crate::backend::Server;
 use crate::net::messages::BackendKeyData;
 
-use super::{Ban, Config, Error, Mapping, Oids, Pool, Request, Stats};
+use super::{Ban, Config, Error, Mapping, Oids, Pool, Request, Stats, Taken};
 
 /// Pool internals protected by a mutex.
 #[derive(Default)]
 pub(super) struct Inner {
     /// Idle server connections.
-    conns: VecDeque<Server>,
+    conns: VecDeque<Box<Server>>,
     /// Server connections currently checked out.
-    taken: Vec<Mapping>,
+    taken: Taken,
     /// Pool configuration.
     pub(super) config: Config,
     /// Number of clients waiting for a connection.
@@ -59,7 +59,7 @@ impl Inner {
     pub(super) fn new(config: Config, id: u64) -> Self {
         Self {
             conns: VecDeque::new(),
-            taken: Vec::new(),
+            taken: Taken::default(),
             config,
             waiting: VecDeque::new(),
             ban: None,
@@ -96,10 +96,7 @@ impl Inner {
     /// Find the server currently linked to this client, if any.
     #[inline]
     pub(super) fn peer(&self, id: &BackendKeyData) -> Option<BackendKeyData> {
-        self.taken
-            .iter()
-            .find(|p| p.client == *id)
-            .map(|p| p.server)
+        self.taken.server(id)
     }
 
     /// How many connections can be removed from the pool
@@ -199,9 +196,9 @@ impl Inner {
 
     /// Take connection from the idle pool.
     #[inline(always)]
-    pub(super) fn take(&mut self, request: &Request) -> Option<Server> {
+    pub(super) fn take(&mut self, request: &Request) -> Option<Box<Server>> {
         if let Some(conn) = self.conns.pop_back() {
-            self.taken.push(Mapping {
+            self.taken.take(&Mapping {
                 client: request.id,
                 server: *(conn.id()),
             });
@@ -214,12 +211,12 @@ impl Inner {
 
     /// Place connection back into the pool.
     #[inline]
-    pub(super) fn put(&mut self, conn: Server) {
+    pub(super) fn put(&mut self, conn: Box<Server>) {
         self.conns.push_back(conn);
     }
 
     #[inline]
-    pub(super) fn set_taken(&mut self, taken: Vec<Mapping>) {
+    pub(super) fn set_taken(&mut self, taken: Taken) {
         self.taken = taken;
     }
 
@@ -232,7 +229,7 @@ impl Inner {
     /// Take all idle connections and tell active ones to
     /// be returned to a different pool instance.
     #[inline]
-    pub(super) fn move_conns_to(&mut self, destination: &Pool) -> (Vec<Server>, Vec<Mapping>) {
+    pub(super) fn move_conns_to(&mut self, destination: &Pool) -> (Vec<Box<Server>>, Taken) {
         self.moved = Some(destination.clone());
         let idle = std::mem::take(&mut self.conns).into_iter().collect();
         let taken = std::mem::take(&mut self.taken);
@@ -245,7 +242,7 @@ impl Inner {
     /// Otherwise, drop the connection and close it.
     ///
     /// Return: true if the pool should be banned, false otherwise.
-    pub(super) fn maybe_check_in(&mut self, mut server: Server, now: Instant) -> bool {
+    pub(super) fn maybe_check_in(&mut self, mut server: Box<Server>, now: Instant) -> bool {
         if let Some(ref moved) = self.moved {
             // Prevents deadlocks.
             if moved.id() != self.id {
@@ -254,18 +251,7 @@ impl Inner {
             }
         }
 
-        let id = *server.id();
-
-        let index = self
-            .taken
-            .iter()
-            .enumerate()
-            .find(|(_i, p)| p.server == id)
-            .map(|(i, _p)| i);
-
-        if let Some(index) = index {
-            self.taken.remove(index);
-        }
+        self.taken.check_in(server.id());
 
         // Update stats
         let stats = server.stats_mut().reset_last_checkout();
@@ -386,23 +372,23 @@ mod test {
         assert!(banned);
 
         // Testing check-in server.
-        let banned = inner.maybe_check_in(Server::default(), Instant::now());
+        let banned = inner.maybe_check_in(Box::new(Server::default()), Instant::now());
         assert!(!banned);
         assert_eq!(inner.idle(), 0); // pool offline
 
         inner.online = true;
         inner.paused = true;
-        inner.maybe_check_in(Server::default(), Instant::now());
+        inner.maybe_check_in(Box::new(Server::default()), Instant::now());
         assert_eq!(inner.total(), 0); // pool paused;
         inner.paused = false;
-        assert!(!inner.maybe_check_in(Server::default(), Instant::now()));
+        assert!(!inner.maybe_check_in(Box::new(Server::default()), Instant::now()));
         assert!(inner.idle() > 0);
         assert_eq!(inner.idle(), 1);
 
-        let server = Server::new_error();
+        let server = Box::new(Server::new_error());
 
         assert_eq!(inner.checked_out(), 0);
-        inner.taken.push(Mapping {
+        inner.taken.take(&Mapping {
             client: BackendKeyData::new(),
             server: *server.id(),
         });
@@ -437,8 +423,8 @@ mod test {
 
         assert!(inner.should_create());
 
-        inner.conns.push_back(Server::default());
-        inner.conns.push_back(Server::default());
+        inner.conns.push_back(Box::new(Server::default()));
+        inner.conns.push_back(Box::new(Server::default()));
         assert!(!inner.should_create());
 
         // Close idle connections.
@@ -463,12 +449,12 @@ mod test {
         assert!(inner.should_create());
 
         assert_eq!(inner.total(), 0);
-        inner.taken.push(Mapping::default());
+        inner.taken.take(&Mapping::default());
         assert_eq!(inner.total(), 1);
         inner.taken.clear();
         assert_eq!(inner.total(), 0);
 
-        let server = Server::default();
+        let server = Box::new(Server::default());
         let banned = inner.maybe_check_in(server, Instant::now() + Duration::from_secs(61));
 
         assert!(!banned);

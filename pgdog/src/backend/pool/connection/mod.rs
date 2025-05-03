@@ -7,7 +7,6 @@ use crate::{
     backend::{
         databases::databases,
         replication::{Buffer, ReplicationConfig},
-        ProtocolMessage,
     },
     config::PoolerMode,
     frontend::router::{parser::Shard, CopyRow, Route},
@@ -197,10 +196,7 @@ impl Connection {
     }
 
     /// Send messages to the server.
-    pub(crate) async fn send(
-        &mut self,
-        messages: Vec<impl Into<ProtocolMessage> + Clone>,
-    ) -> Result<(), Error> {
+    pub(crate) async fn send(&mut self, messages: &crate::frontend::Buffer) -> Result<(), Error> {
         self.binding.send(messages).await
     }
 

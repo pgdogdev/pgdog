@@ -2,7 +2,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use rand::Rng;
 use tokio::task::yield_now;
@@ -212,4 +212,39 @@ async fn test_pause() {
     tracker.close();
     tracker.wait().await;
     assert!(!didnt_work.load(Ordering::Relaxed));
+}
+
+// Proof that the mutex is working well.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore]
+async fn test_benchmark_pool() {
+    let counts = 500_000;
+    let workers = 4;
+
+    let pool = pool();
+
+    // Prewarm
+    let request = Request::default();
+    drop(pool.get(&request).await.unwrap());
+
+    let mut handles = Vec::with_capacity(2);
+    let start = Instant::now();
+
+    for _ in 0..workers {
+        let request = request.clone();
+        let pool = pool.clone();
+        let handle = tokio::spawn(async move {
+            for _ in 0..counts {
+                let conn = pool.get(&request).await.unwrap();
+                conn.addr();
+                drop(conn);
+            }
+        });
+        handles.push(handle);
+    }
+    for handle in handles {
+        handle.await.unwrap();
+    }
+    let duration = start.elapsed();
+    println!("bench: {}ms", duration.as_millis());
 }

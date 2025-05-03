@@ -330,7 +330,9 @@ mod test {
 
         assert_eq!(len as usize + 1, bytes.len());
 
-        conn.send(vec![bind.message().unwrap()]).await.unwrap();
+        conn.send(&vec![ProtocolMessage::from(bind)].into())
+            .await
+            .unwrap();
         let res = conn.read().await.unwrap();
         let err = ErrorResponse::from_bytes(res.to_bytes().unwrap()).unwrap();
         assert_eq!(err.code, "26000");
@@ -354,12 +356,15 @@ mod test {
         };
         let execute = Execute::new();
         server
-            .send(vec![
-                ProtocolMessage::from(parse),
-                bind.into(),
-                execute.into(),
-                Sync.into(),
-            ])
+            .send(
+                &vec![
+                    ProtocolMessage::from(parse),
+                    bind.into(),
+                    execute.into(),
+                    Sync.into(),
+                ]
+                .into(),
+            )
             .await
             .unwrap();
 

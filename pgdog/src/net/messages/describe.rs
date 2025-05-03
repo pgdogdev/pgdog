@@ -95,7 +95,10 @@ impl Describe {
 mod test {
     use super::*;
     use crate::{
-        backend::pool::{test::pool, Request},
+        backend::{
+            pool::{test::pool, Request},
+            ProtocolMessage,
+        },
         net::messages::ErrorResponse,
     };
 
@@ -108,7 +111,9 @@ mod test {
             statement: "".into(),
             original: None,
         };
-        conn.send(vec![describe.message().unwrap()]).await.unwrap();
+        conn.send(&vec![ProtocolMessage::from(describe.message().unwrap())].into())
+            .await
+            .unwrap();
         let res = conn.read().await.unwrap();
         let err = ErrorResponse::from_bytes(res.to_bytes().unwrap()).unwrap();
         assert_eq!(err.code, "34000");

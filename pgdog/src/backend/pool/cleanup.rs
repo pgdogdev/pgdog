@@ -1,15 +1,33 @@
 //! Cleanup queries for servers altered by client behavior.
+use once_cell::sync::Lazy;
+
 use super::{super::Server, Guard};
+
+static PREPARED: Lazy<Vec<&'static str>> = Lazy::new(|| vec!["DEALLOCATE ALL"]);
+static PARAMS: Lazy<Vec<&'static str>> = Lazy::new(|| vec!["RESET ALL", "DISCARD ALL"]);
+static ALL: Lazy<Vec<&'static str>> =
+    Lazy::new(|| vec!["RESET ALL", "DISCARD ALL", "DEALLOCATE ALL"]);
+static NONE: Lazy<Vec<&'static str>> = Lazy::new(|| vec![]);
 
 /// Queries used to clean up server connections after
 /// client modifications.
-#[derive(Default)]
 #[allow(dead_code)]
 pub struct Cleanup {
-    queries: Vec<&'static str>,
+    queries: &'static Vec<&'static str>,
     reset: bool,
     dirty: bool,
     deallocate: bool,
+}
+
+impl Default for Cleanup {
+    fn default() -> Self {
+        Self {
+            queries: &*NONE,
+            reset: false,
+            dirty: false,
+            deallocate: false,
+        }
+    }
 }
 
 impl std::fmt::Display for Cleanup {
@@ -35,7 +53,7 @@ impl Cleanup {
     /// Cleanup prepared statements.
     pub fn prepared_statements() -> Self {
         Self {
-            queries: vec!["DEALLOCATE ALL"],
+            queries: &*PREPARED,
             deallocate: true,
             ..Default::default()
         }
@@ -44,7 +62,7 @@ impl Cleanup {
     /// Cleanup parameters.
     pub fn parameters() -> Self {
         Self {
-            queries: vec!["RESET ALL", "DISCARD ALL"],
+            queries: &*PARAMS,
             dirty: true,
             ..Default::default()
         }
@@ -56,16 +74,13 @@ impl Cleanup {
             reset: true,
             dirty: true,
             deallocate: true,
-            queries: vec!["RESET ALL", "DISCARD ALL", "DEALLOCATE ALL"],
+            queries: &*ALL,
         }
     }
 
     /// Nothing to clean up.
     pub fn none() -> Self {
-        Self {
-            queries: vec![],
-            ..Default::default()
-        }
+        Self::default()
     }
 
     /// Cleanup needed?

@@ -57,6 +57,7 @@ impl Payload {
     /// Add a C-style string to the payload. It will be NULL-terminated
     /// automatically.
     pub fn put_string(&mut self, string: &str) {
+        self.bytes.reserve(string.len() + 1);
         self.bytes.put_slice(string.as_bytes());
         self.bytes.put_u8(0);
     }

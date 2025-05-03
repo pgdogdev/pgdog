@@ -97,6 +97,17 @@ impl Stream {
         }
     }
 
+    /// Check socket is okay while we wait for something else.
+    pub async fn check(&mut self) -> Result<(), crate::net::Error> {
+        let mut buf = [0u8; 1];
+        match self {
+            Self::Plain(plain) => plain.get_mut().peek(&mut buf).await?,
+            Self::Tls(tls) => tls.get_mut().get_mut().0.peek(&mut buf).await?,
+        };
+
+        Ok(())
+    }
+
     /// Send data via the stream.
     ///
     /// # Performance
@@ -180,8 +191,6 @@ impl Stream {
         self.read_exact(&mut bytes[5..]).await?;
 
         let message = Message::new(bytes.freeze());
-
-        // trace!("📡 => {}", message.code());
 
         Ok(message)
     }
