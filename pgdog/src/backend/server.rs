@@ -708,7 +708,7 @@ pub mod test {
         let mut server = test_server().await;
         for _ in 0..25 {
             server
-                .send(vec![ProtocolMessage::from(Query::new("SELECT 1"))])
+                .send(&vec![ProtocolMessage::from(Query::new("SELECT 1"))].into())
                 .await
                 .unwrap();
             let msg = server.read().await.unwrap();
@@ -725,7 +725,7 @@ pub mod test {
 
         for _ in 0..25 {
             server
-                .send(vec![ProtocolMessage::from(Query::new("SELECT 1"))])
+                .send(&vec![ProtocolMessage::from(Query::new("SELECT 1"))].into())
                 .await
                 .unwrap();
         }
@@ -743,7 +743,7 @@ pub mod test {
         let mut server = test_server().await;
         let empty = Query::new(";");
         server
-            .send(vec![ProtocolMessage::from(empty)])
+            .send(&vec![ProtocolMessage::from(empty)].into())
             .await
             .unwrap();
 
@@ -760,9 +760,12 @@ pub mod test {
     async fn test_set() {
         let mut server = test_server().await;
         server
-            .send(vec![ProtocolMessage::from(Query::new(
-                "SET application_name TO 'test'",
-            ))])
+            .send(
+                &vec![ProtocolMessage::from(Query::new(
+                    "SET application_name TO 'test'",
+                ))]
+                .into(),
+            )
             .await
             .unwrap();
 
@@ -789,12 +792,15 @@ pub mod test {
             );
 
             server
-                .send(vec![
-                    ProtocolMessage::from(Parse::new_anonymous("SELECT $1")),
-                    ProtocolMessage::from(bind),
-                    ProtocolMessage::from(Execute::new()),
-                    ProtocolMessage::from(Sync::new()),
-                ])
+                .send(
+                    &vec![
+                        ProtocolMessage::from(Parse::new_anonymous("SELECT $1")),
+                        ProtocolMessage::from(bind),
+                        ProtocolMessage::from(Execute::new()),
+                        ProtocolMessage::from(Sync::new()),
+                    ]
+                    .into(),
+                )
                 .await
                 .unwrap();
 
@@ -830,11 +836,14 @@ pub mod test {
             );
 
             server
-                .send(vec![
-                    ProtocolMessage::from(parse.clone()),
-                    ProtocolMessage::from(describe.clone()),
-                    Flush {}.into(),
-                ])
+                .send(
+                    &vec![
+                        ProtocolMessage::from(parse.clone()),
+                        ProtocolMessage::from(describe.clone()),
+                        Flush {}.into(),
+                    ]
+                    .into(),
+                )
                 .await
                 .unwrap();
 
@@ -851,10 +860,13 @@ pub mod test {
                 .unwrap();
 
             server
-                .send(vec![
-                    ProtocolMessage::from(describe.clone()),
-                    ProtocolMessage::from(Flush),
-                ])
+                .send(
+                    &vec![
+                        ProtocolMessage::from(describe.clone()),
+                        ProtocolMessage::from(Flush),
+                    ]
+                    .into(),
+                )
                 .await
                 .unwrap();
             for code in ['t', 'T'] {
@@ -865,11 +877,14 @@ pub mod test {
             assert_eq!(server.prepared_statements.state().len(), 0);
 
             server
-                .send(vec![
-                    ProtocolMessage::from(bind.clone()),
-                    ProtocolMessage::from(Execute::new()),
-                    ProtocolMessage::from(Sync {}),
-                ])
+                .send(
+                    &vec![
+                        ProtocolMessage::from(bind.clone()),
+                        ProtocolMessage::from(Execute::new()),
+                        ProtocolMessage::from(Sync {}),
+                    ]
+                    .into(),
+                )
                 .await
                 .unwrap();
 
@@ -896,17 +911,20 @@ pub mod test {
 
         for _ in 0..25 {
             server
-                .send(vec![
-                    ProtocolMessage::from(Bind::test_params(
-                        "__pgdog_1",
-                        &[Parameter {
-                            len: 1,
-                            data: "1".as_bytes().to_vec(),
-                        }],
-                    )),
-                    Execute::new().into(),
-                    Sync {}.into(),
-                ])
+                .send(
+                    &vec![
+                        ProtocolMessage::from(Bind::test_params(
+                            "__pgdog_1",
+                            &[Parameter {
+                                len: 1,
+                                data: "1".as_bytes().to_vec(),
+                            }],
+                        )),
+                        Execute::new().into(),
+                        Sync {}.into(),
+                    ]
+                    .into(),
+                )
                 .await
                 .unwrap();
 
@@ -925,11 +943,14 @@ pub mod test {
         for _ in 0..25 {
             let parse = Parse::named("test", "SELECT bad syntax;");
             server
-                .send(vec![
-                    ProtocolMessage::from(parse),
-                    Describe::new_statement("test").into(),
-                    Sync {}.into(),
-                ])
+                .send(
+                    &vec![
+                        ProtocolMessage::from(parse),
+                        Describe::new_statement("test").into(),
+                        Sync {}.into(),
+                    ]
+                    .into(),
+                )
                 .await
                 .unwrap();
             for c in ['E', 'Z'] {
@@ -950,12 +971,15 @@ pub mod test {
             let describe = Describe::new_statement(&name);
             let bind = Bind::test_statement(&name);
             server
-                .send(vec![
-                    ProtocolMessage::from(parse),
-                    describe.into(),
-                    bind.into(),
-                    Sync.into(),
-                ])
+                .send(
+                    &vec![
+                        ProtocolMessage::from(parse),
+                        describe.into(),
+                        bind.into(),
+                        Sync.into(),
+                    ]
+                    .into(),
+                )
                 .await
                 .unwrap();
 
@@ -977,11 +1001,14 @@ pub mod test {
 
         for _ in 0..25 {
             server
-                .send(vec![
-                    ProtocolMessage::from(parse.clone()),
-                    describe.clone().into(),
-                    Flush.into(),
-                ])
+                .send(
+                    &vec![
+                        ProtocolMessage::from(parse.clone()),
+                        describe.clone().into(),
+                        Flush.into(),
+                    ]
+                    .into(),
+                )
                 .await
                 .unwrap();
 
@@ -999,7 +1026,7 @@ pub mod test {
         let parse = Parse::named(&name, "SELECT bad syntax");
 
         server
-            .send(vec![ProtocolMessage::from(parse.clone()), Sync.into()])
+            .send(&vec![ProtocolMessage::from(parse.clone()), Sync.into()].into())
             .await
             .unwrap();
         for c in ['E', 'Z'] {
@@ -1009,10 +1036,13 @@ pub mod test {
         assert!(server.prepared_statements.is_empty());
 
         server
-            .send(vec![
-                ProtocolMessage::from(Parse::named("test", "SELECT $1")),
-                Flush.into(),
-            ])
+            .send(
+                &vec![
+                    ProtocolMessage::from(Parse::named("test", "SELECT $1")),
+                    Flush.into(),
+                ]
+                .into(),
+            )
             .await
             .unwrap();
 
@@ -1047,7 +1077,10 @@ pub mod test {
     async fn test_multiple_queries() {
         let mut server = test_server().await;
         let q = Query::new("SELECT 1; SELECT 2;");
-        server.send(vec![ProtocolMessage::from(q)]).await.unwrap();
+        server
+            .send(&vec![ProtocolMessage::from(q)].into())
+            .await
+            .unwrap();
         for c in ['T', 'D', 'C', 'T', 'D', 'C', 'Z'] {
             let msg = server.read().await.unwrap();
             assert_eq!(c, msg.code());
@@ -1075,7 +1108,7 @@ pub mod test {
             Sync.into(),
             Query::new("COMMIT").into(),
         ];
-        server.send(msgs).await.unwrap();
+        server.send(&msgs.into()).await.unwrap();
 
         for c in ['1', 't', 'T', 'C', 'Z', '2', 'T', 'D', 'C', 'Z', 'C'] {
             let msg = server.read().await.unwrap();
@@ -1103,7 +1136,7 @@ pub mod test {
             Query::new("ROLLBACK").into(),
         ];
 
-        server.send(msgs).await.unwrap();
+        server.send(&msgs.into()).await.unwrap();
         for code in ['C', 'Z', 'C', 'Z', '1', 't', 'n', '2', 'C', 'Z', 'C'] {
             assert!(!server.done());
             let msg = server.read().await.unwrap();
@@ -1137,7 +1170,7 @@ pub mod test {
             Flush.into(),
         ];
 
-        server.send(msgs).await.unwrap();
+        server.send(&msgs.into()).await.unwrap();
 
         for c in ['C', 'Z', '1', '1', 't', 'T', '2', 'E'] {
             let msg = server.read().await.unwrap();
@@ -1150,10 +1183,7 @@ pub mod test {
         assert!(!server.prepared_statements.state().in_sync());
 
         server
-            .send(vec![
-                ProtocolMessage::from(Sync),
-                Query::new("SELECT 1").into(),
-            ])
+            .send(&vec![ProtocolMessage::from(Sync), Query::new("SELECT 1").into()].into())
             .await
             .unwrap();
 
@@ -1171,10 +1201,13 @@ pub mod test {
 
         for _ in 0..5 {
             server
-                .send(vec![
-                    ProtocolMessage::from(Parse::named("test", "SELECT $1")),
-                    Sync.into(),
-                ])
+                .send(
+                    &vec![
+                        ProtocolMessage::from(Parse::named("test", "SELECT $1")),
+                        Sync.into(),
+                    ]
+                    .into(),
+                )
                 .await
                 .unwrap();
 
@@ -1186,20 +1219,23 @@ pub mod test {
             assert!(server.done());
 
             server
-                .send(vec![
-                    Bind::test_params(
-                        "test",
-                        &[crate::net::bind::Parameter {
-                            len: 1,
-                            data: "1".as_bytes().to_vec(),
-                        }],
-                    )
+                .send(
+                    &vec![
+                        Bind::test_params(
+                            "test",
+                            &[crate::net::bind::Parameter {
+                                len: 1,
+                                data: "1".as_bytes().to_vec(),
+                            }],
+                        )
+                        .into(),
+                        Execute::new().into(),
+                        Close::named("test_sdf").into(),
+                        ProtocolMessage::from(Parse::named("test", "SELECT $1")),
+                        Sync.into(),
+                    ]
                     .into(),
-                    Execute::new().into(),
-                    Close::named("test_sdf").into(),
-                    ProtocolMessage::from(Parse::named("test", "SELECT $1")),
-                    Sync.into(),
-                ])
+                )
                 .await
                 .unwrap();
             assert!(!server.done());
@@ -1218,7 +1254,7 @@ pub mod test {
     async fn test_just_sync() {
         let mut server = test_server().await;
         server
-            .send(vec![ProtocolMessage::from(Sync)])
+            .send(&vec![ProtocolMessage::from(Sync)].into())
             .await
             .unwrap();
         assert!(!server.done());
@@ -1231,13 +1267,16 @@ pub mod test {
     async fn test_portal() {
         let mut server = test_server().await;
         server
-            .send(vec![
-                ProtocolMessage::from(Parse::named("test", "SELECT 1")),
-                Bind::test_name_portal("test", "test1").into(),
-                Execute::new_portal("test1").into(),
-                Close::portal("test1").into(),
-                Sync.into(),
-            ])
+            .send(
+                &vec![
+                    ProtocolMessage::from(Parse::named("test", "SELECT 1")),
+                    Bind::test_name_portal("test", "test1").into(),
+                    Execute::new_portal("test1").into(),
+                    Close::portal("test1").into(),
+                    Sync.into(),
+                ]
+                .into(),
+            )
             .await
             .unwrap();
 
@@ -1262,11 +1301,14 @@ pub mod test {
         assert_eq!(parse.name(), "__pgdog_1");
 
         server
-            .send(vec![ProtocolMessage::from(Query::new(format!(
-                "PREPARE {} AS {}",
-                parse.name(),
-                parse.query()
-            )))])
+            .send(
+                &vec![ProtocolMessage::from(Query::new(format!(
+                    "PREPARE {} AS {}",
+                    parse.name(),
+                    parse.query()
+                )))]
+                .into(),
+            )
             .await
             .unwrap();
         for c in ['C', 'Z'] {
@@ -1281,12 +1323,15 @@ pub mod test {
         let bind = Bind::test_statement("__pgdog_1");
         let execute = Execute::new();
         server
-            .send(vec![
-                describe.clone().into(),
-                bind.into(),
-                execute.into(),
-                ProtocolMessage::from(Sync),
-            ])
+            .send(
+                &vec![
+                    describe.clone().into(),
+                    bind.into(),
+                    execute.into(),
+                    ProtocolMessage::from(Sync),
+                ]
+                .into(),
+            )
             .await
             .unwrap();
 
@@ -1299,11 +1344,7 @@ pub mod test {
         let describe = describe.clone();
 
         server
-            .send(vec![
-                parse.into(),
-                describe.into(),
-                ProtocolMessage::from(Flush),
-            ])
+            .send(&vec![parse.into(), describe.into(), ProtocolMessage::from(Flush)].into())
             .await
             .unwrap();
 
@@ -1313,7 +1354,7 @@ pub mod test {
         }
 
         server
-            .send(vec![ProtocolMessage::from(Query::new("EXECUTE __pgdog_1"))])
+            .send(&vec![ProtocolMessage::from(Query::new("EXECUTE __pgdog_1"))].into())
             .await
             .unwrap();
         for c in ['T', 'D', 'C', 'Z'] {
