@@ -48,7 +48,7 @@ impl State {
             total: guard.total(),
             online: guard.online,
             empty: guard.idle() == 0,
-            config: guard.config,
+            config: guard.config.clone(),
             paused: guard.paused,
             waiting: guard.waiting.len(),
             ban: guard.ban,

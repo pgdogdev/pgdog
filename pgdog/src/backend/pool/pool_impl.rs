@@ -53,7 +53,7 @@ impl Pool {
             inner: Arc::new(InnerSync {
                 comms: Comms::new(),
                 addr: config.address.clone(),
-                inner: Mutex::new(Inner::new(config.config, id)),
+                inner: Mutex::new(Inner::new(config.config.clone(), id)),
             }),
             id,
         }
@@ -84,7 +84,13 @@ impl Pool {
             let pool = self.clone();
 
             // Fast path, idle connection probably available.
-            let (checkout_timeout, healthcheck_timeout, healthcheck_interval, server) = {
+            let (
+                checkout_timeout,
+                healthcheck_query,
+                healthcheck_timeout,
+                healthcheck_interval,
+                server,
+            ) = {
                 // Ask for time before we acquire the lock
                 // and only if we actually waited for a connection.
                 let elapsed = if waited {
@@ -123,6 +129,7 @@ impl Pool {
                     } else {
                         guard.config.checkout_timeout
                     },
+                    guard.config.healthcheck_query.clone(),
                     guard.config.healthcheck_timeout,
                     guard.config.healthcheck_interval,
                     conn,
@@ -131,7 +138,12 @@ impl Pool {
 
             if let Some(server) = server {
                 return self
-                    .maybe_healthcheck(server, healthcheck_timeout, healthcheck_interval)
+                    .maybe_healthcheck(
+                        server,
+                        healthcheck_query,
+                        healthcheck_timeout,
+                        healthcheck_interval,
+                    )
                     .await;
             }
 
@@ -165,12 +177,14 @@ impl Pool {
     async fn maybe_healthcheck(
         &self,
         mut conn: Guard,
+        healthcheck_query: Arc<String>,
         healthcheck_timeout: Duration,
         healthcheck_interval: Duration,
     ) -> Result<Guard, Error> {
         let mut healthcheck = Healtcheck::conditional(
             &mut conn,
             self.clone(),
+            healthcheck_query,
             healthcheck_interval,
             healthcheck_timeout,
         );
@@ -188,7 +202,7 @@ impl Pool {
     pub fn duplicate(&self) -> Pool {
         Pool::new(&PoolConfig {
             address: self.addr().clone(),
-            config: *self.lock().config(),
+            config: self.lock().config().clone(),
         })
     }
 
@@ -342,6 +356,11 @@ impl Pool {
         &self.inner.addr
     }
 
+    #[inline]
+    pub fn healthcheck_query(&self) -> Arc<String> {
+        self.lock().config.clone().healthcheck_query.clone()
+    }
+
     /// Get startup parameters for new server connections.
     pub(super) fn server_options(&self) -> ServerOptions {
         let mut params = vec![
@@ -355,7 +374,7 @@ impl Pool {
             },
         ];
 
-        let config = { *self.lock().config() };
+        let config = { self.lock().config().clone() };
 
         if let Some(statement_timeout) = config.statement_timeout {
             params.push(Parameter {

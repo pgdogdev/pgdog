@@ -273,13 +273,14 @@ impl Monitor {
 
     /// Perform a periodic healthcheck on the pool.
     async fn healthcheck(pool: &Pool) -> Result<bool, Error> {
-        let (conn, healthcheck_timeout, connect_timeout) = {
+        let (conn, healthcheck_query, healthcheck_timeout, connect_timeout) = {
             let mut guard = pool.lock();
             if !guard.online || guard.banned() {
                 return Ok(false);
             }
             (
                 guard.take(&Request::default()),
+                guard.config.healthcheck_query().clone(),
                 guard.config.healthcheck_timeout(),
                 guard.config.connect_timeout(),
             )
@@ -290,6 +291,7 @@ impl Monitor {
             Healtcheck::mandatory(
                 &mut Guard::new(pool.clone(), conn),
                 pool.clone(),
+                healthcheck_query,
                 healthcheck_timeout,
             )
             .healthcheck()
@@ -306,9 +308,14 @@ impl Monitor {
             .await
             {
                 Ok(Ok(mut server)) => {
-                    Healtcheck::mandatory(&mut server, pool.clone(), healthcheck_timeout)
-                        .healthcheck()
-                        .await?
+                    Healtcheck::mandatory(
+                        &mut server,
+                        pool.clone(),
+                        healthcheck_query,
+                        healthcheck_timeout,
+                    )
+                    .healthcheck()
+                    .await?
                 }
                 Ok(Err(err)) => {
                     error!("healthcheck error: {} [{}]", err, pool.addr());

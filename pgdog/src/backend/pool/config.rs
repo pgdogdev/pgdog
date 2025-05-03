@@ -1,5 +1,6 @@
 //! Pool configuration.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -7,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::config::{Database, General, PoolerMode, User};
 
 /// Pool configuration.
-#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct Config {
     /// Minimum connections that should be in the pool.
     pub min: usize,
@@ -23,6 +24,8 @@ pub struct Config {
     pub max_age: Duration,
     /// Can this pool be banned from serving traffic?
     pub bannable: bool,
+    /// Healtcheck query.
+    pub healthcheck_query: Arc<String>,
     /// Healtheck timeout.
     pub healthcheck_timeout: Duration, // ms
     /// Healtcheck interval.
@@ -68,6 +71,11 @@ impl Config {
     /// Max age duration.
     pub fn max_age(&self) -> Duration {
         self.max_age
+    }
+
+    /// Healthcheck query.
+    pub fn healthcheck_query(&self) -> Arc<String> {
+        self.healthcheck_query.clone()
     }
 
     /// Healthcheck timeout.
@@ -132,6 +140,7 @@ impl Config {
             max: database
                 .pool_size
                 .unwrap_or(user.pool_size.unwrap_or(general.default_pool_size)),
+            healthcheck_query: general.healthcheck_query.clone(),
             healthcheck_interval: Duration::from_millis(general.healthcheck_interval),
             idle_healthcheck_interval: Duration::from_millis(general.idle_healthcheck_interval),
             idle_healthcheck_delay: Duration::from_millis(general.idle_healthcheck_delay),
@@ -169,6 +178,7 @@ impl Default for Config {
             connect_timeout: Duration::from_millis(5_000),
             max_age: Duration::from_millis(24 * 3600 * 1000),
             bannable: true,
+            healthcheck_query: Arc::new(";".into()),
             healthcheck_timeout: Duration::from_millis(5_000),
             healthcheck_interval: Duration::from_millis(30_000),
             idle_healthcheck_interval: Duration::from_millis(5_000),
