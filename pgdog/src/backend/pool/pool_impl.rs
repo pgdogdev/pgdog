@@ -15,7 +15,7 @@ use crate::net::messages::BackendKeyData;
 use crate::net::Parameter;
 
 use super::{
-    Address, Comms, Config, Error, Guard, Healtcheck, Inner, Monitor, Oids, PoolConfig, Request,
+    Address, Comms, Config, Error, Guard, Healthcheck, Inner, Monitor, Oids, PoolConfig, Request,
     State, Waiting,
 };
 
@@ -161,14 +161,14 @@ impl Pool {
         }
     }
 
-    /// Perform a healtcheck on the connection if one is needed.
+    /// Perform a healthcheck on the connection if one is needed.
     async fn maybe_healthcheck(
         &self,
         mut conn: Guard,
         healthcheck_timeout: Duration,
         healthcheck_interval: Duration,
     ) -> Result<Guard, Error> {
-        let mut healthcheck = Healtcheck::conditional(
+        let mut healthcheck = Healthcheck::conditional(
             &mut conn,
             self.clone(),
             healthcheck_interval,

@@ -28,7 +28,7 @@ pub use config::Config;
 pub use connection::Connection;
 pub use error::Error;
 pub use guard::Guard;
-pub use healthcheck::Healtcheck;
+pub use healthcheck::Healthcheck;
 use monitor::Monitor;
 pub use oids::Oids;
 pub use pool_impl::Pool;

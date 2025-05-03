@@ -1,4 +1,4 @@
-//! Healtcheck a connection.
+//! Healthcheck a connection.
 
 use std::time::{Duration, Instant};
 
@@ -8,16 +8,16 @@ use tracing::error;
 use super::{Error, Pool};
 use crate::backend::Server;
 
-/// Perform a healtcheck on a connection.
-pub struct Healtcheck<'a> {
+/// Perform a healthcheck on a connection.
+pub struct Healthcheck<'a> {
     conn: &'a mut Server,
     pool: Pool,
     healthcheck_interval: Duration,
     healthcheck_timeout: Duration,
 }
 
-impl<'a> Healtcheck<'a> {
-    /// Perform a healtcheck only if necessary.
+impl<'a> Healthcheck<'a> {
+    /// Perform a healthcheck only if necessary.
     pub fn conditional(
         conn: &'a mut Server,
         pool: Pool,
@@ -32,16 +32,16 @@ impl<'a> Healtcheck<'a> {
         }
     }
 
-    /// Perform a mandatory healtcheck.
+    /// Perform a mandatory healthcheck.
     pub fn mandatory(conn: &'a mut Server, pool: Pool, healthcheck_timeout: Duration) -> Self {
         Self::conditional(conn, pool, Duration::from_millis(0), healthcheck_timeout)
     }
 
-    /// Perform the healtcheck if it's required.
+    /// Perform the healthcheck if it's required.
     pub async fn healthcheck(&mut self) -> Result<(), Error> {
-        let healtcheck_age = self.conn.healthcheck_age(Instant::now());
+        let healthcheck_age = self.conn.healthcheck_age(Instant::now());
 
-        if healtcheck_age < self.healthcheck_interval {
+        if healthcheck_age < self.healthcheck_interval {
             return Ok(());
         }
 

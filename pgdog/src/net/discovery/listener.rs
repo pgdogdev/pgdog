@@ -104,7 +104,7 @@ impl Listener {
                 _ = interval.tick() => {
                     let healthcheck = Message::stats(self.id).to_bytes()?;
                     socket.send_to(&healthcheck, format!("{}:{}", address, port)).await?;
-                    debug!("healtcheck");
+                    debug!("healthcheck");
                 }
             }
         }
