@@ -186,6 +186,11 @@ impl Stream {
         bytes.put_u8(code);
         bytes.put_i32(len);
 
+        // Length must be at least 4 bytes.
+        if len < 4 {
+            return Err(crate::net::Error::Eof);
+        }
+
         bytes.resize(len as usize + 1, 0); // self + 1 byte for the message code
 
         self.read_exact(&mut bytes[5..]).await?;

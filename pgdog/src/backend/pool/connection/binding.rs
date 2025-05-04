@@ -64,21 +64,21 @@ impl Binding {
                         if let Some(message) = state.message() {
                             return Ok(message);
                         }
+                        let mut read = false;
+                        for server in shards.iter_mut() {
+                            if !server.has_more_messages() {
+                                continue;
+                            }
 
-                        let pending = shards
-                            .iter_mut()
-                            .filter(|s| s.has_more_messages())
-                            .collect::<Vec<_>>();
-
-                        if pending.is_empty() {
-                            break;
-                        }
-
-                        for shard in pending {
-                            let message = shard.read().await?;
+                            let message = server.read().await?;
+                            read = true;
                             if let Some(message) = state.forward(message)? {
                                 return Ok(message);
                             }
+                        }
+
+                        if !read {
+                            break;
                         }
                     }
 

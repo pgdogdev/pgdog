@@ -409,19 +409,10 @@ impl Client {
             inner.stats.idle(self.in_transaction);
         }
 
-        trace!("[{}] <- {:#?}", self.addr, message);
-
-        if flush || async_flush || streaming {
-            self.stream.send_flush(&message).await?;
-            if async_flush {
-                inner.is_async = false;
-            }
-        } else {
-            self.stream.send(&message).await?;
-        }
-
         inner.stats.sent(len);
 
+        // Release the connection back into the pool
+        // before flushing data to client.
         if inner.backend.done() {
             let changed_params = inner.backend.changed_params();
             if inner.transaction_mode() {
@@ -441,6 +432,20 @@ impl Client {
                 }
                 inner.comms.update_params(&self.params);
             }
+        }
+
+        trace!("[{}] <- {:#?}", self.addr, message);
+
+        if flush || async_flush || streaming {
+            self.stream.send_flush(&message).await?;
+            if async_flush {
+                inner.is_async = false;
+            }
+        } else {
+            self.stream.send(&message).await?;
+        }
+
+        if inner.backend.done() {
             if inner.comms.offline() && !self.admin {
                 return Ok(true);
             }
