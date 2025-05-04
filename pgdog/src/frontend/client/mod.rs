@@ -445,11 +445,13 @@ impl Client {
             self.stream.send(&message).await?;
         }
 
-        if inner.comms.offline() && !self.admin {
-            Ok(true)
-        } else {
-            Ok(false)
+        if inner.backend.done() {
+            if inner.comms.offline() && !self.admin {
+                return Ok(true);
+            }
         }
+
+        Ok(false)
     }
 
     /// Buffer extended protocol messages until client requests a sync.
