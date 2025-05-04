@@ -13,7 +13,7 @@ connect_timeout = 1_000
 passthrough_auth = "enabled_plain"
 idle_timeout = 30_000
 prepared_statements = "disabled"
-default_pool_size = 1
+default_pool_size = 10
 # dry_run = true
 workers = 0
 
