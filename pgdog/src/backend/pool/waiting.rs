@@ -14,7 +14,7 @@ pub(super) struct Waiting {
 
 impl Waiting {
     pub(super) fn new(pool: Pool, request: &Request) -> Result<Self, Error> {
-        let request = request.clone();
+        let request = *request;
         let (tx, rx) = channel();
 
         {

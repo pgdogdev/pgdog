@@ -114,7 +114,7 @@ impl Replicas {
     ) -> Result<Guard, Error> {
         let mut unbanned = false;
         loop {
-            let mut candidates = self.pools.iter().map(|pool| pool).collect::<Vec<_>>();
+            let mut candidates = self.pools.iter().collect::<Vec<_>>();
 
             if let Some(primary) = primary {
                 candidates.push(primary);
