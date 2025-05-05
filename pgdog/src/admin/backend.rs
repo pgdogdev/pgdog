@@ -39,7 +39,7 @@ impl Backend {
     /// Handle command.
     pub async fn send(&mut self, messages: &Buffer) -> Result<(), Error> {
         let message = messages.first().ok_or(Error::Empty)?;
-        let message: ProtocolMessage = message.clone().into();
+        let message: ProtocolMessage = message.clone();
 
         if message.code() != 'Q' {
             debug!("admin received unsupported message: {:?}", message);

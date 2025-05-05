@@ -61,7 +61,7 @@ impl Parameters {
     pub fn merge(&self, other: &mut Self) -> MergeResult {
         let mut different = vec![];
         for (k, v) in &self.params {
-            if IMMUTABLE_PARAMS.contains(&k) {
+            if IMMUTABLE_PARAMS.contains(k) {
                 continue;
             }
             if let Some(other) = other.get(k) {

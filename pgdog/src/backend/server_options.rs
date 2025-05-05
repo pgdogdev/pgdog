@@ -1,12 +1,6 @@
 use crate::net::Parameter;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ServerOptions {
     pub params: Vec<Parameter>,
-}
-
-impl Default for ServerOptions {
-    fn default() -> Self {
-        Self { params: vec![] }
-    }
 }

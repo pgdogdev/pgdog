@@ -32,12 +32,12 @@
 //! connections back to the idle pool in that amount of time, and new connections are no longer needed even
 //! if clients requested ones to be created ~100ms ago.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use super::{Error, Guard, Healtcheck, Oids, Pool, Request};
 use crate::backend::Server;
 
-use tokio::time::{interval, sleep, timeout};
+use tokio::time::{interval, sleep, timeout, Instant};
 use tokio::{select, task::spawn};
 use tracing::info;
 
@@ -288,7 +288,7 @@ impl Monitor {
         // Have an idle connection, use that for the healthcheck.
         if let Some(conn) = conn {
             Healtcheck::mandatory(
-                &mut Guard::new(pool.clone(), conn),
+                &mut Guard::new(pool.clone(), conn, Instant::now()),
                 pool.clone(),
                 healthcheck_timeout,
             )

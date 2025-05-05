@@ -15,7 +15,7 @@ idle_timeout = 30_000
 prepared_statements = "disabled"
 default_pool_size = 10
 # dry_run = true
-workers = 0
+workers = 2
 
 #
 # Admin database password.
@@ -31,6 +31,13 @@ name = "pgdog"
 host = "127.0.0.1"
 port = 5432
 role = "replica"
+
+# [[databases]]
+# name = "pgdog"
+# host = "127.0.0.1"
+# port = 5432
+# role = "replica"
+
 
 # [[databases]]
 # name = "pgdog"

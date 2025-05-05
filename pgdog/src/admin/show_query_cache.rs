@@ -36,7 +36,7 @@ impl Command for ShowQueryCache {
         ])
         .message()?];
 
-        let mut queries: Vec<_> = queries.into_iter().map(|(k, v)| (k, v)).collect();
+        let mut queries: Vec<_> = queries.into_iter().collect();
         queries.sort_by_key(|v| v.1.hits);
 
         for query in queries.into_iter().rev() {

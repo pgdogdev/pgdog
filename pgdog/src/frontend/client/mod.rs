@@ -3,6 +3,7 @@
 use std::net::SocketAddr;
 use std::time::Instant;
 
+use bytes::BytesMut;
 use timeouts::Timeouts;
 use tokio::time::timeout;
 use tokio::{select, spawn};
@@ -46,6 +47,7 @@ pub struct Client {
     in_transaction: bool,
     timeouts: Timeouts,
     buffer: Buffer,
+    stream_buffer: BytesMut,
 }
 
 impl Client {
@@ -173,6 +175,7 @@ impl Client {
             in_transaction: false,
             timeouts: Timeouts::from_config(&config.config.general),
             buffer: Buffer::new(),
+            stream_buffer: BytesMut::new(),
         };
 
         if client.admin {
@@ -384,6 +387,8 @@ impl Client {
             inner.backend.send(&self.buffer).await?;
         }
 
+        inner.stats.memory_used(self.stream_buffer.capacity());
+
         Ok(false)
     }
 
@@ -445,10 +450,8 @@ impl Client {
             self.stream.send(&message).await?;
         }
 
-        if inner.backend.done() {
-            if inner.comms.offline() && !self.admin {
-                return Ok(true);
-            }
+        if inner.backend.done() && inner.comms.offline() && !self.admin {
+            return Ok(true);
         }
 
         Ok(false)
@@ -470,7 +473,7 @@ impl Client {
         self.timeouts = Timeouts::from_config(&config.config.general);
 
         while !self.buffer.full() {
-            let message = match self.stream.read().await {
+            let message = match self.stream.read_buf(&mut self.stream_buffer).await {
                 Ok(message) => message.stream(self.streaming).frontend(),
                 Err(_) => {
                     return Ok(());

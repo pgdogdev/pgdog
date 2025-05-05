@@ -73,20 +73,16 @@ pub async fn backends(application_name: &str, pool: &Pool<Postgres>) -> Vec<Back
 }
 
 pub async fn connection_failover() -> Pool<Postgres> {
-    let pool = PgPoolOptions::new()
+    PgPoolOptions::new()
         .max_connections(5)
-        .connect(&format!(
-            "postgres://pgdog:pgdog@127.0.0.1:6432/failover?application_name=sqlx"
-        ))
+        .connect("postgres://pgdog:pgdog@127.0.0.1:6432/failover?application_name=sqlx")
         .await
-        .unwrap();
-
-    pool
+        .unwrap()
 }
 
 pub async fn admin_tokio() -> Client {
     let (client, connection) = tokio_postgres::connect(
-        &format!("host=127.0.0.1 user=admin dbname=admin password=pgdog port=6432",),
+        "host=127.0.0.1 user=admin dbname=admin password=pgdog port=6432",
         NoTls,
     )
     .await
@@ -102,11 +98,9 @@ pub async fn admin_tokio() -> Client {
 }
 
 pub async fn admin_sqlx() -> Pool<Postgres> {
-    let pool = PgPoolOptions::new()
+    PgPoolOptions::new()
         .max_connections(1)
-        .connect(&format!("postgres://admin:pgdog@127.0.0.1:6432/admin"))
+        .connect("postgres://admin:pgdog@127.0.0.1:6432/admin")
         .await
-        .unwrap();
-
-    pool
+        .unwrap()
 }

@@ -7,7 +7,7 @@ static PREPARED: Lazy<Vec<&'static str>> = Lazy::new(|| vec!["DEALLOCATE ALL"]);
 static PARAMS: Lazy<Vec<&'static str>> = Lazy::new(|| vec!["RESET ALL", "DISCARD ALL"]);
 static ALL: Lazy<Vec<&'static str>> =
     Lazy::new(|| vec!["RESET ALL", "DISCARD ALL", "DEALLOCATE ALL"]);
-static NONE: Lazy<Vec<&'static str>> = Lazy::new(|| vec![]);
+static NONE: Lazy<Vec<&'static str>> = Lazy::new(std::vec::Vec::new);
 
 /// Queries used to clean up server connections after
 /// client modifications.
@@ -90,7 +90,7 @@ impl Cleanup {
 
     /// Get queries to execute on the server to perform cleanup.
     pub fn queries(&self) -> &[&str] {
-        &self.queries
+        self.queries
     }
 
     pub fn is_reset_params(&self) -> bool {

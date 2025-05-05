@@ -1,5 +1,5 @@
 //! PostgreSQL server connection.
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use bytes::{BufMut, BytesMut};
 use rustls_pki_types::ServerName;
@@ -7,6 +7,7 @@ use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
     spawn,
+    time::Instant,
 };
 use tracing::{debug, error, info, trace, warn};
 
@@ -49,6 +50,7 @@ pub struct Server {
     schema_changed: bool,
     sync_prepared: bool,
     pooler_mode: PoolerMode,
+    stream_buffer: BytesMut,
 }
 
 impl Server {
@@ -184,6 +186,7 @@ impl Server {
             schema_changed: false,
             sync_prepared: false,
             pooler_mode: PoolerMode::Transaction,
+            stream_buffer: BytesMut::with_capacity(1024),
         })
     }
 
@@ -206,15 +209,12 @@ impl Server {
 
     /// Send messages to the server and flush the buffer.
     pub async fn send(&mut self, messages: &Buffer) -> Result<(), Error> {
-        let timer = Instant::now();
+        self.stats.state(State::Active);
+
         for message in messages.iter() {
             self.send_one(message).await?;
         }
         self.flush().await?;
-        trace!(
-            "request flushed to server [{:.4}ms]",
-            timer.elapsed().as_secs_f64() * 1000.0
-        );
         Ok(())
     }
 
@@ -222,11 +222,12 @@ impl Server {
     /// accelerating bulk transfers.
     pub async fn send_one(&mut self, message: &ProtocolMessage) -> Result<(), Error> {
         self.stats.state(State::Active);
-        let result = self.prepared_statements.handle(&message)?;
+
+        let result = self.prepared_statements.handle(message)?;
 
         let queue = match result {
             HandleResult::Drop => [None, None],
-            HandleResult::Prepend(ref prepare) => [Some(prepare), Some(&message)],
+            HandleResult::Prepend(ref prepare) => [Some(prepare), Some(message)],
             HandleResult::Forward => [Some(message), None],
         };
 
@@ -261,7 +262,13 @@ impl Server {
             if let Some(message) = self.prepared_statements.state_mut().get_simulated() {
                 return Ok(message);
             }
-            match self.stream().read().await {
+            match self
+                .stream
+                .as_mut()
+                .unwrap()
+                .read_buf(&mut self.stream_buffer)
+                .await
+            {
                 Ok(message) => {
                     let message = message.stream(self.streaming).backend();
                     match self.prepared_statements.forward(&message) {
@@ -675,6 +682,7 @@ pub mod test {
                 schema_changed: false,
                 sync_prepared: false,
                 pooler_mode: PoolerMode::Transaction,
+                stream_buffer: BytesMut::with_capacity(1024),
             }
         }
     }

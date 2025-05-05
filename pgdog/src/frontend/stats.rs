@@ -1,6 +1,7 @@
 //! Frontend client statistics.
 
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, SystemTime};
+use tokio::time::Instant;
 
 use crate::state::State;
 
@@ -31,6 +32,7 @@ pub struct Stats {
     query_timer: Instant,
     wait_timer: Instant,
     pub last_request: SystemTime,
+    pub memory_used: usize,
 }
 
 impl Stats {
@@ -51,6 +53,7 @@ impl Stats {
             query_timer: now,
             wait_timer: now,
             last_request: SystemTime::now(),
+            memory_used: 0,
         }
     }
 
@@ -97,6 +100,10 @@ impl Stats {
 
     pub(super) fn sent(&mut self, bytes: usize) {
         self.bytes_sent += bytes;
+    }
+
+    pub(super) fn memory_used(&mut self, memory: usize) {
+        self.memory_used = memory;
     }
 
     pub(super) fn idle(&mut self, in_transaction: bool) {

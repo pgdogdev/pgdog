@@ -5,7 +5,7 @@ use sqlx::{Executor, Pool, Postgres, Row};
 #[tokio::test]
 #[serial]
 async fn test_fake_transactions() {
-    let conn = connections_sqlx().await.into_iter().skip(1).next().unwrap();
+    let conn = connections_sqlx().await.into_iter().nth(1).unwrap();
     let admin = admin_sqlx().await;
 
     for _ in 0..5 {
