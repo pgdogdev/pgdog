@@ -3,32 +3,30 @@
 use std::cmp::max;
 use std::collections::VecDeque;
 
-use crate::backend::Server;
+use crate::backend::{stats::Counts as BackendCounts, Server};
 use crate::net::messages::BackendKeyData;
 
 use tokio::time::Instant;
 
-use super::{Ban, Config, Error, Mapping, Oids, Pool, Request, Stats, Taken};
+use super::{Ban, Config, Error, Mapping, Oids, Pool, Request, Stats, Taken, Waiter};
 
 /// Pool internals protected by a mutex.
 #[derive(Default)]
 pub(super) struct Inner {
     /// Idle server connections.
-    conns: VecDeque<Box<Server>>,
+    conns: Vec<Box<Server>>,
     /// Server connections currently checked out.
     taken: Taken,
     /// Pool configuration.
     pub(super) config: Config,
     /// Number of clients waiting for a connection.
-    pub(super) waiting: VecDeque<Request>,
+    pub(super) waiting: VecDeque<Waiter>,
     /// Pool ban status.
     pub(super) ban: Option<Ban>,
     /// Pool is online and available to clients.
     pub(super) online: bool,
     /// Pool is paused.
     pub(super) paused: bool,
-    /// Connections being created.
-    pub(super) creating: usize,
     /// Track out of sync terminations.
     pub(super) out_of_sync: usize,
     /// Track connections closed with errors.
@@ -46,7 +44,6 @@ pub(super) struct Inner {
 impl std::fmt::Debug for Inner {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Inner")
-            .field("creating", &self.creating)
             .field("paused", &self.paused)
             .field("taken", &self.taken.len())
             .field("conns", &self.conns.len())
@@ -60,14 +57,13 @@ impl Inner {
     /// New inner structure.
     pub(super) fn new(config: Config, id: u64) -> Self {
         Self {
-            conns: VecDeque::new(),
+            conns: Vec::new(),
             taken: Taken::default(),
             config,
             waiting: VecDeque::new(),
             ban: None,
             online: false,
             paused: false,
-            creating: 0,
             out_of_sync: 0,
             errors: 0,
             stats: Stats::default(),
@@ -132,12 +128,16 @@ impl Inner {
         let client_needs = below_max && !self.waiting.is_empty() && self.conns.is_empty();
         let maintenance_on = self.online && !self.paused;
 
-        !self.banned() && maintenance_on && (maintain_min || client_needs)
+        !self.banned() && (client_needs || maintenance_on && maintain_min)
     }
 
     /// Check if the pool ban should be removed.
     #[inline]
     pub(super) fn check_ban(&mut self, now: Instant) -> bool {
+        if self.ban.is_none() {
+            return false;
+        }
+
         let mut unbanned = false;
         if let Some(ban) = self.ban.take() {
             if !ban.expired(now) {
@@ -153,7 +153,7 @@ impl Inner {
     /// Close connections that have exceeded the max age.
     #[inline]
     pub(crate) fn close_old(&mut self, now: Instant) -> usize {
-        let max_age = self.config.max_age();
+        let max_age = self.config.max_age;
         let mut removed = 0;
 
         self.conns.retain(|c| {
@@ -173,7 +173,7 @@ impl Inner {
     #[inline]
     pub(crate) fn close_idle(&mut self, now: Instant) -> usize {
         let (mut remove, mut removed) = (self.can_remove(), 0);
-        let idle_timeout = self.config.idle_timeout();
+        let idle_timeout = self.config.idle_timeout;
 
         self.conns.retain(|c| {
             let idle_for = c.idle_for(now);
@@ -199,7 +199,7 @@ impl Inner {
     /// Take connection from the idle pool.
     #[inline(always)]
     pub(super) fn take(&mut self, request: &Request) -> Option<Box<Server>> {
-        if let Some(conn) = self.conns.pop_back() {
+        if let Some(conn) = self.conns.pop() {
             self.taken.take(&Mapping {
                 client: request.id,
                 server: *(conn.id()),
@@ -211,10 +211,24 @@ impl Inner {
         }
     }
 
-    /// Place connection back into the pool.
+    /// Place connection back into the pool
+    /// or give it to a waiting client.
     #[inline]
     pub(super) fn put(&mut self, conn: Box<Server>) {
-        self.conns.push_back(conn);
+        // Try to give it to a client that's been waiting, if any.
+        let id = *conn.id();
+        if let Some(waiter) = self.waiting.pop_front() {
+            if let Err(conn) = waiter.tx.send(Ok(conn)) {
+                self.conns.push(conn.unwrap());
+            } else {
+                self.taken.take(&Mapping {
+                    server: id,
+                    client: waiter.request.id,
+                });
+            }
+        } else {
+            self.conns.push(conn);
+        }
     }
 
     #[inline]
@@ -244,35 +258,47 @@ impl Inner {
     /// Otherwise, drop the connection and close it.
     ///
     /// Return: true if the pool should be banned, false otherwise.
-    pub(super) fn maybe_check_in(&mut self, mut server: Box<Server>, now: Instant) -> bool {
+    pub(super) fn maybe_check_in(
+        &mut self,
+        server: Box<Server>,
+        now: Instant,
+        stats: BackendCounts,
+    ) -> CheckInResult {
+        let mut result = CheckInResult {
+            banned: false,
+            replenish: true,
+        };
+
         if let Some(ref moved) = self.moved {
+            result.replenish = false;
             // Prevents deadlocks.
             if moved.id() != self.id {
-                moved.lock().maybe_check_in(server, now);
-                return false;
+                moved.lock().maybe_check_in(server, now, stats);
+                return result;
             }
         }
 
         self.taken.check_in(server.id());
 
         // Update stats
-        let stats = server.stats_mut().reset_last_checkout();
         self.stats.counts = self.stats.counts + stats;
 
         // Ban the pool from serving more clients.
         if server.error() {
             self.errors += 1;
-            return self.maybe_ban(now, Error::ServerError);
+            result.banned = self.maybe_ban(now, Error::ServerError);
+            return result;
         }
 
         // Pool is offline or paused, connection should be closed.
         if !self.online || self.paused {
-            return false;
+            result.replenish = false;
+            return result;
         }
 
         // Close connections exceeding max age.
         if server.age(now) >= self.config.max_age {
-            return false;
+            return result;
         }
 
         // Finally, if the server is ok,
@@ -283,7 +309,26 @@ impl Inner {
             self.out_of_sync += 1;
         }
 
-        false
+        result
+    }
+
+    #[inline]
+    pub(super) fn remove_waiter(&mut self, id: &BackendKeyData) {
+        if let Some(waiter) = self.waiting.pop_front() {
+            if waiter.request.id != *id {
+                // Put me back.
+                self.waiting.push_front(waiter);
+
+                // Slow search, but we should be somewhere towards the front
+                // if the runtime is doing scheduling correctly.
+                for (i, waiter) in self.waiting.iter().enumerate() {
+                    if waiter.request.id == *id {
+                        self.waiting.remove(i);
+                        break;
+                    }
+                }
+            }
+        }
     }
 
     /// Ban the pool from serving traffic if that's allowed
@@ -297,9 +342,19 @@ impl Inner {
                 ban_timeout: self.config.ban_timeout(),
             };
             self.ban = Some(ban);
+
+            // Tell every waiting client that this pool is busted.
+            self.close_waiters(Error::Banned);
             true
         } else {
             false
+        }
+    }
+
+    #[inline]
+    pub(super) fn close_waiters(&mut self, err: Error) {
+        for waiter in self.waiting.drain(..) {
+            let _ = waiter.tx.send(Err(err));
         }
     }
 
@@ -322,22 +377,19 @@ impl Inner {
     pub fn banned(&self) -> bool {
         self.ban.is_some()
     }
+}
 
-    #[inline]
-    pub fn created(&mut self) {
-        self.creating -= 1;
-    }
-
-    /// Create a create permit.
-    #[inline]
-    pub fn creating(&mut self) {
-        self.creating += 1;
-    }
+#[derive(Debug, Copy, Clone)]
+pub(super) struct CheckInResult {
+    pub(super) banned: bool,
+    pub(super) replenish: bool,
 }
 
 #[cfg(test)]
 mod test {
     use std::time::Duration;
+
+    use tokio::sync::oneshot::channel;
 
     use crate::net::messages::BackendKeyData;
 
@@ -374,16 +426,32 @@ mod test {
         assert!(banned);
 
         // Testing check-in server.
-        let banned = inner.maybe_check_in(Box::new(Server::default()), Instant::now());
-        assert!(!banned);
+        let result = inner.maybe_check_in(
+            Box::new(Server::default()),
+            Instant::now(),
+            BackendCounts::default(),
+        );
+        assert!(!result.banned);
         assert_eq!(inner.idle(), 0); // pool offline
 
         inner.online = true;
         inner.paused = true;
-        inner.maybe_check_in(Box::new(Server::default()), Instant::now());
+        inner.maybe_check_in(
+            Box::new(Server::default()),
+            Instant::now(),
+            BackendCounts::default(),
+        );
         assert_eq!(inner.total(), 0); // pool paused;
         inner.paused = false;
-        assert!(!inner.maybe_check_in(Box::new(Server::default()), Instant::now()));
+        assert!(
+            !inner
+                .maybe_check_in(
+                    Box::new(Server::default()),
+                    Instant::now(),
+                    BackendCounts::default()
+                )
+                .banned
+        );
         assert!(inner.idle() > 0);
         assert_eq!(inner.idle(), 1);
 
@@ -396,14 +464,17 @@ mod test {
         });
         assert_eq!(inner.checked_out(), 1);
 
-        let banned = inner.maybe_check_in(server, Instant::now());
-        assert!(banned);
+        let result = inner.maybe_check_in(server, Instant::now(), BackendCounts::default());
+        assert!(result.banned);
         assert_eq!(inner.ban.unwrap().reason, Error::ServerError);
         assert!(inner.taken.is_empty());
         inner.ban = None;
 
         inner.config.max = 5;
-        inner.waiting.push_back(Request::default());
+        inner.waiting.push_back(Waiter {
+            request: Request::default(),
+            tx: channel().0,
+        });
         assert_eq!(inner.idle(), 1);
         assert!(!inner.should_create());
 
@@ -425,8 +496,8 @@ mod test {
 
         assert!(inner.should_create());
 
-        inner.conns.push_back(Box::new(Server::default()));
-        inner.conns.push_back(Box::new(Server::default()));
+        inner.conns.push(Box::new(Server::default()));
+        inner.conns.push(Box::new(Server::default()));
         assert!(!inner.should_create());
 
         // Close idle connections.
@@ -457,9 +528,13 @@ mod test {
         assert_eq!(inner.total(), 0);
 
         let server = Box::new(Server::default());
-        let banned = inner.maybe_check_in(server, Instant::now() + Duration::from_secs(61));
+        let result = inner.maybe_check_in(
+            server,
+            Instant::now() + Duration::from_secs(61),
+            BackendCounts::default(),
+        );
 
-        assert!(!banned);
+        assert!(!result.banned);
         // Not checked in because of max age.
         assert_eq!(inner.total(), 0);
     }

@@ -44,7 +44,7 @@ use comms::Comms;
 use inner::Inner;
 use mapping::Mapping;
 use taken::Taken;
-use waiting::Waiting;
+use waiting::{Waiter, Waiting};
 
 #[cfg(test)]
 pub mod test;

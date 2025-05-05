@@ -231,7 +231,7 @@ async fn test_benchmark_pool() {
     let start = Instant::now();
 
     for _ in 0..workers {
-        let request = request.clone();
+        let request = request;
         let pool = pool.clone();
         let handle = tokio::spawn(async move {
             for _ in 0..counts {

@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use crate::config::PoolerMode;
+use tokio::time::Instant;
 
 use super::{Ban, Config, Pool, Stats};
 
@@ -40,6 +41,7 @@ pub struct State {
 
 impl State {
     pub(super) fn get(pool: &Pool) -> Self {
+        let now = Instant::now();
         let guard = pool.lock();
 
         State {
@@ -60,7 +62,7 @@ impl State {
                 .waiting
                 .iter()
                 .next()
-                .map(|req| req.created_at.elapsed())
+                .map(|req| now.duration_since(req.request.created_at))
                 .unwrap_or(Duration::ZERO),
             pooler_mode: guard.config().pooler_mode,
         }

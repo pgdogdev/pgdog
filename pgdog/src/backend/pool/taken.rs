@@ -11,11 +11,13 @@ pub(super) struct Taken {
 }
 
 impl Taken {
+    #[inline]
     pub(super) fn take(&mut self, mapping: &Mapping) {
         self.client_server.insert(mapping.client, mapping.server);
         self.server_client.insert(mapping.server, mapping.client);
     }
 
+    #[inline]
     pub(super) fn check_in(&mut self, server: &BackendKeyData) {
         let client = self.server_client.remove(server);
         if let Some(client) = client {
@@ -23,6 +25,7 @@ impl Taken {
         }
     }
 
+    #[inline]
     pub(super) fn len(&self) -> usize {
         self.client_server.len() // Both should always be the same length.
     }
@@ -32,6 +35,7 @@ impl Taken {
         self.len() == 0
     }
 
+    #[inline]
     pub(super) fn server(&self, client: &BackendKeyData) -> Option<BackendKeyData> {
         self.client_server.get(client).cloned()
     }
