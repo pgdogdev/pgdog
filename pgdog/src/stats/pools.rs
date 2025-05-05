@@ -150,22 +150,22 @@ impl Pools {
 
                     total_xact_time.push(Measurement {
                         labels: labels.clone(),
-                        measurement: totals.xact_time.into(),
+                        measurement: totals.xact_time.as_millis().into(),
                     });
 
                     avg_xact_time.push(Measurement {
                         labels: labels.clone(),
-                        measurement: averages.xact_time.into(),
+                        measurement: averages.xact_time.as_millis().into(),
                     });
 
                     total_query_time.push(Measurement {
                         labels: labels.clone(),
-                        measurement: totals.query_time.into(),
+                        measurement: totals.query_time.as_millis().into(),
                     });
 
                     avg_query_time.push(Measurement {
                         labels: labels.clone(),
-                        measurement: averages.query_time.into(),
+                        measurement: averages.query_time.as_millis().into(),
                     });
                 }
             }

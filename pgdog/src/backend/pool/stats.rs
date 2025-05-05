@@ -6,8 +6,6 @@ use std::{
     time::Duration,
 };
 
-type Millis = u128;
-
 #[derive(Debug, Clone, Default, Copy)]
 pub struct Counts {
     pub xact_count: usize,
@@ -15,9 +13,9 @@ pub struct Counts {
     pub server_assignment_count: usize,
     pub received: usize,
     pub sent: usize,
-    pub xact_time: Millis,
-    pub query_time: Millis,
-    pub wait_time: Millis,
+    pub xact_time: Duration,
+    pub query_time: Duration,
+    pub wait_time: Duration,
     pub parse_count: usize,
     pub bind_count: usize,
 }
@@ -53,9 +51,9 @@ impl Div<usize> for Counts {
             server_assignment_count: self.server_assignment_count.saturating_div(rhs),
             received: self.received.saturating_div(rhs),
             sent: self.sent.saturating_div(rhs),
-            xact_time: self.xact_time.saturating_div(rhs as u128),
-            query_time: self.query_time.saturating_div(rhs as u128),
-            wait_time: self.wait_time.saturating_div(rhs as u128),
+            xact_time: self.xact_time.checked_div(rhs as u32).unwrap_or_default(),
+            query_time: self.query_time.checked_div(rhs as u32).unwrap_or_default(),
+            wait_time: self.wait_time.checked_div(rhs as u32).unwrap_or_default(),
             parse_count: self.parse_count.saturating_div(rhs),
             bind_count: self.parse_count.saturating_div(rhs),
         }
@@ -72,10 +70,8 @@ impl Add<crate::backend::stats::Counts> for Counts {
             server_assignment_count: self.server_assignment_count + 1,
             received: self.received.saturating_add(rhs.bytes_received),
             sent: self.sent.saturating_add(rhs.bytes_sent),
-            query_time: self.query_time.saturating_add(rhs.query_time.as_millis()),
-            xact_time: self
-                .xact_time
-                .saturating_add(rhs.transaction_time.as_millis()),
+            query_time: self.query_time.saturating_add(rhs.query_time),
+            xact_time: self.xact_time.saturating_add(rhs.transaction_time),
             wait_time: self.wait_time,
             parse_count: self.parse_count.saturating_add(rhs.parse),
             bind_count: self.parse_count.saturating_add(rhs.bind),

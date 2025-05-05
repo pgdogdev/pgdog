@@ -93,9 +93,7 @@ impl Pool {
                 } else {
                     request.created_at
                 };
-                let elapsed = granted_at
-                    .saturating_duration_since(request.created_at)
-                    .as_millis();
+                let elapsed = granted_at.saturating_duration_since(request.created_at);
                 let mut guard = self.lock();
 
                 if !guard.online {
