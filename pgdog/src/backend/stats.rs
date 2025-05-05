@@ -2,12 +2,13 @@
 
 use std::{
     ops::Add,
-    time::{Duration, Instant, SystemTime},
+    time::{Duration, SystemTime},
 };
 
 use fnv::FnvHashMap as HashMap;
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
+use tokio::time::Instant;
 
 use crate::{net::messages::BackendKeyData, state::State};
 
@@ -173,6 +174,11 @@ impl Stats {
             self.total.query_time += duration;
             self.last_checkout.query_time += duration;
         }
+    }
+
+    pub(crate) fn set_timers(&mut self, now: Instant) {
+        self.transaction_timer = Some(now);
+        self.query_timer = Some(now);
     }
 
     /// Manual state change.

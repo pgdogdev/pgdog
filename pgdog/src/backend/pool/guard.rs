@@ -2,8 +2,8 @@
 
 use std::ops::{Deref, DerefMut};
 
-use tokio::spawn;
 use tokio::time::timeout;
+use tokio::{spawn, time::Instant};
 use tracing::{debug, error};
 
 use crate::backend::Server;
@@ -34,7 +34,9 @@ impl std::fmt::Debug for Guard {
 
 impl Guard {
     /// Create new connection guard.
-    pub fn new(pool: Pool, server: Box<Server>) -> Self {
+    pub fn new(pool: Pool, mut server: Box<Server>, granted_at: Instant) -> Self {
+        server.stats_mut().set_timers(granted_at);
+
         Self {
             server: Some(server),
             pool,

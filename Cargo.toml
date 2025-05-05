@@ -8,6 +8,15 @@ members = [
 ]
 resolver = "2"
 
+# [patch.crates-io]
+# tokio = { path = "../tokio/tokio" }
+
 [profile.release]
 codegen-units = 1
 lto = true
+
+[profile.flamegraph]
+inherits = "release"
+lto = false
+codegen-units = 16
+debug = true

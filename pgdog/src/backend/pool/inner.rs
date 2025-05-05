@@ -1,10 +1,12 @@
 //! Pool internals synchronized with a mutex.
 
+use std::cmp::max;
 use std::collections::VecDeque;
-use std::{cmp::max, time::Instant};
 
 use crate::backend::Server;
 use crate::net::messages::BackendKeyData;
+
+use tokio::time::Instant;
 
 use super::{Ban, Config, Error, Mapping, Oids, Pool, Request, Stats, Taken};
 

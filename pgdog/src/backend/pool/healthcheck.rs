@@ -1,8 +1,9 @@
 //! Healtcheck a connection.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use tokio::time::timeout;
+use tokio::time::Instant;
 use tracing::error;
 
 use super::{Error, Pool};

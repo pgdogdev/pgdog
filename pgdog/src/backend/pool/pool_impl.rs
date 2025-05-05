@@ -2,12 +2,12 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use once_cell::sync::Lazy;
 use parking_lot::{lock_api::MutexGuard, Mutex, RawMutex};
 use tokio::select;
-use tokio::time::sleep;
+use tokio::time::{sleep, Instant};
 use tracing::{error, info};
 
 use crate::backend::{Server, ServerOptions};
@@ -88,11 +88,14 @@ impl Pool {
             let (checkout_timeout, healthcheck_timeout, healthcheck_interval, server) = {
                 // Ask for time before we acquire the lock
                 // and only if we actually waited for a connection.
-                let elapsed = if waited {
-                    request.created_at.elapsed().as_micros()
+                let granted_at = if waited {
+                    Instant::now()
                 } else {
-                    0
+                    request.created_at
                 };
+                let elapsed = granted_at
+                    .saturating_duration_since(request.created_at)
+                    .as_millis();
                 let mut guard = self.lock();
 
                 if !guard.online {
@@ -112,10 +115,14 @@ impl Pool {
                 }
 
                 let conn = guard.take(request).map(|mut server| {
-                    Guard::new(pool, {
-                        server.set_pooler_mode(guard.config().pooler_mode);
-                        server
-                    })
+                    Guard::new(
+                        pool,
+                        {
+                            server.set_pooler_mode(guard.config().pooler_mode);
+                            server
+                        },
+                        granted_at,
+                    )
                 });
 
                 if conn.is_some() {

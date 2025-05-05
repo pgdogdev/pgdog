@@ -39,6 +39,7 @@ impl Command for ShowClients {
             Field::numeric("bytes_sent"),
             Field::numeric("errors"),
             Field::text("application_name"),
+            Field::numeric("memory_used"),
         ]);
 
         let mut rows = vec![];
@@ -73,7 +74,8 @@ impl Command for ShowClients {
                 .add(client.stats.bytes_received)
                 .add(client.stats.bytes_sent)
                 .add(client.stats.errors)
-                .add(client.paramters.get_default("application_name", ""));
+                .add(client.paramters.get_default("application_name", ""))
+                .add(client.stats.memory_used);
             rows.push(row.message()?);
         }
 

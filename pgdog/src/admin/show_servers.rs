@@ -1,6 +1,7 @@
 //! SHOW SERVERS command.
 
-use std::time::{Instant, SystemTime};
+use std::time::SystemTime;
+use tokio::time::Instant;
 
 use crate::{
     backend::stats::stats,

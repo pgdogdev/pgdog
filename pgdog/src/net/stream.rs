@@ -178,10 +178,14 @@ impl Stream {
     /// one memory allocation per protocol message. It can be optimized to re-use an existing
     /// buffer but it's not worth the complexity.
     pub async fn read(&mut self) -> Result<Message, crate::net::Error> {
+        let mut buf = BytesMut::with_capacity(5);
+        self.read_buf(&mut buf).await
+    }
+
+    /// Read data into a buffer, avoiding unnecessary allocations.
+    pub async fn read_buf(&mut self, bytes: &mut BytesMut) -> Result<Message, crate::net::Error> {
         let code = self.read_u8().await?;
         let len = self.read_i32().await?;
-
-        let mut bytes = BytesMut::with_capacity(len as usize + 1);
 
         bytes.put_u8(code);
         bytes.put_i32(len);
@@ -191,11 +195,17 @@ impl Stream {
             return Err(crate::net::Error::Eof);
         }
 
-        bytes.resize(len as usize + 1, 0); // self + 1 byte for the message code
+        let capacity = len as usize + 1;
+        bytes.reserve(capacity); // self + 1 byte for the message code
+        unsafe {
+            // SAFETY: We reserved the memory above, so it's there.
+            // It contains garbage but we're about to write to it.
+            bytes.set_len(capacity);
+        }
 
-        self.read_exact(&mut bytes[5..]).await?;
+        self.read_exact(&mut bytes[5..capacity]).await?;
 
-        let message = Message::new(bytes.freeze());
+        let message = Message::new(bytes.split().freeze());
 
         Ok(message)
     }
