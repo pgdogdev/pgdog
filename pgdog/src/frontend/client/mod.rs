@@ -450,10 +450,8 @@ impl Client {
             self.stream.send(&message).await?;
         }
 
-        if inner.backend.done() {
-            if inner.comms.offline() && !self.admin {
-                return Ok(true);
-            }
+        if inner.backend.done() && inner.comms.offline() && !self.admin {
+            return Ok(true);
         }
 
         Ok(false)

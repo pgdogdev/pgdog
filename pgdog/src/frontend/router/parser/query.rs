@@ -391,14 +391,10 @@ impl QueryParser {
                     .ok_or(Error::SetShard)?;
 
                 if let NodeEnum::AConst(AConst { val: Some(val), .. }) = node {
-                    match val {
-                        Val::Sval(String { sval }) => {
-                            let shard = shard_str(&sval, sharding_schema, &vec![], 0);
-                            self.routed = true;
-                            return Ok(Command::Query(Route::write(shard)));
-                        }
-
-                        _ => (),
+                    if let Val::Sval(String { sval }) = val {
+                        let shard = shard_str(sval, sharding_schema, &vec![], 0);
+                        self.routed = true;
+                        return Ok(Command::Query(Route::write(shard)));
                     }
                 }
             }

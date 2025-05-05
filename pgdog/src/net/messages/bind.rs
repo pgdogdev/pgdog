@@ -350,7 +350,7 @@ mod test {
             codes: vec![Format::Binary],
             params: vec![Parameter {
                 data: jsonb.as_bytes().to_vec(),
-                len: jsonb.as_bytes().len() as i32,
+                len: jsonb.len() as i32,
             }],
             ..Default::default()
         };

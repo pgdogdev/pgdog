@@ -113,11 +113,11 @@ impl Cache {
         match query {
             BufferedQuery::Prepared(parse) => self
                 .record_command_for_normalized(parse.query(), route, false)
-                .map_err(|e| Error::PgQuery(e)),
+                .map_err(Error::PgQuery),
             BufferedQuery::Query(query) => {
-                let query = normalize(query.query()).map_err(|e| Error::PgQuery(e))?;
+                let query = normalize(query.query()).map_err(Error::PgQuery)?;
                 self.record_command_for_normalized(&query, route, true)
-                    .map_err(|e| Error::PgQuery(e))
+                    .map_err(Error::PgQuery)
             }
         }
     }

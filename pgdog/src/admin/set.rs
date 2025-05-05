@@ -26,17 +26,15 @@ impl Command for Set {
                 let node = setting.node.clone().ok_or(Error::Syntax)?;
                 match node {
                     NodeEnum::AConst(a_const) => match a_const.val {
-                        Some(a_const::Val::Ival(val)) => {
-                            return Ok(Self {
-                                name,
-                                value: val.ival as u64,
-                            });
-                        }
+                        Some(a_const::Val::Ival(val)) => Ok(Self {
+                            name,
+                            value: val.ival as u64,
+                        }),
 
-                        _ => return Err(Error::Syntax),
+                        _ => Err(Error::Syntax),
                     },
 
-                    _ => return Err(Error::Syntax),
+                    _ => Err(Error::Syntax),
                 }
             }
 

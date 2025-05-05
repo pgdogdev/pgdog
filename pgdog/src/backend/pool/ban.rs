@@ -28,8 +28,8 @@ impl Ban {
             false
         } else {
             let duration = now.duration_since(self.created_at);
-            let expired = duration > self.ban_timeout;
-            expired
+
+            duration > self.ban_timeout
         }
     }
 }

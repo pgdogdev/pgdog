@@ -223,11 +223,11 @@ impl Server {
     pub async fn send_one(&mut self, message: &ProtocolMessage) -> Result<(), Error> {
         self.stats.state(State::Active);
 
-        let result = self.prepared_statements.handle(&message)?;
+        let result = self.prepared_statements.handle(message)?;
 
         let queue = match result {
             HandleResult::Drop => [None, None],
-            HandleResult::Prepend(ref prepare) => [Some(prepare), Some(&message)],
+            HandleResult::Prepend(ref prepare) => [Some(prepare), Some(message)],
             HandleResult::Forward => [Some(message), None],
         };
 
