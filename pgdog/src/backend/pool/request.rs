@@ -3,7 +3,7 @@ use tokio::time::Instant;
 use crate::net::messages::BackendKeyData;
 
 /// Connection request.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Copy)]
 pub struct Request {
     pub id: BackendKeyData,
     pub created_at: Instant,

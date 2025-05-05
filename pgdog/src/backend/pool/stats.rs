@@ -1,5 +1,7 @@
 //! Pool stats.
 
+use crate::backend::stats::Counts as BackendCounts;
+
 use std::{
     iter::Sum,
     ops::{Add, Div, Sub},
@@ -60,21 +62,21 @@ impl Div<usize> for Counts {
     }
 }
 
-impl Add<crate::backend::stats::Counts> for Counts {
+impl Add<BackendCounts> for Counts {
     type Output = Counts;
 
-    fn add(self, rhs: crate::backend::stats::Counts) -> Self::Output {
+    fn add(self, rhs: BackendCounts) -> Self::Output {
         Counts {
-            xact_count: self.xact_count.saturating_add(rhs.transactions),
-            query_count: self.query_count.saturating_add(rhs.queries),
+            xact_count: self.xact_count + rhs.transactions,
+            query_count: self.query_count + rhs.queries,
             server_assignment_count: self.server_assignment_count + 1,
-            received: self.received.saturating_add(rhs.bytes_received),
-            sent: self.sent.saturating_add(rhs.bytes_sent),
-            query_time: self.query_time.saturating_add(rhs.query_time),
-            xact_time: self.xact_time.saturating_add(rhs.transaction_time),
+            received: self.received + rhs.bytes_received,
+            sent: self.sent + rhs.bytes_sent,
+            query_time: self.query_time + rhs.query_time,
+            xact_time: self.xact_time + rhs.transaction_time,
             wait_time: self.wait_time,
-            parse_count: self.parse_count.saturating_add(rhs.parse),
-            bind_count: self.parse_count.saturating_add(rhs.bind),
+            parse_count: self.parse_count + rhs.parse,
+            bind_count: self.parse_count + rhs.bind,
         }
     }
 }
