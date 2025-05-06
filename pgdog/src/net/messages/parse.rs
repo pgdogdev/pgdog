@@ -209,5 +209,7 @@ mod test {
         assert_eq!(parse.name(), "__pgdog_1");
         assert_eq!(parse.query(), "SELECT * FROM users");
         assert_eq!(parse.data_types().len(), 0);
+
+        assert!(Parse::new_anonymous("SELECT 1").anonymous());
     }
 }
