@@ -50,7 +50,7 @@ impl Parse {
 
     /// Anonymous prepared statement.
     pub fn anonymous(&self) -> bool {
-        self.name.is_empty()
+        self.name.len() == 1 // Just the null byte.
     }
 
     pub fn query(&self) -> &str {
