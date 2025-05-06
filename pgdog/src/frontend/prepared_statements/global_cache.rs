@@ -1,6 +1,7 @@
+use bytes::Bytes;
+
 use crate::net::messages::{Parse, RowDescription};
 use std::collections::hash_map::{Entry, HashMap};
-use std::sync::Arc;
 
 // Format the globally unique prepared statement
 // name based on the counter.
@@ -29,8 +30,8 @@ impl Statement {
 ///
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
 struct CacheKey {
-    query: Arc<String>,
-    data_types: Arc<Vec<i32>>,
+    query: Bytes,
+    data_types: Bytes,
     version: usize,
 }
 
