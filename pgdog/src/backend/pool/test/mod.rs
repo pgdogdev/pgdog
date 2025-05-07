@@ -9,6 +9,9 @@ use tokio::task::yield_now;
 use tokio::time::{sleep, timeout};
 use tokio_util::task::TaskTracker;
 
+use crate::backend::ProtocolMessage;
+use crate::net::Query;
+
 use super::*;
 
 mod replica;
@@ -231,7 +234,6 @@ async fn test_benchmark_pool() {
     let start = Instant::now();
 
     for _ in 0..workers {
-        let request = request;
         let pool = pool.clone();
         let handle = tokio::spawn(async move {
             for _ in 0..counts {
@@ -247,4 +249,21 @@ async fn test_benchmark_pool() {
     }
     let duration = start.elapsed();
     println!("bench: {}ms", duration.as_millis());
+}
+
+#[tokio::test]
+async fn test_incomplete_request_recovery() {
+    let pool = pool();
+    let mut conn = pool.get(&Request::default()).await.unwrap();
+
+    conn.send(&vec![ProtocolMessage::from(Query::new("SELECT 1"))].into())
+        .await
+        .unwrap();
+    drop(conn); // Drop the connection to simulating client dying.
+
+    sleep(Duration::from_millis(500)).await;
+    let state = pool.state();
+    let out_of_sync = state.out_of_sync;
+    assert_eq!(out_of_sync, 0);
+    assert_eq!(state.idle, 1);
 }

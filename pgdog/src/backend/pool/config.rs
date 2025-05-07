@@ -52,7 +52,7 @@ pub struct Config {
 impl Config {
     /// Connect timeout duration.
     pub fn connect_timeout(&self) -> Duration {
-        self.checkout_timeout
+        self.connect_timeout
     }
 
     /// Checkout timeout duration.

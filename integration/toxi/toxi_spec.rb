@@ -92,6 +92,12 @@ shared_examples 'minimal errors' do |role, toxic|
 end
 
 describe 'tcp' do
+  around :each do |example|
+    Timeout.timeout(10) do
+      example.run
+    end
+  end
+
   it 'can connect' do
     c = conn
     tup = c.exec 'SELECT 1::bigint AS one'

@@ -3,6 +3,7 @@ query_timeout = 1_000
 checkout_timeout = 1_000
 connect_timeout = 1_000
 load_balancing_strategy = "round_robin"
+rollback_timeout = 1_000
 
 [[databases]]
 name = "pgdog"
@@ -57,9 +58,7 @@ primary = true
 
 [[omnisharded_tables]]
 database = "pgdog_sharded"
-tables = [
-    "sharded_omni"
-]
+tables = ["sharded_omni"]
 
 [admin]
 password = "pgdog"

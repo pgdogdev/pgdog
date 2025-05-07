@@ -22,6 +22,8 @@ pub enum State {
     ParseComplete,
     /// Prepared statement error.
     PreparedStatementError,
+    /// Processing server reply.
+    ReceivingData,
 }
 
 impl std::fmt::Display for State {
@@ -37,6 +39,7 @@ impl std::fmt::Display for State {
             Error => write!(f, "error"),
             ParseComplete => write!(f, "parse complete"),
             PreparedStatementError => write!(f, "prepared statement error"),
+            ReceivingData => write!(f, "receiving data"),
         }
     }
 }

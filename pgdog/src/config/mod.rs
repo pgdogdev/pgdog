@@ -13,7 +13,6 @@ use std::fs::read_to_string;
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::time::Duration;
-use std::u64;
 use std::{collections::HashMap, path::PathBuf};
 
 use arc_swap::ArcSwap;
