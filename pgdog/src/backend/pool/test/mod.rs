@@ -254,16 +254,24 @@ async fn test_benchmark_pool() {
 #[tokio::test]
 async fn test_incomplete_request_recovery() {
     let pool = pool();
-    let mut conn = pool.get(&Request::default()).await.unwrap();
 
-    conn.send(&vec![ProtocolMessage::from(Query::new("SELECT 1"))].into())
-        .await
-        .unwrap();
-    drop(conn); // Drop the connection to simulating client dying.
+    for query in ["SELECT 1", "BEGIN"] {
+        let mut conn = pool.get(&Request::default()).await.unwrap();
 
-    sleep(Duration::from_millis(500)).await;
-    let state = pool.state();
-    let out_of_sync = state.out_of_sync;
-    assert_eq!(out_of_sync, 0);
-    assert_eq!(state.idle, 1);
+        conn.send(&vec![ProtocolMessage::from(Query::new(query))].into())
+            .await
+            .unwrap();
+        drop(conn); // Drop the connection to simulating client dying.
+
+        sleep(Duration::from_millis(500)).await;
+        let state = pool.state();
+        let out_of_sync = state.out_of_sync;
+        assert_eq!(out_of_sync, 0);
+        assert_eq!(state.idle, 1);
+        if query == "BEGIN" {
+            assert_eq!(state.stats.counts.rollbacks, 1);
+        } else {
+            assert_eq!(state.stats.counts.rollbacks, 0);
+        }
+    }
 }

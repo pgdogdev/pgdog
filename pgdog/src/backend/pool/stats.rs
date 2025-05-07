@@ -20,6 +20,7 @@ pub struct Counts {
     pub wait_time: Duration,
     pub parse_count: usize,
     pub bind_count: usize,
+    pub rollbacks: usize,
 }
 
 impl Sub for Counts {
@@ -37,8 +38,9 @@ impl Sub for Counts {
             xact_time: self.xact_time.saturating_sub(rhs.xact_time),
             query_time: self.query_time.saturating_sub(rhs.query_time),
             wait_time: self.wait_time.saturating_sub(rhs.wait_time),
-            parse_count: self.parse_count.saturating_add(rhs.parse_count),
-            bind_count: self.parse_count.saturating_add(rhs.bind_count),
+            parse_count: self.parse_count.saturating_sub(rhs.parse_count),
+            bind_count: self.parse_count.saturating_sub(rhs.bind_count),
+            rollbacks: self.rollbacks.saturating_sub(rhs.rollbacks),
         }
     }
 }
@@ -58,6 +60,7 @@ impl Div<usize> for Counts {
             wait_time: self.wait_time.checked_div(rhs as u32).unwrap_or_default(),
             parse_count: self.parse_count.saturating_div(rhs),
             bind_count: self.parse_count.saturating_div(rhs),
+            rollbacks: self.rollbacks.saturating_div(rhs),
         }
     }
 }
@@ -77,6 +80,7 @@ impl Add<BackendCounts> for Counts {
             wait_time: self.wait_time,
             parse_count: self.parse_count + rhs.parse,
             bind_count: self.parse_count + rhs.bind,
+            rollbacks: self.rollbacks + rhs.rollbacks,
         }
     }
 }
@@ -109,6 +113,7 @@ impl Add for Counts {
             wait_time: self.wait_time.saturating_add(rhs.wait_time),
             parse_count: self.parse_count.saturating_add(rhs.parse_count),
             bind_count: self.parse_count.saturating_add(rhs.bind_count),
+            rollbacks: self.rollbacks.saturating_add(rhs.rollbacks),
         }
     }
 }
