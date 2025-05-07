@@ -57,7 +57,6 @@ impl Guard {
             let schema_changed = server.schema_changed();
             let sync_prepared = server.sync_prepared();
             let receiving_data = server.receiving_data();
-            let mut error = false;
 
             server.reset_changed_params();
 
@@ -74,7 +73,6 @@ impl Guard {
                     if rollback {
                         if timeout(rollback_timeout, server.rollback()).await.is_err() {
                             error!("rollback timeout [{}]", server.addr());
-                            error = true;
                         }
                     }
 
@@ -84,7 +82,6 @@ impl Guard {
                         {
                             Ok(Err(_)) | Err(_) => {
                                 error!("server reset error [{}]", server.addr());
-                                error = true;
                             }
                             Ok(Ok(_)) => {
                                 debug!("{} [{}]", cleanup, server.addr());
@@ -97,7 +94,7 @@ impl Guard {
                         server.reset_schema_changed();
                     }
 
-                    if cleanup.is_reset_params() && !error {
+                    if cleanup.is_reset_params() {
                         server.reset_params();
                     }
 
