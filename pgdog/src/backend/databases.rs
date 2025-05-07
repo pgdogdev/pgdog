@@ -1,11 +1,13 @@
 //! Databases behind pgDog.
 
+use std::collections::BTreeSet;
 use std::collections::{hash_map::Entry, HashMap};
 use std::sync::Arc;
 
 use arc_swap::ArcSwap;
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
+use tracing::{info, warn};
 
 use crate::{
     backend::pool::PoolConfig,
@@ -184,6 +186,25 @@ impl Databases {
         }
     }
 
+    pub fn mirrors(&self, user: impl ToUser) -> Result<Vec<Cluster>, Error> {
+        let user = user.to_user();
+        if let Some(cluster) = self.databases.get(&user) {
+            let name = cluster.name();
+
+            let mirrors = self
+                .databases
+                .iter()
+                .find(|(_, cluster)| cluster.mirror_of() == Some(name))
+                .map(|(_, cluster)| cluster.clone())
+                .into_iter()
+                .collect::<Vec<_>>();
+
+            return Ok(mirrors);
+        } else {
+            Err(Error::NoDatabase(user.clone()))
+        }
+    }
+
     /// Get replication configuration for the database.
     pub fn replication(&self, database: &str) -> Option<ReplicationConfig> {
         for (user, cluster) in &self.databases {
@@ -263,6 +284,13 @@ impl Databases {
     fn launch(&self) {
         for cluster in self.all().values() {
             cluster.launch();
+            if let Some(mirror_of) = cluster.mirror_of() {
+                info!(
+                    r#"enabling mirroring of database "{}" into "{}""#,
+                    mirror_of,
+                    cluster.name(),
+                );
+            }
         }
     }
 }
@@ -276,6 +304,7 @@ pub(crate) fn new_pool(
     let general = &config.general;
     let databases = config.databases();
     let shards = databases.get(&user.database);
+    let mut mirrors_of = BTreeSet::new();
 
     if let Some(shards) = shards {
         let mut shard_configs = vec![];
@@ -283,16 +312,22 @@ pub(crate) fn new_pool(
             let primary = user_databases
                 .iter()
                 .find(|d| d.role == Role::Primary)
-                .map(|primary| PoolConfig {
-                    address: Address::new(primary, user),
-                    config: Config::new(general, primary, user),
+                .map(|primary| {
+                    mirrors_of.insert(primary.mirror_of.clone());
+                    PoolConfig {
+                        address: Address::new(primary, user),
+                        config: Config::new(general, primary, user),
+                    }
                 });
             let replicas = user_databases
                 .iter()
                 .filter(|d| d.role == Role::Replica)
-                .map(|replica| PoolConfig {
-                    address: Address::new(replica, user),
-                    config: Config::new(general, replica, user),
+                .map(|replica| {
+                    mirrors_of.insert(replica.mirror_of.clone());
+                    PoolConfig {
+                        address: Address::new(replica, user),
+                        config: Config::new(general, replica, user),
+                    }
                 })
                 .collect::<Vec<_>>();
 
@@ -309,7 +344,24 @@ pub(crate) fn new_pool(
             .unwrap_or(vec![]);
         let sharded_tables =
             ShardedTables::new(sharded_tables, omnisharded_tables, general.dry_run);
-        let cluster_config = ClusterConfig::new(general, user, &shard_configs, sharded_tables);
+        // Make sure all nodes in the cluster agree they are mirroring the same cluster.
+        let mirror_of = match mirrors_of.len() {
+            0 => None,
+            1 => mirrors_of
+                .first()
+                .map(|s| s.as_ref().map(|s| s.as_str()))
+                .flatten(),
+            _ => {
+                warn!(
+                    "database \"{}\" has multiple mirror_of, disabling mirroring",
+                    user.database
+                );
+                None
+            }
+        };
+
+        let cluster_config =
+            ClusterConfig::new(general, user, &shard_configs, sharded_tables, mirror_of);
 
         Some((
             User {

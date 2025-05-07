@@ -16,6 +16,7 @@ pub use parser::{Command, QueryParser, Route};
 use super::{Buffer, PreparedStatements};
 
 /// Query router.
+#[derive(Debug)]
 pub struct Router {
     query_parser: QueryParser,
 }

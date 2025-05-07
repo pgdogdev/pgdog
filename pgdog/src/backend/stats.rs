@@ -144,6 +144,10 @@ impl Stats {
         self.last_checkout.parse += 1;
     }
 
+    pub fn copy_mode(&mut self) {
+        self.state(State::CopyMode);
+    }
+
     pub fn bind_complete(&mut self) {
         self.total.bind += 1;
         self.last_checkout.bind += 1;

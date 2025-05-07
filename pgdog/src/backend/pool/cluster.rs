@@ -30,11 +30,12 @@ pub struct PoolConfig {
 pub struct Cluster {
     name: String,
     shards: Vec<Shard>,
+    user: String,
     password: String,
     pooler_mode: PoolerMode,
     sharded_tables: ShardedTables,
     replication_sharding: Option<String>,
-    mirrors: Vec<Cluster>,
+    mirror_of: Option<String>,
 }
 
 /// Sharding configuration from the cluster.
@@ -56,10 +57,12 @@ pub struct ClusterConfig<'a> {
     pub name: &'a str,
     pub shards: &'a [ClusterShardConfig],
     pub lb_strategy: LoadBalancingStrategy,
+    pub user: &'a str,
     pub password: &'a str,
     pub pooler_mode: PoolerMode,
     pub sharded_tables: ShardedTables,
     pub replication_sharding: Option<String>,
+    pub mirror_of: Option<&'a str>,
 }
 
 impl<'a> ClusterConfig<'a> {
@@ -68,15 +71,18 @@ impl<'a> ClusterConfig<'a> {
         user: &'a User,
         shards: &'a [ClusterShardConfig],
         sharded_tables: ShardedTables,
+        mirror_of: Option<&'a str>,
     ) -> Self {
         Self {
             name: &user.database,
             password: user.password(),
+            user: &user.name,
             replication_sharding: user.replication_sharding.clone(),
             pooler_mode: user.pooler_mode.unwrap_or(general.pooler_mode),
             lb_strategy: general.load_balancing_strategy,
             shards,
             sharded_tables,
+            mirror_of,
         }
     }
 }
@@ -88,10 +94,12 @@ impl Cluster {
             name,
             shards,
             lb_strategy,
+            user,
             password,
             pooler_mode,
             sharded_tables,
             replication_sharding,
+            mirror_of,
         } = config;
 
         Self {
@@ -101,10 +109,11 @@ impl Cluster {
                 .collect(),
             name: name.to_owned(),
             password: password.to_owned(),
+            user: user.to_owned(),
             pooler_mode,
             sharded_tables,
             replication_sharding,
-            mirrors: vec![],
+            mirror_of: mirror_of.map(|s| s.to_owned()),
         }
     }
 
@@ -145,11 +154,12 @@ impl Cluster {
         Self {
             shards: self.shards.iter().map(|s| s.duplicate()).collect(),
             name: self.name.clone(),
+            user: self.user.clone(),
             password: self.password.clone(),
             pooler_mode: self.pooler_mode,
             sharded_tables: self.sharded_tables.clone(),
             replication_sharding: self.replication_sharding.clone(),
-            mirrors: self.mirrors.clone(),
+            mirror_of: self.mirror_of.clone(),
         }
     }
 
@@ -165,6 +175,11 @@ impl Cluster {
     /// Get all shards.
     pub fn shards(&self) -> &[Shard] {
         &self.shards
+    }
+
+    /// Mirrors getter.
+    pub fn mirror_of(&self) -> Option<&str> {
+        self.mirror_of.as_ref().map(|s| s.as_str())
     }
 
     /// Plugin input.
@@ -216,6 +231,16 @@ impl Cluster {
     /// Get the password the user should use to connect to the database.
     pub fn password(&self) -> &str {
         &self.password
+    }
+
+    /// User name.
+    pub fn user(&self) -> &str {
+        &self.user
+    }
+
+    /// Cluster name (database name).
+    pub fn name(&self) -> &str {
+        &self.name
     }
 
     /// Get pooler mode.

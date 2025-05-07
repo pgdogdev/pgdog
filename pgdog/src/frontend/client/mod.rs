@@ -374,24 +374,14 @@ impl Client {
             }
         }
 
-        // Handle COPY subprotocol in a potentially sharded context.
-        if self.protocol_buffer.copy() && !self.streaming {
-            let rows = inner.router.copy_data(&self.protocol_buffer)?;
-            if !rows.is_empty() {
-                inner.backend.send_copy(rows).await?;
-                inner
-                    .backend
-                    .send(&self.protocol_buffer.without_copy_data())
-                    .await?;
-            } else {
-                inner.backend.send(&self.protocol_buffer).await?;
-            }
-        } else {
-            // Send query to server.
-            inner.backend.send(&self.protocol_buffer).await?;
-        }
+        inner
+            .handle_buffer(&self.protocol_buffer, self.streaming)
+            .await?;
 
         inner.stats.memory_used(self.stream_buffer.capacity());
+
+        // Send traffic to mirrors, if any.
+        inner.backend.mirror(&self.protocol_buffer);
 
         Ok(false)
     }

@@ -41,8 +41,8 @@ impl Listener {
 
     /// Listen for client connections and handle them.
     pub async fn listen(&mut self) -> Result<(), Error> {
-        let listener = TcpListener::bind(&self.addr).await?;
         info!("🐕 PgDog listening on {}", self.addr);
+        let listener = TcpListener::bind(&self.addr).await?;
         let comms = comms();
         let shutdown_signal = comms.shutting_down();
         let mut sighup = Sighup::new()?;

@@ -340,6 +340,7 @@ impl Server {
                     _ => (),
                 }
             }
+            'G' => self.stats.copy_mode(),
             '1' => self.stats.parse_complete(),
             '2' => self.stats.bind_complete(),
             _ => (),
@@ -398,7 +399,7 @@ impl Server {
     pub fn has_more_messages(&self) -> bool {
         !matches!(
             self.stats.state,
-            State::Idle | State::IdleInTransaction | State::TransactionError
+            State::Idle | State::IdleInTransaction | State::TransactionError | State::CopyMode
         ) || !self.prepared_statements.done()
     }
 

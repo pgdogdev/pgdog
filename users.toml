@@ -11,6 +11,11 @@ database = "pgdog"
 password = "pgdog"
 
 [[users]]
+name = "pgdog"
+database = "mirror"
+password = "pgdog"
+
+[[users]]
 name = "pgdog_replication"
 database = "pgdog"
 password = "pgdog"
