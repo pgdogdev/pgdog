@@ -83,7 +83,6 @@ impl Guard {
     }
 
     async fn cleanup_internal(server: &mut Box<Server>, cleanup: Cleanup) -> Result<(), Error> {
-        let rollback = server.in_transaction();
         let schema_changed = server.schema_changed();
         let sync_prepared = server.sync_prepared();
         let needs_drain = server.needs_drain();
@@ -97,6 +96,8 @@ impl Guard {
             );
             server.drain().await;
         }
+        let rollback = server.in_transaction();
+
         // Rollback any unfinished transactions,
         // but only if the server is in sync (protocol-wise).
         if rollback {
