@@ -34,6 +34,7 @@ pub struct Cluster {
     pooler_mode: PoolerMode,
     sharded_tables: ShardedTables,
     replication_sharding: Option<String>,
+    mirrors: Vec<Cluster>,
 }
 
 /// Sharding configuration from the cluster.
@@ -103,6 +104,7 @@ impl Cluster {
             pooler_mode,
             sharded_tables,
             replication_sharding,
+            mirrors: vec![],
         }
     }
 
@@ -147,6 +149,7 @@ impl Cluster {
             pooler_mode: self.pooler_mode,
             sharded_tables: self.sharded_tables.clone(),
             replication_sharding: self.replication_sharding.clone(),
+            mirrors: self.mirrors.clone(),
         }
     }
 

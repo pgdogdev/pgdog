@@ -32,6 +32,12 @@ host = "127.0.0.1"
 port = 5432
 role = "primary"
 
+[[databases]]
+name = "mirror"
+host = "127.0.0.1"
+port = 5432
+role = "primary"
+
 
 # [[databases]]
 # name = "pgdog"

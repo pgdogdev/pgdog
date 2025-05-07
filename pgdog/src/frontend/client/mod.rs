@@ -46,7 +46,7 @@ pub struct Client {
     prepared_statements: PreparedStatements,
     in_transaction: bool,
     timeouts: Timeouts,
-    buffer: Buffer,
+    protocol_buffer: Buffer,
     stream_buffer: BytesMut,
 }
 
@@ -174,7 +174,7 @@ impl Client {
             prepared_statements: PreparedStatements::new(),
             in_transaction: false,
             timeouts: Timeouts::from_config(&config.config.general),
-            buffer: Buffer::new(),
+            protocol_buffer: Buffer::new(),
             stream_buffer: BytesMut::new(),
         };
 
@@ -231,7 +231,7 @@ impl Client {
 
                 buffer = self.buffer() => {
                     buffer?;
-                    if self.buffer.is_empty() {
+                    if self.protocol_buffer.is_empty() {
                         break;
                     }
 
@@ -254,22 +254,23 @@ impl Client {
 
     /// Handle client messages.
     async fn client_messages(&mut self, mut inner: InnerBorrow<'_>) -> Result<bool, Error> {
-        inner.is_async = self.buffer.is_async();
-        inner.stats.received(self.buffer.len());
+        inner.is_async = self.protocol_buffer.is_async();
+        inner.stats.received(self.protocol_buffer.len());
 
         #[cfg(debug_assertions)]
-        if let Some(query) = self.buffer.query()? {
+        if let Some(query) = self.protocol_buffer.query()? {
             debug!(
                 "{} [{}] (in transaction: {})",
                 query.query(),
                 self.addr,
                 self.in_transaction
             );
-            QueryLogger::new(&self.buffer).log().await?;
+            QueryLogger::new(&self.protocol_buffer).log().await?;
         }
 
         let connected = inner.connected();
-        let command = match inner.command(&mut self.buffer, &mut self.prepared_statements) {
+        let command = match inner.command(&mut self.protocol_buffer, &mut self.prepared_statements)
+        {
             Ok(command) => command,
             Err(err) => {
                 self.stream
@@ -361,30 +362,33 @@ impl Client {
         // a client is actually executing something.
         //
         // This prevents us holding open connections to multiple servers
-        if self.buffer.executable() {
+        if self.protocol_buffer.executable() {
             if let Some(query) = inner.start_transaction.take() {
                 inner.backend.execute(&query).await?;
             }
         }
 
-        for msg in self.buffer.iter() {
+        for msg in self.protocol_buffer.iter() {
             if let ProtocolMessage::Bind(bind) = msg {
                 inner.backend.bind(bind)?
             }
         }
 
         // Handle COPY subprotocol in a potentially sharded context.
-        if self.buffer.copy() && !self.streaming {
-            let rows = inner.router.copy_data(&self.buffer)?;
+        if self.protocol_buffer.copy() && !self.streaming {
+            let rows = inner.router.copy_data(&self.protocol_buffer)?;
             if !rows.is_empty() {
                 inner.backend.send_copy(rows).await?;
-                inner.backend.send(&self.buffer.without_copy_data()).await?;
+                inner
+                    .backend
+                    .send(&self.protocol_buffer.without_copy_data())
+                    .await?;
             } else {
-                inner.backend.send(&self.buffer).await?;
+                inner.backend.send(&self.protocol_buffer).await?;
             }
         } else {
             // Send query to server.
-            inner.backend.send(&self.buffer).await?;
+            inner.backend.send(&self.protocol_buffer).await?;
         }
 
         inner.stats.memory_used(self.stream_buffer.capacity());
@@ -462,7 +466,7 @@ impl Client {
     /// This ensures we don't check out a connection from the pool until the client
     /// sent a complete request.
     async fn buffer(&mut self) -> Result<(), Error> {
-        self.buffer.clear();
+        self.protocol_buffer.clear();
 
         // Only start timer once we receive the first message.
         let mut timer = None;
@@ -472,7 +476,7 @@ impl Client {
         self.prepared_statements.enabled = config.prepared_statements();
         self.timeouts = Timeouts::from_config(&config.config.general);
 
-        while !self.buffer.full() {
+        while !self.protocol_buffer.full() {
             let message = match self.stream.read_buf(&mut self.stream_buffer).await {
                 Ok(message) => message.stream(self.streaming).frontend(),
                 Err(_) => {
@@ -490,10 +494,10 @@ impl Client {
             } else {
                 let message = ProtocolMessage::from_bytes(message.to_bytes()?)?;
                 if message.extended() && self.prepared_statements.enabled {
-                    self.buffer
+                    self.protocol_buffer
                         .push(self.prepared_statements.maybe_rewrite(message)?);
                 } else {
-                    self.buffer.push(message);
+                    self.protocol_buffer.push(message);
                 }
             }
         }
@@ -501,7 +505,7 @@ impl Client {
         trace!(
             "request buffered [{:.4}ms]\n{:#?}",
             timer.unwrap().elapsed().as_secs_f64() * 1000.0,
-            self.buffer,
+            self.protocol_buffer,
         );
 
         Ok(())

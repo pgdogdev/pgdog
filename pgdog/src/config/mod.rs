@@ -547,6 +547,8 @@ pub struct Database {
     pub statement_timeout: Option<u64>,
     /// Idle timeout.
     pub idle_timeout: Option<u64>,
+    /// Mirror of another database.
+    pub mirror_of: Option<String>,
 }
 
 impl Database {

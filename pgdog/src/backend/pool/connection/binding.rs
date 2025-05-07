@@ -188,6 +188,16 @@ impl Binding {
         }
     }
 
+    pub(super) fn has_more_messages(&self) -> bool {
+        match self {
+            Binding::Admin(admin) => admin.done(),
+            Binding::Server(Some(server)) => server.has_more_messages(),
+            Binding::MultiShard(servers, _state) => servers.iter().all(|s| s.has_more_messages()),
+            Binding::Replication(Some(server), _) => server.has_more_messages(),
+            _ => false,
+        }
+    }
+
     /// Execute a query on all servers.
     pub(super) async fn execute(&mut self, query: &str) -> Result<(), Error> {
         match self {

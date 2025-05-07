@@ -1,6 +1,7 @@
 //! Server connection requested by a frontend.
 
-use tokio::time::sleep;
+use mirror::MirrorRequest;
+use tokio::{spawn, sync::mpsc::*, time::sleep};
 
 use crate::{
     admin::backend::Backend,
@@ -23,6 +24,7 @@ use std::{mem::replace, time::Duration};
 pub mod aggregate;
 pub mod binding;
 pub mod buffer;
+pub mod mirror;
 pub mod multi_shard;
 
 use aggregate::Aggregates;
@@ -36,6 +38,7 @@ pub struct Connection {
     database: String,
     binding: Binding,
     cluster: Option<Cluster>,
+    mirrors: Option<Sender<MirrorRequest>>,
 }
 
 impl Connection {
@@ -50,6 +53,7 @@ impl Connection {
             cluster: None,
             user: user.to_owned(),
             database: database.to_owned(),
+            mirrors: None,
         };
 
         if !admin {
@@ -100,6 +104,22 @@ impl Connection {
             Buffer::new(shard, replication_config, sharding_schema),
         );
         Ok(())
+    }
+
+    /// Mirror traffic to mirrors.
+    pub(crate) fn mirror(
+        &self,
+        request: &Request,
+        route: &Route,
+        buffer: &crate::frontend::Buffer,
+    ) {
+        if let Some(ref mirrors) = self.mirrors {
+            let _ = mirrors.try_send(MirrorRequest {
+                request: request.clone(),
+                route: route.clone(),
+                buffer: buffer.clone(),
+            });
+        }
     }
 
     /// Try to get a connection for the given route.
@@ -236,6 +256,10 @@ impl Connection {
     /// We are done and can disconnect from this server.
     pub(crate) fn done(&self) -> bool {
         self.binding.done()
+    }
+
+    pub(crate) fn has_more_messages(&self) -> bool {
+        self.binding.has_more_messages()
     }
 
     /// Get connected servers addresses.
