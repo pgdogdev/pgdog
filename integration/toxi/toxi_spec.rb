@@ -127,7 +127,7 @@ describe 'tcp' do
       it_behaves_like 'minimal errors', :replica3, :reset_peer
     end
 
-    xdescribe 'timeout primary' do
+    describe 'timeout primary' do
       describe 'cancels query' do
         it_behaves_like 'minimal errors', :primary, :timeout
       end

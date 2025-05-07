@@ -56,12 +56,12 @@ impl Guard {
             let cleanup = Cleanup::new(self, &server);
             let reset = cleanup.needed();
             let sync_prepared = server.sync_prepared();
-            let receiving_data = server.receiving_data();
+            let needs_drain = server.needs_drain();
 
             server.reset_changed_params();
 
             // No need to delay checkin unless we have to.
-            if rollback || reset || sync_prepared || receiving_data {
+            if rollback || reset || sync_prepared || needs_drain {
                 let rollback_timeout = pool.inner().config.rollback_timeout();
                 spawn(async move {
                     if timeout(
@@ -86,10 +86,15 @@ impl Guard {
         let rollback = server.in_transaction();
         let schema_changed = server.schema_changed();
         let sync_prepared = server.sync_prepared();
-        let receiving_data = server.receiving_data();
+        let needs_drain = server.needs_drain();
 
-        if receiving_data {
+        if needs_drain {
             // Receive whatever data the client left before disconnecting.
+            debug!(
+                "draining data from \"{}\" server [{}]",
+                server.stats().state,
+                server.addr()
+            );
             server.drain().await;
         }
         // Rollback any unfinished transactions,

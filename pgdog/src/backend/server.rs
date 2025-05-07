@@ -217,6 +217,7 @@ impl Server {
         self.flush().await?;
 
         self.stats.state(State::ReceivingData);
+
         Ok(())
     }
 
@@ -431,8 +432,8 @@ impl Server {
         self.sync_prepared
     }
 
-    pub fn receiving_data(&self) -> bool {
-        self.stats.state == State::ReceivingData
+    pub fn needs_drain(&self) -> bool {
+        self.stats.state == State::ReceivingData && !self.done() && self.has_more_messages()
     }
 
     /// Server parameters.
@@ -536,11 +537,10 @@ impl Server {
     }
 
     pub async fn drain(&mut self) {
-        if self.receiving_data() {
-            while self.has_more_messages() {
-                if self.read().await.is_err() {
-                    self.stats.state(State::Error);
-                }
+        while self.has_more_messages() && !self.done() {
+            if self.read().await.is_err() {
+                self.stats.state(State::Error);
+                break;
             }
         }
     }
