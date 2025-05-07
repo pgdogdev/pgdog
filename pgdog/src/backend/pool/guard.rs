@@ -66,7 +66,9 @@ impl Guard {
                 spawn(async move {
                     if receiving_data {
                         // Receive whatever data the client left before disconnecting.
-                        server.drain().await;
+                        if timeout(rollback_timeout, server.drain()).await.is_err() {
+                            error!("drain timeout [{}]", server.addr());
+                        }
                     }
                     // Rollback any unfinished transactions,
                     // but only if the server is in sync (protocol-wise).
