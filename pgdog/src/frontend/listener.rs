@@ -59,7 +59,6 @@ impl Listener {
                    let future = async move {
                        match Self::handle_client(stream, addr, client_comms).await {
                            Ok(_) => (),
-                           // Err(Error::Net(std::))
                            Err(err) => if !err.disconnect() {
                                error!("client crashed: {:?}", err);
                            } else {
