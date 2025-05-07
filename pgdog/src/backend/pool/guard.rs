@@ -8,6 +8,7 @@ use tracing::{debug, error};
 
 use crate::backend::Server;
 
+use super::Error;
 use super::{cleanup::Cleanup, Pool};
 
 /// Connection guard.
@@ -54,7 +55,6 @@ impl Guard {
             let rollback = server.in_transaction();
             let cleanup = Cleanup::new(self, &server);
             let reset = cleanup.needed();
-            let schema_changed = server.schema_changed();
             let sync_prepared = server.sync_prepared();
             let receiving_data = server.receiving_data();
 
@@ -62,53 +62,17 @@ impl Guard {
 
             // No need to delay checkin unless we have to.
             if rollback || reset || sync_prepared || receiving_data {
-                let rollback_timeout = pool.lock().config.rollback_timeout();
+                let rollback_timeout = pool.inner().config.rollback_timeout();
                 spawn(async move {
-                    if receiving_data {
-                        // Receive whatever data the client left before disconnecting.
-                        if timeout(rollback_timeout, server.drain()).await.is_err() {
-                            error!("drain timeout [{}]", server.addr());
-                        }
-                    }
-                    // Rollback any unfinished transactions,
-                    // but only if the server is in sync (protocol-wise).
-                    if rollback {
-                        if timeout(rollback_timeout, server.rollback()).await.is_err() {
-                            error!("rollback timeout [{}]", server.addr());
-                        }
-                    }
-
-                    if cleanup.needed() {
-                        match timeout(rollback_timeout, server.execute_batch(cleanup.queries()))
-                            .await
-                        {
-                            Ok(Err(_)) | Err(_) => {
-                                error!("server reset error [{}]", server.addr());
-                            }
-                            Ok(Ok(_)) => {
-                                debug!("{} [{}]", cleanup, server.addr());
-                                server.cleaned();
-                            }
-                        }
-                    }
-
-                    if schema_changed {
-                        server.reset_schema_changed();
-                    }
-
-                    if cleanup.is_reset_params() {
-                        server.reset_params();
-                    }
-
-                    if sync_prepared {
-                        if let Err(err) = server.sync_prepared_statements().await {
-                            error!(
-                                "prepared statements sync error: {:?} [{}]",
-                                err,
-                                server.addr()
-                            );
-                        }
-                    }
+                    if timeout(
+                        rollback_timeout,
+                        Self::cleanup_internal(&mut server, cleanup),
+                    )
+                    .await
+                    .is_err()
+                    {
+                        error!("rollback timeout [{}]", server.addr());
+                    };
 
                     pool.checkin(server);
                 });
@@ -116,6 +80,55 @@ impl Guard {
                 pool.checkin(server);
             }
         }
+    }
+
+    async fn cleanup_internal(server: &mut Box<Server>, cleanup: Cleanup) -> Result<(), Error> {
+        let rollback = server.in_transaction();
+        let schema_changed = server.schema_changed();
+        let sync_prepared = server.sync_prepared();
+        let receiving_data = server.receiving_data();
+
+        if receiving_data {
+            // Receive whatever data the client left before disconnecting.
+            server.drain().await;
+        }
+        // Rollback any unfinished transactions,
+        // but only if the server is in sync (protocol-wise).
+        if rollback {
+            server.rollback().await;
+        }
+
+        if cleanup.needed() {
+            match server.execute_batch(cleanup.queries()).await {
+                Err(_) => {
+                    error!("server reset error [{}]", server.addr());
+                }
+                Ok(_) => {
+                    debug!("{} [{}]", cleanup, server.addr());
+                    server.cleaned();
+                }
+            }
+        }
+
+        if schema_changed {
+            server.reset_schema_changed();
+        }
+
+        if cleanup.is_reset_params() {
+            server.reset_params();
+        }
+
+        if sync_prepared {
+            if let Err(err) = server.sync_prepared_statements().await {
+                error!(
+                    "prepared statements sync error: {:?} [{}]",
+                    err,
+                    server.addr()
+                );
+            }
+        }
+
+        Ok(())
     }
 }
 
