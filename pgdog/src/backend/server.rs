@@ -215,6 +215,8 @@ impl Server {
             self.send_one(message).await?;
         }
         self.flush().await?;
+
+        self.stats.state(State::ReceivingData);
         Ok(())
     }
 
@@ -429,6 +431,10 @@ impl Server {
         self.sync_prepared
     }
 
+    pub fn receiving_data(&self) -> bool {
+        self.stats.state == State::ReceivingData
+    }
+
     /// Server parameters.
     #[inline]
     pub fn params(&self) -> &Parameters {
@@ -526,6 +532,16 @@ impl Server {
 
         if !self.in_sync() {
             self.stats.state(State::Error);
+        }
+    }
+
+    pub async fn drain(&mut self) {
+        if self.receiving_data() {
+            while self.has_more_messages() {
+                if self.read().await.is_err() {
+                    self.stats.state(State::Error);
+                }
+            }
         }
     }
 

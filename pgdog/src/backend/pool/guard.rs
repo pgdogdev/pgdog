@@ -56,28 +56,40 @@ impl Guard {
             let reset = cleanup.needed();
             let schema_changed = server.schema_changed();
             let sync_prepared = server.sync_prepared();
+            let receiving_data = server.receiving_data();
+            let mut error = false;
 
             server.reset_changed_params();
 
             // No need to delay checkin unless we have to.
-            if rollback || reset || sync_prepared {
+            if rollback || reset || sync_prepared || receiving_data {
                 let rollback_timeout = pool.lock().config.rollback_timeout();
                 spawn(async move {
+                    if receiving_data {
+                        // Receive whatever data the client left before disconnecting.
+                        server.drain().await;
+                    }
                     // Rollback any unfinished transactions,
                     // but only if the server is in sync (protocol-wise).
-                    if rollback && timeout(rollback_timeout, server.rollback()).await.is_err() {
-                        error!("rollback timeout [{}]", server.addr());
+                    if rollback {
+                        if timeout(rollback_timeout, server.rollback()).await.is_err() {
+                            error!("rollback timeout [{}]", server.addr());
+                            error = true;
+                        }
                     }
 
                     if cleanup.needed() {
-                        if timeout(rollback_timeout, server.execute_batch(cleanup.queries()))
+                        match timeout(rollback_timeout, server.execute_batch(cleanup.queries()))
                             .await
-                            .is_err()
                         {
-                            error!("reset timeout [{}]", server.addr());
-                        } else {
-                            debug!("{} [{}]", cleanup, server.addr());
-                            server.cleaned();
+                            Ok(Err(_)) | Err(_) => {
+                                error!("server reset error [{}]", server.addr());
+                                error = true;
+                            }
+                            Ok(Ok(_)) => {
+                                debug!("{} [{}]", cleanup, server.addr());
+                                server.cleaned();
+                            }
                         }
                     }
 
@@ -85,7 +97,7 @@ impl Guard {
                         server.reset_schema_changed();
                     }
 
-                    if cleanup.is_reset_params() {
+                    if cleanup.is_reset_params() && !error {
                         server.reset_params();
                     }
 
