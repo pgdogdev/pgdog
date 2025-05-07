@@ -333,7 +333,7 @@ impl QueryParser {
             }
         }
 
-        debug!("{:#?}", command);
+        debug!("query router decision: {:#?}", command);
 
         if dry_run {
             let default_route = Route::write(None);

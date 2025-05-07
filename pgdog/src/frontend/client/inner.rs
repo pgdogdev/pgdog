@@ -121,11 +121,12 @@ impl Inner {
             self.stats.connected();
             if let Ok(addr) = self.backend.addr() {
                 debug!(
-                    "client paired with {} [{:.4}ms]",
+                    "client paired with [{}] using route [{}] [{:.4}ms]",
                     addr.into_iter()
                         .map(|a| a.to_string())
                         .collect::<Vec<_>>()
                         .join(","),
+                    route,
                     self.stats.wait_time.as_secs_f64() * 1000.0
                 );
             }

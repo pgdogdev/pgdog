@@ -1,6 +1,7 @@
 //! Parse (F) message.
 
 use crate::net::c_string_buf_len;
+use std::fmt::Debug;
 use std::io::Cursor;
 use std::mem::size_of;
 use std::str::from_utf8;
@@ -10,7 +11,7 @@ use super::code;
 use super::prelude::*;
 
 /// Parse (F) message.
-#[derive(Debug, Clone, Hash, Eq, PartialEq, Default)]
+#[derive(Clone, Hash, Eq, PartialEq, Default)]
 pub struct Parse {
     /// Prepared statement name.
     name: Bytes,
@@ -20,6 +21,16 @@ pub struct Parse {
     data_types: Bytes,
     /// Original payload.
     original: Option<Bytes>,
+}
+
+impl Debug for Parse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Parse")
+            .field("name", &self.name())
+            .field("query", &self.query())
+            .field("modified", &self.original.is_none())
+            .finish()
+    }
 }
 
 impl Parse {
