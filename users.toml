@@ -11,11 +11,6 @@ database = "pgdog"
 password = "pgdog"
 
 [[users]]
-name = "pgdog"
-database = "mirror"
-password = "pgdog"
-
-[[users]]
 name = "pgdog_replication"
 database = "pgdog"
 password = "pgdog"
@@ -34,9 +29,4 @@ min_pool_size = 0
 [[users]]
 name = "pgdog"
 database = "pgdog_sharded"
-password = "pgdog"
-
-[[users]]
-name = "pgdog"
-database = "failover"
 password = "pgdog"
