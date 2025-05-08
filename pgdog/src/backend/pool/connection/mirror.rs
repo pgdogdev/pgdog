@@ -8,7 +8,10 @@ use crate::config::config;
 use crate::frontend::client::timeouts::Timeouts;
 use crate::frontend::{PreparedStatements, Router};
 use crate::state::State;
-use crate::{backend::pool::Request, frontend::Buffer};
+use crate::{
+    backend::pool::{Error as PoolError, Request},
+    frontend::Buffer,
+};
 
 use super::Connection;
 use super::Error;
@@ -63,7 +66,10 @@ impl Mirror {
                         if let Some(req) = req {
                             // TODO: timeout these.
                             if let Err(err) = mirror.handle(&req).await {
-                                error!("mirror error: {}", err);
+                                if !matches!(err, Error::Pool(PoolError::Offline)) {
+                                    error!("mirror error: {}", err);
+                                }
+
                                 mirror.connection.disconnect();
                                 mirror.state = State::Idle;
                             } else {
