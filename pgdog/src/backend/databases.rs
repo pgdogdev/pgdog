@@ -275,7 +275,9 @@ impl Databases {
 
     /// Launch all pools.
     fn launch(&self) {
-        for cluster in self.all().values() {
+        let mirrors = self.all().values().filter(|c| c.mirror_of().is_some());
+        let normal = self.all().values().filter(|c| c.mirror_of().is_none());
+        for cluster in mirrors.chain(normal) {
             cluster.launch();
             if let Some(mirror_of) = cluster.mirror_of() {
                 info!(
