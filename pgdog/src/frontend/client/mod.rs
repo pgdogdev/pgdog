@@ -178,6 +178,8 @@ impl Client {
             stream_buffer: BytesMut::new(),
         };
 
+        drop(conn);
+
         if client.admin {
             // Admin clients are not waited on during shutdown.
             spawn(async move {

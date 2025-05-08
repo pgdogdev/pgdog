@@ -2,6 +2,7 @@
 
 use mirror::{MirrorHandler, MirrorRequest};
 use tokio::time::sleep;
+use tracing::debug;
 
 use crate::{
     admin::backend::Backend,
@@ -257,9 +258,15 @@ impl Connection {
                 self.cluster = Some(cluster);
                 self.mirrors = databases
                     .mirrors(user)?
+                    .unwrap_or(&[])
                     .into_iter()
                     .map(|mirror| Mirror::new(&mirror))
                     .collect::<Result<Vec<_>, Error>>()?;
+                debug!(
+                    r#"database "{}" has {} mirrors"#,
+                    self.cluster()?.name(),
+                    self.mirrors.len()
+                );
             }
 
             _ => (),

@@ -37,7 +37,7 @@ name = "mirror"
 host = "127.0.0.1"
 port = 5432
 role = "primary"
-mirror_of = "pgdog"
+# mirror_of = "pgdog"
 
 
 
@@ -85,12 +85,14 @@ name = "pgdog_sharded"
 host = "127.0.0.1"
 database_name = "shard_0"
 shard = 0
+mirror_of = "pgdog"
 
 [[databases]]
 name = "pgdog_sharded"
 host = "127.0.0.1"
 database_name = "shard_1"
 shard = 1
+mirror_of = "pgdog"
 
 # [[databases]]
 # name = "failover"

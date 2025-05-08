@@ -1,12 +1,13 @@
-use std::sync::Arc;
-
 use tokio::select;
-use tokio::sync::Notify;
+use tokio::time::timeout;
 use tokio::{spawn, sync::mpsc::*};
-use tracing::error;
+use tracing::{debug, error};
 
 use crate::backend::Cluster;
+use crate::config::config;
+use crate::frontend::client::timeouts::Timeouts;
 use crate::frontend::{PreparedStatements, Router};
+use crate::state::State;
 use crate::{backend::pool::Request, frontend::Buffer};
 
 use super::Connection;
@@ -33,52 +34,64 @@ pub(crate) struct Mirror {
     router: Router,
     cluster: Cluster,
     prepared_statements: PreparedStatements,
+    state: State,
 }
 
 impl Mirror {
     pub(crate) fn new(cluster: &Cluster) -> Result<MirrorHandler, Error> {
         let connection = Connection::new(cluster.user(), cluster.name(), false)?;
-        let shutdown = Arc::new(Notify::new());
 
         let mut mirror = Self {
             connection,
             router: Router::new(),
             prepared_statements: PreparedStatements::new(),
             cluster: cluster.clone(),
+            state: State::Idle,
         };
 
-        let (tx, mut rx) = channel(128);
-        let handler = MirrorHandler {
-            tx,
-            shutdown: shutdown.clone(),
-        };
+        let config = config();
+
+        let query_timeout = Timeouts::from_config(&config.config.general);
+        let (tx, mut rx) = channel(config.config.general.mirror_queue);
+        let handler = MirrorHandler { tx };
 
         spawn(async move {
             loop {
+                let qt = query_timeout.query_timeout(&mirror.state);
                 select! {
-                    _ = shutdown.notified() => {
-                        break;
-                    }
-
                     req = rx.recv() => {
                         if let Some(req) = req {
                             // TODO: timeout these.
                             if let Err(err) = mirror.handle(&req).await {
                                 error!("mirror error: {}", err);
                                 mirror.connection.disconnect();
+                                mirror.state = State::Idle;
+                            } else {
+                                mirror.state = State::Active;
                             }
+                        } else {
+                            debug!("mirror connection shutting down");
+                            break;
                         }
                     }
 
-                    message = mirror.connection.read() => {
-                        if let Err(err) = message {
-                            error!("mirror error: {}", err);
-                            mirror.connection.disconnect();
+                    message = timeout(qt, mirror.connection.read()) => {
+                        match message {
+                            Err(_) => {
+                                error!("mirror query timeout");
+                                mirror.connection.disconnect();
+                            }
+                            Ok(Err(err)) => {
+                                error!("mirror error: {}", err);
+                                mirror.connection.disconnect();
+                            }
+                            Ok(_) => (),
                         }
 
                         if mirror.connection.done() {
                             mirror.connection.disconnect();
                             mirror.router.reset();
+                            mirror.state = State::Idle;
                         }
                     }
                 }
@@ -117,11 +130,4 @@ impl Mirror {
 #[derive(Debug)]
 pub(crate) struct MirrorHandler {
     pub(super) tx: Sender<MirrorRequest>,
-    shutdown: Arc<Notify>,
-}
-
-impl Drop for MirrorHandler {
-    fn drop(&mut self) {
-        self.shutdown.notify_one();
-    }
 }

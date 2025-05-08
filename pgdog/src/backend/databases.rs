@@ -146,6 +146,7 @@ impl ToUser for (&str, Option<&str>) {
 pub struct Databases {
     databases: HashMap<User, Cluster>,
     manual_queries: HashMap<String, ManualQuery>,
+    mirrors: HashMap<String, Vec<Cluster>>,
 }
 
 impl Databases {
@@ -186,20 +187,11 @@ impl Databases {
         }
     }
 
-    pub fn mirrors(&self, user: impl ToUser) -> Result<Vec<Cluster>, Error> {
+    pub fn mirrors(&self, user: impl ToUser) -> Result<Option<&[Cluster]>, Error> {
         let user = user.to_user();
         if let Some(cluster) = self.databases.get(&user) {
             let name = cluster.name();
-
-            let mirrors = self
-                .databases
-                .iter()
-                .find(|(_, cluster)| cluster.mirror_of() == Some(name))
-                .map(|(_, cluster)| cluster.clone())
-                .into_iter()
-                .collect::<Vec<_>>();
-
-            return Ok(mirrors);
+            Ok(self.mirrors.get(name).map(|m| m.as_slice()))
         } else {
             Err(Error::NoDatabase(user.clone()))
         }
@@ -270,6 +262,7 @@ impl Databases {
                 .map(|(k, v)| (k.clone(), v.duplicate()))
                 .collect(),
             manual_queries: self.manual_queries.clone(),
+            mirrors: self.mirrors.clone(),
         }
     }
 
@@ -353,7 +346,7 @@ pub(crate) fn new_pool(
                 .flatten(),
             _ => {
                 warn!(
-                    "database \"{}\" has multiple mirror_of, disabling mirroring",
+                    "database \"{}\" has different \"mirror_of\" settings, disabling mirroring",
                     user.database
                 );
                 None
@@ -385,8 +378,21 @@ pub fn from_config(config: &ConfigAndUsers) -> Databases {
         }
     }
 
+    let mut mirrors = HashMap::new();
+
+    for cluster in databases.values() {
+        let mirror_clusters = databases
+            .iter()
+            .find(|(_, c)| c.mirror_of() == Some(cluster.name()))
+            .map(|(_, c)| c.clone())
+            .into_iter()
+            .collect::<Vec<_>>();
+        mirrors.insert(cluster.name().to_owned(), mirror_clusters);
+    }
+
     Databases {
         databases,
         manual_queries: config.config.manual_queries(),
+        mirrors,
     }
 }
