@@ -1,8 +1,9 @@
 ### Setup
 
 1. Make sure you don't have anything running on ports 6433 and 6432.
-2. `docker-compose up`
-3. (Optional) Delete all previous images to make sure to pull latest from Hub: `docker rm -vf $(docker ps -aq)` and `docker rmi -f $(docker images -aq)`
+2. (Optional) Delete all previous images to make sure to pull latest from Hub: `docker rm -vf $(docker ps -aq)` and `docker rmi -f $(docker images -aq)`
+3. `docker-compose up`
+
 
 ### Run the benchmark
 
