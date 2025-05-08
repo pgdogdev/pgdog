@@ -1,6 +1,8 @@
 //! Server connection requested by a frontend.
 
+use mirror::{MirrorHandler, MirrorRequest};
 use tokio::time::sleep;
+use tracing::debug;
 
 use crate::{
     admin::backend::Backend,
@@ -9,7 +11,10 @@ use crate::{
         replication::{Buffer, ReplicationConfig},
     },
     config::PoolerMode,
-    frontend::router::{parser::Shard, CopyRow, Route},
+    frontend::{
+        router::{parser::Shard, CopyRow, Route},
+        Router,
+    },
     net::{Bind, Message, ParameterStatus, Parameters},
 };
 
@@ -23,19 +28,22 @@ use std::{mem::replace, time::Duration};
 pub mod aggregate;
 pub mod binding;
 pub mod buffer;
+pub mod mirror;
 pub mod multi_shard;
 
 use aggregate::Aggregates;
 use binding::Binding;
+use mirror::Mirror;
 use multi_shard::MultiShard;
 
 /// Wrapper around a server connection.
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct Connection {
     user: String,
     database: String,
     binding: Binding,
     cluster: Option<Cluster>,
+    mirrors: Vec<MirrorHandler>,
 }
 
 impl Connection {
@@ -50,6 +58,7 @@ impl Connection {
             cluster: None,
             user: user.to_owned(),
             database: database.to_owned(),
+            mirrors: vec![],
         };
 
         if !admin {
@@ -100,6 +109,13 @@ impl Connection {
             Buffer::new(shard, replication_config, sharding_schema),
         );
         Ok(())
+    }
+
+    /// Send traffic to mirrors.
+    pub(crate) fn mirror(&self, buffer: &crate::frontend::Buffer) {
+        for mirror in &self.mirrors {
+            let _ = mirror.tx.try_send(MirrorRequest::new(buffer));
+        }
     }
 
     /// Try to get a connection for the given route.
@@ -208,12 +224,49 @@ impl Connection {
         self.binding.send_copy(rows).await
     }
 
+    /// Send buffer in a potentially sharded context.
+    pub(crate) async fn handle_buffer(
+        &mut self,
+        messages: &crate::frontend::Buffer,
+        router: &mut Router,
+        streaming: bool,
+    ) -> Result<(), Error> {
+        if messages.copy() && !streaming {
+            let rows = router.copy_data(messages).unwrap();
+            if !rows.is_empty() {
+                self.send_copy(rows).await?;
+                self.send(&messages.without_copy_data()).await?;
+            } else {
+                self.send(messages).await?;
+            }
+        } else {
+            // Send query to server.
+            self.send(messages).await?;
+        }
+
+        Ok(())
+    }
+
     /// Fetch the cluster from the global database store.
     pub(crate) fn reload(&mut self) -> Result<(), Error> {
         match self.binding {
             Binding::Server(_) | Binding::MultiShard(_, _) | Binding::Replication(_, _) => {
-                let cluster = databases().cluster((self.user.as_str(), self.database.as_str()))?;
+                let databases = databases();
+                let user = (self.user.as_str(), self.database.as_str());
+                let cluster = databases.cluster(user)?;
+
                 self.cluster = Some(cluster);
+                self.mirrors = databases
+                    .mirrors(user)?
+                    .unwrap_or(&[])
+                    .into_iter()
+                    .map(|mirror| Mirror::new(&mirror))
+                    .collect::<Result<Vec<_>, Error>>()?;
+                debug!(
+                    r#"database "{}" has {} mirrors"#,
+                    self.cluster()?.name(),
+                    self.mirrors.len()
+                );
             }
 
             _ => (),

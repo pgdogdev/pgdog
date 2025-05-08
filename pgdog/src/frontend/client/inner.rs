@@ -108,6 +108,18 @@ impl Inner {
         self.backend.disconnect();
     }
 
+    pub(super) async fn handle_buffer(
+        &mut self,
+        buffer: &Buffer,
+        streaming: bool,
+    ) -> Result<(), Error> {
+        self.backend
+            .handle_buffer(buffer, &mut self.router, streaming)
+            .await?;
+
+        Ok(())
+    }
+
     /// Connect to a backend (or multiple).
     pub(super) async fn connect(&mut self, request: &Request) -> Result<(), BackendError> {
         // Use currently determined route.

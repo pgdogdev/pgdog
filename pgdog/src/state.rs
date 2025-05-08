@@ -24,6 +24,8 @@ pub enum State {
     PreparedStatementError,
     /// Processing server reply.
     ReceivingData,
+    /// Copy started
+    CopyMode,
 }
 
 impl std::fmt::Display for State {
@@ -40,6 +42,7 @@ impl std::fmt::Display for State {
             ParseComplete => write!(f, "parse complete"),
             PreparedStatementError => write!(f, "prepared statement error"),
             ReceivingData => write!(f, "receiving data"),
+            CopyMode => write!(f, "copy mode"),
         }
     }
 }

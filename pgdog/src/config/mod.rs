@@ -324,6 +324,9 @@ pub struct General {
     /// Idle timeout.
     #[serde(default = "General::idle_timeout")]
     pub idle_timeout: u64,
+    /// Mirror queue size.
+    #[serde(default = "General::mirror_queue")]
+    pub mirror_queue: usize,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -383,6 +386,7 @@ impl Default for General {
             checkout_timeout: Self::checkout_timeout(),
             dry_run: bool::default(),
             idle_timeout: Self::idle_timeout(),
+            mirror_queue: Self::mirror_queue(),
         }
     }
 }
@@ -458,6 +462,10 @@ impl General {
 
     fn checkout_timeout() -> u64 {
         Duration::from_secs(5).as_millis() as u64
+    }
+
+    fn mirror_queue() -> usize {
+        128
     }
 
     /// Get shutdown timeout as a duration.
@@ -547,6 +555,8 @@ pub struct Database {
     pub statement_timeout: Option<u64>,
     /// Idle timeout.
     pub idle_timeout: Option<u64>,
+    /// Mirror of another database.
+    pub mirror_of: Option<String>,
 }
 
 impl Database {
