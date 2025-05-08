@@ -1,0 +1,24 @@
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_PASSWORD: postgres
+  pgbouncer:
+    depends_on:
+      - postgres
+    build:
+      dockerfile: ./Dockerfile.pgbouncer
+    volumes:
+      - ./pgbouncer.ini:/etc/pgbouncer.ini
+      - ./userlist.txt:/etc/userlist.txt
+    ports:
+      - 6433:6433
+  pgdog:
+    depends_on:
+      - postgres
+    image: ghcr.io/pgdogdev/pgdog:main
+    volumes:
+      - ./pgdog.toml:/pgdog/pgdog.toml
+      - ./users.toml:/pgdog/users.toml
+    ports:
+      - 6432:6432
