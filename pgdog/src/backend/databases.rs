@@ -17,6 +17,7 @@ use crate::{
 
 use super::{
     pool::{Address, ClusterConfig, Config},
+    reload_notify,
     replication::ReplicationConfig,
     Cluster, ClusterShardConfig, Error, ShardedTables,
 };
@@ -38,6 +39,7 @@ pub fn replace_databases(new_databases: Databases, reload: bool) {
     // to ensure zero downtime for clients.
     let old_databases = databases();
     let new_databases = Arc::new(new_databases);
+    reload_notify::started();
     if reload {
         // Move whatever connections we can over to new pools.
         old_databases.move_conns_to(&new_databases);
@@ -45,6 +47,7 @@ pub fn replace_databases(new_databases: Databases, reload: bool) {
     new_databases.launch();
     DATABASES.store(new_databases);
     old_databases.shutdown();
+    reload_notify::done();
 }
 
 /// Re-create all connections.
