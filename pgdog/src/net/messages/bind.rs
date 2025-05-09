@@ -169,11 +169,12 @@ impl Bind {
 
     /// Is this Bind message anonymous?
     pub fn anonymous(&self) -> bool {
-        self.statement.is_empty()
+        self.statement.len() == 1
     }
 
     #[inline]
     pub(crate) fn statement(&self) -> &str {
+        // SAFETY: We check that this is valid UTF-8 in FromBytes::from_bytes below.
         unsafe { from_utf8_unchecked(&self.statement[0..self.statement.len() - 1]) }
     }
 
@@ -352,6 +353,9 @@ mod test {
         let res = conn.read().await.unwrap();
         let err = ErrorResponse::from_bytes(res.to_bytes().unwrap()).unwrap();
         assert_eq!(err.code, "26000");
+
+        let anon = Bind::default();
+        assert!(anon.anonymous());
     }
 
     #[tokio::test]
