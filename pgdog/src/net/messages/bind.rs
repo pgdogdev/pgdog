@@ -1,5 +1,5 @@
 //! Bind (F) message.
-use crate::net::c_string_buf;
+use crate::net::c_string_buf_len;
 use uuid::Uuid;
 
 use super::code;
@@ -10,6 +10,7 @@ use super::Vector;
 
 use std::fmt::Debug;
 use std::str::from_utf8;
+use std::str::from_utf8_unchecked;
 
 #[derive(PartialEq, Debug, Copy, Clone, PartialOrd, Ord, Eq)]
 pub enum Format {
@@ -97,12 +98,12 @@ impl ParameterWithFormat<'_> {
 }
 
 /// Bind (F) message.
-#[derive(Debug, Clone, Default, PartialEq, PartialOrd, Ord, Eq)]
+#[derive(Debug, Clone, PartialEq, PartialOrd, Ord, Eq)]
 pub struct Bind {
     /// Portal name.
-    portal: String,
+    portal: Bytes,
     /// Prepared statement name.
-    statement: String,
+    statement: Bytes,
     /// Format codes.
     codes: Vec<Format>,
     /// Parameters.
@@ -113,12 +114,23 @@ pub struct Bind {
     original: Option<Bytes>,
 }
 
+impl Default for Bind {
+    fn default() -> Self {
+        Bind {
+            portal: Bytes::from("\0"),
+            statement: Bytes::from("\0"),
+            codes: vec![],
+            params: vec![],
+            results: vec![],
+            original: None,
+        }
+    }
+}
+
 impl Bind {
     pub(crate) fn len(&self) -> usize {
         self.portal.len()
-            + 1 // NULL
             + self.statement.len()
-            + 1 // NULL
             + self.codes.len() * std::mem::size_of::<i16>() + 2 // num codes
             + self.params.iter().map(|p| p.len()).sum::<usize>() + 2 // num params
             + self.results.len() * std::mem::size_of::<i16>() + 2 // num results
@@ -150,19 +162,20 @@ impl Bind {
 
     /// Rename this Bind message to a different prepared statement.
     pub fn rename(mut self, name: impl ToString) -> Self {
-        self.statement = name.to_string();
+        self.statement = Bytes::from(name.to_string() + "\0");
         self.original = None;
         self
     }
 
     /// Is this Bind message anonymous?
     pub fn anonymous(&self) -> bool {
-        self.statement.is_empty()
+        self.statement.len() == 1
     }
 
     #[inline]
     pub(crate) fn statement(&self) -> &str {
-        &self.statement
+        // SAFETY: We check that this is valid UTF-8 in FromBytes::from_bytes below.
+        unsafe { from_utf8_unchecked(&self.statement[0..self.statement.len() - 1]) }
     }
 
     /// Format codes, if any.
@@ -175,14 +188,14 @@ impl Bind {
 impl Bind {
     pub(crate) fn test_statement(name: &str) -> Self {
         Self {
-            statement: name.to_string(),
+            statement: Bytes::from(name.to_string() + "\0"),
             ..Default::default()
         }
     }
 
     pub(crate) fn test_params(name: &str, params: &[Parameter]) -> Self {
         Self {
-            statement: name.to_string(),
+            statement: Bytes::from(name.to_string() + "\0"),
             params: params.to_vec(),
             ..Default::default()
         }
@@ -190,15 +203,15 @@ impl Bind {
 
     pub(crate) fn test_name_portal(name: &str, portal: &str) -> Self {
         Self {
-            statement: name.to_owned(),
-            portal: portal.to_owned(),
+            statement: Bytes::from(name.to_string() + "\0"),
+            portal: Bytes::from(portal.to_string() + "\0"),
             ..Default::default()
         }
     }
 
     pub(crate) fn test_params_codes(name: &str, params: &[Parameter], codes: &[Format]) -> Self {
         Self {
-            statement: name.to_string(),
+            statement: Bytes::from(name.to_string() + "\0"),
             codes: codes.to_vec(),
             params: params.to_vec(),
             ..Default::default()
@@ -211,8 +224,12 @@ impl FromBytes for Bind {
         let original = bytes.clone();
         code!(bytes, 'B');
         let _len = bytes.get_i32();
-        let portal = c_string_buf(&mut bytes);
-        let statement = c_string_buf(&mut bytes);
+
+        let portal = bytes.split_to(c_string_buf_len(&bytes));
+        let statement = bytes.split_to(c_string_buf_len(&bytes));
+        from_utf8(&portal[0..portal.len() - 1])?;
+        from_utf8(&statement[0..statement.len() - 1])?;
+
         let num_codes = bytes.get_i16();
         let codes = (0..num_codes)
             .map(|_| match bytes.get_i16() {
@@ -258,8 +275,8 @@ impl ToBytes for Bind {
         let mut payload = Payload::named(self.code());
         payload.reserve(self.len());
 
-        payload.put_string(&self.portal);
-        payload.put_string(&self.statement);
+        payload.put(self.portal.clone());
+        payload.put(self.statement.clone());
         payload.put_i16(self.codes.len() as i16);
         for code in &self.codes {
             payload.put_i16(match code {
@@ -304,8 +321,8 @@ mod test {
         let mut conn = pool.get(&Request::default()).await.unwrap();
         let bind = Bind {
             original: None,
-            portal: "".into(),
-            statement: "__pgdog_1".into(),
+            portal: "\0".into(),
+            statement: "__pgdog_1\0".into(),
             codes: vec![Format::Binary, Format::Text],
             params: vec![
                 Parameter {
@@ -336,6 +353,9 @@ mod test {
         let res = conn.read().await.unwrap();
         let err = ErrorResponse::from_bytes(res.to_bytes().unwrap()).unwrap();
         assert_eq!(err.code, "26000");
+
+        let anon = Bind::default();
+        assert!(anon.anonymous());
     }
 
     #[tokio::test]
@@ -346,7 +366,7 @@ mod test {
         let json = r#"[{"name": "force_database_error", "type": "C", "value": "false"}, {"name": "__dbver__", "type": "C", "value": 2}]"#;
         let jsonb = binary_marker + json;
         let bind = Bind {
-            statement: "test".into(),
+            statement: "test\0".into(),
             codes: vec![Format::Binary],
             params: vec![Parameter {
                 data: jsonb.as_bytes().to_vec(),
