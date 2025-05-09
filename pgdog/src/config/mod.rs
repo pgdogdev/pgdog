@@ -327,6 +327,8 @@ pub struct General {
     /// Mirror queue size.
     #[serde(default = "General::mirror_queue")]
     pub mirror_queue: usize,
+    #[serde(default)]
+    pub auth_type: AuthType,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -355,6 +357,24 @@ pub enum PassthoughAuth {
     Disabled,
     Enabled,
     EnabledPlain,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum AuthType {
+    Md5,
+    #[default]
+    Scram,
+}
+
+impl AuthType {
+    pub fn md5(&self) -> bool {
+        matches!(self, Self::Md5)
+    }
+
+    pub fn scram(&self) -> bool {
+        matches!(self, Self::Scram)
+    }
 }
 
 impl Default for General {
@@ -387,6 +407,7 @@ impl Default for General {
             dry_run: bool::default(),
             idle_timeout: Self::idle_timeout(),
             mirror_queue: Self::mirror_queue(),
+            auth_type: AuthType::default(),
         }
     }
 }
