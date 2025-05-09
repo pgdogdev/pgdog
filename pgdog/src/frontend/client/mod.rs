@@ -96,8 +96,8 @@ impl Client {
         } else {
             conn.cluster()?.password()
         };
-
-        let auth_ok = if stream.is_tls() {
+        let auth_md5 = config.config.general.auth_type.md5();
+        let auth_ok = if stream.is_tls() || auth_md5 {
             let md5 = md5::Client::new(user, password);
             stream.send_flush(&md5.challenge()).await?;
             let password = Password::from_bytes(stream.read().await?.to_bytes()?)?;

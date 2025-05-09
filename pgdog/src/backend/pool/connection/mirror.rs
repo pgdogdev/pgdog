@@ -66,7 +66,7 @@ impl Mirror {
                         if let Some(req) = req {
                             // TODO: timeout these.
                             if let Err(err) = mirror.handle(&req).await {
-                                if !matches!(err, Error::Pool(PoolError::Offline)) {
+                                if !matches!(err, Error::Pool(PoolError::Offline | PoolError::AllReplicasDown)) {
                                     error!("mirror error: {}", err);
                                 }
 
