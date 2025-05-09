@@ -8,6 +8,7 @@ use crate::{
     admin::backend::Backend,
     backend::{
         databases::databases,
+        reload_notify,
         replication::{Buffer, ReplicationConfig},
     },
     config::PoolerMode,
@@ -85,6 +86,10 @@ impl Connection {
             match self.try_conn(request, route).await {
                 Ok(()) => (),
                 Err(Error::Pool(super::Error::Offline | super::Error::AllReplicasDown)) => {
+                    // Wait to reload pools until they are ready.
+                    if let Some(wait) = reload_notify::ready() {
+                        wait.await;
+                    }
                     self.reload()?;
                     return self.try_conn(request, route).await;
                 }
