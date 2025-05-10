@@ -131,7 +131,7 @@ impl Parser {
             // TODO: This is not ready yet. We have a race and
             // also the changed settings need to be propagated
             // into the pools.
-            // "set" => ParseResult::Set(Set::parse(&sql)?),
+            "set" => ParseResult::Set(Set::parse(&sql)?),
             command => {
                 debug!("unknown admin command: {}", command);
                 return Err(Error::Syntax);

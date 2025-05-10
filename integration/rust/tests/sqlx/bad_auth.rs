@@ -1,6 +1,8 @@
+use serial_test::serial;
 use sqlx::{Connection, PgConnection};
 
 #[tokio::test]
+#[serial]
 async fn test_bad_auth() {
     for user in ["pgdog", "pgdog_bad_user"] {
         for password in ["bad_password", "another_password", ""] {

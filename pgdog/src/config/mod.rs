@@ -36,7 +36,11 @@ pub fn config() -> Arc<ConfigAndUsers> {
 
 /// Load the configuration file from disk.
 pub fn load(config: &PathBuf, users: &PathBuf) -> Result<ConfigAndUsers, Error> {
-    let mut config = ConfigAndUsers::load(config, users)?;
+    let config = ConfigAndUsers::load(config, users)?;
+    set(config)
+}
+
+pub fn set(mut config: ConfigAndUsers) -> Result<ConfigAndUsers, Error> {
     config.config.check();
     for table in config.config.sharded_tables.iter_mut() {
         table.load_centroids()?;

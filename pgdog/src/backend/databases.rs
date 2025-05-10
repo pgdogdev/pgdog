@@ -6,7 +6,8 @@ use std::sync::Arc;
 
 use arc_swap::ArcSwap;
 use once_cell::sync::Lazy;
-use parking_lot::Mutex;
+use parking_lot::lock_api::MutexGuard;
+use parking_lot::{Mutex, RawMutex};
 use tracing::{info, warn};
 
 use crate::{
@@ -25,6 +26,11 @@ use super::{
 static DATABASES: Lazy<ArcSwap<Databases>> =
     Lazy::new(|| ArcSwap::from_pointee(Databases::default()));
 static LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+
+/// Sync databases during modification.
+pub fn lock() -> MutexGuard<'static, RawMutex, ()> {
+    LOCK.lock()
+}
 
 /// Get databases handle.
 ///
