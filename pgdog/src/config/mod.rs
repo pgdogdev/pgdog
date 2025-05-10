@@ -365,6 +365,7 @@ pub enum AuthType {
     Md5,
     #[default]
     Scram,
+    Trust,
 }
 
 impl AuthType {

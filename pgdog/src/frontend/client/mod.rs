@@ -16,7 +16,7 @@ use crate::backend::{
     pool::{Connection, Request},
     ProtocolMessage,
 };
-use crate::config;
+use crate::config::{self, AuthType};
 use crate::frontend::buffer::BufferedQuery;
 #[cfg(debug_assertions)]
 use crate::frontend::QueryLogger;
@@ -96,22 +96,32 @@ impl Client {
         } else {
             conn.cluster()?.password()
         };
-        let auth_md5 = config.config.general.auth_type.md5();
-        let auth_ok = if stream.is_tls() || auth_md5 {
-            let md5 = md5::Client::new(user, password);
-            stream.send_flush(&md5.challenge()).await?;
-            let password = Password::from_bytes(stream.read().await?.to_bytes()?)?;
-            if let Password::PasswordMessage { response } = password {
-                md5.check(&response)
-            } else {
-                false
-            }
-        } else {
-            stream.send_flush(&Authentication::scram()).await?;
 
-            let scram = Server::new(password);
-            let res = scram.handle(&mut stream).await;
-            matches!(res, Ok(true))
+        let auth_type = &config.config.general.auth_type;
+        let auth_ok = match (auth_type, stream.is_tls()) {
+            // TODO: SCRAM doesn't work with TLS currently because of
+            // lack of support for channel binding in our scram library.
+            // Defaulting to MD5.
+            (AuthType::Scram, true) | (AuthType::Md5, _) => {
+                let md5 = md5::Client::new(user, password);
+                stream.send_flush(&md5.challenge()).await?;
+                let password = Password::from_bytes(stream.read().await?.to_bytes()?)?;
+                if let Password::PasswordMessage { response } = password {
+                    md5.check(&response)
+                } else {
+                    false
+                }
+            }
+
+            (AuthType::Scram, false) => {
+                stream.send_flush(&Authentication::scram()).await?;
+
+                let scram = Server::new(password);
+                let res = scram.handle(&mut stream).await;
+                matches!(res, Ok(true))
+            }
+
+            (AuthType::Trust, _) => true,
         };
 
         if !auth_ok {
@@ -464,7 +474,7 @@ impl Client {
         let mut timer = None;
 
         // Check config once per request.
-        let config = config();
+        let config = config::config();
         self.prepared_statements.enabled = config.prepared_statements();
         self.timeouts = Timeouts::from_config(&config.config.general);
 
