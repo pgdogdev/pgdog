@@ -26,6 +26,8 @@ pub enum State {
     ReceivingData,
     /// Copy started
     CopyMode,
+    /// Just close the connection.
+    ForceClose,
 }
 
 impl std::fmt::Display for State {
@@ -43,6 +45,7 @@ impl std::fmt::Display for State {
             PreparedStatementError => write!(f, "prepared statement error"),
             ReceivingData => write!(f, "receiving data"),
             CopyMode => write!(f, "copy mode"),
+            ForceClose => write!(f, "force close"),
         }
     }
 }

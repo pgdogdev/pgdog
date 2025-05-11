@@ -66,11 +66,11 @@ impl Mirror {
                         if let Some(req) = req {
                             // TODO: timeout these.
                             if let Err(err) = mirror.handle(&req).await {
-                                if !matches!(err, Error::Pool(PoolError::Offline | PoolError::AllReplicasDown)) {
+                                if !matches!(err, Error::Pool(PoolError::Offline | PoolError::AllReplicasDown | PoolError::Banned)) {
                                     error!("mirror error: {}", err);
                                 }
 
-                                mirror.connection.disconnect();
+                                mirror.connection.force_close();
                                 mirror.state = State::Idle;
                             } else {
                                 mirror.state = State::Active;
@@ -85,7 +85,7 @@ impl Mirror {
                         match message {
                             Err(_) => {
                                 error!("mirror query timeout");
-                                mirror.connection.disconnect();
+                                mirror.connection.force_close();
                             }
                             Ok(Err(err)) => {
                                 error!("mirror error: {}", err);

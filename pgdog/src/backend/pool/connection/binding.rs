@@ -1,6 +1,6 @@
 //! Binding between frontend client and a connection on the backend.
 
-use crate::{backend::ProtocolMessage, net::parameter::Parameters};
+use crate::{backend::ProtocolMessage, net::parameter::Parameters, state::State};
 
 use super::*;
 
@@ -27,6 +27,23 @@ impl Binding {
             Binding::MultiShard(guards, _) => guards.clear(),
             Binding::Replication(guard, _) => drop(guard.take()),
         }
+    }
+
+    pub(super) fn force_close(&mut self) {
+        match self {
+            Binding::Server(Some(ref mut guard)) => guard.stats_mut().state(State::ForceClose),
+            Binding::MultiShard(ref mut guards, _) => {
+                for guard in guards {
+                    guard.stats_mut().state(State::ForceClose);
+                }
+            }
+            Binding::Replication(Some(ref mut guard), _) => {
+                guard.stats_mut().state(State::ForceClose);
+            }
+            _ => (),
+        }
+
+        self.disconnect();
     }
 
     pub(super) fn connected(&self) -> bool {

@@ -210,6 +210,11 @@ impl Connection {
         self.binding.disconnect();
     }
 
+    /// Close the connection without banning the pool.
+    pub(crate) fn force_close(&mut self) {
+        self.binding.force_close()
+    }
+
     /// Read a message from the server connection.
     ///
     /// Only await this future inside a `select!`. One of the conditions

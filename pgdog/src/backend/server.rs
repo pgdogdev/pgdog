@@ -433,8 +433,14 @@ impl Server {
         self.sync_prepared
     }
 
+    /// Connection was left with an unfinished query.
     pub fn needs_drain(&self) -> bool {
         self.stats.state == State::ReceivingData && !self.done() && self.has_more_messages()
+    }
+
+    /// Close the connection, don't do any recovery.
+    pub fn force_close(&self) -> bool {
+        self.stats.state == State::ForceClose
     }
 
     /// Server parameters.

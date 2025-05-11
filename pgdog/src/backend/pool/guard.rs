@@ -57,11 +57,12 @@ impl Guard {
             let reset = cleanup.needed();
             let sync_prepared = server.sync_prepared();
             let needs_drain = server.needs_drain();
+            let force_close = server.force_close();
 
             server.reset_changed_params();
 
             // No need to delay checkin unless we have to.
-            if rollback || reset || sync_prepared || needs_drain {
+            if (rollback || reset || sync_prepared || needs_drain) && !force_close {
                 let rollback_timeout = pool.inner().config.rollback_timeout();
                 spawn(async move {
                     if timeout(
