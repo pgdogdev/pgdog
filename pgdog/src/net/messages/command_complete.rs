@@ -1,5 +1,6 @@
 //! CommandComplete (B) message.
 
+use std::fmt::Debug;
 use std::str::from_utf8;
 use std::str::from_utf8_unchecked;
 
@@ -7,9 +8,17 @@ use super::code;
 use super::prelude::*;
 
 /// CommandComplete (B) message.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct CommandComplete {
     payload: Bytes,
+}
+
+impl Debug for CommandComplete {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CommandComplete")
+            .field("command", &self.command())
+            .finish()
+    }
 }
 
 impl CommandComplete {

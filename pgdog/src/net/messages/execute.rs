@@ -1,3 +1,4 @@
+use std::fmt::Debug;
 use std::str::from_utf8;
 
 use crate::net::c_string_buf_len;
@@ -5,7 +6,7 @@ use crate::net::c_string_buf_len;
 use super::code;
 use super::prelude::*;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Execute {
     payload: Bytes,
     portal_len: usize,
@@ -14,6 +15,14 @@ pub struct Execute {
 impl Default for Execute {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl Debug for Execute {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Execute")
+            .field("portal", &self.portal())
+            .finish()
     }
 }
 
