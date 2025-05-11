@@ -24,6 +24,7 @@ use crate::net::messages::{
     Authentication, BackendKeyData, CommandComplete, ErrorResponse, FromBytes, Message, Password,
     Protocol, ReadyForQuery, ToBytes,
 };
+use crate::net::NoticeResponse;
 use crate::net::{parameter::Parameters, Stream};
 
 pub mod counter;
@@ -309,6 +310,7 @@ impl Client {
                     if let BufferedQuery::Query(_) = query {
                         self.start_transaction().await?;
                         inner.start_transaction = Some(query.clone());
+                        self.in_transaction = true;
                         inner.done(true);
                         return Ok(false);
                     }
@@ -316,12 +318,14 @@ impl Client {
                 Some(Command::RollbackTransaction) => {
                     inner.start_transaction = None;
                     self.end_transaction(true).await?;
+                    self.in_transaction = false;
                     inner.done(false);
                     return Ok(false);
                 }
                 Some(Command::CommitTransaction) => {
                     inner.start_transaction = None;
                     self.end_transaction(false).await?;
+                    self.in_transaction = false;
                     inner.done(false);
                     return Ok(false);
                 }
@@ -350,13 +354,7 @@ impl Client {
                     let query_timeout = self.timeouts.query_timeout(&inner.stats.state);
                     // We may need to sync params with the server
                     // and that reads from the socket.
-                    timeout(
-                        query_timeout,
-                        inner
-                            .backend
-                            .link_client(&self.params, self.prepared_statements.enabled),
-                    )
-                    .await??;
+                    timeout(query_timeout, inner.backend.link_client(&self.params)).await??;
                 }
                 Err(err) => {
                     if err.no_server() {
@@ -535,9 +533,14 @@ impl Client {
         } else {
             CommandComplete::new_commit()
         };
-        self.stream
-            .send_many(&[cmd.message()?, ReadyForQuery::idle().message()?])
-            .await?;
+        let mut messages = if !self.in_transaction {
+            vec![NoticeResponse::from(ErrorResponse::no_transaction()).message()?]
+        } else {
+            vec![]
+        };
+        messages.push(cmd.message()?);
+        messages.push(ReadyForQuery::idle().message()?);
+        self.stream.send_many(&messages).await?;
         debug!("transaction ended");
         Ok(())
     }

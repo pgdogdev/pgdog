@@ -139,6 +139,13 @@ impl<'a> TryFrom<&'a Option<NodeEnum>> for Value<'a> {
                     Ok(Value::Null)
                 }
             }
+            Some(NodeEnum::TypeCast(cast)) => {
+                if let Some(ref arg) = cast.arg {
+                    Value::try_from(&arg.node)
+                } else {
+                    Ok(Value::Null)
+                }
+            }
             _ => Ok(Value::Null),
         }
     }

@@ -149,7 +149,7 @@ impl Buffer {
 
     /// The client is setting state on the connection
     /// which we can no longer ignore.
-    pub fn executable(&self) -> bool {
+    pub(crate) fn executable(&self) -> bool {
         self.buffer
             .iter()
             .any(|m| ['E', 'Q', 'B'].contains(&m.code()))

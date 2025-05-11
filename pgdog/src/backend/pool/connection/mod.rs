@@ -17,6 +17,7 @@ use crate::{
         Router,
     },
     net::{Bind, Message, ParameterStatus, Parameters},
+    state::State,
 };
 
 use super::{
@@ -83,6 +84,7 @@ impl Connection {
         };
 
         if connect {
+            debug!("connecting {}", route);
             match self.try_conn(request, route).await {
                 Ok(()) => (),
                 Err(Error::Pool(super::Error::Offline | super::Error::AllReplicasDown)) => {
@@ -96,6 +98,10 @@ impl Connection {
                 Err(err) => {
                     return Err(err);
                 }
+            }
+
+            if !self.binding.state_check(State::Idle) {
+                return Err(Error::NotInSync);
             }
         }
 
@@ -208,6 +214,11 @@ impl Connection {
     /// Disconnect from a server.
     pub(crate) fn disconnect(&mut self) {
         self.binding.disconnect();
+    }
+
+    /// Close the connection without banning the pool.
+    pub(crate) fn force_close(&mut self) {
+        self.binding.force_close()
     }
 
     /// Read a message from the server connection.
@@ -342,12 +353,8 @@ impl Connection {
         self.binding.execute(query).await
     }
 
-    pub(crate) async fn link_client(
-        &mut self,
-        params: &Parameters,
-        prepared_statements: bool,
-    ) -> Result<usize, Error> {
-        self.binding.link_client(params, prepared_statements).await
+    pub(crate) async fn link_client(&mut self, params: &Parameters) -> Result<usize, Error> {
+        self.binding.link_client(params).await
     }
 
     pub(crate) fn changed_params(&mut self) -> Parameters {

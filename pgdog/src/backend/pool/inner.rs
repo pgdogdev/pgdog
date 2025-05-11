@@ -29,6 +29,8 @@ pub(super) struct Inner {
     pub(super) paused: bool,
     /// Track out of sync terminations.
     pub(super) out_of_sync: usize,
+    /// Number of connections that were force closed.
+    pub(super) force_close: usize,
     /// Track connections closed with errors.
     pub(super) errors: usize,
     /// Stats
@@ -64,6 +66,7 @@ impl Inner {
             ban: None,
             online: false,
             paused: false,
+            force_close: 0,
             out_of_sync: 0,
             errors: 0,
             stats: Stats::default(),
@@ -298,6 +301,12 @@ impl Inner {
 
         // Close connections exceeding max age.
         if server.age(now) >= self.config.max_age {
+            return result;
+        }
+
+        // Force close the connection.
+        if server.force_close() {
+            self.force_close += 1;
             return result;
         }
 

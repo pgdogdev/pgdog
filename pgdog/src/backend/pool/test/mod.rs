@@ -11,6 +11,7 @@ use tokio_util::task::TaskTracker;
 
 use crate::backend::ProtocolMessage;
 use crate::net::Query;
+use crate::state::State;
 
 use super::*;
 
@@ -45,7 +46,7 @@ async fn test_pool_checkout() {
     let conn = pool.get(&Request::default()).await.unwrap();
     let id = *(conn.id());
 
-    assert!(conn.in_sync());
+    assert!(conn.done());
     assert!(conn.done());
     assert!(!conn.in_transaction());
     assert!(!conn.error());
@@ -253,6 +254,8 @@ async fn test_benchmark_pool() {
 
 #[tokio::test]
 async fn test_incomplete_request_recovery() {
+    crate::logger();
+
     let pool = pool();
 
     for query in ["SELECT 1", "BEGIN"] {
@@ -274,4 +277,15 @@ async fn test_incomplete_request_recovery() {
             assert_eq!(state.stats.counts.rollbacks, 0);
         }
     }
+}
+
+#[tokio::test]
+async fn test_force_close() {
+    let pool = pool();
+    let mut conn = pool.get(&Request::default()).await.unwrap();
+    conn.execute("BEGIN").await.unwrap();
+    assert!(conn.in_transaction());
+    conn.stats_mut().state(State::ForceClose);
+    drop(conn);
+    assert_eq!(pool.lock().force_close, 1);
 }
