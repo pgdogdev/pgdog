@@ -56,6 +56,16 @@ impl Parameters {
         self.params.insert(name, value.to_string())
     }
 
+    pub fn allowed(&self) -> Parameters {
+        let params: HashMap<_, _> = self
+            .params
+            .iter()
+            .filter(|(_, v)| !IMMUTABLE_PARAMS.contains(v))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        Parameters { params }
+    }
+
     /// Merge params from self into other, generating the queries
     /// needed to sync that state on the server.
     pub fn merge(&self, other: &mut Self) -> MergeResult {

@@ -1,5 +1,5 @@
 //! PostgreSQL server connection.
-use std::time::Duration;
+use std::{fmt::Display, time::Duration};
 
 use bytes::{BufMut, BytesMut};
 use rustls_pki_types::ServerName;
@@ -41,6 +41,7 @@ pub struct Server {
     stream: Option<Stream>,
     id: BackendKeyData,
     params: Parameters,
+    client_params: Parameters,
     options: ServerOptions,
     changed_params: Parameters,
     stats: Stats,
@@ -178,6 +179,7 @@ impl Server {
             id,
             options,
             params,
+            client_params: Parameters::default(),
             changed_params: Parameters::default(),
             stats: Stats::connect(id, addr),
             prepared_statements: PreparedStatements::new(),
@@ -444,7 +446,10 @@ impl Server {
     }
 
     /// Execute a batch of queries and return all results.
-    pub async fn execute_batch(&mut self, queries: &[&str]) -> Result<Vec<Message>, Error> {
+    pub async fn execute_batch(
+        &mut self,
+        queries: &[impl Into<Query> + Clone + Display],
+    ) -> Result<Vec<Message>, Error> {
         if !self.in_sync() {
             return Err(Error::NotInSync);
         }
@@ -457,7 +462,7 @@ impl Server {
         let mut messages = vec![];
         let queries = queries
             .iter()
-            .map(Query::new)
+            .map(|q| q.clone().into())
             .map(ProtocolMessage::Query)
             .collect::<Vec<ProtocolMessage>>();
         let expected = queries.len();
@@ -688,6 +693,7 @@ pub mod test {
             Self {
                 stream: None,
                 id,
+                client_params: Parameters::default(),
                 params: Parameters::default(),
                 changed_params: Parameters::default(),
                 options: ServerOptions::default(),
