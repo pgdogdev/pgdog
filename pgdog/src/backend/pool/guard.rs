@@ -78,6 +78,11 @@ impl Guard {
                     pool.checkin(server);
                 });
             } else {
+                debug!(
+                    "[cleanup] no cleanup needed, server in \"{}\" state [{}]",
+                    server.stats().state,
+                    server.addr(),
+                );
                 pool.checkin(server);
             }
         }
@@ -91,7 +96,7 @@ impl Guard {
         if needs_drain {
             // Receive whatever data the client left before disconnecting.
             debug!(
-                "draining data from \"{}\" server [{}]",
+                "[cleanup] draining data from \"{}\" server [{}]",
                 server.stats().state,
                 server.addr()
             );
@@ -102,16 +107,26 @@ impl Guard {
         // Rollback any unfinished transactions,
         // but only if the server is in sync (protocol-wise).
         if rollback {
+            debug!(
+                "[cleanup] rolling back server transaction, in \"{}\" state [{}]",
+                server.stats().state,
+                server.addr(),
+            );
             server.rollback().await;
         }
 
         if cleanup.needed() {
+            debug!(
+                "[cleanup] {}, server in \"{}\" state [{}]",
+                cleanup,
+                server.stats().state,
+                server.addr()
+            );
             match server.execute_batch(cleanup.queries()).await {
                 Err(_) => {
                     error!("server reset error [{}]", server.addr());
                 }
                 Ok(_) => {
-                    debug!("{} [{}]", cleanup, server.addr());
                     server.cleaned();
                 }
             }
@@ -126,6 +141,11 @@ impl Guard {
         }
 
         if sync_prepared {
+            debug!(
+                "[cleanup] syncing prepared statements, server in \"{}\" state [{}]",
+                server.stats().state,
+                server.addr()
+            );
             if let Err(err) = server.sync_prepared_statements().await {
                 error!(
                     "prepared statements sync error: {:?} [{}]",

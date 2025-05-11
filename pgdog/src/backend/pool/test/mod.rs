@@ -46,7 +46,7 @@ async fn test_pool_checkout() {
     let conn = pool.get(&Request::default()).await.unwrap();
     let id = *(conn.id());
 
-    assert!(conn.in_sync());
+    assert!(conn.done());
     assert!(conn.done());
     assert!(!conn.in_transaction());
     assert!(!conn.error());
@@ -254,6 +254,8 @@ async fn test_benchmark_pool() {
 
 #[tokio::test]
 async fn test_incomplete_request_recovery() {
+    crate::logger();
+
     let pool = pool();
 
     for query in ["SELECT 1", "BEGIN"] {

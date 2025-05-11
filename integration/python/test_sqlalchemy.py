@@ -94,7 +94,6 @@ async def test_with_errors(engines):
         async with engine() as session:
             session.add(Sharded(id=5, value="random"))
             await session.commit()
-            await session.commit()
             session.add(Sharded(id=6, value="random"))
             result = await session.execute(select(Sharded).where(Sharded.id == 6))
             rows = result.fetchall()

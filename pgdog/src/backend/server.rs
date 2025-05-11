@@ -49,6 +49,7 @@ pub struct Server {
     streaming: bool,
     schema_changed: bool,
     sync_prepared: bool,
+    in_transaction: bool,
     pooler_mode: PoolerMode,
     stream_buffer: BytesMut,
 }
@@ -185,6 +186,7 @@ impl Server {
             streaming: false,
             schema_changed: false,
             sync_prepared: false,
+            in_transaction: false,
             pooler_mode: PoolerMode::Transaction,
             stream_buffer: BytesMut::with_capacity(1024),
         })
@@ -252,6 +254,7 @@ impl Server {
     /// Flush all pending messages making sure they are sent to the server immediately.
     pub async fn flush(&mut self) -> Result<(), Error> {
         if let Err(err) = self.stream().flush().await {
+            trace!("😳");
             self.stats.state(State::Error);
             Err(err.into())
         } else {
@@ -309,8 +312,14 @@ impl Server {
                 let rfq = ReadyForQuery::from_bytes(message.payload())?;
 
                 match rfq.status {
-                    'I' => self.stats.transaction(now),
-                    'T' => self.stats.state(State::IdleInTransaction),
+                    'I' => {
+                        self.in_transaction = false;
+                        self.stats.transaction(now);
+                    }
+                    'T' => {
+                        self.in_transaction = true;
+                        self.stats.state(State::IdleInTransaction);
+                    }
                     'E' => self.stats.transaction_error(now),
                     status => {
                         self.stats.state(State::Error);
@@ -348,19 +357,17 @@ impl Server {
 
         trace!("{:#?} ← [{}]", message, self.addr());
 
+        // Extended protocol can be broken up.
+        // If we are not expecting any more messages, set server into idle state.
+        if self.prepared_statements.done() && !self.in_transaction {
+            self.stats_mut().state(State::Idle);
+        }
+
         Ok(message.backend())
     }
 
     /// Synchronize parameters between client and server.
-    pub async fn link_client(
-        &mut self,
-        params: &Parameters,
-        prepared_statements: bool,
-    ) -> Result<usize, Error> {
-        // Toggle support for prepared statements
-        // only when client connects to this server.
-        self.prepared_statements.toggle(prepared_statements);
-
+    pub async fn link_client(&mut self, params: &Parameters) -> Result<usize, Error> {
         let diff = params.merge(&mut self.params);
         if diff.changed_params > 0 {
             debug!("syncing {} params", diff.changed_params);
@@ -385,37 +392,25 @@ impl Server {
         self.changed_params.clear();
     }
 
-    /// Server sent everything.
-    #[inline]
+    /// We can disconnect from this server.
     pub fn done(&self) -> bool {
-        if self.prepared_statements.enabled() {
-            self.prepared_statements.done() && !self.in_transaction()
-        } else {
-            matches!(self.stats.state, State::Idle | State::Error)
-        }
+        self.prepared_statements.done() && !self.in_transaction()
     }
 
-    #[inline]
-    pub fn has_more_messages(&self) -> bool {
-        !matches!(
-            self.stats.state,
-            State::Idle | State::IdleInTransaction | State::TransactionError | State::CopyMode
-        ) || !self.prepared_statements.done()
-    }
-
-    /// Server connection is synchronized and can receive more messages.
-    #[inline]
+    /// Server can execute a query.
     pub fn in_sync(&self) -> bool {
-        self.prepared_statements.done() && !self.streaming
+        self.prepared_statements.done()
+    }
+
+    /// Server hasn't sent all messages yet.
+    pub fn has_more_messages(&self) -> bool {
+        !self.prepared_statements.done() || self.streaming
     }
 
     /// Server is still inside a transaction.
     #[inline]
     pub fn in_transaction(&self) -> bool {
-        matches!(
-            self.stats.state,
-            State::IdleInTransaction | State::TransactionError
-        )
+        self.in_transaction
     }
 
     /// The server connection permanently failed.
@@ -538,7 +533,7 @@ impl Server {
             self.stats.rollback();
         }
 
-        if !self.in_sync() {
+        if !self.done() {
             self.stats.state(State::Error);
         }
     }
@@ -704,6 +699,7 @@ pub mod test {
                 streaming: false,
                 schema_changed: false,
                 sync_prepared: false,
+                in_transaction: false,
                 pooler_mode: PoolerMode::Transaction,
                 stream_buffer: BytesMut::with_capacity(1024),
             }
@@ -1404,7 +1400,7 @@ pub mod test {
         let mut server = test_server().await;
         let mut params = Parameters::default();
         params.insert("application_name", "test_sync_params");
-        let changed = server.link_client(&params, true).await.unwrap();
+        let changed = server.link_client(&params).await.unwrap();
         assert_eq!(changed, 1);
 
         let app_name = server
@@ -1413,7 +1409,23 @@ pub mod test {
             .unwrap();
         assert_eq!(app_name[0], "test_sync_params");
 
-        let changed = server.link_client(&params, true).await.unwrap();
+        let changed = server.link_client(&params).await.unwrap();
         assert_eq!(changed, 0);
+    }
+
+    #[tokio::test]
+    async fn test_rollback() {
+        let mut server = test_server().await;
+        server
+            .send(&vec![Query::new("COMMIT").into()].into())
+            .await
+            .unwrap();
+        loop {
+            let msg = server.read().await.unwrap();
+            if msg.code() == 'Z' {
+                break;
+            }
+            println!("{:?}", msg);
+        }
     }
 }

@@ -62,6 +62,7 @@ impl Binding {
                     guard.read().await
                 } else {
                     loop {
+                        debug!("binding suspended");
                         sleep(Duration::MAX).await
                     }
                 }
@@ -71,6 +72,7 @@ impl Binding {
             Binding::MultiShard(shards, state) => {
                 if shards.is_empty() {
                     loop {
+                        debug!("multi-shard binding suspended");
                         sleep(Duration::MAX).await;
                     }
                 } else {
@@ -101,6 +103,7 @@ impl Binding {
 
                     loop {
                         state.reset();
+                        debug!("multi-shard binding done");
                         sleep(Duration::MAX).await;
                     }
                 }
@@ -205,6 +208,24 @@ impl Binding {
         }
     }
 
+    pub(super) fn state_check(&self, state: State) -> bool {
+        match self {
+            Binding::Server(Some(server)) => {
+                debug!(
+                    "server is in \"{}\" state [{}]",
+                    server.stats().state,
+                    server.addr()
+                );
+                server.stats().state == state
+            }
+            Binding::MultiShard(servers, _) => servers.iter().all(|s| {
+                debug!("server is in \"{}\" state [{}]", s.stats().state, s.addr());
+                s.stats().state == state
+            }),
+            _ => true,
+        }
+    }
+
     /// Execute a query on all servers.
     pub(super) async fn execute(&mut self, query: &str) -> Result<(), Error> {
         match self {
@@ -228,28 +249,20 @@ impl Binding {
         Ok(())
     }
 
-    pub(super) async fn link_client(
-        &mut self,
-        params: &Parameters,
-        prepared_statements: bool,
-    ) -> Result<usize, Error> {
+    pub(super) async fn link_client(&mut self, params: &Parameters) -> Result<usize, Error> {
         match self {
-            Binding::Server(Some(ref mut server)) => {
-                server.link_client(params, prepared_statements).await
-            }
+            Binding::Server(Some(ref mut server)) => server.link_client(params).await,
             Binding::MultiShard(ref mut servers, _) => {
                 let mut max = 0;
                 for server in servers {
-                    let synced = server.link_client(params, prepared_statements).await?;
+                    let synced = server.link_client(params).await?;
                     if max < synced {
                         max = synced;
                     }
                 }
                 Ok(max)
             }
-            Binding::Replication(Some(ref mut server), _) => {
-                server.link_client(params, prepared_statements).await
-            }
+            Binding::Replication(Some(ref mut server), _) => server.link_client(params).await,
 
             _ => Ok(0),
         }

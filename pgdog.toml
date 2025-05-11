@@ -6,6 +6,7 @@ host = "0.0.0.0"
 port = 6432
 shutdown_timeout = 5_000
 openmetrics_port = 9090
+idle_healthcheck_delay = 2342343243
 
 #
 # Admin database password.
@@ -22,6 +23,12 @@ host = "127.0.0.1"
 port = 5432
 role = "primary"
 
+[[databases]]
+name = "pgdog"
+host = "127.0.0.1"
+port = 5432
+role = "replica"
+
 [tcp]
 retries = 3
 time = 1000
@@ -37,12 +44,28 @@ name = "pgdog_sharded"
 host = "127.0.0.1"
 database_name = "shard_0"
 shard = 0
+role = "primary"
 
 [[databases]]
 name = "pgdog_sharded"
 host = "127.0.0.1"
 database_name = "shard_1"
 shard = 1
+role = "primary"
+
+[[databases]]
+name = "pgdog_sharded"
+host = "127.0.0.1"
+database_name = "shard_0"
+shard = 0
+role = "replica"
+
+[[databases]]
+name = "pgdog_sharded"
+host = "127.0.0.1"
+database_name = "shard_1"
+shard = 1
+role = "replica"
 
 #
 # Read/write access to theses tables will be automatically
@@ -80,3 +103,6 @@ fingerprint = "bb38525ebeb46656" #[13490623250668217942]
 
 [[manual_query]]
 fingerprint = "f4814b6fadabc4c1" #[17618446160277259457]
+
+[[manual_query]]
+fingerprint = "04dc05f480b702d3"

@@ -99,4 +99,25 @@ mod test {
             _ => panic!("not an insert"),
         }
     }
+
+    #[test]
+    fn test_insert_typecasts() {
+        let query =
+            parse("INSERT INTO sharded (id, value) VALUES ($1::INTEGER, $2::VARCHAR)").unwrap();
+        let select = query.protobuf.stmts.first().unwrap().stmt.as_ref().unwrap();
+
+        match &select.node {
+            Some(NodeEnum::InsertStmt(stmt)) => {
+                let insert = Insert::new(stmt);
+                assert_eq!(
+                    insert.tuples(),
+                    vec![Tuple {
+                        values: vec![Value::Placeholder(1), Value::Placeholder(2),]
+                    }]
+                )
+            }
+
+            _ => panic!("not an insert"),
+        }
+    }
 }
