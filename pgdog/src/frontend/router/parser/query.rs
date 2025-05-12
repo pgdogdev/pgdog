@@ -248,8 +248,10 @@ impl QueryParser {
                 }
                 // Side-effects such as advisory locks
                 else if Self::has_side_effect_function(stmt) {
-                    debug!("Query contains side-effect function, routing to primary.");
-                    return Ok(Command::Query(Route::write(None)));
+                    debug!("Query contains side-effect function, routing to a single primary shard.");
+                    return Ok(Command::Query(Route::write(Some(
+                        round_robin::next() % cluster.shards().len(),
+                    ))));
                 }
                 // `SELECT NOW()`, `SELECT 1`, etc.
                 else if ast.tables().is_empty() {
