@@ -1143,14 +1143,21 @@ mod test {
     #[test]
     fn test_lock() {
         let route = query!("SELECT pg_advisory_lock('test')::bool");
-        assert!(matches!(route.shard(), Shard::All));
+        assert!(matches!(route.shard(), Shard::Direct(_)));
+        assert!(route.is_write());
+    }
+
+     #[test]
+    fn test_lock_param() {
+        let route = query!("SELECT pg_advisory_lock($1)");
+        assert!(matches!(route.shard(), Shard::Direct(_)));
         assert!(route.is_write());
     }
 
     #[test]
     fn test_lock_2() {
         let route = query!("SELECT pg_advisory_lock('test')");
-        assert!(matches!(route.shard(), Shard::All));
+        assert!(matches!(route.shard(), Shard::Direct(_)));
         assert!(route.is_write());
     }
 
