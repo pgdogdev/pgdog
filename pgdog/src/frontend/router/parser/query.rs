@@ -31,6 +31,24 @@ use pg_query::{
 use regex::Regex;
 use tracing::{debug, trace};
 
+static SIDE_EFFECT_FUNCTIONS: Lazy<HashSet<String>> = Lazy::new(|| {
+    let mut set = HashSet::new();
+    // Advisory lock functions
+    set.insert("pg_advisory_lock".to_lowercase());
+    set.insert("pg_advisory_xact_lock".to_lowercase());
+    set.insert("pg_advisory_lock_shared".to_lowercase());
+    set.insert("pg_advisory_xact_lock_shared".to_lowercase());
+    set.insert("pg_try_advisory_lock".to_lowercase());
+    set.insert("pg_try_advisory_xact_lock".to_lowercase());
+    set.insert("pg_try_advisory_lock_shared".to_lowercase());
+    set.insert("pg_try_advisory_xact_lock_shared".to_lowercase());
+    // Sequence functions
+    set.insert("nextval".to_lowercase());
+    set.insert("setval".to_lowercase());
+    // Add other functions with side-effects here
+    set
+});
+
 static REPLICATION_REGEX: Lazy<Regex> = Lazy::new(|| {
     Regex::new(
         "(CREATE_REPLICATION_SLOT|IDENTIFY_SYSTEM|DROP_REPLICATION_SLOT|READ_REPLICATION_SLOT|ALTER_REPLICATION_SLOT|TIMELINE_HISTORY).*",
@@ -226,6 +244,13 @@ impl QueryParser {
         let mut command = match root.node {
             // SELECT statements.
             Some(NodeEnum::SelectStmt(ref stmt)) => {
+                // Check for side-effect functions in the target list
+                if Self::has_side_effect_function(stmt) {
+                    debug!("Query contains side-effect function, routing to primary.");
+                    return Ok(Command::Query(Route::write(None)));
+                }
+
+                // If no side-effect functions found, proceed with normal SELECT routing
                 if matches!(shard, Shard::Direct(_)) {
                     return Ok(Command::Query(Route::read(shard)));
                 }
@@ -700,6 +725,30 @@ impl QueryParser {
 
     fn delete(_stmt: &DeleteStmt) -> Result<Command, Error> {
         Ok(Command::Query(Route::write(None)))
+    }
+
+    /// Check if a SELECT statement contains any functions with side effects.
+    fn has_side_effect_function(stmt: &SelectStmt) -> bool {
+        for target_item_wrapper_node in &stmt.target_list {
+            if let Some(NodeEnum::ResTarget(res_target)) = target_item_wrapper_node.node.as_ref() {
+                if let Some(val_node_wrapper) = &res_target.val {
+                    if let Some(NodeEnum::FuncCall(func_call)) = val_node_wrapper.node.as_ref() {
+                        if let Some(name_part_node) = func_call.funcname.last() {
+                            if let Some(NodeEnum::String(func_name_node_val)) =
+                                name_part_node.node.as_ref()
+                            {
+                                if SIDE_EFFECT_FUNCTIONS
+                                    .contains(&func_name_node_val.sval.to_lowercase())
+                                {
+                                    return true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        false
     }
 }
 
