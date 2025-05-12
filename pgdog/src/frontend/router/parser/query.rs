@@ -248,7 +248,9 @@ impl QueryParser {
                 }
                 // Side-effects such as advisory locks
                 else if Self::has_side_effect_function(stmt) {
-                    debug!("Query contains side-effect function, routing to a single primary shard.");
+                    debug!(
+                        "Query contains side-effect function, routing to a single primary shard."
+                    );
                     return Ok(Command::Query(Route::write(Some(
                         round_robin::next() % cluster.shards().len(),
                     ))));
@@ -734,7 +736,7 @@ impl QueryParser {
                 return true;
             }
         }
-        
+
         // Check WHERE clause
         if let Some(ref where_clause) = stmt.where_clause {
             if Self::has_side_effect_node(&where_clause.node) {
@@ -751,11 +753,13 @@ impl QueryParser {
 
         false
     }
-    
+
     /// Recursively check if a node contains a function with side effects.
     fn has_side_effect_node(node_option: &Option<NodeEnum>) -> bool {
-        let Some(node) = node_option else { return false };
-        
+        let Some(node) = node_option else {
+            return false;
+        };
+
         match node {
             // Direct function call
             NodeEnum::FuncCall(func) => {
@@ -765,8 +769,8 @@ impl QueryParser {
                     }
                 }
                 false
-            },
-            
+            }
+
             // ResTarget wraps an expression
             NodeEnum::ResTarget(res_target) => {
                 if let Some(ref val) = res_target.val {
@@ -774,8 +778,8 @@ impl QueryParser {
                 } else {
                     false
                 }
-            },
-            
+            }
+
             // TypeCast wraps an expression
             NodeEnum::TypeCast(type_cast) => {
                 if let Some(ref arg) = type_cast.arg {
@@ -783,8 +787,8 @@ impl QueryParser {
                 } else {
                     false
                 }
-            },
-            
+            }
+
             // A-expressions (binary operations)
             NodeEnum::AExpr(a_expr) => {
                 // Check both sides of the expression
@@ -799,8 +803,8 @@ impl QueryParser {
                     }
                 }
                 false
-            },
-            
+            }
+
             // BoolExpr (AND, OR, NOT)
             NodeEnum::BoolExpr(bool_expr) => {
                 for arg in &bool_expr.args {
@@ -809,8 +813,8 @@ impl QueryParser {
                     }
                 }
                 false
-            },
-            
+            }
+
             // SubLink (subquery)
             NodeEnum::SubLink(sub_link) => {
                 if let Some(ref subselect) = sub_link.subselect {
@@ -819,8 +823,8 @@ impl QueryParser {
                     }
                 }
                 false
-            },
-            
+            }
+
             // CaseExpr (CASE WHEN ... THEN ... END)
             NodeEnum::CaseExpr(case_expr) => {
                 // Check the argument expression
@@ -829,7 +833,7 @@ impl QueryParser {
                         return true;
                     }
                 }
-                
+
                 // Check each WHEN ... THEN ... clause
                 for when_clause in &case_expr.args {
                     if let Some(NodeEnum::CaseWhen(case_when)) = &when_clause.node {
@@ -839,7 +843,7 @@ impl QueryParser {
                                 return true;
                             }
                         }
-                        
+
                         // Check the THEN result
                         if let Some(ref result) = case_when.result {
                             if Self::has_side_effect_node(&result.node) {
@@ -848,17 +852,17 @@ impl QueryParser {
                         }
                     }
                 }
-                
+
                 // Check the ELSE clause
                 if let Some(ref defresult) = case_expr.defresult {
                     if Self::has_side_effect_node(&defresult.node) {
                         return true;
                     }
                 }
-                
+
                 false
-            },
-            
+            }
+
             // CoalesceExpr (COALESCE function)
             NodeEnum::CoalesceExpr(coalesce) => {
                 for arg in &coalesce.args {
@@ -867,8 +871,8 @@ impl QueryParser {
                     }
                 }
                 false
-            },
-            
+            }
+
             // NullTest (IS NULL, IS NOT NULL)
             NodeEnum::NullTest(null_test) => {
                 if let Some(ref arg) = null_test.arg {
@@ -876,8 +880,8 @@ impl QueryParser {
                 } else {
                     false
                 }
-            },
-            
+            }
+
             // Add other node types as needed
             _ => false,
         }
