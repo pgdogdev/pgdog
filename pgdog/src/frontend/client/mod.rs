@@ -65,18 +65,26 @@ impl Client {
 
         let admin = database == config.config.admin.name && config.config.admin.user == user;
         let admin_password = &config.config.admin.password;
+        let auth_type = &config.config.general.auth_type;
 
         let id = BackendKeyData::new();
 
         // Auto database.
         let exists = databases::databases().exists((user, database));
         if !exists && config.config.general.passthrough_auth() {
-            // Get the password.
-            stream
-                .send_flush(&Authentication::ClearTextPassword)
-                .await?;
-            let password = stream.read().await?;
-            let password = Password::from_bytes(password.to_bytes()?)?;
+            let password = if auth_type.trust() {
+                // Use empty password.
+                // TODO: Postgres must be using "trust" auth
+                // or some other kind of authentication that doesn't require a password.
+                Password::new_password("")
+            } else {
+                // Get the password.
+                stream
+                    .send_flush(&Authentication::ClearTextPassword)
+                    .await?;
+                let password = stream.read().await?;
+                Password::from_bytes(password.to_bytes()?)?
+            };
             let user = config::User::from_params(&params, &password).ok();
             if let Some(user) = user {
                 databases::add(user);
