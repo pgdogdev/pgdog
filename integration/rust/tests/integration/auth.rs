@@ -14,6 +14,11 @@ async fn test_auth() {
     let mut any_password = PgConnection::connect(bad_password).await.unwrap();
     any_password.execute("SELECT 1").await.unwrap();
 
+    let mut empty_password = PgConnection::connect("postgres://pgdog@127.0.0.1:6432/pgdog")
+        .await
+        .unwrap();
+    empty_password.execute("SELECT 1").await.unwrap();
+
     admin.execute("SET auth_type TO 'scram'").await.unwrap();
     assert_auth("scram").await;
 

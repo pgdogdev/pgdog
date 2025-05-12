@@ -380,6 +380,10 @@ impl AuthType {
     pub fn scram(&self) -> bool {
         matches!(self, Self::Scram)
     }
+
+    pub fn trust(&self) -> bool {
+        matches!(self, Self::Trust)
+    }
 }
 
 impl Default for General {
