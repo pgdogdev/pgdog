@@ -263,7 +263,7 @@ impl QueryParser {
                 if self.routed {
                     return command;
                 } else {
-                    Ok(Command::Query(Route::read(Shard::All)))
+                    Ok(Command::Query(Route::write(Shard::All)))
                 }
             }
             // COPY statements.
