@@ -1,6 +1,6 @@
 #!/bin/bash
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
-
+set -e
 export PGPASSWORD=pgdog
 
 pgbench -i -h 127.0.0.1 -U pgdog -p 6432 pgdog
