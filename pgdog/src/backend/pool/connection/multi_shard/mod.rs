@@ -16,6 +16,8 @@ use crate::{
 use super::buffer::Buffer;
 
 mod context;
+#[cfg(test)]
+mod test;
 
 #[derive(Default, Debug)]
 struct Counters {
@@ -221,5 +223,9 @@ impl MultiShard {
             }
             Context::RowDescription(rd) => self.decoder.row_description(rd),
         }
+    }
+
+    pub(super) fn decoder(&self) -> &Decoder {
+        &self.decoder
     }
 }
