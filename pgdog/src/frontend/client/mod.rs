@@ -555,7 +555,6 @@ impl Client {
             .await?;
         inner.done(self.in_transaction);
         debug!("set");
-        println!("{:?}", self.params);
         Ok(())
     }
 }
