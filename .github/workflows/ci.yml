@@ -100,8 +100,6 @@ jobs:
         run: bash integration/toxi/run.sh
       - name: Python
         run: bash integration/python/run.sh
-      - name: pgbench
-        run: bash integration/pgbench/run.sh
       - name: Ruby
         run: bash integration/ruby/run.sh
       - name: Java
@@ -110,3 +108,5 @@ jobs:
         run: bash integration/complex/run.sh
       - name: Rust
         run: bash integration/rust/run.sh
+      - name: pgbench
+        run: bash integration/pgbench/run.sh
