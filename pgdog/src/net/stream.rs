@@ -122,18 +122,18 @@ impl Stream {
             Stream::Tls(ref mut stream) => stream.write_all(&bytes).await?,
         }
 
-        // #[cfg(debug_assertions)]
-        // {
-        //     use crate::net::messages::FromBytes;
-        //     use tracing::error;
+        #[cfg(debug_assertions)]
+        {
+            use crate::net::messages::FromBytes;
+            use tracing::error;
 
-        //     if message.code() == 'E' {
-        //         let error = ErrorResponse::from_bytes(bytes.clone())?;
-        //         if !error.message.is_empty() {
-        //             error!("{:?} <= {}", self.peer_addr(), error)
-        //         }
-        //     }
-        // }
+            if message.code() == 'E' {
+                let error = ErrorResponse::from_bytes(bytes.clone())?;
+                if !error.message.is_empty() {
+                    error!("{:?} <= {}", self.peer_addr(), error)
+                }
+            }
+        }
 
         Ok(bytes.len())
     }
