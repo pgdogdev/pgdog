@@ -554,6 +554,7 @@ impl Client {
             .send_flush(&ReadyForQuery::in_transaction(self.in_transaction))
             .await?;
         inner.done(self.in_transaction);
+        inner.comms.update_params(&self.params);
         debug!("set");
         Ok(())
     }
