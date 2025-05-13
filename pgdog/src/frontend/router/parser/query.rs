@@ -257,15 +257,7 @@ impl QueryParser {
                 }
             }
             // SET statements.
-            Some(NodeEnum::VariableSetStmt(ref stmt)) => {
-                let command = self.set(stmt, &sharding_schema);
-
-                if self.routed {
-                    return command;
-                } else {
-                    Ok(Command::Query(Route::write(Shard::All)))
-                }
-            }
+            Some(NodeEnum::VariableSetStmt(ref stmt)) => return self.set(stmt, &sharding_schema),
             // COPY statements.
             Some(NodeEnum::CopyStmt(ref stmt)) => Self::copy(stmt, cluster),
             // INSERT statements.
@@ -449,7 +441,7 @@ impl QueryParser {
             }
         }
 
-        Ok(Command::Query(Route::read(Shard::All)))
+        Ok(Command::Query(Route::write(Shard::All)))
     }
 
     fn select(
@@ -904,44 +896,57 @@ mod test {
         assert!(qp.routed);
         assert!(!qp.in_transaction);
 
-        for (_, qp) in [
+        for (command, qp) in [
             command!("SET TimeZone TO 'UTC'"),
             command!("SET TIME ZONE 'UTC'"),
         ] {
-            // match command {
-            //     Command::Set { name, value } => {
-            //         assert_eq!(name, "timezone");
-            //         assert_eq!(value, "UTC");
-            //     }
-            //     _ => panic!("not a set"),
-            // };
-            assert!(qp.routed);
+            match command {
+                Command::Set { name, value } => {
+                    assert_eq!(name, "timezone");
+                    assert_eq!(value, "UTC");
+                }
+                _ => panic!("not a set"),
+            };
+            assert!(!qp.routed);
             assert!(!qp.in_transaction);
         }
 
-        let (_, qp) = command!("SET statement_timeout TO 3000");
-        // match command {
-        //     Command::Set { name, value } => {
-        //         assert_eq!(name, "statement_timeout");
-        //         assert_eq!(value, "3000");
-        //     }
-        //     _ => panic!("not a set"),
-        // };
-        assert!(qp.routed);
+        let (command, qp) = command!("SET statement_timeout TO 3000");
+        match command {
+            Command::Set { name, value } => {
+                assert_eq!(name, "statement_timeout");
+                assert_eq!(value, "3000");
+            }
+            _ => panic!("not a set"),
+        };
+        assert!(!qp.routed);
         assert!(!qp.in_transaction);
 
         // TODO: user shouldn't be able to set these.
         // The server will report an error on synchronization.
-        let (_, qp) = command!("SET is_superuser TO true");
-        // match command {
-        //     Command::Set { name, value } => {
-        //         assert_eq!(name, "is_superuser");
-        //         assert_eq!(value, "true");
-        //     }
-        //     _ => panic!("not a set"),
-        // };
-        assert!(qp.routed);
+        let (command, qp) = command!("SET is_superuser TO true");
+        match command {
+            Command::Set { name, value } => {
+                assert_eq!(name, "is_superuser");
+                assert_eq!(value, "true");
+            }
+            _ => panic!("not a set"),
+        };
+        assert!(!qp.routed);
         assert!(!qp.in_transaction);
+
+        let (_, mut qp) = command!("BEGIN");
+        let command = qp
+            .parse(
+                &vec![Query::new(r#"SET statement_timeout TO 3000"#).into()].into(),
+                &Cluster::new_test(),
+                &mut PreparedStatements::default(),
+            )
+            .unwrap();
+        match command {
+            Command::Query(q) => assert!(q.is_write()),
+            _ => panic!("set should trigger binding"),
+        }
     }
 
     #[test]
