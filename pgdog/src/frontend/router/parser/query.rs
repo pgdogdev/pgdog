@@ -955,4 +955,10 @@ mod test {
         assert!(!qp.routed);
         assert!(qp.in_transaction);
     }
+
+    #[test]
+    fn test_insert_do_update() {
+        let route = query!("INSERT INTO foo (id) VALUES ($1::UUID) ON CONFLICT (id) DO UPDATE SET id = excluded.id RETURNING id");
+        assert!(route.is_write())
+    }
 }
