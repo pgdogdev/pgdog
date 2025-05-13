@@ -342,7 +342,7 @@ impl Client {
                 // TODO: Handling session variables requires a lot more work,
                 // e.g. we need to track RESET as well.
                 Some(Command::Set { name, value }) => {
-                    self.params.insert(name, value);
+                    self.params.insert(name, value.clone());
                     self.set(inner).await?;
                     return Ok(false);
                 }
@@ -555,6 +555,7 @@ impl Client {
             .await?;
         inner.done(self.in_transaction);
         debug!("set");
+        println!("{:?}", self.params);
         Ok(())
     }
 }

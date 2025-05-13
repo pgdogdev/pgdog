@@ -1,6 +1,10 @@
 //! Startup, SSLRequest messages.
 
-use crate::net::{c_string, parameter::Parameters, Error};
+use crate::net::{
+    c_string,
+    parameter::{ParameterValue, Parameters},
+    Error,
+};
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tracing::debug;
@@ -88,7 +92,7 @@ impl Startup {
     pub fn parameter(&self, name: &str) -> Option<&str> {
         match self {
             Startup::Ssl | Startup::Cancel { .. } => None,
-            Startup::Startup { params } => params.get(name).map(|s| s.as_str()),
+            Startup::Startup { params } => params.get(name).map(|s| s.as_str()).flatten(),
         }
     }
 
@@ -141,11 +145,13 @@ impl super::ToBytes for Startup {
                 let mut params_buf = BytesMut::new();
 
                 for (name, value) in params.deref() {
-                    params_buf.put_slice(name.as_bytes());
-                    params_buf.put_u8(0);
+                    if let ParameterValue::String(value) = value {
+                        params_buf.put_slice(name.as_bytes());
+                        params_buf.put_u8(0);
 
-                    params_buf.put_slice(value.as_bytes());
-                    params_buf.put_u8(0);
+                        params_buf.put(value.as_bytes());
+                        params_buf.put_u8(0);
+                    }
                 }
 
                 let mut payload = Payload::new();

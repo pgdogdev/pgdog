@@ -17,7 +17,10 @@ use crate::{
         },
         Buffer, PreparedStatements,
     },
-    net::messages::{Bind, CopyData, Vector},
+    net::{
+        messages::{Bind, CopyData, Vector},
+        parameter::ParameterValue,
+    },
 };
 
 use super::*;
@@ -396,45 +399,47 @@ impl QueryParser {
             // params without touching the server.
             name => {
                 if !self.in_transaction {
-                    let node = stmt
-                        .args
-                        .first()
-                        .ok_or(Error::SetShard)?
-                        .node
-                        .as_ref()
-                        .ok_or(Error::SetShard)?;
+                    let mut value = vec![];
 
-                    if let NodeEnum::AConst(AConst { val: Some(val), .. }) = node {
-                        match val {
-                            Val::Sval(String { sval }) => {
-                                return Ok(Command::Set {
-                                    name: name.to_string(),
-                                    value: sval.to_string(),
-                                });
+                    for node in &stmt.args {
+                        if let Some(ref node) = node.node {
+                            if let NodeEnum::AConst(AConst { val: Some(val), .. }) = node {
+                                match val {
+                                    Val::Sval(String { sval }) => {
+                                        value.push(sval.to_string());
+                                    }
+
+                                    Val::Ival(Integer { ival }) => {
+                                        value.push(ival.to_string());
+                                    }
+
+                                    Val::Fval(Float { fval }) => {
+                                        value.push(fval.to_string());
+                                    }
+
+                                    Val::Boolval(Boolean { boolval }) => {
+                                        value.push(boolval.to_string());
+                                    }
+
+                                    _ => (),
+                                }
                             }
+                        }
+                    }
 
-                            Val::Ival(Integer { ival }) => {
-                                return Ok(Command::Set {
-                                    name: name.to_string(),
-                                    value: ival.to_string(),
-                                });
-                            }
-
-                            Val::Fval(Float { fval }) => {
-                                return Ok(Command::Set {
-                                    name: name.to_string(),
-                                    value: fval.to_string(),
-                                });
-                            }
-
-                            Val::Boolval(Boolean { boolval }) => {
-                                return Ok(Command::Set {
-                                    name: name.to_string(),
-                                    value: boolval.to_string(),
-                                });
-                            }
-
-                            _ => (),
+                    match value.len() {
+                        0 => (),
+                        1 => {
+                            return Ok(Command::Set {
+                                name: name.to_string(),
+                                value: ParameterValue::String(value.pop().unwrap()),
+                            })
+                        }
+                        _ => {
+                            return Ok(Command::Set {
+                                name: name.to_string(),
+                                value: ParameterValue::Tuple(value),
+                            })
                         }
                     }
                 }
@@ -699,7 +704,7 @@ impl QueryParser {
 mod test {
     use crate::net::{
         messages::{parse::Parse, Parameter},
-        Format,
+        Format, ParameterStatus,
     };
 
     use super::{super::Shard, *};
@@ -903,7 +908,7 @@ mod test {
             match command {
                 Command::Set { name, value } => {
                     assert_eq!(name, "timezone");
-                    assert_eq!(value, "UTC");
+                    assert_eq!(value, ParameterValue::from("UTC"));
                 }
                 _ => panic!("not a set"),
             };
@@ -915,7 +920,7 @@ mod test {
         match command {
             Command::Set { name, value } => {
                 assert_eq!(name, "statement_timeout");
-                assert_eq!(value, "3000");
+                assert_eq!(value, ParameterValue::from("3000"));
             }
             _ => panic!("not a set"),
         };
@@ -928,7 +933,7 @@ mod test {
         match command {
             Command::Set { name, value } => {
                 assert_eq!(name, "is_superuser");
-                assert_eq!(value, "true");
+                assert_eq!(value, ParameterValue::from("true"));
             }
             _ => panic!("not a set"),
         };
@@ -947,6 +952,23 @@ mod test {
             Command::Query(q) => assert!(q.is_write()),
             _ => panic!("set should trigger binding"),
         }
+
+        let (command, _) = command!("SET search_path TO \"$user\", public");
+        match command {
+            Command::Set { name, value } => {
+                assert_eq!(name, "search_path");
+                assert_eq!(
+                    value,
+                    ParameterValue::Tuple(vec!["$user".into(), "public".into()])
+                )
+            }
+            _ => panic!("search path"),
+        }
+
+        println!(
+            "{:?}",
+            parse("SET search_path TO \"$user\", public").unwrap()
+        );
     }
 
     #[test]

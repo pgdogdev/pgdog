@@ -1,5 +1,5 @@
 use super::*;
-use crate::frontend::buffer::BufferedQuery;
+use crate::{frontend::buffer::BufferedQuery, net::parameter::ParameterValue};
 
 #[derive(Debug, Clone)]
 pub enum Command {
@@ -10,7 +10,7 @@ pub enum Command {
     RollbackTransaction,
     StartReplication,
     ReplicationMeta,
-    Set { name: String, value: String },
+    Set { name: String, value: ParameterValue },
     PreparedStatement(Prepare),
     Rewrite(String),
 }
