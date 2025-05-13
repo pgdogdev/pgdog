@@ -92,6 +92,8 @@ jobs:
           bash integration/toxi/setup.sh
       - name: Build PgDog
         run: cargo build --release
+      - name: pgbench
+        run: bash integration/pgbench/run.sh
       - name: Go
         run: bash integration/go/run.sh
       - name: JavaScript
@@ -108,5 +110,3 @@ jobs:
         run: bash integration/complex/run.sh
       - name: Rust
         run: bash integration/rust/run.sh
-      - name: pgbench
-        run: bash integration/pgbench/run.sh
