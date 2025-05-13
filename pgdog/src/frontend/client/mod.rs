@@ -282,6 +282,9 @@ impl Client {
 
         #[cfg(debug_assertions)]
         if let Some(query) = self.protocol_buffer.query()? {
+            if !query.contains("pg_sleep") {
+                info!("{}", query.query());
+            }
             debug!(
                 "{} [{}] (in transaction: {})",
                 query.query(),
