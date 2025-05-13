@@ -353,8 +353,7 @@ pub(crate) fn new_pool(
             0 => None,
             1 => mirrors_of
                 .first()
-                .map(|s| s.as_ref().map(|s| s.as_str()))
-                .flatten(),
+                .and_then(|s| s.as_ref().map(|s| s.as_str())),
             _ => {
                 warn!(
                     "database \"{}\" has different \"mirror_of\" settings, disabling mirroring",

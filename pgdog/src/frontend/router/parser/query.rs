@@ -704,7 +704,7 @@ impl QueryParser {
 mod test {
     use crate::net::{
         messages::{parse::Parse, Parameter},
-        Format, ParameterStatus,
+        Format,
     };
 
     use super::{super::Shard, *};

@@ -275,8 +275,8 @@ impl Connection {
                 self.mirrors = databases
                     .mirrors(user)?
                     .unwrap_or(&[])
-                    .into_iter()
-                    .map(|mirror| Mirror::new(&mirror))
+                    .iter()
+                    .map(Mirror::new)
                     .collect::<Result<Vec<_>, Error>>()?;
                 debug!(
                     r#"database "{}" has {} mirrors"#,

@@ -92,7 +92,7 @@ impl Startup {
     pub fn parameter(&self, name: &str) -> Option<&str> {
         match self {
             Startup::Ssl | Startup::Cancel { .. } => None,
-            Startup::Startup { params } => params.get(name).map(|s| s.as_str()).flatten(),
+            Startup::Startup { params } => params.get(name).and_then(|s| s.as_str()),
         }
     }
 

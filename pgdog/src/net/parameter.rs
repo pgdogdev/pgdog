@@ -182,8 +182,7 @@ impl Parameters {
     /// Get parameter value or returned an error.
     pub fn get_required(&self, name: &str) -> Result<&str, Error> {
         self.get(name)
-            .map(|s| s.as_str())
-            .flatten()
+            .and_then(|s| s.as_str())
             .ok_or(Error::MissingParameter(name.into()))
     }
 

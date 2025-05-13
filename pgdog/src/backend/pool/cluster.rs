@@ -179,7 +179,7 @@ impl Cluster {
 
     /// Mirrors getter.
     pub fn mirror_of(&self) -> Option<&str> {
-        self.mirror_of.as_ref().map(|s| s.as_str())
+        self.mirror_of.as_deref()
     }
 
     /// Plugin input.
