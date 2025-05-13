@@ -16,6 +16,8 @@ use crate::{
 use super::buffer::Buffer;
 
 mod context;
+#[cfg(test)]
+mod test;
 
 #[derive(Default, Debug)]
 struct Counters {
