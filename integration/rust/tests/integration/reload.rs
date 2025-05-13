@@ -42,6 +42,7 @@ async fn test_reconnect() {
     conn.execute("SET application_name TO 'test_reconnect'")
         .await
         .unwrap();
+    conn.execute("SELECT 1").await.unwrap(); // Trigger param update.
 
     let backends_before = backends("test_reconnect", &conn).await;
 

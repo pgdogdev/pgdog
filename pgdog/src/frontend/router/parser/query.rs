@@ -17,7 +17,10 @@ use crate::{
         },
         Buffer, PreparedStatements,
     },
-    net::messages::{Bind, CopyData, Vector},
+    net::{
+        messages::{Bind, CopyData, Vector},
+        parameter::ParameterValue,
+    },
 };
 
 use super::*;
@@ -257,15 +260,7 @@ impl QueryParser {
                 }
             }
             // SET statements.
-            Some(NodeEnum::VariableSetStmt(ref stmt)) => {
-                let command = self.set(stmt, &sharding_schema);
-
-                if self.routed {
-                    return command;
-                } else {
-                    Ok(Command::Query(Route::read(Shard::All)))
-                }
-            }
+            Some(NodeEnum::VariableSetStmt(ref stmt)) => return self.set(stmt, &sharding_schema),
             // COPY statements.
             Some(NodeEnum::CopyStmt(ref stmt)) => Self::copy(stmt, cluster),
             // INSERT statements.
@@ -404,52 +399,54 @@ impl QueryParser {
             // params without touching the server.
             name => {
                 if !self.in_transaction {
-                    let node = stmt
-                        .args
-                        .first()
-                        .ok_or(Error::SetShard)?
-                        .node
-                        .as_ref()
-                        .ok_or(Error::SetShard)?;
+                    let mut value = vec![];
 
-                    if let NodeEnum::AConst(AConst { val: Some(val), .. }) = node {
-                        match val {
-                            Val::Sval(String { sval }) => {
-                                return Ok(Command::Set {
-                                    name: name.to_string(),
-                                    value: sval.to_string(),
-                                });
+                    for node in &stmt.args {
+                        if let Some(ref node) = node.node {
+                            if let NodeEnum::AConst(AConst { val: Some(val), .. }) = node {
+                                match val {
+                                    Val::Sval(String { sval }) => {
+                                        value.push(sval.to_string());
+                                    }
+
+                                    Val::Ival(Integer { ival }) => {
+                                        value.push(ival.to_string());
+                                    }
+
+                                    Val::Fval(Float { fval }) => {
+                                        value.push(fval.to_string());
+                                    }
+
+                                    Val::Boolval(Boolean { boolval }) => {
+                                        value.push(boolval.to_string());
+                                    }
+
+                                    _ => (),
+                                }
                             }
+                        }
+                    }
 
-                            Val::Ival(Integer { ival }) => {
-                                return Ok(Command::Set {
-                                    name: name.to_string(),
-                                    value: ival.to_string(),
-                                });
-                            }
-
-                            Val::Fval(Float { fval }) => {
-                                return Ok(Command::Set {
-                                    name: name.to_string(),
-                                    value: fval.to_string(),
-                                });
-                            }
-
-                            Val::Boolval(Boolean { boolval }) => {
-                                return Ok(Command::Set {
-                                    name: name.to_string(),
-                                    value: boolval.to_string(),
-                                });
-                            }
-
-                            _ => (),
+                    match value.len() {
+                        0 => (),
+                        1 => {
+                            return Ok(Command::Set {
+                                name: name.to_string(),
+                                value: ParameterValue::String(value.pop().unwrap()),
+                            })
+                        }
+                        _ => {
+                            return Ok(Command::Set {
+                                name: name.to_string(),
+                                value: ParameterValue::Tuple(value),
+                            })
                         }
                     }
                 }
             }
         }
 
-        Ok(Command::Query(Route::read(Shard::All)))
+        Ok(Command::Query(Route::write(Shard::All)))
     }
 
     fn select(
@@ -904,44 +901,74 @@ mod test {
         assert!(qp.routed);
         assert!(!qp.in_transaction);
 
-        for (_, qp) in [
+        for (command, qp) in [
             command!("SET TimeZone TO 'UTC'"),
             command!("SET TIME ZONE 'UTC'"),
         ] {
-            // match command {
-            //     Command::Set { name, value } => {
-            //         assert_eq!(name, "timezone");
-            //         assert_eq!(value, "UTC");
-            //     }
-            //     _ => panic!("not a set"),
-            // };
-            assert!(qp.routed);
+            match command {
+                Command::Set { name, value } => {
+                    assert_eq!(name, "timezone");
+                    assert_eq!(value, ParameterValue::from("UTC"));
+                }
+                _ => panic!("not a set"),
+            };
+            assert!(!qp.routed);
             assert!(!qp.in_transaction);
         }
 
-        let (_, qp) = command!("SET statement_timeout TO 3000");
-        // match command {
-        //     Command::Set { name, value } => {
-        //         assert_eq!(name, "statement_timeout");
-        //         assert_eq!(value, "3000");
-        //     }
-        //     _ => panic!("not a set"),
-        // };
-        assert!(qp.routed);
+        let (command, qp) = command!("SET statement_timeout TO 3000");
+        match command {
+            Command::Set { name, value } => {
+                assert_eq!(name, "statement_timeout");
+                assert_eq!(value, ParameterValue::from("3000"));
+            }
+            _ => panic!("not a set"),
+        };
+        assert!(!qp.routed);
         assert!(!qp.in_transaction);
 
         // TODO: user shouldn't be able to set these.
         // The server will report an error on synchronization.
-        let (_, qp) = command!("SET is_superuser TO true");
-        // match command {
-        //     Command::Set { name, value } => {
-        //         assert_eq!(name, "is_superuser");
-        //         assert_eq!(value, "true");
-        //     }
-        //     _ => panic!("not a set"),
-        // };
-        assert!(qp.routed);
+        let (command, qp) = command!("SET is_superuser TO true");
+        match command {
+            Command::Set { name, value } => {
+                assert_eq!(name, "is_superuser");
+                assert_eq!(value, ParameterValue::from("true"));
+            }
+            _ => panic!("not a set"),
+        };
+        assert!(!qp.routed);
         assert!(!qp.in_transaction);
+
+        let (_, mut qp) = command!("BEGIN");
+        let command = qp
+            .parse(
+                &vec![Query::new(r#"SET statement_timeout TO 3000"#).into()].into(),
+                &Cluster::new_test(),
+                &mut PreparedStatements::default(),
+            )
+            .unwrap();
+        match command {
+            Command::Query(q) => assert!(q.is_write()),
+            _ => panic!("set should trigger binding"),
+        }
+
+        let (command, _) = command!("SET search_path TO \"$user\", public");
+        match command {
+            Command::Set { name, value } => {
+                assert_eq!(name, "search_path");
+                assert_eq!(
+                    value,
+                    ParameterValue::Tuple(vec!["$user".into(), "public".into()])
+                )
+            }
+            _ => panic!("search path"),
+        }
+
+        println!(
+            "{:?}",
+            parse("SET search_path TO \"$user\", public").unwrap()
+        );
     }
 
     #[test]
@@ -954,5 +981,11 @@ mod test {
 
         assert!(!qp.routed);
         assert!(qp.in_transaction);
+    }
+
+    #[test]
+    fn test_insert_do_update() {
+        let route = query!("INSERT INTO foo (id) VALUES ($1::UUID) ON CONFLICT (id) DO UPDATE SET id = excluded.id RETURNING id");
+        assert!(route.is_write())
     }
 }

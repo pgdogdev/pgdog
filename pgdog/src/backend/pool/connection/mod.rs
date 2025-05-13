@@ -199,12 +199,12 @@ impl Connection {
                 if self.connect(request, &Route::read(Some(0))).await.is_err() {
                     self.connect(request, &Route::write(Some(0))).await?;
                 };
-                let params = self
-                    .server()?
-                    .params()
-                    .iter()
-                    .map(ParameterStatus::from)
-                    .collect();
+                let mut params = vec![];
+                for param in self.server()?.params().iter() {
+                    if let Some(value) = param.1.as_str() {
+                        params.push(ParameterStatus::from((param.0.as_str(), value)));
+                    }
+                }
                 self.disconnect();
                 Ok(params)
             }
@@ -275,8 +275,8 @@ impl Connection {
                 self.mirrors = databases
                     .mirrors(user)?
                     .unwrap_or(&[])
-                    .into_iter()
-                    .map(|mirror| Mirror::new(&mirror))
+                    .iter()
+                    .map(Mirror::new)
                     .collect::<Result<Vec<_>, Error>>()?;
                 debug!(
                     r#"database "{}" has {} mirrors"#,

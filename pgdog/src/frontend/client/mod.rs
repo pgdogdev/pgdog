@@ -39,6 +39,7 @@ pub struct Client {
     addr: SocketAddr,
     stream: Stream,
     id: BackendKeyData,
+    connect_params: Parameters,
     params: Parameters,
     comms: Comms,
     admin: bool,
@@ -189,7 +190,8 @@ impl Client {
             admin,
             streaming: false,
             shard,
-            params,
+            params: params.clone(),
+            connect_params: params,
             prepared_statements: PreparedStatements::new(),
             in_transaction: false,
             timeouts: Timeouts::from_config(&config.config.general),
@@ -339,19 +341,11 @@ impl Client {
                 }
                 // TODO: Handling session variables requires a lot more work,
                 // e.g. we need to track RESET as well.
-                // Some(Command::Set { name, value }) => {
-                //     self.params.insert(name, value);
-                //     self.stream.send(&CommandComplete::new("SET")).await?;
-                //     self.stream
-                //         .send_flush(&ReadyForQuery::in_transaction(self.in_transaction))
-                //         .await?;
-                //     let state = inner.stats.state;
-                //     if state == State::Active {
-                //         inner.stats.state = State::Idle;
-                //     }
-
-                //     return Ok(false);
-                // }
+                Some(Command::Set { name, value }) => {
+                    self.params.insert(name, value.clone());
+                    self.set(inner).await?;
+                    return Ok(false);
+                }
                 _ => (),
             };
 
@@ -550,6 +544,18 @@ impl Client {
         messages.push(ReadyForQuery::idle().message()?);
         self.stream.send_many(&messages).await?;
         debug!("transaction ended");
+        Ok(())
+    }
+
+    /// Handle SET command.
+    async fn set(&mut self, mut inner: InnerBorrow<'_>) -> Result<(), Error> {
+        self.stream.send(&CommandComplete::new("SET")).await?;
+        self.stream
+            .send_flush(&ReadyForQuery::in_transaction(self.in_transaction))
+            .await?;
+        inner.done(self.in_transaction);
+        inner.comms.update_params(&self.params);
+        debug!("set");
         Ok(())
     }
 }
