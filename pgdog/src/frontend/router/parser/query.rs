@@ -271,15 +271,27 @@ impl QueryParser {
             Some(NodeEnum::DeleteStmt(ref stmt)) => Self::delete(stmt),
             // Transaction control statements,
             // e.g. BEGIN, COMMIT, etc.
-            Some(NodeEnum::TransactionStmt(ref stmt)) => match stmt.kind() {
-                TransactionStmtKind::TransStmtCommit => return Ok(Command::CommitTransaction),
-                TransactionStmtKind::TransStmtRollback => return Ok(Command::RollbackTransaction),
-                TransactionStmtKind::TransStmtBegin | TransactionStmtKind::TransStmtStart => {
-                    self.in_transaction = true;
-                    return Ok(Command::StartTransaction(query.clone()));
+            Some(NodeEnum::TransactionStmt(ref stmt)) => {
+                if query.simple() {
+                    // Only allow to intercept transaction statements if they are using the simple protocol.
+                    match stmt.kind() {
+                        TransactionStmtKind::TransStmtCommit => {
+                            return Ok(Command::CommitTransaction)
+                        }
+                        TransactionStmtKind::TransStmtRollback => {
+                            return Ok(Command::RollbackTransaction)
+                        }
+                        TransactionStmtKind::TransStmtBegin
+                        | TransactionStmtKind::TransStmtStart => {
+                            self.in_transaction = true;
+                            return Ok(Command::StartTransaction(query.clone()));
+                        }
+                        _ => Ok(Command::Query(Route::write(None))),
+                    }
+                } else {
+                    Ok(Command::Query(Route::write(None)))
                 }
-                _ => Ok(Command::Query(Route::write(None))),
-            },
+            }
             // All others are not handled.
             // They are sent to all shards concurrently.
             _ => Ok(Command::Query(Route::write(None))),
@@ -987,5 +999,18 @@ mod test {
     fn test_insert_do_update() {
         let route = query!("INSERT INTO foo (id) VALUES ($1::UUID) ON CONFLICT (id) DO UPDATE SET id = excluded.id RETURNING id");
         assert!(route.is_write())
+    }
+
+    #[test]
+    fn test_begin_extended() {
+        let mut qr = QueryParser::default();
+        let result = qr
+            .parse(
+                &vec![crate::net::Parse::new_anonymous("BEGIN").into()].into(),
+                &Cluster::new_test(),
+                &mut PreparedStatements::default(),
+            )
+            .unwrap();
+        assert!(matches!(result, Command::Query(_)));
     }
 }

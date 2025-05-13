@@ -142,7 +142,7 @@ impl MultiShard {
             }
 
             'D' => {
-                if !self.route.should_buffer() && self.counters.row_description == self.shards {
+                if !self.route.should_buffer() && self.counters.row_description % self.shards == 0 {
                     forward = Some(message);
                 } else {
                     self.buffer.add(message)?;

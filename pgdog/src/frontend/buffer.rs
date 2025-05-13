@@ -210,6 +210,14 @@ impl BufferedQuery {
             Self::Prepared(parse) => parse.query(),
         }
     }
+
+    pub fn extended(&self) -> bool {
+        matches!(self, Self::Prepared(_))
+    }
+
+    pub fn simple(&self) -> bool {
+        matches!(self, Self::Query(_))
+    }
 }
 
 impl Deref for BufferedQuery {
