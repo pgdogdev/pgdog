@@ -28,9 +28,9 @@ FROM   pg_catalog.pg_class c
               ON am.oid = c.relam
 WHERE  c.relkind IN ( 'r', 'p', 'v', 'm',
                       'S', 'f', '' )
-       AND n.nspname <> 'pg_catalog'
-       AND n.nspname !~ '^pg_toast'
-       AND n.nspname <> 'information_schema'
+       -- AND n.nspname <> 'pg_catalog'
+       -- AND n.nspname !~ '^pg_toast'
+       -- AND n.nspname <> 'information_schema'
        -- AND pg_catalog.pg_table_is_visible(c.oid)
 ORDER  BY 1,
           2;

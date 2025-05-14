@@ -21,6 +21,18 @@ impl<'a> TryFrom<&'a Node> for Table<'a> {
     }
 }
 
+impl<'a> TryFrom<&'a Option<RangeVar>> for Table<'a> {
+    type Error = ();
+
+    fn try_from(value: &'a Option<RangeVar>) -> Result<Self, Self::Error> {
+        if let Some(value) = value {
+            Ok(Self::from(value))
+        } else {
+            Err(())
+        }
+    }
+}
+
 impl<'a> From<&'a RangeVar> for Table<'a> {
     fn from(range_var: &'a RangeVar) -> Self {
         let name = if let Some(ref alias) = range_var.alias {

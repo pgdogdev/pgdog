@@ -42,4 +42,7 @@ pub enum Error {
 
     #[error("set shard syntax error")]
     SetShard,
+
+    #[error("missing tenant id")]
+    MissingTenantId,
 }

@@ -363,8 +363,14 @@ pub(crate) fn new_pool(
             }
         };
 
-        let cluster_config =
-            ClusterConfig::new(general, user, &shard_configs, sharded_tables, mirror_of);
+        let cluster_config = ClusterConfig::new(
+            general,
+            user,
+            &shard_configs,
+            sharded_tables,
+            mirror_of,
+            &config.tenant_tables,
+        );
 
         Some((
             User {

@@ -5,8 +5,8 @@ use std::{
 };
 
 use crate::{
-    backend::{databases::databases, replication::ShardedColumn, Cluster, ShardingSchema},
-    config::config,
+    backend::{databases::databases, replication::ShardedColumn, Cluster, Schema, ShardingSchema},
+    config::{config, TenantTable},
     frontend::{
         buffer::BufferedQuery,
         router::{
@@ -128,9 +128,11 @@ impl QueryParser {
         let full_prepared_statements = config().config.general.prepared_statements.full();
         let sharding_schema = cluster.sharding_schema();
         let dry_run = sharding_schema.tables.dry_run();
-        let router_disabled = shards == 1 && (read_only || write_only);
-        let parser_disabled = !full_prepared_statements && router_disabled && !dry_run;
         let tenant_tables = cluster.tenant_tables();
+
+        let router_disabled = shards == 1 && (read_only || write_only);
+        let parser_disabled =
+            !full_prepared_statements && router_disabled && !dry_run && tenant_tables.is_empty();
 
         debug!(
             "parser is {}",
@@ -165,22 +167,28 @@ impl QueryParser {
                 cache.record_command(query, &route)?;
             }
 
-            return Ok(self.command.clone());
+            if tenant_tables.is_empty() {
+                return Ok(self.command.clone());
+            }
         }
 
-        // Parse hardcoded shard from a query comment.
-        let shard = super::comment::shard(query, &sharding_schema).map_err(Error::PgQuery)?;
+        let mut shard = Shard::All;
+
+        if !self.routed {
+            // Parse hardcoded shard from a query comment.
+            shard = super::comment::shard(query, &sharding_schema).map_err(Error::PgQuery)?;
+        }
 
         // Cluster is read only or write only, traffic split isn't needed,
         // and prepared statements support is limited to the extended protocol,
         // don't parse the query further.
         if !full_prepared_statements {
             if let Shard::Direct(_) = shard {
-                if cluster.read_only() {
+                if cluster.read_only() && tenant_tables.is_empty() {
                     return Ok(Command::Query(Route::read(shard)));
                 }
 
-                if cluster.write_only() {
+                if cluster.write_only() && tenant_tables.is_empty() {
                     return Ok(Command::Query(Route::write(shard)));
                 }
             }
@@ -239,7 +247,13 @@ impl QueryParser {
                         round_robin::next() % cluster.shards().len(),
                     ))));
                 } else {
-                    let mut command = Self::select(stmt, &sharding_schema, params)?;
+                    let mut command = Self::select(
+                        stmt,
+                        &sharding_schema,
+                        params,
+                        tenant_tables,
+                        cluster.schema(),
+                    )?;
                     let mut omni = false;
                     if let Command::Query(query) = &mut command {
                         // Try to route an all-shard query to one
@@ -267,9 +281,9 @@ impl QueryParser {
             // INSERT statements.
             Some(NodeEnum::InsertStmt(ref stmt)) => Self::insert(stmt, &sharding_schema, params),
             // UPDATE statements.
-            Some(NodeEnum::UpdateStmt(ref stmt)) => Self::update(stmt),
+            Some(NodeEnum::UpdateStmt(ref stmt)) => Self::update(stmt, tenant_tables),
             // DELETE statements.
-            Some(NodeEnum::DeleteStmt(ref stmt)) => Self::delete(stmt),
+            Some(NodeEnum::DeleteStmt(ref stmt)) => Self::delete(stmt, tenant_tables),
             // Transaction control statements,
             // e.g. BEGIN, COMMIT, etc.
             Some(NodeEnum::TransactionStmt(ref stmt)) => {
@@ -466,6 +480,8 @@ impl QueryParser {
         stmt: &SelectStmt,
         sharding_schema: &ShardingSchema,
         params: Option<&Bind>,
+        tenant_tables: &[TenantTable],
+        schema: Schema,
     ) -> Result<Command, Error> {
         let order_by = Self::select_sort(&stmt.sort_clause, params);
         let mut shards = HashSet::new();
@@ -483,7 +499,11 @@ impl QueryParser {
                 })
             })
             .flatten();
-        if let Some(where_clause) = WhereClause::new(table_name, &stmt.where_clause) {
+
+        let where_clause = WhereClause::new(table_name, &stmt.where_clause);
+        Self::check_tenant(&where_clause, tenant_tables, schema)?;
+
+        if let Some(where_clause) = where_clause {
             // Complexity: O(number of sharded tables * number of columns in the query)
             for table in sharding_schema.tables.tables() {
                 let table_name = table.name.as_deref();
@@ -704,13 +724,68 @@ impl QueryParser {
         }
     }
 
-    fn update(stmt: &UpdateStmt) -> Result<Command, Error> {
-        let where_clause = WhereClause::new(None, &stmt.where_clause);
+    fn update(stmt: &UpdateStmt, tenant_tables: &[TenantTable]) -> Result<Command, Error> {
+        let table = Table::try_from(&stmt.relation).ok();
+        let where_clause = WhereClause::new(table.map(|t| t.name), &stmt.where_clause);
+        Self::check_tenant(&where_clause, tenant_tables)?;
+
         Ok(Command::Query(Route::write(None)))
     }
 
-    fn delete(_stmt: &DeleteStmt) -> Result<Command, Error> {
+    fn delete(stmt: &DeleteStmt, tenant_tables: &[TenantTable]) -> Result<Command, Error> {
+        let table = Table::try_from(&stmt.relation).ok();
+        let where_clause = WhereClause::new(table.map(|t| t.name), &stmt.where_clause);
+        Self::check_tenant(&where_clause, tenant_tables)?;
         Ok(Command::Query(Route::write(None)))
+    }
+
+    fn check_tenant(
+        table: Option<&str>,
+        where_clause: &Option<WhereClause>,
+        tenant_tables: &[TenantTable],
+        schema: Schema,
+    ) -> Result<(), Error> {
+        if let Some(table) = table {
+            if let Some(schema_table) = schema.table(table, None) {
+                let tenant_table = tenant_tables.iter().find(|t| {
+                    (t.name.is_none() || t.name.as_ref().map(|s| s.as_str()) == Some(table))
+                });
+
+                if let Some(tenant_table) = tenant_table {
+                    if let Some(where_clause) = where_clause {
+                        if !where_clause
+                            .keys(
+                                tenant_table.name.as_ref().map(|s| s.as_str()),
+                                &tenant_table.column,
+                            )
+                            .is_empty()
+                        {
+                            return Err(Error::MissingTenantId);
+                        }
+                    }
+                }
+            }
+        } else {
+            return Ok(());
+        }
+
+        if !tenant_tables.is_empty() {
+            if let Some(where_clause) = where_clause {
+                let have_tenant = tenant_tables.iter().any(|table| {
+                    !where_clause
+                        .keys(table.name.as_ref().map(|s| s.as_str()), &table.column)
+                        .is_empty()
+                });
+
+                if !have_tenant {
+                    return Err(Error::MissingTenantId);
+                }
+            } else {
+                return Err(Error::MissingTenantId);
+            }
+        }
+
+        Ok(())
     }
 }
 

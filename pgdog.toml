@@ -29,6 +29,9 @@ host = "127.0.0.1"
 port = 5432
 role = "replica"
 
+[[tenant_tables]]
+column = "tenant_id"
+
 [tcp]
 retries = 3
 time = 1000

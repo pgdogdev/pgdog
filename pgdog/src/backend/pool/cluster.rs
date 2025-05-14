@@ -1,10 +1,14 @@
 //! A collection of replicas and a primary.
 
+use parking_lot::RwLock;
+use tokio::spawn;
+use tracing::{debug, error};
+
 use crate::{
     backend::{
         databases::databases,
         replication::{ReplicationConfig, ShardedColumn},
-        ShardedTables,
+        Schema, ShardedTables,
     },
     config::{General, PoolerMode, ShardedTable, TenantTable, User},
     net::messages::BackendKeyData,
@@ -13,7 +17,7 @@ use crate::{
 use super::{Address, Config, Error, Guard, Request, Shard};
 use crate::config::LoadBalancingStrategy;
 
-use std::ffi::CString;
+use std::sync::Arc;
 
 #[derive(Clone, Debug)]
 /// Database configuration.
@@ -37,6 +41,7 @@ pub struct Cluster {
     replication_sharding: Option<String>,
     mirror_of: Option<String>,
     tenant_tables: Vec<TenantTable>,
+    schema: Arc<RwLock<Schema>>,
 }
 
 /// Sharding configuration from the cluster.
@@ -120,6 +125,7 @@ impl Cluster {
             replication_sharding,
             mirror_of: mirror_of.map(|s| s.to_owned()),
             tenant_tables: tenant_tables.to_vec(),
+            schema: Arc::new(RwLock::new(Schema::default())),
         }
     }
 
@@ -167,6 +173,7 @@ impl Cluster {
             replication_sharding: self.replication_sharding.clone(),
             mirror_of: self.mirror_of.clone(),
             tenant_tables: self.tenant_tables.clone(),
+            schema: self.schema.clone(),
         }
     }
 
@@ -184,55 +191,26 @@ impl Cluster {
         &self.shards
     }
 
+    /// Get schema with all tables.
+    pub async fn update_schema(&self) -> Result<Schema, crate::backend::Error> {
+        let mut server = self.primary(0, &Request::default()).await?;
+        let schema = Schema::load(&mut server).await?;
+        {
+            *self.schema.write() = schema.clone();
+        }
+
+        debug!("loaded {} tables from schema", schema.tables().len());
+
+        Ok(schema)
+    }
+
+    pub fn schema(&self) -> Schema {
+        self.schema.read().clone()
+    }
+
     /// Mirrors getter.
     pub fn mirror_of(&self) -> Option<&str> {
         self.mirror_of.as_deref()
-    }
-
-    /// Plugin input.
-    ///
-    /// # Safety
-    ///
-    /// This allocates, so make sure to call `Config::drop` when you're done.
-    ///
-    pub unsafe fn plugin_config(&self) -> Result<pgdog_plugin::bindings::Config, Error> {
-        use pgdog_plugin::bindings::{Config, DatabaseConfig, Role_PRIMARY, Role_REPLICA};
-        let mut databases: Vec<DatabaseConfig> = vec![];
-        let name = CString::new(self.name.as_str()).map_err(|_| Error::NullBytes)?;
-
-        for (index, shard) in self.shards.iter().enumerate() {
-            if let Some(ref primary) = shard.primary {
-                // Ignore hosts with null bytes.
-                let host = if let Ok(host) = CString::new(primary.addr().host.as_str()) {
-                    host
-                } else {
-                    continue;
-                };
-                databases.push(DatabaseConfig::new(
-                    host,
-                    primary.addr().port,
-                    Role_PRIMARY,
-                    index,
-                ));
-            }
-
-            for replica in shard.replicas.pools() {
-                // Ignore hosts with null bytes.
-                let host = if let Ok(host) = CString::new(replica.addr().host.as_str()) {
-                    host
-                } else {
-                    continue;
-                };
-                databases.push(DatabaseConfig::new(
-                    host,
-                    replica.addr().port,
-                    Role_REPLICA,
-                    index,
-                ));
-            }
-        }
-
-        Ok(Config::new(name, &databases, self.shards.len()))
     }
 
     /// Get the password the user should use to connect to the database.
@@ -310,6 +288,16 @@ impl Cluster {
     pub(crate) fn launch(&self) {
         for shard in self.shards() {
             shard.launch();
+        }
+
+        if !self.tenant_tables().is_empty() {
+            let schema = self.clone();
+
+            spawn(async move {
+                if let Err(err) = schema.update_schema().await {
+                    error!("failed to fetch schema: {}", err);
+                }
+            });
         }
     }
 
