@@ -25,6 +25,7 @@ use crate::{
 
 use super::*;
 
+use multi_tenant::MultiTenantCheck;
 use once_cell::sync::Lazy;
 use pg_query::{
     fingerprint, parse,
@@ -128,8 +129,10 @@ impl QueryParser {
         let full_prepared_statements = config().config.general.prepared_statements.full();
         let sharding_schema = cluster.sharding_schema();
         let dry_run = sharding_schema.tables.dry_run();
+        let multi_tenant = cluster.multi_tenant();
         let router_disabled = shards == 1 && (read_only || write_only);
-        let parser_disabled = !full_prepared_statements && router_disabled && !dry_run;
+        let parser_disabled =
+            !full_prepared_statements && router_disabled && !dry_run && multi_tenant.is_none();
 
         debug!(
             "parser is {}",
@@ -157,7 +160,7 @@ impl QueryParser {
 
         // We already decided where all queries for this
         // transaction are going to go.
-        if self.routed {
+        if self.routed && multi_tenant.is_none() {
             if dry_run {
                 let cache = Cache::get();
                 let route = self.route();
@@ -167,13 +170,17 @@ impl QueryParser {
             return Ok(self.command.clone());
         }
 
+        let mut shard = Shard::All;
+
         // Parse hardcoded shard from a query comment.
-        let shard = super::comment::shard(query, &sharding_schema).map_err(Error::PgQuery)?;
+        if !router_disabled && !self.routed {
+            shard = super::comment::shard(query, &sharding_schema).map_err(Error::PgQuery)?;
+        }
 
         // Cluster is read only or write only, traffic split isn't needed,
         // and prepared statements support is limited to the extended protocol,
         // don't parse the query further.
-        if !full_prepared_statements {
+        if !full_prepared_statements && multi_tenant.is_none() {
             if let Shard::Direct(_) = shard {
                 if cluster.read_only() {
                     return Ok(Command::Query(Route::read(shard)));
@@ -209,6 +216,15 @@ impl QueryParser {
         if rewrite.needs_rewrite() {
             let queries = rewrite.rewrite(prepared_statements)?;
             return Ok(Command::Rewrite(queries));
+        }
+
+        if let Some(multi_tenant) = multi_tenant {
+            debug!("running multi-tenant check");
+            MultiTenantCheck::new(multi_tenant, cluster.schema(), &ast).run()?;
+        }
+
+        if self.routed {
+            return Ok(self.command.clone());
         }
 
         //

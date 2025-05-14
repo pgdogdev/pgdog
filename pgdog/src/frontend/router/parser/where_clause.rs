@@ -9,33 +9,36 @@ use std::string::String;
 use super::Key;
 
 #[derive(Debug)]
-pub struct Column {
+pub struct Column<'a> {
     /// Table name if fully qualified.
     /// Can be an alias.
-    pub table: Option<String>,
+    pub table: Option<&'a str>,
     /// Column name.
-    pub name: String,
+    pub name: &'a str,
 }
 
 #[derive(Debug)]
-enum Output {
+enum Output<'a> {
     Parameter(i32),
     Value(String),
     Int(i32),
-    Column(Column),
-    Filter(Vec<Output>, Vec<Output>),
+    Column(Column<'a>),
+    Filter(Vec<Output<'a>>, Vec<Output<'a>>),
 }
 
 /// Parse `WHERE` clause of a statement looking for sharding keys.
 #[derive(Debug)]
-pub struct WhereClause {
-    output: Vec<Output>,
+pub struct WhereClause<'a> {
+    output: Vec<Output<'a>>,
 }
 
-impl WhereClause {
+impl<'a> WhereClause<'a> {
     /// Parse the `WHERE` clause of a statement and extract
     /// all possible sharding keys.
-    pub fn new(table_name: Option<&str>, where_clause: &Option<Box<Node>>) -> Option<WhereClause> {
+    pub fn new(
+        table_name: Option<&'a str>,
+        where_clause: &'a Option<Box<Node>>,
+    ) -> Option<WhereClause<'a>> {
         let Some(ref where_clause) = where_clause else {
             return None;
         };
@@ -55,7 +58,7 @@ impl WhereClause {
 
     fn column_match(column: &Column, table: Option<&str>, name: &str) -> bool {
         if let (Some(table), Some(other_table)) = (table, &column.table) {
-            if table != other_table {
+            if &table != other_table {
                 return false;
             }
         };
@@ -115,17 +118,17 @@ impl WhereClause {
         keys
     }
 
-    fn string(node: Option<&Node>) -> Option<String> {
+    fn string(node: Option<&Node>) -> Option<&str> {
         if let Some(node) = node {
             if let Some(NodeEnum::String(ref string)) = node.node {
-                return Some(string.sval.clone());
+                return Some(string.sval.as_str());
             }
         }
 
         None
     }
 
-    fn parse(table_name: Option<&str>, node: &Node) -> Vec<Output> {
+    fn parse(table_name: Option<&'a str>, node: &'a Node) -> Vec<Output<'a>> {
         let mut keys = vec![];
 
         match node.node {
@@ -178,7 +181,7 @@ impl WhereClause {
                 let table = if let Some(table) = table {
                     Some(table)
                 } else {
-                    table_name.map(|t| t.to_owned())
+                    table_name.map(|t| t)
                 };
 
                 if let Some(name) = name {

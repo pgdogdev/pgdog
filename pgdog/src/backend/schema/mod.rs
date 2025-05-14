@@ -3,6 +3,7 @@ pub mod columns;
 pub mod relation;
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use tracing::debug;
 
 pub use relation::Relation;
@@ -14,7 +15,7 @@ static SETUP: &str = include_str!("setup.sql");
 /// Load schema from database.
 #[derive(Debug, Clone, Default)]
 pub struct Schema {
-    relations: HashMap<(String, String), Relation>,
+    relations: Arc<HashMap<(String, String), Relation>>,
 }
 
 impl Schema {
@@ -31,7 +32,9 @@ impl Schema {
             })
             .collect();
 
-        Ok(Self { relations })
+        Ok(Self {
+            relations: Arc::new(relations),
+        })
     }
 
     /// Load schema from primary database.
@@ -68,7 +71,7 @@ impl Schema {
                     .iter()
                     .filter(|table| table.schema() != "pgdog")
                 {
-                    let column_match = schema_table.columns.iter().find(|column| {
+                    let column_match = schema_table.columns.values().find(|column| {
                         column.column_name == table.column && column.data_type == "bigint"
                     });
                     if let Some(column_match) = column_match {

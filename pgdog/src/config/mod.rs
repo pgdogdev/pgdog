@@ -118,6 +118,10 @@ impl ConfigAndUsers {
             warn!("admin password has been randomly generated");
         }
 
+        if config.multi_tenant.is_some() {
+            info!("multi-tenant protection enabled");
+        }
+
         let users: Users = if let Ok(users) = read_to_string(users_path) {
             let mut users: Users = toml::from_str(&users)?;
             users.check(&config);
@@ -157,6 +161,8 @@ pub struct Config {
     /// TCP settings
     #[serde(default)]
     pub tcp: Tcp,
+    /// Multi-tenant
+    pub multi_tenant: Option<MultiTenant>,
     /// Servers.
     #[serde(default)]
     pub databases: Vec<Database>,
@@ -249,6 +255,11 @@ impl Config {
                 );
             }
         }
+    }
+
+    /// Multi-tenanncy is enabled.
+    pub fn multi_tenant(&self) -> &Option<MultiTenant> {
+        &self.multi_tenant
     }
 }
 
@@ -907,6 +918,12 @@ impl Tcp {
     }
 }
 
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
+#[serde(rename_all = "snake_case")]
+pub struct MultiTenant {
+    pub column: String,
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -936,6 +953,9 @@ retries = 5
 
 [[plugins]]
 name = "pgdog_routing"
+
+[[multi_tenant]]
+column = "tenant_id"
 "#;
 
         let config: Config = toml::from_str(source).unwrap();
@@ -949,5 +969,6 @@ name = "pgdog_routing"
         );
         assert_eq!(config.tcp.time().unwrap(), Duration::from_millis(1000));
         assert_eq!(config.tcp.retries().unwrap(), 5);
+        assert_eq!(config.multi_tenant.unwrap().column, "tenant_id");
     }
 }

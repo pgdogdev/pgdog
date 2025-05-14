@@ -1,12 +1,17 @@
 //! A collection of replicas and a primary.
 
+use parking_lot::RwLock;
+use std::sync::Arc;
+use tokio::spawn;
+use tracing::{debug, error, info};
+
 use crate::{
     backend::{
         databases::databases,
         replication::{ReplicationConfig, ShardedColumn},
-        ShardedTables,
+        Schema, ShardedTables,
     },
-    config::{General, PoolerMode, ShardedTable, User},
+    config::{General, MultiTenant, PoolerMode, ShardedTable, User},
     net::messages::BackendKeyData,
 };
 
@@ -36,6 +41,8 @@ pub struct Cluster {
     sharded_tables: ShardedTables,
     replication_sharding: Option<String>,
     mirror_of: Option<String>,
+    schema: Arc<RwLock<Schema>>,
+    multi_tenant: Option<MultiTenant>,
 }
 
 /// Sharding configuration from the cluster.
@@ -63,6 +70,7 @@ pub struct ClusterConfig<'a> {
     pub sharded_tables: ShardedTables,
     pub replication_sharding: Option<String>,
     pub mirror_of: Option<&'a str>,
+    pub multi_tenant: &'a Option<MultiTenant>,
 }
 
 impl<'a> ClusterConfig<'a> {
@@ -72,6 +80,7 @@ impl<'a> ClusterConfig<'a> {
         shards: &'a [ClusterShardConfig],
         sharded_tables: ShardedTables,
         mirror_of: Option<&'a str>,
+        multi_tenant: &'a Option<MultiTenant>,
     ) -> Self {
         Self {
             name: &user.database,
@@ -83,6 +92,7 @@ impl<'a> ClusterConfig<'a> {
             shards,
             sharded_tables,
             mirror_of,
+            multi_tenant,
         }
     }
 }
@@ -100,6 +110,7 @@ impl Cluster {
             sharded_tables,
             replication_sharding,
             mirror_of,
+            multi_tenant,
         } = config;
 
         Self {
@@ -114,6 +125,8 @@ impl Cluster {
             sharded_tables,
             replication_sharding,
             mirror_of: mirror_of.map(|s| s.to_owned()),
+            schema: Arc::new(RwLock::new(Schema::default())),
+            multi_tenant: multi_tenant.clone(),
         }
     }
 
@@ -160,6 +173,8 @@ impl Cluster {
             sharded_tables: self.sharded_tables.clone(),
             replication_sharding: self.replication_sharding.clone(),
             mirror_of: self.mirror_of.clone(),
+            schema: self.schema.clone(),
+            multi_tenant: self.multi_tenant.clone(),
         }
     }
 
@@ -180,52 +195,6 @@ impl Cluster {
     /// Mirrors getter.
     pub fn mirror_of(&self) -> Option<&str> {
         self.mirror_of.as_deref()
-    }
-
-    /// Plugin input.
-    ///
-    /// # Safety
-    ///
-    /// This allocates, so make sure to call `Config::drop` when you're done.
-    ///
-    pub unsafe fn plugin_config(&self) -> Result<pgdog_plugin::bindings::Config, Error> {
-        use pgdog_plugin::bindings::{Config, DatabaseConfig, Role_PRIMARY, Role_REPLICA};
-        let mut databases: Vec<DatabaseConfig> = vec![];
-        let name = CString::new(self.name.as_str()).map_err(|_| Error::NullBytes)?;
-
-        for (index, shard) in self.shards.iter().enumerate() {
-            if let Some(ref primary) = shard.primary {
-                // Ignore hosts with null bytes.
-                let host = if let Ok(host) = CString::new(primary.addr().host.as_str()) {
-                    host
-                } else {
-                    continue;
-                };
-                databases.push(DatabaseConfig::new(
-                    host,
-                    primary.addr().port,
-                    Role_PRIMARY,
-                    index,
-                ));
-            }
-
-            for replica in shard.replicas.pools() {
-                // Ignore hosts with null bytes.
-                let host = if let Ok(host) = CString::new(replica.addr().host.as_str()) {
-                    host
-                } else {
-                    continue;
-                };
-                databases.push(DatabaseConfig::new(
-                    host,
-                    replica.addr().port,
-                    Role_REPLICA,
-                    index,
-                ));
-            }
-        }
-
-        Ok(Config::new(name, &databases, self.shards.len()))
     }
 
     /// Get the password the user should use to connect to the database.
@@ -280,6 +249,11 @@ impl Cluster {
         true
     }
 
+    /// Multi-tenant config.
+    pub fn multi_tenant(&self) -> &Option<MultiTenant> {
+        &self.multi_tenant
+    }
+
     /// Get replication configuration for this cluster.
     pub fn replication_sharding_config(&self) -> Option<ReplicationConfig> {
         self.replication_sharding
@@ -295,11 +269,36 @@ impl Cluster {
         }
     }
 
+    /// Update schema from primary.
+    async fn update_schema(&self) -> Result<(), crate::backend::Error> {
+        let mut server = self.primary(0, &Request::default()).await?;
+        let schema = Schema::load(&mut server).await?;
+        info!(
+            "loaded {} tables from schema [{}]",
+            schema.tables().len(),
+            server.addr()
+        );
+        *self.schema.write() = schema;
+        Ok(())
+    }
+
+    /// Get currently loaded schema.
+    pub fn schema(&self) -> Schema {
+        self.schema.read().clone()
+    }
+
     /// Launch the connection pools.
     pub(crate) fn launch(&self) {
         for shard in self.shards() {
             shard.launch();
         }
+
+        let me = self.clone();
+        spawn(async move {
+            if let Err(err) = me.update_schema().await {
+                error!("error loading schema: {}", err);
+            }
+        });
     }
 
     /// Shutdown the connection pools.

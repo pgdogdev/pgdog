@@ -106,3 +106,6 @@ fingerprint = "f4814b6fadabc4c1" #[17618446160277259457]
 
 [[manual_query]]
 fingerprint = "04dc05f480b702d3"
+
+[multi_tenant]
+column = "tenant_id"
