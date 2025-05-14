@@ -280,6 +280,10 @@ impl Cluster {
         Ok(())
     }
 
+    fn load_schema(&self) -> bool {
+        self.multi_tenant.is_some()
+    }
+
     /// Get currently loaded schema.
     pub fn schema(&self) -> Schema {
         self.schema.read().clone()
@@ -291,12 +295,14 @@ impl Cluster {
             shard.launch();
         }
 
-        let me = self.clone();
-        spawn(async move {
-            if let Err(err) = me.update_schema().await {
-                error!("error loading schema: {}", err);
-            }
-        });
+        if self.load_schema() {
+            let me = self.clone();
+            spawn(async move {
+                if let Err(err) = me.update_schema().await {
+                    error!("error loading schema: {}", err);
+                }
+            });
+        }
     }
 
     /// Shutdown the connection pools.
