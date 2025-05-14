@@ -292,8 +292,12 @@ impl Client {
         }
 
         let connected = inner.connected();
-        let command = match inner.command(&mut self.protocol_buffer, &mut self.prepared_statements)
-        {
+
+        let command = match inner.command(
+            &mut self.protocol_buffer,
+            &mut self.prepared_statements,
+            &self.params,
+        ) {
             Ok(command) => command,
             Err(err) => {
                 self.stream

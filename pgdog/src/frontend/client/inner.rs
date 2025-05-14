@@ -7,8 +7,9 @@ use crate::{
     },
     frontend::{
         buffer::BufferedQuery, router::Error as RouterError, Buffer, Command, Comms,
-        PreparedStatements, Router, Stats,
+        PreparedStatements, Router, RouterContext, Stats,
     },
+    net::Parameters,
     state::State,
 };
 
@@ -73,12 +74,22 @@ impl Inner {
         &mut self,
         buffer: &mut Buffer,
         prepared_statements: &mut PreparedStatements,
+        params: &Parameters,
     ) -> Result<Option<&Command>, RouterError> {
         let command = self
             .backend
             .cluster()
             .ok()
-            .map(|cluster| self.router.query(buffer, cluster, prepared_statements))
+            .map(|cluster| {
+                // Build router context.
+                let context = RouterContext::new(
+                    buffer,              // Query and parameters.
+                    cluster,             // Cluster configuration.
+                    prepared_statements, // Prepared statements.
+                    params,              // Client connection parameters.
+                )?;
+                self.router.query(context)
+            })
             .transpose()?;
 
         if let Some(Command::Rewrite(query)) = command {

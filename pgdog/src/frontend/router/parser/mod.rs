@@ -11,6 +11,7 @@ pub mod csv;
 pub mod error;
 pub mod insert;
 pub mod key;
+pub mod multi_tenant;
 pub mod order_by;
 pub mod prepare;
 pub mod query;

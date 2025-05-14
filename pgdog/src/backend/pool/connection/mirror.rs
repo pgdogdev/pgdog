@@ -6,7 +6,8 @@ use tracing::{debug, error};
 use crate::backend::Cluster;
 use crate::config::config;
 use crate::frontend::client::timeouts::Timeouts;
-use crate::frontend::{PreparedStatements, Router};
+use crate::frontend::{PreparedStatements, Router, RouterContext};
+use crate::net::Parameters;
 use crate::state::State;
 use crate::{
     backend::pool::{Error as PoolError, Request},
@@ -37,6 +38,7 @@ pub(crate) struct Mirror {
     router: Router,
     cluster: Cluster,
     prepared_statements: PreparedStatements,
+    params: Parameters,
     state: State,
 }
 
@@ -50,6 +52,7 @@ impl Mirror {
             prepared_statements: PreparedStatements::new(),
             cluster: cluster.clone(),
             state: State::Idle,
+            params: Parameters::default(),
         };
 
         let config = config();
@@ -110,18 +113,21 @@ impl Mirror {
     pub(crate) async fn handle(&mut self, request: &MirrorRequest) -> Result<(), Error> {
         if !self.connection.connected() {
             // TODO: handle parsing errors.
-            if let Err(err) = self.router.query(
+            if let Ok(context) = RouterContext::new(
                 &request.buffer,
                 &self.cluster,
                 &mut self.prepared_statements,
+                &self.params,
             ) {
-                error!("mirror query parse error: {}", err);
-                return Ok(()); // Drop request.
-            }
+                if let Err(err) = self.router.query(context) {
+                    error!("mirror query parse error: {}", err);
+                    return Ok(()); // Drop request.
+                }
 
-            self.connection
-                .connect(&request.request, &self.router.route())
-                .await?;
+                self.connection
+                    .connect(&request.request, &self.router.route())
+                    .await?;
+            }
         }
 
         // TODO: handle streaming.
