@@ -145,8 +145,7 @@ impl<'a> WhereClause<'a> {
                     let left = null_test
                         .arg
                         .as_ref()
-                        .map(|node| Self::parse(table_name, node).pop())
-                        .flatten();
+                        .and_then(|node| Self::parse(table_name, node).pop());
 
                     if let Some(Output::Column(c)) = left {
                         keys.push(Output::NullCheck(c));
@@ -203,7 +202,7 @@ impl<'a> WhereClause<'a> {
                 let table = if let Some(table) = table {
                     Some(table)
                 } else {
-                    table_name.map(|t| t)
+                    table_name
                 };
 
                 if let Some(name) = name {

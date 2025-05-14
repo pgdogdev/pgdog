@@ -16,7 +16,7 @@ use crate::{
             sharding::{shard_param, shard_str, shard_value, Centroids},
             CopyRow,
         },
-        Buffer, PreparedStatements,
+        PreparedStatements,
     },
     net::{
         messages::{Bind, CopyData, Vector},
@@ -72,7 +72,7 @@ impl QueryParser {
     pub fn parse(&mut self, context: RouterContext) -> Result<&Command, Error> {
         if let Some(ref query) = context.query {
             self.command = self.query(
-                &query,
+                query,
                 context.cluster,
                 context.bind,
                 context.prepared_statements,
@@ -743,7 +743,7 @@ mod test {
     };
 
     use super::{super::Shard, *};
-    use crate::frontend::RouterContext;
+    use crate::frontend::{Buffer, RouterContext};
     use crate::net::messages::Query;
     use crate::net::Parameters;
 

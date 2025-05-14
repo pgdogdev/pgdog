@@ -9,7 +9,7 @@ use tokio::time::timeout;
 use tokio::{select, spawn};
 use tracing::{debug, error, info, trace};
 
-use super::{Buffer, Command, Comms, Error, PreparedStatements, RouterContext};
+use super::{Buffer, Command, Comms, Error, PreparedStatements};
 use crate::auth::{md5, scram::Server};
 use crate::backend::{
     databases,

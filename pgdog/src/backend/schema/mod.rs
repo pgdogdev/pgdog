@@ -44,7 +44,6 @@ impl Schema {
             .pop()
             .unwrap_or(String::from("$user, public"))
             .split(",")
-            .into_iter()
             .map(|p| p.trim().replace("\"", ""))
             .collect();
 

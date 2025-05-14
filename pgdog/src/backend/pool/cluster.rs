@@ -3,7 +3,7 @@
 use parking_lot::RwLock;
 use std::sync::Arc;
 use tokio::spawn;
-use tracing::{debug, error, info};
+use tracing::{error, info};
 
 use crate::{
     backend::{
@@ -18,7 +18,6 @@ use crate::{
 use super::{Address, Config, Error, Guard, Request, Shard};
 use crate::config::LoadBalancingStrategy;
 
-use std::ffi::CString;
 
 #[derive(Clone, Debug)]
 /// Database configuration.

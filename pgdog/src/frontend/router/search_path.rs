@@ -1,5 +1,5 @@
 use crate::{
-    backend::{Cluster, Schema},
+    backend::Schema,
     net::{parameter::ParameterValue, Parameters},
 };
 

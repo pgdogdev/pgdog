@@ -1,8 +1,8 @@
 use super::Error;
 use crate::{
-    backend::{Cluster, Schema},
+    backend::Cluster,
     frontend::{
-        buffer::BufferedQuery, router::search_path::SearchPath, Buffer, PreparedStatements,
+        buffer::BufferedQuery, Buffer, PreparedStatements,
     },
     net::{Bind, Parameters},
 };

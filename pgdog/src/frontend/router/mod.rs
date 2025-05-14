@@ -1,6 +1,5 @@
 //! Query router.
 
-use crate::backend::Cluster;
 
 pub mod context;
 pub mod copy;
@@ -15,7 +14,7 @@ pub use copy::CopyRow;
 pub use error::Error;
 pub use parser::{Command, QueryParser, Route};
 
-use super::{Buffer, PreparedStatements};
+use super::Buffer;
 pub use context::RouterContext;
 pub use search_path::SearchPath;
 
