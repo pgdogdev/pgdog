@@ -10,6 +10,7 @@ use crate::{
     frontend::{
         buffer::BufferedQuery,
         router::{
+            context::RouterContext,
             parser::{rewrite::Rewrite, OrderBy, Shard},
             round_robin,
             sharding::{shard_param, shard_str, shard_value, Centroids},
@@ -20,6 +21,7 @@ use crate::{
     net::{
         messages::{Bind, CopyData, Vector},
         parameter::ParameterValue,
+        Parameters,
     },
 };
 
@@ -67,15 +69,15 @@ impl QueryParser {
         self.replication_mode = true;
     }
 
-    pub fn parse(
-        &mut self,
-        buffer: &Buffer,
-        cluster: &Cluster,
-        prepared_statements: &mut PreparedStatements,
-    ) -> Result<&Command, Error> {
-        if let Some(query) = buffer.query()? {
-            self.command =
-                self.query(&query, cluster, buffer.parameters()?, prepared_statements)?;
+    pub fn parse(&mut self, context: RouterContext) -> Result<&Command, Error> {
+        if let Some(ref query) = context.query {
+            self.command = self.query(
+                &query,
+                context.cluster,
+                context.bind,
+                context.prepared_statements,
+                context.params,
+            )?;
         }
         Ok(&self.command)
     }
@@ -107,8 +109,9 @@ impl QueryParser {
         &mut self,
         query: &BufferedQuery,
         cluster: &Cluster,
-        params: Option<&Bind>,
+        bind: Option<&Bind>,
         prepared_statements: &mut PreparedStatements,
+        params: &Parameters,
     ) -> Result<Command, Error> {
         // Replication protocol commands
         // don't have a node in pg_query,
@@ -220,7 +223,8 @@ impl QueryParser {
 
         if let Some(multi_tenant) = multi_tenant {
             debug!("running multi-tenant check");
-            MultiTenantCheck::new(multi_tenant, cluster.schema(), &ast).run()?;
+            MultiTenantCheck::new(cluster.user(), multi_tenant, cluster.schema(), &ast, params)
+                .run()?;
         }
 
         if self.routed {
@@ -254,7 +258,7 @@ impl QueryParser {
                         round_robin::next() % cluster.shards().len(),
                     ))));
                 } else {
-                    let mut command = Self::select(stmt, &sharding_schema, params)?;
+                    let mut command = Self::select(stmt, &sharding_schema, bind)?;
                     let mut omni = false;
                     if let Command::Query(query) = &mut command {
                         // Try to route an all-shard query to one
@@ -280,7 +284,7 @@ impl QueryParser {
             // COPY statements.
             Some(NodeEnum::CopyStmt(ref stmt)) => Self::copy(stmt, cluster),
             // INSERT statements.
-            Some(NodeEnum::InsertStmt(ref stmt)) => Self::insert(stmt, &sharding_schema, params),
+            Some(NodeEnum::InsertStmt(ref stmt)) => Self::insert(stmt, &sharding_schema, bind),
             // UPDATE statements.
             Some(NodeEnum::UpdateStmt(ref stmt)) => Self::update(stmt),
             // DELETE statements.
@@ -526,6 +530,9 @@ impl QueryParser {
                                 }
                             }
                         }
+
+                        // Null doesn't help.
+                        Key::Null => (),
                     }
                 }
             }
@@ -736,20 +743,20 @@ mod test {
     };
 
     use super::{super::Shard, *};
+    use crate::frontend::RouterContext;
     use crate::net::messages::Query;
+    use crate::net::Parameters;
 
     macro_rules! command {
         ($query:expr) => {{
             let query = $query;
             let mut query_parser = QueryParser::default();
-            let command = query_parser
-                .parse(
-                    &Buffer::from(vec![Query::new(query).into()]),
-                    &Cluster::new_test(),
-                    &mut PreparedStatements::default(),
-                )
-                .unwrap()
-                .clone();
+            let buffer = Buffer::from(vec![Query::new(query).into()]);
+            let cluster = Cluster::new_test();
+            let mut stmt = PreparedStatements::default();
+            let params = Parameters::default();
+            let context = RouterContext::new(&buffer, &cluster, &mut stmt, &params).unwrap();
+            let command = query_parser.parse(context).unwrap().clone();
 
             (command, query_parser)
         }};
@@ -785,9 +792,13 @@ mod test {
             let bind = Bind::test_params_codes($name, &params, $codes);
             let route = QueryParser::default()
                 .parse(
-                    &Buffer::from(vec![parse.into(), bind.into()]),
-                    &Cluster::new_test(),
-                    &mut PreparedStatements::default(),
+                    RouterContext::new(
+                        &Buffer::from(vec![parse.into(), bind.into()]),
+                        &Cluster::new_test(),
+                        &mut PreparedStatements::default(),
+                        &Parameters::default(),
+                    )
+                    .unwrap(),
                 )
                 .unwrap()
                 .clone();
@@ -818,7 +829,15 @@ mod test {
         let cluster = Cluster::default();
 
         let command = query_parser
-            .parse(&buffer, &cluster, &mut PreparedStatements::default())
+            .parse(
+                RouterContext::new(
+                    &buffer,
+                    &cluster,
+                    &mut PreparedStatements::default(),
+                    &Parameters::default(),
+                )
+                .unwrap(),
+            )
             .unwrap();
         assert!(matches!(command, &Command::StartReplication));
     }
@@ -835,7 +854,15 @@ mod test {
         let cluster = Cluster::default();
 
         let command = query_parser
-            .parse(&buffer, &cluster, &mut PreparedStatements::default())
+            .parse(
+                RouterContext::new(
+                    &buffer,
+                    &cluster,
+                    &mut PreparedStatements::default(),
+                    &Parameters::default(),
+                )
+                .unwrap(),
+            )
             .unwrap();
         assert!(matches!(command, &Command::ReplicationMeta));
     }
@@ -971,9 +998,13 @@ mod test {
         let (_, mut qp) = command!("BEGIN");
         let command = qp
             .parse(
-                &vec![Query::new(r#"SET statement_timeout TO 3000"#).into()].into(),
-                &Cluster::new_test(),
-                &mut PreparedStatements::default(),
+                RouterContext::new(
+                    &vec![Query::new(r#"SET statement_timeout TO 3000"#).into()].into(),
+                    &Cluster::new_test(),
+                    &mut PreparedStatements::default(),
+                    &Parameters::default(),
+                )
+                .unwrap(),
             )
             .unwrap();
         match command {
@@ -981,13 +1012,13 @@ mod test {
             _ => panic!("set should trigger binding"),
         }
 
-        let (command, _) = command!("SET search_path TO \"$user\", public");
+        let (command, _) = command!("SET search_path TO \"$user\", public, \"APPLES\"");
         match command {
             Command::Set { name, value } => {
                 assert_eq!(name, "search_path");
                 assert_eq!(
                     value,
-                    ParameterValue::Tuple(vec!["$user".into(), "public".into()])
+                    ParameterValue::Tuple(vec!["$user".into(), "public".into(), "APPLES".into()])
                 )
             }
             _ => panic!("search path"),
@@ -1022,9 +1053,13 @@ mod test {
         let mut qr = QueryParser::default();
         let result = qr
             .parse(
-                &vec![crate::net::Parse::new_anonymous("BEGIN").into()].into(),
-                &Cluster::new_test(),
-                &mut PreparedStatements::default(),
+                RouterContext::new(
+                    &vec![crate::net::Parse::new_anonymous("BEGIN").into()].into(),
+                    &Cluster::new_test(),
+                    &mut PreparedStatements::default(),
+                    &Parameters::default(),
+                )
+                .unwrap(),
             )
             .unwrap();
         assert!(matches!(result, Command::Query(_)));

@@ -8,4 +8,6 @@ pub enum Key {
     /// A constant value, e.g. "1", "2", or "'value'"
     /// which can be parsed from the query text.
     Constant(String),
+    /// Null check on a column.
+    Null,
 }

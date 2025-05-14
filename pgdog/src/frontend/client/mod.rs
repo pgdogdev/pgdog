@@ -9,7 +9,7 @@ use tokio::time::timeout;
 use tokio::{select, spawn};
 use tracing::{debug, error, info, trace};
 
-use super::{Buffer, Command, Comms, Error, PreparedStatements};
+use super::{Buffer, Command, Comms, Error, PreparedStatements, RouterContext};
 use crate::auth::{md5, scram::Server};
 use crate::backend::{
     databases,
@@ -292,8 +292,12 @@ impl Client {
         }
 
         let connected = inner.connected();
-        let command = match inner.command(&mut self.protocol_buffer, &mut self.prepared_statements)
-        {
+
+        let command = match inner.command(
+            &mut self.protocol_buffer,
+            &mut self.prepared_statements,
+            &self.params,
+        ) {
             Ok(command) => command,
             Err(err) => {
                 self.stream

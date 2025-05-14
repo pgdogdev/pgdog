@@ -23,6 +23,7 @@ enum Output<'a> {
     Value(String),
     Int(i32),
     Column(Column<'a>),
+    NullCheck(Column<'a>),
     Filter(Vec<Output<'a>>, Vec<Output<'a>>),
 }
 
@@ -115,6 +116,12 @@ impl<'a> WhereClause<'a> {
             }
         }
 
+        if let Output::NullCheck(c) = output {
+            if c.name == column_name && c.table == table_name {
+                keys.push(Key::Null);
+            }
+        }
+
         keys
     }
 
@@ -132,6 +139,21 @@ impl<'a> WhereClause<'a> {
         let mut keys = vec![];
 
         match node.node {
+            Some(NodeEnum::NullTest(ref null_test)) => {
+                // Only check for IS NULL, IS NOT NULL definitely doesn't help.
+                if NullTestType::from_i32(null_test.nulltesttype) == Some(NullTestType::IsNull) {
+                    let left = null_test
+                        .arg
+                        .as_ref()
+                        .map(|node| Self::parse(table_name, node).pop())
+                        .flatten();
+
+                    if let Some(Output::Column(c)) = left {
+                        keys.push(Output::NullCheck(c));
+                    }
+                }
+            }
+
             Some(NodeEnum::BoolExpr(ref expr)) => {
                 // Only AND expressions can really be asserted.
                 // OR needs both sides to be evaluated and either one
@@ -223,6 +245,33 @@ mod test {
             let where_ = WhereClause::new(Some("sharded"), &stmt.where_clause).unwrap();
             let mut keys = where_.keys(Some("sharded"), "id");
             assert_eq!(keys.pop().unwrap(), Key::Constant("5".into()));
+        }
+    }
+
+    #[test]
+    fn test_is_null() {
+        let query = "SELECT * FROM users WHERE tenant_id IS NULL";
+        let ast = parse(query).unwrap();
+
+        let stmt = ast.protobuf.stmts.first().cloned().unwrap().stmt.unwrap();
+
+        if let Some(NodeEnum::SelectStmt(stmt)) = stmt.node {
+            let where_ = WhereClause::new(Some("users"), &stmt.where_clause).unwrap();
+            assert_eq!(
+                where_.keys(Some("users"), "tenant_id").pop(),
+                Some(Key::Null)
+            );
+        }
+
+        //  NOT NULL check is basically everyone, so no!
+        let query = "SELECT * FROM users WHERE tenant_id IS NOT NULL";
+        let ast = parse(query).unwrap();
+
+        let stmt = ast.protobuf.stmts.first().cloned().unwrap().stmt.unwrap();
+
+        if let Some(NodeEnum::SelectStmt(stmt)) = stmt.node {
+            let where_ = WhereClause::new(Some("users"), &stmt.where_clause).unwrap();
+            assert!(where_.keys(Some("users"), "tenant_id").is_empty());
         }
     }
 }

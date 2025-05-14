@@ -2,11 +2,13 @@
 
 use crate::backend::Cluster;
 
+pub mod context;
 pub mod copy;
 pub mod error;
 pub mod parser;
 pub mod request;
 pub mod round_robin;
+pub mod search_path;
 pub mod sharding;
 
 pub use copy::CopyRow;
@@ -14,6 +16,8 @@ pub use error::Error;
 pub use parser::{Command, QueryParser, Route};
 
 use super::{Buffer, PreparedStatements};
+pub use context::RouterContext;
+pub use search_path::SearchPath;
 
 /// Query router.
 #[derive(Debug)]
@@ -46,15 +50,8 @@ impl Router {
     /// previous route is preserved. This is useful in case the client
     /// doesn't supply enough information in the buffer, e.g. just issued
     /// a Describe request to a previously submitted Parse.
-    pub fn query(
-        &mut self,
-        buffer: &Buffer,
-        cluster: &Cluster,
-        prepared_statements: &mut PreparedStatements,
-    ) -> Result<&Command, Error> {
-        Ok(self
-            .query_parser
-            .parse(buffer, cluster, prepared_statements)?)
+    pub fn query(&mut self, context: RouterContext) -> Result<&Command, Error> {
+        Ok(self.query_parser.parse(context)?)
     }
 
     /// Parse CopyData messages and shard them.

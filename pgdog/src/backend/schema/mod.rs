@@ -2,8 +2,8 @@
 pub mod columns;
 pub mod relation;
 
-use std::collections::HashMap;
 use std::sync::Arc;
+use std::{collections::HashMap, ops::Deref};
 use tracing::debug;
 
 pub use relation::Relation;
@@ -12,10 +12,16 @@ use super::{pool::Request, Cluster, Error, Server};
 
 static SETUP: &str = include_str!("setup.sql");
 
+#[derive(Debug, Default)]
+struct Inner {
+    search_path: Vec<String>,
+    relations: HashMap<(String, String), Relation>,
+}
+
 /// Load schema from database.
 #[derive(Debug, Clone, Default)]
 pub struct Schema {
-    relations: Arc<HashMap<(String, String), Relation>>,
+    inner: Arc<Inner>,
 }
 
 impl Schema {
@@ -32,8 +38,23 @@ impl Schema {
             })
             .collect();
 
+        let search_path = server
+            .fetch_all::<String>("SHOW search_path")
+            .await?
+            .pop()
+            .unwrap_or(String::from("$user, public"))
+            .split(",")
+            .into_iter()
+            .map(|p| p.trim().replace("\"", ""))
+            .collect();
+
+        let inner = Inner {
+            search_path,
+            relations,
+        };
+
         Ok(Self {
-            relations: Arc::new(relations),
+            inner: Arc::new(inner),
         })
     }
 
@@ -113,12 +134,15 @@ impl Schema {
     /// Get table by name.
     pub fn table(&self, name: &str, schema: Option<&str>) -> Option<&Relation> {
         let schema = schema.unwrap_or("public");
-        self.relations.get(&(name.to_string(), schema.to_string()))
+        self.inner
+            .relations
+            .get(&(name.to_string(), schema.to_string()))
     }
 
     /// Get all indices.
     pub fn tables(&self) -> Vec<&Relation> {
-        self.relations
+        self.inner
+            .relations
             .values()
             .filter(|value| value.is_table())
             .collect()
@@ -126,10 +150,24 @@ impl Schema {
 
     /// Get all sequences.
     pub fn sequences(&self) -> Vec<&Relation> {
-        self.relations
+        self.inner
+            .relations
             .values()
             .filter(|value| value.is_sequence())
             .collect()
+    }
+
+    /// Get search path components.
+    pub fn search_path(&self) -> &[String] {
+        &self.inner.search_path
+    }
+}
+
+impl Deref for Schema {
+    type Target = HashMap<(String, String), Relation>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner.relations
     }
 }
 

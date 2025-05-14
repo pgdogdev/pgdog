@@ -954,7 +954,7 @@ retries = 5
 [[plugins]]
 name = "pgdog_routing"
 
-[[multi_tenant]]
+[multi_tenant]
 column = "tenant_id"
 "#;
 
