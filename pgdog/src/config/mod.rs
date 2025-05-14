@@ -170,6 +170,8 @@ pub struct Config {
     pub manual_queries: Vec<ManualQuery>,
     #[serde(default)]
     pub omnisharded_tables: Vec<OmnishardedTables>,
+    #[serde(default)]
+    pub tenant_tables: Vec<TenantTable>,
 }
 
 impl Config {
@@ -907,6 +909,15 @@ impl Tcp {
     }
 }
 
+/// Table with a tenant_id.
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
+pub struct TenantTable {
+    pub name: Option<String>,
+    pub column: String,
+    #[serde(default)]
+    pub data_type: DataType,
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -936,6 +947,11 @@ retries = 5
 
 [[plugins]]
 name = "pgdog_routing"
+
+[[tenant_tables]]
+name = "users"
+column = "tenant_id"
+data_type = "bigint"
 "#;
 
         let config: Config = toml::from_str(source).unwrap();
@@ -949,5 +965,6 @@ name = "pgdog_routing"
         );
         assert_eq!(config.tcp.time().unwrap(), Duration::from_millis(1000));
         assert_eq!(config.tcp.retries().unwrap(), 5);
+        assert_eq!(config.tenant_tables.first().unwrap().column, "tenant_id");
     }
 }

@@ -130,6 +130,7 @@ impl QueryParser {
         let dry_run = sharding_schema.tables.dry_run();
         let router_disabled = shards == 1 && (read_only || write_only);
         let parser_disabled = !full_prepared_statements && router_disabled && !dry_run;
+        let tenant_tables = cluster.tenant_tables();
 
         debug!(
             "parser is {}",
@@ -703,7 +704,8 @@ impl QueryParser {
         }
     }
 
-    fn update(_stmt: &UpdateStmt) -> Result<Command, Error> {
+    fn update(stmt: &UpdateStmt) -> Result<Command, Error> {
+        let where_clause = WhereClause::new(None, &stmt.where_clause);
         Ok(Command::Query(Route::write(None)))
     }
 

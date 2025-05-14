@@ -6,7 +6,7 @@ use crate::{
         replication::{ReplicationConfig, ShardedColumn},
         ShardedTables,
     },
-    config::{General, PoolerMode, ShardedTable, User},
+    config::{General, PoolerMode, ShardedTable, TenantTable, User},
     net::messages::BackendKeyData,
 };
 
@@ -36,6 +36,7 @@ pub struct Cluster {
     sharded_tables: ShardedTables,
     replication_sharding: Option<String>,
     mirror_of: Option<String>,
+    tenant_tables: Vec<TenantTable>,
 }
 
 /// Sharding configuration from the cluster.
@@ -63,6 +64,7 @@ pub struct ClusterConfig<'a> {
     pub sharded_tables: ShardedTables,
     pub replication_sharding: Option<String>,
     pub mirror_of: Option<&'a str>,
+    pub tenant_tables: &'a [TenantTable],
 }
 
 impl<'a> ClusterConfig<'a> {
@@ -72,6 +74,7 @@ impl<'a> ClusterConfig<'a> {
         shards: &'a [ClusterShardConfig],
         sharded_tables: ShardedTables,
         mirror_of: Option<&'a str>,
+        tenant_tables: &'a [TenantTable],
     ) -> Self {
         Self {
             name: &user.database,
@@ -83,6 +86,7 @@ impl<'a> ClusterConfig<'a> {
             shards,
             sharded_tables,
             mirror_of,
+            tenant_tables,
         }
     }
 }
@@ -100,6 +104,7 @@ impl Cluster {
             sharded_tables,
             replication_sharding,
             mirror_of,
+            tenant_tables,
         } = config;
 
         Self {
@@ -114,6 +119,7 @@ impl Cluster {
             sharded_tables,
             replication_sharding,
             mirror_of: mirror_of.map(|s| s.to_owned()),
+            tenant_tables: tenant_tables.to_vec(),
         }
     }
 
@@ -160,6 +166,7 @@ impl Cluster {
             sharded_tables: self.sharded_tables.clone(),
             replication_sharding: self.replication_sharding.clone(),
             mirror_of: self.mirror_of.clone(),
+            tenant_tables: self.tenant_tables.clone(),
         }
     }
 
@@ -251,6 +258,10 @@ impl Cluster {
     // Get sharded tables if any.
     pub fn sharded_tables(&self) -> &[ShardedTable] {
         self.sharded_tables.tables()
+    }
+
+    pub fn tenant_tables(&self) -> &[TenantTable] {
+        &self.tenant_tables
     }
 
     /// Find sharded column position, if the table and columns match the configuration.
