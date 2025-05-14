@@ -157,4 +157,9 @@ impl Route {
         self.read = !lock;
         self
     }
+
+    pub fn set_read(mut self, read: bool) -> Self {
+        self.read = read;
+        self
+    }
 }

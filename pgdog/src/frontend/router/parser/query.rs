@@ -280,7 +280,9 @@ impl QueryParser {
                 }
             }
             // SET statements.
-            Some(NodeEnum::VariableSetStmt(ref stmt)) => return self.set(stmt, &sharding_schema),
+            Some(NodeEnum::VariableSetStmt(ref stmt)) => {
+                return self.set(stmt, &sharding_schema, read_only)
+            }
             // COPY statements.
             Some(NodeEnum::CopyStmt(ref stmt)) => Self::copy(stmt, cluster),
             // INSERT statements.
@@ -389,6 +391,7 @@ impl QueryParser {
         &mut self,
         stmt: &VariableSetStmt,
         sharding_schema: &ShardingSchema,
+        read_only: bool,
     ) -> Result<Command, Error> {
         match stmt.name.as_str() {
             "pgdog.shard" => {
@@ -405,7 +408,9 @@ impl QueryParser {
                 }) = node
                 {
                     self.routed = true;
-                    return Ok(Command::Query(Route::write(Some(*ival as usize))));
+                    return Ok(Command::Query(
+                        Route::write(Some(*ival as usize)).set_read(read_only),
+                    ));
                 }
             }
 
@@ -422,7 +427,7 @@ impl QueryParser {
                     if let Val::Sval(String { sval }) = val {
                         let shard = shard_str(sval, sharding_schema, &vec![], 0);
                         self.routed = true;
-                        return Ok(Command::Query(Route::write(shard)));
+                        return Ok(Command::Query(Route::write(shard).set_read(read_only)));
                     }
                 }
             }
@@ -478,7 +483,7 @@ impl QueryParser {
             }
         }
 
-        Ok(Command::Query(Route::write(Shard::All)))
+        Ok(Command::Query(Route::write(Shard::All).set_read(read_only)))
     }
 
     fn select(
@@ -1008,7 +1013,7 @@ mod test {
             )
             .unwrap();
         match command {
-            Command::Query(q) => assert!(q.is_write()),
+            Command::Query(q) => assert!(q.is_read()),
             _ => panic!("set should trigger binding"),
         }
 
@@ -1024,10 +1029,28 @@ mod test {
             _ => panic!("search path"),
         }
 
-        println!(
-            "{:?}",
-            parse("SET search_path TO \"$user\", public").unwrap()
-        );
+        let ast = parse("SET statement_timeout TO 1").unwrap();
+        let mut qp = QueryParser::default();
+        qp.in_transaction = true;
+
+        let root = ast.protobuf.stmts.first().unwrap().stmt.as_ref().unwrap();
+        match root.node.as_ref() {
+            Some(NodeEnum::VariableSetStmt(stmt)) => {
+                for read_only in [true, false] {
+                    let route = qp
+                        .set(&stmt, &ShardingSchema::default(), read_only)
+                        .unwrap();
+                    match route {
+                        Command::Query(route) => {
+                            assert_eq!(route.is_read(), read_only);
+                        }
+                        _ => panic!("not a query"),
+                    }
+                }
+            }
+
+            _ => panic!("not a set"),
+        }
     }
 
     #[test]
