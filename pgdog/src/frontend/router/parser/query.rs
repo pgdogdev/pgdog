@@ -170,7 +170,9 @@ impl QueryParser {
                 cache.record_command(query, &route)?;
             }
 
-            return Ok(self.command.clone());
+            if multi_tenant.is_none() {
+                return Ok(self.command.clone());
+            }
         }
 
         let mut shard = Shard::All;
