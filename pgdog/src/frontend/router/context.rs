@@ -1,9 +1,7 @@
 use super::Error;
 use crate::{
     backend::Cluster,
-    frontend::{
-        buffer::BufferedQuery, Buffer, PreparedStatements,
-    },
+    frontend::{buffer::BufferedQuery, Buffer, PreparedStatements},
     net::{Bind, Parameters},
 };
 
