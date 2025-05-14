@@ -18,7 +18,6 @@ use crate::{
 use super::{Address, Config, Error, Guard, Request, Shard};
 use crate::config::LoadBalancingStrategy;
 
-
 #[derive(Clone, Debug)]
 /// Database configuration.
 pub struct PoolConfig {
