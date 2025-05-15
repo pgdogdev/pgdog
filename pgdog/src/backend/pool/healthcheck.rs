@@ -55,7 +55,15 @@ impl<'a> Healtcheck<'a> {
             return Ok(());
         }
 
-        match timeout(self.healthcheck_timeout, self.conn.healthcheck(";")).await {
+        if self.conn.in_transaction() {
+            error!(
+                "server in transaction while health checking [{}]",
+                self.conn.addr()
+            );
+            return Err(Error::ServerError);
+        }
+
+        match timeout(self.healthcheck_timeout, self.conn.healthcheck("SELECT 1")).await {
             Ok(Ok(())) => Ok(()),
             Ok(Err(err)) => {
                 error!("server error: {} [{}]", err, self.pool.addr());
