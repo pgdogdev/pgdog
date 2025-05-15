@@ -328,7 +328,7 @@ impl Cluster {
 mod test {
     use crate::{
         backend::{Shard, ShardedTables},
-        config::{DataType, ShardedTable},
+        config::{DataType, ReadWriteStrategy, ShardedTable},
     };
 
     use super::Cluster;
@@ -353,6 +353,10 @@ mod test {
                 shards: vec![Shard::default(), Shard::default()],
                 ..Default::default()
             }
+        }
+
+        pub fn set_read_write_strategy(&mut self, rw_strategy: ReadWriteStrategy) {
+            self.rw_strategy = rw_strategy;
         }
     }
 }

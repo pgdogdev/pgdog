@@ -757,6 +757,7 @@ impl QueryParser {
 
 #[cfg(test)]
 mod test {
+
     use crate::net::{
         messages::{parse::Parse, Parameter},
         Format,
@@ -1028,7 +1029,7 @@ mod test {
             )
             .unwrap();
         match command {
-            Command::Query(q) => assert!(q.is_read()),
+            Command::Query(q) => assert!(q.is_write()),
             _ => panic!("set should trigger binding"),
         }
 
@@ -1071,13 +1072,52 @@ mod test {
     #[test]
     fn test_transaction() {
         let (command, qp) = command!("BEGIN");
+        match command {
+            Command::Query(q) => assert!(q.is_write()),
+            _ => panic!("not a query"),
+        };
+
+        assert!(qp.routed);
+        assert!(!qp.in_transaction);
+
+        let mut cluster = Cluster::new_test();
+        cluster.set_read_write_strategy(ReadWriteStrategy::Aggressive);
+
+        let mut qp = QueryParser::default();
+        let command = qp
+            .query(
+                &BufferedQuery::Query(Query::new("BEGIN")),
+                &cluster,
+                None,
+                &mut PreparedStatements::default(),
+                &Parameters::default(),
+            )
+            .unwrap();
         assert!(matches!(
             command,
             Command::StartTransaction(BufferedQuery::Query(_))
         ));
-
         assert!(!qp.routed);
         assert!(qp.in_transaction);
+
+        let route = qp
+            .query(
+                &BufferedQuery::Query(Query::new("SET application_name TO 'test'")),
+                &cluster,
+                None,
+                &mut PreparedStatements::default(),
+                &Parameters::default(),
+            )
+            .unwrap();
+
+        match route {
+            Command::Query(q) => {
+                assert!(q.is_read());
+                assert!(cluster.read_only());
+            }
+
+            _ => panic!("not a query"),
+        }
     }
 
     #[test]

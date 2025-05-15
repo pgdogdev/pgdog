@@ -8,6 +8,11 @@ async fn test_fake_transactions() {
     let conn = connections_sqlx().await.into_iter().nth(1).unwrap();
     let admin = admin_sqlx().await;
 
+    admin
+        .execute("SET read_write_strategy TO 'conservative'")
+        .await
+        .unwrap();
+
     for _ in 0..5 {
         conn.execute("SET application_name TO 'test_fake_transactions'")
             .await
