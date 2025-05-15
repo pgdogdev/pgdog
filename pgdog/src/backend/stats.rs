@@ -144,19 +144,12 @@ impl Stats {
         self.update();
     }
 
-    pub fn link_client(&mut self, client_params: &Parameters, server_params: &Parameters) {
-        let default_name = "PgDog";
-        let client_name = client_params.get_default("application_name", default_name);
-        let server_name = server_params.get_default("application_name", default_name);
-
-        if client_name != server_name {
-            self.state = State::Active;
-            self.activate();
+    pub fn link_client(&mut self, client: &str, server: &str) {
+        if client != server {
             let mut guard = STATS.lock();
             if let Some(entry) = guard.get_mut(&self.id) {
-                entry.stats = *self;
                 entry.application_name.clear();
-                entry.application_name.push_str(client_name);
+                entry.application_name.push_str(client);
             }
         }
     }

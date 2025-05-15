@@ -365,8 +365,11 @@ impl Server {
 
     /// Synchronize parameters between client and server.
     pub async fn link_client(&mut self, params: &Parameters) -> Result<usize, Error> {
+        let default_name = "PgDog";
+        let server_name = self.params.get_default("application_name", default_name);
+        let client_name = params.get_default("application_name", default_name);
         // Update client link between client and server.
-        self.stats.link_client(params, &self.params);
+        self.stats.link_client(client_name, server_name);
 
         let diff = params.merge(&mut self.params);
         if diff.changed_params > 0 {
@@ -380,6 +383,7 @@ impl Server {
             )
             .await?;
         }
+
         self.changed_params.clear();
 
         Ok(diff.changed_params)
@@ -445,7 +449,7 @@ impl Server {
 
     /// Connection was left with an unfinished query.
     pub fn needs_drain(&self) -> bool {
-        !self.idle()
+        !self.in_sync()
     }
 
     /// Close the connection, don't do any recovery.
@@ -561,7 +565,7 @@ impl Server {
             }
         }
 
-        if !self.idle() {
+        if !self.in_sync() {
             if self
                 .send(&vec![ProtocolMessage::Sync(Sync)].into())
                 .await
@@ -570,7 +574,7 @@ impl Server {
                 self.stats.state(State::Error);
                 return;
             }
-            while !self.idle() {
+            while !self.in_sync() {
                 if self.read().await.is_err() {
                     self.stats.state(State::Error);
                     break;
@@ -681,11 +685,6 @@ impl Server {
     #[inline]
     pub fn pooler_mode(&self) -> &PoolerMode {
         &self.pooler_mode
-    }
-
-    #[inline]
-    pub fn idle(&self) -> bool {
-        matches!(self.stats.state, State::Idle | State::IdleInTransaction)
     }
 }
 
@@ -1437,6 +1436,7 @@ pub mod test {
         let mut server = test_server().await;
         let mut params = Parameters::default();
         params.insert("application_name", "test_sync_params");
+        println!("server state: {}", server.stats().state);
         let changed = server.link_client(&params).await.unwrap();
         assert_eq!(changed, 1);
 
@@ -1496,9 +1496,32 @@ pub mod test {
         assert!(!server.has_more_messages());
         assert!(server.done());
         server.drain().await;
-        assert!(server.idle());
+        assert!(server.in_sync());
         assert!(server.done());
         assert!(!server.needs_drain());
+
+        server
+            .send(
+                &vec![
+                    Query::new("BEGIN").into(),
+                    Query::new("syntax error").into(),
+                ]
+                .into(),
+            )
+            .await?;
+
+        for c in ['C', 'Z', 'E'] {
+            let msg = server.read().await?;
+            assert_eq!(msg.code(), c);
+        }
+
+        assert!(!server.needs_drain());
+        assert!(server.in_transaction());
+        server.drain().await; // Nothing will be done.
+        assert!(server.in_transaction());
+        server.rollback().await;
+        assert!(server.in_sync());
+        assert!(!server.in_transaction());
 
         Ok(())
     }
