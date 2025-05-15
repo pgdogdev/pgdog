@@ -141,7 +141,7 @@ impl<'a> WhereClause<'a> {
         match node.node {
             Some(NodeEnum::NullTest(ref null_test)) => {
                 // Only check for IS NULL, IS NOT NULL definitely doesn't help.
-                if NullTestType::from_i32(null_test.nulltesttype) == Some(NullTestType::IsNull) {
+                if NullTestType::try_from(null_test.nulltesttype) == Ok(NullTestType::IsNull) {
                     let left = null_test
                         .arg
                         .as_ref()
