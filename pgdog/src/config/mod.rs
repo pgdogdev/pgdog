@@ -598,6 +598,8 @@ pub struct Database {
     pub idle_timeout: Option<u64>,
     /// Mirror of another database.
     pub mirror_of: Option<String>,
+    /// Read-only mode.
+    pub read_only: Option<bool>,
 }
 
 impl Database {
@@ -709,6 +711,8 @@ pub struct User {
     pub replication_sharding: Option<String>,
     /// Idle timeout.
     pub idle_timeout: Option<u64>,
+    /// Read-only mode.
+    pub read_only: Option<bool>,
 }
 
 impl User {

@@ -10,6 +10,12 @@ name = "pgdog"
 host = "127.0.0.1"
 
 [[databases]]
+name = "pgdog"
+host = "127.0.0.1"
+role = "replica"
+read_only = true
+
+[[databases]]
 name = "pgdog_sharded"
 host = "127.0.0.1"
 database_name = "shard_0"
@@ -34,6 +40,7 @@ host = "127.0.0.1"
 port = 5436
 role = "replica"
 database_name = "pgdog"
+read_only = true
 
 [[databases]]
 name = "failover"
@@ -41,6 +48,7 @@ host = "127.0.0.1"
 port = 5437
 role = "replica"
 database_name = "pgdog"
+read_only = true
 
 [[databases]]
 name = "failover"
@@ -48,6 +56,7 @@ host = "127.0.0.1"
 port = 5438
 role = "replica"
 database_name = "pgdog"
+read_only = true
 
 [[sharded_tables]]
 database = "pgdog_sharded"
