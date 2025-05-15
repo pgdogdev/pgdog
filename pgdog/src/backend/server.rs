@@ -178,9 +178,9 @@ impl Server {
             stream: Some(stream),
             id,
             options,
+            stats: Stats::connect(id, addr, &params),
             params,
             changed_params: Parameters::default(),
-            stats: Stats::connect(id, addr),
             prepared_statements: PreparedStatements::new(),
             dirty: false,
             streaming: false,
@@ -368,6 +368,9 @@ impl Server {
 
     /// Synchronize parameters between client and server.
     pub async fn link_client(&mut self, params: &Parameters) -> Result<usize, Error> {
+        // Update client link between client and server.
+        self.stats.link_client(params, &self.params);
+
         let diff = params.merge(&mut self.params);
         if diff.changed_params > 0 {
             debug!("syncing {} params", diff.changed_params);
@@ -381,6 +384,7 @@ impl Server {
             .await?;
         }
         self.changed_params.clear();
+
         Ok(diff.changed_params)
     }
 
@@ -692,7 +696,7 @@ pub mod test {
                 params: Parameters::default(),
                 changed_params: Parameters::default(),
                 options: ServerOptions::default(),
-                stats: Stats::connect(id, &addr),
+                stats: Stats::connect(id, &addr, &Parameters::default()),
                 prepared_statements: super::PreparedStatements::new(),
                 addr,
                 dirty: false,
