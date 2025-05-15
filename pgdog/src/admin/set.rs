@@ -67,6 +67,11 @@ impl Command for Set {
                     serde_json::from_str(&format!(r#""{}""#, self.value))?;
             }
 
+            "read_write_strategy" => {
+                config.config.general.read_write_strategy =
+                    serde_json::from_str(&format!(r#""{}""#, self.value))?;
+            }
+
             _ => return Err(Error::Syntax),
         }
 

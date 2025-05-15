@@ -372,6 +372,13 @@ impl Pool {
             });
         }
 
+        if config.read_only {
+            params.push(Parameter {
+                name: "default_transaction_read_only".into(),
+                value: "on".into(),
+            });
+        }
+
         ServerOptions { params }
     }
 

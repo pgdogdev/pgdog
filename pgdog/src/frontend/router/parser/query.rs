@@ -6,7 +6,7 @@ use std::{
 
 use crate::{
     backend::{databases::databases, replication::ShardedColumn, Cluster, ShardingSchema},
-    config::config,
+    config::{config, ReadWriteStrategy},
     frontend::{
         buffer::BufferedQuery,
         router::{
@@ -136,6 +136,7 @@ impl QueryParser {
         let router_disabled = shards == 1 && (read_only || write_only);
         let parser_disabled =
             !full_prepared_statements && router_disabled && !dry_run && multi_tenant.is_none();
+        let rw_strategy = cluster.read_write_strategy();
 
         debug!(
             "parser is {}",
@@ -296,8 +297,20 @@ impl QueryParser {
             // Transaction control statements,
             // e.g. BEGIN, COMMIT, etc.
             Some(NodeEnum::TransactionStmt(ref stmt)) => {
+                // Only allow to intercept transaction statements
+                // if they are using the simple protocol.
                 if query.simple() {
-                    // Only allow to intercept transaction statements if they are using the simple protocol.
+                    // In conservative read write split mode,
+                    // we don't assume anything about transaction contents
+                    // and just send it to the primary.
+                    //
+                    // Only single-statement SELECT queries can be routed
+                    // to a replica.
+                    if *rw_strategy == ReadWriteStrategy::Conservative {
+                        self.routed = true;
+                        return Ok(Command::Query(Route::write(None)));
+                    }
+
                     match stmt.kind() {
                         TransactionStmtKind::TransStmtCommit => {
                             return Ok(Command::CommitTransaction)
@@ -744,6 +757,7 @@ impl QueryParser {
 
 #[cfg(test)]
 mod test {
+
     use crate::net::{
         messages::{parse::Parse, Parameter},
         Format,
@@ -1015,7 +1029,7 @@ mod test {
             )
             .unwrap();
         match command {
-            Command::Query(q) => assert!(q.is_read()),
+            Command::Query(q) => assert!(q.is_write()),
             _ => panic!("set should trigger binding"),
         }
 
@@ -1058,13 +1072,52 @@ mod test {
     #[test]
     fn test_transaction() {
         let (command, qp) = command!("BEGIN");
+        match command {
+            Command::Query(q) => assert!(q.is_write()),
+            _ => panic!("not a query"),
+        };
+
+        assert!(qp.routed);
+        assert!(!qp.in_transaction);
+
+        let mut cluster = Cluster::new_test();
+        cluster.set_read_write_strategy(ReadWriteStrategy::Aggressive);
+
+        let mut qp = QueryParser::default();
+        let command = qp
+            .query(
+                &BufferedQuery::Query(Query::new("BEGIN")),
+                &cluster,
+                None,
+                &mut PreparedStatements::default(),
+                &Parameters::default(),
+            )
+            .unwrap();
         assert!(matches!(
             command,
             Command::StartTransaction(BufferedQuery::Query(_))
         ));
-
         assert!(!qp.routed);
         assert!(qp.in_transaction);
+
+        let route = qp
+            .query(
+                &BufferedQuery::Query(Query::new("SET application_name TO 'test'")),
+                &cluster,
+                None,
+                &mut PreparedStatements::default(),
+                &Parameters::default(),
+            )
+            .unwrap();
+
+        match route {
+            Command::Query(q) => {
+                assert!(q.is_read());
+                assert!(cluster.read_only());
+            }
+
+            _ => panic!("not a query"),
+        }
     }
 
     #[test]

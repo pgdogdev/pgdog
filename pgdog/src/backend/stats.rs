@@ -10,7 +10,10 @@ use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use tokio::time::Instant;
 
-use crate::{net::messages::BackendKeyData, state::State};
+use crate::{
+    net::{messages::BackendKeyData, Parameters},
+    state::State,
+};
 
 use super::pool::Address;
 
@@ -40,6 +43,7 @@ fn disconnect(id: &BackendKeyData) {
 pub struct ConnectedServer {
     pub stats: Stats,
     pub addr: Address,
+    pub application_name: String,
 }
 
 /// Server connection stats.
@@ -99,7 +103,7 @@ pub struct Stats {
 
 impl Stats {
     /// Register new server with statistics.
-    pub fn connect(id: BackendKeyData, addr: &Address) -> Self {
+    pub fn connect(id: BackendKeyData, addr: &Address, params: &Parameters) -> Self {
         let now = Instant::now();
         let stats = Stats {
             id,
@@ -120,6 +124,7 @@ impl Stats {
             ConnectedServer {
                 stats,
                 addr: addr.clone(),
+                application_name: params.get_default("application_name", "PgDog").to_owned(),
             },
         );
 
@@ -137,6 +142,23 @@ impl Stats {
             self.last_checkout.transaction_time += duration;
         }
         self.update();
+    }
+
+    pub fn link_client(&mut self, client_params: &Parameters, server_params: &Parameters) {
+        let default_name = "PgDog";
+        let client_name = client_params.get_default("application_name", default_name);
+        let server_name = server_params.get_default("application_name", default_name);
+
+        if client_name != server_name {
+            self.state = State::Active;
+            self.activate();
+            let mut guard = STATS.lock();
+            if let Some(entry) = guard.get_mut(&self.id) {
+                entry.stats = *self;
+                entry.application_name.clear();
+                entry.application_name.push_str(client_name);
+            }
+        }
     }
 
     pub fn parse_complete(&mut self) {
@@ -190,16 +212,20 @@ impl Stats {
         let update = self.state != state;
         self.state = state;
         if update {
-            if state == State::Active {
-                let now = Instant::now();
-                if self.transaction_timer.is_none() {
-                    self.transaction_timer = Some(now);
-                }
-                if self.query_timer.is_none() {
-                    self.query_timer = Some(now);
-                }
-            }
+            self.activate();
             self.update();
+        }
+    }
+
+    fn activate(&mut self) {
+        if self.state == State::Active {
+            let now = Instant::now();
+            if self.transaction_timer.is_none() {
+                self.transaction_timer = Some(now);
+            }
+            if self.query_timer.is_none() {
+                self.query_timer = Some(now);
+            }
         }
     }
 

@@ -11,7 +11,7 @@ use crate::{
         replication::{ReplicationConfig, ShardedColumn},
         Schema, ShardedTables,
     },
-    config::{General, MultiTenant, PoolerMode, ShardedTable, User},
+    config::{General, MultiTenant, PoolerMode, ReadWriteStrategy, ShardedTable, User},
     net::messages::BackendKeyData,
 };
 
@@ -41,6 +41,7 @@ pub struct Cluster {
     mirror_of: Option<String>,
     schema: Arc<RwLock<Schema>>,
     multi_tenant: Option<MultiTenant>,
+    rw_strategy: ReadWriteStrategy,
 }
 
 /// Sharding configuration from the cluster.
@@ -69,6 +70,7 @@ pub struct ClusterConfig<'a> {
     pub replication_sharding: Option<String>,
     pub mirror_of: Option<&'a str>,
     pub multi_tenant: &'a Option<MultiTenant>,
+    pub rw_strategy: ReadWriteStrategy,
 }
 
 impl<'a> ClusterConfig<'a> {
@@ -91,6 +93,7 @@ impl<'a> ClusterConfig<'a> {
             sharded_tables,
             mirror_of,
             multi_tenant,
+            rw_strategy: general.read_write_strategy,
         }
     }
 }
@@ -109,6 +112,7 @@ impl Cluster {
             replication_sharding,
             mirror_of,
             multi_tenant,
+            rw_strategy,
         } = config;
 
         Self {
@@ -125,6 +129,7 @@ impl Cluster {
             mirror_of: mirror_of.map(|s| s.to_owned()),
             schema: Arc::new(RwLock::new(Schema::default())),
             multi_tenant: multi_tenant.clone(),
+            rw_strategy,
         }
     }
 
@@ -173,6 +178,7 @@ impl Cluster {
             mirror_of: self.mirror_of.clone(),
             schema: self.schema.clone(),
             multi_tenant: self.multi_tenant.clone(),
+            rw_strategy: self.rw_strategy,
         }
     }
 
@@ -289,6 +295,11 @@ impl Cluster {
         self.schema.read().clone()
     }
 
+    /// Read/write strategy
+    pub fn read_write_strategy(&self) -> &ReadWriteStrategy {
+        &self.rw_strategy
+    }
+
     /// Launch the connection pools.
     pub(crate) fn launch(&self) {
         for shard in self.shards() {
@@ -317,7 +328,7 @@ impl Cluster {
 mod test {
     use crate::{
         backend::{Shard, ShardedTables},
-        config::{DataType, ShardedTable},
+        config::{DataType, ReadWriteStrategy, ShardedTable},
     };
 
     use super::Cluster;
@@ -342,6 +353,10 @@ mod test {
                 shards: vec![Shard::default(), Shard::default()],
                 ..Default::default()
             }
+        }
+
+        pub fn set_read_write_strategy(&mut self, rw_strategy: ReadWriteStrategy) {
+            self.rw_strategy = rw_strategy;
         }
     }
 }

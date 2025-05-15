@@ -47,6 +47,8 @@ pub struct Config {
     pub replication_mode: bool,
     /// Pooler mode.
     pub pooler_mode: PoolerMode,
+    /// Read only mode.
+    pub read_only: bool,
 }
 
 impl Config {
@@ -154,6 +156,9 @@ impl Config {
                 user.idle_timeout
                     .unwrap_or(database.idle_timeout.unwrap_or(general.idle_timeout)),
             ),
+            read_only: database
+                .read_only
+                .unwrap_or(user.read_only.unwrap_or_default()),
             ..Default::default()
         }
     }
@@ -181,6 +186,7 @@ impl Default for Config {
             statement_timeout: None,
             replication_mode: false,
             pooler_mode: PoolerMode::default(),
+            read_only: false,
         }
     }
 }

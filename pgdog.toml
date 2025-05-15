@@ -28,6 +28,7 @@ name = "pgdog"
 host = "127.0.0.1"
 port = 5432
 role = "replica"
+read_only = true
 
 [tcp]
 retries = 3

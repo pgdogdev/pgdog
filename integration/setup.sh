@@ -21,6 +21,7 @@ fi
 export PGPASSWORD='pgdog'
 export PGHOST=127.0.0.1
 export PGPORT=5432
+#export PGUSER='pgdog'
 
 for db in pgdog shard_0 shard_1; do
     psql -c "CREATE DATABASE $db" || true
