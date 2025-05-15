@@ -239,6 +239,7 @@ async def test_stress():
     for i in range(100):
         # Reconnect
         normal = await normal_async()
+        await normal.execute("SET search_path TO '$user', public")
         num = random.randint(1, 1_000_000)
         # assert not await in_transaction(normal)
         await normal.execute("DROP TABLE IF EXISTS test_stress")

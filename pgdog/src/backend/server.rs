@@ -394,13 +394,25 @@ impl Server {
     }
 
     /// We can disconnect from this server.
+    ///
+    /// There are no more expected messages from the server connection
+    /// and we haven't started an explicit transaction.
     pub fn done(&self) -> bool {
         self.prepared_statements.done() && !self.in_transaction()
     }
 
     /// Server can execute a query.
     pub fn in_sync(&self) -> bool {
-        self.prepared_statements.done()
+        matches!(
+            self.stats.state,
+            State::Idle | State::IdleInTransaction | State::TransactionError
+        )
+    }
+
+    /// Server is done executing all queries and is
+    /// not inside a transaction.
+    pub fn can_check_in(&self) -> bool {
+        self.stats.state == State::Idle
     }
 
     /// Server hasn't sent all messages yet.
@@ -425,6 +437,8 @@ impl Server {
         self.schema_changed
     }
 
+    /// Prepared statements changed outside of our pipeline,
+    /// need to resync from `pg_prepared_statements` view.
     pub fn sync_prepared(&self) -> bool {
         self.sync_prepared
     }
@@ -1450,5 +1464,42 @@ pub mod test {
             }
             println!("{:?}", msg);
         }
+    }
+
+    #[tokio::test]
+    async fn test_partial_state() -> Result<(), Box<dyn std::error::Error>> {
+        crate::logger();
+        let mut server = test_server().await;
+
+        server
+            .send(
+                &vec![
+                    Parse::named("test", "SELECT $1").into(),
+                    Describe::new_statement("test").into(),
+                    Flush.into(),
+                ]
+                .into(),
+            )
+            .await?;
+
+        for c in ['1', 't', 'T'] {
+            let msg = server.read().await?;
+            assert_eq!(msg.code(), c);
+            if c == 'T' {
+                assert!(server.done());
+            } else {
+                assert!(!server.done());
+            }
+        }
+
+        assert!(server.needs_drain());
+        assert!(!server.has_more_messages());
+        assert!(server.done());
+        server.drain().await;
+        assert!(server.idle());
+        assert!(server.done());
+        assert!(!server.needs_drain());
+
+        Ok(())
     }
 }
