@@ -3,6 +3,7 @@
 use std::{
     collections::BTreeMap,
     fmt::Display,
+    hash::{DefaultHasher, Hash, Hasher},
     ops::{Deref, DerefMut},
 };
 
@@ -44,30 +45,10 @@ pub struct MergeResult {
     pub changed_params: usize,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Hash, PartialEq)]
 pub enum ParameterValue {
     String(String),
     Tuple(Vec<String>),
-}
-
-impl PartialEq for ParameterValue {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::String(a), Self::String(b)) => a.eq(b),
-            (Self::Tuple(a), Self::Tuple(b)) => a.eq(b),
-            _ => false,
-        }
-    }
-}
-
-impl PartialEq<String> for ParameterValue {
-    fn eq(&self, other: &String) -> bool {
-        if let Self::String(s) = self {
-            s.eq(other)
-        } else {
-            false
-        }
-    }
 }
 
 impl Display for ParameterValue {
@@ -111,6 +92,17 @@ impl ParameterValue {
 #[derive(Default, Debug, Clone, PartialEq)]
 pub struct Parameters {
     params: BTreeMap<String, ParameterValue>,
+    hash: u64,
+}
+
+impl From<BTreeMap<String, ParameterValue>> for Parameters {
+    fn from(value: BTreeMap<String, ParameterValue>) -> Self {
+        let hash = Self::compute_hash(&value);
+        Self {
+            params: value,
+            hash,
+        }
+    }
 }
 
 impl Parameters {
@@ -121,46 +113,55 @@ impl Parameters {
         value: impl Into<ParameterValue>,
     ) -> Option<ParameterValue> {
         let name = name.to_string().to_lowercase();
-        self.params.insert(name, value.into())
+        let result = self.params.insert(name, value.into());
+
+        self.hash = Self::compute_hash(&self.params);
+
+        result
+    }
+
+    fn compute_hash(params: &BTreeMap<String, ParameterValue>) -> u64 {
+        let mut hasher = DefaultHasher::new();
+
+        for (k, v) in params {
+            if IMMUTABLE_PARAMS.contains(k) {
+                continue;
+            }
+
+            k.hash(&mut hasher);
+            v.hash(&mut hasher);
+        }
+
+        hasher.finish()
+    }
+
+    pub fn tracked(&self) -> Parameters {
+        self.params
+            .iter()
+            .filter(|(k, _)| !IMMUTABLE_PARAMS.contains(k))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect::<BTreeMap<_, _>>()
+            .into()
     }
 
     /// Merge params from self into other, generating the queries
     /// needed to sync that state on the server.
-    pub fn merge(&self, other: &mut Self) -> MergeResult {
-        let mut different = vec![];
-        for (k, v) in &self.params {
-            if IMMUTABLE_PARAMS.contains(k) {
-                continue;
-            }
-            if let Some(other) = other.get(k) {
-                if v != other {
-                    different.push((k, v));
-                }
-            } else {
-                different.push((k, v));
-            }
-        }
+    pub fn identical(&self, other: &Self) -> bool {
+        self.hash == other.hash
+    }
 
-        for (k, v) in &different {
-            other.insert(k.to_string(), (*v).clone());
-        }
+    pub fn set_queries(&self) -> Vec<Query> {
+        self.params
+            .iter()
+            .map(|(name, value)| Query::new(format!(r#"SET "{}" TO {}"#, name, value)))
+            .collect()
+    }
 
-        let queries = if different.is_empty() {
-            vec![]
-        } else {
-            let mut queries = vec![];
-
-            for (k, v) in different {
-                queries.push(Query::new(format!(r#"SET "{}" TO {}"#, k, v)));
-            }
-
-            queries
-        };
-
-        MergeResult {
-            changed_params: if queries.is_empty() { 0 } else { queries.len() },
-            queries,
-        }
+    pub fn reset_queries(&self) -> Vec<Query> {
+        self.params
+            .keys()
+            .map(|name| Query::new(format!(r#"RESET "{}""#, name)))
+            .collect()
     }
 
     /// Get self-declared shard number.
@@ -209,12 +210,12 @@ impl DerefMut for Parameters {
 
 impl From<Vec<Parameter>> for Parameters {
     fn from(value: Vec<Parameter>) -> Self {
-        Self {
-            params: value
-                .into_iter()
-                .map(|p| (p.name, ParameterValue::String(p.value)))
-                .collect(),
-        }
+        let params = value
+            .into_iter()
+            .map(|p| (p.name, ParameterValue::String(p.value)))
+            .collect::<BTreeMap<_, _>>();
+        let hash = Self::compute_hash(&params);
+        Self { params, hash }
     }
 }
 
@@ -239,7 +240,7 @@ mod test {
     use super::Parameters;
 
     #[test]
-    fn test_merge() {
+    fn test_identical() {
         let mut me = Parameters::default();
         me.insert("application_name", "something");
         me.insert("TimeZone", "UTC");
@@ -251,16 +252,9 @@ mod test {
         let mut other = Parameters::default();
         other.insert("TimeZone", "UTC");
 
-        let diff = me.merge(&mut other);
-        assert_eq!(diff.changed_params, 2);
-        assert_eq!(diff.queries.len(), 2);
-        assert_eq!(
-            diff.queries[0].query(),
-            r#"SET "application_name" TO 'something'"#
-        );
-        assert_eq!(
-            diff.queries[1].query(),
-            r#"SET "search_path" TO '$user', 'public'"#,
-        );
+        let same = me.identical(&other);
+        assert!(!same);
+
+        assert!(Parameters::default().identical(&Parameters::default()));
     }
 }

@@ -1,19 +1,25 @@
 //! Cleanup queries for servers altered by client behavior.
 use once_cell::sync::Lazy;
 
+use crate::net::Query;
+
 use super::{super::Server, Guard};
 
-static PREPARED: Lazy<Vec<&'static str>> = Lazy::new(|| vec!["DEALLOCATE ALL"]);
-static PARAMS: Lazy<Vec<&'static str>> = Lazy::new(|| vec!["RESET ALL", "DISCARD ALL"]);
-static ALL: Lazy<Vec<&'static str>> =
-    Lazy::new(|| vec!["RESET ALL", "DISCARD ALL", "DEALLOCATE ALL"]);
-static NONE: Lazy<Vec<&'static str>> = Lazy::new(std::vec::Vec::new);
+static PREPARED: Lazy<Vec<Query>> = Lazy::new(|| vec![Query::new("DEALLOCATE ALL")]);
+static PARAMS: Lazy<Vec<Query>> = Lazy::new(|| vec![Query::new("DISCARD ALL")]);
+static ALL: Lazy<Vec<Query>> = Lazy::new(|| {
+    vec!["DISCARD ALL", "DEALLOCATE ALL"]
+        .into_iter()
+        .map(Query::new)
+        .collect()
+});
+static NONE: Lazy<Vec<Query>> = Lazy::new(Vec::new);
 
 /// Queries used to clean up server connections after
 /// client modifications.
 #[allow(dead_code)]
 pub struct Cleanup {
-    queries: &'static Vec<&'static str>,
+    queries: &'static Vec<Query>,
     reset: bool,
     dirty: bool,
     deallocate: bool,
@@ -32,7 +38,15 @@ impl Default for Cleanup {
 
 impl std::fmt::Display for Cleanup {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.queries.join(","))
+        write!(
+            f,
+            "{}",
+            self.queries
+                .iter()
+                .map(|s| s.query())
+                .collect::<Vec<_>>()
+                .join(",")
+        )
     }
 }
 
@@ -89,7 +103,7 @@ impl Cleanup {
     }
 
     /// Get queries to execute on the server to perform cleanup.
-    pub fn queries(&self) -> &[&str] {
+    pub fn queries(&self) -> &[Query] {
         self.queries
     }
 

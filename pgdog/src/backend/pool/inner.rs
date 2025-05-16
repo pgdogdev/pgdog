@@ -14,6 +14,7 @@ use super::{Ban, Config, Error, Mapping, Oids, Pool, Request, Stats, Taken, Wait
 #[derive(Default)]
 pub(super) struct Inner {
     /// Idle server connections.
+    #[allow(clippy::vec_box)]
     conns: Vec<Box<Server>>,
     /// Server connections currently checked out.
     taken: Taken,
@@ -248,6 +249,7 @@ impl Inner {
     /// Take all idle connections and tell active ones to
     /// be returned to a different pool instance.
     #[inline]
+    #[allow(clippy::vec_box)] // Server is a very large struct, reading it when moving between contains is expensive.
     pub(super) fn move_conns_to(&mut self, destination: &Pool) -> (Vec<Box<Server>>, Taken) {
         self.moved = Some(destination.clone());
         let idle = std::mem::take(&mut self.conns).into_iter().collect();

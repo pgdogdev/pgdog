@@ -438,12 +438,14 @@ impl QueryParser {
                     .as_ref()
                     .ok_or(Error::SetShard)?;
 
-                if let NodeEnum::AConst(AConst { val: Some(val), .. }) = node {
-                    if let Val::Sval(String { sval }) = val {
-                        let shard = shard_str(sval, sharding_schema, &vec![], 0);
-                        self.routed = true;
-                        return Ok(Command::Query(Route::write(shard).set_read(read_only)));
-                    }
+                if let NodeEnum::AConst(AConst {
+                    val: Some(Val::Sval(String { sval })),
+                    ..
+                }) = node
+                {
+                    let shard = shard_str(sval, sharding_schema, &vec![], 0);
+                    self.routed = true;
+                    return Ok(Command::Query(Route::write(shard).set_read(read_only)));
                 }
             }
 
@@ -454,27 +456,25 @@ impl QueryParser {
                     let mut value = vec![];
 
                     for node in &stmt.args {
-                        if let Some(ref node) = node.node {
-                            if let NodeEnum::AConst(AConst { val: Some(val), .. }) = node {
-                                match val {
-                                    Val::Sval(String { sval }) => {
-                                        value.push(sval.to_string());
-                                    }
-
-                                    Val::Ival(Integer { ival }) => {
-                                        value.push(ival.to_string());
-                                    }
-
-                                    Val::Fval(Float { fval }) => {
-                                        value.push(fval.to_string());
-                                    }
-
-                                    Val::Boolval(Boolean { boolval }) => {
-                                        value.push(boolval.to_string());
-                                    }
-
-                                    _ => (),
+                        if let Some(NodeEnum::AConst(AConst { val: Some(val), .. })) = &node.node {
+                            match val {
+                                Val::Sval(String { sval }) => {
+                                    value.push(sval.to_string());
                                 }
+
+                                Val::Ival(Integer { ival }) => {
+                                    value.push(ival.to_string());
+                                }
+
+                                Val::Fval(Float { fval }) => {
+                                    value.push(fval.to_string());
+                                }
+
+                                Val::Boolval(Boolean { boolval }) => {
+                                    value.push(boolval.to_string());
+                                }
+
+                                _ => (),
                             }
                         }
                     }
@@ -1046,16 +1046,16 @@ mod test {
         }
 
         let ast = parse("SET statement_timeout TO 1").unwrap();
-        let mut qp = QueryParser::default();
-        qp.in_transaction = true;
+        let mut qp = QueryParser {
+            in_transaction: true,
+            ..Default::default()
+        };
 
         let root = ast.protobuf.stmts.first().unwrap().stmt.as_ref().unwrap();
         match root.node.as_ref() {
             Some(NodeEnum::VariableSetStmt(stmt)) => {
                 for read_only in [true, false] {
-                    let route = qp
-                        .set(&stmt, &ShardingSchema::default(), read_only)
-                        .unwrap();
+                    let route = qp.set(stmt, &ShardingSchema::default(), read_only).unwrap();
                     match route {
                         Command::Query(route) => {
                             assert_eq!(route.is_read(), read_only);
