@@ -19,6 +19,10 @@ impl Logger {
         }
     }
 
+    pub fn shutdown(&self) {
+        self.shutdown.notify_one();
+    }
+
     pub fn spawn(&self) {
         let me = self.clone();
 

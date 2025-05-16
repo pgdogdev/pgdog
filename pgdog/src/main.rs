@@ -100,14 +100,17 @@ async fn pgdog() -> Result<(), Box<dyn std::error::Error>> {
         tokio::spawn(async move { stats::http_server::server(openmetrics_port).await });
     }
 
+    let stats_logger = stats::StatsLogger::new();
+
     if general.dry_run {
-        stats::StatsLogger::new().spawn();
+        stats_logger.spawn();
     }
 
     let mut listener = Listener::new(format!("{}:{}", general.host, general.port));
     listener.listen().await?;
 
     info!("🐕 pgDog is shutting down");
+    stats_logger.shutdown();
 
     // Any shutdown routines go below.
     plugin::shutdown();
