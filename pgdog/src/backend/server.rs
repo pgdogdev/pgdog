@@ -151,7 +151,6 @@ impl Server {
                 'S' => {
                     let parameter = ParameterStatus::from_bytes(message.payload())?;
                     params.push(Parameter::from(parameter));
-                    // params.insert(parameter.name, parameter.value);
                 }
                 // BackendKeyData (B)
                 'K' => {
