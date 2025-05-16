@@ -1,0 +1,25 @@
+services:
+  primary:
+    image: postgres:17
+    environment:
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - ./docker/primary.sh:/docker-entrypoint-initdb.d/setup.sh
+    ports:
+      - 5433:5432
+  replica_1:
+    image: postgres:17
+    environment:
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - ./docker/replica.sh:/docker-entrypoint-initdb.d/setup.sh
+    ports:
+      - 5434:5432
+  replica_2:
+    image: postgres:17
+    environment:
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - ./docker/replica.sh:/docker-entrypoint-initdb.d/setup.sh
+    ports:
+      - 5435:5432

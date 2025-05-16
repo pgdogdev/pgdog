@@ -78,7 +78,16 @@ impl QueryParser {
                 context.prepared_statements,
                 context.params,
             )?;
+
+            // If the cluster only has one shard, use direct-to-shard queries.
+            if let Command::Query(ref mut query) = self.command {
+                if !matches!(query.shard(), Shard::Direct(_)) && context.cluster.shards().len() == 1
+                {
+                    query.set_shard(0);
+                }
+            }
         }
+
         Ok(&self.command)
     }
 

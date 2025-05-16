@@ -41,8 +41,6 @@ done
 
 pushd ${SCRIPT_DIR}
 
-set -e
-
 for bin in toxiproxy-server toxiproxy-cli; do
     if [[ ! -f ${bin} ]]; then
         curl -L https://github.com/Shopify/toxiproxy/releases/download/v2.12.0/${bin}-${OS}-${ARCH} > ${bin}

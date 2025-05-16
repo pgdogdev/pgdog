@@ -1,30 +1,17 @@
 //! pgDog, modern PostgreSQL proxy, pooler and query router.
 
-use backend::databases;
 use clap::Parser;
-use cli::Commands;
-use config::config;
-use frontend::listener::Listener;
+use pgdog::backend::databases;
+use pgdog::cli::{self, Commands};
+use pgdog::config;
+use pgdog::frontend::listener::Listener;
+use pgdog::net;
+use pgdog::plugin;
+use pgdog::stats;
 use tokio::runtime::Builder;
-use tracing::{info, level_filters::LevelFilter};
-use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+use tracing::info;
 
-use std::{io::IsTerminal, process::exit};
-
-pub mod admin;
-pub mod auth;
-pub mod backend;
-pub mod cli;
-pub mod config;
-pub mod frontend;
-pub mod net;
-pub mod plugin;
-pub mod sighup;
-pub mod state;
-pub mod stats;
-#[cfg(feature = "tui")]
-pub mod tui;
-pub mod util;
+use std::process::exit;
 
 #[cfg(not(target_env = "msvc"))]
 use tikv_jemallocator::Jemalloc;
@@ -33,38 +20,16 @@ use tikv_jemallocator::Jemalloc;
 #[global_allocator]
 static GLOBAL: Jemalloc = Jemalloc;
 
-/// Setup the logger, so `info!`, `debug!`
-/// and other macros actually output something.
-///
-/// Using try_init and ignoring errors to allow
-/// for use in tests (setting up multiple times).
-fn logger() {
-    let format = fmt::layer()
-        .with_ansi(std::io::stderr().is_terminal())
-        .with_file(false);
-    #[cfg(not(debug_assertions))]
-    let format = format.with_target(false);
-
-    let filter = EnvFilter::builder()
-        .with_default_directive(LevelFilter::INFO.into())
-        .from_env_lossy();
-
-    let _ = tracing_subscriber::registry()
-        .with(format)
-        .with(filter)
-        .try_init();
-}
-
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = cli::Cli::parse();
 
-    logger();
+    pgdog::logger();
 
-    let mut overrides = config::Overrides::default();
+    let mut overrides = pgdog::config::Overrides::default();
 
     match args.command {
         Some(Commands::Fingerprint { query, path }) => {
-            cli::fingerprint(query, path)?;
+            pgdog::cli::fingerprint(query, path)?;
             exit(0);
         }
 
@@ -75,7 +40,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             min_pool_size,
             session_mode,
         }) => {
-            overrides = config::Overrides {
+            overrides = pgdog::config::Overrides {
                 min_pool_size,
                 session_mode,
                 default_pool_size: pool_size,
@@ -125,7 +90,7 @@ async fn pgdog() -> Result<(), Box<dyn std::error::Error>> {
     // Load databases and connect if needed.
     databases::init();
 
-    let general = &config().config.general;
+    let general = &config::config().config.general;
 
     if let Some(broadcast_addr) = general.broadcast_address {
         net::discovery::Listener::get().run(broadcast_addr, general.broadcast_port);
