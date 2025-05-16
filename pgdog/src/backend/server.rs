@@ -23,7 +23,7 @@ use crate::{
             hello::SslReply, Authentication, BackendKeyData, ErrorResponse, FromBytes, Message,
             ParameterStatus, Password, Protocol, Query, ReadyForQuery, Startup, Terminate, ToBytes,
         },
-        Sync,
+        Parameter, Sync,
     },
 };
 use crate::{
@@ -44,7 +44,6 @@ pub struct Server {
     stream: Option<Stream>,
     id: BackendKeyData,
     params: Parameters,
-    options: ServerOptions,
     changed_params: Parameters,
     client_params: Parameters,
     stats: Stats,
@@ -139,7 +138,7 @@ impl Server {
             }
         }
 
-        let mut params = Parameters::default();
+        let mut params = Vec::new();
         let mut key_data: Option<BackendKeyData> = None;
 
         loop {
@@ -151,7 +150,8 @@ impl Server {
                 // ParameterStatus (B)
                 'S' => {
                     let parameter = ParameterStatus::from_bytes(message.payload())?;
-                    params.insert(parameter.name, parameter.value);
+                    params.push(Parameter::from(parameter));
+                    // params.insert(parameter.name, parameter.value);
                 }
                 // BackendKeyData (B)
                 'K' => {
@@ -174,6 +174,7 @@ impl Server {
         }
 
         let id = key_data.ok_or(Error::NoBackendKeyData)?;
+        let params: Parameters = params.into();
 
         info!("new server connection [{}]", addr);
 
@@ -181,7 +182,6 @@ impl Server {
             addr: addr.clone(),
             stream: Some(stream),
             id,
-            options,
             stats: Stats::connect(id, addr, &params),
             params,
             changed_params: Parameters::default(),
@@ -617,7 +617,7 @@ impl Server {
 
     #[inline]
     pub fn reset_params(&mut self) {
-        self.params = self.options.params.clone().into();
+        self.client_params.clear();
     }
 
     /// Server connection unique identifier.
@@ -739,7 +739,6 @@ pub mod test {
                 params: Parameters::default(),
                 changed_params: Parameters::default(),
                 client_params: Parameters::default(),
-                options: ServerOptions::default(),
                 stats: Stats::connect(id, &addr, &Parameters::default()),
                 prepared_statements: super::PreparedStatements::new(),
                 addr,

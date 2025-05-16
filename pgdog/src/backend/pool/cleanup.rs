@@ -6,10 +6,9 @@ use crate::net::Query;
 use super::{super::Server, Guard};
 
 static PREPARED: Lazy<Vec<Query>> = Lazy::new(|| vec![Query::new("DEALLOCATE ALL")]);
-static PARAMS: Lazy<Vec<Query>> =
-    Lazy::new(|| vec![Query::new("RESET ALL"), Query::new("DISCARD ALL")]);
+static PARAMS: Lazy<Vec<Query>> = Lazy::new(|| vec![Query::new("DISCARD ALL")]);
 static ALL: Lazy<Vec<Query>> = Lazy::new(|| {
-    vec!["RESET ALL", "DISCARD ALL", "DEALLOCATE ALL"]
+    vec!["DISCARD ALL", "DEALLOCATE ALL"]
         .into_iter()
         .map(Query::new)
         .collect()
