@@ -46,6 +46,7 @@ pub struct Server {
     params: Parameters,
     options: ServerOptions,
     changed_params: Parameters,
+    client_params: Parameters,
     stats: Stats,
     prepared_statements: PreparedStatements,
     dirty: bool,
@@ -184,6 +185,7 @@ impl Server {
             stats: Stats::connect(id, addr, &params),
             params,
             changed_params: Parameters::default(),
+            client_params: Parameters::default(),
             prepared_statements: PreparedStatements::new(),
             dirty: false,
             streaming: false,
@@ -365,28 +367,30 @@ impl Server {
 
     /// Synchronize parameters between client and server.
     pub async fn link_client(&mut self, params: &Parameters) -> Result<usize, Error> {
+        // Sync application_name parameter
+        // and update it in the stats.
         let default_name = "PgDog";
-        let server_name = self.params.get_default("application_name", default_name);
+        let server_name = self
+            .client_params
+            .get_default("application_name", default_name);
         let client_name = params.get_default("application_name", default_name);
-        // Update client link between client and server.
         self.stats.link_client(client_name, server_name);
 
-        let diff = params.merge(&mut self.params);
-        if diff.changed_params > 0 {
-            debug!("syncing {} params", diff.changed_params);
-            self.execute_batch(
-                &diff
-                    .queries
-                    .iter()
-                    .map(|query| query.query())
-                    .collect::<Vec<_>>(),
-            )
-            .await?;
-        }
-
+        // Clear any params previously tracked by SET.
         self.changed_params.clear();
 
-        Ok(diff.changed_params)
+        // Compare client and server params.
+        if !params.identical(&self.client_params) {
+            let tracked = params.tracked();
+            let mut queries = self.client_params.reset_queries();
+            queries.extend(tracked.set_queries());
+            debug!("syncing {} params", queries.len());
+            self.execute_batch(&queries).await?;
+            self.client_params = tracked;
+            Ok(queries.len())
+        } else {
+            Ok(0)
+        }
     }
 
     pub fn changed_params(&self) -> &Parameters {
@@ -464,20 +468,20 @@ impl Server {
     }
 
     /// Execute a batch of queries and return all results.
-    pub async fn execute_batch(&mut self, queries: &[&str]) -> Result<Vec<Message>, Error> {
+    pub async fn execute_batch(&mut self, queries: &[Query]) -> Result<Vec<Message>, Error> {
         if !self.in_sync() {
             return Err(Error::NotInSync);
         }
 
         #[cfg(debug_assertions)]
         for query in queries {
-            debug!("{} [{}]", query, self.addr());
+            debug!("{} [{}]", query.query(), self.addr());
         }
 
         let mut messages = vec![];
         let queries = queries
             .iter()
-            .map(Query::new)
+            .map(Clone::clone)
             .map(ProtocolMessage::Query)
             .collect::<Vec<ProtocolMessage>>();
         let expected = queries.len();
@@ -502,13 +506,17 @@ impl Server {
     }
 
     /// Execute a query on the server and return the result.
-    pub async fn execute(&mut self, query: &str) -> Result<Vec<Message>, Error> {
-        debug!("[{}] {} ", self.addr(), query,);
+    pub async fn execute(&mut self, query: impl Into<Query>) -> Result<Vec<Message>, Error> {
+        let query = query.into();
+        debug!("[{}] {} ", self.addr(), query.query(),);
         self.execute_batch(&[query]).await
     }
 
     /// Execute query and raise an error if one is returned by PostgreSQL.
-    pub async fn execute_checked(&mut self, query: &str) -> Result<Vec<Message>, Error> {
+    pub async fn execute_checked(
+        &mut self,
+        query: impl Into<Query>,
+    ) -> Result<Vec<Message>, Error> {
         let messages = self.execute(query).await?;
         let error = messages.iter().find(|m| m.code() == 'E');
         if let Some(error) = error {
@@ -520,7 +528,10 @@ impl Server {
     }
 
     /// Execute a query and return all rows.
-    pub async fn fetch_all<T: From<DataRow>>(&mut self, query: &str) -> Result<Vec<T>, Error> {
+    pub async fn fetch_all<T: From<DataRow>>(
+        &mut self,
+        query: impl Into<Query>,
+    ) -> Result<Vec<T>, Error> {
         let messages = self.execute_checked(query).await?;
         Ok(messages
             .into_iter()
@@ -727,6 +738,7 @@ pub mod test {
                 id,
                 params: Parameters::default(),
                 changed_params: Parameters::default(),
+                client_params: Parameters::default(),
                 options: ServerOptions::default(),
                 stats: Stats::connect(id, &addr, &Parameters::default()),
                 prepared_statements: super::PreparedStatements::new(),
@@ -1522,6 +1534,33 @@ pub mod test {
         server.rollback().await;
         assert!(server.in_sync());
         assert!(!server.in_transaction());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_params_sync() -> Result<(), Box<dyn std::error::Error>> {
+        let mut params = Parameters::default();
+        params.insert("application_name", "test");
+
+        let mut server = test_server().await;
+
+        let changed = server.link_client(&params).await?;
+        assert_eq!(changed, 1);
+
+        let changed = server.link_client(&params).await?;
+        assert_eq!(changed, 0);
+
+        for i in 0..25 {
+            let value = format!("apples_{}", i);
+            params.insert("application_name", value);
+
+            let changed = server.link_client(&params).await?;
+            assert_eq!(changed, 2); // RESET, SET.
+
+            let changed = server.link_client(&params).await?;
+            assert_eq!(changed, 0);
+        }
 
         Ok(())
     }
