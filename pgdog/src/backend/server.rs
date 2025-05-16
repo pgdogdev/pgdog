@@ -381,11 +381,14 @@ impl Server {
 
         // Compare client and server params.
         if !params.identical(&self.client_params) {
+            debug!("params are different");
             let tracked = params.tracked();
             let mut queries = self.client_params.reset_queries();
             queries.extend(tracked.set_queries());
-            debug!("syncing {} params", queries.len());
-            self.execute_batch(&queries).await?;
+            if !queries.is_empty() {
+                debug!("syncing {} params", queries.len());
+                self.execute_batch(&queries).await?;
+            }
             self.client_params = tracked;
             Ok(queries.len())
         } else {
@@ -471,6 +474,11 @@ impl Server {
     pub async fn execute_batch(&mut self, queries: &[Query]) -> Result<Vec<Message>, Error> {
         if !self.in_sync() {
             return Err(Error::NotInSync);
+        }
+
+        // Empty queries will throw the server out of sync.
+        if queries.is_empty() {
+            return Ok(vec![]);
         }
 
         #[cfg(debug_assertions)]
