@@ -1,7 +1,7 @@
 import asyncpg
 import pytest
 from datetime import datetime
-from globals import normal_async, sharded_async, no_out_of_sync
+from globals import normal_async, sharded_async, no_out_of_sync, admin
 import random
 import string
 import pytest_asyncio
@@ -17,6 +17,9 @@ async def conns():
         await setup(conn, schema)
 
     yield conns
+
+    admin_conn = admin()
+    admin_conn.execute("RECONNECT") # Remove lock on schema
 
     for conn in conns:
         await conn.execute(f'DROP SCHEMA "{schema}" CASCADE')
@@ -230,3 +233,38 @@ async def test_execute_many(conns):
             "INSERT INTO sharded (id, value) VALUES ($1, $2) RETURNING *", values
         )
         assert len(rows) == 50
+
+@pytest.mark.asyncio
+async def test_stress():
+    for i in range(100):
+        # Reconnect
+        normal = await normal_async()
+        await normal.execute("SET search_path TO '$user', public")
+        num = random.randint(1, 1_000_000)
+        # assert not await in_transaction(normal)
+        await normal.execute("DROP TABLE IF EXISTS test_stress")
+        # await not_in_transaction(normal)
+        await normal.execute("CREATE TABLE test_stress (id BIGINT)")
+        # await not_in_transaction(normal)
+        result = await normal.fetch("INSERT INTO test_stress VALUES ($1) RETURNING *", num)
+        assert result[0][0] == num
+
+        # await not_in_transaction(normal)
+        result = await normal.fetch("SELECT * FROM test_stress WHERE id = $1", num)
+        assert result[0][0] == num
+
+        # await not_in_transaction(normal)
+        await normal.fetch("TRUNCATE test_stress")
+
+        # await not_in_transaction(normal)
+        assert (await normal.fetch("SELECT COUNT(*) FROM test_stress"))[0][0] == 0
+
+        for i in range(50):
+            await normal.execute("SELECT 1")
+
+        # await not_in_transaction(normal)
+        await normal.execute("DROP TABLE test_stress")
+
+
+async def in_transaction(conn):
+    await conn.fetch("SELECT now() != statement_timestamp()")

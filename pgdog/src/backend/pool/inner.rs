@@ -312,7 +312,7 @@ impl Inner {
 
         // Finally, if the server is ok,
         // place the connection back into the idle list.
-        if server.done() {
+        if server.can_check_in() {
             self.put(server);
         } else {
             self.out_of_sync += 1;

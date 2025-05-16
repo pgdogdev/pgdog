@@ -18,9 +18,12 @@ use super::{
 use crate::{
     auth::{md5, scram::Client},
     frontend::Buffer,
-    net::messages::{
-        hello::SslReply, Authentication, BackendKeyData, ErrorResponse, FromBytes, Message,
-        ParameterStatus, Password, Protocol, Query, ReadyForQuery, Startup, Terminate, ToBytes,
+    net::{
+        messages::{
+            hello::SslReply, Authentication, BackendKeyData, ErrorResponse, FromBytes, Message,
+            ParameterStatus, Password, Protocol, Query, ReadyForQuery, Startup, Terminate, ToBytes,
+        },
+        Sync,
     },
 };
 use crate::{
@@ -237,7 +240,7 @@ impl Server {
         };
 
         for message in queue.into_iter().flatten() {
-            trace!("{:#?} → [{}]", message, self.addr());
+            trace!(">>> {:?} [{}]", message, self.addr());
 
             match self.stream().send(message).await {
                 Ok(sent) => self.stats.send(sent),
@@ -355,21 +358,18 @@ impl Server {
             _ => (),
         }
 
-        trace!("{:#?} ← [{}]", message, self.addr());
-
-        // Extended protocol can be broken up.
-        // If we are not expecting any more messages, set server into idle state.
-        if self.prepared_statements.done() && !self.in_transaction {
-            self.stats_mut().state(State::Idle);
-        }
+        trace!("<<< {:?} [{}]", message, self.addr());
 
         Ok(message.backend())
     }
 
     /// Synchronize parameters between client and server.
     pub async fn link_client(&mut self, params: &Parameters) -> Result<usize, Error> {
+        let default_name = "PgDog";
+        let server_name = self.params.get_default("application_name", default_name);
+        let client_name = params.get_default("application_name", default_name);
         // Update client link between client and server.
-        self.stats.link_client(params, &self.params);
+        self.stats.link_client(client_name, server_name);
 
         let diff = params.merge(&mut self.params);
         if diff.changed_params > 0 {
@@ -383,6 +383,7 @@ impl Server {
             )
             .await?;
         }
+
         self.changed_params.clear();
 
         Ok(diff.changed_params)
@@ -397,13 +398,25 @@ impl Server {
     }
 
     /// We can disconnect from this server.
+    ///
+    /// There are no more expected messages from the server connection
+    /// and we haven't started an explicit transaction.
     pub fn done(&self) -> bool {
         self.prepared_statements.done() && !self.in_transaction()
     }
 
     /// Server can execute a query.
     pub fn in_sync(&self) -> bool {
-        self.prepared_statements.done()
+        matches!(
+            self.stats.state,
+            State::Idle | State::IdleInTransaction | State::TransactionError
+        )
+    }
+
+    /// Server is done executing all queries and is
+    /// not inside a transaction.
+    pub fn can_check_in(&self) -> bool {
+        self.stats.state == State::Idle
     }
 
     /// Server hasn't sent all messages yet.
@@ -428,13 +441,15 @@ impl Server {
         self.schema_changed
     }
 
+    /// Prepared statements changed outside of our pipeline,
+    /// need to resync from `pg_prepared_statements` view.
     pub fn sync_prepared(&self) -> bool {
         self.sync_prepared
     }
 
     /// Connection was left with an unfinished query.
     pub fn needs_drain(&self) -> bool {
-        self.stats.state == State::ReceivingData && !self.done() && self.has_more_messages()
+        !self.in_sync()
     }
 
     /// Close the connection, don't do any recovery.
@@ -543,10 +558,27 @@ impl Server {
     }
 
     pub async fn drain(&mut self) {
-        while self.has_more_messages() && !self.done() {
+        while self.has_more_messages() {
             if self.read().await.is_err() {
                 self.stats.state(State::Error);
                 break;
+            }
+        }
+
+        if !self.in_sync() {
+            if self
+                .send(&vec![ProtocolMessage::Sync(Sync)].into())
+                .await
+                .is_err()
+            {
+                self.stats.state(State::Error);
+                return;
+            }
+            while !self.in_sync() {
+                if self.read().await.is_err() {
+                    self.stats.state(State::Error);
+                    break;
+                }
             }
         }
     }
@@ -1404,6 +1436,7 @@ pub mod test {
         let mut server = test_server().await;
         let mut params = Parameters::default();
         params.insert("application_name", "test_sync_params");
+        println!("server state: {}", server.stats().state);
         let changed = server.link_client(&params).await.unwrap();
         assert_eq!(changed, 1);
 
@@ -1431,5 +1464,65 @@ pub mod test {
             }
             println!("{:?}", msg);
         }
+    }
+
+    #[tokio::test]
+    async fn test_partial_state() -> Result<(), Box<dyn std::error::Error>> {
+        crate::logger();
+        let mut server = test_server().await;
+
+        server
+            .send(
+                &vec![
+                    Parse::named("test", "SELECT $1").into(),
+                    Describe::new_statement("test").into(),
+                    Flush.into(),
+                ]
+                .into(),
+            )
+            .await?;
+
+        for c in ['1', 't', 'T'] {
+            let msg = server.read().await?;
+            assert_eq!(msg.code(), c);
+            if c == 'T' {
+                assert!(server.done());
+            } else {
+                assert!(!server.done());
+            }
+        }
+
+        assert!(server.needs_drain());
+        assert!(!server.has_more_messages());
+        assert!(server.done());
+        server.drain().await;
+        assert!(server.in_sync());
+        assert!(server.done());
+        assert!(!server.needs_drain());
+
+        server
+            .send(
+                &vec![
+                    Query::new("BEGIN").into(),
+                    Query::new("syntax error").into(),
+                ]
+                .into(),
+            )
+            .await?;
+
+        for c in ['C', 'Z', 'E'] {
+            let msg = server.read().await?;
+            assert_eq!(msg.code(), c);
+        }
+
+        assert!(!server.needs_drain());
+        assert!(server.in_transaction());
+        server.drain().await; // Nothing will be done.
+        assert!(server.in_transaction());
+        server.rollback().await;
+        assert!(server.in_sync());
+        assert!(!server.in_transaction());
+
+        Ok(())
     }
 }
