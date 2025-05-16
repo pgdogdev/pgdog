@@ -97,17 +97,22 @@ impl Listener {
         Ok(())
     }
 
+    /// Shutdown this listener.
+    pub fn shutdown(&self) {
+        self.shutdown.notify_one();
+    }
+
     fn start_shutdown(&self) {
         shutdown();
         comms().shutdown();
 
         let listener = self.clone();
         spawn(async move {
-            listener.shutdown().await;
+            listener.execute_shutdown().await;
         });
     }
 
-    async fn shutdown(&self) {
+    async fn execute_shutdown(&self) {
         let shutdown_timeout = config().config.general.shutdown_timeout();
 
         info!(
