@@ -7,7 +7,7 @@ port = 6432
 shutdown_timeout = 5_000
 openmetrics_port = 9090
 idle_healthcheck_delay = 2342343243
-read_write_strategy = "aggressive"
+read_write_strategy = "conservative"
 
 #
 # Admin database password.
