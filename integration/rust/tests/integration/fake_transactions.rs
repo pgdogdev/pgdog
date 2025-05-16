@@ -80,5 +80,5 @@ async fn check_server_state(expected: &str, admin: Pool<Postgres>) -> bool {
         }
     }
 
-    return ok;
+    ok
 }

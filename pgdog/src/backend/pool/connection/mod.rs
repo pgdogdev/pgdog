@@ -276,7 +276,7 @@ impl Connection {
                     .mirrors(user)?
                     .unwrap_or(&[])
                     .iter()
-                    .map(Mirror::new)
+                    .map(Mirror::spawn)
                     .collect::<Result<Vec<_>, Error>>()?;
                 debug!(
                     r#"database "{}" has {} mirrors"#,

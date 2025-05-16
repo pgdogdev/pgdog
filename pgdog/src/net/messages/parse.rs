@@ -132,9 +132,9 @@ impl FromBytes for Parse {
         let original = bytes.clone();
         code!(bytes, 'P');
         let _len = bytes.get_i32();
-        let name_len = c_string_buf_len(&mut bytes);
+        let name_len = c_string_buf_len(&bytes);
         let name = bytes.split_to(name_len);
-        let query_len = c_string_buf_len(&mut bytes);
+        let query_len = c_string_buf_len(&bytes);
         let query = bytes.split_to(query_len);
         let data_types = bytes;
 

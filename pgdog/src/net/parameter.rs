@@ -45,30 +45,10 @@ pub struct MergeResult {
     pub changed_params: usize,
 }
 
-#[derive(Debug, Clone, Hash)]
+#[derive(Debug, Clone, Hash, PartialEq)]
 pub enum ParameterValue {
     String(String),
     Tuple(Vec<String>),
-}
-
-impl PartialEq for ParameterValue {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::String(a), Self::String(b)) => a.eq(b),
-            (Self::Tuple(a), Self::Tuple(b)) => a.eq(b),
-            _ => false,
-        }
-    }
-}
-
-impl PartialEq<String> for ParameterValue {
-    fn eq(&self, other: &String) -> bool {
-        if let Self::String(s) = self {
-            s.eq(other)
-        } else {
-            false
-        }
-    }
 }
 
 impl Display for ParameterValue {
@@ -272,7 +252,9 @@ mod test {
         let mut other = Parameters::default();
         other.insert("TimeZone", "UTC");
 
-        let same = me.identical(&mut other);
+        let same = me.identical(&other);
         assert!(!same);
+
+        assert!(Parameters::default().identical(&Parameters::default()));
     }
 }

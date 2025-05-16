@@ -50,7 +50,7 @@ impl Debug for Parameter {
 }
 
 impl Parameter {
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         4 + self.data.len()
     }
 }
