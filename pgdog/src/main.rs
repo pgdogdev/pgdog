@@ -100,6 +100,10 @@ async fn pgdog() -> Result<(), Box<dyn std::error::Error>> {
         tokio::spawn(async move { stats::http_server::server(openmetrics_port).await });
     }
 
+    if general.dry_run {
+        stats::StatsLogger::new().spawn();
+    }
+
     let mut listener = Listener::new(format!("{}:{}", general.host, general.port));
     listener.listen().await?;
 
