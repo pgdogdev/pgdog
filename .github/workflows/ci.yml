@@ -45,13 +45,14 @@ jobs:
           sudo service postgresql start
           sudo -u postgres createuser --superuser --login $USER
           sudo -u postgres createdb $USER
-          createdb pgdog
-          psql -c "CREATE USER pgdog PASSWORD 'pgdog' LOGIN;"
-          psql -c "GRANT ALL ON SCHEMA public TO pgdog;" pgdog
-          psql -c "GRANT ALL ON DATABASE pgdog TO pgdog;"
-          psql postgres://pgdog:pgdog@127.0.0.1:5432/pgdog -c "SELECT 1" > /dev/null
+          bash integration/setup.sh
+          sudo apt update && sudo apt install -y python3-virtualenv
+          sudo gem install bundler
           sudo apt remove -y cmake
           sudo pip3 install cmake==3.31.6
+          cmake --version
+          cargo install cargo-nextest --version "0.9.78" --locked
+          bash integration/toxi/setup.sh
       - uses: actions/checkout@v4
       - uses: actions-rs/toolchain@v1
         with:
