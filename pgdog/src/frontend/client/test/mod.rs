@@ -1,10 +1,6 @@
-use std::time::Duration;
-
-use hyper::client;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt, BufStream},
     net::{TcpListener, TcpStream},
-    time::sleep,
 };
 
 use bytes::{Buf, BufMut, BytesMut};
