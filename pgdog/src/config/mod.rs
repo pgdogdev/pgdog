@@ -956,6 +956,7 @@ pub mod test {
         config.users.users = vec![User {
             name: "pgdog".into(),
             database: "pgdog".into(),
+            password: Some("pgdog".into()),
             ..Default::default()
         }];
 
