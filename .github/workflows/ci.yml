@@ -64,7 +64,7 @@ jobs:
       - name: Install test dependencies
         run: cargo install cargo-nextest --version "0.9.78" --locked
       - name: Run tests
-        run: cargo nextest run -E 'package(pgdog)' --no-fail-fast
+        run: cargo nextest run -E 'package(pgdog)' --no-fail-fast --test-threads=1
       - name: Run documentation tests
         run: cargo test --doc
   integration:
