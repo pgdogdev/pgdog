@@ -31,6 +31,8 @@ pub struct State {
     pub errors: usize,
     /// Out of sync
     pub out_of_sync: usize,
+    /// Re-synced servers.
+    pub re_synced: usize,
     /// Statistics
     pub stats: Stats,
     /// Max wait.
@@ -57,6 +59,7 @@ impl State {
             banned: guard.ban.is_some(),
             errors: guard.errors,
             out_of_sync: guard.out_of_sync,
+            re_synced: guard.re_synced,
             stats: guard.stats,
             maxwait: guard
                 .waiting

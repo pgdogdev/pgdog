@@ -442,7 +442,7 @@ impl Client {
 
             if !changed_params.is_empty() {
                 for (name, value) in changed_params.iter() {
-                    debug!("setting client's \"{}\" to '{}'", name, value);
+                    debug!("setting client's \"{}\" to {}", name, value);
                     self.params.insert(name.clone(), value.clone());
                 }
                 inner.comms.update_params(&self.params);

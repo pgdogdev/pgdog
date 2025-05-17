@@ -30,6 +30,9 @@ pub(super) struct Inner {
     pub(super) paused: bool,
     /// Track out of sync terminations.
     pub(super) out_of_sync: usize,
+    /// How many times servers had to be re-synced
+    /// after back check-in.
+    pub(super) re_synced: usize,
     /// Number of connections that were force closed.
     pub(super) force_close: usize,
     /// Track connections closed with errors.
@@ -69,6 +72,7 @@ impl Inner {
             paused: false,
             force_close: 0,
             out_of_sync: 0,
+            re_synced: 0,
             errors: 0,
             stats: Stats::default(),
             oids: None,
@@ -265,7 +269,7 @@ impl Inner {
     /// Return: true if the pool should be banned, false otherwise.
     pub(super) fn maybe_check_in(
         &mut self,
-        server: Box<Server>,
+        mut server: Box<Server>,
         now: Instant,
         stats: BackendCounts,
     ) -> CheckInResult {
@@ -310,6 +314,11 @@ impl Inner {
         if server.force_close() {
             self.force_close += 1;
             return result;
+        }
+
+        if server.re_synced() {
+            self.re_synced += 1;
+            server.reset_re_synced();
         }
 
         // Finally, if the server is ok,
