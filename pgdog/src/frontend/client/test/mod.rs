@@ -46,6 +46,7 @@ pub async fn test_client(port: u16) -> (TcpStream, Client) {
 
 macro_rules! new_client {
     ($port:expr) => {{
+        crate::logger();
         let (conn, client) = test_client($port).await;
         let inner = Inner::new(&client).unwrap();
 
