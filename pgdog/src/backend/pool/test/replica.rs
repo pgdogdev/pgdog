@@ -15,7 +15,7 @@ fn replicas() -> Replicas {
         },
         config: Config {
             max: 1,
-            checkout_timeout: 1000,
+            checkout_timeout: Duration::from_millis(1000),
             ..Default::default()
         },
     };

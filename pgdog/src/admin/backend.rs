@@ -7,6 +7,7 @@ use tokio::time::sleep;
 use tracing::debug;
 
 use crate::backend::ProtocolMessage;
+use crate::frontend::Buffer;
 use crate::net::messages::command_complete::CommandComplete;
 use crate::net::messages::{ErrorResponse, FromBytes, Protocol, Query, ReadyForQuery};
 use crate::net::ToBytes;
@@ -36,12 +37,9 @@ impl Backend {
     }
 
     /// Handle command.
-    pub async fn send(
-        &mut self,
-        messages: Vec<impl Into<ProtocolMessage> + Clone>,
-    ) -> Result<(), Error> {
+    pub async fn send(&mut self, messages: &Buffer) -> Result<(), Error> {
         let message = messages.first().ok_or(Error::Empty)?;
-        let message: ProtocolMessage = message.clone().into();
+        let message: ProtocolMessage = message.clone();
 
         if message.code() != 'Q' {
             debug!("admin received unsupported message: {:?}", message);
@@ -53,12 +51,7 @@ impl Backend {
         let messages = match Parser::parse(&query.query().to_lowercase()) {
             Ok(command) => {
                 let mut messages = command.execute().await?;
-                messages.push(
-                    CommandComplete {
-                        command: command.name(),
-                    }
-                    .message()?,
-                );
+                messages.push(CommandComplete::new(command.name()).message()?);
 
                 messages
             }

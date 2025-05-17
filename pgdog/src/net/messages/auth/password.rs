@@ -11,6 +11,7 @@ pub enum Password {
     /// SASLInitialResponse (F)
     SASLInitialResponse { name: String, response: String },
     /// PasswordMessage (F) or SASLResponse (F)
+    /// TODO: This requires a NULL byte at end. Need to rewrite this struct.
     PasswordMessage { response: String },
 }
 

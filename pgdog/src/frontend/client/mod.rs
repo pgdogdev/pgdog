@@ -3,6 +3,7 @@
 use std::net::SocketAddr;
 use std::time::Instant;
 
+use bytes::BytesMut;
 use timeouts::Timeouts;
 use tokio::time::timeout;
 use tokio::{select, spawn};
@@ -15,7 +16,7 @@ use crate::backend::{
     pool::{Connection, Request},
     ProtocolMessage,
 };
-use crate::config;
+use crate::config::{self, AuthType};
 use crate::frontend::buffer::BufferedQuery;
 #[cfg(debug_assertions)]
 use crate::frontend::QueryLogger;
@@ -23,6 +24,7 @@ use crate::net::messages::{
     Authentication, BackendKeyData, CommandComplete, ErrorResponse, FromBytes, Message, Password,
     Protocol, ReadyForQuery, ToBytes,
 };
+use crate::net::NoticeResponse;
 use crate::net::{parameter::Parameters, Stream};
 
 pub mod counter;
@@ -37,6 +39,7 @@ pub struct Client {
     addr: SocketAddr,
     stream: Stream,
     id: BackendKeyData,
+    connect_params: Parameters,
     params: Parameters,
     comms: Comms,
     admin: bool,
@@ -45,6 +48,8 @@ pub struct Client {
     prepared_statements: PreparedStatements,
     in_transaction: bool,
     timeouts: Timeouts,
+    protocol_buffer: Buffer,
+    stream_buffer: BytesMut,
 }
 
 impl Client {
@@ -61,18 +66,26 @@ impl Client {
 
         let admin = database == config.config.admin.name && config.config.admin.user == user;
         let admin_password = &config.config.admin.password;
+        let auth_type = &config.config.general.auth_type;
 
         let id = BackendKeyData::new();
 
         // Auto database.
         let exists = databases::databases().exists((user, database));
         if !exists && config.config.general.passthrough_auth() {
-            // Get the password.
-            stream
-                .send_flush(&Authentication::ClearTextPassword)
-                .await?;
-            let password = stream.read().await?;
-            let password = Password::from_bytes(password.to_bytes()?)?;
+            let password = if auth_type.trust() {
+                // Use empty password.
+                // TODO: Postgres must be using "trust" auth
+                // or some other kind of authentication that doesn't require a password.
+                Password::new_password("")
+            } else {
+                // Get the password.
+                stream
+                    .send_flush(&Authentication::ClearTextPassword)
+                    .await?;
+                let password = stream.read().await?;
+                Password::from_bytes(password.to_bytes()?)?
+            };
             let user = config::User::from_params(&params, &password).ok();
             if let Some(user) = user {
                 databases::add(user);
@@ -94,21 +107,31 @@ impl Client {
             conn.cluster()?.password()
         };
 
-        let auth_ok = if stream.is_tls() {
-            let md5 = md5::Client::new(user, password);
-            stream.send_flush(&md5.challenge()).await?;
-            let password = Password::from_bytes(stream.read().await?.to_bytes()?)?;
-            if let Password::PasswordMessage { response } = password {
-                md5.check(&response)
-            } else {
-                false
+        let auth_type = &config.config.general.auth_type;
+        let auth_ok = match (auth_type, stream.is_tls()) {
+            // TODO: SCRAM doesn't work with TLS currently because of
+            // lack of support for channel binding in our scram library.
+            // Defaulting to MD5.
+            (AuthType::Scram, true) | (AuthType::Md5, _) => {
+                let md5 = md5::Client::new(user, password);
+                stream.send_flush(&md5.challenge()).await?;
+                let password = Password::from_bytes(stream.read().await?.to_bytes()?)?;
+                if let Password::PasswordMessage { response } = password {
+                    md5.check(&response)
+                } else {
+                    false
+                }
             }
-        } else {
-            stream.send_flush(&Authentication::scram()).await?;
 
-            let scram = Server::new(password);
-            let res = scram.handle(&mut stream).await;
-            matches!(res, Ok(true))
+            (AuthType::Scram, false) => {
+                stream.send_flush(&Authentication::scram()).await?;
+
+                let scram = Server::new(password);
+                let res = scram.handle(&mut stream).await;
+                matches!(res, Ok(true))
+            }
+
+            (AuthType::Trust, _) => true,
         };
 
         if !auth_ok {
@@ -167,11 +190,16 @@ impl Client {
             admin,
             streaming: false,
             shard,
-            params,
+            params: params.clone(),
+            connect_params: params,
             prepared_statements: PreparedStatements::new(),
             in_transaction: false,
             timeouts: Timeouts::from_config(&config.config.general),
+            protocol_buffer: Buffer::new(),
+            stream_buffer: BytesMut::new(),
         };
+
+        drop(conn);
 
         if client.admin {
             // Admin clients are not waited on during shutdown.
@@ -225,12 +253,12 @@ impl Client {
                 }
 
                 buffer = self.buffer() => {
-                    let buffer = buffer?;
-                    if buffer.is_empty() {
+                    buffer?;
+                    if self.protocol_buffer.is_empty() {
                         break;
                     }
 
-                    let disconnect = self.client_messages(inner.get(), buffer).await?;
+                    let disconnect = self.client_messages(inner.get()).await?;
                     if disconnect {
                         break;
                     }
@@ -248,27 +276,28 @@ impl Client {
     }
 
     /// Handle client messages.
-    async fn client_messages(
-        &mut self,
-        mut inner: InnerBorrow<'_>,
-        mut buffer: Buffer,
-    ) -> Result<bool, Error> {
-        inner.is_async = buffer.is_async();
-        inner.stats.received(buffer.len());
+    async fn client_messages(&mut self, mut inner: InnerBorrow<'_>) -> Result<bool, Error> {
+        inner.is_async = self.protocol_buffer.is_async();
+        inner.stats.received(self.protocol_buffer.len());
 
         #[cfg(debug_assertions)]
-        if let Some(query) = buffer.query()? {
+        if let Some(query) = self.protocol_buffer.query()? {
             debug!(
                 "{} [{}] (in transaction: {})",
                 query.query(),
                 self.addr,
                 self.in_transaction
             );
-            QueryLogger::new(&buffer).log().await?;
+            QueryLogger::new(&self.protocol_buffer).log().await?;
         }
 
         let connected = inner.connected();
-        let command = match inner.command(&mut buffer, &mut self.prepared_statements) {
+
+        let command = match inner.command(
+            &mut self.protocol_buffer,
+            &mut self.prepared_statements,
+            &self.params,
+        ) {
             Ok(command) => command,
             Err(err) => {
                 self.stream
@@ -295,6 +324,7 @@ impl Client {
                     if let BufferedQuery::Query(_) = query {
                         self.start_transaction().await?;
                         inner.start_transaction = Some(query.clone());
+                        self.in_transaction = true;
                         inner.done(true);
                         return Ok(false);
                     }
@@ -302,30 +332,24 @@ impl Client {
                 Some(Command::RollbackTransaction) => {
                     inner.start_transaction = None;
                     self.end_transaction(true).await?;
+                    self.in_transaction = false;
                     inner.done(false);
                     return Ok(false);
                 }
                 Some(Command::CommitTransaction) => {
                     inner.start_transaction = None;
                     self.end_transaction(false).await?;
+                    self.in_transaction = false;
                     inner.done(false);
                     return Ok(false);
                 }
                 // TODO: Handling session variables requires a lot more work,
                 // e.g. we need to track RESET as well.
-                // Some(Command::Set { name, value }) => {
-                //     self.params.insert(name, value);
-                //     self.stream.send(&CommandComplete::new("SET")).await?;
-                //     self.stream
-                //         .send_flush(&ReadyForQuery::in_transaction(self.in_transaction))
-                //         .await?;
-                //     let state = inner.stats.state;
-                //     if state == State::Active {
-                //         inner.stats.state = State::Idle;
-                //     }
-
-                //     return Ok(false);
-                // }
+                Some(Command::Set { name, value }) => {
+                    self.params.insert(name, value.clone());
+                    self.set(inner).await?;
+                    return Ok(false);
+                }
                 _ => (),
             };
 
@@ -336,13 +360,7 @@ impl Client {
                     let query_timeout = self.timeouts.query_timeout(&inner.stats.state);
                     // We may need to sync params with the server
                     // and that reads from the socket.
-                    timeout(
-                        query_timeout,
-                        inner
-                            .backend
-                            .link_client(&self.params, self.prepared_statements.enabled),
-                    )
-                    .await??;
+                    timeout(query_timeout, inner.backend.link_client(&self.params)).await??;
                 }
                 Err(err) => {
                     if err.no_server() {
@@ -360,34 +378,26 @@ impl Client {
         // a client is actually executing something.
         //
         // This prevents us holding open connections to multiple servers
-        if buffer.executable() {
+        if self.protocol_buffer.executable() {
             if let Some(query) = inner.start_transaction.take() {
                 inner.backend.execute(&query).await?;
             }
         }
 
-        for msg in buffer.iter() {
+        for msg in self.protocol_buffer.iter() {
             if let ProtocolMessage::Bind(bind) = msg {
                 inner.backend.bind(bind)?
             }
         }
 
-        // Handle COPY subprotocol in a potentially sharded context.
-        if buffer.copy() && !self.streaming {
-            let rows = inner.router.copy_data(&buffer)?;
-            if !rows.is_empty() {
-                inner.backend.send_copy(rows).await?;
-                inner
-                    .backend
-                    .send(buffer.without_copy_data().into())
-                    .await?;
-            } else {
-                inner.backend.send(buffer.into()).await?;
-            }
-        } else {
-            // Send query to server.
-            inner.backend.send(buffer.into()).await?;
-        }
+        inner
+            .handle_buffer(&self.protocol_buffer, self.streaming)
+            .await?;
+
+        inner.stats.memory_used(self.stream_buffer.capacity());
+
+        // Send traffic to mirrors, if any.
+        inner.backend.mirror(&self.protocol_buffer);
 
         Ok(false)
     }
@@ -414,19 +424,10 @@ impl Client {
             inner.stats.idle(self.in_transaction);
         }
 
-        trace!("[{}] <- {:#?}", self.addr, message);
-
-        if flush || async_flush || streaming {
-            self.stream.send_flush(&message).await?;
-            if async_flush {
-                inner.is_async = false;
-            }
-        } else {
-            self.stream.send(&message).await?;
-        }
-
         inner.stats.sent(len);
 
+        // Release the connection back into the pool
+        // before flushing data to client.
         if inner.backend.done() {
             let changed_params = inner.backend.changed_params();
             if inner.transaction_mode() {
@@ -441,14 +442,26 @@ impl Client {
 
             if !changed_params.is_empty() {
                 for (name, value) in changed_params.iter() {
-                    debug!("setting client's \"{}\" to '{}'", name, value);
+                    debug!("setting client's \"{}\" to {}", name, value);
                     self.params.insert(name.clone(), value.clone());
                 }
                 inner.comms.update_params(&self.params);
             }
-            if inner.comms.offline() && !self.admin {
-                return Ok(true);
+        }
+
+        trace!("[{}] <- {:#?}", self.addr, message);
+
+        if flush || async_flush || streaming {
+            self.stream.send_flush(&message).await?;
+            if async_flush {
+                inner.is_async = false;
             }
+        } else {
+            self.stream.send(&message).await?;
+        }
+
+        if inner.backend.done() && inner.comms.offline() && !self.admin {
+            return Ok(true);
         }
 
         Ok(false)
@@ -458,21 +471,22 @@ impl Client {
     ///
     /// This ensures we don't check out a connection from the pool until the client
     /// sent a complete request.
-    async fn buffer(&mut self) -> Result<Buffer, Error> {
-        let mut buffer = Buffer::new();
+    async fn buffer(&mut self) -> Result<(), Error> {
+        self.protocol_buffer.clear();
+
         // Only start timer once we receive the first message.
         let mut timer = None;
 
         // Check config once per request.
-        let config = config();
+        let config = config::config();
         self.prepared_statements.enabled = config.prepared_statements();
         self.timeouts = Timeouts::from_config(&config.config.general);
 
-        while !buffer.full() {
-            let message = match self.stream.read().await {
+        while !self.protocol_buffer.full() {
+            let message = match self.stream.read_buf(&mut self.stream_buffer).await {
                 Ok(message) => message.stream(self.streaming).frontend(),
                 Err(_) => {
-                    return Ok(vec![].into());
+                    return Ok(());
                 }
             };
 
@@ -482,17 +496,14 @@ impl Client {
 
             // Terminate (B & F).
             if message.code() == 'X' {
-                return Ok(vec![].into());
+                return Ok(());
             } else {
-                if self.prepared_statements.enabled {
-                    let message = ProtocolMessage::from_bytes(message.to_bytes()?)?;
-                    if message.extended() {
-                        buffer.push(self.prepared_statements.maybe_rewrite(message)?);
-                    } else {
-                        buffer.push(message);
-                    }
+                let message = ProtocolMessage::from_bytes(message.to_bytes()?)?;
+                if message.extended() && self.prepared_statements.enabled {
+                    self.protocol_buffer
+                        .push(self.prepared_statements.maybe_rewrite(message)?);
                 } else {
-                    buffer.push(message.into())
+                    self.protocol_buffer.push(message);
                 }
             }
         }
@@ -500,10 +511,10 @@ impl Client {
         trace!(
             "request buffered [{:.4}ms]\n{:#?}",
             timer.unwrap().elapsed().as_secs_f64() * 1000.0,
-            buffer,
+            self.protocol_buffer,
         );
 
-        Ok(buffer)
+        Ok(())
     }
 
     /// Tell the client we started a transaction.
@@ -528,10 +539,27 @@ impl Client {
         } else {
             CommandComplete::new_commit()
         };
-        self.stream
-            .send_many(&[cmd.message()?, ReadyForQuery::idle().message()?])
-            .await?;
+        let mut messages = if !self.in_transaction {
+            vec![NoticeResponse::from(ErrorResponse::no_transaction()).message()?]
+        } else {
+            vec![]
+        };
+        messages.push(cmd.message()?);
+        messages.push(ReadyForQuery::idle().message()?);
+        self.stream.send_many(&messages).await?;
         debug!("transaction ended");
+        Ok(())
+    }
+
+    /// Handle SET command.
+    async fn set(&mut self, mut inner: InnerBorrow<'_>) -> Result<(), Error> {
+        self.stream.send(&CommandComplete::new("SET")).await?;
+        self.stream
+            .send_flush(&ReadyForQuery::in_transaction(self.in_transaction))
+            .await?;
+        inner.done(self.in_transaction);
+        inner.comms.update_params(&self.params);
+        debug!("set");
         Ok(())
     }
 }

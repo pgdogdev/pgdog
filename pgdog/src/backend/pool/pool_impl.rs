@@ -2,18 +2,19 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use once_cell::sync::Lazy;
 use parking_lot::{lock_api::MutexGuard, Mutex, RawMutex};
-use tokio::select;
-use tokio::time::sleep;
+use tokio::time::Instant;
 use tracing::{error, info};
 
 use crate::backend::{Server, ServerOptions};
+use crate::config::PoolerMode;
 use crate::net::messages::BackendKeyData;
 use crate::net::Parameter;
 
+use super::inner::CheckInResult;
 use super::{
     Address, Comms, Config, Error, Guard, Healtcheck, Inner, Monitor, Oids, PoolConfig, Request,
     State, Waiting,
@@ -25,27 +26,24 @@ fn next_pool_id() -> u64 {
 }
 
 /// Connection pool.
+#[derive(Clone)]
 pub struct Pool {
-    inner: Arc<Mutex<Inner>>,
-    comms: Arc<Comms>,
-    addr: Address,
-    id: u64,
+    inner: Arc<InnerSync>,
+}
+
+pub(crate) struct InnerSync {
+    pub(super) comms: Comms,
+    pub(super) addr: Address,
+    pub(super) inner: Mutex<Inner>,
+    pub(super) id: u64,
+    pub(super) config: Config,
 }
 
 impl std::fmt::Debug for Pool {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Pool").field("addr", &self.addr).finish()
-    }
-}
-
-impl Clone for Pool {
-    fn clone(&self) -> Self {
-        Self {
-            inner: self.inner.clone(),
-            comms: self.comms.clone(),
-            addr: self.addr.clone(),
-            id: self.id,
-        }
+        f.debug_struct("Pool")
+            .field("addr", &self.inner.addr)
+            .finish()
     }
 }
 
@@ -54,11 +52,18 @@ impl Pool {
     pub fn new(config: &PoolConfig) -> Self {
         let id = next_pool_id();
         Self {
-            inner: Arc::new(Mutex::new(Inner::new(config.config, id))),
-            comms: Arc::new(Comms::new()),
-            addr: config.address.clone(),
-            id,
+            inner: Arc::new(InnerSync {
+                comms: Comms::new(),
+                addr: config.address.clone(),
+                inner: Mutex::new(Inner::new(config.config, id)),
+                id,
+                config: config.config,
+            }),
         }
+    }
+
+    pub(crate) fn inner(&self) -> &InnerSync {
+        &self.inner
     }
 
     /// Launch the maintenance loop, bringing the pool online.
@@ -79,79 +84,73 @@ impl Pool {
     }
 
     /// Get a connection from the pool.
-    async fn get_internal(&self, request: &Request, mut unban: bool) -> Result<Guard, Error> {
-        loop {
-            // Fast path, idle connection probably available.
-            let (checkout_timeout, healthcheck_timeout, healthcheck_interval, server) = {
-                let elapsed = request.created_at.elapsed(); // Before the lock!
-                let mut guard = self.lock();
+    async fn get_internal(&self, request: &Request, unban: bool) -> Result<Guard, Error> {
+        let pool = self.clone();
 
-                if !guard.online {
-                    return Err(Error::Offline);
-                }
+        // Fast path, idle connection probably available.
+        let (server, granted_at, paused) = {
+            // Ask for time before we acquire the lock
+            // and only if we actually waited for a connection.
+            let granted_at = request.created_at;
+            let elapsed = granted_at.saturating_duration_since(request.created_at);
+            let mut guard = self.lock();
 
-                // Try this only once. If the pool still
-                // has an error after a checkout attempt,
-                // return error.
-                if unban {
-                    unban = false;
-                    guard.maybe_unban();
-                }
-
-                if guard.banned() {
-                    return Err(Error::Banned);
-                }
-
-                let conn = guard
-                    .take(request)
-                    .map(|server| Guard::new(self.clone(), server));
-
-                if conn.is_some() {
-                    guard.stats.counts.wait_time += elapsed.as_micros();
-                    guard.stats.counts.server_assignment_count += 1;
-                }
-
-                (
-                    if guard.paused {
-                        Duration::MAX // Wait forever if the pool is paused.
-                    } else {
-                        guard.config.checkout_timeout()
-                    },
-                    guard.config.healthcheck_timeout(),
-                    guard.config.healthcheck_interval(),
-                    conn,
-                )
-            };
-
-            if let Some(server) = server {
-                return self
-                    .maybe_healthcheck(server, healthcheck_timeout, healthcheck_interval)
-                    .await;
+            if !guard.online {
+                return Err(Error::Offline);
             }
 
+            // Try this only once. If the pool still
+            // has an error after a checkout attempt,
+            // return error.
+            if unban && guard.banned() {
+                guard.maybe_unban();
+            }
+
+            if guard.banned() {
+                return Err(Error::Banned);
+            }
+
+            let conn = guard.take(request);
+
+            if conn.is_some() {
+                guard.stats.counts.wait_time += elapsed;
+                guard.stats.counts.server_assignment_count += 1;
+            }
+
+            (conn, granted_at, guard.paused)
+        };
+
+        if paused {
+            self.comms().ready.notified().await;
+        }
+
+        let (server, granted_at) = if let Some(mut server) = server {
+            (
+                Guard::new(
+                    pool,
+                    {
+                        server.set_pooler_mode(self.inner.config.pooler_mode);
+                        server
+                    },
+                    granted_at,
+                ),
+                granted_at,
+            )
+        } else {
             // Slow path, pool is empty, will create new connection
             // or wait for one to be returned if the pool is maxed out.
-            self.comms().request.notify_one();
-            let _waiting = Waiting::new(self.clone(), request);
+            let waiting = Waiting::new(pool, request)?;
+            waiting.wait().await?
+        };
 
-            select! {
-                // A connection may be available.
-                _ =  self.comms().ready.notified() => {
-                    let waited_for = request.created_at.elapsed();
-                    if waited_for >= checkout_timeout {
-                        return Err(Error::CheckoutTimeout);
-                    }
-                    continue;
-                }
-
-                // Waited too long, return an error.
-                _ = sleep(checkout_timeout) => {
-                    self.lock()
-                        .maybe_ban(Instant::now(), Error::CheckoutTimeout);
-                    return Err(Error::CheckoutTimeout);
-                }
-            }
-        }
+        return self
+            .maybe_healthcheck(
+                server,
+                self.inner.config.healthcheck_timeout,
+                self.inner.config.healthcheck_interval,
+                granted_at,
+            )
+            .await;
     }
 
     /// Perform a healtcheck on the connection if one is needed.
@@ -160,12 +159,14 @@ impl Pool {
         mut conn: Guard,
         healthcheck_timeout: Duration,
         healthcheck_interval: Duration,
+        now: Instant,
     ) -> Result<Guard, Error> {
         let mut healthcheck = Healtcheck::conditional(
             &mut conn,
-            self.clone(),
+            self,
             healthcheck_interval,
             healthcheck_timeout,
+            now,
         );
 
         if let Err(err) = healthcheck.healthcheck().await {
@@ -186,14 +187,21 @@ impl Pool {
     }
 
     /// Check the connection back into the pool.
-    pub(super) fn checkin(&self, server: Server) {
-        // Ask for the time before locking.
-        // This can take some time on some systems, e.g. EC2.
-        let now = Instant::now();
+    pub(super) fn checkin(&self, mut server: Box<Server>) {
+        // Server is checked in right after transaction finished
+        // in transaction mode but can be checked in anytime in session mode.
+        let now = if server.pooler_mode() == &PoolerMode::Session {
+            Instant::now()
+        } else {
+            server.stats().last_used
+        };
+
+        let counts = server.stats_mut().reset_last_checkout();
 
         // Check everything and maybe check the connection
         // into the idle pool.
-        let banned = self.lock().maybe_check_in(server, now);
+        let CheckInResult { banned, replenish } =
+            { self.lock().maybe_check_in(server, now, counts) };
 
         if banned {
             error!(
@@ -201,13 +209,13 @@ impl Pool {
                 Error::ServerError,
                 self.addr()
             );
-            // Tell everyone to stop waiting, this pool is broken.
-            self.comms().ready.notify_waiters();
         }
 
-        // Notify clients that a connection may be available
-        // or at least they should request a new one from the pool again.
-        self.comms().ready.notify_one();
+        // Notify maintenance that we need a new connection because
+        // the one we tried to check in was broken.
+        if replenish {
+            self.comms().request.notify_one();
+        }
     }
 
     /// Server connection used by the client.
@@ -242,7 +250,6 @@ impl Pool {
 
         if banned {
             error!("pool banned explicitly: {} [{}]", reason, self.addr());
-            self.comms().ready.notify_waiters();
         }
     }
 
@@ -256,7 +263,7 @@ impl Pool {
 
     /// Connection pool unique identifier.
     pub(crate) fn id(&self) -> u64 {
-        self.id
+        self.inner.id
     }
 
     /// Take connections from the pool and tell all idle ones to be returned
@@ -265,7 +272,7 @@ impl Pool {
     /// This shuts down the pool.
     pub(crate) fn move_conns_to(&self, destination: &Pool) {
         // Ensure no deadlock.
-        assert!(self.id != destination.id());
+        assert!(self.inner.id != destination.id());
 
         {
             let mut from_guard = self.lock();
@@ -313,6 +320,7 @@ impl Pool {
 
         guard.online = false;
         guard.dump_idle();
+        guard.close_waiters(Error::Offline);
         self.comms().shutdown.notify_waiters();
         self.comms().ready.notify_waiters();
     }
@@ -320,19 +328,19 @@ impl Pool {
     /// Pool exclusive lock.
     #[inline]
     pub(super) fn lock(&self) -> MutexGuard<'_, RawMutex, Inner> {
-        self.inner.lock()
+        self.inner.inner.lock()
     }
 
     /// Internal notifications.
     #[inline]
     pub(super) fn comms(&self) -> &Comms {
-        &self.comms
+        &self.inner.comms
     }
 
     /// Pool address.
     #[inline]
     pub fn addr(&self) -> &Address {
-        &self.addr
+        &self.inner.addr
     }
 
     /// Get startup parameters for new server connections.
@@ -348,12 +356,12 @@ impl Pool {
             },
         ];
 
-        let config = *self.lock().config();
+        let config = self.inner.config;
 
         if let Some(statement_timeout) = config.statement_timeout {
             params.push(Parameter {
                 name: "statement_timeout".into(),
-                value: statement_timeout.to_string(),
+                value: statement_timeout.as_millis().to_string(),
             });
         }
 
@@ -361,6 +369,13 @@ impl Pool {
             params.push(Parameter {
                 name: "replication".into(),
                 value: "database".into(),
+            });
+        }
+
+        if config.read_only {
+            params.push(Parameter {
+                name: "default_transaction_read_only".into(),
+                value: "on".into(),
             });
         }
 
@@ -372,10 +387,9 @@ impl Pool {
         State::get(self)
     }
 
-    /// Update pool configuration.
-    ///
-    /// This takes effect immediately.
-    pub fn update_config(&self, config: Config) {
+    /// Update pool configuration used in internals.
+    #[cfg(test)]
+    pub(crate) fn update_config(&self, config: Config) {
         self.lock().config = config;
     }
 

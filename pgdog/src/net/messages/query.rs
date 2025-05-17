@@ -61,6 +61,12 @@ impl Protocol for Query {
     }
 }
 
+impl<T: ToString> From<T> for Query {
+    fn from(value: T) -> Self {
+        Query::new(value)
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;

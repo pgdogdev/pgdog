@@ -97,6 +97,17 @@ impl Stream {
         }
     }
 
+    /// Check socket is okay while we wait for something else.
+    pub async fn check(&mut self) -> Result<(), crate::net::Error> {
+        let mut buf = [0u8; 1];
+        match self {
+            Self::Plain(plain) => plain.get_mut().peek(&mut buf).await?,
+            Self::Tls(tls) => tls.get_mut().get_mut().0.peek(&mut buf).await?,
+        };
+
+        Ok(())
+    }
+
     /// Send data via the stream.
     ///
     /// # Performance
@@ -113,6 +124,7 @@ impl Stream {
 
         #[cfg(debug_assertions)]
         {
+            trace!(">>> {:?} [{:?}]", message.message()?, self.peer_addr());
             use crate::net::messages::FromBytes;
             use tracing::error;
 
@@ -167,21 +179,34 @@ impl Stream {
     /// one memory allocation per protocol message. It can be optimized to re-use an existing
     /// buffer but it's not worth the complexity.
     pub async fn read(&mut self) -> Result<Message, crate::net::Error> {
+        let mut buf = BytesMut::with_capacity(5);
+        self.read_buf(&mut buf).await
+    }
+
+    /// Read data into a buffer, avoiding unnecessary allocations.
+    pub async fn read_buf(&mut self, bytes: &mut BytesMut) -> Result<Message, crate::net::Error> {
         let code = self.read_u8().await?;
         let len = self.read_i32().await?;
-
-        let mut bytes = BytesMut::with_capacity(len as usize + 1);
 
         bytes.put_u8(code);
         bytes.put_i32(len);
 
-        bytes.resize(len as usize + 1, 0); // self + 1 byte for the message code
+        // Length must be at least 4 bytes.
+        if len < 4 {
+            return Err(crate::net::Error::Eof);
+        }
 
-        self.read_exact(&mut bytes[5..]).await?;
+        let capacity = len as usize + 1;
+        bytes.reserve(capacity); // self + 1 byte for the message code
+        unsafe {
+            // SAFETY: We reserved the memory above, so it's there.
+            // It contains garbage but we're about to write to it.
+            bytes.set_len(capacity);
+        }
 
-        let message = Message::new(bytes.freeze());
+        self.read_exact(&mut bytes[5..capacity]).await?;
 
-        // trace!("📡 => {}", message.code());
+        let message = Message::new(bytes.split().freeze());
 
         Ok(message)
     }

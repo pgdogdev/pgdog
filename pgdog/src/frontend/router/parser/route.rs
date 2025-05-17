@@ -1,3 +1,5 @@
+use std::fmt::Display;
+
 use super::{Aggregate, OrderBy};
 
 #[derive(Debug, Clone, PartialEq, PartialOrd, Ord, Eq, Hash)]
@@ -5,6 +7,20 @@ pub enum Shard {
     Direct(usize),
     Multi(Vec<usize>),
     All,
+}
+
+impl Display for Shard {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                Self::Direct(shard) => shard.to_string(),
+                Self::Multi(shards) => format!("{:?}", shards),
+                Self::All => "all".into(),
+            }
+        )
+    }
 }
 
 impl Shard {
@@ -42,6 +58,17 @@ pub struct Route {
     order_by: Vec<OrderBy>,
     aggregate: Aggregate,
     limit: Option<Limit>,
+}
+
+impl Display for Route {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "shard={}, role={}",
+            self.shard,
+            if self.read { "replica" } else { "primary" }
+        )
+    }
 }
 
 impl Default for Route {
@@ -128,6 +155,11 @@ impl Route {
 
     pub fn with_lock(mut self, lock: bool) -> Self {
         self.read = !lock;
+        self
+    }
+
+    pub fn set_read(mut self, read: bool) -> Self {
+        self.read = read;
         self
     }
 }

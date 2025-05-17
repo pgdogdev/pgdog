@@ -98,6 +98,17 @@ impl ErrorResponse {
             routine: None,
         }
     }
+
+    pub fn no_transaction() -> Self {
+        Self {
+            severity: "WARNING".into(),
+            code: "25P01".into(),
+            message: "there is no transaction in progress".into(),
+            routine: Some("EndTransactionBlock".into()),
+            file: Some("xact.c".into()),
+            ..Default::default()
+        }
+    }
 }
 
 impl Display for ErrorResponse {
@@ -141,6 +152,9 @@ impl ToBytes for ErrorResponse {
         let mut payload = Payload::named(self.code());
 
         payload.put_u8(b'S');
+        payload.put_string(&self.severity);
+
+        payload.put_u8(b'V');
         payload.put_string(&self.severity);
 
         payload.put_u8(b'C');

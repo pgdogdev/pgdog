@@ -6,22 +6,28 @@ use std::{
 
 use crate::{
     backend::{databases::databases, replication::ShardedColumn, Cluster, ShardingSchema},
-    config::config,
+    config::{config, ReadWriteStrategy},
     frontend::{
         buffer::BufferedQuery,
         router::{
+            context::RouterContext,
             parser::{rewrite::Rewrite, OrderBy, Shard},
             round_robin,
             sharding::{shard_param, shard_str, shard_value, Centroids},
             CopyRow,
         },
-        Buffer, PreparedStatements,
+        PreparedStatements,
     },
-    net::messages::{Bind, CopyData, Vector},
+    net::{
+        messages::{Bind, CopyData, Vector},
+        parameter::ParameterValue,
+        Parameters,
+    },
 };
 
 use super::*;
 
+use multi_tenant::MultiTenantCheck;
 use once_cell::sync::Lazy;
 use pg_query::{
     fingerprint, parse,
@@ -63,16 +69,25 @@ impl QueryParser {
         self.replication_mode = true;
     }
 
-    pub fn parse(
-        &mut self,
-        buffer: &Buffer,
-        cluster: &Cluster,
-        prepared_statements: &mut PreparedStatements,
-    ) -> Result<&Command, Error> {
-        if let Some(query) = buffer.query()? {
-            self.command =
-                self.query(&query, cluster, buffer.parameters()?, prepared_statements)?;
+    pub fn parse(&mut self, context: RouterContext) -> Result<&Command, Error> {
+        if let Some(ref query) = context.query {
+            self.command = self.query(
+                query,
+                context.cluster,
+                context.bind,
+                context.prepared_statements,
+                context.params,
+            )?;
+
+            // If the cluster only has one shard, use direct-to-shard queries.
+            if let Command::Query(ref mut query) = self.command {
+                if !matches!(query.shard(), Shard::Direct(_)) && context.cluster.shards().len() == 1
+                {
+                    query.set_shard(0);
+                }
+            }
         }
+
         Ok(&self.command)
     }
 
@@ -103,8 +118,9 @@ impl QueryParser {
         &mut self,
         query: &BufferedQuery,
         cluster: &Cluster,
-        params: Option<&Bind>,
+        bind: Option<&Bind>,
         prepared_statements: &mut PreparedStatements,
+        params: &Parameters,
     ) -> Result<Command, Error> {
         // Replication protocol commands
         // don't have a node in pg_query,
@@ -125,8 +141,11 @@ impl QueryParser {
         let full_prepared_statements = config().config.general.prepared_statements.full();
         let sharding_schema = cluster.sharding_schema();
         let dry_run = sharding_schema.tables.dry_run();
+        let multi_tenant = cluster.multi_tenant();
         let router_disabled = shards == 1 && (read_only || write_only);
-        let parser_disabled = !full_prepared_statements && router_disabled && !dry_run;
+        let parser_disabled =
+            !full_prepared_statements && router_disabled && !dry_run && multi_tenant.is_none();
+        let rw_strategy = cluster.read_write_strategy();
 
         debug!(
             "parser is {}",
@@ -154,23 +173,29 @@ impl QueryParser {
 
         // We already decided where all queries for this
         // transaction are going to go.
-        if self.routed {
+        if self.routed && multi_tenant.is_none() {
             if dry_run {
                 let cache = Cache::get();
                 let route = self.route();
                 cache.record_command(query, &route)?;
             }
 
-            return Ok(self.command.clone());
+            if multi_tenant.is_none() {
+                return Ok(self.command.clone());
+            }
         }
 
+        let mut shard = Shard::All;
+
         // Parse hardcoded shard from a query comment.
-        let shard = super::comment::shard(query, &sharding_schema).map_err(Error::PgQuery)?;
+        if !router_disabled && !self.routed {
+            shard = super::comment::shard(query, &sharding_schema).map_err(Error::PgQuery)?;
+        }
 
         // Cluster is read only or write only, traffic split isn't needed,
         // and prepared statements support is limited to the extended protocol,
         // don't parse the query further.
-        if !full_prepared_statements {
+        if !full_prepared_statements && multi_tenant.is_none() {
             if let Shard::Direct(_) = shard {
                 if cluster.read_only() {
                     return Ok(Command::Query(Route::read(shard)));
@@ -208,6 +233,16 @@ impl QueryParser {
             return Ok(Command::Rewrite(queries));
         }
 
+        if let Some(multi_tenant) = multi_tenant {
+            debug!("running multi-tenant check");
+            MultiTenantCheck::new(cluster.user(), multi_tenant, cluster.schema(), &ast, params)
+                .run()?;
+        }
+
+        if self.routed {
+            return Ok(self.command.clone());
+        }
+
         //
         // Get the root AST node.
         //
@@ -235,7 +270,7 @@ impl QueryParser {
                         round_robin::next() % cluster.shards().len(),
                     ))));
                 } else {
-                    let mut command = Self::select(stmt, &sharding_schema, params)?;
+                    let mut command = Self::select(stmt, &sharding_schema, bind)?;
                     let mut omni = false;
                     if let Command::Query(query) = &mut command {
                         // Try to route an all-shard query to one
@@ -258,33 +293,51 @@ impl QueryParser {
             }
             // SET statements.
             Some(NodeEnum::VariableSetStmt(ref stmt)) => {
-                let command = self.set(stmt, &sharding_schema);
-
-                if self.routed {
-                    return command;
-                } else {
-                    Ok(Command::Query(Route::read(Shard::All)))
-                }
+                return self.set(stmt, &sharding_schema, read_only)
             }
             // COPY statements.
             Some(NodeEnum::CopyStmt(ref stmt)) => Self::copy(stmt, cluster),
             // INSERT statements.
-            Some(NodeEnum::InsertStmt(ref stmt)) => Self::insert(stmt, &sharding_schema, params),
+            Some(NodeEnum::InsertStmt(ref stmt)) => Self::insert(stmt, &sharding_schema, bind),
             // UPDATE statements.
             Some(NodeEnum::UpdateStmt(ref stmt)) => Self::update(stmt),
             // DELETE statements.
             Some(NodeEnum::DeleteStmt(ref stmt)) => Self::delete(stmt),
             // Transaction control statements,
             // e.g. BEGIN, COMMIT, etc.
-            Some(NodeEnum::TransactionStmt(ref stmt)) => match stmt.kind() {
-                TransactionStmtKind::TransStmtCommit => return Ok(Command::CommitTransaction),
-                TransactionStmtKind::TransStmtRollback => return Ok(Command::RollbackTransaction),
-                TransactionStmtKind::TransStmtBegin | TransactionStmtKind::TransStmtStart => {
-                    self.in_transaction = true;
-                    return Ok(Command::StartTransaction(query.clone()));
+            Some(NodeEnum::TransactionStmt(ref stmt)) => {
+                // Only allow to intercept transaction statements
+                // if they are using the simple protocol.
+                if query.simple() {
+                    // In conservative read write split mode,
+                    // we don't assume anything about transaction contents
+                    // and just send it to the primary.
+                    //
+                    // Only single-statement SELECT queries can be routed
+                    // to a replica.
+                    if *rw_strategy == ReadWriteStrategy::Conservative {
+                        self.routed = true;
+                        return Ok(Command::Query(Route::write(None)));
+                    }
+
+                    match stmt.kind() {
+                        TransactionStmtKind::TransStmtCommit => {
+                            return Ok(Command::CommitTransaction)
+                        }
+                        TransactionStmtKind::TransStmtRollback => {
+                            return Ok(Command::RollbackTransaction)
+                        }
+                        TransactionStmtKind::TransStmtBegin
+                        | TransactionStmtKind::TransStmtStart => {
+                            self.in_transaction = true;
+                            return Ok(Command::StartTransaction(query.clone()));
+                        }
+                        _ => Ok(Command::Query(Route::write(None))),
+                    }
+                } else {
+                    Ok(Command::Query(Route::write(None)))
                 }
-                _ => Ok(Command::Query(Route::write(None))),
-            },
+            }
             // All others are not handled.
             // They are sent to all shards concurrently.
             _ => Ok(Command::Query(Route::write(None))),
@@ -323,6 +376,7 @@ impl QueryParser {
                 // Otherwise, we're wasting time parsing SQL.
                 if !databases.manual_queries().is_empty() {
                     let fingerprint = fingerprint(query).map_err(Error::PgQuery)?;
+                    trace!("fingerprint: {}", fingerprint.hex);
                     let manual_route = databases.manual_query(&fingerprint.hex).cloned();
 
                     // TODO: check routing logic required by config.
@@ -333,7 +387,7 @@ impl QueryParser {
             }
         }
 
-        debug!("{:#?}", command);
+        debug!("query router decision: {:#?}", command);
 
         if dry_run {
             let default_route = Route::write(None);
@@ -361,6 +415,7 @@ impl QueryParser {
         &mut self,
         stmt: &VariableSetStmt,
         sharding_schema: &ShardingSchema,
+        read_only: bool,
     ) -> Result<Command, Error> {
         match stmt.name.as_str() {
             "pgdog.shard" => {
@@ -377,7 +432,9 @@ impl QueryParser {
                 }) = node
                 {
                     self.routed = true;
-                    return Ok(Command::Query(Route::write(Some(*ival as usize))));
+                    return Ok(Command::Query(
+                        Route::write(Some(*ival as usize)).set_read(read_only),
+                    ));
                 }
             }
 
@@ -390,16 +447,14 @@ impl QueryParser {
                     .as_ref()
                     .ok_or(Error::SetShard)?;
 
-                if let NodeEnum::AConst(AConst { val: Some(val), .. }) = node {
-                    match val {
-                        Val::Sval(String { sval }) => {
-                            let shard = shard_str(&sval, sharding_schema, &vec![], 0);
-                            self.routed = true;
-                            return Ok(Command::Query(Route::write(shard)));
-                        }
-
-                        _ => (),
-                    }
+                if let NodeEnum::AConst(AConst {
+                    val: Some(Val::Sval(String { sval })),
+                    ..
+                }) = node
+                {
+                    let shard = shard_str(sval, sharding_schema, &vec![], 0);
+                    self.routed = true;
+                    return Ok(Command::Query(Route::write(shard).set_read(read_only)));
                 }
             }
 
@@ -407,52 +462,52 @@ impl QueryParser {
             // params without touching the server.
             name => {
                 if !self.in_transaction {
-                    let node = stmt
-                        .args
-                        .first()
-                        .ok_or(Error::SetShard)?
-                        .node
-                        .as_ref()
-                        .ok_or(Error::SetShard)?;
+                    let mut value = vec![];
 
-                    if let NodeEnum::AConst(AConst { val: Some(val), .. }) = node {
-                        match val {
-                            Val::Sval(String { sval }) => {
-                                return Ok(Command::Set {
-                                    name: name.to_string(),
-                                    value: sval.to_string(),
-                                });
+                    for node in &stmt.args {
+                        if let Some(NodeEnum::AConst(AConst { val: Some(val), .. })) = &node.node {
+                            match val {
+                                Val::Sval(String { sval }) => {
+                                    value.push(sval.to_string());
+                                }
+
+                                Val::Ival(Integer { ival }) => {
+                                    value.push(ival.to_string());
+                                }
+
+                                Val::Fval(Float { fval }) => {
+                                    value.push(fval.to_string());
+                                }
+
+                                Val::Boolval(Boolean { boolval }) => {
+                                    value.push(boolval.to_string());
+                                }
+
+                                _ => (),
                             }
+                        }
+                    }
 
-                            Val::Ival(Integer { ival }) => {
-                                return Ok(Command::Set {
-                                    name: name.to_string(),
-                                    value: ival.to_string(),
-                                });
-                            }
-
-                            Val::Fval(Float { fval }) => {
-                                return Ok(Command::Set {
-                                    name: name.to_string(),
-                                    value: fval.to_string(),
-                                });
-                            }
-
-                            Val::Boolval(Boolean { boolval }) => {
-                                return Ok(Command::Set {
-                                    name: name.to_string(),
-                                    value: boolval.to_string(),
-                                });
-                            }
-
-                            _ => (),
+                    match value.len() {
+                        0 => (),
+                        1 => {
+                            return Ok(Command::Set {
+                                name: name.to_string(),
+                                value: ParameterValue::String(value.pop().unwrap()),
+                            })
+                        }
+                        _ => {
+                            return Ok(Command::Set {
+                                name: name.to_string(),
+                                value: ParameterValue::Tuple(value),
+                            })
                         }
                     }
                 }
             }
         }
 
-        Ok(Command::Query(Route::read(Shard::All)))
+        Ok(Command::Query(Route::write(Shard::All).set_read(read_only)))
     }
 
     fn select(
@@ -504,6 +559,9 @@ impl QueryParser {
                                 }
                             }
                         }
+
+                        // Null doesn't help.
+                        Key::Null => (),
                     }
                 }
             }
@@ -708,23 +766,27 @@ impl QueryParser {
 
 #[cfg(test)]
 mod test {
-    use crate::net::messages::{parse::Parse, Parameter};
+
+    use crate::net::{
+        messages::{parse::Parse, Parameter},
+        Format,
+    };
 
     use super::{super::Shard, *};
+    use crate::frontend::{Buffer, RouterContext};
     use crate::net::messages::Query;
+    use crate::net::Parameters;
 
     macro_rules! command {
         ($query:expr) => {{
             let query = $query;
             let mut query_parser = QueryParser::default();
-            let command = query_parser
-                .parse(
-                    &Buffer::from(vec![Query::new(query).into()]),
-                    &Cluster::new_test(),
-                    &mut PreparedStatements::default(),
-                )
-                .unwrap()
-                .clone();
+            let buffer = Buffer::from(vec![Query::new(query).into()]);
+            let cluster = Cluster::new_test();
+            let mut stmt = PreparedStatements::default();
+            let params = Parameters::default();
+            let context = RouterContext::new(&buffer, &cluster, &mut stmt, &params).unwrap();
+            let command = query_parser.parse(context).unwrap().clone();
 
             (command, query_parser)
         }};
@@ -757,18 +819,16 @@ mod test {
                     data: p.to_vec(),
                 })
                 .collect::<Vec<_>>();
-            let bind = Bind {
-                portal: "".into(),
-                statement: $name.into(),
-                codes: $codes.to_vec(),
-                params,
-                results: vec![],
-            };
+            let bind = Bind::test_params_codes($name, &params, $codes);
             let route = QueryParser::default()
                 .parse(
-                    &Buffer::from(vec![parse.into(), bind.into()]),
-                    &Cluster::new_test(),
-                    &mut PreparedStatements::default(),
+                    RouterContext::new(
+                        &Buffer::from(vec![parse.into(), bind.into()]),
+                        &Cluster::new_test(),
+                        &mut PreparedStatements::default(),
+                        &Parameters::default(),
+                    )
+                    .unwrap(),
                 )
                 .unwrap()
                 .clone();
@@ -781,7 +841,7 @@ mod test {
         }};
 
         ($name:expr, $query:expr, $params: expr) => {
-            parse!($name, $query, $params, [])
+            parse!($name, $query, $params, &[])
         };
     }
 
@@ -799,7 +859,15 @@ mod test {
         let cluster = Cluster::default();
 
         let command = query_parser
-            .parse(&buffer, &cluster, &mut PreparedStatements::default())
+            .parse(
+                RouterContext::new(
+                    &buffer,
+                    &cluster,
+                    &mut PreparedStatements::default(),
+                    &Parameters::default(),
+                )
+                .unwrap(),
+            )
             .unwrap();
         assert!(matches!(command, &Command::StartReplication));
     }
@@ -816,7 +884,15 @@ mod test {
         let cluster = Cluster::default();
 
         let command = query_parser
-            .parse(&buffer, &cluster, &mut PreparedStatements::default())
+            .parse(
+                RouterContext::new(
+                    &buffer,
+                    &cluster,
+                    &mut PreparedStatements::default(),
+                    &Parameters::default(),
+                )
+                .unwrap(),
+            )
             .unwrap();
         assert!(matches!(command, &Command::ReplicationMeta));
     }
@@ -866,7 +942,7 @@ mod test {
     FROM sharded
     WHERE sharded.id = $1::INTEGER ORDER BY sharded.id"#,
             [[0, 0, 0, 1]],
-            [1]
+            &[Format::Binary]
         );
         assert!(route.is_read());
         assert_eq!(route.shard(), &Shard::Direct(0))
@@ -910,55 +986,169 @@ mod test {
         assert!(qp.routed);
         assert!(!qp.in_transaction);
 
-        for (_, qp) in [
+        for (command, qp) in [
             command!("SET TimeZone TO 'UTC'"),
             command!("SET TIME ZONE 'UTC'"),
         ] {
-            // match command {
-            //     Command::Set { name, value } => {
-            //         assert_eq!(name, "timezone");
-            //         assert_eq!(value, "UTC");
-            //     }
-            //     _ => panic!("not a set"),
-            // };
-            assert!(qp.routed);
+            match command {
+                Command::Set { name, value } => {
+                    assert_eq!(name, "timezone");
+                    assert_eq!(value, ParameterValue::from("UTC"));
+                }
+                _ => panic!("not a set"),
+            };
+            assert!(!qp.routed);
             assert!(!qp.in_transaction);
         }
 
-        let (_, qp) = command!("SET statement_timeout TO 3000");
-        // match command {
-        //     Command::Set { name, value } => {
-        //         assert_eq!(name, "statement_timeout");
-        //         assert_eq!(value, "3000");
-        //     }
-        //     _ => panic!("not a set"),
-        // };
-        assert!(qp.routed);
+        let (command, qp) = command!("SET statement_timeout TO 3000");
+        match command {
+            Command::Set { name, value } => {
+                assert_eq!(name, "statement_timeout");
+                assert_eq!(value, ParameterValue::from("3000"));
+            }
+            _ => panic!("not a set"),
+        };
+        assert!(!qp.routed);
         assert!(!qp.in_transaction);
 
         // TODO: user shouldn't be able to set these.
         // The server will report an error on synchronization.
-        let (_, qp) = command!("SET is_superuser TO true");
-        // match command {
-        //     Command::Set { name, value } => {
-        //         assert_eq!(name, "is_superuser");
-        //         assert_eq!(value, "true");
-        //     }
-        //     _ => panic!("not a set"),
-        // };
-        assert!(qp.routed);
+        let (command, qp) = command!("SET is_superuser TO true");
+        match command {
+            Command::Set { name, value } => {
+                assert_eq!(name, "is_superuser");
+                assert_eq!(value, ParameterValue::from("true"));
+            }
+            _ => panic!("not a set"),
+        };
+        assert!(!qp.routed);
         assert!(!qp.in_transaction);
+
+        let (_, mut qp) = command!("BEGIN");
+        let command = qp
+            .parse(
+                RouterContext::new(
+                    &vec![Query::new(r#"SET statement_timeout TO 3000"#).into()].into(),
+                    &Cluster::new_test(),
+                    &mut PreparedStatements::default(),
+                    &Parameters::default(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        match command {
+            Command::Query(q) => assert!(q.is_write()),
+            _ => panic!("set should trigger binding"),
+        }
+
+        let (command, _) = command!("SET search_path TO \"$user\", public, \"APPLES\"");
+        match command {
+            Command::Set { name, value } => {
+                assert_eq!(name, "search_path");
+                assert_eq!(
+                    value,
+                    ParameterValue::Tuple(vec!["$user".into(), "public".into(), "APPLES".into()])
+                )
+            }
+            _ => panic!("search path"),
+        }
+
+        let ast = parse("SET statement_timeout TO 1").unwrap();
+        let mut qp = QueryParser {
+            in_transaction: true,
+            ..Default::default()
+        };
+
+        let root = ast.protobuf.stmts.first().unwrap().stmt.as_ref().unwrap();
+        match root.node.as_ref() {
+            Some(NodeEnum::VariableSetStmt(stmt)) => {
+                for read_only in [true, false] {
+                    let route = qp.set(stmt, &ShardingSchema::default(), read_only).unwrap();
+                    match route {
+                        Command::Query(route) => {
+                            assert_eq!(route.is_read(), read_only);
+                        }
+                        _ => panic!("not a query"),
+                    }
+                }
+            }
+
+            _ => panic!("not a set"),
+        }
     }
 
     #[test]
     fn test_transaction() {
         let (command, qp) = command!("BEGIN");
+        match command {
+            Command::Query(q) => assert!(q.is_write()),
+            _ => panic!("not a query"),
+        };
+
+        assert!(qp.routed);
+        assert!(!qp.in_transaction);
+
+        let mut cluster = Cluster::new_test();
+        cluster.set_read_write_strategy(ReadWriteStrategy::Aggressive);
+
+        let mut qp = QueryParser::default();
+        let command = qp
+            .query(
+                &BufferedQuery::Query(Query::new("BEGIN")),
+                &cluster,
+                None,
+                &mut PreparedStatements::default(),
+                &Parameters::default(),
+            )
+            .unwrap();
         assert!(matches!(
             command,
             Command::StartTransaction(BufferedQuery::Query(_))
         ));
-
         assert!(!qp.routed);
         assert!(qp.in_transaction);
+
+        let route = qp
+            .query(
+                &BufferedQuery::Query(Query::new("SET application_name TO 'test'")),
+                &cluster,
+                None,
+                &mut PreparedStatements::default(),
+                &Parameters::default(),
+            )
+            .unwrap();
+
+        match route {
+            Command::Query(q) => {
+                assert!(q.is_read());
+                assert!(cluster.read_only());
+            }
+
+            _ => panic!("not a query"),
+        }
+    }
+
+    #[test]
+    fn test_insert_do_update() {
+        let route = query!("INSERT INTO foo (id) VALUES ($1::UUID) ON CONFLICT (id) DO UPDATE SET id = excluded.id RETURNING id");
+        assert!(route.is_write())
+    }
+
+    #[test]
+    fn test_begin_extended() {
+        let mut qr = QueryParser::default();
+        let result = qr
+            .parse(
+                RouterContext::new(
+                    &vec![crate::net::Parse::new_anonymous("BEGIN").into()].into(),
+                    &Cluster::new_test(),
+                    &mut PreparedStatements::default(),
+                    &Parameters::default(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        assert!(matches!(result, Command::Query(_)));
     }
 }

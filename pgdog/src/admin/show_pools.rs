@@ -36,6 +36,7 @@ impl Command for ShowPools {
             Field::bool("paused"),
             Field::bool("banned"),
             Field::numeric("errors"),
+            Field::numeric("re_synced"),
             Field::numeric("out_of_sync"),
             Field::bool("online"),
         ]);
@@ -63,6 +64,7 @@ impl Command for ShowPools {
                         .add(state.paused)
                         .add(state.banned)
                         .add(state.errors)
+                        .add(state.re_synced)
                         .add(state.out_of_sync)
                         .add(state.online);
                     messages.push(row.message()?);

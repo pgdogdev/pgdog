@@ -21,4 +21,10 @@ pub enum Error {
 
     #[error("{0}")]
     Backend(Box<crate::backend::Error>),
+
+    #[error("parse int")]
+    ParseInt(#[from] std::num::ParseIntError),
+
+    #[error("{0}")]
+    Config(#[from] crate::config::error::Error),
 }

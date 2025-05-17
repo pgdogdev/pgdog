@@ -1,20 +1,52 @@
 //! Cleanup queries for servers altered by client behavior.
+use once_cell::sync::Lazy;
+
+use crate::net::Query;
+
 use super::{super::Server, Guard};
+
+static PREPARED: Lazy<Vec<Query>> = Lazy::new(|| vec![Query::new("DEALLOCATE ALL")]);
+static PARAMS: Lazy<Vec<Query>> = Lazy::new(|| vec![Query::new("DISCARD ALL")]);
+static ALL: Lazy<Vec<Query>> = Lazy::new(|| {
+    vec!["DISCARD ALL", "DEALLOCATE ALL"]
+        .into_iter()
+        .map(Query::new)
+        .collect()
+});
+static NONE: Lazy<Vec<Query>> = Lazy::new(Vec::new);
 
 /// Queries used to clean up server connections after
 /// client modifications.
-#[derive(Default)]
 #[allow(dead_code)]
 pub struct Cleanup {
-    queries: Vec<&'static str>,
+    queries: &'static Vec<Query>,
     reset: bool,
     dirty: bool,
     deallocate: bool,
 }
 
+impl Default for Cleanup {
+    fn default() -> Self {
+        Self {
+            queries: &*NONE,
+            reset: false,
+            dirty: false,
+            deallocate: false,
+        }
+    }
+}
+
 impl std::fmt::Display for Cleanup {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.queries.join(","))
+        write!(
+            f,
+            "{}",
+            self.queries
+                .iter()
+                .map(|s| s.query())
+                .collect::<Vec<_>>()
+                .join(",")
+        )
     }
 }
 
@@ -35,7 +67,7 @@ impl Cleanup {
     /// Cleanup prepared statements.
     pub fn prepared_statements() -> Self {
         Self {
-            queries: vec!["DEALLOCATE ALL"],
+            queries: &*PREPARED,
             deallocate: true,
             ..Default::default()
         }
@@ -44,7 +76,7 @@ impl Cleanup {
     /// Cleanup parameters.
     pub fn parameters() -> Self {
         Self {
-            queries: vec!["RESET ALL", "DISCARD ALL"],
+            queries: &*PARAMS,
             dirty: true,
             ..Default::default()
         }
@@ -56,16 +88,13 @@ impl Cleanup {
             reset: true,
             dirty: true,
             deallocate: true,
-            queries: vec!["RESET ALL", "DISCARD ALL", "DEALLOCATE ALL"],
+            queries: &*ALL,
         }
     }
 
     /// Nothing to clean up.
     pub fn none() -> Self {
-        Self {
-            queries: vec![],
-            ..Default::default()
-        }
+        Self::default()
     }
 
     /// Cleanup needed?
@@ -74,8 +103,8 @@ impl Cleanup {
     }
 
     /// Get queries to execute on the server to perform cleanup.
-    pub fn queries(&self) -> &[&str] {
-        &self.queries
+    pub fn queries(&self) -> &[Query] {
+        self.queries
     }
 
     pub fn is_reset_params(&self) -> bool {

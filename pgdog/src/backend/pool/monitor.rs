@@ -32,12 +32,12 @@
 //! connections back to the idle pool in that amount of time, and new connections are no longer needed even
 //! if clients requested ones to be created ~100ms ago.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use super::{Error, Guard, Healtcheck, Oids, Pool, Request};
 use crate::backend::Server;
 
-use tokio::time::{interval, sleep, timeout};
+use tokio::time::{interval, sleep, timeout, Instant};
 use tokio::{select, task::spawn};
 use tracing::info;
 
@@ -99,17 +99,20 @@ impl Monitor {
                 // connections are available.
                 _ = comms.request.notified() => {
                     let (
-                        idle,
                         should_create,
                         connect_timeout,
                         online,
                     ) = {
-                        let guard = self.pool.lock();
+                        let mut guard = self.pool.lock();
+                        let online = guard.online;
+
+                        if !online {
+                            guard.close_waiters(Error::Offline);
+                        }
 
                         (
-                            guard.idle(),
                             guard.should_create(),
-                            guard.config().connect_timeout(),
+                            guard.config().connect_timeout,
                             guard.online,
                         )
                     };
@@ -118,19 +121,9 @@ impl Monitor {
                         break;
                     }
 
-                    if idle > 0 {
-                        comms.ready.notify_waiters();
-                    }
-
                     if should_create {
-                        self.pool.lock().creating();
                         let ok = self.replenish(connect_timeout).await;
-                        if ok {
-                            // Notify all clients we have a connection
-                            // available.
-                            self.pool.lock().created();
-                            comms.ready.notify_waiters();
-                        } else {
+                        if !ok {
                             self.pool.ban(Error::ServerError);
                         }
                     }
@@ -207,9 +200,17 @@ impl Monitor {
                     let mut guard = pool.lock();
 
                     if !guard.online {
+                        guard.close_waiters(Error::Offline);
                         break;
                     }
 
+                    // If a client is waiting already,
+                    // create it a connection.
+                    if guard.should_create() {
+                        comms.request.notify_one();
+                    }
+
+                    // Don't perform any additional maintenance tasks.
                     if guard.paused {
                         continue;
                     }
@@ -217,10 +218,6 @@ impl Monitor {
                     guard.close_idle(now);
                     guard.close_old(now);
                     let unbanned = guard.check_ban(now);
-
-                    if guard.should_create() {
-                        comms.request.notify_one();
-                    }
 
                     if unbanned {
                         info!("pool unbanned due to maintenance [{}]", pool.addr());
@@ -242,7 +239,10 @@ impl Monitor {
         match timeout(connect_timeout, Server::connect(self.pool.addr(), options)).await {
             Ok(Ok(conn)) => {
                 ok = true;
-                self.pool.lock().put(conn);
+                let server = Box::new(conn);
+
+                let mut guard = self.pool.lock();
+                guard.put(server);
             }
 
             Ok(Err(err)) => {
@@ -280,16 +280,16 @@ impl Monitor {
             }
             (
                 guard.take(&Request::default()),
-                guard.config.healthcheck_timeout(),
-                guard.config.connect_timeout(),
+                guard.config.healthcheck_timeout,
+                guard.config.connect_timeout,
             )
         };
 
         // Have an idle connection, use that for the healthcheck.
         if let Some(conn) = conn {
             Healtcheck::mandatory(
-                &mut Guard::new(pool.clone(), conn),
-                pool.clone(),
+                &mut Guard::new(pool.clone(), conn, Instant::now()),
+                pool,
                 healthcheck_timeout,
             )
             .healthcheck()
@@ -306,7 +306,7 @@ impl Monitor {
             .await
             {
                 Ok(Ok(mut server)) => {
-                    Healtcheck::mandatory(&mut server, pool.clone(), healthcheck_timeout)
+                    Healtcheck::mandatory(&mut server, pool, healthcheck_timeout)
                         .healthcheck()
                         .await?
                 }

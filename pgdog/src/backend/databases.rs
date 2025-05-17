@@ -1,11 +1,14 @@
 //! Databases behind pgDog.
 
+use std::collections::BTreeSet;
 use std::collections::{hash_map::Entry, HashMap};
 use std::sync::Arc;
 
 use arc_swap::ArcSwap;
 use once_cell::sync::Lazy;
-use parking_lot::Mutex;
+use parking_lot::lock_api::MutexGuard;
+use parking_lot::{Mutex, RawMutex};
+use tracing::{info, warn};
 
 use crate::{
     backend::pool::PoolConfig,
@@ -15,6 +18,7 @@ use crate::{
 
 use super::{
     pool::{Address, ClusterConfig, Config},
+    reload_notify,
     replication::ReplicationConfig,
     Cluster, ClusterShardConfig, Error, ShardedTables,
 };
@@ -22,6 +26,11 @@ use super::{
 static DATABASES: Lazy<ArcSwap<Databases>> =
     Lazy::new(|| ArcSwap::from_pointee(Databases::default()));
 static LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+
+/// Sync databases during modification.
+pub fn lock() -> MutexGuard<'static, RawMutex, ()> {
+    LOCK.lock()
+}
 
 /// Get databases handle.
 ///
@@ -36,6 +45,7 @@ pub fn replace_databases(new_databases: Databases, reload: bool) {
     // to ensure zero downtime for clients.
     let old_databases = databases();
     let new_databases = Arc::new(new_databases);
+    reload_notify::started();
     if reload {
         // Move whatever connections we can over to new pools.
         old_databases.move_conns_to(&new_databases);
@@ -43,6 +53,7 @@ pub fn replace_databases(new_databases: Databases, reload: bool) {
     new_databases.launch();
     DATABASES.store(new_databases);
     old_databases.shutdown();
+    reload_notify::done();
 }
 
 /// Re-create all connections.
@@ -144,6 +155,7 @@ impl ToUser for (&str, Option<&str>) {
 pub struct Databases {
     databases: HashMap<User, Cluster>,
     manual_queries: HashMap<String, ManualQuery>,
+    mirrors: HashMap<String, Vec<Cluster>>,
 }
 
 impl Databases {
@@ -179,6 +191,16 @@ impl Databases {
         let user = user.to_user();
         if let Some(cluster) = self.databases.get(&user) {
             Ok(cluster.clone())
+        } else {
+            Err(Error::NoDatabase(user.clone()))
+        }
+    }
+
+    pub fn mirrors(&self, user: impl ToUser) -> Result<Option<&[Cluster]>, Error> {
+        let user = user.to_user();
+        if let Some(cluster) = self.databases.get(&user) {
+            let name = cluster.name();
+            Ok(self.mirrors.get(name).map(|m| m.as_slice()))
         } else {
             Err(Error::NoDatabase(user.clone()))
         }
@@ -249,6 +271,7 @@ impl Databases {
                 .map(|(k, v)| (k.clone(), v.duplicate()))
                 .collect(),
             manual_queries: self.manual_queries.clone(),
+            mirrors: self.mirrors.clone(),
         }
     }
 
@@ -261,8 +284,17 @@ impl Databases {
 
     /// Launch all pools.
     fn launch(&self) {
-        for cluster in self.all().values() {
+        let mirrors = self.all().values().filter(|c| c.mirror_of().is_some());
+        let normal = self.all().values().filter(|c| c.mirror_of().is_none());
+        for cluster in mirrors.chain(normal) {
             cluster.launch();
+            if let Some(mirror_of) = cluster.mirror_of() {
+                info!(
+                    r#"enabling mirroring of database "{}" into "{}""#,
+                    mirror_of,
+                    cluster.name(),
+                );
+            }
         }
     }
 }
@@ -276,6 +308,7 @@ pub(crate) fn new_pool(
     let general = &config.general;
     let databases = config.databases();
     let shards = databases.get(&user.database);
+    let mut mirrors_of = BTreeSet::new();
 
     if let Some(shards) = shards {
         let mut shard_configs = vec![];
@@ -283,16 +316,22 @@ pub(crate) fn new_pool(
             let primary = user_databases
                 .iter()
                 .find(|d| d.role == Role::Primary)
-                .map(|primary| PoolConfig {
-                    address: Address::new(primary, user),
-                    config: Config::new(general, primary, user),
+                .map(|primary| {
+                    mirrors_of.insert(primary.mirror_of.clone());
+                    PoolConfig {
+                        address: Address::new(primary, user),
+                        config: Config::new(general, primary, user),
+                    }
                 });
             let replicas = user_databases
                 .iter()
                 .filter(|d| d.role == Role::Replica)
-                .map(|replica| PoolConfig {
-                    address: Address::new(replica, user),
-                    config: Config::new(general, replica, user),
+                .map(|replica| {
+                    mirrors_of.insert(replica.mirror_of.clone());
+                    PoolConfig {
+                        address: Address::new(replica, user),
+                        config: Config::new(general, replica, user),
+                    }
                 })
                 .collect::<Vec<_>>();
 
@@ -309,7 +348,29 @@ pub(crate) fn new_pool(
             .unwrap_or(vec![]);
         let sharded_tables =
             ShardedTables::new(sharded_tables, omnisharded_tables, general.dry_run);
-        let cluster_config = ClusterConfig::new(general, user, &shard_configs, sharded_tables);
+        // Make sure all nodes in the cluster agree they are mirroring the same cluster.
+        let mirror_of = match mirrors_of.len() {
+            0 => None,
+            1 => mirrors_of
+                .first()
+                .and_then(|s| s.as_ref().map(|s| s.as_str())),
+            _ => {
+                warn!(
+                    "database \"{}\" has different \"mirror_of\" settings, disabling mirroring",
+                    user.database
+                );
+                None
+            }
+        };
+
+        let cluster_config = ClusterConfig::new(
+            general,
+            user,
+            &shard_configs,
+            sharded_tables,
+            mirror_of,
+            config.multi_tenant(),
+        );
 
         Some((
             User {
@@ -333,8 +394,21 @@ pub fn from_config(config: &ConfigAndUsers) -> Databases {
         }
     }
 
+    let mut mirrors = HashMap::new();
+
+    for cluster in databases.values() {
+        let mirror_clusters = databases
+            .iter()
+            .find(|(_, c)| c.mirror_of() == Some(cluster.name()))
+            .map(|(_, c)| c.clone())
+            .into_iter()
+            .collect::<Vec<_>>();
+        mirrors.insert(cluster.name().to_owned(), mirror_clusters);
+    }
+
     Databases {
         databases,
         manual_queries: config.config.manual_queries(),
+        mirrors,
     }
 }

@@ -1,5 +1,7 @@
 [general]
 prepared_statements = "disabled"
+workers = 2
+min_pool_size = 0
 
 [[databases]]
 name = "pgdog"

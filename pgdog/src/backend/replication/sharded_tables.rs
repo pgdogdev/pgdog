@@ -21,7 +21,7 @@ impl From<&[ShardedTable]> for ShardedTables {
 impl ShardedTables {
     pub fn new(tables: Vec<ShardedTable>, omnisharded_tables: Vec<String>, dry_run: bool) -> Self {
         Self {
-            tables: Arc::new(tables.iter().map(|t| t.clone()).collect()),
+            tables: Arc::new(tables.to_vec()),
             omnisharded: Arc::new(omnisharded_tables.into_iter().collect()),
             dry_run,
         }

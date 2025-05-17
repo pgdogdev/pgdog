@@ -112,52 +112,50 @@ impl Replicas {
         request: &Request,
         primary: &Option<Pool>,
     ) -> Result<Guard, Error> {
-        let mut candidates = self
-            .pools
-            .iter()
-            .map(|pool| (pool.banned(), pool))
-            .collect::<Vec<_>>();
-
-        if let Some(primary) = primary {
-            candidates.push((primary.banned(), primary));
-        }
-
-        match self.lb_strategy {
-            LoadBalancingStrategy::Random => candidates.shuffle(&mut rand::thread_rng()),
-            LoadBalancingStrategy::RoundRobin => {
-                let first = self.round_robin.fetch_add(1, Ordering::Relaxed) % candidates.len();
-                let mut reshuffled = vec![];
-                reshuffled.extend_from_slice(&candidates[first..]);
-                reshuffled.extend_from_slice(&candidates[..first]);
-                candidates = reshuffled;
-            }
-            LoadBalancingStrategy::LeastActiveConnections => {
-                candidates.sort_by_cached_key(|(_, pool)| pool.lock().idle());
-            }
-        }
-
-        // All replicas are banned, unban everyone.
-        let banned = candidates.iter().all(|(banned, _)| *banned);
         let mut unbanned = false;
-        if banned {
-            candidates
-                .iter()
-                .for_each(|(_, candidate)| candidate.unban());
-            unbanned = true;
-        }
+        loop {
+            let mut candidates = self.pools.iter().collect::<Vec<_>>();
 
-        for (banned, candidate) in candidates {
-            if banned && !unbanned {
-                continue;
+            if let Some(primary) = primary {
+                candidates.push(primary);
             }
 
-            match candidate.get(request).await {
-                Ok(conn) => return Ok(conn),
-                Err(Error::Offline) => continue,
-                Err(Error::Banned) => continue,
-                Err(err) => {
-                    error!("{} [{}]", err, candidate.addr());
+            match self.lb_strategy {
+                LoadBalancingStrategy::Random => candidates.shuffle(&mut rand::thread_rng()),
+                LoadBalancingStrategy::RoundRobin => {
+                    let first = self.round_robin.fetch_add(1, Ordering::Relaxed) % candidates.len();
+                    let mut reshuffled = vec![];
+                    reshuffled.extend_from_slice(&candidates[first..]);
+                    reshuffled.extend_from_slice(&candidates[..first]);
+                    candidates = reshuffled;
                 }
+                LoadBalancingStrategy::LeastActiveConnections => {
+                    candidates.sort_by_cached_key(|pool| pool.lock().idle());
+                }
+            }
+
+            let mut banned = 0;
+
+            for candidate in &candidates {
+                match candidate.get(request).await {
+                    Ok(conn) => return Ok(conn),
+                    Err(Error::Offline) => continue,
+                    Err(Error::Banned) => {
+                        banned += 1;
+                        continue;
+                    }
+                    Err(err) => {
+                        error!("{} [{}]", err, candidate.addr());
+                    }
+                }
+            }
+
+            // All replicas are banned, unban everyone.
+            if banned == candidates.len() && !unbanned {
+                candidates.iter().for_each(|candidate| candidate.unban());
+                unbanned = true;
+            } else {
+                break;
             }
         }
 

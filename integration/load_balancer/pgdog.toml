@@ -1,0 +1,45 @@
+[general]
+host = "0.0.0.0"
+port = 6432
+shutdown_timeout = 5_000
+openmetrics_port = 9930
+query_timeout = 1_000
+checkout_timeout = 1_000
+connect_timeout = 1_000
+idle_timeout = 30_000
+prepared_statements = "extended"
+passthrough_auth = "enabled_plain"
+default_pool_size = 100
+workers = 10
+min_pool_size = 1
+pooler_mode = "transaction"
+load_balancing_strategy = "least_active_connections"
+auth_type = "trust"
+
+[admin]
+user = "pgdog"
+password = "pgdog"
+
+[[databases]]
+name = "postgres"
+host = "localhost"
+port = 5435
+role = "replica"
+
+[[databases]]
+name = "postgres"
+host = "localhost"
+role = "replica"
+port = 5434
+
+[[databases]]
+name = "postgres"
+host = "localhost"
+role = "primary"
+port = 5433
+
+[tcp]
+retries = 3
+time = 1000
+interval = 1000
+user_timeout = 1000

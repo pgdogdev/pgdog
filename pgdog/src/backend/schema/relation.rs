@@ -20,7 +20,7 @@ pub struct Relation {
     pub size: usize,
     pub description: String,
     pub oid: i32,
-    pub columns: Vec<Column>,
+    pub columns: HashMap<String, Column>,
 }
 
 impl From<DataRow> for Relation {
@@ -35,7 +35,7 @@ impl From<DataRow> for Relation {
             size: value.get_int(6, true).unwrap_or_default() as usize,
             description: value.get_text(7).unwrap_or_default(),
             oid: value.get::<i32>(8, Format::Text).unwrap_or_default(),
-            columns: vec![],
+            columns: HashMap::new(),
         }
     }
 }
@@ -57,7 +57,11 @@ impl Relation {
         let columns = Column::load(server).await?;
         for column in columns {
             if let Some(relation) = relations.get_mut(&column.0) {
-                relation.columns = column.1;
+                relation.columns = column
+                    .1
+                    .into_iter()
+                    .map(|c| (c.column_name.clone(), c))
+                    .collect();
             }
         }
 
@@ -86,6 +90,11 @@ impl Relation {
     /// This is a sequence.
     pub fn is_sequence(&self) -> bool {
         self.type_ == "sequence"
+    }
+
+    /// Columns by name.
+    pub fn columns(&self) -> &HashMap<String, Column> {
+        &self.columns
     }
 }
 

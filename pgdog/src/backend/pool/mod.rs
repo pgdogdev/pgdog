@@ -20,6 +20,7 @@ pub mod request;
 pub mod shard;
 pub mod state;
 pub mod stats;
+pub mod taken;
 pub mod waiting;
 
 pub use address::Address;
@@ -42,7 +43,8 @@ use ban::Ban;
 use comms::Comms;
 use inner::Inner;
 use mapping::Mapping;
-use waiting::Waiting;
+use taken::Taken;
+use waiting::{Waiter, Waiting};
 
 #[cfg(test)]
 pub mod test;

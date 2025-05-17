@@ -1,0 +1,9 @@
+[general]
+default_pool_size = 10
+prepared_statements = "disabled"
+min_pool_size = 0
+
+[[databases]]
+name = "postgres"
+host = "postgres"
+port = 5432

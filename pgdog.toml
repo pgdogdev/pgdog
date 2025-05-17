@@ -1,18 +1,13 @@
 #
-# minimal pgDog configuration for a single user, single
-# primary database running on the same host.
+# PgDog configuration.
 #
 [general]
 host = "0.0.0.0"
 port = 6432
 shutdown_timeout = 5_000
 openmetrics_port = 9090
-query_timeout = 1_000
-checkout_timeout = 1_000
-connect_timeout = 1_000
-passthrough_auth = "enabled_plain"
-idle_timeout = 30_000
-# dry_run = true
+idle_healthcheck_delay = 2342343243
+read_write_strategy = "aggressive"
 
 #
 # Admin database password.
@@ -34,16 +29,7 @@ name = "pgdog"
 host = "127.0.0.1"
 port = 5432
 role = "replica"
-
-[[databases]]
-name = "mastodon_development"
-host = "127.0.0.1"
-role = "primary"
-
-[[databases]]
-name = "mastodon_development"
-host = "127.0.0.1"
-role = "replica"
+read_only = true
 
 [tcp]
 retries = 3
@@ -60,26 +46,28 @@ name = "pgdog_sharded"
 host = "127.0.0.1"
 database_name = "shard_0"
 shard = 0
+role = "primary"
 
 [[databases]]
 name = "pgdog_sharded"
 host = "127.0.0.1"
 database_name = "shard_1"
 shard = 1
-
-[[databases]]
-name = "failover"
-host = "127.0.0.1"
-port = 5435
 role = "primary"
-database_name = "pgdog"
 
 [[databases]]
-name = "failover"
+name = "pgdog_sharded"
 host = "127.0.0.1"
-port = 5436
+database_name = "shard_0"
+shard = 0
 role = "replica"
-database_name = "pgdog"
+
+[[databases]]
+name = "pgdog_sharded"
+host = "127.0.0.1"
+database_name = "shard_1"
+shard = 1
+role = "replica"
 
 #
 # Read/write access to theses tables will be automatically
@@ -91,68 +79,6 @@ name = "sharded"
 column = "id"
 data_type = "bigint"
 primary = true
-
-[[sharded_tables]]
-database = "pgdog_sharded"
-name = "users"
-data_type = "bigint"
-column = "id"
-primary = true
-
-[[omnisharded_tables]]
-database = "pgdog_sharded"
-tables = [
-    "sharded_omni"
-]
-
-[[sharded_tables]]
-database = "pgdog_sharded"
-name = "embeddings"
-data_type = "vector"
-column = "embedding"
-centroids_path = "examples/pgvector/centroids.json"
-
-[[sharded_tables]]
-database = "mastodon_development"
-data_type = "bigint"
-column = "account_id"
-
-[[sharded_tables]]
-database = "mastodon_development"
-data_type = "bigint"
-name = "accounts"
-column = "id"
-
-[[sharded_tables]]
-database = "mastodon_development"
-column = "remote_account_id"
-
-[[sharded_tables]]
-database = "mastodon_development"
-column = "target_account_id"
-
-[[sharded_tables]]
-database = "mastodon_development"
-column = "reference_account_id"
-
-[[sharded_tables]]
-database = "mastodon_development"
-column = "from_account_id"
-
-[[sharded_tables]]
-database = "mastodon_development"
-column = "action_taken_by_account_id"
-
-[[omnisharded_tables]]
-database = "mastodon_development"
-tables = [
-    "settings",
-    "settings",
-    "site_uploads",
-    "ip_blocks",
-    "terms_of_services",
-    "account_statuses_cleanup_policies",
-]
 
 
 #
@@ -179,3 +105,9 @@ fingerprint = "bb38525ebeb46656" #[13490623250668217942]
 
 [[manual_query]]
 fingerprint = "f4814b6fadabc4c1" #[17618446160277259457]
+
+[[manual_query]]
+fingerprint = "04dc05f480b702d3"
+
+[multi_tenant]
+column = "tenant_id"

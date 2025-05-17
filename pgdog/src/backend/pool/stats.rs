@@ -1,12 +1,12 @@
 //! Pool stats.
 
+use crate::backend::stats::Counts as BackendCounts;
+
 use std::{
     iter::Sum,
     ops::{Add, Div, Sub},
     time::Duration,
 };
-
-type Millis = u128;
 
 #[derive(Debug, Clone, Default, Copy)]
 pub struct Counts {
@@ -15,11 +15,12 @@ pub struct Counts {
     pub server_assignment_count: usize,
     pub received: usize,
     pub sent: usize,
-    pub xact_time: Millis,
-    pub query_time: Millis,
-    pub wait_time: Millis,
+    pub xact_time: Duration,
+    pub query_time: Duration,
+    pub wait_time: Duration,
     pub parse_count: usize,
     pub bind_count: usize,
+    pub rollbacks: usize,
 }
 
 impl Sub for Counts {
@@ -37,8 +38,9 @@ impl Sub for Counts {
             xact_time: self.xact_time.saturating_sub(rhs.xact_time),
             query_time: self.query_time.saturating_sub(rhs.query_time),
             wait_time: self.wait_time.saturating_sub(rhs.wait_time),
-            parse_count: self.parse_count.saturating_add(rhs.parse_count),
-            bind_count: self.parse_count.saturating_add(rhs.bind_count),
+            parse_count: self.parse_count.saturating_sub(rhs.parse_count),
+            bind_count: self.parse_count.saturating_sub(rhs.bind_count),
+            rollbacks: self.rollbacks.saturating_sub(rhs.rollbacks),
         }
     }
 }
@@ -53,32 +55,32 @@ impl Div<usize> for Counts {
             server_assignment_count: self.server_assignment_count.saturating_div(rhs),
             received: self.received.saturating_div(rhs),
             sent: self.sent.saturating_div(rhs),
-            xact_time: self.xact_time.saturating_div(rhs as u128),
-            query_time: self.query_time.saturating_div(rhs as u128),
-            wait_time: self.wait_time.saturating_div(rhs as u128),
+            xact_time: self.xact_time.checked_div(rhs as u32).unwrap_or_default(),
+            query_time: self.query_time.checked_div(rhs as u32).unwrap_or_default(),
+            wait_time: self.wait_time.checked_div(rhs as u32).unwrap_or_default(),
             parse_count: self.parse_count.saturating_div(rhs),
             bind_count: self.parse_count.saturating_div(rhs),
+            rollbacks: self.rollbacks.saturating_div(rhs),
         }
     }
 }
 
-impl Add<crate::backend::stats::Counts> for Counts {
+impl Add<BackendCounts> for Counts {
     type Output = Counts;
 
-    fn add(self, rhs: crate::backend::stats::Counts) -> Self::Output {
+    fn add(self, rhs: BackendCounts) -> Self::Output {
         Counts {
-            xact_count: self.xact_count.saturating_add(rhs.transactions),
-            query_count: self.query_count.saturating_add(rhs.queries),
+            xact_count: self.xact_count + rhs.transactions,
+            query_count: self.query_count + rhs.queries,
             server_assignment_count: self.server_assignment_count + 1,
-            received: self.received.saturating_add(rhs.bytes_received),
-            sent: self.sent.saturating_add(rhs.bytes_sent),
-            query_time: self.query_time.saturating_add(rhs.query_time.as_millis()),
-            xact_time: self
-                .xact_time
-                .saturating_add(rhs.transaction_time.as_millis()),
+            received: self.received + rhs.bytes_received,
+            sent: self.sent + rhs.bytes_sent,
+            query_time: self.query_time + rhs.query_time,
+            xact_time: self.xact_time + rhs.transaction_time,
             wait_time: self.wait_time,
-            parse_count: self.parse_count.saturating_add(rhs.parse),
-            bind_count: self.parse_count.saturating_add(rhs.bind),
+            parse_count: self.parse_count + rhs.parse,
+            bind_count: self.parse_count + rhs.bind,
+            rollbacks: self.rollbacks + rhs.rollbacks,
         }
     }
 }
@@ -111,6 +113,7 @@ impl Add for Counts {
             wait_time: self.wait_time.saturating_add(rhs.wait_time),
             parse_count: self.parse_count.saturating_add(rhs.parse_count),
             bind_count: self.parse_count.saturating_add(rhs.bind_count),
+            rollbacks: self.rollbacks.saturating_add(rhs.rollbacks),
         }
     }
 }

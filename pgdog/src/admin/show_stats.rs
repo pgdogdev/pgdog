@@ -74,9 +74,9 @@ impl Command for ShowStats {
                             .add(stat.server_assignment_count)
                             .add(stat.received)
                             .add(stat.sent)
-                            .add(stat.xact_time)
-                            .add(stat.query_time)
-                            .add(stat.wait_time)
+                            .add(stat.xact_time.as_millis() as u64)
+                            .add(stat.query_time.as_millis() as u64)
+                            .add(stat.wait_time.as_millis() as u64)
                             // .add(0_i64)
                             .add(stat.parse_count)
                             .add(stat.bind_count);

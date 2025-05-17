@@ -34,7 +34,7 @@ impl PreparedRequest {
             Self::Prepare { name } => name,
             Self::Describe { name } => name,
             Self::PrepareNew { name } => name,
-            Self::Bind { bind } => &bind.statement,
+            Self::Bind { bind } => bind.statement(),
         }
     }
 

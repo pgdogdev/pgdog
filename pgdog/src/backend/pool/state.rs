@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use crate::config::PoolerMode;
+use tokio::time::Instant;
 
 use super::{Ban, Config, Pool, Stats};
 
@@ -30,6 +31,8 @@ pub struct State {
     pub errors: usize,
     /// Out of sync
     pub out_of_sync: usize,
+    /// Re-synced servers.
+    pub re_synced: usize,
     /// Statistics
     pub stats: Stats,
     /// Max wait.
@@ -40,6 +43,7 @@ pub struct State {
 
 impl State {
     pub(super) fn get(pool: &Pool) -> Self {
+        let now = Instant::now();
         let guard = pool.lock();
 
         State {
@@ -55,12 +59,13 @@ impl State {
             banned: guard.ban.is_some(),
             errors: guard.errors,
             out_of_sync: guard.out_of_sync,
+            re_synced: guard.re_synced,
             stats: guard.stats,
             maxwait: guard
                 .waiting
                 .iter()
                 .next()
-                .map(|req| req.created_at.elapsed())
+                .map(|req| now.duration_since(req.request.created_at))
                 .unwrap_or(Duration::ZERO),
             pooler_mode: guard.config().pooler_mode,
         }

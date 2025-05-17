@@ -1,4 +1,3 @@
-pub mod buffer;
 pub mod protocol_message;
 pub mod state;
 

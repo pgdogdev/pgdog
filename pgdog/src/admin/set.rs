@@ -1,11 +1,14 @@
-use crate::config::config;
+use crate::{
+    backend::databases,
+    config::{self, config},
+};
 
 use super::prelude::*;
 use pg_query::{parse, protobuf::a_const, NodeEnum};
 
 pub struct Set {
     name: String,
-    value: u64,
+    value: String,
 }
 
 #[async_trait]
@@ -26,17 +29,20 @@ impl Command for Set {
                 let node = setting.node.clone().ok_or(Error::Syntax)?;
                 match node {
                     NodeEnum::AConst(a_const) => match a_const.val {
-                        Some(a_const::Val::Ival(val)) => {
-                            return Ok(Self {
-                                name,
-                                value: val.ival as u64,
-                            });
-                        }
+                        Some(a_const::Val::Ival(val)) => Ok(Self {
+                            name,
+                            value: val.ival.to_string(),
+                        }),
 
-                        _ => return Err(Error::Syntax),
+                        Some(a_const::Val::Sval(sval)) => Ok(Self {
+                            name,
+                            value: sval.sval.to_string(),
+                        }),
+
+                        _ => Err(Error::Syntax),
                     },
 
-                    _ => return Err(Error::Syntax),
+                    _ => Err(Error::Syntax),
                 }
             }
 
@@ -45,18 +51,32 @@ impl Command for Set {
     }
 
     async fn execute(&self) -> Result<Vec<Message>, Error> {
-        let mut general = config().config.general.clone();
+        let _lock = databases::lock();
+        let mut config = (*config()).clone();
         match self.name.as_str() {
             "query_timeout" => {
-                general.query_timeout = self.value;
+                config.config.general.query_timeout = self.value.parse()?;
             }
 
             "checkout_timeout" => {
-                general.checkout_timeout = self.value;
+                config.config.general.checkout_timeout = self.value.parse()?;
+            }
+
+            "auth_type" => {
+                config.config.general.auth_type =
+                    serde_json::from_str(&format!(r#""{}""#, self.value))?;
+            }
+
+            "read_write_strategy" => {
+                config.config.general.read_write_strategy =
+                    serde_json::from_str(&format!(r#""{}""#, self.value))?;
             }
 
             _ => return Err(Error::Syntax),
         }
+
+        config::set(config)?;
+        databases::init();
 
         Ok(vec![])
     }
@@ -71,6 +91,6 @@ mod test {
         let cmd = "SET query_timeout TO 5000";
         let cmd = Set::parse(cmd).unwrap();
         assert_eq!(cmd.name, "query_timeout");
-        assert_eq!(cmd.value, 5000);
+        assert_eq!(cmd.value, "5000");
     }
 }

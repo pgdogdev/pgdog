@@ -13,7 +13,6 @@ use std::fs::read_to_string;
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::time::Duration;
-use std::u64;
 use std::{collections::HashMap, path::PathBuf};
 
 use arc_swap::ArcSwap;
@@ -37,7 +36,11 @@ pub fn config() -> Arc<ConfigAndUsers> {
 
 /// Load the configuration file from disk.
 pub fn load(config: &PathBuf, users: &PathBuf) -> Result<ConfigAndUsers, Error> {
-    let mut config = ConfigAndUsers::load(config, users)?;
+    let config = ConfigAndUsers::load(config, users)?;
+    set(config)
+}
+
+pub fn set(mut config: ConfigAndUsers) -> Result<ConfigAndUsers, Error> {
     config.config.check();
     for table in config.config.sharded_tables.iter_mut() {
         table.load_centroids()?;
@@ -115,6 +118,10 @@ impl ConfigAndUsers {
             warn!("admin password has been randomly generated");
         }
 
+        if config.multi_tenant.is_some() {
+            info!("multi-tenant protection enabled");
+        }
+
         let users: Users = if let Ok(users) = read_to_string(users_path) {
             let mut users: Users = toml::from_str(&users)?;
             users.check(&config);
@@ -154,6 +161,8 @@ pub struct Config {
     /// TCP settings
     #[serde(default)]
     pub tcp: Tcp,
+    /// Multi-tenant
+    pub multi_tenant: Option<MultiTenant>,
     /// Servers.
     #[serde(default)]
     pub databases: Vec<Database>,
@@ -247,6 +256,11 @@ impl Config {
             }
         }
     }
+
+    /// Multi-tenanncy is enabled.
+    pub fn multi_tenant(&self) -> &Option<MultiTenant> {
+        &self.multi_tenant
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -288,6 +302,8 @@ pub struct General {
     /// Load balancing strategy.
     #[serde(default = "General::load_balancing_strategy")]
     pub load_balancing_strategy: LoadBalancingStrategy,
+    #[serde(default)]
+    pub read_write_strategy: ReadWriteStrategy,
     /// TLS certificate.
     pub tls_certificate: Option<PathBuf>,
     /// TLS private key.
@@ -325,6 +341,11 @@ pub struct General {
     /// Idle timeout.
     #[serde(default = "General::idle_timeout")]
     pub idle_timeout: u64,
+    /// Mirror queue size.
+    #[serde(default = "General::mirror_queue")]
+    pub mirror_queue: usize,
+    #[serde(default)]
+    pub auth_type: AuthType,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -355,6 +376,37 @@ pub enum PassthoughAuth {
     EnabledPlain,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum AuthType {
+    Md5,
+    #[default]
+    Scram,
+    Trust,
+}
+
+impl AuthType {
+    pub fn md5(&self) -> bool {
+        matches!(self, Self::Md5)
+    }
+
+    pub fn scram(&self) -> bool {
+        matches!(self, Self::Scram)
+    }
+
+    pub fn trust(&self) -> bool {
+        matches!(self, Self::Trust)
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Copy)]
+#[serde(rename_all = "snake_case")]
+pub enum ReadWriteStrategy {
+    #[default]
+    Conservative,
+    Aggressive,
+}
+
 impl Default for General {
     fn default() -> Self {
         Self {
@@ -370,6 +422,7 @@ impl Default for General {
             ban_timeout: Self::ban_timeout(),
             rollback_timeout: Self::rollback_timeout(),
             load_balancing_strategy: Self::load_balancing_strategy(),
+            read_write_strategy: ReadWriteStrategy::default(),
             tls_certificate: None,
             tls_private_key: None,
             shutdown_timeout: Self::default_shutdown_timeout(),
@@ -384,6 +437,8 @@ impl Default for General {
             checkout_timeout: Self::checkout_timeout(),
             dry_run: bool::default(),
             idle_timeout: Self::idle_timeout(),
+            mirror_queue: Self::mirror_queue(),
+            auth_type: AuthType::default(),
         }
     }
 }
@@ -398,7 +453,7 @@ impl General {
     }
 
     fn workers() -> usize {
-        0
+        2
     }
 
     fn default_pool_size() -> usize {
@@ -459,6 +514,10 @@ impl General {
 
     fn checkout_timeout() -> u64 {
         Duration::from_secs(5).as_millis() as u64
+    }
+
+    fn mirror_queue() -> usize {
+        128
     }
 
     /// Get shutdown timeout as a duration.
@@ -548,6 +607,10 @@ pub struct Database {
     pub statement_timeout: Option<u64>,
     /// Idle timeout.
     pub idle_timeout: Option<u64>,
+    /// Mirror of another database.
+    pub mirror_of: Option<String>,
+    /// Read-only mode.
+    pub read_only: Option<bool>,
 }
 
 impl Database {
@@ -659,6 +722,8 @@ pub struct User {
     pub replication_sharding: Option<String>,
     /// Idle timeout.
     pub idle_timeout: Option<u64>,
+    /// Read-only mode.
+    pub read_only: Option<bool>,
 }
 
 impl User {
@@ -868,6 +933,12 @@ impl Tcp {
     }
 }
 
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
+#[serde(rename_all = "snake_case")]
+pub struct MultiTenant {
+    pub column: String,
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -897,6 +968,9 @@ retries = 5
 
 [[plugins]]
 name = "pgdog_routing"
+
+[multi_tenant]
+column = "tenant_id"
 "#;
 
         let config: Config = toml::from_str(source).unwrap();
@@ -910,5 +984,6 @@ name = "pgdog_routing"
         );
         assert_eq!(config.tcp.time().unwrap(), Duration::from_millis(1000));
         assert_eq!(config.tcp.retries().unwrap(), 5);
+        assert_eq!(config.multi_tenant.unwrap().column, "tenant_id");
     }
 }

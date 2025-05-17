@@ -40,7 +40,6 @@ pub struct PreparedStatements {
     parses: VecDeque<String>,
     // Describes being executed now on the connection.
     describes: VecDeque<String>,
-    enabled: bool,
 }
 
 impl Default for PreparedStatements {
@@ -58,32 +57,19 @@ impl PreparedStatements {
             state: ProtocolState::default(),
             parses: VecDeque::new(),
             describes: VecDeque::new(),
-            enabled: true,
         }
-    }
-
-    pub fn toggle(&mut self, enabled: bool) {
-        self.enabled = enabled;
-    }
-
-    pub(crate) fn enabled(&self) -> bool {
-        self.enabled
     }
 
     /// Handle extended protocol message.
     pub fn handle(&mut self, request: &ProtocolMessage) -> Result<HandleResult, Error> {
-        if !self.enabled {
-            return Ok(HandleResult::Forward);
-        }
-
         match request {
             ProtocolMessage::Bind(bind) => {
                 if !bind.anonymous() {
-                    let message = self.check_prepared(&bind.statement)?;
+                    let message = self.check_prepared(bind.statement())?;
                     match message {
                         Some(message) => {
-                            self.state.add_ignore('1', &bind.statement);
-                            self.prepared(&bind.statement);
+                            self.state.add_ignore('1', bind.statement());
+                            self.prepared(bind.statement());
                             self.state.add('2');
                             return Ok(HandleResult::Prepend(message));
                         }
@@ -99,12 +85,12 @@ impl PreparedStatements {
 
             ProtocolMessage::Describe(describe) => {
                 if !describe.anonymous() {
-                    let message = self.check_prepared(&describe.statement)?;
+                    let message = self.check_prepared(describe.statement())?;
 
                     match message {
                         Some(message) => {
-                            self.state.add_ignore('1', &describe.statement);
-                            self.prepared(&describe.statement);
+                            self.state.add_ignore('1', describe.statement());
+                            self.prepared(describe.statement());
                             self.state.add(ExecutionCode::DescriptionOrNothing); // t
                             self.state.add(ExecutionCode::DescriptionOrNothing); // T
                             return Ok(HandleResult::Prepend(message));
@@ -117,7 +103,7 @@ impl PreparedStatements {
                         }
                     }
 
-                    self.describes.push_back(describe.statement.clone());
+                    self.describes.push_back(describe.statement().to_string());
                 } else {
                     self.state.add(ExecutionCode::DescriptionOrNothing);
                 }
@@ -170,10 +156,6 @@ impl PreparedStatements {
 
     /// Should we forward the message to the client.
     pub fn forward(&mut self, message: &Message) -> Result<bool, Error> {
-        if !self.enabled {
-            return Ok(true);
-        }
-
         let code = message.code();
         let action = self.state.action(code)?;
 

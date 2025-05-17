@@ -1,7 +1,7 @@
 //! RELOAD command.
 
 use super::prelude::*;
-use crate::databases::reload;
+use crate::backend::databases::reload;
 
 pub struct Reload;
 

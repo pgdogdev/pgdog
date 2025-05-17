@@ -1,5 +1,7 @@
 //! Frontend errors.
 
+use std::io::ErrorKind;
+
 use thiserror::Error;
 
 /// Frontend error.
@@ -40,6 +42,9 @@ pub enum Error {
 
     #[error("query timeout")]
     Timeout(#[from] tokio::time::error::Elapsed),
+
+    #[error("join error")]
+    Join(#[from] tokio::task::JoinError),
 }
 
 impl Error {
@@ -52,5 +57,15 @@ impl Error {
             self,
             &Error::Backend(BackendError::Pool(PoolError::CheckoutTimeout))
         )
+    }
+
+    pub(crate) fn disconnect(&self) -> bool {
+        if let Error::Net(crate::net::Error::Io(err)) = self {
+            if err.kind() == ErrorKind::UnexpectedEof {
+                return true;
+            }
+        }
+
+        false
     }
 }

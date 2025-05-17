@@ -41,8 +41,8 @@ impl Listener {
 
     /// Listen for client connections and handle them.
     pub async fn listen(&mut self) -> Result<(), Error> {
-        let listener = TcpListener::bind(&self.addr).await?;
         info!("🐕 PgDog listening on {}", self.addr);
+        let listener = TcpListener::bind(&self.addr).await?;
         let comms = comms();
         let shutdown_signal = comms.shutting_down();
         let mut sighup = Sighup::new()?;
@@ -59,8 +59,10 @@ impl Listener {
                    let future = async move {
                        match Self::handle_client(stream, addr, client_comms).await {
                            Ok(_) => (),
-                           Err(err) => {
+                           Err(err) => if !err.disconnect() {
                                error!("client crashed: {:?}", err);
+                           } else {
+                               info!("client disconnected [{}]", addr);
                            }
                        };
                    };
@@ -95,17 +97,22 @@ impl Listener {
         Ok(())
     }
 
+    /// Shutdown this listener.
+    pub fn shutdown(&self) {
+        self.shutdown.notify_one();
+    }
+
     fn start_shutdown(&self) {
         shutdown();
         comms().shutdown();
 
         let listener = self.clone();
         spawn(async move {
-            listener.shutdown().await;
+            listener.execute_shutdown().await;
         });
     }
 
-    async fn shutdown(&self) {
+    async fn execute_shutdown(&self) {
         let shutdown_timeout = config().config.general.shutdown_timeout();
 
         info!(

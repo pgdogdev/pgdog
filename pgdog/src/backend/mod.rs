@@ -5,6 +5,7 @@ pub mod error;
 pub mod pool;
 pub mod prepared_statements;
 pub mod protocol;
+pub mod reload_notify;
 pub mod replication;
 pub mod schema;
 pub mod server;
