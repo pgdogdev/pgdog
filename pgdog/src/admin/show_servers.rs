@@ -68,7 +68,7 @@ impl Command for ShowServers {
                 .add(server.stats.total.queries)
                 .add(server.stats.total.rollbacks)
                 .add(server.stats.total.prepared_statements)
-                .add(server.stats.healthchecks)
+                .add(server.stats.total.healthchecks)
                 .add(server.stats.total.errors)
                 .add(server.stats.total.bytes_received)
                 .add(server.stats.total.bytes_sent)

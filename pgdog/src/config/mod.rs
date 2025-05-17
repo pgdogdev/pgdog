@@ -982,15 +982,8 @@ pub mod test {
                 read_only: Some(true),
                 ..Default::default()
             },
-            Database {
-                name: "pgdog".into(),
-                host: "127.0.0.1".into(),
-                port: 5432,
-                role: Role::Replica,
-                read_only: Some(true),
-                ..Default::default()
-            },
         ];
+        config.config.general.load_balancing_strategy = LoadBalancingStrategy::RoundRobin;
         config.users.users = vec![User {
             name: "pgdog".into(),
             database: "pgdog".into(),

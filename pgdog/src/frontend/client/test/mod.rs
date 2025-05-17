@@ -1,13 +1,20 @@
+use std::time::Duration;
+
+use hyper::client;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt, BufStream},
     net::{TcpListener, TcpStream},
+    time::sleep,
 };
 
 use bytes::{Buf, BufMut, BytesMut};
 
 use crate::{
     backend::databases::databases,
-    config::test::{load_test, load_test_replicas},
+    config::{
+        test::{load_test, load_test_replicas},
+        Role,
+    },
     frontend::{client::Inner, Client, Command},
     net::{
         bind::Parameter, Bind, CommandComplete, DataRow, Describe, Execute, Field, Format,
@@ -30,6 +37,10 @@ pub async fn test_client(port: u16, replicas: bool) -> (TcpStream, Client) {
         load_test();
     }
 
+    parallel_test_client(port).await
+}
+
+pub async fn parallel_test_client(port: u16) -> (TcpStream, Client) {
     let addr = format!("127.0.0.1:{}", port);
     let conn_addr = addr.clone();
     let stream = TcpListener::bind(&conn_addr).await.unwrap();
@@ -70,18 +81,26 @@ macro_rules! buffer {
     }}
 }
 
+macro_rules! read_one {
+    ($conn:expr) => {{
+        let mut buf = BytesMut::new();
+        let code = $conn.read_u8().await.unwrap();
+        buf.put_u8(code);
+        let len = $conn.read_i32().await.unwrap();
+        buf.put_i32(len);
+        buf.resize(len as usize + 1, 0);
+        $conn.read_exact(&mut buf[5..]).await.unwrap();
+
+        buf
+    }};
+}
+
 macro_rules! read {
     ($conn:expr, $codes:expr) => {{
         let mut result = vec![];
         for c in $codes {
-            let mut buf = BytesMut::new();
-            let code = $conn.read_u8().await.unwrap();
-            assert_eq!(code as char, c);
-            buf.put_u8(code);
-            let len = $conn.read_i32().await.unwrap();
-            buf.put_i32(len);
-            buf.resize(len as usize - 4, 0);
-            $conn.read_exact(&mut buf).await.unwrap();
+            let buf = read_one!($conn);
+            assert_eq!(buf[0] as char, c);
             result.push(buf);
         }
 
@@ -243,12 +262,7 @@ async fn test_client_extended() {
 
     conn.write_all(&buf).await.unwrap();
 
-    for c in ['1', '2', 't', 'T', 'D', 'C', 'Z'] {
-        assert_eq!(c, conn.read_u8().await.unwrap() as char);
-        let len = conn.read_i32().await.unwrap();
-        let mut the_rest = BytesMut::zeroed(len as usize - 4);
-        conn.read_exact(&mut the_rest).await.unwrap();
-    }
+    let _ = read!(conn, ['1', '2', 't', 'T', 'D', 'C', 'Z']);
 
     handle.await.unwrap();
 }
@@ -261,9 +275,87 @@ async fn test_client_with_replicas() {
         client.run().await.unwrap();
     });
 
+    let mut len_sent = 0;
+    let mut len_recv = 0;
+
     let buf =
         buffer!({ Query::new("CREATE TABLE IF NOT EXISTS test_client_with_replicas (id BIGINT)") });
     conn.write_all(&buf).await.unwrap();
+    len_sent += buf.len();
 
-    let _ = read!(conn, ['C', 'Z']);
+    // Terminate messages are not sent to servers,
+    // so they are not counted in bytes sent/recv.
+    conn.write_all(&buffer!({ Terminate })).await.unwrap();
+
+    loop {
+        let msg = read_one!(conn);
+        len_recv += msg.len();
+        if msg[0] as char == 'Z' {
+            break;
+        }
+    }
+
+    handle.await.unwrap();
+
+    let mut clients = vec![];
+    for i in 0..26 {
+        let (mut conn, mut client) = parallel_test_client(34004 + i).await;
+        let handle = tokio::spawn(async move {
+            client.run().await.unwrap();
+        });
+        let buf = buffer!(
+            { Parse::new_anonymous("SELECT * FROM test_client_with_replicas") },
+            { Bind::test_statement("") },
+            { Execute::new() },
+            { Sync }
+        );
+        conn.write_all(&buf).await.unwrap();
+        len_sent += buf.len();
+
+        clients.push((conn, handle));
+    }
+
+    for (mut conn, handle) in clients {
+        let msgs = read!(conn, ['1', '2', 'C', 'Z']);
+        for msg in msgs {
+            len_recv += msg.len();
+        }
+
+        // Terminate messages are not sent to servers,
+        // so they are not counted in bytes sent/recv.
+        conn.write_all(&buffer!({ Terminate })).await.unwrap();
+        conn.flush().await.unwrap();
+        handle.await.unwrap();
+    }
+
+    let pools = databases().cluster(("pgdog", "pgdog")).unwrap().shards()[0].pools_with_roles();
+    let mut pool_recv = -(5 + 6) * 2; // Empty query response + ready for query from health check
+    let mut pool_sent = -(Query::new(";").len() as isize * 2); // ; Health check query query
+    for (role, pool) in pools {
+        let state = pool.state();
+        // We're using round robin
+        // and one write (create table) is going to primary.
+        pool_recv += state.stats.counts.received as isize;
+        pool_sent += state.stats.counts.sent as isize;
+
+        match role {
+            Role::Primary => {
+                assert_eq!(state.stats.counts.server_assignment_count, 14);
+                assert_eq!(state.stats.counts.bind_count, 13);
+                assert_eq!(state.stats.counts.parse_count, 13);
+                assert_eq!(state.stats.counts.rollbacks, 0);
+                assert_eq!(state.stats.counts.healthchecks, 1);
+            }
+            Role::Replica => {
+                assert_eq!(state.stats.counts.server_assignment_count, 13);
+                assert_eq!(state.stats.counts.bind_count, 13);
+                assert_eq!(state.stats.counts.parse_count, 13);
+                assert_eq!(state.stats.counts.rollbacks, 0);
+                assert_eq!(state.stats.counts.healthchecks, 1);
+            }
+        }
+    }
+
+    assert_eq!(pool_recv, len_recv as isize);
+    assert_eq!(pool_sent, len_sent as isize);
 }

@@ -273,6 +273,7 @@ impl Pool {
     pub(crate) fn move_conns_to(&self, destination: &Pool) {
         // Ensure no deadlock.
         assert!(self.inner.id != destination.id());
+        let now = Instant::now();
 
         {
             let mut from_guard = self.lock();
@@ -281,7 +282,7 @@ impl Pool {
             from_guard.online = false;
             let (idle, taken) = from_guard.move_conns_to(destination);
             for server in idle {
-                to_guard.put(server);
+                to_guard.put(server, now);
             }
             to_guard.set_taken(taken);
         }

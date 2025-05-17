@@ -509,7 +509,7 @@ impl Server {
                 let err = ErrorResponse::from_bytes(message.to_bytes()?)?;
                 return Err(Error::ExecutionError(Box::new(err)));
             }
-            messages.push(message);
+            messages.push(message.backend());
         }
 
         Ok(messages)

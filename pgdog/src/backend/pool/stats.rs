@@ -21,6 +21,7 @@ pub struct Counts {
     pub parse_count: usize,
     pub bind_count: usize,
     pub rollbacks: usize,
+    pub healthchecks: usize,
 }
 
 impl Sub for Counts {
@@ -41,6 +42,7 @@ impl Sub for Counts {
             parse_count: self.parse_count.saturating_sub(rhs.parse_count),
             bind_count: self.parse_count.saturating_sub(rhs.bind_count),
             rollbacks: self.rollbacks.saturating_sub(rhs.rollbacks),
+            healthchecks: self.healthchecks.saturating_add(rhs.healthchecks),
         }
     }
 }
@@ -61,6 +63,7 @@ impl Div<usize> for Counts {
             parse_count: self.parse_count.saturating_div(rhs),
             bind_count: self.parse_count.saturating_div(rhs),
             rollbacks: self.rollbacks.saturating_div(rhs),
+            healthchecks: self.healthchecks.saturating_div(rhs),
         }
     }
 }
@@ -72,7 +75,7 @@ impl Add<BackendCounts> for Counts {
         Counts {
             xact_count: self.xact_count + rhs.transactions,
             query_count: self.query_count + rhs.queries,
-            server_assignment_count: self.server_assignment_count + 1,
+            server_assignment_count: self.server_assignment_count,
             received: self.received + rhs.bytes_received,
             sent: self.sent + rhs.bytes_sent,
             query_time: self.query_time + rhs.query_time,
@@ -81,6 +84,7 @@ impl Add<BackendCounts> for Counts {
             parse_count: self.parse_count + rhs.parse,
             bind_count: self.parse_count + rhs.bind,
             rollbacks: self.rollbacks + rhs.rollbacks,
+            healthchecks: self.healthchecks + rhs.healthchecks,
         }
     }
 }
@@ -114,6 +118,7 @@ impl Add for Counts {
             parse_count: self.parse_count.saturating_add(rhs.parse_count),
             bind_count: self.parse_count.saturating_add(rhs.bind_count),
             rollbacks: self.rollbacks.saturating_add(rhs.rollbacks),
+            healthchecks: self.healthchecks.saturating_add(rhs.healthchecks),
         }
     }
 }
