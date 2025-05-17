@@ -3,8 +3,8 @@ use std::io::Cursor;
 use bytes::Buf;
 
 use crate::net::{
-    Bind, Close, CopyData, Describe, Execute, Flush, FromBytes, Message, Parse, Protocol, Query,
-    Sync, ToBytes,
+    Bind, Close, CopyData, CopyDone, CopyFail, Describe, Execute, Flush, FromBytes, Message, Parse,
+    Protocol, Query, Sync, ToBytes,
 };
 
 #[derive(Debug, Clone)]
@@ -18,6 +18,8 @@ pub enum ProtocolMessage {
     Query(Query),
     Other(Message),
     CopyData(CopyData),
+    CopyFail(CopyFail),
+    CopyDone(CopyDone),
     Sync(Sync),
 }
 
@@ -42,6 +44,8 @@ impl ProtocolMessage {
             Self::Other(message) => message.len(),
             Self::CopyData(data) => data.len(),
             Self::Sync(sync) => sync.len(),
+            Self::CopyDone(copy_done) => copy_done.len(),
+            Self::CopyFail(copy_fail) => copy_fail.len(),
         }
     }
 }
@@ -59,6 +63,8 @@ impl Protocol for ProtocolMessage {
             Self::Other(message) => message.code(),
             Self::CopyData(data) => data.code(),
             Self::Sync(sync) => sync.code(),
+            Self::CopyFail(copy_fail) => copy_fail.code(),
+            Self::CopyDone(copy_done) => copy_done.code(),
         }
     }
 }
@@ -75,6 +81,8 @@ impl FromBytes for ProtocolMessage {
             'Q' => Ok(Self::Query(Query::from_bytes(bytes)?)),
             'd' => Ok(Self::CopyData(CopyData::from_bytes(bytes)?)),
             'S' => Ok(Self::Sync(Sync::from_bytes(bytes)?)),
+            'f' => Ok(Self::CopyFail(CopyFail::from_bytes(bytes)?)),
+            'c' => Ok(Self::CopyDone(CopyDone::from_bytes(bytes)?)),
             _ => Ok(Self::Other(Message::from_bytes(bytes)?)),
         }
     }
@@ -93,6 +101,8 @@ impl ToBytes for ProtocolMessage {
             Self::Other(message) => message.to_bytes(),
             Self::CopyData(data) => data.to_bytes(),
             Self::Sync(sync) => sync.to_bytes(),
+            Self::CopyFail(copy_fail) => copy_fail.to_bytes(),
+            Self::CopyDone(copy_done) => copy_done.to_bytes(),
         }
     }
 }
@@ -154,5 +164,17 @@ impl From<Sync> for ProtocolMessage {
 impl From<Flush> for ProtocolMessage {
     fn from(value: Flush) -> Self {
         Self::Other(value.message().unwrap())
+    }
+}
+
+impl From<CopyDone> for ProtocolMessage {
+    fn from(value: CopyDone) -> Self {
+        Self::CopyDone(value)
+    }
+}
+
+impl From<CopyFail> for ProtocolMessage {
+    fn from(value: CopyFail) -> Self {
+        Self::CopyFail(value)
     }
 }

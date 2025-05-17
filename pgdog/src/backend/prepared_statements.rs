@@ -82,7 +82,6 @@ impl PreparedStatements {
                     self.state.add('2');
                 }
             }
-
             ProtocolMessage::Describe(describe) => {
                 if !describe.anonymous() {
                     let message = self.check_prepared(describe.statement())?;
@@ -136,8 +135,6 @@ impl PreparedStatements {
                 }
             }
 
-            ProtocolMessage::CopyData(_) => (),
-            ProtocolMessage::Other(_) => (),
             ProtocolMessage::Close(close) => {
                 if !close.anonymous() {
                     // We don't allow clients to close prepared statements.
@@ -149,6 +146,15 @@ impl PreparedStatements {
                 }
             }
             ProtocolMessage::Prepare { .. } => (),
+            ProtocolMessage::CopyDone(_) => {
+                self.state.action('c')?;
+            }
+
+            ProtocolMessage::CopyFail(_) => {
+                self.state.action('f')?;
+            }
+
+            ProtocolMessage::CopyData(_) | ProtocolMessage::Other(_) => (),
         }
 
         Ok(HandleResult::Forward)
@@ -188,6 +194,15 @@ impl PreparedStatements {
 
             '1' => {
                 self.parses.pop_front();
+            }
+
+            'G' => {
+                self.state.prepend('G'); // Next thing we'll see is a CopyFail or CopyDone.
+            }
+
+            'c' | 'f' => {
+                // Backend told us the copy failed or succeeded.
+                self.state.action(code)?;
             }
 
             _ => (),

@@ -40,18 +40,6 @@ jobs:
   tests:
     runs-on: ubuntu-latest
     steps:
-      - name: Setup PostgreSQL
-        run: |
-          sudo service postgresql start
-          sudo -u postgres createuser --superuser --login $USER
-          sudo -u postgres createdb $USER
-          createdb pgdog
-          psql -c "CREATE USER pgdog PASSWORD 'pgdog' LOGIN;"
-          psql -c "GRANT ALL ON SCHEMA public TO pgdog;" pgdog
-          psql -c "GRANT ALL ON DATABASE pgdog TO pgdog;"
-          psql postgres://pgdog:pgdog@127.0.0.1:5432/pgdog -c "SELECT 1" > /dev/null
-          sudo apt remove -y cmake
-          sudo pip3 install cmake==3.31.6
       - uses: actions/checkout@v4
       - uses: actions-rs/toolchain@v1
         with:
@@ -60,10 +48,23 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           prefix-key: "v1" # Change this when updating tooling
+      - name: Setup PostgreSQL
+        run: |
+          sudo service postgresql start
+          sudo -u postgres createuser --superuser --login $USER
+          sudo -u postgres createdb $USER
+          bash integration/setup.sh
+          sudo apt update && sudo apt install -y python3-virtualenv
+          sudo gem install bundler
+          sudo apt remove -y cmake
+          sudo pip3 install cmake==3.31.6
+          cmake --version
+          cargo install cargo-nextest --version "0.9.78" --locked
+          bash integration/toxi/setup.sh
       - name: Install test dependencies
         run: cargo install cargo-nextest --version "0.9.78" --locked
       - name: Run tests
-        run: cargo nextest run -E 'package(pgdog)' --no-fail-fast
+        run: cargo nextest run -E 'package(pgdog)' --no-fail-fast --test-threads=1
       - name: Run documentation tests
         run: cargo test --doc
   integration:

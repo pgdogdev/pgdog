@@ -86,6 +86,9 @@ pub enum Error {
 
     #[error("read timeout")]
     ReadTimeout,
+
+    #[error("router error: {0}")]
+    Router(String),
 }
 
 impl Error {

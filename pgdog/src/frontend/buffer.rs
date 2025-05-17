@@ -155,11 +155,6 @@ impl Buffer {
             .any(|m| ['E', 'Q', 'B'].contains(&m.code()))
     }
 
-    /// Client told us the copy failed.
-    pub fn copy_fail(&self) -> bool {
-        self.buffer.last().map(|m| m.code() == 'f').unwrap_or(false)
-    }
-
     /// Rewrite query in buffer.
     pub fn rewrite(&mut self, query: &str) -> Result<(), Error> {
         if self.buffer.iter().any(|c| c.code() != 'Q') {
