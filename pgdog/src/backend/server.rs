@@ -53,6 +53,7 @@ pub struct Server {
     schema_changed: bool,
     sync_prepared: bool,
     in_transaction: bool,
+    re_synced: bool,
     pooler_mode: PoolerMode,
     stream_buffer: BytesMut,
 }
@@ -191,6 +192,7 @@ impl Server {
             schema_changed: false,
             sync_prepared: false,
             in_transaction: false,
+            re_synced: false,
             pooler_mode: PoolerMode::Transaction,
             stream_buffer: BytesMut::with_capacity(1024),
         })
@@ -350,6 +352,7 @@ impl Server {
                 let cmd = CommandComplete::from_bytes(message.to_bytes()?)?;
                 match cmd.command() {
                     "PREPARE" | "DEALLOCATE" => self.sync_prepared = true,
+                    "RESET" => self.client_params.clear(), // Someone reset params, we're gonna need to re-sync.
                     _ => (),
                 }
             }
@@ -598,6 +601,8 @@ impl Server {
                     break;
                 }
             }
+
+            self.re_synced = true;
         }
     }
 
@@ -625,6 +630,16 @@ impl Server {
     #[inline]
     pub fn reset_params(&mut self) {
         self.client_params.clear();
+    }
+
+    #[inline]
+    pub fn reset_re_synced(&mut self) {
+        self.re_synced = false;
+    }
+
+    #[inline]
+    pub fn re_synced(&self) -> bool {
+        self.re_synced
     }
 
     /// Server connection unique identifier.
@@ -754,6 +769,7 @@ pub mod test {
                 schema_changed: false,
                 sync_prepared: false,
                 in_transaction: false,
+                re_synced: false,
                 pooler_mode: PoolerMode::Transaction,
                 stream_buffer: BytesMut::with_capacity(1024),
             }

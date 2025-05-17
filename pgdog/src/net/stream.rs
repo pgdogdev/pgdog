@@ -124,6 +124,7 @@ impl Stream {
 
         #[cfg(debug_assertions)]
         {
+            trace!(">>> {:?} [{:?}]", message.message()?, self.peer_addr());
             use crate::net::messages::FromBytes;
             use tracing::error;
 
