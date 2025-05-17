@@ -352,7 +352,7 @@ impl Server {
                 let cmd = CommandComplete::from_bytes(message.to_bytes()?)?;
                 match cmd.command() {
                     "PREPARE" | "DEALLOCATE" => self.sync_prepared = true,
-                    "RESET" => self.params.clear(), // Someone reset params, we're gonna need to re-sync.
+                    "RESET" => self.client_params.clear(), // Someone reset params, we're gonna need to re-sync.
                     _ => (),
                 }
             }

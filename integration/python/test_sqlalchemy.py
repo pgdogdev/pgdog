@@ -141,7 +141,6 @@ async def test_reads_writes(engines):
 
 
 @pytest.mark.asyncio
-@pytest.mark.skip
 async def test_write_in_read(engines):
     normal = engines[0]
 
