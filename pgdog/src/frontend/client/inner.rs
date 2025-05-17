@@ -35,7 +35,6 @@ pub(super) struct Inner {
     pub(super) start_transaction: Option<BufferedQuery>,
     /// Client-wide comms.
     pub(super) comms: Comms,
-    pub(super) copy_mode: bool,
 }
 
 impl Inner {
@@ -67,7 +66,6 @@ impl Inner {
             is_async: false,
             start_transaction: None,
             comms: client.comms.clone(),
-            copy_mode: false,
         })
     }
 

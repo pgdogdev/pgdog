@@ -6,7 +6,6 @@ use std::time::Instant;
 
 use bytes::BytesMut;
 use timeouts::Timeouts;
-use tokio::sync::Notify;
 use tokio::time::timeout;
 use tokio::{select, spawn};
 use tracing::{debug, error, info, trace};
@@ -53,7 +52,6 @@ pub struct Client {
     request_buffer: Buffer,
     stream_buffer: BytesMut,
     message_buffer: VecDeque<ProtocolMessage>,
-    ready: Notify,
 }
 
 impl Client {
@@ -202,7 +200,6 @@ impl Client {
             request_buffer: Buffer::new(),
             stream_buffer: BytesMut::new(),
             message_buffer: VecDeque::new(),
-            ready: Notify::new(),
         };
 
         drop(conn);
@@ -239,7 +236,6 @@ impl Client {
     async fn run(&mut self) -> Result<(), Error> {
         let mut inner = Inner::new(self)?;
         let shutdown = self.comms.shutting_down();
-        self.ready.notify_one();
 
         loop {
             let query_timeout = self.timeouts.query_timeout(&inner.stats.state);
@@ -260,8 +256,8 @@ impl Client {
                     }
                 }
 
-                _ = self.ready.notified() => {
-                    self.buffer().await?;
+                buffer = self.buffer() => {
+                    buffer?;
                     if self.request_buffer.is_empty() {
                         break;
                     }
@@ -270,10 +266,6 @@ impl Client {
 
                     if disconnect {
                         break;
-                    }
-
-                    if inner.copy_mode {
-                        self.ready.notify_one();
                     }
                 }
             }
@@ -330,7 +322,8 @@ impl Client {
             // This ensures we:
             //
             // 1. Don't connect to servers unnecessarily.
-            // 2. Can use the first query sent by the client to route the transaction.
+            // 2. Can use the first query sent by the client to route the transaction
+            //    to a shard.
             //
             match command {
                 Some(Command::StartTransaction(query)) => {
@@ -412,10 +405,6 @@ impl Client {
         // Send traffic to mirrors, if any.
         inner.backend.mirror(&self.request_buffer);
 
-        if self.request_buffer.copy_finished() {
-            inner.copy_mode = false;
-        }
-
         Ok(false)
     }
 
@@ -432,16 +421,8 @@ impl Client {
 
         // Messages that we need to send to the client immediately.
         // ReadyForQuery (B) | CopyInResponse (B) | ErrorResponse(B) | NoticeResponse(B)
-        let flush = matches!(code, 'Z' | 'G' | 'E' | 'N');
-        if code == 'G' {
-            inner.copy_mode = true;
-        }
-
-        // Messages that need to be sent to the client immediately
-        // only if we are async.
-        // RowDescription (B) | NoData(B)
-        let async_flush = matches!(code, 'T' | 'n') && inner.is_async;
-        let streaming = message.streaming();
+        let flush =
+            matches!(code, 'Z' | 'G' | 'E' | 'N') || !has_more_messages || message.streaming();
 
         // Server finished executing a query.
         // ReadyForQuery (B)
@@ -482,17 +463,10 @@ impl Client {
 
         trace!("[{}] <- {:#?}", self.addr, message);
 
-        if flush || async_flush || streaming {
+        if flush {
             self.stream.send_flush(&message).await?;
-            if async_flush {
-                inner.is_async = false;
-            }
         } else {
             self.stream.send(&message).await?;
-        }
-
-        if !has_more_messages || flush {
-            self.ready.notify_one();
         }
 
         // Pooler is offline and the transaction is done.
@@ -562,7 +536,6 @@ impl Client {
             ])
             .await?;
         debug!("transaction started");
-        self.ready.notify_one();
         Ok(())
     }
 
@@ -585,7 +558,6 @@ impl Client {
         messages.push(ReadyForQuery::idle().message()?);
         self.stream.send_many(&messages).await?;
         debug!("transaction ended");
-        self.ready.notify_one();
         Ok(())
     }
 
@@ -598,7 +570,6 @@ impl Client {
         inner.done(self.in_transaction);
         inner.comms.update_params(&self.params);
         debug!("set");
-        self.ready.notify_one();
         Ok(())
     }
 }
