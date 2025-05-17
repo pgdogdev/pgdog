@@ -29,8 +29,6 @@ pub(super) struct Inner {
     pub(super) router: Router,
     /// Client stats.
     pub(super) stats: Stats,
-    /// Protocol is async.
-    pub(super) is_async: bool,
     /// Start transaction statement, intercepted by the router.
     pub(super) start_transaction: Option<BufferedQuery>,
     /// Client-wide comms.
@@ -63,7 +61,6 @@ impl Inner {
             backend,
             router,
             stats: Stats::new(),
-            is_async: false,
             start_transaction: None,
             comms: client.comms.clone(),
         })

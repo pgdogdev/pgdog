@@ -314,7 +314,6 @@ impl Client {
 
     /// Handle client messages.
     async fn client_messages(&mut self, mut inner: InnerBorrow<'_>) -> Result<bool, Error> {
-        inner.is_async = self.request_buffer.is_async();
         inner.stats.received(self.request_buffer.len());
 
         #[cfg(debug_assertions)]
