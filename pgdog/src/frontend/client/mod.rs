@@ -45,6 +45,7 @@ pub struct Client {
     comms: Comms,
     admin: bool,
     streaming: bool,
+    shutdown: bool,
     shard: Option<usize>,
     prepared_statements: PreparedStatements,
     in_transaction: bool,
@@ -200,6 +201,7 @@ impl Client {
             request_buffer: Buffer::new(),
             stream_buffer: BytesMut::new(),
             message_buffer: VecDeque::new(),
+            shutdown: false,
         };
 
         drop(conn);
@@ -214,6 +216,34 @@ impl Client {
         }
 
         Ok(())
+    }
+
+    #[cfg(test)]
+    pub fn new_test(stream: Stream, addr: SocketAddr) -> Self {
+        use crate::{config::config, frontend::comms::comms};
+
+        let mut connect_params = Parameters::default();
+        connect_params.insert("user", "pgdog");
+        connect_params.insert("database", "pgdog");
+
+        Self {
+            stream,
+            addr,
+            id: BackendKeyData::new(),
+            comms: comms(),
+            streaming: false,
+            prepared_statements: PreparedStatements::new(),
+            connect_params: connect_params.clone(),
+            params: connect_params,
+            admin: false,
+            shard: None,
+            in_transaction: false,
+            timeouts: Timeouts::from_config(&config().config.general),
+            request_buffer: Buffer::new(),
+            stream_buffer: BytesMut::new(),
+            message_buffer: VecDeque::new(),
+            shutdown: false,
+        }
     }
 
     /// Get client's identifier.
@@ -258,13 +288,15 @@ impl Client {
 
                 buffer = self.buffer() => {
                     buffer?;
-                    if self.request_buffer.is_empty() {
-                        break;
+                    if !self.request_buffer.is_empty() {
+                        let disconnect = self.client_messages(inner.get()).await?;
+
+                        if disconnect {
+                            break;
+                        }
                     }
 
-                    let disconnect = self.client_messages(inner.get()).await?;
-
-                    if disconnect {
+                    if self.shutdown && !inner.get().backend.connected() {
                         break;
                     }
                 }
@@ -414,7 +446,6 @@ impl Client {
         mut inner: InnerBorrow<'_>,
         message: Message,
     ) -> Result<bool, Error> {
-        let len = message.len();
         let code = message.code();
         let message = message.backend();
         let has_more_messages = inner.backend.has_more_messages();
@@ -432,7 +463,7 @@ impl Client {
             inner.stats.idle(self.in_transaction);
         }
 
-        inner.stats.sent(len);
+        inner.stats.sent(message.len());
 
         // Release the connection back into the pool
         // before flushing data to client.
@@ -469,8 +500,8 @@ impl Client {
             self.stream.send(&message).await?;
         }
 
-        // Pooler is offline and the transaction is done.
-        if inner.backend.done() && inner.comms.offline() && !self.admin {
+        // Pooler is offline or the client requested to disconnect and the transaction is done.
+        if inner.backend.done() && (inner.comms.offline() || self.shutdown) && !self.admin {
             return Ok(true);
         }
 
@@ -496,6 +527,7 @@ impl Client {
             let message = match self.stream.read_buf(&mut self.stream_buffer).await {
                 Ok(message) => message.stream(self.streaming).frontend(),
                 Err(_) => {
+                    self.shutdown = true;
                     return Ok(());
                 }
             };
@@ -506,6 +538,7 @@ impl Client {
 
             // Terminate (B & F).
             if message.code() == 'X' {
+                self.shutdown = true;
                 return Ok(());
             } else {
                 let message = ProtocolMessage::from_bytes(message.to_bytes()?)?;
@@ -579,3 +612,6 @@ impl Drop for Client {
         self.comms.disconnect();
     }
 }
+
+#[cfg(test)]
+pub mod test;

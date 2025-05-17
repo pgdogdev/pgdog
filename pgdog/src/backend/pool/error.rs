@@ -44,4 +44,7 @@ pub enum Error {
 
     #[error("all replicas down")]
     AllReplicasDown,
+
+    #[error("router error")]
+    Router,
 }

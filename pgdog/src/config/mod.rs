@@ -940,8 +940,28 @@ pub struct MultiTenant {
 }
 
 #[cfg(test)]
-mod test {
+pub mod test {
+    use crate::backend::databases::init;
+
     use super::*;
+
+    pub fn load_test() {
+        let mut config = ConfigAndUsers::default();
+        config.config.databases = vec![Database {
+            name: "pgdog".into(),
+            host: "127.0.0.1".into(),
+            port: 5432,
+            ..Default::default()
+        }];
+        config.users.users = vec![User {
+            name: "pgdog".into(),
+            database: "pgdog".into(),
+            ..Default::default()
+        }];
+
+        set(config).unwrap();
+        init();
+    }
 
     #[test]
     fn test_basic() {

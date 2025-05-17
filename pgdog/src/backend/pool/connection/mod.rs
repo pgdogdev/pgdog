@@ -248,7 +248,9 @@ impl Connection {
         streaming: bool,
     ) -> Result<(), Error> {
         if messages.copy() && !streaming {
-            let rows = router.copy_data(messages).unwrap();
+            let rows = router
+                .copy_data(messages)
+                .map_err(|e| Error::Router(e.to_string()))?;
             if !rows.is_empty() {
                 self.send_copy(rows).await?;
                 self.send(&messages.without_copy_data()).await?;
