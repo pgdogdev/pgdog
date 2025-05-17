@@ -7,7 +7,7 @@ use bytes::{Buf, BufMut, BytesMut};
 
 use crate::{
     backend::databases::databases,
-    config::test::load_test,
+    config::test::{load_test, load_test_replicas},
     frontend::{client::Inner, Client, Command},
     net::{
         bind::Parameter, Bind, CommandComplete, DataRow, Describe, Execute, Field, Format,
@@ -23,8 +23,12 @@ use super::Stream;
 // That's important otherwise I'm not sure what would happen.
 //
 
-pub async fn test_client(port: u16) -> (TcpStream, Client) {
-    load_test();
+pub async fn test_client(port: u16, replicas: bool) -> (TcpStream, Client) {
+    if replicas {
+        load_test_replicas();
+    } else {
+        load_test();
+    }
 
     let addr = format!("127.0.0.1:{}", port);
     let conn_addr = addr.clone();
@@ -45,18 +49,49 @@ pub async fn test_client(port: u16) -> (TcpStream, Client) {
 }
 
 macro_rules! new_client {
-    ($port:expr) => {{
+    ($port:expr, $replicas:expr) => {{
         crate::logger();
-        let (conn, client) = test_client($port).await;
+        let (conn, client) = test_client($port, $replicas).await;
         let inner = Inner::new(&client).unwrap();
 
         (conn, client, inner)
     }};
 }
 
+macro_rules! buffer {
+    ( $( $msg:block ),* ) => {{
+        let mut buf = BytesMut::new();
+
+        $(
+           buf.put($msg.to_bytes().unwrap());
+        )*
+
+        buf
+    }}
+}
+
+macro_rules! read {
+    ($conn:expr, $codes:expr) => {{
+        let mut result = vec![];
+        for c in $codes {
+            let mut buf = BytesMut::new();
+            let code = $conn.read_u8().await.unwrap();
+            assert_eq!(code as char, c);
+            buf.put_u8(code);
+            let len = $conn.read_i32().await.unwrap();
+            buf.put_i32(len);
+            buf.resize(len as usize - 4, 0);
+            $conn.read_exact(&mut buf).await.unwrap();
+            result.push(buf);
+        }
+
+        result
+    }};
+}
+
 #[tokio::test]
 async fn test_test_client() {
-    let (mut conn, mut client, mut inner) = new_client!(34000);
+    let (mut conn, mut client, mut inner) = new_client!(34000, false);
 
     let query = Query::new("SELECT 1").to_bytes().unwrap();
 
@@ -105,7 +140,7 @@ async fn test_test_client() {
 
 #[tokio::test]
 async fn test_multiple_async() {
-    let (mut conn, mut client, _) = new_client!(34001);
+    let (mut conn, mut client, _) = new_client!(34001, false);
 
     let handle = tokio::spawn(async move {
         client.run().await.unwrap();
@@ -181,7 +216,7 @@ async fn test_multiple_async() {
 
 #[tokio::test]
 async fn test_client_extended() {
-    let (mut conn, mut client, _) = new_client!(34002);
+    let (mut conn, mut client, _) = new_client!(34002, false);
 
     let handle = tokio::spawn(async move {
         client.run().await.unwrap();
@@ -216,4 +251,19 @@ async fn test_client_extended() {
     }
 
     handle.await.unwrap();
+}
+
+#[tokio::test]
+async fn test_client_with_replicas() {
+    let (mut conn, mut client, _) = new_client!(34003, true);
+
+    let handle = tokio::spawn(async move {
+        client.run().await.unwrap();
+    });
+
+    let buf =
+        buffer!({ Query::new("CREATE TABLE IF NOT EXISTS test_client_with_replicas (id BIGINT)") });
+    conn.write_all(&buf).await.unwrap();
+
+    let _ = read!(conn, ['C', 'Z']);
 }

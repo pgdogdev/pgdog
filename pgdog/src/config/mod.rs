@@ -964,6 +964,44 @@ pub mod test {
         init();
     }
 
+    pub fn load_test_replicas() {
+        let mut config = ConfigAndUsers::default();
+        config.config.databases = vec![
+            Database {
+                name: "pgdog".into(),
+                host: "127.0.0.1".into(),
+                port: 5432,
+                role: Role::Primary,
+                ..Default::default()
+            },
+            Database {
+                name: "pgdog".into(),
+                host: "127.0.0.1".into(),
+                port: 5432,
+                role: Role::Replica,
+                read_only: Some(true),
+                ..Default::default()
+            },
+            Database {
+                name: "pgdog".into(),
+                host: "127.0.0.1".into(),
+                port: 5432,
+                role: Role::Replica,
+                read_only: Some(true),
+                ..Default::default()
+            },
+        ];
+        config.users.users = vec![User {
+            name: "pgdog".into(),
+            database: "pgdog".into(),
+            password: Some("pgdog".into()),
+            ..Default::default()
+        }];
+
+        set(config).unwrap();
+        init();
+    }
+
     #[test]
     fn test_basic() {
         let source = r#"
