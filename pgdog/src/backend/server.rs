@@ -1586,4 +1586,91 @@ pub mod test {
 
         Ok(())
     }
+
+    #[tokio::test]
+    async fn test_copy_protocol() {
+        let mut server = test_server().await;
+
+        server.execute("BEGIN").await.unwrap();
+        server
+            .execute("CREATE TABLE test_copy_t (id BIGINT)")
+            .await
+            .unwrap();
+
+        server
+            .send(&vec![Query::from("COPY test_copy_t (id) FROM STDIN CSV").into()].into())
+            .await
+            .unwrap();
+
+        for c in ['G'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), c);
+            assert!(server.has_more_messages());
+            assert!(!server.prepared_statements.state().done());
+        }
+
+        server
+            .send(&vec![CopyData::new(b"1\n").into()].into())
+            .await
+            .unwrap();
+
+        assert!(!server.done());
+        assert!(server.has_more_messages());
+        assert!(!server.prepared_statements.state().done());
+
+        server
+            .send(&vec![CopyData::new(b"2\n").into(), CopyDone.into()].into())
+            .await
+            .unwrap();
+        assert!(!server.done());
+        assert!(server.has_more_messages());
+
+        let cc = server.read().await.unwrap();
+        assert_eq!(cc.code(), 'C');
+        assert!(server.has_more_messages());
+        assert!(!server.done());
+
+        let rfq = server.read().await.unwrap();
+        assert_eq!(rfq.code(), 'Z');
+        assert!(!server.has_more_messages());
+        assert!(!server.done()); // transaction
+
+        server.execute("ROLLBACK").await.unwrap();
+
+        assert!(server.done());
+        assert!(!server.has_more_messages());
+        assert!(server.in_sync());
+    }
+
+    #[tokio::test]
+    async fn test_copy_protocol_fail() {
+        let mut server = test_server().await;
+
+        server.execute("BEGIN").await.unwrap();
+        server
+            .execute("CREATE TABLE test_copy_t (id BIGINT)")
+            .await
+            .unwrap();
+
+        server
+            .send(
+                &vec![
+                    Query::from("COPY test_copy_t (id) FROM STDIN CSV").into(),
+                    CopyData::new(b"hello\n").into(),
+                ]
+                .into(),
+            )
+            .await
+            .unwrap();
+
+        for c in ['G', 'E', 'Z'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), c);
+        }
+
+        assert!(server.in_sync());
+
+        server.execute("ROLLBACK").await.unwrap();
+        assert!(server.in_sync());
+    }
 }

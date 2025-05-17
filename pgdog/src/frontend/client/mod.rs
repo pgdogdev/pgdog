@@ -1,5 +1,6 @@
 //! Frontend client.
 
+use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::time::Instant;
 
@@ -48,8 +49,9 @@ pub struct Client {
     prepared_statements: PreparedStatements,
     in_transaction: bool,
     timeouts: Timeouts,
-    protocol_buffer: Buffer,
+    request_buffer: Buffer,
     stream_buffer: BytesMut,
+    message_buffer: VecDeque<ProtocolMessage>,
 }
 
 impl Client {
@@ -195,8 +197,9 @@ impl Client {
             prepared_statements: PreparedStatements::new(),
             in_transaction: false,
             timeouts: Timeouts::from_config(&config.config.general),
-            protocol_buffer: Buffer::new(),
+            request_buffer: Buffer::new(),
             stream_buffer: BytesMut::new(),
+            message_buffer: VecDeque::new(),
         };
 
         drop(conn);
@@ -244,6 +247,7 @@ impl Client {
                     }
                 }
 
+                // Async messages.
                 message = timeout(query_timeout, inner.backend.read()) => {
                     let message = message??;
                     let disconnect = self.server_message(inner.get(), message).await?;
@@ -254,11 +258,12 @@ impl Client {
 
                 buffer = self.buffer() => {
                     buffer?;
-                    if self.protocol_buffer.is_empty() {
+                    if self.request_buffer.is_empty() {
                         break;
                     }
 
                     let disconnect = self.client_messages(inner.get()).await?;
+
                     if disconnect {
                         break;
                     }
@@ -277,24 +282,24 @@ impl Client {
 
     /// Handle client messages.
     async fn client_messages(&mut self, mut inner: InnerBorrow<'_>) -> Result<bool, Error> {
-        inner.is_async = self.protocol_buffer.is_async();
-        inner.stats.received(self.protocol_buffer.len());
+        inner.is_async = self.request_buffer.is_async();
+        inner.stats.received(self.request_buffer.len());
 
         #[cfg(debug_assertions)]
-        if let Some(query) = self.protocol_buffer.query()? {
+        if let Some(query) = self.request_buffer.query()? {
             debug!(
                 "{} [{}] (in transaction: {})",
                 query.query(),
                 self.addr,
                 self.in_transaction
             );
-            QueryLogger::new(&self.protocol_buffer).log().await?;
+            QueryLogger::new(&self.request_buffer).log().await?;
         }
 
         let connected = inner.connected();
 
         let command = match inner.command(
-            &mut self.protocol_buffer,
+            &mut self.request_buffer,
             &mut self.prepared_statements,
             &self.params,
         ) {
@@ -317,7 +322,8 @@ impl Client {
             // This ensures we:
             //
             // 1. Don't connect to servers unnecessarily.
-            // 2. Can use the first query sent by the client to route the transaction.
+            // 2. Can use the first query sent by the client to route the transaction
+            //    to a shard.
             //
             match command {
                 Some(Command::StartTransaction(query)) => {
@@ -378,26 +384,26 @@ impl Client {
         // a client is actually executing something.
         //
         // This prevents us holding open connections to multiple servers
-        if self.protocol_buffer.executable() {
+        if self.request_buffer.executable() {
             if let Some(query) = inner.start_transaction.take() {
                 inner.backend.execute(&query).await?;
             }
         }
 
-        for msg in self.protocol_buffer.iter() {
+        for msg in self.request_buffer.iter() {
             if let ProtocolMessage::Bind(bind) = msg {
                 inner.backend.bind(bind)?
             }
         }
 
         inner
-            .handle_buffer(&self.protocol_buffer, self.streaming)
+            .handle_buffer(&self.request_buffer, self.streaming)
             .await?;
 
         inner.stats.memory_used(self.stream_buffer.capacity());
 
         // Send traffic to mirrors, if any.
-        inner.backend.mirror(&self.protocol_buffer);
+        inner.backend.mirror(&self.request_buffer);
 
         Ok(false)
     }
@@ -411,13 +417,15 @@ impl Client {
         let len = message.len();
         let code = message.code();
         let message = message.backend();
+        let has_more_messages = inner.backend.has_more_messages();
 
-        // ReadyForQuery (B) | CopyInResponse (B)
-        let flush = matches!(code, 'Z' | 'G' | 'E' | 'N');
-        // RowDescription (B) | NoData(B)
-        let async_flush = matches!(code, 'T' | 'n') && inner.is_async;
-        let streaming = message.streaming();
+        // Messages that we need to send to the client immediately.
+        // ReadyForQuery (B) | CopyInResponse (B) | ErrorResponse(B) | NoticeResponse(B)
+        let flush =
+            matches!(code, 'Z' | 'G' | 'E' | 'N') || !has_more_messages || message.streaming();
 
+        // Server finished executing a query.
+        // ReadyForQuery (B)
         if code == 'Z' {
             inner.stats.query();
             self.in_transaction = message.in_transaction();
@@ -428,6 +436,8 @@ impl Client {
 
         // Release the connection back into the pool
         // before flushing data to client.
+        // Flushing can take a minute and we don't want to block
+        // the connection from being reused.
         if inner.backend.done() {
             let changed_params = inner.backend.changed_params();
             if inner.transaction_mode() {
@@ -440,6 +450,8 @@ impl Client {
                 inner.stats.last_transaction_time.as_secs_f64() * 1000.0
             );
 
+            // Update client params with values
+            // sent from the server using ParameterStatus(B) messages.
             if !changed_params.is_empty() {
                 for (name, value) in changed_params.iter() {
                     debug!("setting client's \"{}\" to {}", name, value);
@@ -451,15 +463,13 @@ impl Client {
 
         trace!("[{}] <- {:#?}", self.addr, message);
 
-        if flush || async_flush || streaming {
+        if flush {
             self.stream.send_flush(&message).await?;
-            if async_flush {
-                inner.is_async = false;
-            }
         } else {
             self.stream.send(&message).await?;
         }
 
+        // Pooler is offline and the transaction is done.
         if inner.backend.done() && inner.comms.offline() && !self.admin {
             return Ok(true);
         }
@@ -472,7 +482,7 @@ impl Client {
     /// This ensures we don't check out a connection from the pool until the client
     /// sent a complete request.
     async fn buffer(&mut self) -> Result<(), Error> {
-        self.protocol_buffer.clear();
+        self.request_buffer.clear();
 
         // Only start timer once we receive the first message.
         let mut timer = None;
@@ -482,7 +492,7 @@ impl Client {
         self.prepared_statements.enabled = config.prepared_statements();
         self.timeouts = Timeouts::from_config(&config.config.general);
 
-        while !self.protocol_buffer.full() {
+        while !self.request_buffer.full() {
             let message = match self.stream.read_buf(&mut self.stream_buffer).await {
                 Ok(message) => message.stream(self.streaming).frontend(),
                 Err(_) => {
@@ -500,10 +510,10 @@ impl Client {
             } else {
                 let message = ProtocolMessage::from_bytes(message.to_bytes()?)?;
                 if message.extended() && self.prepared_statements.enabled {
-                    self.protocol_buffer
+                    self.request_buffer
                         .push(self.prepared_statements.maybe_rewrite(message)?);
                 } else {
-                    self.protocol_buffer.push(message);
+                    self.request_buffer.push(message);
                 }
             }
         }
@@ -511,7 +521,7 @@ impl Client {
         trace!(
             "request buffered [{:.4}ms]\n{:#?}",
             timer.unwrap().elapsed().as_secs_f64() * 1000.0,
-            self.protocol_buffer,
+            self.request_buffer,
         );
 
         Ok(())

@@ -18,6 +18,7 @@ pub enum ExecutionCode {
     BindComplete,
     CloseComplete,
     DescriptionOrNothing,
+    Copy,
     Error,
     Untracked,
 }
@@ -37,6 +38,7 @@ impl From<char> for ExecutionCode {
             '2' => Self::BindComplete,
             '3' => Self::CloseComplete,
             'T' | 'n' | 't' => Self::DescriptionOrNothing,
+            'G' | 'c' | 'f' => Self::Copy,
             'E' => Self::Error,
             _ => Self::Untracked,
         }
@@ -78,6 +80,12 @@ impl ProtocolState {
         let code = code.into();
         self.extended = self.extended || code.extended();
         self.queue.push_back(ExecutionItem::Code(code))
+    }
+
+    /// New code we expect now to arrive first.
+    pub(crate) fn prepend(&mut self, code: impl Into<ExecutionCode>) {
+        let code = code.into();
+        self.queue.push_front(ExecutionItem::Code(code));
     }
 
     /// Add a message we will return to the client but the server

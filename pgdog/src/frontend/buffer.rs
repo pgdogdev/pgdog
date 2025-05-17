@@ -160,6 +160,10 @@ impl Buffer {
         self.buffer.last().map(|m| m.code() == 'f').unwrap_or(false)
     }
 
+    pub fn copy_finished(&self) -> bool {
+        matches!(self.buffer.last().map(|m| m.code()), Some('f') | Some('c'))
+    }
+
     /// Rewrite query in buffer.
     pub fn rewrite(&mut self, query: &str) -> Result<(), Error> {
         if self.buffer.iter().any(|c| c.code() != 'Q') {

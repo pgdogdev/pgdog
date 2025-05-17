@@ -307,6 +307,10 @@ impl Connection {
         self.binding.done()
     }
 
+    pub(crate) fn has_more_messages(&self) -> bool {
+        self.binding.has_more_messages()
+    }
+
     /// Get connected servers addresses.
     pub(crate) fn addr(&mut self) -> Result<Vec<&Address>, Error> {
         Ok(match self.binding {
