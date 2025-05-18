@@ -60,6 +60,7 @@ pub struct Counts {
     pub transaction_time: Duration,
     pub parse: usize,
     pub bind: usize,
+    pub healthchecks: usize,
 }
 
 impl Add for Counts {
@@ -80,6 +81,7 @@ impl Add for Counts {
             transaction_time: self.query_time.saturating_add(rhs.transaction_time),
             parse: self.parse.saturating_add(rhs.parse),
             bind: self.bind.saturating_add(rhs.bind),
+            healthchecks: self.healthchecks.saturating_add(rhs.healthchecks),
         }
     }
 }
@@ -88,8 +90,6 @@ impl Add for Counts {
 #[derive(Copy, Clone, Debug)]
 pub struct Stats {
     pub id: BackendKeyData,
-    /// Number of bytes sent.
-    pub healthchecks: usize,
     pub state: State,
     pub last_used: Instant,
     pub last_healthcheck: Option<Instant>,
@@ -107,7 +107,6 @@ impl Stats {
         let now = Instant::now();
         let stats = Stats {
             id,
-            healthchecks: 0,
             state: State::Idle,
             last_used: now,
             last_healthcheck: None,
@@ -244,7 +243,8 @@ impl Stats {
 
     /// Track healtchecks.
     pub fn healthcheck(&mut self) {
-        self.healthchecks += 1;
+        self.total.healthchecks += 1;
+        self.last_checkout.healthchecks += 1;
         self.last_healthcheck = Some(Instant::now());
         self.update();
     }

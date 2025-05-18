@@ -242,7 +242,7 @@ impl Monitor {
                 let server = Box::new(conn);
 
                 let mut guard = self.pool.lock();
-                guard.put(server);
+                guard.put(server, Instant::now());
             }
 
             Ok(Err(err)) => {

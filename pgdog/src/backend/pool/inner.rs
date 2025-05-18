@@ -222,7 +222,7 @@ impl Inner {
     /// Place connection back into the pool
     /// or give it to a waiting client.
     #[inline]
-    pub(super) fn put(&mut self, conn: Box<Server>) {
+    pub(super) fn put(&mut self, conn: Box<Server>, now: Instant) {
         // Try to give it to a client that's been waiting, if any.
         let id = *conn.id();
         if let Some(waiter) = self.waiting.pop_front() {
@@ -233,6 +233,8 @@ impl Inner {
                     server: id,
                     client: waiter.request.id,
                 });
+                self.stats.counts.server_assignment_count += 1;
+                self.stats.counts.wait_time += now.duration_since(waiter.request.created_at);
             }
         } else {
             self.conns.push(conn);
@@ -324,7 +326,7 @@ impl Inner {
         // Finally, if the server is ok,
         // place the connection back into the idle list.
         if server.can_check_in() {
-            self.put(server);
+            self.put(server, now);
         } else {
             self.out_of_sync += 1;
         }
