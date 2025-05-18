@@ -13,10 +13,12 @@ fn test_rd_before_dr() {
             .forward(rd.message().unwrap().backend())
             .unwrap();
         assert!(result.is_none()); // dropped
+        assert!(!multi_shard.done());
         let result = multi_shard
             .forward(dr.message().unwrap().backend())
             .unwrap();
         assert!(result.is_none()); // buffered.
+        assert!(!multi_shard.done());
     }
 
     let result = multi_shard.forward(rd.message().unwrap()).unwrap();
@@ -24,6 +26,7 @@ fn test_rd_before_dr() {
     let result = multi_shard.message();
     // Waiting for command complete
     assert!(result.is_none());
+    assert!(!multi_shard.done());
 
     for _ in 0..3 {
         let result = multi_shard
@@ -35,6 +38,7 @@ fn test_rd_before_dr() {
             )
             .unwrap();
         assert!(result.is_none());
+        assert!(!multi_shard.done());
     }
 
     for _ in 0..2 {
@@ -43,6 +47,7 @@ fn test_rd_before_dr() {
             result.map(|m| m.backend()),
             Some(dr.message().unwrap().backend())
         );
+        assert!(!multi_shard.done());
     }
 
     let result = multi_shard.message().map(|m| m.backend());
@@ -58,4 +63,5 @@ fn test_rd_before_dr() {
 
     // Buffer is empty.
     assert!(multi_shard.message().is_none());
+    assert!(multi_shard.done());
 }
