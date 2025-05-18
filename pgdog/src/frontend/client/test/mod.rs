@@ -37,9 +37,10 @@ pub async fn test_client(port: u16, replicas: bool) -> (TcpStream, Client) {
 }
 
 pub async fn parallel_test_client(port: u16) -> (TcpStream, Client) {
-    let addr = format!("127.0.0.1:{}", port);
+    let addr = format!("127.0.0.1:0");
     let conn_addr = addr.clone();
     let stream = TcpListener::bind(&conn_addr).await.unwrap();
+    let port = stream.local_addr().unwrap().port();
     let connect_handle = tokio::spawn(async move {
         let (stream, addr) = stream.accept().await.unwrap();
 
@@ -49,7 +50,9 @@ pub async fn parallel_test_client(port: u16) -> (TcpStream, Client) {
         Client::new_test(stream, addr)
     });
 
-    let conn = TcpStream::connect(&addr).await.unwrap();
+    let conn = TcpStream::connect(&format!("127.0.0.1:{}", port))
+        .await
+        .unwrap();
     let client = connect_handle.await.unwrap();
 
     (conn, client)
