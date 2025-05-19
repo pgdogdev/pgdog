@@ -30,39 +30,27 @@ impl<'a> Rewrite<'a> {
 
     /// Rewrite Parse message.
     fn parse(&mut self, parse: Parse) -> Result<Parse, Error> {
-        if parse.anonymous() {
-            Ok(parse)
-        } else {
-            let parse = self.statements.insert(parse);
-            Ok(parse)
-        }
+        let parse = self.statements.insert(parse);
+        Ok(parse)
     }
 
     /// Rerwrite Bind message.
     fn bind(&mut self, bind: Bind) -> Result<Bind, Error> {
-        if bind.anonymous() {
-            Ok(bind)
+        let name = self.statements.name(bind.statement());
+        if let Some(name) = name {
+            Ok(bind.rename(name))
         } else {
-            let name = self.statements.name(bind.statement());
-            if let Some(name) = name {
-                Ok(bind.rename(name))
-            } else {
-                Ok(bind)
-            }
+            Ok(bind)
         }
     }
 
     /// Rewrite Describe message.
     fn describe(&mut self, describe: Describe) -> Result<Describe, Error> {
-        if describe.anonymous() {
-            Ok(describe)
+        let name = self.statements.name(describe.statement());
+        if let Some(name) = name {
+            Ok(describe.rename(name))
         } else {
-            let name = self.statements.name(describe.statement());
-            if let Some(name) = name {
-                Ok(describe.rename(name))
-            } else {
-                Ok(describe)
-            }
+            Ok(describe)
         }
     }
 }
@@ -118,10 +106,10 @@ mod test {
         let parse =
             Parse::from_bytes(rewrite.rewrite(parse.into()).unwrap().to_bytes().unwrap()).unwrap();
 
-        assert!(parse.anonymous());
+        assert!(!parse.anonymous());
         assert_eq!(parse.query(), "SELECT * FROM users");
 
-        assert!(statements.is_empty());
-        assert!(statements.global.lock().is_empty());
+        assert_eq!(statements.len(), 1);
+        assert_eq!(statements.global.lock().len(), 1);
     }
 }

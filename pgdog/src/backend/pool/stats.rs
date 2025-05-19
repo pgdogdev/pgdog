@@ -82,7 +82,7 @@ impl Add<BackendCounts> for Counts {
             xact_time: self.xact_time + rhs.transaction_time,
             wait_time: self.wait_time,
             parse_count: self.parse_count + rhs.parse,
-            bind_count: self.parse_count + rhs.bind,
+            bind_count: self.bind_count + rhs.bind,
             rollbacks: self.rollbacks + rhs.rollbacks,
             healthchecks: self.healthchecks + rhs.healthchecks,
         }

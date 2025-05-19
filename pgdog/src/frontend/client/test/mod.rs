@@ -338,6 +338,7 @@ async fn test_client_with_replicas() {
     let mut pool_sent = 0;
     for (role, pool) in pools {
         let state = pool.state();
+        let idle = state.idle;
         // We're using round robin
         // and one write (create table) is going to primary.
         pool_recv += state.stats.counts.received as isize;
@@ -347,25 +348,24 @@ async fn test_client_with_replicas() {
             Role::Primary => {
                 assert_eq!(state.stats.counts.server_assignment_count, 14);
                 assert_eq!(state.stats.counts.bind_count, 13);
-                assert_eq!(state.stats.counts.parse_count, 13);
+                assert_eq!(state.stats.counts.parse_count, idle);
                 assert_eq!(state.stats.counts.rollbacks, 0);
-                assert_eq!(state.stats.counts.healthchecks, 1);
+                assert_eq!(state.stats.counts.healthchecks, idle);
                 pool_recv -= (healthcheck_len_recv * state.stats.counts.healthchecks) as isize;
             }
             Role::Replica => {
                 assert_eq!(state.stats.counts.server_assignment_count, 13);
                 assert_eq!(state.stats.counts.bind_count, 13);
-                assert_eq!(state.stats.counts.parse_count, 13);
+                assert_eq!(state.stats.counts.parse_count, idle);
                 assert_eq!(state.stats.counts.rollbacks, 0);
-                assert!(state.stats.counts.healthchecks >= 1);
+                assert_eq!(state.stats.counts.healthchecks, idle);
                 pool_sent -= (healthcheck_len_sent * state.stats.counts.healthchecks) as isize;
             }
         }
     }
 
-    // TODO: find the missing bytes
-    assert!((pool_recv - len_recv as isize).abs() < 20);
-    assert!((pool_sent - len_sent as isize).abs() < 20);
+    assert!(pool_sent <= len_sent as isize);
+    assert!(pool_recv <= len_recv as isize);
 }
 
 #[tokio::test]

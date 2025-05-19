@@ -6,6 +6,7 @@ use tokio::time::Instant;
 use super::{Ban, Config, Pool, Stats};
 
 /// Pool state.
+#[derive(Debug)]
 pub struct State {
     /// Number of connections checked out.
     pub checked_out: usize,
