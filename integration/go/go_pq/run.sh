@@ -1,10 +1,11 @@
 #!/bin/bash
 set -e
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+source ${SCRIPT_DIR}/../../common.sh
 
-pushd ${SCRIPT_DIR}
+run_pgdog
+wait_for_pgdog
 
-npm install
-timeout 60 npm test
+bash ${SCRIPT_DIR}/dev.sh
 
-popd
+stop_pgdog

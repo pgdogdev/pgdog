@@ -37,15 +37,33 @@ func TestPqCrud(t *testing.T) {
 
 			assert.Nil(t, err)
 			id := rand.Intn(1_000_000)
-			rows, err := tx.Query("INSERT INTO sharded (id) VALUES ($1) RETURNING *", id)
+			rows, err := tx.Query("INSERT INTO sharded (id) VALUES ($1) RETURNING id", id)
+
+			assert.Nil(t, err)
 
 			var len int
 			var id_val int64
 			for rows.Next() {
 				rows.Scan(&id_val)
 				len += 1
-				assert.Equal(t, id, id_val)
+				assert.Equal(t, id_val, int64(id))
 			}
+			assert.Equal(t, len, 1)
+
+			rows, err = tx.Query("SELECT id FROM sharded WHERE id = $1", id)
+			assert.Nil(t, err)
+
+			len = 0
+			id_val = 0
+			for rows.Next() {
+				rows.Scan(&id_val)
+				len += 1
+				assert.Equal(t, id_val, int64(id))
+			}
+			assert.Equal(t, len, 1)
+
+			err = tx.Rollback()
+			assert.Nil(t, err)
 		}
 	}
 }

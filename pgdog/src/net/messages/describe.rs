@@ -71,6 +71,14 @@ impl Describe {
         }
     }
 
+    pub fn is_statement(&self) -> bool {
+        self.kind == 'S'
+    }
+
+    pub fn is_portal(&self) -> bool {
+        self.kind == 'P'
+    }
+
     pub fn new_portal(name: &str) -> Describe {
         Describe {
             kind: 'P',

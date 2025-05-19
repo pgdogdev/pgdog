@@ -146,7 +146,7 @@ func executeTimeoutTest(t *testing.T) {
 	conns := connectBoth()
 
 	for _, conn := range conns {
-		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 		defer cancel()
 
 		c := make(chan int, 1)
