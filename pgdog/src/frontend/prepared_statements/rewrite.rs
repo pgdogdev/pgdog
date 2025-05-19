@@ -46,11 +46,15 @@ impl<'a> Rewrite<'a> {
 
     /// Rewrite Describe message.
     fn describe(&mut self, describe: Describe) -> Result<Describe, Error> {
-        let name = self.statements.name(describe.statement());
-        if let Some(name) = name {
-            Ok(describe.rename(name))
-        } else {
+        if describe.is_portal() {
             Ok(describe)
+        } else {
+            let name = self.statements.name(describe.statement());
+            if let Some(name) = name {
+                Ok(describe.rename(name))
+            } else {
+                Ok(describe)
+            }
         }
     }
 }
