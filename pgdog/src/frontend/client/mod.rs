@@ -287,7 +287,7 @@ impl Client {
                 }
 
                 buffer = self.buffer() => {
-                    buffer?;
+                    let event = buffer?;
                     if !self.request_buffer.is_empty() {
                         let disconnect = self.client_messages(inner.get()).await?;
 
@@ -296,8 +296,17 @@ impl Client {
                         }
                     }
 
-                    if self.shutdown && !inner.get().backend.connected() {
-                        break;
+                    match event {
+                        BufferEvent::DisconnectAbrupt => break,
+                        BufferEvent::DisconnectGraceful => {
+                            let connected = inner.get().backend.connected();
+
+                            if !connected {
+                                break;
+                            }
+                        }
+
+                        BufferEvent::HaveRequest => (),
                     }
                 }
             }
@@ -511,7 +520,7 @@ impl Client {
     ///
     /// This ensures we don't check out a connection from the pool until the client
     /// sent a complete request.
-    async fn buffer(&mut self) -> Result<(), Error> {
+    async fn buffer(&mut self) -> Result<BufferEvent, Error> {
         self.request_buffer.clear();
 
         // Only start timer once we receive the first message.
@@ -526,8 +535,7 @@ impl Client {
             let message = match self.stream.read_buf(&mut self.stream_buffer).await {
                 Ok(message) => message.stream(self.streaming).frontend(),
                 Err(_) => {
-                    self.shutdown = true;
-                    return Ok(());
+                    return Ok(BufferEvent::DisconnectAbrupt);
                 }
             };
 
@@ -538,7 +546,7 @@ impl Client {
             // Terminate (B & F).
             if message.code() == 'X' {
                 self.shutdown = true;
-                return Ok(());
+                return Ok(BufferEvent::DisconnectGraceful);
             } else {
                 let message = ProtocolMessage::from_bytes(message.to_bytes()?)?;
                 if message.extended() && self.prepared_statements.enabled {
@@ -556,7 +564,7 @@ impl Client {
             self.request_buffer,
         );
 
-        Ok(())
+        Ok(BufferEvent::HaveRequest)
     }
 
     /// Tell the client we started a transaction.
@@ -614,3 +622,10 @@ impl Drop for Client {
 
 #[cfg(test)]
 pub mod test;
+
+#[derive(Copy, Clone, PartialEq, Debug)]
+enum BufferEvent {
+    DisconnectGraceful,
+    DisconnectAbrupt,
+    HaveRequest,
+}
