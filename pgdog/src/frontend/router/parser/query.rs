@@ -300,9 +300,9 @@ impl QueryParser {
             // INSERT statements.
             Some(NodeEnum::InsertStmt(ref stmt)) => Self::insert(stmt, &sharding_schema, bind),
             // UPDATE statements.
-            Some(NodeEnum::UpdateStmt(ref stmt)) => Self::update(stmt),
+            Some(NodeEnum::UpdateStmt(ref stmt)) => Self::update(stmt, &sharding_schema, bind),
             // DELETE statements.
-            Some(NodeEnum::DeleteStmt(ref stmt)) => Self::delete(stmt),
+            Some(NodeEnum::DeleteStmt(ref stmt)) => Self::delete(stmt, &sharding_schema, bind),
             // Transaction control statements,
             // e.g. BEGIN, COMMIT, etc.
             Some(NodeEnum::TransactionStmt(ref stmt)) => {
@@ -510,80 +510,46 @@ impl QueryParser {
         Ok(Command::Query(Route::write(Shard::All).set_read(read_only)))
     }
 
-    fn select(
-        stmt: &SelectStmt,
+    fn where_clause(
         sharding_schema: &ShardingSchema,
+        where_clause: &WhereClause,
         params: Option<&Bind>,
-    ) -> Result<Command, Error> {
-        let order_by = Self::select_sort(&stmt.sort_clause, params);
+    ) -> Result<HashSet<Shard>, Error> {
         let mut shards = HashSet::new();
-        let table_name = stmt
-            .from_clause
-            .first()
-            .and_then(|node| {
-                node.node.as_ref().map(|node| match node {
-                    NodeEnum::RangeVar(var) => Some(if let Some(ref alias) = var.alias {
-                        alias.aliasname.as_str()
-                    } else {
-                        var.relname.as_str()
-                    }),
-                    _ => None,
-                })
-            })
-            .flatten();
-        if let Some(where_clause) = WhereClause::new(table_name, &stmt.where_clause) {
-            // Complexity: O(number of sharded tables * number of columns in the query)
-            for table in sharding_schema.tables.tables() {
-                let table_name = table.name.as_deref();
-                let keys = where_clause.keys(table_name, &table.column);
-                for key in keys {
-                    match key {
-                        Key::Constant(value) => {
-                            shards.insert(shard_value(
-                                &value,
-                                &table.data_type,
-                                sharding_schema.shards,
-                                &table.centroids,
-                                table.centroid_probes,
-                            ));
-                        }
-
-                        Key::Parameter(param) => {
-                            if let Some(params) = params {
-                                if let Some(param) = params.parameter(param)? {
-                                    shards.insert(shard_param(
-                                        &param,
-                                        table,
-                                        sharding_schema.shards,
-                                    ));
-                                }
-                            }
-                        }
-
-                        // Null doesn't help.
-                        Key::Null => (),
-                    }
-                }
-            }
-        }
-        // Shard by vector in ORDER BY clause.
-        for order in &order_by {
-            if let Some((vector, column_name)) = order.vector() {
-                for table in sharding_schema.tables.tables() {
-                    if &table.column == column_name
-                        && (table.name.is_none() || table.name.as_deref() == table_name)
-                    {
-                        let centroids = Centroids::from(&table.centroids);
-                        shards.insert(centroids.shard(
-                            vector,
+        // Complexity: O(number of sharded tables * number of columns in the query)
+        for table in sharding_schema.tables.tables() {
+            let table_name = table.name.as_deref();
+            let keys = where_clause.keys(table_name, &table.column);
+            for key in keys {
+                match key {
+                    Key::Constant(value) => {
+                        shards.insert(shard_value(
+                            &value,
+                            &table.data_type,
                             sharding_schema.shards,
+                            &table.centroids,
                             table.centroid_probes,
                         ));
                     }
+
+                    Key::Parameter(param) => {
+                        if let Some(params) = params {
+                            if let Some(param) = params.parameter(param)? {
+                                shards.insert(shard_param(&param, table, sharding_schema.shards));
+                            }
+                        }
+                    }
+
+                    // Null doesn't help.
+                    Key::Null => (),
                 }
             }
         }
 
+        Ok(shards)
+    }
+
+    fn converge(shards: HashSet<Shard>) -> Shard {
         let shard = if shards.len() == 1 {
             shards.iter().next().cloned().unwrap()
         } else {
@@ -605,6 +571,44 @@ impl QueryParser {
                 Shard::Multi(multi)
             }
         };
+
+        shard
+    }
+
+    fn select(
+        stmt: &SelectStmt,
+        sharding_schema: &ShardingSchema,
+        params: Option<&Bind>,
+    ) -> Result<Command, Error> {
+        let order_by = Self::select_sort(&stmt.sort_clause, params);
+        let mut shards = HashSet::new();
+        let the_table = Table::try_from(&stmt.from_clause).ok();
+        if let Some(where_clause) =
+            WhereClause::new(the_table.as_ref().map(|t| t.name), &stmt.where_clause)
+        {
+            shards = Self::where_clause(sharding_schema, &where_clause, params)?;
+        }
+
+        // Shard by vector in ORDER BY clause.
+        for order in &order_by {
+            if let Some((vector, column_name)) = order.vector() {
+                for table in sharding_schema.tables.tables() {
+                    if &table.column == column_name
+                        && (table.name.is_none()
+                            || table.name.as_deref() == the_table.as_ref().map(|t| t.name))
+                    {
+                        let centroids = Centroids::from(&table.centroids);
+                        shards.insert(centroids.shard(
+                            vector,
+                            sharding_schema.shards,
+                            table.centroid_probes,
+                        ));
+                    }
+                }
+            }
+        }
+
+        let shard = Self::converge(shards);
 
         let aggregates = Aggregate::parse(stmt)?;
 
@@ -755,11 +759,35 @@ impl QueryParser {
         }
     }
 
-    fn update(_stmt: &UpdateStmt) -> Result<Command, Error> {
+    fn update(
+        stmt: &UpdateStmt,
+        sharding_schema: &ShardingSchema,
+        params: Option<&Bind>,
+    ) -> Result<Command, Error> {
+        let table = stmt.relation.as_ref().map(Table::from);
+        let where_clause = WhereClause::new(table.map(|t| t.name), &stmt.where_clause);
+
+        if let Some(where_clause) = where_clause {
+            let shards = Self::where_clause(sharding_schema, &where_clause, params)?;
+            return Ok(Command::Query(Route::write(Self::converge(shards))));
+        }
+
         Ok(Command::Query(Route::write(None)))
     }
 
-    fn delete(_stmt: &DeleteStmt) -> Result<Command, Error> {
+    fn delete(
+        stmt: &DeleteStmt,
+        sharding_schema: &ShardingSchema,
+        params: Option<&Bind>,
+    ) -> Result<Command, Error> {
+        let table = stmt.relation.as_ref().map(Table::from);
+        let where_clause = WhereClause::new(table.map(|t| t.name), &stmt.where_clause);
+
+        if let Some(where_clause) = where_clause {
+            let shards = Self::where_clause(sharding_schema, &where_clause, params)?;
+            return Ok(Command::Query(Route::write(Self::converge(shards))));
+        }
+
         Ok(Command::Query(Route::write(None)))
     }
 }

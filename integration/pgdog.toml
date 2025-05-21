@@ -66,6 +66,11 @@ column = "id"
 data_type = "bigint"
 primary = true
 
+[[sharded_tables]]
+database = "pgdog_sharded"
+column = "customer_id"
+data_type = "bigint"
+
 [[omnisharded_tables]]
 database = "pgdog_sharded"
 tables = ["sharded_omni"]
