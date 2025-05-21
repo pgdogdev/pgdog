@@ -25,8 +25,8 @@ use crate::net::messages::{
     Authentication, BackendKeyData, CommandComplete, ErrorResponse, FromBytes, Message, Password,
     Protocol, ReadyForQuery, ToBytes,
 };
-use crate::net::NoticeResponse;
 use crate::net::{parameter::Parameters, Stream};
+use crate::net::{DataRow, Field, NoticeResponse, RowDescription};
 
 pub mod counter;
 pub mod inner;
@@ -387,6 +387,18 @@ impl Client {
                     self.end_transaction(false).await?;
                     self.in_transaction = false;
                     inner.done(false);
+                    return Ok(false);
+                }
+                // How many shards are configured.
+                Some(Command::Shards(shards)) => {
+                    let rd = RowDescription::new(&[Field::bigint("shards")]);
+                    let mut dr = DataRow::new();
+                    dr.add(*shards as i64);
+                    let cc = CommandComplete::from_str("SHOW");
+                    let rfq = ReadyForQuery::in_transaction(self.in_transaction);
+                    self.stream
+                        .send_many(&[rd.message()?, dr.message()?, cc.message()?, rfq.message()?])
+                        .await?;
                     return Ok(false);
                 }
                 // TODO: Handling session variables requires a lot more work,
