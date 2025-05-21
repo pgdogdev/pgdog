@@ -46,4 +46,9 @@ describe "basics" do
       }.to raise_error /Transaction already started/
     end
   end
+
+  it "can get the number of shards" do
+    shards = PgDog.shards
+    expect(shards).to eq(2)
+  end
 end

@@ -13,6 +13,7 @@ pub enum Command {
     Set { name: String, value: ParameterValue },
     PreparedStatement(Prepare),
     Rewrite(String),
+    Shards(usize),
 }
 
 #[derive(Debug, Clone, PartialEq)]

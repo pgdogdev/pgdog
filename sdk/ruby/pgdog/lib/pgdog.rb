@@ -30,6 +30,17 @@ class PgDog
     end
   end
 
+  # Get the number of configured shards
+  #
+  # Can only work outside of a transaction, because
+  # a started transaction is most likely already routed to a shard
+  # and the PgDog query parser won't be used.
+  def self.shards
+    PgDog.check_transaction
+    shards = ActiveRecord::Base.connection.execute "SHOW \"pgdog.shards\""
+    return shards[0]["shards"].to_i
+  end
+
   # Get currently set shard, if any.
   def self.shard
     shard = self.connection.execute "SELECT current_setting('pgdog.shard', true)"

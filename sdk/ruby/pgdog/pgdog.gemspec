@@ -1,6 +1,6 @@
 Gem::Specification.new do |s|
   s.name        = "pgdog"
-  s.version     = "0.1.1"
+  s.version     = "0.1.2"
   s.summary     = "PgDog plugin for Ruby on Rails."
   s.description = "Add routing hints to the application to enable direct-to-shard transaction routing in ambiguous contexts."
   s.authors     = ["Lev Kokotov"]

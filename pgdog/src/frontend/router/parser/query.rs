@@ -295,6 +295,9 @@ impl QueryParser {
             Some(NodeEnum::VariableSetStmt(ref stmt)) => {
                 return self.set(stmt, &sharding_schema, read_only)
             }
+            Some(NodeEnum::VariableShowStmt(ref stmt)) => {
+                return self.show(stmt, &sharding_schema, read_only)
+            }
             // COPY statements.
             Some(NodeEnum::CopyStmt(ref stmt)) => Self::copy(stmt, cluster),
             // INSERT statements.
@@ -401,6 +404,18 @@ impl QueryParser {
             Ok(command.dry_run())
         } else {
             Ok(command)
+        }
+    }
+
+    fn show(
+        &mut self,
+        stmt: &VariableShowStmt,
+        sharding_schema: &ShardingSchema,
+        read_only: bool,
+    ) -> Result<Command, Error> {
+        match stmt.name.as_str() {
+            "pgdog.shards" => Ok(Command::Shards(sharding_schema.shards)),
+            _ => Ok(Command::Query(Route::write(Shard::All).set_read(read_only))),
         }
     }
 
@@ -1178,5 +1193,13 @@ mod test {
             )
             .unwrap();
         assert!(matches!(result, Command::Query(_)));
+    }
+
+    #[test]
+    fn test_show_shards() {
+        let (cmd, qp) = command!("SHOW pgdog.shards");
+        assert!(matches!(cmd, Command::Shards(2)));
+        assert!(!qp.routed);
+        assert!(!qp.in_transaction);
     }
 }
