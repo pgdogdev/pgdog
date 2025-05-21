@@ -80,6 +80,11 @@ column = "id"
 data_type = "bigint"
 primary = true
 
+[[sharded_tables]]
+column = "customer_id"
+database = "pgdog_sharded"
+data_type = "bigint"
+
 
 #
 # ActiveRecord sends these queries
