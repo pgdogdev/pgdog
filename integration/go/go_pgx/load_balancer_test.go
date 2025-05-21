@@ -37,8 +37,17 @@ DROP TABLE IF EXISTS users;
 DROP TABLE IF EXISTS companies;
 `
 
-func migrate(pool *pgxpool.Pool) error {
-	_, err := pool.Exec(context.Background(), createTables)
+func migrate(t *testing.T, pool *pgxpool.Pool) error {
+	ctx := context.Background()
+	_, err := pool.Exec(ctx, createTables)
+	assert.NoError(t, err)
+	_, err = pool.Exec(ctx, "INSERT INTO companies(name) VALUES($1) ON CONFLICT DO NOTHING;", "TestCo")
+	assert.NoError(t, err)
+	_, err = pool.Exec(ctx, "INSERT INTO users(company_id, username) VALUES($1, $2) ON CONFLICT DO NOTHING", 1, "bob")
+	assert.NoError(t, err)
+	_, err = pool.Exec(ctx, "INSERT INTO notes(company_id, user_id, content) VALUES($1, $2, $3) ON CONFLICT DO NOTHING;", 1, 1, "Initial Note")
+	assert.NoError(t, err)
+
 	return err
 }
 
@@ -79,7 +88,7 @@ var writeQueries = []struct {
 	{"UPDATE companies SET name = $1 WHERE company_id = $2;", []any{"MegaCorp", 1}},
 }
 
-func runTest(t *testing.T) {
+func getPool(t *testing.T) *pgxpool.Pool {
 	ctx := context.Background()
 	dsn := "postgres://pgdog:pgdog@127.0.0.1:6432/pgdog?sslmode=disable"
 
@@ -88,27 +97,20 @@ func runTest(t *testing.T) {
 	config.MaxConns = 32 // increase pool size for heavy test concurrency
 
 	pool, err := pgxpool.NewWithConfig(ctx, config)
-	assert.NoError(t, err)
-	defer pool.Close()
 
-	err = migrate(pool)
 	assert.NoError(t, err)
 
-	defer func() {
-		_ = dropAll(pool)
-	}()
+	return pool
 
-	_, err = pool.Exec(ctx, "INSERT INTO companies(name) VALUES($1) ON CONFLICT DO NOTHING;", "TestCo")
-	assert.NoError(t, err)
-	_, err = pool.Exec(ctx, "INSERT INTO users(company_id, username) VALUES($1, $2) ON CONFLICT DO NOTHING", 1, "bob")
-	assert.NoError(t, err)
-	_, err = pool.Exec(ctx, "INSERT INTO notes(company_id, user_id, content) VALUES($1, $2, $3) ON CONFLICT DO NOTHING;", 1, 1, "Initial Note")
-	assert.NoError(t, err)
+}
+
+func runTest(t *testing.T, pool *pgxpool.Pool) {
+	ctx := context.Background()
 
 	t.Run("Read queries are handled as reads", func(t *testing.T) {
 		for i, q := range readQueries {
 			t.Run(fmt.Sprintf("read_query_%d", i), func(t *testing.T) {
-				t.Parallel()
+				// t.Parallel()
 				rows, err := pool.Query(ctx, q.q, q.args...)
 				rows.Close()
 				assert.NoError(t, err, "Query failed: %s", q.q)
@@ -135,7 +137,25 @@ func runTest(t *testing.T) {
 func TestRoundRobinWithPrimary(t *testing.T) {
 	adminCommand(t, "RELOAD")
 	adminCommand(t, "SET load_balancing_strategy TO 'round_robin'")
-	runTest(t)
+	pool := getPool(t)
+
+	migrate(t, pool)
+
+	defer func() {
+		_ = dropAll(pool)
+	}()
+
+	prewarm(t, pool)
+
+	transPrimaryBefore, queriesPrimaryBefore := getTransactionsAndQueries(t, "primary")
+	transReplicaBefore, queriesReplicaBefore := getTransactionsAndQueries(t, "replica")
+
+	runTest(t, pool)
+
+	transPrimaryAfter, queriesPrimaryAfter := getTransactionsAndQueries(t, "primary")
+	transReplicaAfter, queriesReplicaAfter := getTransactionsAndQueries(t, "replica")
+
+	fmt.Printf("%d %d %d %d\n%d %d %d %d\n", transPrimaryBefore, queriesPrimaryBefore, transReplicaBefore, queriesReplicaBefore, transPrimaryAfter, queriesPrimaryAfter, transReplicaAfter, queriesReplicaAfter)
 }
 
 func adminCommand(t *testing.T, command string) {
@@ -147,7 +167,7 @@ func adminCommand(t *testing.T, command string) {
 	defer rows.Close()
 }
 
-func getTransactionsAndQueries(t *testing.T, role string) (pgtype.Numeric, pgtype.Numeric) {
+func getTransactionsAndQueries(t *testing.T, role string) (int64, int64) {
 	conn, err := pgx.Connect(context.Background(), "postgres://admin:pgdog@127.0.0.1:6432/admin")
 	assert.NoError(t, err)
 	defer conn.Close(context.Background())
@@ -157,8 +177,8 @@ func getTransactionsAndQueries(t *testing.T, role string) (pgtype.Numeric, pgtyp
 
 	assert.NoError(t, err)
 
-	var totalQueryCount pgtype.Numeric
-	var totalTransactionCount pgtype.Numeric
+	var totalQueryCount float64
+	var totalTransactionCount float64
 
 outer:
 	for rows.Next() {
@@ -190,14 +210,29 @@ outer:
 			}
 
 			if description.Name == "total_xact_count" {
-				totalTransactionCount = values[i].(pgtype.Numeric)
+				transactions := values[i].(pgtype.Numeric)
+				v, err := transactions.Float64Value()
+				assert.NoError(t, err)
+				totalTransactionCount = v.Float64
 			}
 
 			if description.Name == "total_query_count" {
-				totalQueryCount = values[i].(pgtype.Numeric)
+				queries := values[i].(pgtype.Numeric)
+				v, err := queries.Float64Value()
+				assert.NoError(t, err)
+				totalQueryCount = v.Float64
 			}
 		}
 	}
 
-	return totalQueryCount, totalTransactionCount
+	return int64(totalQueryCount), int64(totalTransactionCount)
+}
+
+func prewarm(t *testing.T, pool *pgxpool.Pool) {
+	for range 25 {
+		for _, q := range []string{"BEGIN", "SELECT 1", "COMMIT", "SELECT 1"} {
+			_, err := pool.Exec(context.Background(), q)
+			assert.NoError(t, err)
+		}
+	}
 }

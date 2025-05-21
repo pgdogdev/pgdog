@@ -141,3 +141,77 @@ impl Shard {
         self.pools().iter().for_each(|pool| pool.shutdown());
     }
 }
+
+#[cfg(test)]
+mod test {
+    use std::collections::BTreeSet;
+
+    use crate::backend::pool::{Address, Config};
+
+    use super::*;
+
+    #[tokio::test]
+    async fn test_exclude_primary() {
+        crate::logger();
+
+        let primary = &Some(PoolConfig {
+            address: Address::new_test(),
+            config: Config::default(),
+        });
+
+        let replicas = &[PoolConfig {
+            address: Address::new_test(),
+            config: Config::default(),
+        }];
+
+        let shard = Shard::new(
+            primary,
+            replicas,
+            LoadBalancingStrategy::Random,
+            ReadWriteSplit::ExcludePrimary,
+        );
+        shard.launch();
+
+        for _ in 0..25 {
+            let replica_id = shard.replicas.pools[0].id();
+
+            let conn = shard.replica(&Request::default()).await.unwrap();
+            assert_eq!(conn.pool.id(), replica_id);
+        }
+
+        shard.shutdown();
+    }
+
+    #[tokio::test]
+    async fn test_include_primary() {
+        crate::logger();
+
+        let primary = &Some(PoolConfig {
+            address: Address::new_test(),
+            config: Config::default(),
+        });
+
+        let replicas = &[PoolConfig {
+            address: Address::new_test(),
+            config: Config::default(),
+        }];
+
+        let shard = Shard::new(
+            primary,
+            replicas,
+            LoadBalancingStrategy::Random,
+            ReadWriteSplit::IncludePrimary,
+        );
+        shard.launch();
+        let mut ids = BTreeSet::new();
+
+        for _ in 0..25 {
+            let conn = shard.replica(&Request::default()).await.unwrap();
+            ids.insert(conn.pool.id());
+        }
+
+        shard.shutdown();
+
+        assert_eq!(ids.len(), 2);
+    }
+}

@@ -13,7 +13,7 @@ default_pool_size = 100
 workers = 10
 min_pool_size = 1
 pooler_mode = "transaction"
-load_balancing_strategy = "least_active_connections"
+load_balancing_strategy = "round_robin"
 auth_type = "trust"
 
 [admin]
