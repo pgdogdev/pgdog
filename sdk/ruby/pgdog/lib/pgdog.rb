@@ -21,7 +21,7 @@ class PgDog
   # manually using SET.
   def self.with_sharding_key(key)
     # Basic SQL injection protection.
-    key.to_s.sub "'", "''"
+    key = key.to_s.sub "'", "''"
 
     PgDog.check_transaction
     ActiveRecord::Base.transaction do
@@ -37,7 +37,7 @@ class PgDog
   # and the PgDog query parser won't be used.
   def self.shards
     PgDog.check_transaction
-    shards = ActiveRecord::Base.connection.execute "SHOW \"pgdog.shards\""
+    shards = self.connection.execute "SHOW \"pgdog.shards\""
     return shards[0]["shards"].to_i
   end
 
@@ -70,3 +70,13 @@ end
 # Error raised if a transaction is already started.
 class PgDogError < StandardError
 end
+
+# class ActiveRecord::Schema
+#   def self.install_sharded_primary_key(table)
+#     shards = PgDog.shards
+#     table = table.to_s.sub "'", "''"
+#     shards.times do |shard|
+#       PgDog.connection.execute "/* pgdog_shard: #{shard} */ SELECT pgdog.install_next_id('public', '#{table}', 'id', #{shards}, #{shard})"
+#     end
+#   end
+# end
