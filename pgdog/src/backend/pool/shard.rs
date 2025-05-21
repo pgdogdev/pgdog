@@ -1,7 +1,7 @@
 //! A shard is a collection of replicas and a primary.
 
 use crate::{
-    config::{LoadBalancingStrategy, Role},
+    config::{LoadBalancingStrategy, ReadWriteSplit, Role},
     net::messages::BackendKeyData,
 };
 
@@ -12,6 +12,7 @@ use super::{Error, Guard, Pool, PoolConfig, Replicas, Request};
 pub struct Shard {
     pub(super) primary: Option<Pool>,
     pub(super) replicas: Replicas,
+    pub(super) rw_split: ReadWriteSplit,
 }
 
 impl Shard {
@@ -20,11 +21,16 @@ impl Shard {
         primary: &Option<PoolConfig>,
         replicas: &[PoolConfig],
         lb_strategy: LoadBalancingStrategy,
+        rw_split: ReadWriteSplit,
     ) -> Self {
         let primary = primary.as_ref().map(Pool::new);
         let replicas = Replicas::new(replicas, lb_strategy);
 
-        Self { primary, replicas }
+        Self {
+            primary,
+            replicas,
+            rw_split,
+        }
     }
 
     /// Get a connection to the shard primary database.
@@ -45,7 +51,14 @@ impl Shard {
                 .get(request)
                 .await
         } else {
-            self.replicas.get(request, &self.primary).await
+            use ReadWriteSplit::*;
+
+            let primary = match self.rw_split {
+                IncludePrimary => &self.primary,
+                ExcludePrimary => &None,
+            };
+
+            self.replicas.get(request, primary).await
         }
     }
 
@@ -81,6 +94,7 @@ impl Shard {
         Self {
             primary: self.primary.as_ref().map(|primary| primary.duplicate()),
             replicas: self.replicas.duplicate(),
+            rw_split: self.rw_split,
         }
     }
 

@@ -63,6 +63,10 @@ impl ParameterStatus {
                 name: "server_version".into(),
                 value: env!("CARGO_PKG_VERSION").to_string() + " (PgDog)",
             },
+            ParameterStatus {
+                name: "standard_conforming_strings".into(),
+                value: "on".into(),
+            },
         ]
     }
 }

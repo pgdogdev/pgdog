@@ -3,16 +3,25 @@ package main
 import (
 	"context"
 	"fmt"
+	"math/big"
 	"math/rand"
 	"os"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/stretchr/testify/assert"
 )
 
 func assertNoOutOfSync(t *testing.T) {
+	zero := pgtype.Numeric{
+		Int:   big.NewInt(0),
+		Exp:   0,
+		NaN:   false,
+		Valid: true,
+	}
+
 	conn, err := pgx.Connect(context.Background(), "postgres://admin:pgdog@127.0.0.1:6432/admin")
 	if err != nil {
 		panic(err)
@@ -20,6 +29,7 @@ func assertNoOutOfSync(t *testing.T) {
 	defer conn.Close(context.Background())
 
 	rows, err := conn.Query(context.Background(), "SHOW POOLS", pgx.QueryExecModeSimpleProtocol)
+	assert.NoError(t, err)
 	defer rows.Close()
 
 	for rows.Next() {
@@ -30,8 +40,8 @@ func assertNoOutOfSync(t *testing.T) {
 
 		for i, description := range rows.FieldDescriptions() {
 			if description.Name == "out_of_sync" {
-				out_of_sync := values[i].(int64)
-				assert.Equal(t, out_of_sync, int64(0), "No connections should be out of sync")
+				out_of_sync := values[i].(pgtype.Numeric)
+				assert.Equal(t, out_of_sync, zero, "No connections should be out of sync")
 				return
 			}
 		}

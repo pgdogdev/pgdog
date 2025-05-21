@@ -271,6 +271,7 @@ async fn test_client_extended() {
 
 #[tokio::test]
 async fn test_client_with_replicas() {
+    crate::logger();
     let (mut conn, mut client, _) = new_client!(true);
 
     let handle = tokio::spawn(async move {
@@ -346,6 +347,14 @@ async fn test_client_with_replicas() {
 
         match role {
             Role::Primary => {
+                assert_eq!(
+                    state.stats.counts.query_count,
+                    state.stats.counts.server_assignment_count + state.stats.counts.healthchecks
+                );
+                assert_eq!(
+                    state.stats.counts.xact_count,
+                    state.stats.counts.server_assignment_count + state.stats.counts.healthchecks
+                );
                 assert_eq!(state.stats.counts.server_assignment_count, 14);
                 assert_eq!(state.stats.counts.bind_count, 13);
                 assert_eq!(state.stats.counts.parse_count, idle);
@@ -355,6 +364,14 @@ async fn test_client_with_replicas() {
             }
             Role::Replica => {
                 assert_eq!(state.stats.counts.server_assignment_count, 13);
+                assert_eq!(
+                    state.stats.counts.query_count,
+                    state.stats.counts.server_assignment_count + state.stats.counts.healthchecks
+                );
+                assert_eq!(
+                    state.stats.counts.xact_count,
+                    state.stats.counts.server_assignment_count + state.stats.counts.healthchecks
+                );
                 assert_eq!(state.stats.counts.bind_count, 13);
                 assert_eq!(state.stats.counts.parse_count, idle);
                 assert_eq!(state.stats.counts.rollbacks, 0);
