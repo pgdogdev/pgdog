@@ -212,3 +212,19 @@ impl Drop for InnerBorrow<'_> {
         self.comms.stats(self.inner.stats);
     }
 }
+
+#[cfg(test)]
+mod test {
+    use crate::frontend::client::test::test_client;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn test_locking() {
+        let (_conn, client) = test_client(true).await;
+        let mut inner = Inner::new(&client).unwrap();
+
+        inner.connect(&Request::default()).await.unwrap();
+        assert!(inner.backend.done());
+    }
+}
