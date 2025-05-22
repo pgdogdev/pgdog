@@ -226,5 +226,6 @@ mod test {
 
         inner.connect(&Request::default()).await.unwrap();
         assert!(inner.backend.done());
+        assert!(!inner.backend.is_dirty());
     }
 }
