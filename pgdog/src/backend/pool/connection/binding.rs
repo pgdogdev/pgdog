@@ -303,4 +303,14 @@ impl Binding {
             _ => (),
         }
     }
+
+    #[cfg(test)]
+    pub(super) fn is_dirty(&self) -> bool {
+        match self {
+            Binding::Server(Some(ref server)) => server.dirty(),
+            Binding::MultiShard(ref servers, _state) => servers.iter().any(|s| s.dirty()),
+            Binding::Replication(Some(ref server), _) => server.dirty(),
+            _ => false,
+        }
+    }
 }

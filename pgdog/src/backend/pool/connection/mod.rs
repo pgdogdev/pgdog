@@ -320,6 +320,11 @@ impl Connection {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn is_dirty(&self) -> bool {
+        self.binding.is_dirty()
+    }
+
     pub(crate) fn has_more_messages(&self) -> bool {
         self.binding.has_more_messages()
     }
