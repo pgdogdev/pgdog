@@ -28,7 +28,7 @@ func LoadStatsForQuery(conn *pgx.Conn, query string) PgStatStatement {
 }
 
 func LoadStatsForPrimary(query string) PgStatStatement {
-	conn, err := pgx.Connect(context.Background(), "postgres://postgres:postgres@127.0.0.1:5433/postgres")
+	conn, err := pgx.Connect(context.Background(), "postgres://postgres:postgres@127.0.0.1:45000/postgres")
 	defer conn.Close(context.Background())
 
 	if err != nil {
@@ -42,7 +42,7 @@ func LoadStatsForReplicas(query string) []PgStatStatement {
 	stats := make([]PgStatStatement, 0)
 
 	for i := range 2 {
-		port := 5434 + i
+		port := 45001 + i
 		conn, err := pgx.Connect(context.Background(), fmt.Sprintf("postgres://postgres:postgres@127.0.0.1:%d/postgres", port))
 		defer conn.Close(context.Background())
 		if err != nil {
@@ -57,7 +57,7 @@ func LoadStatsForReplicas(query string) []PgStatStatement {
 
 func ResetStats() {
 	for i := range 3 {
-		port := 5433 + i
+		port := 45000 + i
 		conn, err := pgx.Connect(context.Background(), fmt.Sprintf("postgres://postgres:postgres@127.0.0.1:%d/postgres?sslmode=disable", port))
 		defer conn.Close(context.Background())
 

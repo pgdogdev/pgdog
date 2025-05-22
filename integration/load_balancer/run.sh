@@ -15,7 +15,7 @@ docker-compose up -d
 
 echo "Waiting for Postgres to be ready"
 
-for p in 5433 5434 5434; do
+for p in 45000 45001 45002; do
     export PGPORT=${p}
     while ! pg_isready; do
         sleep 1
