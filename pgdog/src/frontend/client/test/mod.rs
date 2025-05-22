@@ -405,12 +405,17 @@ async fn test_abrupt_disconnect() {
 async fn test_lock_session() {
     let (mut conn, mut client, mut inner) = new_client!(true);
 
-    conn.write_all(&buffer!({ Query::new("SELECT pg_advisory_lock(1234)") }))
-        .await
-        .unwrap();
+    conn.write_all(&buffer!(
+        { Query::new("SET application_name TO 'blah'") },
+        { Query::new("SELECT pg_advisory_lock(1234)") }
+    ))
+    .await
+    .unwrap();
 
-    client.buffer().await.unwrap();
-    client.client_messages(inner.get()).await.unwrap();
+    for _ in 0..2 {
+        client.buffer().await.unwrap();
+        client.client_messages(inner.get()).await.unwrap();
+    }
 
     for c in ['T', 'D', 'C', 'Z'] {
         let msg = inner.backend.read().await.unwrap();
@@ -421,4 +426,7 @@ async fn test_lock_session() {
     // Session locked.
     assert!(inner.backend.is_dirty());
     assert!(!inner.backend.done());
+    assert!(client.params.contains_key("application_name"));
+
+    inner.disconnect();
 }
