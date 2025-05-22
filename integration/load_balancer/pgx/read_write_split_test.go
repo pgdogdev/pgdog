@@ -85,21 +85,65 @@ func TestWrites(t *testing.T) {
 	calls := LoadStatsForPrimary("CREATE TABLE IF NOT EXISTS lb_pgx_test_writes")
 	assert.Equal(t, int64(1), calls.Calls)
 
+	parallel := make(chan int)
+
 	for i := range 50 {
 		id := int64(i)
 		email := fmt.Sprintf("test-%d@test.com", i)
-		rows, err := pool.Query(context.Background(), `INSERT INTO lb_pgx_test_writes (id, email, created_at) VALUES ($1, $2, NOW()) RETURNING *`, i, email)
-		assert.NoError(t, err)
 
-		for rows.Next() {
-			var result TestTable
-			rows.Scan(&result.id, &result.email, &result.created_at)
+		go func() {
+			rows, err := pool.Query(context.Background(), `INSERT INTO lb_pgx_test_writes (id, email, created_at) VALUES ($1, $2, NOW()) RETURNING *`, i, email)
+			assert.NoError(t, err)
 
-			assert.Equal(t, id, result.id)
-			assert.Equal(t, email, result.email)
-		}
+			for rows.Next() {
+				var result TestTable
+				rows.Scan(&result.id, &result.email, &result.created_at)
+
+				assert.Equal(t, id, result.id)
+				assert.Equal(t, email, result.email)
+			}
+
+			parallel <- 1
+		}()
+
+		go func() {
+			_, err := pool.Exec(context.Background(), `UPDATE lb_pgx_test_writes SET created_at = NOW() WHERE id = $1 RETURNING *`, i)
+			assert.NoError(t, err)
+			parallel <- 1
+		}()
+
+		go func() {
+			_, err := pool.Exec(context.Background(), `DELETE FROM lb_pgx_test_writes WHERE id = $1 RETURNING *`, i)
+			assert.NoError(t, err)
+			parallel <- 1
+		}()
+	}
+
+	for range 50 * 3 {
+		<-parallel
 	}
 
 	calls = LoadStatsForPrimary("INSERT INTO lb_pgx_test_writes")
 	assert.Equal(t, int64(50), calls.Calls)
+
+	calls = LoadStatsForPrimary("UPDATE lb_pgx_test_writes")
+	assert.Equal(t, int64(50), calls.Calls)
+
+	calls = LoadStatsForPrimary("DELETE FROM lb_pgx_test_writes")
+	assert.Equal(t, int64(50), calls.Calls)
+}
+
+func TestWriteFunctions(t *testing.T) {
+	pool := GetPool()
+	defer pool.Close()
+
+	ResetStats()
+
+	for i := range 25 {
+		_, err := pool.Exec(context.Background(), "SELECT pg_advisory_lock($1), pg_advisory_unlock($1)", i)
+		assert.NoError(t, err)
+	}
+
+	calls := LoadStatsForPrimary("SELECT pg_advisory_lock")
+	assert.Equal(t, int64(25), calls.Calls)
 }

@@ -33,6 +33,7 @@ pub struct Stats {
     wait_timer: Instant,
     pub last_request: SystemTime,
     pub memory_used: usize,
+    pub locked: bool,
 }
 
 impl Stats {
@@ -54,6 +55,7 @@ impl Stats {
             wait_timer: now,
             last_request: SystemTime::now(),
             memory_used: 0,
+            locked: false,
         }
     }
 
@@ -96,6 +98,10 @@ impl Stats {
         self.transaction_timer = now;
         self.query_timer = now;
         self.wait_time = now.duration_since(self.wait_timer);
+    }
+
+    pub(super) fn locked(&mut self, lock: bool) {
+        self.locked = lock;
     }
 
     pub(super) fn sent(&mut self, bytes: usize) {

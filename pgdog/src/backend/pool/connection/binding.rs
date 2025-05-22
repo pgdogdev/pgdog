@@ -292,4 +292,25 @@ impl Binding {
             _ => Parameters::default(),
         }
     }
+
+    pub(super) fn dirty(&mut self) {
+        match self {
+            Binding::Server(Some(ref mut server)) => server.mark_dirty(true),
+            Binding::MultiShard(ref mut servers, _state) => {
+                servers.iter_mut().for_each(|s| s.mark_dirty(true))
+            }
+            Binding::Replication(Some(ref mut server), _) => server.mark_dirty(true),
+            _ => (),
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn is_dirty(&self) -> bool {
+        match self {
+            Binding::Server(Some(ref server)) => server.dirty(),
+            Binding::MultiShard(ref servers, _state) => servers.iter().any(|s| s.dirty()),
+            Binding::Replication(Some(ref server), _) => server.dirty(),
+            _ => false,
+        }
+    }
 }

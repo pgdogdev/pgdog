@@ -406,6 +406,7 @@ impl Client {
                     self.stream
                         .send_many(&[rd.message()?, dr.message()?, cc.message()?, rfq.message()?])
                         .await?;
+                    inner.done(false);
                     return Ok(false);
                 }
                 // TODO: Handling session variables requires a lot more work,

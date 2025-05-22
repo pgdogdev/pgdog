@@ -1,11 +1,12 @@
 use std::fmt::Display;
 
-use super::{Aggregate, OrderBy};
+use super::{Aggregate, FunctionBehavior, LockingBehavior, OrderBy};
 
-#[derive(Debug, Clone, PartialEq, PartialOrd, Ord, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, PartialOrd, Ord, Eq, Hash, Default)]
 pub enum Shard {
     Direct(usize),
     Multi(Vec<usize>),
+    #[default]
     All,
 }
 
@@ -58,6 +59,7 @@ pub struct Route {
     order_by: Vec<OrderBy>,
     aggregate: Aggregate,
     limit: Option<Limit>,
+    lock_session: bool,
 }
 
 impl Display for Route {
@@ -73,19 +75,26 @@ impl Display for Route {
 
 impl Default for Route {
     fn default() -> Self {
-        Self::write(None)
+        Self {
+            shard: Shard::default(),
+            order_by: vec![],
+            read: false,
+            aggregate: Aggregate::default(),
+            limit: None,
+            lock_session: false,
+        }
     }
 }
 
 impl Route {
     /// SELECT query.
-    pub fn select(shard: Shard, order_by: &[OrderBy], aggregate: &Aggregate) -> Self {
+    pub fn select(shard: Shard, order_by: Vec<OrderBy>, aggregate: Aggregate) -> Self {
         Self {
             shard,
-            order_by: order_by.to_vec(),
+            order_by,
             read: true,
-            aggregate: aggregate.clone(),
-            limit: None,
+            aggregate,
+            ..Default::default()
         }
     }
 
@@ -94,9 +103,7 @@ impl Route {
         Self {
             shard: shard.into(),
             read: true,
-            order_by: vec![],
-            aggregate: Aggregate::default(),
-            limit: None,
+            ..Default::default()
         }
     }
 
@@ -104,10 +111,7 @@ impl Route {
     pub fn write(shard: impl Into<Shard>) -> Self {
         Self {
             shard: shard.into(),
-            read: false,
-            order_by: vec![],
-            aggregate: Aggregate::default(),
-            limit: None,
+            ..Default::default()
         }
     }
 
@@ -161,5 +165,24 @@ impl Route {
     pub fn set_read(mut self, read: bool) -> Self {
         self.read = read;
         self
+    }
+
+    pub fn set_write(mut self, write: FunctionBehavior) -> Self {
+        let FunctionBehavior {
+            writes,
+            locking_behavior,
+        } = write;
+        self.read = !writes;
+        self.lock_session = matches!(locking_behavior, LockingBehavior::Lock);
+        self
+    }
+
+    pub fn set_lock_session(mut self) -> Self {
+        self.lock_session = true;
+        self
+    }
+
+    pub fn lock_session(&self) -> bool {
+        self.lock_session
     }
 }

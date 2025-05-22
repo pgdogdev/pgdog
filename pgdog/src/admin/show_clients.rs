@@ -40,6 +40,7 @@ impl Command for ShowClients {
             Field::numeric("errors"),
             Field::text("application_name"),
             Field::numeric("memory_used"),
+            Field::bool("locked"),
         ]);
 
         let mut rows = vec![];
@@ -75,7 +76,8 @@ impl Command for ShowClients {
                 .add(client.stats.bytes_sent)
                 .add(client.stats.errors)
                 .add(client.paramters.get_default("application_name", ""))
-                .add(client.stats.memory_used);
+                .add(client.stats.memory_used)
+                .add(client.stats.locked);
             rows.push(row.message()?);
         }
 

@@ -261,18 +261,21 @@ impl QueryParser {
         let mut command = match root.node {
             // SELECT statements.
             Some(NodeEnum::SelectStmt(ref stmt)) => {
+                let writes = Self::select_writes(stmt)?;
+
                 if matches!(shard, Shard::Direct(_)) {
-                    return Ok(Command::Query(Route::read(shard)));
+                    return Ok(Command::Query(Route::read(shard).set_write(writes)));
                 }
                 // `SELECT NOW()`, `SELECT 1`, etc.
                 else if ast.tables().is_empty() {
-                    return Ok(Command::Query(Route::read(Some(
-                        round_robin::next() % cluster.shards().len(),
-                    ))));
+                    return Ok(Command::Query(
+                        Route::read(Some(round_robin::next() % cluster.shards().len()))
+                            .set_write(writes),
+                    ));
                 } else {
-                    let mut command = Self::select(stmt, &sharding_schema, bind)?;
+                    let command = Self::select(stmt, &sharding_schema, bind)?;
                     let mut omni = false;
-                    if let Command::Query(query) = &mut command {
+                    if let Command::Query(mut query) = command {
                         // Try to route an all-shard query to one
                         // shard if the table(s) it's touching contain
                         // the same data on all shards.
@@ -286,9 +289,11 @@ impl QueryParser {
                         if omni {
                             query.set_shard(round_robin::next() % cluster.shards().len());
                         }
-                    }
 
-                    Ok(command)
+                        Ok(Command::Query(query.set_write(writes)))
+                    } else {
+                        Ok(command)
+                    }
                 }
             }
             // SET statements.
@@ -590,6 +595,20 @@ impl QueryParser {
         shard
     }
 
+    fn select_writes(stmt: &SelectStmt) -> Result<FunctionBehavior, Error> {
+        for target in &stmt.target_list {
+            if let Ok(func) = Function::try_from(target) {
+                return Ok(func.behavior());
+            }
+        }
+
+        Ok(if stmt.locking_clause.is_empty() {
+            FunctionBehavior::default()
+        } else {
+            FunctionBehavior::writes_only()
+        })
+    }
+
     fn select(
         stmt: &SelectStmt,
         sharding_schema: &ShardingSchema,
@@ -627,9 +646,7 @@ impl QueryParser {
 
         let aggregates = Aggregate::parse(stmt)?;
 
-        Ok(Command::Query(
-            Route::select(shard, &order_by, &aggregates).with_lock(!stmt.locking_clause.is_empty()),
-        ))
+        Ok(Command::Query(Route::select(shard, order_by, aggregates)))
     }
 
     /// Parse the `ORDER BY` clause of a `SELECT` statement.
@@ -1201,5 +1218,19 @@ mod test {
         assert!(matches!(cmd, Command::Shards(2)));
         assert!(!qp.routed);
         assert!(!qp.in_transaction);
+    }
+
+    #[test]
+    fn test_write_functions() {
+        let route = query!("SELECT pg_advisory_lock($1)");
+        assert!(route.is_write());
+        assert!(route.lock_session());
+    }
+
+    #[test]
+    fn test_write_nolock() {
+        let route = query!("SELECT nextval('234')");
+        assert!(route.is_write());
+        assert!(!route.lock_session());
     }
 }
