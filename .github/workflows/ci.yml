@@ -91,8 +91,12 @@ jobs:
           cmake --version
           cargo install cargo-nextest --version "0.9.78" --locked
           bash integration/toxi/setup.sh
+          sudo curl -SL https://github.com/docker/compose/releases/download/v2.36.1/docker-compose-linux-x86_64 -o /usr/local/bin/docker-compose
+          sudo chmod +x /usr/local/bin/docker-compose
       - name: Build PgDog
         run: cargo build --release
+      - name: Load balancer
+        run: bash integration/load_balancer/run.sh
       - name: pgbench
         run: bash integration/pgbench/run.sh
       - name: Go

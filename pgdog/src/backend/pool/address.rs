@@ -51,6 +51,17 @@ impl Address {
     pub fn addr(&self) -> String {
         format!("{}:{}", self.host, self.port)
     }
+
+    #[cfg(test)]
+    pub fn new_test() -> Self {
+        Self {
+            host: "127.0.0.1".into(),
+            port: 5432,
+            user: "pgdog".into(),
+            password: "pgdog".into(),
+            database_name: "pgdog".into(),
+        }
+    }
 }
 
 impl std::fmt::Display for Address {

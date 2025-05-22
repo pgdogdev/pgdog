@@ -302,8 +302,12 @@ pub struct General {
     /// Load balancing strategy.
     #[serde(default = "General::load_balancing_strategy")]
     pub load_balancing_strategy: LoadBalancingStrategy,
+    /// How aggressive should the query parser be in determining reads.
     #[serde(default)]
     pub read_write_strategy: ReadWriteStrategy,
+    /// Read write split.
+    #[serde(default)]
+    pub read_write_split: ReadWriteSplit,
     /// TLS certificate.
     pub tls_certificate: Option<PathBuf>,
     /// TLS private key.
@@ -423,6 +427,7 @@ impl Default for General {
             rollback_timeout: Self::rollback_timeout(),
             load_balancing_strategy: Self::load_balancing_strategy(),
             read_write_strategy: ReadWriteStrategy::default(),
+            read_write_split: ReadWriteSplit::default(),
             tls_certificate: None,
             tls_private_key: None,
             shutdown_timeout: Self::default_shutdown_timeout(),
@@ -569,6 +574,14 @@ pub enum LoadBalancingStrategy {
     Random,
     RoundRobin,
     LeastActiveConnections,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Copy)]
+#[serde(rename_all = "snake_case")]
+pub enum ReadWriteSplit {
+    #[default]
+    IncludePrimary,
+    ExcludePrimary,
 }
 
 /// Database server proxied by pgDog.

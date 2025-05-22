@@ -5,6 +5,7 @@ use crate::{
 
 use super::prelude::*;
 use pg_query::{parse, protobuf::a_const, NodeEnum};
+use serde::de::DeserializeOwned;
 
 pub struct Set {
     name: String,
@@ -63,13 +64,19 @@ impl Command for Set {
             }
 
             "auth_type" => {
-                config.config.general.auth_type =
-                    serde_json::from_str(&format!(r#""{}""#, self.value))?;
+                config.config.general.auth_type = Self::from_json(&self.value)?;
             }
 
             "read_write_strategy" => {
-                config.config.general.read_write_strategy =
-                    serde_json::from_str(&format!(r#""{}""#, self.value))?;
+                config.config.general.read_write_strategy = Self::from_json(&self.value)?;
+            }
+
+            "read_write_split" => {
+                config.config.general.read_write_split = Self::from_json(&self.value)?;
+            }
+
+            "load_balancing_strategy" => {
+                config.config.general.load_balancing_strategy = Self::from_json(&self.value)?;
             }
 
             _ => return Err(Error::Syntax),
@@ -79,6 +86,12 @@ impl Command for Set {
         databases::init();
 
         Ok(vec![])
+    }
+}
+
+impl Set {
+    fn from_json<'a, T: DeserializeOwned>(value: &'a str) -> serde_json::Result<T> {
+        Ok(serde_json::from_str::<T>(&format!(r#""{}""#, value))?)
     }
 }
 

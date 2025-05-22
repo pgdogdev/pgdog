@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use rand::Rng;
+use tokio::spawn;
 use tokio::task::yield_now;
 use tokio::time::{sleep, timeout};
 use tokio_util::task::TaskTracker;
@@ -288,4 +289,48 @@ async fn test_force_close() {
     conn.stats_mut().state(State::ForceClose);
     drop(conn);
     assert_eq!(pool.lock().force_close, 1);
+}
+
+#[tokio::test]
+async fn test_query_stats() {
+    let pool = pool();
+    let before = pool.state();
+
+    let mut tasks = vec![];
+    for _ in 0..25 {
+        let pool = pool.clone();
+        let handle = spawn(async move {
+            let mut conn = pool.get(&Request::default()).await.unwrap();
+
+            for _ in 0..25 {
+                conn.execute("BEGIN").await.unwrap();
+                conn.execute("SELECT 1").await.unwrap();
+                conn.execute("COMMIT").await.unwrap();
+            }
+
+            drop(conn);
+
+            let mut conn = pool.get(&Request::default()).await.unwrap();
+            conn.execute("SELECT 2").await.unwrap();
+        });
+        tasks.push(handle);
+    }
+
+    for task in tasks {
+        task.await.unwrap();
+    }
+
+    let after = pool.state();
+
+    assert_eq!(before.stats.counts.query_count, 0);
+    assert_eq!(before.stats.counts.xact_count, 0);
+    assert_eq!(
+        after.stats.counts.query_count,
+        25 * 25 * 3 + 25 + after.stats.counts.healthchecks
+    );
+    assert_eq!(
+        after.stats.counts.xact_count,
+        25 * 26 + after.stats.counts.healthchecks
+    );
+    assert_eq!(after.stats.counts.healthchecks, 1)
 }

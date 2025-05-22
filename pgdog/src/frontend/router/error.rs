@@ -26,3 +26,9 @@ pub enum Error {
     #[error("{0}")]
     Parser(#[from] super::parser::Error),
 }
+
+impl Error {
+    pub fn empty_query(&self) -> bool {
+        matches!(self, Self::Parser(super::parser::Error::EmptyQuery))
+    }
+}

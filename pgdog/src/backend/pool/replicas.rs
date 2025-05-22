@@ -120,16 +120,18 @@ impl Replicas {
                 candidates.push(primary);
             }
 
+            use LoadBalancingStrategy::*;
+
             match self.lb_strategy {
-                LoadBalancingStrategy::Random => candidates.shuffle(&mut rand::thread_rng()),
-                LoadBalancingStrategy::RoundRobin => {
+                Random => candidates.shuffle(&mut rand::thread_rng()),
+                RoundRobin => {
                     let first = self.round_robin.fetch_add(1, Ordering::Relaxed) % candidates.len();
                     let mut reshuffled = vec![];
                     reshuffled.extend_from_slice(&candidates[first..]);
                     reshuffled.extend_from_slice(&candidates[..first]);
                     candidates = reshuffled;
                 }
-                LoadBalancingStrategy::LeastActiveConnections => {
+                LeastActiveConnections => {
                     candidates.sort_by_cached_key(|pool| pool.lock().idle());
                 }
             }

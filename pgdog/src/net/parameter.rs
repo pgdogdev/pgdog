@@ -122,17 +122,23 @@ impl Parameters {
 
     fn compute_hash(params: &BTreeMap<String, ParameterValue>) -> u64 {
         let mut hasher = DefaultHasher::new();
+        let mut entries = 0;
 
         for (k, v) in params {
             if IMMUTABLE_PARAMS.contains(k) {
                 continue;
             }
+            entries += 1;
 
             k.hash(&mut hasher);
             v.hash(&mut hasher);
         }
 
-        hasher.finish()
+        if entries > 0 {
+            hasher.finish()
+        } else {
+            0
+        }
     }
 
     pub fn tracked(&self) -> Parameters {
