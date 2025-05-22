@@ -22,11 +22,16 @@ for p in 5433 5434 5434; do
     done
 done
 
+
+pushd ${SCRIPT_DIR}/../../
+cargo build --release
+popd
+
 sleep 2
 
-bash pgdog.sh &
-
-sleep 2
+cargo run --release -- \
+    --config ${SCRIPT_DIR}/pgdog.toml \
+    --users ${SCRIPT_DIR}/users.toml &
 
 pushd ${SCRIPT_DIR}/pgx
 go get

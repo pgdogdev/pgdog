@@ -93,6 +93,8 @@ jobs:
           bash integration/toxi/setup.sh
       - name: Build PgDog
         run: cargo build --release
+      - name: Load balancer
+        run: bash integration/load_balancer/run.sh
       - name: pgbench
         run: bash integration/pgbench/run.sh
       - name: Go
