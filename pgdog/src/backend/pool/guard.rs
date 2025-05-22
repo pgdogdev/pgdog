@@ -178,3 +178,71 @@ impl Drop for Guard {
         self.cleanup();
     }
 }
+
+#[cfg(test)]
+mod test {
+    use crate::{
+        backend::pool::{test::pool, Request},
+        net::{Describe, Flush, Parse, Protocol, Query, Sync},
+    };
+
+    #[tokio::test]
+    async fn test_cleanup_dirty() {
+        crate::logger();
+        let pool = pool();
+        let mut guard = pool.get(&Request::default()).await.unwrap();
+
+        guard
+            .send(&vec![Parse::named("test", "SELECT $1").into(), Flush.into()].into())
+            .await
+            .unwrap();
+        let msg = guard.read().await.unwrap();
+        assert_eq!(msg.code(), '1');
+        assert!(guard.done());
+
+        guard
+            .send(&vec![Query::new("SELECT pg_advisory_lock(123456)").into()].into())
+            .await
+            .unwrap();
+
+        for c in ['T', 'D', 'C', 'Z'] {
+            let msg = guard.read().await.unwrap();
+            assert_eq!(msg.code(), c);
+        }
+
+        assert!(guard.done());
+
+        guard.mark_dirty(true);
+        drop(guard);
+
+        // Our test pool is only 1 connection.
+        //
+        let mut guard = pool.get(&Request::default()).await.unwrap();
+
+        guard
+            .send(&vec![Describe::new_statement("test").into(), Sync.into()].into())
+            .await
+            .unwrap();
+
+        for code in ['t', 'T', 'Z'] {
+            let msg = guard.read().await.unwrap();
+            assert_eq!(msg.code(), code);
+        }
+
+        // Try to lock again, should work.
+        guard
+            .send(&vec![Query::new("SELECT pg_advisory_lock(123456)").into()].into())
+            .await
+            .unwrap();
+
+        for c in ['T', 'D', 'C', 'Z'] {
+            let msg = guard.read().await.unwrap();
+            assert_eq!(msg.code(), c);
+        }
+
+        assert!(guard.done());
+
+        guard.mark_dirty(true);
+        drop(guard);
+    }
+}
