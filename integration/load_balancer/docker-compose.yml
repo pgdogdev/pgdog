@@ -13,6 +13,10 @@ services:
       POSTGRES_PASSWORD: postgres
     volumes:
       - ./docker/replica.sh:/docker-entrypoint-initdb.d/setup.sh
+    user: postgres
+    entrypoint:
+      - bash
+      - /docker-entrypoint-initdb.d/setup.sh
     ports:
       - 5434:5432
   replica_2:
@@ -21,5 +25,9 @@ services:
       POSTGRES_PASSWORD: postgres
     volumes:
       - ./docker/replica.sh:/docker-entrypoint-initdb.d/setup.sh
+    user: postgres
+    entrypoint:
+      - bash
+      - /docker-entrypoint-initdb.d/setup.sh
     ports:
       - 5435:5432

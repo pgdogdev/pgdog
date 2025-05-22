@@ -26,7 +26,7 @@ use crate::net::messages::{
     Protocol, ReadyForQuery, ToBytes,
 };
 use crate::net::{parameter::Parameters, Stream};
-use crate::net::{DataRow, Field, NoticeResponse, RowDescription};
+use crate::net::{DataRow, EmptyQueryResponse, Field, NoticeResponse, RowDescription};
 
 pub mod counter;
 pub mod inner;
@@ -345,9 +345,16 @@ impl Client {
         ) {
             Ok(command) => command,
             Err(err) => {
-                self.stream
-                    .error(ErrorResponse::syntax(err.to_string().as_str()))
-                    .await?;
+                if err.empty_query() {
+                    self.stream.send(&EmptyQueryResponse::default()).await?;
+                    self.stream
+                        .send_flush(&ReadyForQuery::in_transaction(self.in_transaction))
+                        .await?;
+                } else {
+                    self.stream
+                        .error(ErrorResponse::syntax(err.to_string().as_str()))
+                        .await?;
+                }
                 inner.done(self.in_transaction);
                 return Ok(false);
             }

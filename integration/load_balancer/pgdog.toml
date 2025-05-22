@@ -15,6 +15,7 @@ min_pool_size = 1
 pooler_mode = "transaction"
 load_balancing_strategy = "round_robin"
 auth_type = "trust"
+read_write_split = "exclude_primary"
 
 [admin]
 user = "pgdog"
