@@ -1226,4 +1226,11 @@ mod test {
         assert!(route.is_write());
         assert!(route.lock_session());
     }
+
+    #[test]
+    fn test_write_nolock() {
+        let route = query!("SELECT nextval('234')");
+        assert!(route.is_write());
+        assert!(!route.lock_session());
+    }
 }
