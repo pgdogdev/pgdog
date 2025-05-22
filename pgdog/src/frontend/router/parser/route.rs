@@ -2,10 +2,11 @@ use std::fmt::Display;
 
 use super::{Aggregate, OrderBy};
 
-#[derive(Debug, Clone, PartialEq, PartialOrd, Ord, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, PartialOrd, Ord, Eq, Hash, Default)]
 pub enum Shard {
     Direct(usize),
     Multi(Vec<usize>),
+    #[default]
     All,
 }
 
@@ -58,6 +59,7 @@ pub struct Route {
     order_by: Vec<OrderBy>,
     aggregate: Aggregate,
     limit: Option<Limit>,
+    sticky: bool,
 }
 
 impl Display for Route {
@@ -79,13 +81,13 @@ impl Default for Route {
 
 impl Route {
     /// SELECT query.
-    pub fn select(shard: Shard, order_by: &[OrderBy], aggregate: &Aggregate) -> Self {
+    pub fn select(shard: Shard, order_by: Vec<OrderBy>, aggregate: Aggregate) -> Self {
         Self {
             shard,
-            order_by: order_by.to_vec(),
+            order_by,
             read: true,
-            aggregate: aggregate.clone(),
-            limit: None,
+            aggregate,
+            ..Default::default()
         }
     }
 
@@ -94,9 +96,7 @@ impl Route {
         Self {
             shard: shard.into(),
             read: true,
-            order_by: vec![],
-            aggregate: Aggregate::default(),
-            limit: None,
+            ..Default::default()
         }
     }
 
@@ -104,10 +104,7 @@ impl Route {
     pub fn write(shard: impl Into<Shard>) -> Self {
         Self {
             shard: shard.into(),
-            read: false,
-            order_by: vec![],
-            aggregate: Aggregate::default(),
-            limit: None,
+            ..Default::default()
         }
     }
 
@@ -161,5 +158,19 @@ impl Route {
     pub fn set_read(mut self, read: bool) -> Self {
         self.read = read;
         self
+    }
+
+    pub fn set_write(mut self, write: bool) -> Self {
+        self.read = !write;
+        self
+    }
+
+    pub fn set_sticky(mut self) -> Self {
+        self.sticky = true;
+        self
+    }
+
+    pub fn sticky(&self) -> bool {
+        self.sticky
     }
 }

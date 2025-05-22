@@ -132,3 +132,18 @@ func TestWrites(t *testing.T) {
 	calls = LoadStatsForPrimary("DELETE FROM lb_pgx_test_writes")
 	assert.Equal(t, int64(50), calls.Calls)
 }
+
+func TestWriteFunctions(t *testing.T) {
+	pool := GetPool()
+	defer pool.Close()
+
+	ResetStats()
+
+	for i := range 25 {
+		_, err := pool.Exec(context.Background(), "SELECT pg_advisory_lock($1), pg_advisory_unlock($1)", i)
+		assert.NoError(t, err)
+	}
+
+	calls := LoadStatsForPrimary("SELECT pg_advisory_lock")
+	assert.Equal(t, int64(25), calls.Calls)
+}

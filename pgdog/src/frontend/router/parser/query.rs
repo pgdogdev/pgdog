@@ -261,14 +261,17 @@ impl QueryParser {
         let mut command = match root.node {
             // SELECT statements.
             Some(NodeEnum::SelectStmt(ref stmt)) => {
+                let writes = Self::select_writes(stmt)?;
+
                 if matches!(shard, Shard::Direct(_)) {
-                    return Ok(Command::Query(Route::read(shard)));
+                    return Ok(Command::Query(Route::read(shard).set_write(writes)));
                 }
                 // `SELECT NOW()`, `SELECT 1`, etc.
                 else if ast.tables().is_empty() {
-                    return Ok(Command::Query(Route::read(Some(
-                        round_robin::next() % cluster.shards().len(),
-                    ))));
+                    return Ok(Command::Query(
+                        Route::read(Some(round_robin::next() % cluster.shards().len()))
+                            .set_write(writes),
+                    ));
                 } else {
                     let mut command = Self::select(stmt, &sharding_schema, bind)?;
                     let mut omni = false;
@@ -590,6 +593,18 @@ impl QueryParser {
         shard
     }
 
+    fn select_writes(stmt: &SelectStmt) -> Result<bool, Error> {
+        for target in &stmt.target_list {
+            if let Ok(func) = Function::try_from(target) {
+                if func.writes() {
+                    return Ok(true);
+                }
+            }
+        }
+
+        Ok(!stmt.locking_clause.is_empty())
+    }
+
     fn select(
         stmt: &SelectStmt,
         sharding_schema: &ShardingSchema,
@@ -628,7 +643,7 @@ impl QueryParser {
         let aggregates = Aggregate::parse(stmt)?;
 
         Ok(Command::Query(
-            Route::select(shard, &order_by, &aggregates).with_lock(!stmt.locking_clause.is_empty()),
+            Route::select(shard, order_by, aggregates).set_write(Self::select_writes(stmt)?),
         ))
     }
 
@@ -1201,5 +1216,11 @@ mod test {
         assert!(matches!(cmd, Command::Shards(2)));
         assert!(!qp.routed);
         assert!(!qp.in_transaction);
+    }
+
+    #[test]
+    fn test_write_functions() {
+        let route = query!("SELECT pg_advisory_lock($1)");
+        assert!(route.is_write());
     }
 }
