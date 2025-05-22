@@ -688,6 +688,11 @@ impl Server {
         self.dirty
     }
 
+    #[inline]
+    pub fn mark_dirty(&mut self, dirty: bool) {
+        self.dirty = dirty;
+    }
+
     /// Server has been cleaned.
     #[inline]
     pub(super) fn cleaned(&mut self) {

@@ -273,9 +273,9 @@ impl QueryParser {
                             .set_write(writes),
                     ));
                 } else {
-                    let mut command = Self::select(stmt, &sharding_schema, bind)?;
+                    let command = Self::select(stmt, &sharding_schema, bind)?;
                     let mut omni = false;
-                    if let Command::Query(query) = &mut command {
+                    if let Command::Query(mut query) = command {
                         // Try to route an all-shard query to one
                         // shard if the table(s) it's touching contain
                         // the same data on all shards.
@@ -289,9 +289,11 @@ impl QueryParser {
                         if omni {
                             query.set_shard(round_robin::next() % cluster.shards().len());
                         }
-                    }
 
-                    Ok(command)
+                        Ok(Command::Query(query.set_write(writes)))
+                    } else {
+                        Ok(command)
+                    }
                 }
             }
             // SET statements.
@@ -593,16 +595,18 @@ impl QueryParser {
         shard
     }
 
-    fn select_writes(stmt: &SelectStmt) -> Result<bool, Error> {
+    fn select_writes(stmt: &SelectStmt) -> Result<FunctionBehavior, Error> {
         for target in &stmt.target_list {
             if let Ok(func) = Function::try_from(target) {
-                if func.writes() {
-                    return Ok(true);
-                }
+                return Ok(func.behavior());
             }
         }
 
-        Ok(!stmt.locking_clause.is_empty())
+        Ok(if stmt.locking_clause.is_empty() {
+            FunctionBehavior::default()
+        } else {
+            FunctionBehavior::writes_only()
+        })
     }
 
     fn select(
@@ -642,9 +646,7 @@ impl QueryParser {
 
         let aggregates = Aggregate::parse(stmt)?;
 
-        Ok(Command::Query(
-            Route::select(shard, order_by, aggregates).set_write(Self::select_writes(stmt)?),
-        ))
+        Ok(Command::Query(Route::select(shard, order_by, aggregates)))
     }
 
     /// Parse the `ORDER BY` clause of a `SELECT` statement.
@@ -1222,5 +1224,6 @@ mod test {
     fn test_write_functions() {
         let route = query!("SELECT pg_advisory_lock($1)");
         assert!(route.is_write());
+        assert!(route.lock_session());
     }
 }

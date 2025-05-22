@@ -6,13 +6,14 @@ use crate::net::Query;
 use super::{super::Server, Guard};
 
 static PREPARED: Lazy<Vec<Query>> = Lazy::new(|| vec![Query::new("DEALLOCATE ALL")]);
-static PARAMS: Lazy<Vec<Query>> = Lazy::new(|| vec![Query::new("DISCARD ALL")]);
-static ALL: Lazy<Vec<Query>> = Lazy::new(|| {
-    vec!["DISCARD ALL", "DEALLOCATE ALL"]
-        .into_iter()
-        .map(Query::new)
-        .collect()
+static DIRTY: Lazy<Vec<Query>> = Lazy::new(|| {
+    vec![
+        Query::new("RESET ALL"),
+        Query::new("SELECT pg_advisory_unlock_all()"),
+    ]
 });
+static ALL: Lazy<Vec<Query>> =
+    Lazy::new(|| vec!["DISCARD ALL"].into_iter().map(Query::new).collect());
 static NONE: Lazy<Vec<Query>> = Lazy::new(Vec::new);
 
 /// Queries used to clean up server connections after
@@ -76,7 +77,7 @@ impl Cleanup {
     /// Cleanup parameters.
     pub fn parameters() -> Self {
         Self {
-            queries: &*PARAMS,
+            queries: &*DIRTY,
             dirty: true,
             ..Default::default()
         }

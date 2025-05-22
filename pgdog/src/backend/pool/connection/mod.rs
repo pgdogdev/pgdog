@@ -46,6 +46,7 @@ pub struct Connection {
     binding: Binding,
     cluster: Option<Cluster>,
     mirrors: Vec<MirrorHandler>,
+    locked: bool,
 }
 
 impl Connection {
@@ -61,6 +62,7 @@ impl Connection {
             user: user.to_owned(),
             database: database.to_owned(),
             mirrors: vec![],
+            locked: false,
         };
 
         if !admin {
@@ -306,7 +308,16 @@ impl Connection {
 
     /// We are done and can disconnect from this server.
     pub(crate) fn done(&self) -> bool {
-        self.binding.done()
+        self.binding.done() && !self.locked
+    }
+
+    /// Lock this connection to the client, preventing it's
+    /// release back into the pool.
+    pub(crate) fn lock(&mut self, lock: bool) {
+        self.locked = lock;
+        if lock {
+            self.binding.dirty();
+        }
     }
 
     pub(crate) fn has_more_messages(&self) -> bool {

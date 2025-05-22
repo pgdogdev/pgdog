@@ -1,22 +1,46 @@
-use std::collections::HashSet;
+use std::collections::HashMap;
 
 use once_cell::sync::Lazy;
 use pg_query::{protobuf, Node, NodeEnum};
 
-static WRITE_ONLY: Lazy<HashSet<&'static str>> = Lazy::new(|| {
-    HashSet::from([
-        "pg_advisory_lock",
-        "pg_advisory_xact_lock",
-        "pg_advisory_lock_shared",
-        "pg_advisory_xact_lock_shared",
-        "pg_try_advisory_lock",
-        "pg_try_advisory_xact_lock",
-        "pg_try_advisory_lock_shared",
-        "pg_try_advisory_xact_lock_shared",
-        "nextval",
-        "setval",
+static WRITE_ONLY: Lazy<HashMap<&'static str, LockingBehavior>> = Lazy::new(|| {
+    HashMap::from([
+        ("pg_advisory_lock", LockingBehavior::Lock),
+        ("pg_advisory_xact_lock", LockingBehavior::None),
+        ("pg_advisory_lock_shared", LockingBehavior::Lock),
+        ("pg_advisory_xact_lock_shared", LockingBehavior::None),
+        ("pg_try_advisory_lock", LockingBehavior::Lock),
+        ("pg_try_advisory_xact_lock", LockingBehavior::None),
+        ("pg_try_advisory_lock_shared", LockingBehavior::Lock),
+        ("pg_try_advisory_xact_lock_shared", LockingBehavior::None),
+        ("pg_advisory_unlock_all", LockingBehavior::Unlock),
+        ("nextval", LockingBehavior::None),
+        ("setval", LockingBehavior::None),
     ])
 });
+
+#[derive(Debug, Copy, Clone, PartialEq, Default)]
+pub enum LockingBehavior {
+    Lock,
+    Unlock,
+    #[default]
+    None,
+}
+
+#[derive(Default, Debug, Copy, Clone)]
+pub struct FunctionBehavior {
+    pub writes: bool,
+    pub locking_behavior: LockingBehavior,
+}
+
+impl FunctionBehavior {
+    pub fn writes_only() -> FunctionBehavior {
+        FunctionBehavior {
+            writes: true,
+            ..Default::default()
+        }
+    }
+}
 
 pub struct Function<'a> {
     pub name: &'a str,
@@ -34,8 +58,15 @@ impl<'a> Function<'a> {
     }
 
     /// This function likely writes.
-    pub fn writes(&self) -> bool {
-        WRITE_ONLY.contains(&self.name)
+    pub fn behavior(&self) -> FunctionBehavior {
+        if let Some(locks) = WRITE_ONLY.get(&self.name) {
+            FunctionBehavior {
+                writes: true,
+                locking_behavior: *locks,
+            }
+        } else {
+            FunctionBehavior::default()
+        }
     }
 }
 

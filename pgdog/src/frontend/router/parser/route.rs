@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-use super::{Aggregate, OrderBy};
+use super::{Aggregate, FunctionBehavior, LockingBehavior, OrderBy};
 
 #[derive(Debug, Clone, PartialEq, PartialOrd, Ord, Eq, Hash, Default)]
 pub enum Shard {
@@ -59,7 +59,7 @@ pub struct Route {
     order_by: Vec<OrderBy>,
     aggregate: Aggregate,
     limit: Option<Limit>,
-    sticky: bool,
+    lock_session: bool,
 }
 
 impl Display for Route {
@@ -75,7 +75,14 @@ impl Display for Route {
 
 impl Default for Route {
     fn default() -> Self {
-        Self::write(None)
+        Self {
+            shard: Shard::default(),
+            order_by: vec![],
+            read: false,
+            aggregate: Aggregate::default(),
+            limit: None,
+            lock_session: false,
+        }
     }
 }
 
@@ -160,17 +167,22 @@ impl Route {
         self
     }
 
-    pub fn set_write(mut self, write: bool) -> Self {
-        self.read = !write;
+    pub fn set_write(mut self, write: FunctionBehavior) -> Self {
+        let FunctionBehavior {
+            writes,
+            locking_behavior,
+        } = write;
+        self.read = !writes;
+        self.lock_session = matches!(locking_behavior, LockingBehavior::Lock);
         self
     }
 
-    pub fn set_sticky(mut self) -> Self {
-        self.sticky = true;
+    pub fn set_lock_session(mut self) -> Self {
+        self.lock_session = true;
         self
     }
 
-    pub fn sticky(&self) -> bool {
-        self.sticky
+    pub fn lock_session(&self) -> bool {
+        self.lock_session
     }
 }

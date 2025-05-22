@@ -32,6 +32,7 @@ pub use copy::{CopyFormat, CopyParser};
 pub use csv::{CsvStream, Record};
 pub use error::Error;
 pub use function::Function;
+pub use function::{FunctionBehavior, LockingBehavior};
 pub use insert::Insert;
 pub use key::Key;
 pub use order_by::OrderBy;

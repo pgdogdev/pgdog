@@ -44,6 +44,7 @@ pub struct ConnectedServer {
     pub stats: Stats,
     pub addr: Address,
     pub application_name: String,
+    pub client: Option<BackendKeyData>,
 }
 
 /// Server connection stats.
@@ -124,6 +125,7 @@ impl Stats {
                 stats,
                 addr: addr.clone(),
                 application_name: params.get_default("application_name", "PgDog").to_owned(),
+                client: None,
             },
         );
 
@@ -143,12 +145,12 @@ impl Stats {
         self.update();
     }
 
-    pub fn link_client(&mut self, client: &str, server: &str) {
-        if client != server {
+    pub fn link_client(&mut self, client_name: &str, server_server: &str) {
+        if client_name != server_server {
             let mut guard = STATS.lock();
             if let Some(entry) = guard.get_mut(&self.id) {
                 entry.application_name.clear();
-                entry.application_name.push_str(client);
+                entry.application_name.push_str(client_name);
             }
         }
     }

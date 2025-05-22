@@ -292,4 +292,15 @@ impl Binding {
             _ => Parameters::default(),
         }
     }
+
+    pub(super) fn dirty(&mut self) {
+        match self {
+            Binding::Server(Some(ref mut server)) => server.mark_dirty(true),
+            Binding::MultiShard(ref mut servers, _state) => {
+                servers.iter_mut().for_each(|s| s.mark_dirty(true))
+            }
+            Binding::Replication(Some(ref mut server), _) => server.mark_dirty(true),
+            _ => (),
+        }
+    }
 }
