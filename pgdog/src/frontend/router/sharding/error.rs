@@ -21,4 +21,7 @@ pub enum Error {
 
     #[error("{0}")]
     Utf8(#[from] std::str::Utf8Error),
+
+    #[error("wrong integer binary size")]
+    IntegerSize,
 }

@@ -76,7 +76,7 @@ impl<'a> Value<'a> {
         match self.data_type {
             DataType::Bigint => match self.data {
                 Data::Text(text) => text.parse::<i64>().is_ok(),
-                Data::Binary(data) => data.len() == 8,
+                Data::Binary(data) => [2, 4, 8].contains(&data.len()),
                 Data::Integer(_) => true,
             },
             DataType::Uuid => match self.data {
@@ -93,7 +93,12 @@ impl<'a> Value<'a> {
         match self.data_type {
             DataType::Bigint => match self.data {
                 Data::Text(text) => Ok(Some(bigint(text.parse()?))),
-                Data::Binary(data) => Ok(Some(bigint(i64::from_be_bytes(data.try_into()?)))),
+                Data::Binary(data) => Ok(Some(bigint(match data.len() {
+                    2 => i16::from_be_bytes(data.try_into()?) as i64,
+                    4 => i32::from_be_bytes(data.try_into()?) as i64,
+                    8 => i64::from_be_bytes(data.try_into()?) as i64,
+                    _ => return Err(Error::IntegerSize),
+                }))),
                 Data::Integer(int) => Ok(Some(bigint(int))),
             },
 
