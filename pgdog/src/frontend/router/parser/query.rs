@@ -189,7 +189,7 @@ impl QueryParser {
 
         // Parse hardcoded shard from a query comment.
         if !router_disabled && !self.routed {
-            shard = super::comment::shard(query, &sharding_schema).map_err(Error::PgQuery)?;
+            shard = super::comment::shard(query, &sharding_schema)?;
         }
 
         // Cluster is read only or write only, traffic split isn't needed,

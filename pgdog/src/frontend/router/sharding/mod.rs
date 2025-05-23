@@ -41,11 +41,6 @@ pub fn uuid(uuid: Uuid) -> u64 {
     }
 }
 
-/// Shard an integer.
-pub(crate) fn shard_int(value: i64, schema: &ShardingSchema) -> Shard {
-    Shard::direct(bigint(value) as usize % schema.shards)
-}
-
 /// Shard a string value, parsing out a BIGINT, UUID, or vector.
 ///
 /// TODO: This is really not great, we should pass in the type oid

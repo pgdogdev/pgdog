@@ -3,20 +3,17 @@
 use pg_query::{protobuf::CopyStmt, NodeEnum};
 
 use crate::{
-    backend::{replication::ShardedColumn, Cluster, ShardingSchema},
+    backend::{Cluster, ShardingSchema},
+    config::ShardedTable,
     frontend::router::{
         parser::Shard,
-        sharding::{shard_binary, shard_str},
+        sharding::{ContextBuilder, Tables},
         CopyRow,
     },
     net::messages::{CopyData, ToBytes},
 };
 
-use super::{binary::Data, BinaryStream, CsvStream, Error};
-
-/// We are putting data on only _one_ shard
-/// for each row.
-static CENTROID_PROBES: usize = 1;
+use super::{binary::Data, BinaryStream, Column, CsvStream, Error, Table};
 
 /// Copy information parsed from a COPY statement.
 #[derive(Debug, Clone)]
@@ -58,22 +55,21 @@ enum CopyStream {
 #[derive(Debug, Clone)]
 pub struct CopyParser {
     /// CSV contains headers.
-    pub headers: bool,
+    headers: bool,
     /// CSV delimiter.
     delimiter: Option<char>,
-    /// Number of shards.
-    pub shards: usize,
-    /// Which column is used for sharding.
-    pub sharded_column: Option<ShardedColumn>,
     /// Number of columns
-    pub columns: usize,
+    columns: usize,
     /// This is a COPY coming from the server.
-    pub is_from: bool,
-
+    is_from: bool,
     /// Stream parser.
     stream: CopyStream,
-
+    /// The sharding schema
     sharding_schema: ShardingSchema,
+    /// This COPY is dealing with a sharded table.
+    sharded_table: Option<ShardedTable>,
+    /// The sharding column is in this position in each row.
+    sharded_column: usize,
 }
 
 impl Default for CopyParser {
@@ -81,12 +77,12 @@ impl Default for CopyParser {
         Self {
             headers: false,
             delimiter: None,
-            sharded_column: None,
-            shards: 1,
             columns: 0,
             is_from: false,
             stream: CopyStream::Text(Box::new(CsvStream::new(',', false, CopyFormat::Csv))),
             sharding_schema: ShardingSchema::default(),
+            sharded_table: None,
+            sharded_column: 0,
         }
     }
 }
@@ -95,7 +91,6 @@ impl CopyParser {
     /// Create new copy parser from a COPY statement.
     pub fn new(stmt: &CopyStmt, cluster: &Cluster) -> Result<Option<Self>, Error> {
         let mut parser = Self {
-            shards: cluster.shards().len(),
             is_from: stmt.is_from,
             ..Default::default()
         };
@@ -106,12 +101,18 @@ impl CopyParser {
             let mut columns = vec![];
 
             for column in &stmt.attlist {
-                if let Some(NodeEnum::String(ref column)) = column.node {
-                    columns.push(column.sval.as_str());
+                if let Ok(column) = Column::from_string(column) {
+                    columns.push(column);
                 }
             }
 
-            parser.sharded_column = cluster.sharded_column(&rel.relname, &columns);
+            let table = Table::from(rel);
+
+            if let Some(key) = Tables::new(&cluster.sharding_schema()).key(table, &columns) {
+                parser.sharded_table = Some(key.table.clone());
+                parser.sharded_column = key.position;
+            }
+
             parser.columns = columns.len();
 
             for option in &stmt.options {
@@ -200,17 +201,17 @@ impl CopyParser {
                         // Totally broken.
                         let record = record?;
 
-                        let shard = if let Some(sharding_column) = &self.sharded_column {
+                        let shard = if let Some(table) = &self.sharded_table {
                             let key = record
-                                .get(sharding_column.position)
+                                .get(self.sharded_column)
                                 .ok_or(Error::NoShardingColumn)?;
 
-                            shard_str(
-                                key,
-                                &self.sharding_schema,
-                                &sharding_column.centroids,
-                                CENTROID_PROBES,
-                            )
+                            let ctx = ContextBuilder::new(table)
+                                .data(key)
+                                .shards(self.sharding_schema.shards)
+                                .build()?;
+
+                            ctx.apply()?
                         } else {
                             Shard::All
                         };
@@ -233,16 +234,17 @@ impl CopyParser {
                             rows.push(CopyRow::new(&terminator, Shard::All));
                             break;
                         }
-                        let shard = if let Some(column) = &self.sharded_column {
-                            let key = tuple.get(column.position).ok_or(Error::NoShardingColumn)?;
+                        let shard = if let Some(table) = &self.sharded_table {
+                            let key = tuple
+                                .get(self.sharded_column)
+                                .ok_or(Error::NoShardingColumn)?;
                             if let Data::Column(key) = key {
-                                shard_binary(
-                                    key,
-                                    &column.data_type,
-                                    self.sharding_schema.shards,
-                                    &column.centroids,
-                                    CENTROID_PROBES,
-                                )
+                                let ctx = ContextBuilder::new(&table)
+                                    .data(&key[..])
+                                    .shards(self.sharding_schema.shards)
+                                    .build()?;
+
+                                ctx.apply()?
                             } else {
                                 Shard::All
                             }

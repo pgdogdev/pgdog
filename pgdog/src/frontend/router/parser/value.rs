@@ -5,13 +5,7 @@ use pg_query::{
     NodeEnum,
 };
 
-use crate::{
-    backend::{replication::ShardedColumn, ShardingSchema},
-    frontend::router::sharding::{shard_binary, shard_int, shard_str, shard_value},
-    net::messages::{Bind, Format, Vector},
-};
-
-use super::Shard;
+use crate::net::messages::Vector;
 
 /// A value extracted from a query.
 #[derive(Debug, Clone, PartialEq)]
@@ -26,52 +20,9 @@ pub enum Value<'a> {
 }
 
 impl<'a> Value<'a> {
-    /// Extract value from a Bind (F) message and shard on it.
-    pub fn shard_placeholder(
-        &self,
-        bind: &'a Bind,
-        schema: &ShardingSchema,
-        column: &ShardedColumn,
-    ) -> Shard {
-        match self {
-            Value::Placeholder(placeholder) => bind
-                .parameter(*placeholder as usize - 1)
-                .ok()
-                .flatten()
-                .and_then(|value| match value.format() {
-                    Format::Binary => Some(shard_binary(
-                        value.data(),
-                        &column.data_type,
-                        schema.shards,
-                        &column.centroids,
-                        column.centroid_probes,
-                    )),
-                    Format::Text => value.text().map(|value| {
-                        shard_value(
-                            value,
-                            &column.data_type,
-                            schema.shards,
-                            &column.centroids,
-                            column.centroid_probes,
-                        )
-                    }),
-                })
-                .unwrap_or(Shard::All),
-            _ => self.shard(schema, column),
-        }
-    }
-
-    /// Shard the value given the number of shards in the cluster.
-    pub fn shard(&self, schema: &ShardingSchema, column: &ShardedColumn) -> Shard {
-        match self {
-            Value::String(v) => shard_str(v, schema, &column.centroids, column.centroid_probes),
-            Value::Integer(v) => shard_int(*v, schema),
-            _ => Shard::All,
-        }
-    }
-
     /// Get vector if it's a vector.
-    pub fn vector(self) -> Option<Vector> {
+    #[cfg(test)]
+    pub(crate) fn vector(self) -> Option<Vector> {
         match self {
             Self::Vector(vector) => Some(vector),
             _ => None,
