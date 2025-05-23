@@ -13,7 +13,7 @@ use crate::{
             context::RouterContext,
             parser::{rewrite::Rewrite, OrderBy, Shard},
             round_robin,
-            sharding::{shard_param, shard_str, shard_value, Centroids, ContextBuilder, Tables},
+            sharding::{shard_str, Centroids, ContextBuilder, Tables, Value as ShardingValue},
             CopyRow,
         },
         PreparedStatements,
@@ -537,25 +537,28 @@ impl QueryParser {
     ) -> Result<HashSet<Shard>, Error> {
         let mut shards = HashSet::new();
         // Complexity: O(number of sharded tables * number of columns in the query)
-        for table in sharding_schema.tables.tables() {
+        for table in sharding_schema.tables().tables() {
             let table_name = table.name.as_deref();
             let keys = where_clause.keys(table_name, &table.column);
             for key in keys {
                 match key {
                     Key::Constant(value) => {
-                        shards.insert(shard_value(
-                            &value,
-                            &table.data_type,
-                            sharding_schema.shards,
-                            &table.centroids,
-                            table.centroid_probes,
-                        ));
+                        let ctx = ContextBuilder::new(table)
+                            .data(value.as_str())
+                            .shards(sharding_schema.shards)
+                            .build()?;
+                        shards.insert(ctx.apply()?);
                     }
 
                     Key::Parameter(param) => {
                         if let Some(params) = params {
                             if let Some(param) = params.parameter(param)? {
-                                shards.insert(shard_param(&param, table, sharding_schema.shards));
+                                let value = ShardingValue::from_param(&param, table.data_type)?;
+                                let ctx = ContextBuilder::new(table)
+                                    .value(value)
+                                    .shards(sharding_schema.shards)
+                                    .build()?;
+                                shards.insert(ctx.apply()?);
                             }
                         }
                     }
