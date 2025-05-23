@@ -145,8 +145,13 @@ impl Route {
         &self.aggregate
     }
 
-    pub fn set_shard(&mut self, shard: usize) {
+    pub fn set_shard_mut(&mut self, shard: usize) {
         self.shard = Shard::Direct(shard);
+    }
+
+    pub fn set_shard(mut self, shard: usize) -> Self {
+        self.set_shard_mut(shard);
+        self
     }
 
     pub fn should_buffer(&self) -> bool {
@@ -157,24 +162,27 @@ impl Route {
         self.limit
     }
 
-    pub fn with_lock(mut self, lock: bool) -> Self {
-        self.read = !lock;
+    pub fn set_read(mut self, read: bool) -> Self {
+        self.set_read_mut(read);
         self
     }
 
-    pub fn set_read(mut self, read: bool) -> Self {
+    pub fn set_read_mut(&mut self, read: bool) {
         self.read = read;
-        self
     }
 
     pub fn set_write(mut self, write: FunctionBehavior) -> Self {
+        self.set_write_mut(write);
+        self
+    }
+
+    pub fn set_write_mut(&mut self, write: FunctionBehavior) {
         let FunctionBehavior {
             writes,
             locking_behavior,
         } = write;
         self.read = !writes;
         self.lock_session = matches!(locking_behavior, LockingBehavior::Lock);
-        self
     }
 
     pub fn set_lock_session(mut self) -> Self {

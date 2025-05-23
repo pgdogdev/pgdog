@@ -7,9 +7,21 @@ use crate::{
 };
 
 // pub mod context;
+pub mod context;
+pub mod context_builder;
+pub mod error;
 pub mod ffi;
+pub mod operator;
+pub mod tables;
+pub mod value;
 pub mod vector;
 
+pub use context::*;
+pub use context_builder::*;
+pub use error::Error;
+pub use operator::*;
+pub use tables::*;
+pub use value::*;
 pub use vector::{Centroids, Distance};
 
 use super::parser::Shard;
@@ -29,16 +41,11 @@ pub fn uuid(uuid: Uuid) -> u64 {
     }
 }
 
-/// Shard an integer.
-pub fn shard_int(value: i64, schema: &ShardingSchema) -> Shard {
-    Shard::direct(bigint(value) as usize % schema.shards)
-}
-
 /// Shard a string value, parsing out a BIGINT, UUID, or vector.
 ///
 /// TODO: This is really not great, we should pass in the type oid
 /// from RowDescription in here to avoid guessing.
-pub fn shard_str(
+pub(crate) fn shard_str(
     value: &str,
     schema: &ShardingSchema,
     centroids: &Vec<Vector>,
@@ -55,7 +62,7 @@ pub fn shard_str(
 }
 
 /// Shard a value that's coming out of the query text directly.
-pub fn shard_value(
+pub(crate) fn shard_value(
     value: &str,
     data_type: &DataType,
     shards: usize,
@@ -82,7 +89,7 @@ pub fn shard_value(
     }
 }
 
-pub fn shard_binary(
+pub(crate) fn shard_binary(
     bytes: &[u8],
     data_type: &DataType,
     shards: usize,

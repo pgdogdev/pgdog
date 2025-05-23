@@ -23,6 +23,7 @@ impl Distance<'_> {
     }
 }
 
+#[derive(Debug)]
 pub struct Centroids<'a> {
     centroids: &'a [Vector],
 }

@@ -62,7 +62,7 @@ pub struct ParameterWithFormat<'a> {
     format: Format,
 }
 
-impl ParameterWithFormat<'_> {
+impl<'a> ParameterWithFormat<'a> {
     /// Get text representation if it's valid UTF-8.
     pub fn text(&self) -> Option<&str> {
         from_utf8(&self.parameter.data).ok()
@@ -92,7 +92,7 @@ impl ParameterWithFormat<'_> {
         self.format
     }
 
-    pub fn data(&self) -> &[u8] {
+    pub fn data(&'a self) -> &'a [u8] {
         &self.parameter.data
     }
 }

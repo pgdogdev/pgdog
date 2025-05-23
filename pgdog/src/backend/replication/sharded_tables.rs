@@ -44,22 +44,37 @@ impl ShardedTables {
 
     /// Find out which column (if any) is sharded in the given table.
     pub fn sharded_column(&self, table: &str, columns: &[&str]) -> Option<ShardedColumn> {
-        let mut tables = self
+        let with_names = self
             .tables()
             .iter()
             .filter(|t| t.name.is_some())
             .collect::<Vec<_>>();
-        tables.extend(self.tables().iter().filter(|t| t.name.is_none()));
-        for sharded_table in tables {
+        let without_names = self.tables().iter().filter(|t| t.name.is_none());
+
+        let get_column = |sharded_table: &ShardedTable, columns: &[&str]| {
+            if let Some(position) = columns.iter().position(|c| *c == sharded_table.column) {
+                Some(ShardedColumn {
+                    data_type: sharded_table.data_type,
+                    position,
+                    centroids: sharded_table.centroids.clone(),
+                    centroid_probes: sharded_table.centroid_probes,
+                })
+            } else {
+                None
+            }
+        };
+
+        for sharded_table in with_names {
             if Some(table) == sharded_table.name.as_deref() {
-                if let Some(position) = columns.iter().position(|c| *c == sharded_table.column) {
-                    return Some(ShardedColumn {
-                        data_type: sharded_table.data_type,
-                        position,
-                        centroids: sharded_table.centroids.clone(),
-                        centroid_probes: sharded_table.centroid_probes,
-                    });
+                if let Some(column) = get_column(sharded_table, columns) {
+                    return Some(column);
                 }
+            }
+        }
+
+        for sharded_table in without_names {
+            if let Some(column) = get_column(sharded_table, columns) {
+                return Some(column);
             }
         }
 

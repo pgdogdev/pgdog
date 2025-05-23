@@ -56,6 +56,12 @@ pub struct ShardingSchema {
     pub tables: ShardedTables,
 }
 
+impl ShardingSchema {
+    pub fn tables(&self) -> &ShardedTables {
+        &self.tables
+    }
+}
+
 pub struct ClusterShardConfig {
     pub primary: Option<PoolConfig>,
     pub replicas: Vec<PoolConfig>,
@@ -335,7 +341,7 @@ impl Cluster {
 #[cfg(test)]
 mod test {
     use crate::{
-        backend::{Shard, ShardedTables},
+        backend::{Pool, Replicas, Shard, ShardedTables},
         config::{DataType, ReadWriteStrategy, ShardedTable},
     };
 
@@ -358,7 +364,24 @@ mod test {
                     vec!["sharded_omni".into()],
                     false,
                 ),
-                shards: vec![Shard::default(), Shard::default()],
+                shards: vec![
+                    Shard {
+                        primary: Some(Pool::new_test()),
+                        replicas: Replicas {
+                            pools: vec![Pool::new_test()],
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    },
+                    Shard {
+                        primary: Some(Pool::new_test()),
+                        replicas: Replicas {
+                            pools: vec![Pool::new_test()],
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    },
+                ],
                 ..Default::default()
             }
         }

@@ -1,11 +1,8 @@
 //! Route queries to correct shards.
-use std::{
-    collections::{BTreeSet, HashSet},
-    sync::Arc,
-};
+use std::{collections::HashSet, sync::Arc};
 
 use crate::{
-    backend::{databases::databases, replication::ShardedColumn, Cluster, ShardingSchema},
+    backend::{databases::databases, Cluster, ShardingSchema},
     config::{config, ReadWriteStrategy},
     frontend::{
         buffer::BufferedQuery,
@@ -13,7 +10,7 @@ use crate::{
             context::RouterContext,
             parser::{rewrite::Rewrite, OrderBy, Shard},
             round_robin,
-            sharding::{shard_param, shard_str, shard_value, Centroids},
+            sharding::{Centroids, ContextBuilder, Value as ShardingValue},
             CopyRow,
         },
         PreparedStatements,
@@ -50,6 +47,7 @@ pub struct QueryParser {
     replication_mode: bool,
     routed: bool,
     in_transaction: bool,
+    write_override: Option<bool>,
 }
 
 impl Default for QueryParser {
@@ -59,6 +57,7 @@ impl Default for QueryParser {
             replication_mode: false,
             routed: false,
             in_transaction: false,
+            write_override: None,
         }
     }
 }
@@ -83,7 +82,7 @@ impl QueryParser {
             if let Command::Query(ref mut query) = self.command {
                 if !matches!(query.shard(), Shard::Direct(_)) && context.cluster.shards().len() == 1
                 {
-                    query.set_shard(0);
+                    query.set_shard_mut(0);
                 }
             }
         }
@@ -112,6 +111,7 @@ impl QueryParser {
         self.routed = false;
         self.in_transaction = false;
         self.command = Command::Query(Route::default());
+        self.write_override = None;
     }
 
     fn query(
@@ -189,7 +189,7 @@ impl QueryParser {
 
         // Parse hardcoded shard from a query comment.
         if !router_disabled && !self.routed {
-            shard = super::comment::shard(query, &sharding_schema).map_err(Error::PgQuery)?;
+            shard = super::comment::shard(query, &sharding_schema)?;
         }
 
         // Cluster is read only or write only, traffic split isn't needed,
@@ -261,7 +261,11 @@ impl QueryParser {
         let mut command = match root.node {
             // SELECT statements.
             Some(NodeEnum::SelectStmt(ref stmt)) => {
-                let writes = Self::select_writes(stmt)?;
+                let mut writes = Self::select_writes(stmt)?;
+                // Write overwrite because of conservative read/write split.
+                if let Some(true) = self.write_override {
+                    writes.writes = true;
+                }
 
                 if matches!(shard, Shard::Direct(_)) {
                     return Ok(Command::Query(Route::read(shard).set_write(writes)));
@@ -287,7 +291,7 @@ impl QueryParser {
                         }
 
                         if omni {
-                            query.set_shard(round_robin::next() % cluster.shards().len());
+                            query.set_shard_mut(round_robin::next() % cluster.shards().len());
                         }
 
                         Ok(Command::Query(query.set_write(writes)))
@@ -323,9 +327,8 @@ impl QueryParser {
                     //
                     // Only single-statement SELECT queries can be routed
                     // to a replica.
-                    if *rw_strategy == ReadWriteStrategy::Conservative {
-                        self.routed = true;
-                        return Ok(Command::Query(Route::write(None)));
+                    if *rw_strategy == ReadWriteStrategy::Conservative && !read_only {
+                        self.write_override = Some(true);
                     }
 
                     match stmt.kind() {
@@ -356,7 +359,7 @@ impl QueryParser {
         // Overwrite shard using shard we got from a comment, if any.
         if let Shard::Direct(shard) = shard {
             if let Command::Query(ref mut route) = command {
-                route.set_shard(shard);
+                route.set_shard_mut(shard);
             }
         }
 
@@ -368,7 +371,7 @@ impl QueryParser {
         //
         if cluster.shards().len() == 1 && !dry_run {
             if let Command::Query(ref mut route) = command {
-                route.set_shard(0);
+                route.set_shard_mut(0);
             }
         }
 
@@ -384,14 +387,18 @@ impl QueryParser {
                 // Otherwise, we're wasting time parsing SQL.
                 if !databases.manual_queries().is_empty() {
                     let fingerprint = fingerprint(query).map_err(Error::PgQuery)?;
-                    trace!("fingerprint: {}", fingerprint.hex);
+                    debug!("fingerprint: {}", fingerprint.hex);
                     let manual_route = databases.manual_query(&fingerprint.hex).cloned();
 
                     // TODO: check routing logic required by config.
                     if manual_route.is_some() {
-                        route.set_shard(round_robin::next() % cluster.shards().len());
+                        route.set_shard_mut(round_robin::next() % cluster.shards().len());
                     }
                 }
+            }
+
+            if let Some(true) = self.write_override {
+                route.set_read_mut(false);
             }
         }
 
@@ -472,7 +479,10 @@ impl QueryParser {
                     ..
                 }) = node
                 {
-                    let shard = shard_str(sval, sharding_schema, &vec![], 0);
+                    let ctx = ContextBuilder::from_str(sval.as_str())?
+                        .shards(sharding_schema.shards)
+                        .build()?;
+                    let shard = ctx.apply()?;
                     self.routed = true;
                     return Ok(Command::Query(Route::write(shard).set_read(read_only)));
                 }
@@ -537,25 +547,28 @@ impl QueryParser {
     ) -> Result<HashSet<Shard>, Error> {
         let mut shards = HashSet::new();
         // Complexity: O(number of sharded tables * number of columns in the query)
-        for table in sharding_schema.tables.tables() {
+        for table in sharding_schema.tables().tables() {
             let table_name = table.name.as_deref();
             let keys = where_clause.keys(table_name, &table.column);
             for key in keys {
                 match key {
                     Key::Constant(value) => {
-                        shards.insert(shard_value(
-                            &value,
-                            &table.data_type,
-                            sharding_schema.shards,
-                            &table.centroids,
-                            table.centroid_probes,
-                        ));
+                        let ctx = ContextBuilder::new(table)
+                            .data(value.as_str())
+                            .shards(sharding_schema.shards)
+                            .build()?;
+                        shards.insert(ctx.apply()?);
                     }
 
                     Key::Parameter(param) => {
                         if let Some(params) = params {
                             if let Some(param) = params.parameter(param)? {
-                                shards.insert(shard_param(&param, table, sharding_schema.shards));
+                                let value = ShardingValue::from_param(&param, table.data_type)?;
+                                let ctx = ContextBuilder::new(table)
+                                    .value(value)
+                                    .shards(sharding_schema.shards)
+                                    .build()?;
+                                shards.insert(ctx.apply()?);
                             }
                         }
                     }
@@ -759,36 +772,8 @@ impl QueryParser {
         params: Option<&Bind>,
     ) -> Result<Command, Error> {
         let insert = Insert::new(stmt);
-        let columns = insert
-            .columns()
-            .into_iter()
-            .map(|column| column.name)
-            .collect::<Vec<_>>();
-        let mut shards = BTreeSet::new();
-        let table = insert.table().unwrap().name;
-        if let Some(sharded_table) = sharding_schema.tables.table(table) {
-            if let Some(column) = ShardedColumn::from_sharded_table(sharded_table, &columns) {
-                for tuple in insert.tuples() {
-                    if let Some(value) = tuple.get(column.position) {
-                        shards.insert(if let Some(bind) = params {
-                            value.shard_placeholder(bind, sharding_schema, &column)
-                        } else {
-                            value.shard(sharding_schema, &column)
-                        });
-                    }
-                }
-            }
-            match shards.len() {
-                0 => Ok(Command::Query(Route::write(Some(
-                    round_robin::next() % sharding_schema.shards,
-                )))),
-                1 => Ok(Command::Query(Route::write(shards.pop_last().unwrap()))),
-                // TODO: support sending inserts to multiple shards.
-                _ => Ok(Command::Query(Route::write(None))),
-            }
-        } else {
-            Ok(Command::Query(Route::write(None)))
-        }
+        let shard = insert.shard(sharding_schema, params)?;
+        Ok(Command::Query(Route::write(shard)))
     }
 
     fn update(
@@ -797,6 +782,7 @@ impl QueryParser {
         params: Option<&Bind>,
     ) -> Result<Command, Error> {
         let table = stmt.relation.as_ref().map(Table::from);
+
         let where_clause = WhereClause::new(table.map(|t| t.name), &stmt.where_clause);
 
         if let Some(where_clause) = where_clause {
@@ -804,7 +790,7 @@ impl QueryParser {
             return Ok(Command::Query(Route::write(Self::converge(shards))));
         }
 
-        Ok(Command::Query(Route::write(None)))
+        Ok(Command::Query(Route::write(Shard::All)))
     }
 
     fn delete(
@@ -1086,6 +1072,7 @@ mod test {
         assert!(!qp.in_transaction);
 
         let (_, mut qp) = command!("BEGIN");
+        assert!(qp.write_override.is_some());
         let command = qp
             .parse(
                 RouterContext::new(
@@ -1142,12 +1129,12 @@ mod test {
     fn test_transaction() {
         let (command, qp) = command!("BEGIN");
         match command {
-            Command::Query(q) => assert!(q.is_write()),
+            Command::StartTransaction(q) => assert_eq!(q.query(), "BEGIN"),
             _ => panic!("not a query"),
         };
 
-        assert!(qp.routed);
-        assert!(!qp.in_transaction);
+        assert!(!qp.routed);
+        assert!(qp.in_transaction);
 
         let mut cluster = Cluster::new_test();
         cluster.set_read_write_strategy(ReadWriteStrategy::Aggressive);
@@ -1181,8 +1168,8 @@ mod test {
 
         match route {
             Command::Query(q) => {
-                assert!(q.is_read());
-                assert!(cluster.read_only());
+                assert!(q.is_write());
+                assert!(!cluster.read_only());
             }
 
             _ => panic!("not a query"),

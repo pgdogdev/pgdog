@@ -1,12 +1,27 @@
 //! Column name reference.
 
-use pg_query::{protobuf::String as PgQueryString, Node, NodeEnum};
+use pg_query::{
+    protobuf::{self, String as PgQueryString},
+    Node, NodeEnum,
+};
 
 /// Column name extracted from a query.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Column<'a> {
     /// Column name.
     pub name: &'a str,
+}
+
+impl<'a> Column<'a> {
+    pub fn from_string(string: &'a Node) -> Result<Self, ()> {
+        match &string.node {
+            Some(NodeEnum::String(protobuf::String { sval })) => Ok(Self {
+                name: sval.as_str(),
+            }),
+
+            _ => Err(()),
+        }
+    }
 }
 
 impl<'a> TryFrom<&'a Node> for Column<'a> {

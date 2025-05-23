@@ -345,6 +345,7 @@ impl Client {
         ) {
             Ok(command) => command,
             Err(err) => {
+                error!("{:?} [{}]", err, self.addr);
                 if err.empty_query() {
                     self.stream.send(&EmptyQueryResponse::default()).await?;
                     self.stream

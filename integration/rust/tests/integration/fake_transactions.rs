@@ -17,9 +17,10 @@ async fn test_fake_transactions() {
         conn.execute("SET application_name TO 'test_fake_transactions'")
             .await
             .unwrap();
+        conn.execute("SELECT 1").await.unwrap(); // Sync application name.
         conn.execute("BEGIN").await.unwrap();
         check_client_state("idle in transaction", admin.clone()).await;
-        assert!(check_server_state("idle in transaction", admin.clone()).await);
+        assert!(check_server_state("idle", admin.clone()).await);
         conn.execute("ROLLBACK").await.unwrap();
         check_client_state("idle", admin.clone()).await;
         assert!(check_server_state("idle", admin.clone()).await);
@@ -34,6 +35,7 @@ async fn test_fake_transactions() {
         conn.execute("SET application_name TO 'test_fake_transactions'")
             .await
             .unwrap();
+        conn.execute("SELECT 1").await.unwrap(); // Sync application name.
         conn.execute("BEGIN").await.unwrap();
         check_client_state("idle in transaction", admin.clone()).await;
         assert!(check_server_state("idle", admin.clone()).await);
@@ -76,6 +78,7 @@ async fn check_server_state(expected: &str, admin: Pool<Postgres>) -> bool {
         let application_name: String = client.get("application_name");
 
         if database.starts_with("shard_") && application_name == "test_fake_transactions" {
+            println!("{} = {}", state, expected);
             ok = state == expected;
         }
     }
