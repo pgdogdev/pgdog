@@ -7,8 +7,8 @@ Contributions are welcome. If you see a bug, feel free to submit a PR with a fix
 1. Run cargo build in the project directory.
 2. Install Postgres (v17 currently supported). Create a `pgdog` superuser with a `pgdog` password.
 3. Run the setup script `bash integration/setup.sh`. 
-2. Launch the pgdog process `target/debug/pgdog`.
-3. Run the tests `cargo nextest run --test-threads=1`. If a test fails, trying running it directly.
+2. Launch the pgdog process `cargo run`.
+3. Run the tests `cargo nextest run --test-threads=1`. If a test fails, try running it directly.
 
 ## Coding
 
