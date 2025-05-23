@@ -55,7 +55,7 @@ impl Command {
     pub(crate) fn dry_run(self) -> Self {
         match self {
             Command::Query(mut query) => {
-                query.set_shard(0);
+                query.set_shard_mut(0);
                 Command::Query(query)
             }
 

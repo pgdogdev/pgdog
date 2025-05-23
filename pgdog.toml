@@ -7,7 +7,7 @@ port = 6432
 shutdown_timeout = 5_000
 openmetrics_port = 9090
 idle_healthcheck_delay = 2342343243
-read_write_strategy = "aggressive"
+read_write_strategy = "conservative"
 
 #
 # Admin database password.
@@ -108,14 +108,14 @@ fingerprint = "23cd60d5972d1712" #[2579824632033777426]
 [[manual_queries]]
 fingerprint = "bb38525ebeb46656" #[13490623250668217942]
 
-[[manual_query]]
+[[manual_queries]]
 fingerprint = "f4814b6fadabc4c1" #[17618446160277259457]
 
-[[manual_query]]
+[[manual_queries]]
 fingerprint = "04dc05f480b702d3"
 
-[[manual_query]]
+[[manual_queries]]
 fingerprint = "2d9944fc9caeaadd" # [3285733254894627549]
 
-[multi_tenant]
-column = "tenant_id"
+# [multi_tenant]
+# column = "tenant_id"

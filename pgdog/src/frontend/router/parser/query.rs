@@ -47,6 +47,7 @@ pub struct QueryParser {
     replication_mode: bool,
     routed: bool,
     in_transaction: bool,
+    write_override: Option<bool>,
 }
 
 impl Default for QueryParser {
@@ -56,6 +57,7 @@ impl Default for QueryParser {
             replication_mode: false,
             routed: false,
             in_transaction: false,
+            write_override: None,
         }
     }
 }
@@ -80,7 +82,7 @@ impl QueryParser {
             if let Command::Query(ref mut query) = self.command {
                 if !matches!(query.shard(), Shard::Direct(_)) && context.cluster.shards().len() == 1
                 {
-                    query.set_shard(0);
+                    query.set_shard_mut(0);
                 }
             }
         }
@@ -109,6 +111,7 @@ impl QueryParser {
         self.routed = false;
         self.in_transaction = false;
         self.command = Command::Query(Route::default());
+        self.write_override = None;
     }
 
     fn query(
@@ -258,7 +261,11 @@ impl QueryParser {
         let mut command = match root.node {
             // SELECT statements.
             Some(NodeEnum::SelectStmt(ref stmt)) => {
-                let writes = Self::select_writes(stmt)?;
+                let mut writes = Self::select_writes(stmt)?;
+                // Write overwrite because of conservative read/write split.
+                if let Some(true) = self.write_override {
+                    writes.writes = true;
+                }
 
                 if matches!(shard, Shard::Direct(_)) {
                     return Ok(Command::Query(Route::read(shard).set_write(writes)));
@@ -284,7 +291,7 @@ impl QueryParser {
                         }
 
                         if omni {
-                            query.set_shard(round_robin::next() % cluster.shards().len());
+                            query.set_shard_mut(round_robin::next() % cluster.shards().len());
                         }
 
                         Ok(Command::Query(query.set_write(writes)))
@@ -321,8 +328,7 @@ impl QueryParser {
                     // Only single-statement SELECT queries can be routed
                     // to a replica.
                     if *rw_strategy == ReadWriteStrategy::Conservative {
-                        self.routed = true;
-                        return Ok(Command::Query(Route::write(None)));
+                        self.write_override = Some(true);
                     }
 
                     match stmt.kind() {
@@ -353,7 +359,7 @@ impl QueryParser {
         // Overwrite shard using shard we got from a comment, if any.
         if let Shard::Direct(shard) = shard {
             if let Command::Query(ref mut route) = command {
-                route.set_shard(shard);
+                route.set_shard_mut(shard);
             }
         }
 
@@ -365,7 +371,7 @@ impl QueryParser {
         //
         if cluster.shards().len() == 1 && !dry_run {
             if let Command::Query(ref mut route) = command {
-                route.set_shard(0);
+                route.set_shard_mut(0);
             }
         }
 
@@ -386,7 +392,7 @@ impl QueryParser {
 
                     // TODO: check routing logic required by config.
                     if manual_route.is_some() {
-                        route.set_shard(round_robin::next() % cluster.shards().len());
+                        route.set_shard_mut(round_robin::next() % cluster.shards().len());
                     }
                 }
             }
