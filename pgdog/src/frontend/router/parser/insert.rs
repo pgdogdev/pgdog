@@ -1,9 +1,13 @@
 //! Handle INSERT statements.
 use pg_query::{protobuf::*, NodeEnum};
 
-use crate::{backend::ShardingSchema, frontend::router::sharding::Tables};
+use crate::{
+    backend::ShardingSchema,
+    frontend::router::sharding::{ContextBuilder, Tables, Value as ShardingValue},
+    net::Bind,
+};
 
-use super::{Column, Table, Tuple};
+use super::{Column, Error, Shard, Table, Tuple, Value};
 
 /// Parse an `INSERT` statement.
 #[derive(Debug)]
@@ -42,7 +46,7 @@ impl<'a> Insert<'a> {
                     .iter()
                     .map(Tuple::try_from)
                     .collect::<Result<Vec<Tuple<'a>>, ()>>();
-                return tuples.unwrap();
+                return tuples.unwrap_or(vec![]);
             }
         }
 
@@ -50,19 +54,73 @@ impl<'a> Insert<'a> {
     }
 
     /// Get the sharding key for the statement.
-    pub fn sharding_key(&self, schema: &ShardingSchema) -> Option<usize> {
-        self.table()
-            .map(|table| {
-                let tables = Tables::new(schema);
-                tables.key(table, &self.columns())
-            })
-            .flatten()
+    pub fn shard(
+        &'a self,
+        schema: &'a ShardingSchema,
+        bind: Option<&Bind>,
+    ) -> Result<Shard, Error> {
+        let tables = Tables::new(schema);
+        let columns = self.columns();
+
+        let key = self
+            .table()
+            .map(|table| tables.key(table, &columns))
+            .flatten();
+
+        if let Some(key) = key {
+            if let Some(bind) = bind {
+                if let Ok(Some(param)) = bind.parameter(key.position) {
+                    let value = ShardingValue::from_param(&param, key.table.data_type)?;
+                    let ctx = ContextBuilder::new(&key.table)
+                        .value(value)
+                        .shards(schema.shards)
+                        .build()?;
+                    return Ok(ctx.apply()?);
+                }
+            } else {
+                let tuples = self.tuples();
+
+                // TODO: support rewriting INSERTs to run against multiple shards.
+                if tuples.len() != 1 {
+                    return Ok(Shard::All);
+                }
+
+                if let Some(value) = tuples.get(0).map(|tuple| tuple.get(key.position)).flatten() {
+                    match value {
+                        Value::Integer(int) => {
+                            let ctx = ContextBuilder::new(&key.table)
+                                .data(*int)
+                                .shards(schema.shards)
+                                .build()?;
+                            return Ok(ctx.apply()?);
+                        }
+
+                        Value::String(str) => {
+                            let ctx = ContextBuilder::new(&key.table)
+                                .data(*str)
+                                .shards(schema.shards)
+                                .build()?;
+                            return Ok(ctx.apply()?);
+                        }
+
+                        _ => (),
+                    }
+                }
+            }
+        }
+
+        Ok(Shard::All)
     }
 }
 
 #[cfg(test)]
 mod test {
     use pg_query::{parse, NodeEnum};
+
+    use crate::backend::ShardedTables;
+    use crate::config::ShardedTable;
+    use crate::net::bind::Parameter;
+    use crate::net::Format;
 
     use super::super::Value;
     use super::*;
@@ -130,6 +188,90 @@ mod test {
             }
 
             _ => panic!("not an insert"),
+        }
+    }
+
+    #[test]
+    fn test_shard_insert() {
+        let query = parse("INSERT INTO sharded (id, value) VALUES (1, 'test')").unwrap();
+        let select = query.protobuf.stmts.first().unwrap().stmt.as_ref().unwrap();
+        let schema = ShardingSchema {
+            shards: 3,
+            tables: ShardedTables::new(
+                vec![
+                    ShardedTable {
+                        name: Some("sharded".into()),
+                        column: "id".into(),
+                        ..Default::default()
+                    },
+                    ShardedTable {
+                        name: None,
+                        column: "user_id".into(),
+                        ..Default::default()
+                    },
+                ],
+                vec![],
+                false,
+            ),
+        };
+
+        match &select.node {
+            Some(NodeEnum::InsertStmt(stmt)) => {
+                let insert = Insert::new(stmt);
+                let shard = insert.shard(&schema, None).unwrap();
+                assert!(matches!(shard, Shard::Direct(2)));
+
+                let bind = Bind::test_params(
+                    "",
+                    &[Parameter {
+                        len: 1,
+                        data: "3".as_bytes().to_vec(),
+                    }],
+                );
+
+                let shard = insert.shard(&schema, Some(&bind)).unwrap();
+                assert!(matches!(shard, Shard::Direct(1)));
+
+                let bind = Bind::test_params_codes(
+                    "",
+                    &[Parameter {
+                        len: 8,
+                        data: 234_i64.to_be_bytes().to_vec(),
+                    }],
+                    &[Format::Binary],
+                );
+
+                let shard = insert.shard(&schema, Some(&bind)).unwrap();
+                assert!(matches!(shard, Shard::Direct(0)));
+            }
+
+            _ => panic!("not an insert"),
+        }
+
+        let query = parse("INSERT INTO orders (user_id, value) VALUES (1, 'test')").unwrap();
+        let select = query.protobuf.stmts.first().unwrap().stmt.as_ref().unwrap();
+
+        match &select.node {
+            Some(NodeEnum::InsertStmt(stmt)) => {
+                let insert = Insert::new(stmt);
+                let shard = insert.shard(&schema, None).unwrap();
+                assert!(matches!(shard, Shard::Direct(2)));
+            }
+
+            _ => panic!("not a select"),
+        }
+
+        let query = parse("INSERT INTO random_table (users_id, value) VALUES (1, 'test')").unwrap();
+        let select = query.protobuf.stmts.first().unwrap().stmt.as_ref().unwrap();
+
+        match &select.node {
+            Some(NodeEnum::InsertStmt(stmt)) => {
+                let insert = Insert::new(stmt);
+                let shard = insert.shard(&schema, None).unwrap();
+                assert!(matches!(shard, Shard::All));
+            }
+
+            _ => panic!("not a select"),
         }
     }
 }

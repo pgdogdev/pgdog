@@ -2,6 +2,8 @@
 
 use thiserror::Error;
 
+use crate::frontend::router::sharding;
+
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("{0}")]
@@ -45,4 +47,7 @@ pub enum Error {
 
     #[error("no multi tenant id")]
     MultiTenantId,
+
+    #[error("{0}")]
+    Sharder(#[from] sharding::Error),
 }

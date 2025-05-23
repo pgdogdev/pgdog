@@ -800,7 +800,7 @@ fn admin_password() -> String {
 }
 
 /// Sharded table.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 #[serde(deny_unknown_fields)]
 pub struct ShardedTable {
     /// Database this table belongs to.

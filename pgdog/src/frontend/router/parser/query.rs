@@ -13,7 +13,7 @@ use crate::{
             context::RouterContext,
             parser::{rewrite::Rewrite, OrderBy, Shard},
             round_robin,
-            sharding::{shard_param, shard_str, shard_value, Centroids},
+            sharding::{shard_param, shard_str, shard_value, Centroids, ContextBuilder, Tables},
             CopyRow,
         },
         PreparedStatements,
@@ -759,36 +759,8 @@ impl QueryParser {
         params: Option<&Bind>,
     ) -> Result<Command, Error> {
         let insert = Insert::new(stmt);
-        let columns = insert
-            .columns()
-            .into_iter()
-            .map(|column| column.name)
-            .collect::<Vec<_>>();
-        let mut shards = BTreeSet::new();
-        let table = insert.table().unwrap().name;
-        if let Some(sharded_table) = sharding_schema.tables.table(table) {
-            if let Some(column) = ShardedColumn::from_sharded_table(sharded_table, &columns) {
-                for tuple in insert.tuples() {
-                    if let Some(value) = tuple.get(column.position) {
-                        shards.insert(if let Some(bind) = params {
-                            value.shard_placeholder(bind, sharding_schema, &column)
-                        } else {
-                            value.shard(sharding_schema, &column)
-                        });
-                    }
-                }
-            }
-            match shards.len() {
-                0 => Ok(Command::Query(Route::write(Some(
-                    round_robin::next() % sharding_schema.shards,
-                )))),
-                1 => Ok(Command::Query(Route::write(shards.pop_last().unwrap()))),
-                // TODO: support sending inserts to multiple shards.
-                _ => Ok(Command::Query(Route::write(None))),
-            }
-        } else {
-            Ok(Command::Query(Route::write(None)))
-        }
+        let shard = insert.shard(sharding_schema, params)?;
+        Ok(Command::Query(Route::write(shard)))
     }
 
     fn update(
@@ -797,6 +769,7 @@ impl QueryParser {
         params: Option<&Bind>,
     ) -> Result<Command, Error> {
         let table = stmt.relation.as_ref().map(Table::from);
+
         let where_clause = WhereClause::new(table.map(|t| t.name), &stmt.where_clause);
 
         if let Some(where_clause) = where_clause {
@@ -804,7 +777,7 @@ impl QueryParser {
             return Ok(Command::Query(Route::write(Self::converge(shards))));
         }
 
-        Ok(Command::Query(Route::write(None)))
+        Ok(Command::Query(Route::write(Shard::All)))
     }
 
     fn delete(

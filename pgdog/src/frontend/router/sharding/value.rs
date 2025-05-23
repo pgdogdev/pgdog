@@ -1,17 +1,18 @@
-use std::str::FromStr;
+use std::str::{from_utf8, FromStr};
 
 use uuid::Uuid;
 
 use super::{bigint, uuid, Error};
 use crate::{
     config::DataType,
-    net::{Format, FromDataType, Vector},
+    net::{Format, FromDataType, ParameterWithFormat, Vector},
 };
 
 #[derive(Debug, Clone)]
 pub enum Data<'a> {
     Text(&'a str),
     Binary(&'a [u8]),
+    Integer(i64),
 }
 
 impl<'a> From<&'a str> for Data<'a> {
@@ -23,6 +24,12 @@ impl<'a> From<&'a str> for Data<'a> {
 impl<'a> From<&'a [u8]> for Data<'a> {
     fn from(value: &'a [u8]) -> Self {
         Self::Binary(value)
+    }
+}
+
+impl<'a> From<i64> for Data<'a> {
+    fn from(value: i64) -> Self {
+        Self::Integer(value)
     }
 }
 
@@ -40,11 +47,25 @@ impl<'a> Value<'a> {
         }
     }
 
+    pub fn from_param(
+        param: &'a ParameterWithFormat<'a>,
+        data_type: DataType,
+    ) -> Result<Self, Error> {
+        let data = param.data();
+        let format = param.format();
+
+        match format {
+            Format::Text => Ok(Self::new(from_utf8(data)?, data_type)),
+            Format::Binary => Ok(Self::new(data, data_type)),
+        }
+    }
+
     pub fn vector(&self) -> Result<Option<Vector>, Error> {
         if self.data_type == DataType::Vector {
             match self.data {
                 Data::Text(text) => Ok(Some(Vector::decode(text.as_bytes(), Format::Text)?)),
                 Data::Binary(binary) => Ok(Some(Vector::decode(binary, Format::Binary)?)),
+                Data::Integer(_) => Ok(None),
             }
         } else {
             Ok(None)
@@ -56,11 +77,13 @@ impl<'a> Value<'a> {
             DataType::Bigint => match self.data {
                 Data::Text(text) => Ok(Some(bigint(text.parse()?))),
                 Data::Binary(data) => Ok(Some(bigint(i64::from_be_bytes(data.try_into()?)))),
+                Data::Integer(int) => Ok(Some(bigint(int))),
             },
 
             DataType::Uuid => match self.data {
                 Data::Text(text) => Ok(Some(uuid(Uuid::from_str(text)?))),
                 Data::Binary(data) => Ok(Some(uuid(Uuid::from_bytes(data.try_into()?)))),
+                Data::Integer(_) => Ok(None),
             },
 
             DataType::Vector => Ok(None),

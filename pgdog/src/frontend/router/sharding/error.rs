@@ -15,4 +15,10 @@ pub enum Error {
 
     #[error("{0}")]
     Net(#[from] crate::net::Error),
+
+    #[error("context incomplete")]
+    IncompleteContext,
+
+    #[error("{0}")]
+    Utf8(#[from] std::str::Utf8Error),
 }

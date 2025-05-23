@@ -8,6 +8,7 @@ use crate::{
 
 // pub mod context;
 pub mod context;
+pub mod context_builder;
 pub mod error;
 pub mod ffi;
 pub mod operator;
@@ -15,9 +16,11 @@ pub mod tables;
 pub mod value;
 pub mod vector;
 
+pub use context::*;
+pub use context_builder::*;
 pub use error::Error;
 pub use operator::*;
-pub use tables::Tables;
+pub use tables::*;
 pub use value::*;
 pub use vector::{Centroids, Distance};
 

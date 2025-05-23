@@ -1,7 +1,14 @@
 use crate::{
     backend::ShardingSchema,
+    config::ShardedTable,
     frontend::router::parser::{Column, Table},
 };
+
+#[derive(Debug)]
+pub struct Key<'a> {
+    pub table: &'a ShardedTable,
+    pub position: usize,
+}
 
 pub struct Tables<'a> {
     schema: &'a ShardingSchema,
@@ -12,7 +19,7 @@ impl<'a> Tables<'a> {
         Tables { schema }
     }
 
-    pub(crate) fn key(&self, table: Table, columns: &[Column]) -> Option<usize> {
+    pub(crate) fn key(&'a self, table: Table, columns: &'a [Column]) -> Option<Key<'a>> {
         let tables = self.schema.tables().tables();
 
         // Check tables with name first.
@@ -22,18 +29,30 @@ impl<'a> Tables<'a> {
             .find(|t| t.name.as_ref().map(|s| s.as_str()) == Some(table.name));
 
         if let Some(sharded) = sharded {
-            return columns.iter().position(|col| col.name == sharded.column);
+            if let Some(position) = columns.iter().position(|col| col.name == sharded.column) {
+                return Some(Key {
+                    table: sharded,
+                    position,
+                });
+            }
         }
 
         // Check tables without name.
-        let key = tables
+        let key: Option<(&'a ShardedTable, Option<usize>)> = tables
             .iter()
             .filter(|table| table.name.is_none())
-            .map(|t| columns.iter().position(|col| col.name == t.column))
-            .filter(|p| p.is_some())
-            .next()
-            .flatten();
+            .map(|t| (t, columns.iter().position(|col| col.name == t.column)))
+            .filter(|t| t.1.is_some())
+            .next();
+        if let Some(key) = key {
+            if let Some(position) = key.1 {
+                return Some(Key {
+                    table: key.0,
+                    position,
+                });
+            }
+        }
 
-        key
+        None
     }
 }
