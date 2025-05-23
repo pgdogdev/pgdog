@@ -62,6 +62,17 @@ impl Pool {
         }
     }
 
+    /// Test pool, no connections.
+    #[cfg(test)]
+    pub fn new_test() -> Self {
+        let config = PoolConfig {
+            address: Address::new_test(),
+            config: Config::default(),
+        };
+
+        Self::new(&config)
+    }
+
     pub(crate) fn inner(&self) -> &InnerSync {
         &self.inner
     }

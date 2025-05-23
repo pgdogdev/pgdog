@@ -327,7 +327,7 @@ impl QueryParser {
                     //
                     // Only single-statement SELECT queries can be routed
                     // to a replica.
-                    if *rw_strategy == ReadWriteStrategy::Conservative {
+                    if *rw_strategy == ReadWriteStrategy::Conservative && !read_only {
                         self.write_override = Some(true);
                     }
 
@@ -395,6 +395,10 @@ impl QueryParser {
                         route.set_shard_mut(round_robin::next() % cluster.shards().len());
                     }
                 }
+            }
+
+            if let Some(true) = self.write_override {
+                route.set_read_mut(false);
             }
         }
 
@@ -1068,6 +1072,7 @@ mod test {
         assert!(!qp.in_transaction);
 
         let (_, mut qp) = command!("BEGIN");
+        assert!(qp.write_override.is_some());
         let command = qp
             .parse(
                 RouterContext::new(
@@ -1124,12 +1129,12 @@ mod test {
     fn test_transaction() {
         let (command, qp) = command!("BEGIN");
         match command {
-            Command::Query(q) => assert!(q.is_write()),
+            Command::StartTransaction(q) => assert_eq!(q.query(), "BEGIN"),
             _ => panic!("not a query"),
         };
 
-        assert!(qp.routed);
-        assert!(!qp.in_transaction);
+        assert!(!qp.routed);
+        assert!(qp.in_transaction);
 
         let mut cluster = Cluster::new_test();
         cluster.set_read_write_strategy(ReadWriteStrategy::Aggressive);
@@ -1163,8 +1168,8 @@ mod test {
 
         match route {
             Command::Query(q) => {
-                assert!(q.is_read());
-                assert!(cluster.read_only());
+                assert!(q.is_write());
+                assert!(!cluster.read_only());
             }
 
             _ => panic!("not a query"),
