@@ -518,7 +518,6 @@ impl Server {
     /// Execute a query on the server and return the result.
     pub async fn execute(&mut self, query: impl Into<Query>) -> Result<Vec<Message>, Error> {
         let query = query.into();
-        debug!("[{}] {} ", self.addr(), query.query(),);
         self.execute_batch(&[query]).await
     }
 
