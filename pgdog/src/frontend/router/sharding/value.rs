@@ -72,6 +72,23 @@ impl<'a> Value<'a> {
         }
     }
 
+    pub fn valid(&self) -> bool {
+        match self.data_type {
+            DataType::Bigint => match self.data {
+                Data::Text(text) => text.parse::<i64>().is_ok(),
+                Data::Binary(data) => data.len() == 8,
+                Data::Integer(_) => true,
+            },
+            DataType::Uuid => match self.data {
+                Data::Text(text) => Uuid::from_str(text).is_ok(),
+                Data::Binary(data) => data.len() == 16,
+                Data::Integer(_) => false,
+            },
+
+            _ => false,
+        }
+    }
+
     pub fn hash(&self) -> Result<Option<u64>, Error> {
         match self.data_type {
             DataType::Bigint => match self.data {

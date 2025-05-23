@@ -1,11 +1,8 @@
 //! Route queries to correct shards.
-use std::{
-    collections::{BTreeSet, HashSet},
-    sync::Arc,
-};
+use std::{collections::HashSet, sync::Arc};
 
 use crate::{
-    backend::{databases::databases, replication::ShardedColumn, Cluster, ShardingSchema},
+    backend::{databases::databases, Cluster, ShardingSchema},
     config::{config, ReadWriteStrategy},
     frontend::{
         buffer::BufferedQuery,
@@ -13,7 +10,7 @@ use crate::{
             context::RouterContext,
             parser::{rewrite::Rewrite, OrderBy, Shard},
             round_robin,
-            sharding::{shard_str, Centroids, ContextBuilder, Tables, Value as ShardingValue},
+            sharding::{Centroids, ContextBuilder, Value as ShardingValue},
             CopyRow,
         },
         PreparedStatements,
@@ -472,7 +469,10 @@ impl QueryParser {
                     ..
                 }) = node
                 {
-                    let shard = shard_str(sval, sharding_schema, &vec![], 0);
+                    let ctx = ContextBuilder::from_str(sval.as_str())?
+                        .shards(sharding_schema.shards)
+                        .build()?;
+                    let shard = ctx.apply()?;
                     self.routed = true;
                     return Ok(Command::Query(Route::write(shard).set_read(read_only)));
                 }
