@@ -151,6 +151,7 @@ impl ConfigAndUsers {
 
 /// Configuration.
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[serde(deny_unknown_fields)]
 pub struct Config {
     /// General configuration.
     #[serde(default)]

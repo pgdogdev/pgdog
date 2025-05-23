@@ -19,6 +19,17 @@ impl<'a> Tables<'a> {
         Tables { schema }
     }
 
+    pub(crate) fn sharded(&'a self, table: Table) -> Option<&'a ShardedTable> {
+        let tables = self.schema.tables().tables();
+
+        let sharded = tables
+            .iter()
+            .filter(|table| table.name.is_some())
+            .find(|t| t.name.as_ref().map(|s| s.as_str()) == Some(table.name));
+
+        sharded
+    }
+
     pub(crate) fn key(&'a self, table: Table, columns: &'a [Column]) -> Option<Key<'a>> {
         let tables = self.schema.tables().tables();
 

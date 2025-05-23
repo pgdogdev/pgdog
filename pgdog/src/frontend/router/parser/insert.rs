@@ -3,7 +3,10 @@ use pg_query::{protobuf::*, NodeEnum};
 
 use crate::{
     backend::ShardingSchema,
-    frontend::router::sharding::{ContextBuilder, Tables, Value as ShardingValue},
+    frontend::router::{
+        round_robin,
+        sharding::{ContextBuilder, Tables, Value as ShardingValue},
+    },
     net::Bind,
 };
 
@@ -62,10 +65,9 @@ impl<'a> Insert<'a> {
         let tables = Tables::new(schema);
         let columns = self.columns();
 
-        let key = self
-            .table()
-            .map(|table| tables.key(table, &columns))
-            .flatten();
+        let table = self.table();
+
+        let key = table.map(|table| tables.key(table, &columns)).flatten();
 
         if let Some(key) = key {
             if let Some(bind) = bind {
@@ -106,6 +108,12 @@ impl<'a> Insert<'a> {
                         _ => (),
                     }
                 }
+            }
+        } else if let Some(table) = table {
+            // If this table is sharded, but the sharding key isn't in the query,
+            // choose a shard at random.
+            if let Some(_) = tables.sharded(table) {
+                return Ok(Shard::Direct(round_robin::next() % schema.shards));
             }
         }
 
@@ -269,6 +277,20 @@ mod test {
                 let insert = Insert::new(stmt);
                 let shard = insert.shard(&schema, None).unwrap();
                 assert!(matches!(shard, Shard::All));
+            }
+
+            _ => panic!("not a select"),
+        }
+
+        // Round robin test.
+        let query = parse("INSERT INTO sharded (value) VALUES ('test')").unwrap();
+        let select = query.protobuf.stmts.first().unwrap().stmt.as_ref().unwrap();
+
+        match &select.node {
+            Some(NodeEnum::InsertStmt(stmt)) => {
+                let insert = Insert::new(stmt);
+                let shard = insert.shard(&schema, None).unwrap();
+                assert!(matches!(shard, Shard::Direct(_)));
             }
 
             _ => panic!("not a select"),

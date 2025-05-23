@@ -381,7 +381,7 @@ impl QueryParser {
                 // Otherwise, we're wasting time parsing SQL.
                 if !databases.manual_queries().is_empty() {
                     let fingerprint = fingerprint(query).map_err(Error::PgQuery)?;
-                    trace!("fingerprint: {}", fingerprint.hex);
+                    debug!("fingerprint: {}", fingerprint.hex);
                     let manual_route = databases.manual_query(&fingerprint.hex).cloned();
 
                     // TODO: check routing logic required by config.
