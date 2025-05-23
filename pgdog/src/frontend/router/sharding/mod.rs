@@ -7,9 +7,18 @@ use crate::{
 };
 
 // pub mod context;
+pub mod context;
+pub mod error;
 pub mod ffi;
+pub mod operator;
+pub mod tables;
+pub mod value;
 pub mod vector;
 
+pub use error::Error;
+pub use operator::*;
+pub use tables::Tables;
+pub use value::*;
 pub use vector::{Centroids, Distance};
 
 use super::parser::Shard;

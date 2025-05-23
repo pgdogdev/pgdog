@@ -56,6 +56,12 @@ pub struct ShardingSchema {
     pub tables: ShardedTables,
 }
 
+impl ShardingSchema {
+    pub fn tables(&self) -> &ShardedTables {
+        &self.tables
+    }
+}
+
 pub struct ClusterShardConfig {
     pub primary: Option<PoolConfig>,
     pub replicas: Vec<PoolConfig>,

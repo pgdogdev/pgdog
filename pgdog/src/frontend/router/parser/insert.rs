@@ -1,6 +1,8 @@
 //! Handle INSERT statements.
 use pg_query::{protobuf::*, NodeEnum};
 
+use crate::{backend::ShardingSchema, frontend::router::sharding::Tables};
+
 use super::{Column, Table, Tuple};
 
 /// Parse an `INSERT` statement.
@@ -45,6 +47,16 @@ impl<'a> Insert<'a> {
         }
 
         vec![]
+    }
+
+    /// Get the sharding key for the statement.
+    pub fn sharding_key(&self, schema: &ShardingSchema) -> Option<usize> {
+        self.table()
+            .map(|table| {
+                let tables = Tables::new(schema);
+                tables.key(table, &self.columns())
+            })
+            .flatten()
     }
 }
 
