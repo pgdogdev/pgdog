@@ -158,6 +158,8 @@ impl Stats {
     pub fn parse_complete(&mut self) {
         self.total.parse += 1;
         self.last_checkout.parse += 1;
+        self.total.prepared_statements += 1;
+        self.last_checkout.prepared_statements += 1;
     }
 
     pub fn copy_mode(&mut self) {
@@ -233,14 +235,6 @@ impl Stats {
     pub fn receive(&mut self, bytes: usize) {
         self.total.bytes_received += bytes;
         self.last_checkout.bytes_received += bytes;
-    }
-
-    /// Count prepared statements.
-    pub fn prepared_statement(&mut self) {
-        self.total.prepared_statements += 1;
-        self.last_checkout.prepared_statements += 1;
-        self.state = State::ParseComplete;
-        self.update();
     }
 
     /// Track healtchecks.

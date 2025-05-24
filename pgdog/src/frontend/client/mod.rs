@@ -345,13 +345,13 @@ impl Client {
         ) {
             Ok(command) => command,
             Err(err) => {
-                error!("{:?} [{}]", err, self.addr);
                 if err.empty_query() {
                     self.stream.send(&EmptyQueryResponse::default()).await?;
                     self.stream
                         .send_flush(&ReadyForQuery::in_transaction(self.in_transaction))
                         .await?;
                 } else {
+                    error!("{:?} [{}]", err, self.addr);
                     self.stream
                         .error(ErrorResponse::syntax(err.to_string().as_str()))
                         .await?;
