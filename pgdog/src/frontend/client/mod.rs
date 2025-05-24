@@ -506,7 +506,7 @@ impl Client {
             inner.stats.transaction();
             inner.reset_router();
             debug!(
-                "transaction finished [{}ms]",
+                "transaction finished [{:.3}ms]",
                 inner.stats.last_transaction_time.as_secs_f64() * 1000.0
             );
 
