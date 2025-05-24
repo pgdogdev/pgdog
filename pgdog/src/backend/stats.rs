@@ -237,14 +237,6 @@ impl Stats {
         self.last_checkout.bytes_received += bytes;
     }
 
-    /// Count prepared statements.
-    pub fn prepared_statement(&mut self) {
-        self.total.prepared_statements += 1;
-        self.last_checkout.prepared_statements += 1;
-        self.state = State::ParseComplete;
-        self.update();
-    }
-
     /// Track healtchecks.
     pub fn healthcheck(&mut self) {
         self.total.healthchecks += 1;
