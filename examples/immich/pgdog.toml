@@ -1,0 +1,9 @@
+[general]
+port = 5432
+
+[[databases]]
+name = "immich"
+host = "database2"
+
+[admin]
+password = "admin"
