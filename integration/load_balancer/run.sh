@@ -35,7 +35,7 @@ cargo run --release -- \
 
 pushd ${SCRIPT_DIR}/pgx
 go get
-go test -v
+go test -v -count 3
 popd
 
 killall pgdog

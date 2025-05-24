@@ -158,6 +158,8 @@ impl Stats {
     pub fn parse_complete(&mut self) {
         self.total.parse += 1;
         self.last_checkout.parse += 1;
+        self.total.prepared_statements += 1;
+        self.last_checkout.prepared_statements += 1;
     }
 
     pub fn copy_mode(&mut self) {

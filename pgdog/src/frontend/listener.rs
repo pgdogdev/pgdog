@@ -61,8 +61,6 @@ impl Listener {
                            Ok(_) => (),
                            Err(err) => if !err.disconnect() {
                                error!("client crashed: {:?}", err);
-                           } else {
-                               info!("client disconnected [{}]", addr);
                            }
                        };
                    };
