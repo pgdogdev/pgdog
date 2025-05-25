@@ -3,6 +3,33 @@ CREATE SCHEMA IF NOT EXISTS pgdog;
 
 GRANT USAGE ON SCHEMA pgdog TO PUBLIC;
 
+-- Settings table.
+CREATE TABLE IF NOT EXISTS pgdog.config (
+    shard INTEGER NOT NULL,
+    shards INTEGER NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE OR REPLACE FUNCTION pgdog.config_trigger() RETURNS trigger AS $body$
+DECLARE count BIGINT;
+BEGIN
+    SELECT count(*) INTO count FROM pgdog.config;
+
+    IF count::bigint = 1::bigint THEN
+        RAISE EXCEPTION 'There can only be one pgdog.config row.';
+    END IF;
+
+    RETURN NEW;
+END;
+$body$
+LANGUAGE plpgsql;
+
+CREATE OR REPLACE TRIGGER config_trigger BEFORE INSERT ON pgdog.config
+FOR EACH ROW
+EXECUTE FUNCTION pgdog.config_trigger();
+
+GRANT SELECT ON TABLE pgdog.config TO PUBLIC;
+
 -- Table to use with "satisfies_hash_partition".
 -- We just need the type to match; everything else
 -- is passed as an argument to the function.
@@ -10,8 +37,68 @@ CREATE TABLE IF NOT EXISTS pgdog.validator_bigint (id BIGSERIAL NOT NULL PRIMARY
 PARTITION BY
     HASH (id);
 
+-- Table to use with "satisfies_hash_partition".
+-- We just need the type to match; everything else
+-- is passed as an argument to the function.
+CREATE TABLE IF NOT EXISTS pgdog.validator_uuid (id UUID NOT NULL PRIMARY KEY)
+PARTITION BY
+    HASH (id);
+
 -- Allow anyone to get next sequence value.
 GRANT USAGE ON SEQUENCE pgdog.validator_bigint_id_seq TO PUBLIC;
+
+-- Generate a primary key from a sequence that will
+-- match the shard number this is ran on.
+CREATE OR REPLACE FUNCTION pgdog.next_id_auto() RETURNS BIGINT AS $body$
+DECLARE next_value BIGINT;
+DECLARE seq_oid oid;
+DECLARE table_oid oid;
+DECLARE shards INTEGER;
+DECLARE shard INTEGER;
+BEGIN
+    SELECT 'pgdog.validator_bigint_id_seq'::regclass INTO seq_oid;
+    SELECT 'pgdog.validator_bigint'::regclass INTO table_oid;
+    SELECT
+        pgdog.config.shard,
+        pgdog.config.shards
+    INTO shard, shards
+    FROM pgdog.config;
+
+    LOOP
+        -- This is atomic.
+        SELECT nextval(seq_oid) INTO next_value;
+
+        IF satisfies_hash_partition(table_oid, shards, shard, next_value) THEN
+            RETURN next_value;
+        END IF;
+    END LOOP;
+END;
+$body$ LANGUAGE plpgsql;
+
+-- Generate a primary key from a sequence that will
+-- match the shard number this is ran on.
+CREATE OR REPLACE FUNCTION pgdog.next_uuid_auto() RETURNS UUID AS $body$
+DECLARE next_value UUID;
+DECLARE table_oid OID;
+DECLARE shard INTEGER;
+DECLARE shards INTEGER;
+BEGIN
+    SELECT 'pgdog.validator_uuid'::regclass INTO table_oid;
+    SELECT
+        pgdog.config.shard,
+        pgdog.config.shards
+    INTO shard, shards
+    FROM pgdog.config;
+
+    LOOP
+        SELECT gen_random_uuid() INTO next_value;
+
+        IF satisfies_hash_partition(table_oid, shards, shard, next_value) THEN
+            RETURN next_value;
+        END IF;
+    END LOOP;
+END;
+$body$ LANGUAGE plpgsql;
 
 -- Generate a primary key from a sequence that will
 -- match the shard number this is ran on.

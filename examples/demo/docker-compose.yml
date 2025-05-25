@@ -1,0 +1,30 @@
+services:
+  db_0:
+    image: postgres:16
+    environment:
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - 6000:5432
+    volumes:
+      - shard_0:/var/lib/postgresql/data
+  db_1:
+    image: postgres:16
+    environment:
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - 6001:5432
+    volumes:
+      - shard_1:/var/lib/postgresql/data
+  db_2:
+    image: postgres:16
+    environment:
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - 6002:5432
+    volumes:
+      - shard_2:/var/lib/postgresql/data
+
+volumes:
+  shard_0:
+  shard_1:
+  shard_2:
