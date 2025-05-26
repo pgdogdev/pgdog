@@ -33,6 +33,11 @@ cargo run --release -- \
     --config ${SCRIPT_DIR}/pgdog.toml \
     --users ${SCRIPT_DIR}/users.toml &
 
+export PGPORT=6432
+while ! pg_isready; do
+    sleep 1
+done
+
 pushd ${SCRIPT_DIR}/pgx
 go get
 go test -v -count 3
