@@ -1,0 +1,5 @@
+CREATE TABLE kv (
+    id BIGINT PRIMARY KEY,
+    data JSONB,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW ()
+);

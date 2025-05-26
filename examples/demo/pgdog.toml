@@ -1,0 +1,35 @@
+#
+# PgDog configuration.
+#
+
+[general]
+openmetrics_port = 9090
+
+[[databases]]
+name = "postgres"
+host = "127.0.0.1"
+port = 6000
+shard = 0
+
+[[databases]]
+name = "postgres"
+host = "127.0.0.1"
+port = 6001
+shard = 1
+
+[[databases]]
+name = "postgres"
+host = "127.0.0.1"
+port = 6002
+shard = 2
+
+[[sharded_tables]]
+name = "kv"
+column = "id"
+data_type = "bigint"
+database = "postgres"
+
+[[sharded_tables]]
+column = "kv_id"
+data_type = "bigint"
+database = "postgres"

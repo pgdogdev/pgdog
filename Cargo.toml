@@ -1,6 +1,6 @@
 [workspace]
 
-members = [
+members = [ "examples/demo",
     "examples/routing-plugin", "integration/rust",
     "pgdog",
     "pgdog-plugin",
