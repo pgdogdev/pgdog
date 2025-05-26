@@ -26,5 +26,10 @@ shard = 2
 [[sharded_tables]]
 name = "kv"
 column = "id"
-data_type = "uuid"
+data_type = "bigint"
+database = "postgres"
+
+[[sharded_tables]]
+column = "kv_id"
+data_type = "bigint"
 database = "postgres"

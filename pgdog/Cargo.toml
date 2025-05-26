@@ -8,6 +8,8 @@ license = "AGPL-3.0"
 homepage = "https://pgdog.dev"
 repository = "https://github.com/levkk/pgdog"
 readme = "README.md"
+default-run = "pgdog"
+
 
 [features]
 tui = ["ratatui"]
