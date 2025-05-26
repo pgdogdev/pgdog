@@ -1,5 +1,5 @@
 <p align="center">
-    <picture>
+    <picture height="128" width="auto">
       <source media="(prefers-color-scheme: dark)" srcset="/.github/logo2-white.png">
       <source media="(prefers-color-scheme: light)" srcset="/.github/logo2_wide.png">
       <img alt="Fallback image description" src="/.github/logo2-white.png">
