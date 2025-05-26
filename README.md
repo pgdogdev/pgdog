@@ -1,5 +1,9 @@
 <p align="center">
-    <img src="/.github/logo2-white.png" height="128" width="auto">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="/.github/logo2-white.png">
+      <source media="(prefers-color-scheme: light)" srcset="/.github/logo2_wide.png">
+      <img alt="Fallback image description" src="/.github/logo2-white.png">
+    </picture>
 </p>
 
 [![CI](https://github.com/levkk/pgdog/actions/workflows/ci.yml/badge.svg)](https://github.com/levkk/pgdog/actions/workflows/ci.yml)
