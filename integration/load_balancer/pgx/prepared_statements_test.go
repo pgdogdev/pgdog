@@ -11,20 +11,20 @@ import (
 
 func TestPrepared(t *testing.T) {
 	done := make(chan int)
-	iterations := 10
+	concurrency := 100
 
-	for range iterations {
+	for range concurrency {
 		// Creating separate pools in purpose.
 		pool := GetPool()
 		defer pool.Close()
 
 		go func() {
-			runPrepared(t, pool, 500)
+			runPrepared(t, pool, 20)
 			done <- 1
 		}()
 	}
 
-	for range iterations {
+	for range concurrency {
 		<-done
 	}
 }
@@ -67,17 +67,29 @@ func runPrepared(t *testing.T, pool *pgxpool.Pool, iterations int) {
 			"SELECT *, NOW() FROM (SELECT $1::bigint, $2::text, current_user)", int64(1), "hello world")
 		assert.NoError(t, err)
 
-		// Generate 25 prepared statements.
-		for i := range 25 {
+		// Generate 150 prepared statements.
+		for i := range 150 {
 			query := fmt.Sprintf(`SELECT
 					*,
 					NOW(),
-					5 + %d
+					(5 + %d)::bigint
 				FROM (
 					SELECT $1::bigint, $2::text, current_user
 				)`, i)
 
-			_, err = pool.Exec(context.Background(), query, int64(1), "hello world")
+			rows, err := pool.Query(context.Background(), query, int64(i), fmt.Sprintf("hello world %d", i))
+			var count int
+			for rows.Next() {
+				values, err := rows.Values()
+				assert.NoError(t, err)
+				assert.Equal(t, values[0].(int64), int64(i))
+				assert.Equal(t, values[1].(string), fmt.Sprintf("hello world %d", i))
+				assert.Equal(t, values[4].(int64), int64(5+i))
+				count += 1
+			}
+			rows.Close()
+			assert.Equal(t, count, 1)
+
 			assert.NoError(t, err)
 		}
 	}
