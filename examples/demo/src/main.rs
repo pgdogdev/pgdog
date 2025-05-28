@@ -1,9 +1,8 @@
-use colored::{ColoredString, Colorize};
+use colored::Colorize;
 use std::{
     io::{Write, stdin, stdout},
     process::{Command, Stdio, exit},
 };
-use which::which;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
@@ -53,12 +52,6 @@ fn input() -> String {
     };
     println!("");
     input
-}
-
-fn step() {
-    let input = input();
-    let input: usize = input.parse().unwrap();
-    demo(input);
 }
 
 fn command(info: &str, cmd: &mut Command) -> bool {

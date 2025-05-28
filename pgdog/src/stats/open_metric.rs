@@ -2,6 +2,8 @@
 
 use std::ops::Deref;
 
+use crate::config::config;
+
 pub trait OpenMetric: Send + Sync {
     fn name(&self) -> String;
     /// Metric measurement.
@@ -104,6 +106,14 @@ impl Deref for Metric {
 impl std::fmt::Display for Metric {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let name = self.name();
+        let config = config();
+        let prefix = config
+            .config
+            .general
+            .openmetrics_prefix
+            .as_ref()
+            .map(|s| s.as_str())
+            .unwrap_or("");
         writeln!(f, "# TYPE {} {}", name, self.metric_type())?;
         if let Some(unit) = self.unit() {
             writeln!(f, "# UNIT {} {}", name, unit)?;
@@ -113,8 +123,43 @@ impl std::fmt::Display for Metric {
         }
 
         for measurement in self.measurements() {
-            writeln!(f, "{}", measurement.render(&name))?;
+            writeln!(f, "{}{}", prefix, measurement.render(&name))?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::config::{self, ConfigAndUsers};
+
+    use super::*;
+
+    #[test]
+    fn test_prefix() {
+        struct TestMetric;
+
+        impl OpenMetric for TestMetric {
+            fn name(&self) -> String {
+                "test".into()
+            }
+
+            fn measurements(&self) -> Vec<Measurement> {
+                vec![Measurement {
+                    labels: vec![],
+                    measurement: MeasurementType::Integer(5),
+                }]
+            }
+        }
+
+        let render = Metric::new(TestMetric {}).to_string();
+        assert_eq!(render.lines().last().unwrap(), "test 5");
+
+        let mut cfg = ConfigAndUsers::default();
+        cfg.config.general.openmetrics_prefix = Some("pgdog.".into());
+        config::set(cfg).unwrap();
+
+        let render = Metric::new(TestMetric {}).to_string();
+        assert_eq!(render.lines().last().unwrap(), "pgdog.test 5");
     }
 }
