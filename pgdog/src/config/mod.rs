@@ -326,6 +326,8 @@ pub struct General {
     pub query_log: Option<PathBuf>,
     /// Enable OpenMetrics server on this port.
     pub openmetrics_port: Option<u16>,
+    /// OpenMetrics prefix.
+    pub openmetrics_namespace: Option<String>,
     /// Prepared statatements support.
     #[serde(default)]
     pub prepared_statements: PreparedStatements,
@@ -436,6 +438,7 @@ impl Default for General {
             broadcast_port: Self::broadcast_port(),
             query_log: None,
             openmetrics_port: None,
+            openmetrics_namespace: None,
             prepared_statements: PreparedStatements::default(),
             passthrough_auth: PassthoughAuth::default(),
             connect_timeout: Self::default_connect_timeout(),
