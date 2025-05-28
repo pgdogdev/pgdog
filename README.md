@@ -1,8 +1,8 @@
 <p align="center">
     <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="/.github/logo2-white.png" height="192" width="auto">
-      <source media="(prefers-color-scheme: light)" srcset="/.github/logo2_wide.png" height="192" width="auto">
-      <img alt="Fallback image description" src="/.github/logo2-white.png" height="192" width="auto">
+      <source media="(prefers-color-scheme: dark)" srcset="/.github/logo2-white.png" height="128" width="auto">
+      <source media="(prefers-color-scheme: light)" srcset="/.github/logo2_wide.png" height="128" width="auto">
+      <img alt="Fallback image description" src="/.github/logo2-white.png" height="128" width="auto">
     </picture>
 </p>
 
