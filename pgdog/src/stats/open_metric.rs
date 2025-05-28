@@ -110,7 +110,7 @@ impl std::fmt::Display for Metric {
         let prefix = config
             .config
             .general
-            .openmetrics_prefix
+            .openmetrics_namespace
             .as_ref()
             .map(|s| s.as_str())
             .unwrap_or("");
@@ -156,7 +156,7 @@ mod test {
         assert_eq!(render.lines().last().unwrap(), "test 5");
 
         let mut cfg = ConfigAndUsers::default();
-        cfg.config.general.openmetrics_prefix = Some("pgdog.".into());
+        cfg.config.general.openmetrics_namespace = Some("pgdog.".into());
         config::set(cfg).unwrap();
 
         let render = Metric::new(TestMetric {}).to_string();
