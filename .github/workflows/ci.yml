@@ -4,7 +4,7 @@ on:
 
 jobs:
   fmt:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rs/toolchain@v1
@@ -21,7 +21,7 @@ jobs:
       - name: Clippy
         run: cargo clippy
   build:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rs/toolchain@v1
@@ -38,14 +38,14 @@ jobs:
       - name: Check release
         run: cargo check --release
   tests:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
           override: true
-      - uses: Swatinem/rust-cache@v2
+      - uses: useblacksmith/rust-cache@v3
         with:
           prefix-key: "v1" # Change this when updating tooling
       - name: Setup PostgreSQL
@@ -68,14 +68,14 @@ jobs:
       - name: Run documentation tests
         run: cargo test --doc
   integration:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
           override: true
-      - uses: Swatinem/rust-cache@v2
+      - uses: useblacksmith/rust-cache@v3
         with:
           prefix-key: release-1
       - name: Setup dependencies
