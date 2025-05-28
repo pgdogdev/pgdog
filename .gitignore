@@ -42,3 +42,4 @@ toxi.log
 *.sqlite3
 perf.data
 perf.data.old
+/shard_test/

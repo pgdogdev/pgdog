@@ -49,7 +49,7 @@ uuid = { version = "1", features = ["v4"] }
 url = "2"
 ratatui = { version = "0.30.0-alpha.1", optional = true }
 rmp-serde = "1"
-chrono = "0.4"
+chrono = { version = "0.4", features = ["serde"] }
 hyper = { version = "1", features = ["full"] }
 http-body-util = "0.1"
 hyper-util = { version = "0.1", features = ["full"] }

@@ -3,6 +3,7 @@
 pub mod convert;
 pub mod error;
 pub mod overrides;
+mod shards;
 pub mod url;
 
 use error::Error;
@@ -21,6 +22,7 @@ use serde::{Deserialize, Serialize};
 use tracing::info;
 use tracing::warn;
 
+pub(crate) use crate::config::shards::{ShardListMap, ShardRangeMap, ShardingMethod};
 use crate::net::messages::Vector;
 use crate::util::{human_duration_optional, random_string};
 
@@ -829,6 +831,12 @@ pub struct ShardedTable {
     /// How many centroids to probe.
     #[serde(default)]
     pub centroid_probes: usize,
+    #[serde(default)]
+    pub sharding_method: Option<ShardingMethod>,
+
+    pub shard_range_map: Option<ShardRangeMap>,
+
+    pub shard_list_map: Option<ShardListMap>,
 }
 
 impl ShardedTable {
@@ -868,6 +876,10 @@ pub enum DataType {
     Bigint,
     Uuid,
     Vector,
+    // TODO: implement more types?
+    // String,
+    // DateTimeUTC
+    // Float
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Default)]
@@ -958,9 +970,10 @@ pub struct MultiTenant {
 
 #[cfg(test)]
 pub mod test {
-    use crate::backend::databases::init;
 
     use super::*;
+    use crate::backend::databases::init;
+    use crate::config::shards::ShardRange;
 
     pub fn load_test() {
         let mut config = ConfigAndUsers::default();
@@ -1054,5 +1067,316 @@ column = "tenant_id"
         assert_eq!(config.tcp.time().unwrap(), Duration::from_millis(1000));
         assert_eq!(config.tcp.retries().unwrap(), 5);
         assert_eq!(config.multi_tenant.unwrap().column, "tenant_id");
+    }
+
+    #[test]
+    fn test_load_sharded_table_with_range_map() {
+        let toml_str = r#"
+            database = "pgdog_sharded"
+            name = "range_sharded"
+            column = "user_id"
+            data_type = "bigint"
+            sharding_method = "range"
+            
+            [shard_range_map]
+            "0" = { start = 0, end = 1000 }
+            "1" = { start = 1000, end = 2000 }
+            "2" = { start = 2000, end = 3000 }
+        "#;
+
+        let table: ShardedTable = toml::from_str(toml_str).unwrap();
+
+        // Verify basic fields
+        assert_eq!(table.database, "pgdog_sharded");
+        assert_eq!(table.name, Some("range_sharded".to_string()));
+        assert_eq!(table.column, "user_id");
+        assert_eq!(table.data_type, crate::config::DataType::Bigint);
+        assert_eq!(table.sharding_method, Some(ShardingMethod::Range));
+
+        // Verify shard_range_map
+        let range_map = table.shard_range_map.unwrap();
+        assert_eq!(range_map.0.len(), 3);
+
+        // Check first range
+        let range_0 = range_map.0.get(&0).unwrap();
+        assert_eq!(range_0.start, Some(0));
+        assert_eq!(range_0.end, Some(1000));
+        assert_eq!(range_0.no_min, false);
+        assert_eq!(range_0.no_max, false);
+
+        // Check second range
+        let range_1 = range_map.0.get(&1).unwrap();
+        assert_eq!(range_1.start, Some(1000));
+        assert_eq!(range_1.end, Some(2000));
+
+        // Check third range
+        let range_2 = range_map.0.get(&2).unwrap();
+        assert_eq!(range_2.start, Some(2000));
+        assert_eq!(range_2.end, Some(3000));
+
+        // Verify that shard_list_map is None
+        assert!(table.shard_list_map.is_none());
+    }
+
+    #[test]
+    fn test_load_sharded_table_with_list_map() {
+        let toml_str = r#"
+            database = "pgdog_sharded"
+            name = "list_sharded"
+            column = "category_id"
+            data_type = "bigint"
+            sharding_method = "list"
+            
+            [shard_list_map]
+            "0" = { values = [1, 3, 5, 7, 9] }
+            "1" = { values = [2, 4, 6, 8, 10] }
+            "2" = { values = [11, 12, 13, 14, 15] }
+        "#;
+
+        let table: ShardedTable = toml::from_str(toml_str).unwrap();
+
+        // Verify basic fields
+        assert_eq!(table.database, "pgdog_sharded");
+        assert_eq!(table.name, Some("list_sharded".to_string()));
+        assert_eq!(table.column, "category_id");
+        assert_eq!(table.data_type, crate::config::DataType::Bigint);
+        assert_eq!(table.sharding_method, Some(ShardingMethod::List));
+
+        // Verify shard_list_map
+        let list_map = table.shard_list_map.unwrap();
+        assert_eq!(list_map.0.len(), 3);
+
+        // Check first list
+        let list_0 = list_map.0.get(&0).unwrap();
+        assert_eq!(list_0.values, vec![1, 3, 5, 7, 9]);
+
+        // Check second list
+        let list_1 = list_map.0.get(&1).unwrap();
+        assert_eq!(list_1.values, vec![2, 4, 6, 8, 10]);
+
+        // Check third list
+        let list_2 = list_map.0.get(&2).unwrap();
+        assert_eq!(list_2.values, vec![11, 12, 13, 14, 15]);
+
+        // Verify that shard_range_map is None
+        assert!(table.shard_range_map.is_none());
+    }
+
+    #[test]
+    fn test_load_sharded_table_with_special_range_flags() {
+        let toml_str = r#"
+            database = "pgdog_sharded"
+            name = "special_range_sharded"
+            column = "timestamp_id"
+            data_type = "bigint"
+            sharding_method = "range"
+            
+            [shard_range_map]
+            "0" = { start = 0, end = 1000 }
+            "1" = { start = 1000, no_max = true }
+            "2" = { no_min = true, end = 0 }
+        "#;
+
+        let table: ShardedTable = toml::from_str(toml_str).unwrap();
+
+        // Verify shard_range_map with special flags
+        let range_map = table.shard_range_map.unwrap();
+        assert_eq!(range_map.0.len(), 3);
+
+        // Standard range
+        let range_0 = range_map.0.get(&0).unwrap();
+        assert_eq!(range_0.start, Some(0));
+        assert_eq!(range_0.end, Some(1000));
+        assert_eq!(range_0.no_min, false);
+        assert_eq!(range_0.no_max, false);
+
+        // Range with no maximum (unbounded upper)
+        let range_1 = range_map.0.get(&1).unwrap();
+        assert_eq!(range_1.start, Some(1000));
+        assert_eq!(range_1.end, None);
+        assert_eq!(range_1.no_min, false);
+        assert_eq!(range_1.no_max, true);
+
+        // Range with no minimum (unbounded lower)
+        let range_2 = range_map.0.get(&2).unwrap();
+        assert_eq!(range_2.start, None);
+        assert_eq!(range_2.end, Some(0));
+        assert_eq!(range_2.no_min, true);
+        assert_eq!(range_2.no_max, false);
+    }
+
+    #[test]
+    fn test_load_sharded_table_with_empty_list_values() {
+        let toml_str = r#"
+            database = "pgdog_sharded"
+            name = "empty_list_sharded"
+            column = "tag_id"
+            data_type = "bigint"
+            sharding_method = "list"
+            
+            [shard_list_map]
+            "0" = { values = [1, 2, 3] }
+            "1" = { values = [] }
+        "#;
+
+        let table: ShardedTable = toml::from_str(toml_str).unwrap();
+
+        // Verify shard_list_map with an empty list
+        let list_map = table.shard_list_map.unwrap();
+        assert_eq!(list_map.0.len(), 2);
+
+        // Check first list
+        let list_0 = list_map.0.get(&0).unwrap();
+        assert_eq!(list_0.values, vec![1, 2, 3]);
+
+        // Check empty list
+        let list_1 = list_map.0.get(&1).unwrap();
+        assert!(list_1.values.is_empty());
+    }
+
+    #[test]
+    fn test_load_sharded_table_with_invalid_shard_map_keys() {
+        let toml_str = r#"
+            database = "pgdog_sharded"
+            name = "invalid_keys"
+            column = "user_id"
+            data_type = "bigint"
+            sharding_method = "range"
+            
+            [shard_range_map]
+            "invalid" = { start = 0, end = 1000 }
+            "0" = { start = 1000, end = 2000 }
+        "#;
+
+        let result = toml::from_str::<ShardedTable>(toml_str);
+        assert!(result.is_err());
+
+        // Verify the error message contains information about parsing failure
+        let error = result.unwrap_err().to_string();
+        assert!(error.contains("invalid") || error.contains("parse"));
+    }
+
+    #[test]
+    fn test_load_sharded_table_with_both_maps() {
+        let toml_str = r#"
+            database = "pgdog_sharded"
+            name = "dual_sharded"
+            column = "id"
+            data_type = "bigint"
+            sharding_method = "range"
+            
+            [shard_range_map]
+            "0" = { start = 0, end = 1000 }
+            "1" = { start = 1000, end = 2000 }
+            
+            [shard_list_map]
+            "0" = { values = [1, 3, 5] }
+            "1" = { values = [2, 4, 6] }
+        "#;
+
+        let table: ShardedTable = toml::from_str(toml_str).unwrap();
+
+        // Both maps should be populated, but the actual sharding method used
+        // should be determined by the sharding_method field
+        assert_eq!(table.sharding_method, Some(ShardingMethod::Range));
+
+        // Verify both maps exist
+        assert!(table.shard_range_map.is_some());
+        assert!(table.shard_list_map.is_some());
+
+        // Check range map
+        let range_map = table.shard_range_map.unwrap();
+        assert_eq!(range_map.0.len(), 2);
+
+        // Check list map
+        let list_map = table.shard_list_map.unwrap();
+        assert_eq!(list_map.0.len(), 2);
+    }
+
+    #[test]
+    fn test_load_sharded_table_without_sharding_method() {
+        let toml_str = r#"
+            database = "pgdog_sharded"
+            name = "implicit_hash"
+            column = "id"
+            data_type = "bigint"
+            
+            [shard_range_map]
+            "0" = { start = 0, end = 1000 }
+            "1" = { start = 1000, end = 2000 }
+        "#;
+
+        let table: ShardedTable = toml::from_str(toml_str).unwrap();
+
+        // If sharding_method is not specified, it should default to Hash
+        assert_eq!(table.sharding_method, None);
+
+        // But the range map should still be populated
+        assert!(table.shard_range_map.is_some());
+        let range_map = table.shard_range_map.unwrap();
+        assert_eq!(range_map.0.len(), 2);
+    }
+
+    #[test]
+    fn test_programmatically_create_and_serialize() {
+        // Create a ShardedTable with range map programmatically
+        let mut range_map = HashMap::new();
+        range_map.insert(
+            0,
+            ShardRange {
+                start: Some(0),
+                end: Some(1000),
+                no_min: false,
+                no_max: false,
+            },
+        );
+        range_map.insert(
+            1,
+            ShardRange {
+                start: Some(1000),
+                end: None,
+                no_min: false,
+                no_max: true,
+            },
+        );
+
+        let shard_range_map = ShardRangeMap(range_map);
+
+        let table = ShardedTable {
+            database: "pgdog_sharded".to_string(),
+            name: Some("range_table".to_string()),
+            column: "id".to_string(),
+            data_type: crate::config::DataType::Bigint,
+            sharding_method: Some(ShardingMethod::Range),
+            shard_range_map: Some(shard_range_map),
+            shard_list_map: None,
+            primary: false,
+            centroids: Vec::new(),
+            centroids_path: None,
+            centroid_probes: 0,
+        };
+
+        // Serialize to TOML
+        let toml_str = toml::to_string(&table).unwrap();
+
+        // Deserialize back to validate
+        let parsed_table: ShardedTable = toml::from_str(&toml_str).unwrap();
+
+        // Verify the deserialized structure matches the original
+        assert_eq!(parsed_table.database, "pgdog_sharded");
+        assert_eq!(parsed_table.name, Some("range_table".to_string()));
+        assert_eq!(parsed_table.sharding_method, Some(ShardingMethod::Range));
+
+        let parsed_range_map = parsed_table.shard_range_map.unwrap();
+        assert_eq!(parsed_range_map.0.len(), 2);
+
+        let range_0 = parsed_range_map.0.get(&0).unwrap();
+        assert_eq!(range_0.start, Some(0));
+        assert_eq!(range_0.end, Some(1000));
+
+        let range_1 = parsed_range_map.0.get(&1).unwrap();
+        assert_eq!(range_1.start, Some(1000));
+        assert_eq!(range_1.end, None);
+        assert_eq!(range_1.no_max, true);
     }
 }

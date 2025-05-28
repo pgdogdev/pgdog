@@ -1,3 +1,4 @@
+use bytes::Bytes;
 use uuid::Uuid;
 
 use crate::{
@@ -37,6 +38,15 @@ pub fn uuid(uuid: Uuid) -> u64 {
         ffi::hash_combine64(
             0,
             ffi::hash_bytes_extended(uuid.as_bytes().as_ptr(), uuid.as_bytes().len() as i64),
+        )
+    }
+}
+
+pub fn bytes(bytes: Bytes) -> u64 {
+    unsafe {
+        ffi::hash_combine64(
+            0,
+            ffi::hash_bytes_extended(bytes.as_ptr(), bytes.len() as i64),
         )
     }
 }

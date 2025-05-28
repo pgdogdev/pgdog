@@ -1,6 +1,5 @@
-use crate::frontend::router::parser::Shard;
-
 use super::{Error, Operator, Value};
+use crate::frontend::router::parser::Shard;
 
 #[derive(Debug)]
 pub struct Context<'a> {
@@ -16,7 +15,6 @@ impl<'a> Context<'a> {
                     return Ok(Shard::Direct(hash as usize % shards));
                 }
             }
-
             Operator::Centroids {
                 shards,
                 probes,
@@ -24,6 +22,16 @@ impl<'a> Context<'a> {
             } => {
                 if let Some(vector) = self.value.vector()? {
                     return Ok(centroids.shard(&vector, *shards, *probes));
+                }
+            }
+            Operator::Ranges(srm) => {
+                if let Some(i) = self.value.int()? {
+                    return Ok(srm.find_shard_key(i).unwrap());
+                }
+            }
+            Operator::Lists(slm) => {
+                if let Some(i) = self.value.int()? {
+                    return Ok(slm.find_shard_key(i).unwrap());
                 }
             }
         }
