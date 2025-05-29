@@ -2,7 +2,7 @@ use std::str::{from_utf8, FromStr};
 
 use uuid::Uuid;
 
-use super::{bigint, uuid, Error};
+use super::{bigint, uuid, varchar, Error};
 use crate::{
     config::DataType,
     net::{Format, FromDataType, ParameterWithFormat, Vector},
@@ -109,6 +109,11 @@ impl<'a> Value<'a> {
             },
 
             DataType::Vector => Ok(None),
+            DataType::Varchar => match self.data {
+                Data::Binary(b) => Ok(varchar(b).ok()),
+                Data::Text(s) => Ok(Some(varchar(s.as_bytes())?)),
+                Data::Integer(_) => Ok(None),
+            },
         }
     }
 }

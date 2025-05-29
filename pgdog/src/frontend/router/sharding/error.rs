@@ -1,4 +1,4 @@
-use std::{array::TryFromSliceError, num::ParseIntError};
+use std::{array::TryFromSliceError, ffi::NulError, num::ParseIntError};
 
 use thiserror::Error;
 
@@ -24,4 +24,7 @@ pub enum Error {
 
     #[error("wrong integer binary size")]
     IntegerSize,
+
+    #[error("{0}")]
+    NullError(#[from] NulError),
 }

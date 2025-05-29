@@ -13,6 +13,8 @@ pub mod error;
 pub mod ffi;
 pub mod operator;
 pub mod tables;
+#[cfg(test)]
+pub mod test;
 pub mod value;
 pub mod vector;
 
@@ -38,6 +40,16 @@ pub fn uuid(uuid: Uuid) -> u64 {
             0,
             ffi::hash_bytes_extended(uuid.as_bytes().as_ptr(), uuid.as_bytes().len() as i64),
         )
+    }
+}
+
+/// Hash VARCHAR.
+pub fn varchar(s: &[u8]) -> Result<u64, Error> {
+    unsafe {
+        Ok(ffi::hash_combine64(
+            0,
+            ffi::hash_bytes_extended(s.as_ptr(), s.len() as i64),
+        ))
     }
 }
 
@@ -86,6 +98,9 @@ pub(crate) fn shard_value(
             .ok()
             .map(|v| Centroids::from(centroids).shard(&v, shards, centroid_probes))
             .unwrap_or(Shard::All),
+        DataType::Varchar => varchar(value.as_bytes())
+            .map(|s| Shard::Direct(s as usize % shards))
+            .unwrap_or(Shard::All), // DataType::Varchar => value/
     }
 }
 
@@ -108,6 +123,9 @@ pub(crate) fn shard_binary(
         DataType::Vector => Vector::decode(bytes, Format::Binary)
             .ok()
             .map(|v| Centroids::from(centroids).shard(&v, shards, centroid_probes))
+            .unwrap_or(Shard::All),
+        DataType::Varchar => varchar(bytes)
+            .map(|s| Shard::Direct(s as usize % shards))
             .unwrap_or(Shard::All),
     }
 }

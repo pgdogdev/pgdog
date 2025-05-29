@@ -217,6 +217,18 @@ impl Bind {
             ..Default::default()
         }
     }
+
+    pub(crate) fn test_params_codes_results(
+        name: &str,
+        params: &[Parameter],
+        codes: &[Format],
+        results: &[i16],
+    ) -> Self {
+        let mut me = Self::test_params_codes(name, params, codes);
+        me.results = results.to_vec();
+
+        me
+    }
 }
 
 impl FromBytes for Bind {
