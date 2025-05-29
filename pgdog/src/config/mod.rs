@@ -868,6 +868,7 @@ pub enum DataType {
     Bigint,
     Uuid,
     Vector,
+    Varchar,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Default)]

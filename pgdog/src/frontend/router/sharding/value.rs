@@ -2,11 +2,12 @@ use std::str::{from_utf8, FromStr};
 
 use uuid::Uuid;
 
-use super::{bigint, uuid, Error};
+use super::{bigint, uuid, varchar, Error};
 use crate::{
     config::DataType,
     net::{Format, FromDataType, ParameterWithFormat, Vector},
 };
+use bytes::Bytes;
 
 #[derive(Debug, Clone)]
 pub enum Data<'a> {
@@ -30,6 +31,12 @@ impl<'a> From<&'a [u8]> for Data<'a> {
 impl<'a> From<i64> for Data<'a> {
     fn from(value: i64) -> Self {
         Self::Integer(value)
+    }
+}
+
+impl<'a> From<&'a Bytes> for Data<'a> {
+    fn from(value: &'a Bytes) -> Self {
+        Self::Binary(&value[..])
     }
 }
 
@@ -109,6 +116,11 @@ impl<'a> Value<'a> {
             },
 
             DataType::Vector => Ok(None),
+            DataType::Varchar => match self.data {
+                Data::Binary(b) => Ok(varchar(b).ok()),
+                Data::Text(s) => Ok(Some(varchar(s.as_bytes())?)),
+                Data::Integer(_) => Ok(None),
+            },
         }
     }
 }
