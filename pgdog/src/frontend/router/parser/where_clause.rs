@@ -86,23 +86,24 @@ impl<'a> WhereClause<'a> {
             match (&left, &right) {
                 // TODO: Handle something like
                 // id = (SELECT 5) which is stupid but legal SQL.
-                (&[left], &[right]) => match (left, right) {
-                    (Output::Column(ref column), output) => {
-                        if Self::column_match(column, table_name, column_name) {
+                (&[Output::Column(ref column)], output) => {
+                    if Self::column_match(column, table_name, column_name) {
+                        for output in output.iter() {
                             if let Some(key) = Self::get_key(output) {
                                 keys.push(key);
                             }
                         }
                     }
-                    (output, Output::Column(ref column)) => {
-                        if Self::column_match(column, table_name, column_name) {
+                }
+                (output, &[Output::Column(ref column)]) => {
+                    if Self::column_match(column, table_name, column_name) {
+                        for output in output.iter() {
                             if let Some(key) = Self::get_key(output) {
                                 keys.push(key);
                             }
                         }
                     }
-                    _ => (),
-                },
+                }
 
                 _ => {
                     for output in left {
@@ -167,7 +168,7 @@ impl<'a> WhereClause<'a> {
             }
 
             Some(NodeEnum::AExpr(ref expr)) => {
-                if expr.kind() == AExprKind::AexprOp {
+                if matches!(expr.kind(), AExprKind::AexprOp | AExprKind::AexprIn) {
                     let op = Self::string(expr.name.first());
                     if let Some(op) = op {
                         if op != "=" {
@@ -212,6 +213,12 @@ impl<'a> WhereClause<'a> {
 
             Some(NodeEnum::ParamRef(ref param)) => {
                 keys.push(Output::Parameter(param.number));
+            }
+
+            Some(NodeEnum::List(ref list)) => {
+                for node in &list.items {
+                    keys.extend(Self::parse(table_name, node));
+                }
             }
 
             Some(NodeEnum::TypeCast(ref cast)) => {
@@ -271,6 +278,21 @@ mod test {
         if let Some(NodeEnum::SelectStmt(stmt)) = stmt.node {
             let where_ = WhereClause::new(Some("users"), &stmt.where_clause).unwrap();
             assert!(where_.keys(Some("users"), "tenant_id").is_empty());
+        }
+    }
+
+    #[test]
+    fn test_in_clause() {
+        let query = "SELECT * FROM users WHERE tenant_id IN ($1, $2, $3, $4)";
+        let ast = parse(query).unwrap();
+        let stmt = ast.protobuf.stmts.first().cloned().unwrap().stmt.unwrap();
+
+        if let Some(NodeEnum::SelectStmt(stmt)) = stmt.node {
+            let where_ = WhereClause::new(Some("users"), &stmt.where_clause).unwrap();
+            let keys = where_.keys(Some("users"), "tenant_id");
+            assert_eq!(keys.len(), 4);
+        } else {
+            panic!("not a select");
         }
     }
 }
