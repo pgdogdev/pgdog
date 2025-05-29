@@ -28,7 +28,7 @@ func TestShardedVarchar(t *testing.T) {
 		rows.Close()
 		assert.Equal(t, 1, len)
 
-		rows, err = conn.Query(context.Background(), "SELECT * FROM sharded_varchar WHERE id_varchar = $1 ", str)
+		rows, err = conn.Query(context.Background(), "SELECT * FROM sharded_varchar WHERE id_varchar IN ($1) ", str)
 		assert.NoError(t, err)
 
 		len = 0
