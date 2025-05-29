@@ -36,6 +36,8 @@ for db in pgdog shard_0 shard_1; do
             psql -c "DROP TABLE IF EXISTS ${table}" ${db} -U pgdog
             psql -c "CREATE TABLE IF NOT EXISTS ${table} (id BIGINT PRIMARY KEY, value TEXT)" ${db} -U pgdog
     done
+
+    psql -c "CREATE TABLE IF NOT EXISTS sharded_varchar (id_varchar VARCHAR)" ${db} -U pgdog
     psql -f ${SCRIPT_DIR}/../pgdog/src/backend/schema/setup.sql ${db} -U ${user}
 done
 

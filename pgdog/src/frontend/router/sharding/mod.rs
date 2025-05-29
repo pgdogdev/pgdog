@@ -102,7 +102,7 @@ pub(crate) fn shard_value(
             .unwrap_or(Shard::All),
         DataType::Varchar => varchar(value.as_bytes())
             .map(|s| Shard::Direct(s as usize % shards))
-            .unwrap_or(Shard::All), // DataType::Varchar => value/
+            .unwrap_or(Shard::All),
     }
 }
 

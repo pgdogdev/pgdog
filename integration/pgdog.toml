@@ -71,6 +71,12 @@ database = "pgdog_sharded"
 column = "customer_id"
 data_type = "bigint"
 
+[[sharded_tables]]
+database = "pgdog_sharded"
+name = "sharded_varchar"
+column = "id_varchar"
+data_type = "varchar"
+
 [[omnisharded_tables]]
 database = "pgdog_sharded"
 tables = ["sharded_omni"]
