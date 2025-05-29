@@ -7,6 +7,7 @@ use crate::{
     config::DataType,
     net::{Format, FromDataType, ParameterWithFormat, Vector},
 };
+use bytes::Bytes;
 
 #[derive(Debug, Clone)]
 pub enum Data<'a> {
@@ -30,6 +31,12 @@ impl<'a> From<&'a [u8]> for Data<'a> {
 impl<'a> From<i64> for Data<'a> {
     fn from(value: i64) -> Self {
         Self::Integer(value)
+    }
+}
+
+impl<'a> From<&'a Bytes> for Data<'a> {
+    fn from(value: &'a Bytes) -> Self {
+        Self::Binary(&value[..])
     }
 }
 

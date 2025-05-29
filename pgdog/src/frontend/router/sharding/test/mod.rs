@@ -1,3 +1,5 @@
+use std::str::from_utf8;
+
 use rand::{seq::SliceRandom, thread_rng};
 
 use crate::{
@@ -35,6 +37,12 @@ async fn test_shard_varchar() {
 
     server.execute_batch(&queries).await.unwrap();
 
+    let mut schema = ShardingSchema::default();
+    schema.shards = 3;
+
+    let mut table = ShardedTable::default();
+    table.data_type = DataType::Varchar;
+
     let shard_0 = server
         .execute("SELECT * FROM test_shard_varchar_0")
         .await
@@ -45,7 +53,7 @@ async fn test_shard_varchar() {
         .collect::<Vec<_>>();
     assert!(!shard_0.is_empty());
     for val in &shard_0 {
-        assert_eq!(varchar(&val[..]).unwrap() as usize % 3, 0);
+        assert_shard(val, 0);
     }
 
     let shard_1 = server
@@ -58,7 +66,7 @@ async fn test_shard_varchar() {
         .collect::<Vec<_>>();
     assert!(!shard_1.is_empty());
     for val in &shard_1 {
-        assert_eq!(varchar(&val[..]).unwrap() as usize % 3, 1);
+        assert_shard(val, 1);
     }
     let shard_2 = server
         .execute("SELECT * FROM test_shard_varchar_2")
@@ -70,9 +78,38 @@ async fn test_shard_varchar() {
         .collect::<Vec<_>>();
     assert!(!shard_2.is_empty());
     for val in &shard_2 {
-        assert_eq!(varchar(&val[..]).unwrap() as usize % 3, 2);
+        assert_shard(val, 2);
     }
     server.execute("ROLLBACK").await.unwrap();
+}
+
+fn assert_shard(val: &[u8], expected_shard: usize) {
+    let mut schema = ShardingSchema::default();
+    schema.shards = 3;
+
+    let mut table = ShardedTable::default();
+    table.data_type = DataType::Varchar;
+
+    assert_eq!(varchar(&val[..]).unwrap() as usize % 3, expected_shard);
+
+    let s = from_utf8(&val[..]).unwrap();
+    let shard = shard_str(s, &schema, &vec![], 0);
+    assert_eq!(shard, Shard::Direct(expected_shard));
+    let shard = shard_value(
+        s,
+        &crate::config::DataType::Varchar,
+        3,
+        &vec![],
+        expected_shard,
+    );
+    assert_eq!(shard, Shard::Direct(expected_shard));
+    let ctx = ContextBuilder::new(&table)
+        .data(&val[..])
+        .shards(3)
+        .build()
+        .unwrap();
+    let shard = ctx.apply().unwrap();
+    assert_eq!(shard, Shard::Direct(expected_shard));
 }
 
 #[tokio::test]

@@ -67,8 +67,10 @@ pub(crate) fn shard_str(
         DataType::Vector
     } else if value.parse::<i64>().is_ok() {
         DataType::Bigint
-    } else {
+    } else if value.parse::<Uuid>().is_ok() {
         DataType::Uuid
+    } else {
+        DataType::Varchar
     };
     shard_value(value, &data_type, schema.shards, centroids, centroid_probes)
 }
