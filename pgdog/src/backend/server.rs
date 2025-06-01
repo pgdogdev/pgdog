@@ -1721,4 +1721,55 @@ pub mod test {
         assert_eq!(server.stats().total.queries, 25 + (25 * 4));
         assert_eq!(server.stats().total.transactions, 25 + 25);
     }
+
+    #[tokio::test]
+    async fn test_anonymous_extended() {
+        use crate::net::bind::Parameter;
+
+        let buf = vec![
+            Parse::new_anonymous("SELECT pg_advisory_lock($1)").into(),
+            Describe::new_statement("").into(),
+            Flush.into(),
+        ];
+
+        let mut server = test_server().await;
+
+        server.send(&buf.into()).await.unwrap();
+
+        for c in ['1', 't', 'T'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), c);
+            if c != 'T' {
+                assert!(!server.done());
+            }
+        }
+
+        assert!(server.done());
+
+        let buf = vec![
+            Bind::test_params(
+                "",
+                &[Parameter {
+                    len: 4,
+                    data: "1234".as_bytes().to_vec(),
+                }],
+            )
+            .into(),
+            Describe::new_portal("").into(),
+            Execute::new_portal("").into(),
+            Sync.into(),
+        ];
+
+        server.send(&buf.into()).await.unwrap();
+
+        for c in ['2', 'T', 'D', 'C', 'Z'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), c);
+            if c != 'Z' {
+                assert!(!server.done());
+            }
+        }
+
+        assert!(server.done());
+    }
 }
