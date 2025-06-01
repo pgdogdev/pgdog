@@ -220,9 +220,14 @@ impl Stream {
 
     /// Send an error to the client and let them know we are ready
     /// for more queries.
-    pub async fn error(&mut self, error: ErrorResponse) -> Result<(), crate::net::Error> {
+    pub async fn error(
+        &mut self,
+        error: ErrorResponse,
+        in_transaction: bool,
+    ) -> Result<(), crate::net::Error> {
         self.send(&error).await?;
-        self.send_flush(&ReadyForQuery::idle()).await?;
+        self.send_flush(&ReadyForQuery::in_transaction(in_transaction))
+            .await?;
 
         Ok(())
     }
