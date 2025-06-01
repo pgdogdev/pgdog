@@ -226,8 +226,12 @@ impl Stream {
         in_transaction: bool,
     ) -> Result<(), crate::net::Error> {
         self.send(&error).await?;
-        self.send_flush(&ReadyForQuery::in_transaction(in_transaction))
-            .await?;
+        self.send_flush(&if in_transaction {
+            ReadyForQuery::error()
+        } else {
+            ReadyForQuery::idle()
+        })
+        .await?;
 
         Ok(())
     }
