@@ -436,6 +436,8 @@ impl Client {
                         // TODO: should this be wrapped in a method?
                         inner.disconnect();
                         inner.reset_router();
+                        self.in_transaction = false; // Remove transaction marker. Not worth requiring a ROLLBACK.
+                        inner.done(self.in_transaction);
                         return Ok(false);
                     } else {
                         return Err(err.into());
