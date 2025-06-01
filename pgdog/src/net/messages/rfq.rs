@@ -22,6 +22,10 @@ impl ReadyForQuery {
             Self::idle()
         }
     }
+
+    pub fn error() -> Self {
+        ReadyForQuery { status: 'E' }
+    }
 }
 
 impl ToBytes for ReadyForQuery {

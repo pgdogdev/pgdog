@@ -256,7 +256,10 @@ impl Client {
         match self.run().await {
             Ok(_) => info!("client disconnected [{}]", self.addr),
             Err(err) => {
-                let _ = self.stream.error(ErrorResponse::from_err(&err)).await;
+                let _ = self
+                    .stream
+                    .error(ErrorResponse::from_err(&err), false)
+                    .await;
                 error!("client disconnected with error [{}]: {}", self.addr, err)
             }
         }
@@ -353,7 +356,10 @@ impl Client {
                 } else {
                     error!("{:?} [{}]", err, self.addr);
                     self.stream
-                        .error(ErrorResponse::syntax(err.to_string().as_str()))
+                        .error(
+                            ErrorResponse::syntax(err.to_string().as_str()),
+                            self.in_transaction,
+                        )
                         .await?;
                 }
                 inner.done(self.in_transaction);
@@ -432,10 +438,13 @@ impl Client {
                 Err(err) => {
                     if err.no_server() {
                         error!("{} [{}]", err, self.addr);
-                        self.stream.error(ErrorResponse::from_err(&err)).await?;
+                        self.stream
+                            .error(ErrorResponse::from_err(&err), self.in_transaction)
+                            .await?;
                         // TODO: should this be wrapped in a method?
                         inner.disconnect();
                         inner.reset_router();
+                        inner.done(self.in_transaction);
                         return Ok(false);
                     } else {
                         return Err(err.into());
