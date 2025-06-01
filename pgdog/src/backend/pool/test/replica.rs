@@ -51,7 +51,7 @@ async fn test_replicas() {
             task.await.unwrap();
         }
 
-        replicas.pools[pool].unban();
+        replicas.pools[pool].maybe_unban();
     }
 
     replicas.pools[0].ban(Error::CheckoutTimeout);

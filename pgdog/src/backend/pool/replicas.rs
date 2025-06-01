@@ -154,7 +154,9 @@ impl Replicas {
 
             // All replicas are banned, unban everyone.
             if banned == candidates.len() && !unbanned {
-                candidates.iter().for_each(|candidate| candidate.unban());
+                candidates
+                    .iter()
+                    .for_each(|candidate| candidate.maybe_unban());
                 unbanned = true;
             } else {
                 break;

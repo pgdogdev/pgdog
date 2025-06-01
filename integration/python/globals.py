@@ -16,7 +16,6 @@ def no_out_of_sync():
     cur.execute("SHOW POOLS;")
     pools = cur.fetchall()
     for pool in pools:
-        print(pools)
         assert pool[-2] == 0
 
 

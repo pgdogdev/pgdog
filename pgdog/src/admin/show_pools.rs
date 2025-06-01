@@ -20,6 +20,7 @@ impl Command for ShowPools {
 
     async fn execute(&self) -> Result<Vec<Message>, Error> {
         let rd = RowDescription::new(&[
+            Field::bigint("id"),
             Field::text("database"),
             Field::text("user"),
             Field::text("addr"),
@@ -48,7 +49,8 @@ impl Command for ShowPools {
                     let state = pool.state();
                     let maxwait = state.maxwait.as_secs() as i64;
                     let maxwait_us = state.maxwait.subsec_micros() as i64;
-                    row.add(user.database.as_str())
+                    row.add(pool.id() as i64)
+                        .add(user.database.as_str())
                         .add(user.user.as_str())
                         .add(pool.addr().host.as_str())
                         .add(pool.addr().port as i64)

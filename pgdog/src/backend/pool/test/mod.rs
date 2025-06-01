@@ -166,7 +166,7 @@ async fn test_pause() {
     pool.get(&Request::default())
         .await
         .expect_err("checkout timeout");
-    pool.unban();
+    pool.maybe_unban();
     drop(hold);
     // Make sure we're not blocked still.
     drop(pool.get(&Request::default()).await.unwrap());

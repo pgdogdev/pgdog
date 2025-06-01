@@ -5,6 +5,7 @@ use async_trait::async_trait;
 use crate::net::messages::Message;
 
 pub mod backend;
+pub mod ban;
 pub mod error;
 pub mod parser;
 pub mod pause;

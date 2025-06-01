@@ -431,8 +431,11 @@ impl Client {
                 }
                 Err(err) => {
                     if err.no_server() {
-                        error!("connection pool is down [{}]", self.addr);
-                        self.stream.error(ErrorResponse::connection()).await?;
+                        error!("{} [{}]", err, self.addr);
+                        self.stream.error(ErrorResponse::from_err(&err)).await?;
+                        // TODO: should this be wrapped in a method?
+                        inner.disconnect();
+                        inner.reset_router();
                         return Ok(false);
                     } else {
                         return Err(err.into());
