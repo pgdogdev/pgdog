@@ -26,6 +26,21 @@ async fn ban_unban(database: &str, ban: bool, replica: bool) {
     }
 }
 
+async fn ensure_client_state(state: &str) {
+    let admin = admin_sqlx().await;
+
+    let clients = admin.fetch_all("SHOW CLIENTS").await.unwrap();
+    let mut found = false;
+    for client in clients {
+        if client.get::<String, _>("database") != "admin" {
+            assert_eq!(client.get::<String, _>("state"), state);
+            found = true;
+        }
+    }
+
+    assert!(found);
+}
+
 #[tokio::test]
 async fn test_ban_unban() {
     let conns = connections_sqlx().await;
@@ -53,6 +68,8 @@ async fn test_ban_unban() {
             }
         }
     }
+
+    ensure_client_state("idle").await;
 
     for (pool, database) in conns
         .into_iter()
