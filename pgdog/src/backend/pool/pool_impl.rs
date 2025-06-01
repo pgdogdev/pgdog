@@ -264,11 +264,17 @@ impl Pool {
         }
     }
 
-    /// Unban this pool from serving traffic.
-    pub fn unban(&self) {
+    /// Unban this pool from serving traffic, unless manually banned.
+    pub fn maybe_unban(&self) {
         let unbanned = self.lock().maybe_unban();
         if unbanned {
-            info!("pool unbanned manually [{}]", self.addr());
+            info!("pool unbanned [{}]", self.addr());
+        }
+    }
+
+    pub fn unban(&self) {
+        if self.lock().unban() {
+            info!("pool unbanned [{}]", self.addr());
         }
     }
 

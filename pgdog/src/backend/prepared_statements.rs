@@ -103,8 +103,11 @@ impl PreparedStatements {
                     }
 
                     self.describes.push_back(describe.statement().to_string());
-                } else {
+                } else if describe.is_portal() {
                     self.state.add(ExecutionCode::DescriptionOrNothing);
+                } else if describe.is_statement() {
+                    self.state.add(ExecutionCode::DescriptionOrNothing); // t
+                    self.state.add(ExecutionCode::DescriptionOrNothing); // T
                 }
             }
 

@@ -1,7 +1,7 @@
 //! Admin command parser.
 
 use super::{
-    pause::Pause, prelude::Message, reconnect::Reconnect, reload::Reload,
+    ban::Ban, pause::Pause, prelude::Message, reconnect::Reconnect, reload::Reload,
     reset_query_cache::ResetQueryCache, set::Set, setup_schema::SetupSchema,
     show_clients::ShowClients, show_config::ShowConfig, show_lists::ShowLists,
     show_peers::ShowPeers, show_pools::ShowPools, show_prepared_statements::ShowPreparedStatements,
@@ -30,6 +30,7 @@ pub enum ParseResult {
     ShowLists(ShowLists),
     ShowPrepared(ShowPreparedStatements),
     Set(Set),
+    Ban(Ban),
 }
 
 impl ParseResult {
@@ -55,6 +56,7 @@ impl ParseResult {
             ShowLists(show_lists) => show_lists.execute().await,
             ShowPrepared(cmd) => cmd.execute().await,
             Set(set) => set.execute().await,
+            Ban(ban) => ban.execute().await,
         }
     }
 
@@ -80,6 +82,7 @@ impl ParseResult {
             ShowLists(show_lists) => show_lists.name(),
             ShowPrepared(show) => show.name(),
             Set(set) => set.name(),
+            Ban(ban) => ban.name(),
         }
     }
 }
@@ -98,6 +101,7 @@ impl Parser {
             "shutdown" => ParseResult::Shutdown(Shutdown::parse(&sql)?),
             "reconnect" => ParseResult::Reconnect(Reconnect::parse(&sql)?),
             "reload" => ParseResult::Reload(Reload::parse(&sql)?),
+            "ban" | "unban" => ParseResult::Ban(Ban::parse(&sql)?),
             "show" => match iter.next().ok_or(Error::Syntax)?.trim() {
                 "clients" => ParseResult::ShowClients(ShowClients::parse(&sql)?),
                 "pools" => ParseResult::ShowPools(ShowPools::parse(&sql)?),
