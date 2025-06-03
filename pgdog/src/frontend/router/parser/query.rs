@@ -261,17 +261,25 @@ impl QueryParser {
         let mut command = match root.node {
             // SELECT statements.
             Some(NodeEnum::SelectStmt(ref stmt)) => {
-                let mut writes = Self::select_writes(stmt)?;
+                let cte_writes = Self::cte_writes(stmt);
+                let mut writes = Self::functions(stmt)?;
+
                 // Write overwrite because of conservative read/write split.
                 if let Some(true) = self.write_override {
                     writes.writes = true;
                 }
 
+                if cte_writes {
+                    writes.writes = true;
+                }
+
                 if matches!(shard, Shard::Direct(_)) {
+                    self.routed = true;
                     return Ok(Command::Query(Route::read(shard).set_write(writes)));
                 }
                 // `SELECT NOW()`, `SELECT 1`, etc.
                 else if ast.tables().is_empty() {
+                    self.routed = true;
                     return Ok(Command::Query(
                         Route::read(Some(round_robin::next() % cluster.shards().len()))
                             .set_write(writes),
@@ -608,7 +616,35 @@ impl QueryParser {
         shard
     }
 
-    fn select_writes(stmt: &SelectStmt) -> Result<FunctionBehavior, Error> {
+    fn cte_writes(stmt: &SelectStmt) -> bool {
+        if let Some(ref with_clause) = stmt.with_clause {
+            for cte in &with_clause.ctes {
+                if let Some(ref node) = cte.node {
+                    if let NodeEnum::CommonTableExpr(expr) = node {
+                        if let Some(ref query) = expr.ctequery {
+                            if let Some(ref node) = query.node {
+                                match node {
+                                    NodeEnum::SelectStmt(stmt) => {
+                                        if Self::cte_writes(stmt) {
+                                            return true;
+                                        }
+                                    }
+
+                                    _ => {
+                                        return true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        false
+    }
+
+    fn functions(stmt: &SelectStmt) -> Result<FunctionBehavior, Error> {
         for target in &stmt.target_list {
             if let Ok(func) = Function::try_from(target) {
                 return Ok(func.behavior());
@@ -1127,7 +1163,7 @@ mod test {
 
     #[test]
     fn test_transaction() {
-        let (command, qp) = command!("BEGIN");
+        let (command, mut qp) = command!("BEGIN");
         match command {
             Command::StartTransaction(q) => assert_eq!(q.query(), "BEGIN"),
             _ => panic!("not a query"),
@@ -1135,6 +1171,22 @@ mod test {
 
         assert!(!qp.routed);
         assert!(qp.in_transaction);
+        assert_eq!(qp.write_override, Some(true));
+
+        let route = qp
+            .query(
+                &BufferedQuery::Prepared(Parse::named("test", "SELECT $1")),
+                &Cluster::new_test(),
+                None,
+                &mut PreparedStatements::default(),
+                &Parameters::default(),
+            )
+            .unwrap();
+        match route {
+            Command::Query(q) => assert!(q.is_write()),
+            _ => panic!("not a select"),
+        }
+        assert!(qp.routed);
 
         let mut cluster = Cluster::new_test();
         cluster.set_read_write_strategy(ReadWriteStrategy::Aggressive);
@@ -1219,5 +1271,51 @@ mod test {
         let route = query!("SELECT nextval('234')");
         assert!(route.is_write());
         assert!(!route.lock_session());
+    }
+
+    #[test]
+    fn test_cte() {
+        let route = query!("WITH s AS (SELECT 1) SELECT 2");
+        assert!(route.is_read());
+
+        let route = query!("WITH s AS (SELECT 1), s2 AS (INSERT INTO test VALUES ($1) RETURNING *), s3 AS (SELECT 123) SELECT * FROM s");
+        assert!(route.is_write());
+    }
+
+    #[test]
+    fn test_function_begin() {
+        let (cmd, mut qp) = command!("BEGIN");
+        assert!(matches!(cmd, Command::StartTransaction(_)));
+        assert!(!qp.routed);
+        assert!(qp.in_transaction);
+        let route = qp
+            .query(
+                &BufferedQuery::Query(Query::new(
+                    "SELECT
+	ROW(t1.*) AS tt1,
+	ROW(t2.*) AS tt2
+        FROM t1
+        LEFT JOIN t2 ON t1.id = t2.t1_id
+        WHERE t2.account = (
+	SELECT
+		account
+	FROM
+		t2
+	WHERE
+		t2.id = $1
+	)",
+                )),
+                &Cluster::new_test(),
+                None,
+                &mut PreparedStatements::default(),
+                &Parameters::default(),
+            )
+            .unwrap();
+        match route {
+            Command::Query(query) => assert!(query.is_write()),
+            _ => panic!("not a select"),
+        }
+        assert!(qp.routed);
+        assert!(qp.in_transaction);
     }
 }

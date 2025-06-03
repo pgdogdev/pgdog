@@ -81,7 +81,7 @@ impl<'a> TryFrom<&'a Node> for Function<'a> {
             }
 
             Some(NodeEnum::TypeCast(cast)) => {
-                if let Some(node) = cast.arg.as_ref().map(|arg| arg) {
+                if let Some(node) = cast.arg.as_ref() {
                     return Self::try_from(node.as_ref());
                 }
             }

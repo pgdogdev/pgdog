@@ -349,7 +349,7 @@ impl Client {
             Ok(command) => command,
             Err(err) => {
                 if err.empty_query() {
-                    self.stream.send(&EmptyQueryResponse::default()).await?;
+                    self.stream.send(&EmptyQueryResponse).await?;
                     self.stream
                         .send_flush(&ReadyForQuery::in_transaction(self.in_transaction))
                         .await?;

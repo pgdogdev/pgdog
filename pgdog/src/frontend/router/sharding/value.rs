@@ -28,7 +28,7 @@ impl<'a> From<&'a [u8]> for Data<'a> {
     }
 }
 
-impl<'a> From<i64> for Data<'a> {
+impl From<i64> for Data<'_> {
     fn from(value: i64) -> Self {
         Self::Integer(value)
     }
@@ -103,7 +103,7 @@ impl<'a> Value<'a> {
                 Data::Binary(data) => Ok(Some(bigint(match data.len() {
                     2 => i16::from_be_bytes(data.try_into()?) as i64,
                     4 => i32::from_be_bytes(data.try_into()?) as i64,
-                    8 => i64::from_be_bytes(data.try_into()?) as i64,
+                    8 => i64::from_be_bytes(data.try_into()?),
                     _ => return Err(Error::IntegerSize),
                 }))),
                 Data::Integer(int) => Ok(Some(bigint(int))),

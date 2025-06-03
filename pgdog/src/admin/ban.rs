@@ -41,7 +41,7 @@ impl Command for Ban {
     }
 
     async fn execute(&self) -> Result<Vec<Message>, Error> {
-        for (_, database) in databases().all() {
+        for database in databases().all().values() {
             for shard in database.shards() {
                 for pool in shard.pools() {
                     if let Some(id) = self.id {

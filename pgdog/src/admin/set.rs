@@ -90,8 +90,8 @@ impl Command for Set {
 }
 
 impl Set {
-    fn from_json<'a, T: DeserializeOwned>(value: &'a str) -> serde_json::Result<T> {
-        Ok(serde_json::from_str::<T>(&format!(r#""{}""#, value))?)
+    fn from_json<T: DeserializeOwned>(value: &str) -> serde_json::Result<T> {
+        serde_json::from_str::<T>(&format!(r#""{}""#, value))
     }
 }
 

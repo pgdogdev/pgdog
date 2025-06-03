@@ -111,8 +111,7 @@ impl std::fmt::Display for Metric {
             .config
             .general
             .openmetrics_namespace
-            .as_ref()
-            .map(|s| s.as_str())
+            .as_deref()
             .unwrap_or("");
         writeln!(f, "# TYPE {} {}", name, self.metric_type())?;
         if let Some(unit) = self.unit() {

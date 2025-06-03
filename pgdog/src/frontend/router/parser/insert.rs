@@ -67,13 +67,13 @@ impl<'a> Insert<'a> {
 
         let table = self.table();
 
-        let key = table.map(|table| tables.key(table, &columns)).flatten();
+        let key = table.and_then(|table| tables.key(table, &columns));
 
         if let Some(key) = key {
             if let Some(bind) = bind {
                 if let Ok(Some(param)) = bind.parameter(key.position) {
                     let value = ShardingValue::from_param(&param, key.table.data_type)?;
-                    let ctx = ContextBuilder::new(&key.table)
+                    let ctx = ContextBuilder::new(key.table)
                         .value(value)
                         .shards(schema.shards)
                         .build()?;
@@ -87,10 +87,10 @@ impl<'a> Insert<'a> {
                     return Ok(Shard::All);
                 }
 
-                if let Some(value) = tuples.get(0).map(|tuple| tuple.get(key.position)).flatten() {
+                if let Some(value) = tuples.first().and_then(|tuple| tuple.get(key.position)) {
                     match value {
                         Value::Integer(int) => {
-                            let ctx = ContextBuilder::new(&key.table)
+                            let ctx = ContextBuilder::new(key.table)
                                 .data(*int)
                                 .shards(schema.shards)
                                 .build()?;
@@ -98,7 +98,7 @@ impl<'a> Insert<'a> {
                         }
 
                         Value::String(str) => {
-                            let ctx = ContextBuilder::new(&key.table)
+                            let ctx = ContextBuilder::new(key.table)
                                 .data(*str)
                                 .shards(schema.shards)
                                 .build()?;
@@ -112,7 +112,7 @@ impl<'a> Insert<'a> {
         } else if let Some(table) = table {
             // If this table is sharded, but the sharding key isn't in the query,
             // choose a shard at random.
-            if let Some(_) = tables.sharded(table) {
+            if tables.sharded(table).is_some() {
                 return Ok(Shard::Direct(round_robin::next() % schema.shards));
             }
         }

@@ -25,7 +25,7 @@ impl<'a> Tables<'a> {
         let sharded = tables
             .iter()
             .filter(|table| table.name.is_some())
-            .find(|t| t.name.as_ref().map(|s| s.as_str()) == Some(table.name));
+            .find(|t| t.name.as_deref() == Some(table.name));
 
         sharded
     }
@@ -37,7 +37,7 @@ impl<'a> Tables<'a> {
         let sharded = tables
             .iter()
             .filter(|table| table.name.is_some())
-            .find(|t| t.name.as_ref().map(|s| s.as_str()) == Some(table.name));
+            .find(|t| t.name.as_deref() == Some(table.name));
 
         if let Some(sharded) = sharded {
             if let Some(position) = columns.iter().position(|col| col.name == sharded.column) {
@@ -53,8 +53,7 @@ impl<'a> Tables<'a> {
             .iter()
             .filter(|table| table.name.is_none())
             .map(|t| (t, columns.iter().position(|col| col.name == t.column)))
-            .filter(|t| t.1.is_some())
-            .next();
+            .find(|t| t.1.is_some());
         if let Some(key) = key {
             if let Some(position) = key.1 {
                 return Some(Key {
