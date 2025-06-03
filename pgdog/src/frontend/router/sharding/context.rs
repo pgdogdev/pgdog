@@ -8,7 +8,7 @@ pub struct Context<'a> {
     pub(super) operator: Operator<'a>,
 }
 
-impl<'a> Context<'a> {
+impl Context<'_> {
     pub fn apply(&self) -> Result<Shard, Error> {
         match &self.operator {
             Operator::Shards(shards) => {

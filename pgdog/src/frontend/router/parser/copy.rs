@@ -239,7 +239,7 @@ impl CopyParser {
                                 .get(self.sharded_column)
                                 .ok_or(Error::NoShardingColumn)?;
                             if let Data::Column(key) = key {
-                                let ctx = ContextBuilder::new(&table)
+                                let ctx = ContextBuilder::new(table)
                                     .data(&key[..])
                                     .shards(self.sharding_schema.shards)
                                     .build()?;

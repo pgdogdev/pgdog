@@ -52,16 +52,12 @@ impl ShardedTables {
         let without_names = self.tables().iter().filter(|t| t.name.is_none());
 
         let get_column = |sharded_table: &ShardedTable, columns: &[&str]| {
-            if let Some(position) = columns.iter().position(|c| *c == sharded_table.column) {
-                Some(ShardedColumn {
+            columns.iter().position(|c| *c == sharded_table.column).map(|position| ShardedColumn {
                     data_type: sharded_table.data_type,
                     position,
                     centroids: sharded_table.centroids.clone(),
                     centroid_probes: sharded_table.centroid_probes,
                 })
-            } else {
-                None
-            }
         };
 
         for sharded_table in with_names {

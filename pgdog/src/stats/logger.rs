@@ -11,6 +11,12 @@ pub struct Logger {
     shutdown: Arc<Notify>,
 }
 
+impl Default for Logger {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Logger {
     pub fn new() -> Self {
         Self {

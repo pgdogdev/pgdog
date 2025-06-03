@@ -19,7 +19,7 @@ pub enum Value<'a> {
     Function(&'a str),
 }
 
-impl<'a> Value<'a> {
+impl Value<'_> {
     /// Get vector if it's a vector.
     #[cfg(test)]
     pub(crate) fn vector(self) -> Option<Vector> {

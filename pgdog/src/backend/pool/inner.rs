@@ -396,11 +396,7 @@ impl Inner {
     }
 
     pub fn unban(&mut self) -> bool {
-        if let Some(_) = self.ban.take() {
-            true
-        } else {
-            false
-        }
+        self.ban.take().is_some()
     }
 
     #[inline(always)]

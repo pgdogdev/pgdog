@@ -6,9 +6,9 @@ use std::{
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
-    println!("");
+    println!();
     println!("  🐕 Welcome! This is a demo of PgDog.");
-    println!("");
+    println!();
     println!("  PgDog is a pooler and proxy for sharding PostgreSQL.");
     println!(
         "  This demo is interactive. You'll be running examples \n  and using PgDog directly."
@@ -36,7 +36,7 @@ fn info(what: impl ToString) {
 
         counter += 1;
     }
-    print!("\n");
+    println!();
     stdout().flush().unwrap();
 }
 
@@ -50,7 +50,7 @@ fn input() -> String {
         "exit" | "quit" => exit(0),
         _ => (),
     };
-    println!("");
+    println!();
     input
 }
 
@@ -61,10 +61,10 @@ fn command(info: &str, cmd: &mut Command) -> bool {
     let status = cmd.status().unwrap();
 
     if status.success() {
-        print!("✅\n");
+        println!("✅");
         true
     } else {
-        print!("❌\n");
+        println!("❌");
         false
     }
 }
@@ -92,13 +92,13 @@ fn config_shard(port: usize, shard: usize) {
 
 fn config() {
     println!("  {}  ", "pgdog.toml".bold().italic());
-    println!("");
+    println!();
     config_shard(6000, 0);
-    println!("");
+    println!();
     config_shard(6001, 1);
-    println!("");
+    println!();
     config_shard(6002, 2);
-    println!("");
+    println!();
 }
 
 fn check(what: &str) -> bool {
@@ -112,14 +112,14 @@ fn check(what: &str) -> bool {
         .success();
 
     if ok {
-        print!("✅\n");
+        println!("✅");
         true
     } else {
         println!(
             "❌\n\n  {} isn't installed! Please install it before proceeding.",
             what,
         );
-        return false;
+        false
     }
 }
 
@@ -141,7 +141,7 @@ fn demo(step: usize) -> bool {
         }
 
         1 => {
-            println!("");
+            println!();
             info(
                 "Good to go. First things first, I'm going to create 3 PostgreSQL databases with Docker. \
 They are going to run on ports 6000, 6001, and 6002. Press any key when you're ready.",
@@ -152,7 +152,7 @@ They are going to run on ports 6000, 6001, and 6002. Press any key when you're r
         }
 
         2 => {
-            println!("");
+            println!();
             command(
                 "  Starting PostgreSQL, give me a second...",
                 Command::new("docker-compose")
@@ -166,13 +166,13 @@ They are going to run on ports 6000, 6001, and 6002. Press any key when you're r
         }
 
         3 => {
-            println!("");
+            println!();
             info("Great. PostgreSQL is running, let's configure PgDog to connect to it.");
-            println!("");
+            println!();
             info("PgDog has two configuration files:\n");
             info("  - pgdog.toml");
             info("  - users.toml");
-            println!("");
+            println!();
 
             info("pgdog.toml".bold().to_string() +
                 " is used for configuring database connections while " + &"users.toml".bold().to_string() + " stores usernames and passwords. \

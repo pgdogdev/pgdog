@@ -15,7 +15,6 @@ async fn test_shard_varchar() {
 
     let mut server = test_server().await;
     let inserts = (0..100)
-        .into_iter()
         .map(|i| {
             words.shuffle(&mut thread_rng());
             let word = words.first().unwrap();
@@ -90,9 +89,9 @@ fn assert_shard(val: &[u8], expected_shard: usize) {
     let mut table = ShardedTable::default();
     table.data_type = DataType::Varchar;
 
-    assert_eq!(varchar(&val[..]).unwrap() as usize % 3, expected_shard);
+    assert_eq!(varchar(val).unwrap() as usize % 3, expected_shard);
 
-    let s = from_utf8(&val[..]).unwrap();
+    let s = from_utf8(val).unwrap();
     let shard = shard_str(s, &schema, &vec![], 0);
     assert_eq!(shard, Shard::Direct(expected_shard));
     let shard = shard_value(
@@ -104,7 +103,7 @@ fn assert_shard(val: &[u8], expected_shard: usize) {
     );
     assert_eq!(shard, Shard::Direct(expected_shard));
     let ctx = ContextBuilder::new(&table)
-        .data(&val[..])
+        .data(val)
         .shards(3)
         .build()
         .unwrap();

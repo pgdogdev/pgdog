@@ -53,6 +53,7 @@ pub struct Limit {
 /// Path a query should take and any transformations
 /// that should be applied along the way.
 #[derive(Debug, Clone)]
+#[derive(Default)]
 pub struct Route {
     shard: Shard,
     read: bool,
@@ -73,18 +74,6 @@ impl Display for Route {
     }
 }
 
-impl Default for Route {
-    fn default() -> Self {
-        Self {
-            shard: Shard::default(),
-            order_by: vec![],
-            read: false,
-            aggregate: Aggregate::default(),
-            limit: None,
-            lock_session: false,
-        }
-    }
-}
 
 impl Route {
     /// SELECT query.

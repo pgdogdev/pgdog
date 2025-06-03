@@ -40,7 +40,7 @@ pub async fn test_client(replicas: bool) -> (TcpStream, Client) {
 }
 
 pub async fn parallel_test_client() -> (TcpStream, Client) {
-    let addr = format!("127.0.0.1:0");
+    let addr = "127.0.0.1:0".to_string();
     let conn_addr = addr.clone();
     let stream = TcpListener::bind(&conn_addr).await.unwrap();
     let port = stream.local_addr().unwrap().port();
