@@ -1285,4 +1285,41 @@ mod test {
         let route = query!("WITH s AS (SELECT 1), s2 AS (INSERT INTO test VALUES ($1) RETURNING *), s3 AS (SELECT 123) SELECT * FROM s");
         assert!(route.is_write());
     }
+
+    #[test]
+    fn test_function_begin() {
+        let (cmd, mut qp) = command!("BEGIN");
+        assert!(matches!(cmd, Command::StartTransaction(_)));
+        assert!(!qp.routed);
+        assert!(qp.in_transaction);
+        let route = qp
+            .query(
+                &BufferedQuery::Query(Query::new(
+                    "SELECT
+	ROW(t1.*) AS tt1,
+	ROW(t2.*) AS tt2
+        FROM t1
+        LEFT JOIN t2 ON t1.id = t2.t1_id
+        WHERE t2.account = (
+	SELECT
+		account
+	FROM
+		t2
+	WHERE
+		t2.id = $1
+	)",
+                )),
+                &Cluster::new_test(),
+                None,
+                &mut PreparedStatements::default(),
+                &Parameters::default(),
+            )
+            .unwrap();
+        match route {
+            Command::Query(query) => assert!(query.is_write()),
+            _ => panic!("not a select"),
+        }
+        assert!(qp.routed);
+        assert!(qp.in_transaction);
+    }
 }
