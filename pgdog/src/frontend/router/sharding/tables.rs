@@ -52,7 +52,8 @@ impl<'a> Tables<'a> {
         let key: Option<(&'a ShardedTable, Option<usize>)> = tables
             .iter()
             .filter(|table| table.name.is_none())
-            .map(|t| (t, columns.iter().position(|col| col.name == t.column))).find(|t| t.1.is_some());
+            .map(|t| (t, columns.iter().position(|col| col.name == t.column)))
+            .find(|t| t.1.is_some());
         if let Some(key) = key {
             if let Some(position) = key.1 {
                 return Some(Key {

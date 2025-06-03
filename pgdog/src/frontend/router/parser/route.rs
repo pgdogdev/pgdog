@@ -52,8 +52,7 @@ pub struct Limit {
 
 /// Path a query should take and any transformations
 /// that should be applied along the way.
-#[derive(Debug, Clone)]
-#[derive(Default)]
+#[derive(Debug, Clone, Default)]
 pub struct Route {
     shard: Shard,
     read: bool,
@@ -73,7 +72,6 @@ impl Display for Route {
         )
     }
 }
-
 
 impl Route {
     /// SELECT query.

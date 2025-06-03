@@ -110,7 +110,8 @@ impl std::fmt::Display for Metric {
         let prefix = config
             .config
             .general
-            .openmetrics_namespace.as_deref()
+            .openmetrics_namespace
+            .as_deref()
             .unwrap_or("");
         writeln!(f, "# TYPE {} {}", name, self.metric_type())?;
         if let Some(unit) = self.unit() {
