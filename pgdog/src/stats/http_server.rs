@@ -28,7 +28,7 @@ async fn metrics(_: Request<hyper::body::Incoming>) -> Result<Response<Full<Byte
             "text/plain; version=0.0.4; charset=utf-8",
         )
         .body(Full::new(Bytes::from(metrics_data)))
-        .expect("build metrics response");
+        .unwrap_or_else(|_| Response::new(Full::new(Bytes::from("Metrics unavailable"))));
 
     Ok(response)
 }
