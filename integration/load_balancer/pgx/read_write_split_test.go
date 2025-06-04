@@ -2,12 +2,15 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -146,4 +149,86 @@ func TestWriteFunctions(t *testing.T) {
 
 	calls := LoadStatsForPrimary("SELECT pg_advisory_lock")
 	assert.Equal(t, int64(25), calls.Calls)
+}
+
+func withTransaction(t *testing.T, pool *pgxpool.Pool, f func(t pgx.Tx) error) error {
+	tx, err := pool.Begin(context.Background())
+	assert.NoError(t, err)
+
+	err = f(tx)
+
+	if err != nil {
+		return tx.Rollback(context.Background())
+	} else {
+		return tx.Commit(context.Background())
+	}
+}
+
+func runTransactionWithError(tx pgx.Tx) error {
+	_, err := tx.Exec(context.Background(), "SELECT ROW(t.*, 1, 2, 3) FROM test_transactions_with_func t")
+
+	if err != nil {
+		return err
+	}
+
+	return errors.New("error")
+}
+
+func runTransactionWithoutError(tx pgx.Tx) error {
+	_, err := tx.Exec(context.Background(), "SELECT * FROM test_transactions_with_func")
+
+	if err != nil {
+		return err
+	}
+
+	_, err = tx.Exec(context.Background(), "SELECT pg_advisory_xact_lock(12345)")
+
+	_, err = tx.Exec(context.Background(), "INSERT INTO test_transactions_with_func (id, email) VALUES ($1, $2)", 1, "apple@gmail.com")
+
+	rows, err := tx.Query(context.Background(), "SELECT * FROM test_transactions_with_func")
+
+	for rows.Next() {
+	}
+
+	rows.Close()
+
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func TestTransactionsWithFunc(t *testing.T) {
+	pool := GetPool()
+
+	_, err := pool.Exec(context.Background(), `CREATE TABLE IF NOT EXISTS test_transactions_with_func (
+		id BIGINT NOT NULL,
+		email VARCHAR,
+		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		)`)
+
+	defer pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_transactions_with_func")
+
+	c := make(chan int)
+
+	for range 50 {
+		go func() {
+			err = withTransaction(t, pool, runTransactionWithError)
+			assert.NoError(t, err)
+			err = withTransaction(t, pool, runTransactionWithoutError)
+			assert.NoError(t, err)
+			err = withTransaction(t, pool, runTransactionWithError)
+			assert.NoError(t, err)
+			err = withTransaction(t, pool, runTransactionWithoutError)
+			assert.NoError(t, err)
+			c <- 1
+		}()
+	}
+
+	for range 50 {
+		<-c
+	}
+
+	assert.NoError(t, err)
 }
