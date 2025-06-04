@@ -21,9 +21,16 @@ async fn metrics(_: Request<hyper::body::Incoming>) -> Result<Response<Full<Byte
         .map(|m| m.to_string())
         .collect();
     let query_cache = query_cache.join("\n");
-    Ok(Response::new(Full::new(Bytes::from(
-        clients.to_string() + "\n" + &pools.to_string() + "\n" + &query_cache,
-    ))))
+    let metrics_data = clients.to_string() + "\n" + &pools.to_string() + "\n" + &query_cache;
+    let response = Response::builder()
+        .header(
+            hyper::header::CONTENT_TYPE,
+            "text/plain; version=0.0.4; charset=utf-8",
+        )
+        .body(Full::new(Bytes::from(metrics_data)))
+        .unwrap_or_else(|_| Response::new(Full::new(Bytes::from("Metrics unavailable"))));
+
+    Ok(response)
 }
 
 pub async fn server(port: u16) -> std::io::Result<()> {
