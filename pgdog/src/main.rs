@@ -50,7 +50,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         None => (),
     }
 
-    info!("🐕 PgDog {}", env!("GIT_HASH"));
+    info!("🐕 PgDog v{}", env!("GIT_HASH"));
     let config = config::load(&args.config, &args.users)?;
 
     // Set database from --database-url arg.
