@@ -139,20 +139,22 @@ describe 'active record' do
         expect(count).to eq(30)
       end
 
-      it 'can use comments' do
+      it 'can use set' do
         30.times do |i|
-          # Haven't figured out how to annotate comments
           Sharded.create value: "comment_#{i}"
         end
         count = Sharded.count
         expect(count).to eq(30)
         [0, 1].each do |shard|
-          count = Sharded.annotate("pgdog_shard: #{shard}").count
-          expect(count).to be < 30
-          shard_id = Sharded.annotate("pgdog_shard: #{shard}")
-                            .select('pgdog.shard_id() AS shard_id')
-                            .first
-          expect(shard_id.shard_id).to eq(shard)
+          Sharded.transaction do
+            Sharded.connection.execute "SET pgdog.shard TO #{shard}"
+            count = Sharded.count
+            expect(count).to be < 30
+            shard_id = Sharded
+                       .select('pgdog.shard_id() AS shard_id')
+                       .first
+            expect(shard_id.shard_id).to eq(shard)
+          end
         end
       end
     end
