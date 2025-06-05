@@ -106,6 +106,10 @@ impl QueryParser {
         }
     }
 
+    pub fn routed(&self) -> bool {
+        self.routed
+    }
+
     /// Reset shard.
     pub fn reset(&mut self) {
         self.routed = false;
@@ -329,13 +333,7 @@ impl QueryParser {
                 // Only allow to intercept transaction statements
                 // if they are using the simple protocol.
                 if query.simple() {
-                    // In conservative read write split mode,
-                    // we don't assume anything about transaction contents
-                    // and just send it to the primary.
-                    //
-                    // Only single-statement SELECT queries can be routed
-                    // to a replica.
-                    if *rw_strategy == ReadWriteStrategy::Conservative && !read_only {
+                    if rw_strategy == &ReadWriteStrategy::Conservative && !read_only {
                         self.write_override = Some(true);
                     }
 
@@ -403,10 +401,6 @@ impl QueryParser {
                         route.set_shard_mut(round_robin::next() % cluster.shards().len());
                     }
                 }
-            }
-
-            if let Some(true) = self.write_override {
-                route.set_read_mut(false);
             }
         }
 
