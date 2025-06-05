@@ -146,6 +146,7 @@ impl QueryParser {
             }
         }
 
+        let shards = cluster.shards().len();
         let read_only = cluster.read_only();
         let write_only = cluster.write_only();
         let full_prepared_statements = config().config.general.prepared_statements.full();
@@ -201,10 +202,16 @@ impl QueryParser {
             }
         }
 
-        let mut shard = Shard::All;
+        // Shortcut for non-sharded clusters.
+        let mut shard = if shards > 1 {
+            Shard::All
+        } else {
+            Shard::Direct(0)
+        };
 
         // Parse hardcoded shard from a query comment.
-        if router_needed && !self.routed {
+        // Skipped if cluster isn't sharded.
+        if router_needed && !self.routed && shards > 1 {
             shard = super::comment::shard(query, &sharding_schema)?;
         }
 
