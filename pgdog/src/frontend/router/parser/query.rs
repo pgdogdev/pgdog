@@ -212,7 +212,9 @@ impl QueryParser {
         // Parse hardcoded shard from a query comment.
         // Skipped if cluster isn't sharded.
         if router_needed && !self.routed && shards > 1 {
-            shard = super::comment::shard(query, &sharding_schema)?;
+            if let BufferedQuery::Query(query) = query {
+                shard = super::comment::shard(query.query(), &sharding_schema)?;
+            }
         }
 
         // Cluster is read only or write only, traffic split isn't needed,
@@ -1338,5 +1340,38 @@ mod test {
         }
         assert!(qp.routed);
         assert!(qp.in_transaction);
+    }
+
+    #[test]
+    fn test_comment() {
+        let query = "/* pgdog_shard: 1234 */ SELECT 1234";
+        let route = query!(query);
+        assert_eq!(route.shard(), &Shard::Direct(1234));
+
+        // Comment is ignored.
+        let mut qp = QueryParser::default();
+        let command = qp
+            .query(
+                &BufferedQuery::Prepared(Parse::new_anonymous(
+                    "/* pgdog_shard: 1234 */ SELECT * FROM sharded WHERE id = $1",
+                )),
+                &Cluster::new_test(),
+                Some(&Bind::test_params(
+                    "",
+                    &[Parameter {
+                        len: 1,
+                        data: "1".as_bytes().to_vec(),
+                    }],
+                )),
+                &mut PreparedStatements::new(),
+                &Parameters::default(),
+                false,
+            )
+            .unwrap();
+
+        match command {
+            Command::Query(query) => assert_eq!(query.shard(), &Shard::Direct(0)),
+            _ => panic!("not a query"),
+        }
     }
 }
