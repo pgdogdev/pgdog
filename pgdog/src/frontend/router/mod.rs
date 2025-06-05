@@ -66,4 +66,14 @@ impl Router {
     pub fn reset(&mut self) {
         self.query_parser.reset()
     }
+
+    /// The router is configured.
+    pub fn routed(&self) -> bool {
+        self.query_parser.routed()
+    }
+
+    /// Query parser is inside a transaction.
+    pub fn in_transaction(&self) -> bool {
+        self.query_parser.in_transaction()
+    }
 }

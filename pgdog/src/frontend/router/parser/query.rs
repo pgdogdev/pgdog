@@ -68,6 +68,11 @@ impl QueryParser {
         self.replication_mode = true;
     }
 
+    /// In transaction.
+    pub fn in_transaction(&self) -> bool {
+        self.in_transaction
+    }
+
     pub fn parse(&mut self, context: RouterContext) -> Result<&Command, Error> {
         if let Some(ref query) = context.query {
             self.command = self.query(
@@ -76,6 +81,7 @@ impl QueryParser {
                 context.bind,
                 context.prepared_statements,
                 context.params,
+                context.in_transaction,
             )?;
 
             // If the cluster only has one shard, use direct-to-shard queries.
@@ -106,6 +112,10 @@ impl QueryParser {
         }
     }
 
+    pub fn routed(&self) -> bool {
+        self.routed
+    }
+
     /// Reset shard.
     pub fn reset(&mut self) {
         self.routed = false;
@@ -121,6 +131,7 @@ impl QueryParser {
         bind: Option<&Bind>,
         prepared_statements: &mut PreparedStatements,
         params: &Parameters,
+        in_transaction: bool,
     ) -> Result<Command, Error> {
         // Replication protocol commands
         // don't have a node in pg_query,
@@ -146,6 +157,12 @@ impl QueryParser {
         let parser_disabled =
             !full_prepared_statements && router_disabled && !dry_run && multi_tenant.is_none();
         let rw_strategy = cluster.read_write_strategy();
+        self.in_transaction = in_transaction;
+
+        // Route transaction to primary.
+        if in_transaction && rw_strategy == &ReadWriteStrategy::Conservative {
+            self.write_override = Some(true);
+        }
 
         debug!(
             "parser is {}",
@@ -329,13 +346,7 @@ impl QueryParser {
                 // Only allow to intercept transaction statements
                 // if they are using the simple protocol.
                 if query.simple() {
-                    // In conservative read write split mode,
-                    // we don't assume anything about transaction contents
-                    // and just send it to the primary.
-                    //
-                    // Only single-statement SELECT queries can be routed
-                    // to a replica.
-                    if *rw_strategy == ReadWriteStrategy::Conservative && !read_only {
+                    if rw_strategy == &ReadWriteStrategy::Conservative && !read_only {
                         self.write_override = Some(true);
                     }
 
@@ -403,10 +414,6 @@ impl QueryParser {
                         route.set_shard_mut(round_robin::next() % cluster.shards().len());
                     }
                 }
-            }
-
-            if let Some(true) = self.write_override {
-                route.set_read_mut(false);
             }
         }
 
@@ -867,7 +874,7 @@ mod test {
             let cluster = Cluster::new_test();
             let mut stmt = PreparedStatements::default();
             let params = Parameters::default();
-            let context = RouterContext::new(&buffer, &cluster, &mut stmt, &params).unwrap();
+            let context = RouterContext::new(&buffer, &cluster, &mut stmt, &params, false).unwrap();
             let command = query_parser.parse(context).unwrap().clone();
 
             (command, query_parser)
@@ -909,6 +916,7 @@ mod test {
                         &Cluster::new_test(),
                         &mut PreparedStatements::default(),
                         &Parameters::default(),
+                        false,
                     )
                     .unwrap(),
                 )
@@ -947,6 +955,7 @@ mod test {
                     &cluster,
                     &mut PreparedStatements::default(),
                     &Parameters::default(),
+                    false,
                 )
                 .unwrap(),
             )
@@ -972,6 +981,7 @@ mod test {
                     &cluster,
                     &mut PreparedStatements::default(),
                     &Parameters::default(),
+                    false,
                 )
                 .unwrap(),
             )
@@ -1035,7 +1045,6 @@ mod test {
         let route = query!("SELECT * FROM sharded WHERE id = $1 FOR UPDATE");
         assert!(route.is_write());
         assert!(matches!(route.shard(), Shard::All));
-
         let route = parse!(
             "SELECT * FROM sharded WHERE id = $1 FOR UPDATE",
             ["1".as_bytes()]
@@ -1116,6 +1125,7 @@ mod test {
                     &Cluster::new_test(),
                     &mut PreparedStatements::default(),
                     &Parameters::default(),
+                    true,
                 )
                 .unwrap(),
             )
@@ -1180,6 +1190,7 @@ mod test {
                 None,
                 &mut PreparedStatements::default(),
                 &Parameters::default(),
+                true,
             )
             .unwrap();
         match route {
@@ -1199,6 +1210,7 @@ mod test {
                 None,
                 &mut PreparedStatements::default(),
                 &Parameters::default(),
+                false,
             )
             .unwrap();
         assert!(matches!(
@@ -1215,6 +1227,7 @@ mod test {
                 None,
                 &mut PreparedStatements::default(),
                 &Parameters::default(),
+                true,
             )
             .unwrap();
 
@@ -1244,6 +1257,7 @@ mod test {
                     &Cluster::new_test(),
                     &mut PreparedStatements::default(),
                     &Parameters::default(),
+                    false,
                 )
                 .unwrap(),
             )
@@ -1309,6 +1323,7 @@ mod test {
                 None,
                 &mut PreparedStatements::default(),
                 &Parameters::default(),
+                true,
             )
             .unwrap();
         match route {

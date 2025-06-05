@@ -17,6 +17,8 @@ pub struct RouterContext<'a> {
     pub cluster: &'a Cluster,
     /// Client parameters, e.g. search_path.
     pub params: &'a Parameters,
+    /// Client inside transaction,
+    pub in_transaction: bool,
 }
 
 impl<'a> RouterContext<'a> {
@@ -25,6 +27,7 @@ impl<'a> RouterContext<'a> {
         cluster: &'a Cluster,
         stmt: &'a mut PreparedStatements,
         params: &'a Parameters,
+        in_transaction: bool,
     ) -> Result<Self, Error> {
         let query = buffer.query()?;
         let bind = buffer.parameters()?;
@@ -35,6 +38,7 @@ impl<'a> RouterContext<'a> {
             params,
             prepared_statements: stmt,
             cluster,
+            in_transaction,
         })
     }
 }

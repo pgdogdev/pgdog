@@ -72,6 +72,7 @@ impl Inner {
         buffer: &mut Buffer,
         prepared_statements: &mut PreparedStatements,
         params: &Parameters,
+        in_transaction: bool,
     ) -> Result<Option<&Command>, RouterError> {
         let command = self
             .backend
@@ -84,6 +85,7 @@ impl Inner {
                     cluster,             // Cluster configuration.
                     prepared_statements, // Prepared statements.
                     params,              // Client connection parameters.
+                    in_transaction,      // Client in explcitely started transaction.
                 )?;
                 self.router.query(context)
             })

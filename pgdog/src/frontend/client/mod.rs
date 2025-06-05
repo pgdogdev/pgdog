@@ -345,6 +345,7 @@ impl Client {
             &mut self.request_buffer,
             &mut self.prepared_statements,
             &self.params,
+            self.in_transaction,
         ) {
             Ok(command) => command,
             Err(err) => {
@@ -500,7 +501,9 @@ impl Client {
         // ReadyForQuery (B)
         if code == 'Z' {
             inner.stats.query();
-            self.in_transaction = message.in_transaction();
+            // In transaction if buffered BEGIN from client
+            // or server is telling us we are.
+            self.in_transaction = message.in_transaction() || inner.start_transaction.is_some();
             inner.stats.idle(self.in_transaction);
         }
 

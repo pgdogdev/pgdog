@@ -134,6 +134,7 @@ async fn test_test_client() {
             &mut client.request_buffer,
             &mut client.prepared_statements,
             &client.params,
+            client.in_transaction,
         )
         .unwrap();
     assert!(matches!(command, Some(Command::Query(_))));
@@ -429,4 +430,101 @@ async fn test_lock_session() {
     assert!(client.params.contains_key("application_name"));
 
     inner.disconnect();
+}
+
+#[tokio::test]
+async fn test_transaction_state() {
+    let (mut conn, mut client, mut inner) = new_client!(true);
+
+    conn.write_all(&buffer!({ Query::new("BEGIN") }))
+        .await
+        .unwrap();
+
+    client.buffer().await.unwrap();
+    client.client_messages(inner.get()).await.unwrap();
+
+    read!(conn, ['C', 'Z']);
+
+    assert!(client.in_transaction);
+    assert!(inner.router.route().is_write());
+    assert!(inner.router.in_transaction());
+
+    conn.write_all(&buffer!(
+        { Parse::named("test", "SELECT $1") },
+        { Describe::new_statement("test") },
+        { Sync }
+    ))
+    .await
+    .unwrap();
+
+    client.buffer().await.unwrap();
+    client.client_messages(inner.get()).await.unwrap();
+
+    assert!(inner.router.routed());
+    assert!(client.in_transaction);
+    assert!(inner.router.route().is_write());
+    assert!(inner.router.in_transaction());
+
+    for c in ['1', 't', 'T', 'Z'] {
+        let msg = inner.backend.read().await.unwrap();
+        assert_eq!(msg.code(), c);
+
+        client.server_message(inner.get(), msg).await.unwrap();
+    }
+
+    read!(conn, ['1', 't', 'T', 'Z']);
+
+    conn.write_all(&buffer!(
+        {
+            Bind::test_params(
+                "test",
+                &[Parameter {
+                    len: 1,
+                    data: "1".as_bytes().to_vec(),
+                }],
+            )
+        },
+        { Execute::new() },
+        { Sync }
+    ))
+    .await
+    .unwrap();
+
+    assert!(!inner.router.routed());
+    client.buffer().await.unwrap();
+    client.client_messages(inner.get()).await.unwrap();
+    assert!(inner.router.routed());
+
+    for c in ['2', 'D', 'C', 'Z'] {
+        let msg = inner.backend.read().await.unwrap();
+        assert_eq!(msg.code(), c);
+
+        client.server_message(inner.get(), msg).await.unwrap();
+    }
+
+    read!(conn, ['2', 'D', 'C', 'Z']);
+
+    assert!(inner.router.routed());
+    assert!(client.in_transaction);
+    assert!(inner.router.route().is_write());
+    assert!(inner.router.in_transaction());
+
+    conn.write_all(&buffer!({ Query::new("COMMIT") }))
+        .await
+        .unwrap();
+
+    client.buffer().await.unwrap();
+    client.client_messages(inner.get()).await.unwrap();
+
+    for c in ['C', 'Z'] {
+        let msg = inner.backend.read().await.unwrap();
+        assert_eq!(msg.code(), c);
+
+        client.server_message(inner.get(), msg).await.unwrap();
+    }
+
+    read!(conn, ['C', 'Z']);
+
+    assert!(!client.in_transaction);
+    assert!(!inner.router.routed());
 }
