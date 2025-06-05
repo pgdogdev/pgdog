@@ -2,7 +2,7 @@
 use std::{collections::BTreeSet, env::var};
 use url::Url;
 
-use super::{Config, ConfigAndUsers, Database, Error, User, Users};
+use super::{ConfigAndUsers, Database, Error, User, Users};
 
 fn database_name(url: &Url) -> String {
     let database = url.path().chars().skip(1).collect::<String>();
@@ -51,7 +51,7 @@ impl From<&Url> for User {
 
 impl ConfigAndUsers {
     /// Load from database URLs.
-    pub fn from_urls(urls: &[String]) -> Result<Self, Error> {
+    pub fn databases_from_urls(mut self, urls: &[String]) -> Result<Self, Error> {
         let urls = urls
             .iter()
             .map(|url| Url::parse(url))
@@ -69,14 +69,10 @@ impl ConfigAndUsers {
             .into_iter()
             .collect::<Vec<_>>();
 
-        Ok(Self {
-            users: Users { users },
-            config: Config {
-                databases,
-                ..Default::default()
-            },
-            ..Default::default()
-        })
+        self.users = Users { users };
+        self.config.databases = databases;
+
+        Ok(self)
     }
 }
 

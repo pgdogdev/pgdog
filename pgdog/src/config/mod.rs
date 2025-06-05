@@ -7,6 +7,7 @@ pub mod url;
 
 use error::Error;
 pub use overrides::Overrides;
+use parking_lot::Mutex;
 
 use std::collections::HashSet;
 use std::fs::read_to_string;
@@ -27,7 +28,7 @@ use crate::util::{human_duration_optional, random_string};
 static CONFIG: Lazy<ArcSwap<ConfigAndUsers>> =
     Lazy::new(|| ArcSwap::from_pointee(ConfigAndUsers::default()));
 
-// static LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+static LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
 /// Load configuration.
 pub fn config() -> Arc<ConfigAndUsers> {
@@ -51,7 +52,9 @@ pub fn set(mut config: ConfigAndUsers) -> Result<ConfigAndUsers, Error> {
 
 /// Load configuration from a list of database URLs.
 pub fn from_urls(urls: &[String]) -> Result<ConfigAndUsers, Error> {
-    let config = ConfigAndUsers::from_urls(urls)?;
+    let _lock = LOCK.lock();
+    let config = (*config()).clone();
+    let config = config.databases_from_urls(urls)?;
     CONFIG.store(Arc::new(config.clone()));
     Ok(config)
 }

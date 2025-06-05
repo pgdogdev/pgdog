@@ -50,12 +50,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         None => (),
     }
 
-    info!("🐕 PgDog v{}", env!("GIT_HASH"));
+    info!("🐕 PgDog {}", env!("GIT_HASH"));
+    let config = config::load(&args.config, &args.users)?;
 
+    // Set database from --database-url arg.
     let config = if let Some(database_urls) = args.database_url {
         config::from_urls(&database_urls)?
     } else {
-        config::load(&args.config, &args.users)?
+        config
     };
 
     config::overrides(overrides);
