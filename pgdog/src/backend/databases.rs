@@ -10,6 +10,7 @@ use parking_lot::lock_api::MutexGuard;
 use parking_lot::{Mutex, RawMutex};
 use tracing::{info, warn};
 
+use crate::config::PoolerMode;
 use crate::{
     backend::pool::PoolConfig,
     config::{config, load, ConfigAndUsers, ManualQuery, Role},
@@ -293,6 +294,13 @@ impl Databases {
                     r#"enabling mirroring of database "{}" into "{}""#,
                     mirror_of,
                     cluster.name(),
+                );
+            }
+
+            if cluster.pooler_mode() == PoolerMode::Session && cluster.router_needed() {
+                warn!(
+                    r#"database "{}" requires transaction mode to route queries"#,
+                    cluster.name()
                 );
             }
         }

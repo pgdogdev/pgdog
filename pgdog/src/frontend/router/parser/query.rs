@@ -146,16 +146,15 @@ impl QueryParser {
             }
         }
 
-        let shards = cluster.shards().len();
         let read_only = cluster.read_only();
         let write_only = cluster.write_only();
         let full_prepared_statements = config().config.general.prepared_statements.full();
         let sharding_schema = cluster.sharding_schema();
         let dry_run = sharding_schema.tables.dry_run();
         let multi_tenant = cluster.multi_tenant();
-        let router_disabled = shards == 1 && (read_only || write_only);
+        let router_needed = cluster.router_needed();
         let parser_disabled =
-            !full_prepared_statements && router_disabled && !dry_run && multi_tenant.is_none();
+            !full_prepared_statements && !router_needed && !dry_run && multi_tenant.is_none();
         let rw_strategy = cluster.read_write_strategy();
         self.in_transaction = in_transaction;
 
@@ -205,7 +204,7 @@ impl QueryParser {
         let mut shard = Shard::All;
 
         // Parse hardcoded shard from a query comment.
-        if !router_disabled && !self.routed {
+        if router_needed && !self.routed {
             shard = super::comment::shard(query, &sharding_schema)?;
         }
 
