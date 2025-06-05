@@ -118,6 +118,7 @@ impl Mirror {
                 &self.cluster,
                 &mut self.prepared_statements,
                 &self.params,
+                false,
             ) {
                 if let Err(err) = self.router.query(context) {
                     error!("mirror query parse error: {}", err);

@@ -134,6 +134,7 @@ async fn test_test_client() {
             &mut client.request_buffer,
             &mut client.prepared_statements,
             &client.params,
+            client.in_transaction,
         )
         .unwrap();
     assert!(matches!(command, Some(Command::Query(_))));
@@ -444,9 +445,9 @@ async fn test_transaction_state() {
 
     read!(conn, ['C', 'Z']);
 
-    assert!(!inner.router.routed());
     assert!(client.in_transaction);
     assert!(inner.router.route().is_write());
+    assert!(inner.router.in_transaction());
 
     conn.write_all(&buffer!(
         { Parse::named("test", "SELECT $1") },
@@ -462,6 +463,7 @@ async fn test_transaction_state() {
     assert!(inner.router.routed());
     assert!(client.in_transaction);
     assert!(inner.router.route().is_write());
+    assert!(inner.router.in_transaction());
 
     for c in ['1', 't', 'T', 'Z'] {
         let msg = inner.backend.read().await.unwrap();
@@ -488,7 +490,7 @@ async fn test_transaction_state() {
     .await
     .unwrap();
 
-    assert!(inner.router.routed());
+    assert!(!inner.router.routed());
     client.buffer().await.unwrap();
     client.client_messages(inner.get()).await.unwrap();
     assert!(inner.router.routed());
@@ -502,9 +504,10 @@ async fn test_transaction_state() {
 
     read!(conn, ['2', 'D', 'C', 'Z']);
 
-    assert!(!inner.router.routed());
+    assert!(inner.router.routed());
     assert!(client.in_transaction);
     assert!(inner.router.route().is_write());
+    assert!(inner.router.in_transaction());
 
     conn.write_all(&buffer!({ Query::new("COMMIT") }))
         .await
