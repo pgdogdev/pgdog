@@ -501,6 +501,8 @@ impl Client {
         // ReadyForQuery (B)
         if code == 'Z' {
             inner.stats.query();
+            // In transaction if buffered BEGIN from client
+            // or server is telling us we are.
             self.in_transaction = message.in_transaction() || inner.start_transaction.is_some();
             inner.stats.idle(self.in_transaction);
         }
