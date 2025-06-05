@@ -267,6 +267,12 @@ impl Cluster {
         true
     }
 
+    /// We'll need the query router to figure out
+    /// where a query should go.
+    pub fn router_needed(&self) -> bool {
+        !(self.shards().len() == 1 && (self.read_only() || self.write_only()))
+    }
+
     /// Multi-tenant config.
     pub fn multi_tenant(&self) -> &Option<MultiTenant> {
         &self.multi_tenant
