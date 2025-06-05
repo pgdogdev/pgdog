@@ -171,6 +171,20 @@ Running PgDog can be done with Cargo:
 cargo run --release
 ```
 
+#### Command-line options
+
+PgDog supports several command-line options:
+
+- `-c, --config <CONFIG>`: Path to the configuration file (default: "pgdog.toml")
+- `-u, --users <USERS>`: Path to the users.toml file (default: "users.toml")
+- `-d, --database_url <DATABASE_URL>`: Connection URL(s). Can be specified multiple times to add multiple database connections. When provided, these URLs override database configurations from the config file.
+
+Example using database URLs directly:
+
+```bash
+cargo run --release -- -d postgres://user:pass@localhost:5432/db1 -d postgres://user:pass@localhost:5433/db2
+```
+
 You can connect to PgDog with psql or any other PostgreSQL client:
 
 ```bash
