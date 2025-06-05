@@ -66,4 +66,9 @@ impl Router {
     pub fn reset(&mut self) {
         self.query_parser.reset()
     }
+
+    /// The router is configured.
+    pub fn routed(&self) -> bool {
+        self.query_parser.routed()
+    }
 }

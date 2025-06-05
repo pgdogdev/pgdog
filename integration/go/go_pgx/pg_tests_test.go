@@ -267,3 +267,41 @@ func TestTransactions(t *testing.T) {
 		}
 	}
 }
+
+func TestBatch(t *testing.T) {
+	conn, err := connectNormal()
+	assert.NoError(t, err)
+
+	tx, err := conn.Begin(context.Background())
+	assert.NoError(t, err)
+
+	tx.Exec(context.Background(), "SELECT * FROM (SELECT 1) t")
+
+	batch := pgx.Batch{}
+	batch.Queue("SELECT $1::integer", 1)
+	batch.Queue("SELECT $1::integer, $2::integer", 1, 2)
+
+	results := tx.SendBatch(context.Background(), &batch)
+
+	rows, err := results.Query()
+	assert.NoError(t, err)
+
+	for rows.Next() {
+		_, err := rows.Values()
+		assert.NoError(t, err)
+	}
+	rows.Close()
+
+	tx.Commit(context.Background())
+
+	tx2, err := conn.Begin(context.Background())
+	assert.NoError(t, err)
+
+	batch = pgx.Batch{}
+	batch.Queue("SELECT $1::integer", 1)
+	batch.Queue("SELECT $1::integer, $2::integer", 1, 2)
+
+	results = tx2.SendBatch(context.Background(), &batch)
+
+	tx.Commit(context.Background())
+}

@@ -502,6 +502,12 @@ impl Client {
             inner.stats.query();
             self.in_transaction = message.in_transaction();
             inner.stats.idle(self.in_transaction);
+
+            // If transaction was started on the server and
+            // is now finished, reset the router.
+            if inner.start_transaction.is_none() {
+                inner.reset_router();
+            }
         }
 
         inner.stats.sent(message.len());
@@ -516,7 +522,6 @@ impl Client {
                 inner.disconnect();
             }
             inner.stats.transaction();
-            inner.reset_router();
             debug!(
                 "transaction finished [{:.3}ms]",
                 inner.stats.last_transaction_time.as_secs_f64() * 1000.0
