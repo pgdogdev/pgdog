@@ -1,6 +1,9 @@
+use std::time::Duration;
+
 use rust::setup::{admin_sqlx, connections_sqlx};
 use serial_test::serial;
 use sqlx::{Executor, Pool, Postgres, Row};
+use tokio::time::sleep;
 
 #[tokio::test]
 #[serial]
@@ -43,6 +46,7 @@ async fn test_fake_transactions() {
             .await
             .unwrap();
         check_client_state("idle in transaction", admin.clone()).await;
+        sleep(Duration::from_millis(10)).await;
         assert!(check_server_state("idle in transaction", admin.clone()).await);
         conn.execute("ROLLBACK").await.unwrap();
         check_client_state("idle", admin.clone()).await;
