@@ -325,6 +325,7 @@ impl Connection {
         self.binding.is_dirty()
     }
 
+    /// Server(s) have more messages.
     pub(crate) fn has_more_messages(&self) -> bool {
         self.binding.has_more_messages()
     }
@@ -375,11 +376,18 @@ impl Connection {
         self.binding.execute(query).await
     }
 
+    /// Link client with server(s).
     pub(crate) async fn link_client(&mut self, params: &Parameters) -> Result<usize, Error> {
         self.binding.link_client(params).await
     }
 
+    /// Server(s) detected changed parameters.
     pub(crate) fn changed_params(&mut self) -> Parameters {
         self.binding.changed_params()
+    }
+
+    /// Executing a multi-shard query.
+    pub(crate) fn multi_shard(&self) -> bool {
+        matches!(self.binding, Binding::MultiShard(_, _))
     }
 }

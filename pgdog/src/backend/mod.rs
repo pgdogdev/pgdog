@@ -11,6 +11,7 @@ pub mod schema;
 pub mod server;
 pub mod server_options;
 pub mod stats;
+pub mod two_pc;
 
 pub use error::Error;
 pub use pool::{Cluster, ClusterShardConfig, Pool, Replicas, Shard, ShardingSchema};
