@@ -390,4 +390,13 @@ impl Connection {
     pub(crate) fn multi_shard(&self) -> bool {
         matches!(self.binding, Binding::MultiShard(_, _))
     }
+
+    /// Synchronize servers.
+    pub(crate) async fn sync(&mut self) -> Result<(), Error> {
+        if self.connected() {
+            self.binding.sync().await?;
+        }
+
+        Ok(())
+    }
 }

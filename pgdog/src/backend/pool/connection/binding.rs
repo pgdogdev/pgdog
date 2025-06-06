@@ -1,6 +1,10 @@
 //! Binding between frontend client and a connection on the backend.
 
-use crate::{backend::ProtocolMessage, net::parameter::Parameters, state::State};
+use crate::{
+    backend::ProtocolMessage,
+    net::{parameter::Parameters, Sync},
+    state::State,
+};
 
 use super::*;
 
@@ -312,5 +316,20 @@ impl Binding {
             Binding::Replication(Some(ref server), _) => server.dirty(),
             _ => false,
         }
+    }
+
+    /// Ensure the servers are synchronized
+    /// so we can execute a query.
+    pub(super) async fn sync(&mut self) -> Result<(), Error> {
+        use crate::net::Protocol;
+
+        self.send(&vec![Sync.into()].into()).await?;
+        let msg = self.read().await?;
+
+        if msg.code() != 'Z' {
+            return Err(Error::ProtocolOutOfSync);
+        }
+
+        Ok(())
     }
 }
