@@ -1382,5 +1382,13 @@ mod test {
         let route = query!("SELECT * FROM users LIMIT 25 OFFSET 5");
         assert_eq!(route.limit().offset, Some(5));
         assert_eq!(route.limit().limit, Some(25));
+
+        let cmd = parse!(
+            "SELECT * FROM users LIMIT $1 OFFSET $2",
+            &["1".as_bytes(), "25".as_bytes(),]
+        );
+
+        assert_eq!(cmd.limit().limit, Some(1));
+        assert_eq!(cmd.limit().offset, Some(25));
     }
 }
