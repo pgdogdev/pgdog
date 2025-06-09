@@ -47,7 +47,7 @@ impl<'a> LimitClause<'a> {
                 let param = self
                     .bind
                     .as_ref()
-                    .map(|b| b.parameter(*number as usize))
+                    .map(|b| b.parameter(*number as usize - 1))
                     .transpose()?
                     .flatten()
                     .ok_or(Error::MissingParameter(*number as usize))?;
