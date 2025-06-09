@@ -707,10 +707,12 @@ impl QueryParser {
         }
 
         let shard = Self::converge(shards);
-
         let aggregates = Aggregate::parse(stmt)?;
+        let limit = LimitClause::new(stmt, params).limit_offset()?;
 
-        Ok(Command::Query(Route::select(shard, order_by, aggregates)))
+        Ok(Command::Query(Route::select(
+            shard, order_by, aggregates, limit,
+        )))
     }
 
     /// Parse the `ORDER BY` clause of a `SELECT` statement.
@@ -1373,5 +1375,12 @@ mod test {
             Command::Query(query) => assert_eq!(query.shard(), &Shard::Direct(0)),
             _ => panic!("not a query"),
         }
+    }
+
+    #[test]
+    fn test_limit_offset() {
+        let route = query!("SELECT * FROM users LIMIT 25 OFFSET 5");
+        assert_eq!(route.limit().offset, Some(5));
+        assert_eq!(route.limit().limit, Some(25));
     }
 }

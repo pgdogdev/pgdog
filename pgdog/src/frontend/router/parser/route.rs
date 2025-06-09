@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-use super::{Aggregate, FunctionBehavior, LockingBehavior, OrderBy};
+use super::{Aggregate, FunctionBehavior, Limit, LockingBehavior, OrderBy};
 
 #[derive(Debug, Clone, PartialEq, PartialOrd, Ord, Eq, Hash, Default)]
 pub enum Shard {
@@ -44,12 +44,6 @@ impl From<Option<usize>> for Shard {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct Limit {
-    pub limit: usize,
-    pub offset: usize,
-}
-
 /// Path a query should take and any transformations
 /// that should be applied along the way.
 #[derive(Debug, Clone, Default)]
@@ -58,7 +52,7 @@ pub struct Route {
     read: bool,
     order_by: Vec<OrderBy>,
     aggregate: Aggregate,
-    limit: Option<Limit>,
+    limit: Limit,
     lock_session: bool,
 }
 
@@ -75,12 +69,18 @@ impl Display for Route {
 
 impl Route {
     /// SELECT query.
-    pub fn select(shard: Shard, order_by: Vec<OrderBy>, aggregate: Aggregate) -> Self {
+    pub fn select(
+        shard: Shard,
+        order_by: Vec<OrderBy>,
+        aggregate: Aggregate,
+        limit: Limit,
+    ) -> Self {
         Self {
             shard,
             order_by,
             read: true,
             aggregate,
+            limit,
             ..Default::default()
         }
     }
@@ -145,8 +145,8 @@ impl Route {
         !self.order_by().is_empty() || !self.aggregate().is_empty()
     }
 
-    pub fn limit(&self) -> Option<Limit> {
-        self.limit
+    pub fn limit(&self) -> &Limit {
+        &self.limit
     }
 
     pub fn set_read(mut self, read: bool) -> Self {
