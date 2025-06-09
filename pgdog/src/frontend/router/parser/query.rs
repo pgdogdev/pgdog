@@ -222,11 +222,11 @@ impl QueryParser {
         // don't parse the query further.
         if !full_prepared_statements && multi_tenant.is_none() {
             if let Shard::Direct(_) = shard {
-                if cluster.read_only() {
+                if read_only {
                     return Ok(Command::Query(Route::read(shard)));
                 }
 
-                if cluster.write_only() {
+                if write_only {
                     return Ok(Command::Query(Route::write(shard)));
                 }
             }
@@ -254,6 +254,7 @@ impl QueryParser {
 
         let rewrite = Rewrite::new(ast.clone());
         if rewrite.needs_rewrite() {
+            debug!("rewrite needed");
             let queries = rewrite.rewrite(prepared_statements)?;
             return Ok(Command::Rewrite(queries));
         }
@@ -265,6 +266,7 @@ impl QueryParser {
         }
 
         if self.routed {
+            debug!("already routed");
             return Ok(self.command.clone());
         }
 
@@ -707,10 +709,12 @@ impl QueryParser {
         }
 
         let shard = Self::converge(shards);
-
         let aggregates = Aggregate::parse(stmt)?;
+        let limit = LimitClause::new(stmt, params).limit_offset()?;
 
-        Ok(Command::Query(Route::select(shard, order_by, aggregates)))
+        Ok(Command::Query(Route::select(
+            shard, order_by, aggregates, limit,
+        )))
     }
 
     /// Parse the `ORDER BY` clause of a `SELECT` statement.
@@ -1373,5 +1377,20 @@ mod test {
             Command::Query(query) => assert_eq!(query.shard(), &Shard::Direct(0)),
             _ => panic!("not a query"),
         }
+    }
+
+    #[test]
+    fn test_limit_offset() {
+        let route = query!("SELECT * FROM users LIMIT 25 OFFSET 5");
+        assert_eq!(route.limit().offset, Some(5));
+        assert_eq!(route.limit().limit, Some(25));
+
+        let cmd = parse!(
+            "SELECT * FROM users LIMIT $1 OFFSET $2",
+            &["1".as_bytes(), "25".as_bytes(),]
+        );
+
+        assert_eq!(cmd.limit().limit, Some(1));
+        assert_eq!(cmd.limit().offset, Some(25));
     }
 }

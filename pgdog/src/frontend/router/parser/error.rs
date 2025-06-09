@@ -50,4 +50,7 @@ pub enum Error {
 
     #[error("{0}")]
     Sharder(#[from] sharding::Error),
+
+    #[error("missing parameter: ${0}")]
+    MissingParameter(usize),
 }

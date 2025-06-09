@@ -305,3 +305,26 @@ func TestBatch(t *testing.T) {
 
 	tx.Commit(context.Background())
 }
+
+func TestLimitOffset(t *testing.T) {
+	conns := connectBoth()
+
+	for _, conn := range conns {
+		defer conn.Close(context.Background())
+	}
+
+	for _, conn := range conns {
+		_, err := conn.Exec(context.Background(), "CREATE TABLE IF NOT EXISTS pgx_test_limit_offset(id BIGINT)")
+		assert.NoError(t, err)
+		defer conn.Exec(context.Background(), "DROP TABLE IF EXISTS pgx_test_limit_offset")
+
+		_, err = conn.Exec(context.Background(), "SELECT * FROM pgx_test_limit_offset LIMIT $1 OFFSET $2", 5, 7)
+		assert.NoError(t, err)
+
+		_, err = conn.Exec(context.Background(), "SELECT * FROM pgx_test_limit_offset WHERE id = $1 LIMIT $2 OFFSET $3", 25, 6, 8)
+		assert.NoError(t, err)
+
+		_, err = conn.Exec(context.Background(), "SELECT * FROM pgx_test_limit_offset WHERE id = $1 LIMIT 25 OFFSET 50", 25)
+		assert.NoError(t, err)
+	}
+}
