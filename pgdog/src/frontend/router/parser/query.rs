@@ -222,11 +222,11 @@ impl QueryParser {
         // don't parse the query further.
         if !full_prepared_statements && multi_tenant.is_none() {
             if let Shard::Direct(_) = shard {
-                if cluster.read_only() {
+                if read_only {
                     return Ok(Command::Query(Route::read(shard)));
                 }
 
-                if cluster.write_only() {
+                if write_only {
                     return Ok(Command::Query(Route::write(shard)));
                 }
             }
@@ -254,6 +254,7 @@ impl QueryParser {
 
         let rewrite = Rewrite::new(ast.clone());
         if rewrite.needs_rewrite() {
+            debug!("rewrite needed");
             let queries = rewrite.rewrite(prepared_statements)?;
             return Ok(Command::Rewrite(queries));
         }
@@ -265,6 +266,7 @@ impl QueryParser {
         }
 
         if self.routed {
+            debug!("already routed");
             return Ok(self.command.clone());
         }
 

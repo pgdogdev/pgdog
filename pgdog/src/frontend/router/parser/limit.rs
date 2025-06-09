@@ -44,20 +44,20 @@ impl<'a> LimitClause<'a> {
             })) => Ok(Some(*ival as usize)),
 
             Some(NodeEnum::ParamRef(ParamRef { number, .. })) => {
-                let param = self
-                    .bind
-                    .as_ref()
-                    .map(|b| b.parameter(*number as usize - 1))
-                    .transpose()?
-                    .flatten()
-                    .ok_or(Error::MissingParameter(*number as usize))?;
+                if let Some(bind) = &self.bind {
+                    let param = bind
+                        .parameter(*number as usize - 1)?
+                        .ok_or(Error::MissingParameter(*number as usize))?;
 
-                Ok(Some(
-                    param
-                        .bigint()
-                        .ok_or(Error::MissingParameter(*number as usize))?
-                        as usize,
-                ))
+                    Ok(Some(
+                        param
+                            .bigint()
+                            .ok_or(Error::MissingParameter(*number as usize))?
+                            as usize,
+                    ))
+                } else {
+                    Ok(None)
+                }
             }
 
             _ => Ok(None),
