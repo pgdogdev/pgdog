@@ -386,7 +386,7 @@ impl Client {
                         self.start_transaction().await?;
                         inner.start_transaction = Some(query.clone());
                         self.in_transaction = true;
-                        inner.done(true);
+                        inner.done(self.in_transaction);
                         return Ok(false);
                     }
                 }
@@ -394,14 +394,14 @@ impl Client {
                     inner.start_transaction = None;
                     self.end_transaction(true).await?;
                     self.in_transaction = false;
-                    inner.done(false);
+                    inner.done(self.in_transaction);
                     return Ok(false);
                 }
                 Some(Command::CommitTransaction) => {
                     inner.start_transaction = None;
                     self.end_transaction(false).await?;
                     self.in_transaction = false;
-                    inner.done(false);
+                    inner.done(self.in_transaction);
                     return Ok(false);
                 }
                 // How many shards are configured.
@@ -414,7 +414,17 @@ impl Client {
                     self.stream
                         .send_many(&[rd.message()?, dr.message()?, cc.message()?, rfq.message()?])
                         .await?;
-                    inner.done(false);
+                    inner.done(self.in_transaction);
+                    return Ok(false);
+                }
+                Some(Command::Deallocate) => {
+                    self.stream
+                        .send_many(&[
+                            CommandComplete::from_str("DEALLOCATE").message()?,
+                            ReadyForQuery::in_transaction(self.in_transaction).message()?,
+                        ])
+                        .await?;
+                    inner.done(self.in_transaction);
                     return Ok(false);
                 }
                 // TODO: Handling session variables requires a lot more work,

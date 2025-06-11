@@ -91,4 +91,16 @@ describe 'pg' do
       conn.exec 'SELECT 1'
     end
   end
+
+  it 'deallocate ignored' do
+    %w[pgdog pgdog_sharded].each do |db|
+      conn = connect db
+      conn.prepare 'deallocate_ignored', 'SELECT $1 AS one'
+      res = conn.exec_prepared 'deallocate_ignored', [1]
+      expect(res[0]['one']).to eq('1')
+      conn.exec 'DEALLOCATE deallocate_ignored' # Ignored
+      res = conn.exec_prepared 'deallocate_ignored', [2]
+      expect(res[0]['one']).to eq('2')
+    end
+  end
 end
