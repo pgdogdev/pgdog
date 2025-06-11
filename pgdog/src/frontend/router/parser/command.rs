@@ -14,6 +14,7 @@ pub enum Command {
     PreparedStatement(Prepare),
     Rewrite(String),
     Shards(usize),
+    Deallocate,
 }
 
 #[derive(Debug, Clone, PartialEq)]

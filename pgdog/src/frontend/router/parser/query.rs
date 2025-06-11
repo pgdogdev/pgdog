@@ -255,8 +255,7 @@ impl QueryParser {
         let rewrite = Rewrite::new(ast.clone());
         if rewrite.needs_rewrite() {
             debug!("rewrite needed");
-            let queries = rewrite.rewrite(prepared_statements)?;
-            return Ok(Command::Rewrite(queries));
+            return rewrite.rewrite(prepared_statements);
         }
 
         if let Some(multi_tenant) = multi_tenant {
@@ -341,6 +340,9 @@ impl QueryParser {
             }
             Some(NodeEnum::VariableShowStmt(ref stmt)) => {
                 return self.show(stmt, &sharding_schema, read_only)
+            }
+            Some(NodeEnum::DeallocateStmt(_)) => {
+                return Ok(Command::Deallocate);
             }
             // COPY statements.
             Some(NodeEnum::CopyStmt(ref stmt)) => Self::copy(stmt, cluster),

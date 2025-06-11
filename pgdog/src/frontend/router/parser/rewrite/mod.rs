@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use pg_query::{NodeEnum, ParseResult};
 
-use super::Error;
+use super::{Command, Error};
 use crate::frontend::PreparedStatements;
 use crate::net::Parse;
 
@@ -34,7 +34,7 @@ impl Rewrite {
         false
     }
 
-    pub fn rewrite(&self, prepared_statements: &mut PreparedStatements) -> Result<String, Error> {
+    pub fn rewrite(&self, prepared_statements: &mut PreparedStatements) -> Result<Command, Error> {
         let mut ast = self.ast.protobuf.clone();
 
         for stmt in &mut ast.stmts {
@@ -56,12 +56,7 @@ impl Rewrite {
                             }
                         }
 
-                        NodeEnum::DeallocateStmt(ref mut stmt) => {
-                            let name = prepared_statements.name(&stmt.name);
-                            if let Some(name) = name {
-                                stmt.name = name.to_string();
-                            }
-                        }
+                        NodeEnum::DeallocateStmt(_) => return Ok(Command::Deallocate),
 
                         _ => (),
                     }
@@ -69,7 +64,9 @@ impl Rewrite {
             }
         }
 
-        ast.deparse().map_err(|_| Error::EmptyQuery)
+        Ok(Command::Rewrite(
+            ast.deparse().map_err(|_| Error::EmptyQuery)?,
+        ))
     }
 }
 
@@ -85,6 +82,22 @@ mod test {
         assert!(rewrite.needs_rewrite());
         let mut prepared_statements = PreparedStatements::new();
         let queries = rewrite.rewrite(&mut prepared_statements).unwrap();
-        assert_eq!(queries, "BEGIN; PREPARE __pgdog_1 AS SELECT $1, $2, $3; PREPARE __pgdog_2 AS SELECT * FROM my_table WHERE id = $1; COMMIT");
+        match queries {
+            Command::Rewrite(queries) => assert_eq!(queries, "BEGIN; PREPARE __pgdog_1 AS SELECT $1, $2, $3; PREPARE __pgdog_2 AS SELECT * FROM my_table WHERE id = $1; COMMIT"),
+            _ => panic!("not a rewrite"),
+        }
+    }
+
+    #[test]
+    fn test_deallocate() {
+        for q in ["DEALLOCATE ALL", "DEALLOCATE test"] {
+            let ast = pg_query::parse(q).unwrap();
+            let ast = Arc::new(ast);
+            let rewrite = Rewrite::new(ast)
+                .rewrite(&mut PreparedStatements::new())
+                .unwrap();
+
+            assert!(matches!(rewrite, Command::Deallocate));
+        }
     }
 }
