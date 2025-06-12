@@ -2,7 +2,7 @@ use std::str::{from_utf8, FromStr};
 
 use uuid::Uuid;
 
-use super::{bigint, uuid, varchar, Error};
+use super::{Error, Hasher};
 use crate::{
     config::DataType,
     net::{Format, FromDataType, ParameterWithFormat, Vector},
@@ -96,29 +96,33 @@ impl<'a> Value<'a> {
         }
     }
 
-    pub fn hash(&self) -> Result<Option<u64>, Error> {
+    pub fn data(&self) -> &Data {
+        &self.data
+    }
+
+    pub fn hash(&self, hasher: Hasher) -> Result<Option<u64>, Error> {
         match self.data_type {
             DataType::Bigint => match self.data {
-                Data::Text(text) => Ok(Some(bigint(text.parse()?))),
-                Data::Binary(data) => Ok(Some(bigint(match data.len() {
+                Data::Text(text) => Ok(Some(hasher.bigint(text.parse()?))),
+                Data::Binary(data) => Ok(Some(hasher.bigint(match data.len() {
                     2 => i16::from_be_bytes(data.try_into()?) as i64,
                     4 => i32::from_be_bytes(data.try_into()?) as i64,
                     8 => i64::from_be_bytes(data.try_into()?),
                     _ => return Err(Error::IntegerSize),
                 }))),
-                Data::Integer(int) => Ok(Some(bigint(int))),
+                Data::Integer(int) => Ok(Some(hasher.bigint(int))),
             },
 
             DataType::Uuid => match self.data {
-                Data::Text(text) => Ok(Some(uuid(Uuid::from_str(text)?))),
-                Data::Binary(data) => Ok(Some(uuid(Uuid::from_bytes(data.try_into()?)))),
+                Data::Text(text) => Ok(Some(hasher.uuid(Uuid::from_str(text)?))),
+                Data::Binary(data) => Ok(Some(hasher.uuid(Uuid::from_bytes(data.try_into()?)))),
                 Data::Integer(_) => Ok(None),
             },
 
             DataType::Vector => Ok(None),
             DataType::Varchar => match self.data {
-                Data::Binary(b) => Ok(varchar(b).ok()),
-                Data::Text(s) => Ok(Some(varchar(s.as_bytes())?)),
+                Data::Binary(b) => Ok(Some(hasher.varchar(b))),
+                Data::Text(s) => Ok(Some(hasher.varchar(s.as_bytes()))),
                 Data::Integer(_) => Ok(None),
             },
         }

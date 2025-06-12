@@ -348,7 +348,7 @@ impl Cluster {
 mod test {
     use crate::{
         backend::{Pool, Replicas, Shard, ShardedTables},
-        config::{DataType, ReadWriteStrategy, ShardedTable},
+        config::{DataType, Hasher, ReadWriteStrategy, ShardedTable},
     };
 
     use super::Cluster;
@@ -366,6 +366,7 @@ mod test {
                         data_type: DataType::Bigint,
                         centroids_path: None,
                         centroid_probes: 1,
+                        hasher: Hasher::Postgres,
                     }],
                     vec!["sharded_omni".into()],
                     false,

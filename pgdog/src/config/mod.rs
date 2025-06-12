@@ -832,6 +832,9 @@ pub struct ShardedTable {
     /// How many centroids to probe.
     #[serde(default)]
     pub centroid_probes: usize,
+    /// Hasher function.
+    #[serde(default)]
+    pub hasher: Hasher,
 }
 
 impl ShardedTable {
@@ -862,6 +865,14 @@ impl ShardedTable {
 
         Ok(())
     }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum Hasher {
+    #[default]
+    Postgres,
+    Sha1,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Default, Copy)]

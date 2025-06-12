@@ -11,6 +11,7 @@ pub mod context;
 pub mod context_builder;
 pub mod error;
 pub mod ffi;
+pub mod hasher;
 pub mod operator;
 pub mod tables;
 #[cfg(test)]
@@ -21,6 +22,7 @@ pub mod vector;
 pub use context::*;
 pub use context_builder::*;
 pub use error::Error;
+pub use hasher::Hasher;
 pub use operator::*;
 pub use tables::*;
 pub use value::*;
@@ -44,13 +46,8 @@ pub fn uuid(uuid: Uuid) -> u64 {
 }
 
 /// Hash VARCHAR.
-pub fn varchar(s: &[u8]) -> Result<u64, Error> {
-    unsafe {
-        Ok(ffi::hash_combine64(
-            0,
-            ffi::hash_bytes_extended(s.as_ptr(), s.len() as i64),
-        ))
-    }
+pub fn varchar(s: &[u8]) -> u64 {
+    unsafe { ffi::hash_combine64(0, ffi::hash_bytes_extended(s.as_ptr(), s.len() as i64)) }
 }
 
 /// Shard a string value, parsing out a BIGINT, UUID, or vector.
@@ -100,9 +97,7 @@ pub(crate) fn shard_value(
             .ok()
             .map(|v| Centroids::from(centroids).shard(&v, shards, centroid_probes))
             .unwrap_or(Shard::All),
-        DataType::Varchar => varchar(value.as_bytes())
-            .map(|s| Shard::Direct(s as usize % shards))
-            .unwrap_or(Shard::All),
+        DataType::Varchar => Shard::Direct(varchar(value.as_bytes()) as usize % shards),
     }
 }
 
@@ -126,9 +121,7 @@ pub(crate) fn shard_binary(
             .ok()
             .map(|v| Centroids::from(centroids).shard(&v, shards, centroid_probes))
             .unwrap_or(Shard::All),
-        DataType::Varchar => varchar(bytes)
-            .map(|s| Shard::Direct(s as usize % shards))
-            .unwrap_or(Shard::All),
+        DataType::Varchar => Shard::Direct(varchar(bytes) as usize % shards),
     }
 }
 
