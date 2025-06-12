@@ -1,7 +1,7 @@
 //! Admin command parser.
 
 use super::{
-    ban::Ban, pause::Pause, prelude::Message, reconnect::Reconnect, reload::Reload,
+    ban::Ban, pause::Pause, prelude::Message, probe::Probe, reconnect::Reconnect, reload::Reload,
     reset_query_cache::ResetQueryCache, set::Set, setup_schema::SetupSchema,
     show_clients::ShowClients, show_config::ShowConfig, show_lists::ShowLists,
     show_peers::ShowPeers, show_pools::ShowPools, show_prepared_statements::ShowPreparedStatements,
@@ -31,6 +31,7 @@ pub enum ParseResult {
     ShowPrepared(ShowPreparedStatements),
     Set(Set),
     Ban(Ban),
+    Probe(Probe),
 }
 
 impl ParseResult {
@@ -57,6 +58,7 @@ impl ParseResult {
             ShowPrepared(cmd) => cmd.execute().await,
             Set(set) => set.execute().await,
             Ban(ban) => ban.execute().await,
+            Probe(probe) => probe.execute().await,
         }
     }
 
@@ -83,6 +85,7 @@ impl ParseResult {
             ShowPrepared(show) => show.name(),
             Set(set) => set.name(),
             Ban(ban) => ban.name(),
+            Probe(probe) => probe.name(),
         }
     }
 }
@@ -132,6 +135,7 @@ impl Parser {
                     return Err(Error::Syntax);
                 }
             },
+            "probe" => ParseResult::Probe(Probe::parse(&sql)?),
             // TODO: This is not ready yet. We have a race and
             // also the changed settings need to be propagated
             // into the pools.

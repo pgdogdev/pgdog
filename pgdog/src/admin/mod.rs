@@ -10,6 +10,7 @@ pub mod error;
 pub mod parser;
 pub mod pause;
 pub mod prelude;
+pub mod probe;
 pub mod reconnect;
 pub mod reload;
 pub mod reset_query_cache;

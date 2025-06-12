@@ -1,6 +1,7 @@
 //! Server address.
 
 use serde::{Deserialize, Serialize};
+use url::Url;
 
 use crate::config::{Database, User};
 
@@ -70,6 +71,26 @@ impl std::fmt::Display for Address {
     }
 }
 
+impl TryFrom<Url> for Address {
+    type Error = ();
+
+    fn try_from(value: Url) -> Result<Self, Self::Error> {
+        let host = value.host().ok_or(())?.to_string();
+        let port = value.port().unwrap_or(5432);
+        let user = value.username().to_string();
+        let password = value.password().ok_or(())?.to_string();
+        let database_name = value.path().replace("/", "").to_string();
+
+        Ok(Self {
+            host,
+            port,
+            password,
+            user,
+            database_name,
+        })
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -107,5 +128,17 @@ mod test {
         assert_eq!(address.database_name, "not_pgdog");
         assert_eq!(address.user, "alice");
         assert_eq!(address.password, "hunter3");
+    }
+
+    #[test]
+    fn test_addr_from_url() {
+        let addr =
+            Address::try_from(Url::parse("postgres://user:password@127.0.0.1:6432/pgdb").unwrap())
+                .unwrap();
+        assert_eq!(addr.host, "127.0.0.1");
+        assert_eq!(addr.port, 6432);
+        assert_eq!(addr.database_name, "pgdb");
+        assert_eq!(addr.user, "user");
+        assert_eq!(addr.password, "password");
     }
 }
