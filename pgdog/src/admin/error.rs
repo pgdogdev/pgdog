@@ -27,4 +27,13 @@ pub enum Error {
 
     #[error("{0}")]
     Config(#[from] crate::config::error::Error),
+
+    #[error("{0}")]
+    Url(#[from] url::ParseError),
+
+    #[error("connect timeout")]
+    Timeout(#[from] tokio::time::error::Elapsed),
+
+    #[error("address is not valid")]
+    InvalidAddress,
 }
