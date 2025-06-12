@@ -1,6 +1,6 @@
-use crate::config::{DataType, ShardedTable};
+use crate::config::{DataType, Hasher as HasherConfig, ShardedTable};
 
-use super::{Centroids, Context, Data, Error, Operator, Value};
+use super::{Centroids, Context, Data, Error, Hasher, Operator, Value};
 
 pub struct ContextBuilder<'a> {
     data_type: DataType,
@@ -8,6 +8,7 @@ pub struct ContextBuilder<'a> {
     operator: Option<Operator<'a>>,
     centroids: Option<Centroids<'a>>,
     probes: usize,
+    hasher: Hasher,
 }
 
 impl<'a> ContextBuilder<'a> {
@@ -22,6 +23,10 @@ impl<'a> ContextBuilder<'a> {
             probes: table.centroid_probes,
             operator: None,
             value: None,
+            hasher: match table.hasher {
+                HasherConfig::Sha1 => Hasher::Sha1,
+                HasherConfig::Postgres => Hasher::Postgres,
+            },
         }
     }
 
@@ -37,6 +42,7 @@ impl<'a> ContextBuilder<'a> {
                 probes: 0,
                 centroids: None,
                 operator: None,
+                hasher: Hasher::Postgres,
             })
         } else if uuid.valid() {
             Ok(Self {
@@ -45,6 +51,7 @@ impl<'a> ContextBuilder<'a> {
                 probes: 0,
                 centroids: None,
                 operator: None,
+                hasher: Hasher::Postgres,
             })
         } else {
             Err(Error::IncompleteContext)
@@ -78,6 +85,10 @@ impl<'a> ContextBuilder<'a> {
         let operator = self.operator.take().ok_or(Error::IncompleteContext)?;
         let value = self.value.take().ok_or(Error::IncompleteContext)?;
 
-        Ok(Context { operator, value })
+        Ok(Context {
+            operator,
+            value,
+            hasher: self.hasher,
+        })
     }
 }

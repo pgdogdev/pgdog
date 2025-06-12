@@ -89,7 +89,7 @@ fn assert_shard(val: &[u8], expected_shard: usize) {
     let mut table = ShardedTable::default();
     table.data_type = DataType::Varchar;
 
-    assert_eq!(varchar(val).unwrap() as usize % 3, expected_shard);
+    assert_eq!(varchar(val) as usize % 3, expected_shard);
 
     let s = from_utf8(val).unwrap();
     let shard = shard_str(s, &schema, &vec![], 0);

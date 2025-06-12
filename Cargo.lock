@@ -2049,6 +2049,7 @@ dependencies = [
  "scram",
  "serde",
  "serde_json",
+ "sha1",
  "socket2",
  "thiserror 2.0.12",
  "tikv-jemallocator",
