@@ -98,7 +98,9 @@ impl<'a> ClusterConfig<'a> {
             user: &user.name,
             replication_sharding: user.replication_sharding.clone(),
             pooler_mode: user.pooler_mode.unwrap_or(general.pooler_mode),
-            lb_strategy: general.load_balancing_strategy,
+            lb_strategy: user
+                .load_balancing_strategy
+                .unwrap_or(general.load_balancing_strategy),
             shards,
             sharded_tables,
             mirror_of,

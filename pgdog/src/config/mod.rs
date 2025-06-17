@@ -574,13 +574,17 @@ impl std::fmt::Display for PoolerMode {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Copy)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Copy, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum LoadBalancingStrategy {
     #[default]
     Random,
     RoundRobin,
     LeastActiveConnections,
+    /// Use replicas for queries unless they are all down.
+    ReplicasOnlyWithFailover,
+    /// Use primary for queries unless it's banned.
+    PrimaryOnlyWithFailover,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Copy)]
@@ -744,6 +748,9 @@ pub struct User {
     pub idle_timeout: Option<u64>,
     /// Read-only mode.
     pub read_only: Option<bool>,
+    /// Load balancing strategy.
+    #[serde(default)]
+    pub load_balancing_strategy: Option<LoadBalancingStrategy>,
 }
 
 impl User {
