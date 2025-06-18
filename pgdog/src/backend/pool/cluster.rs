@@ -393,6 +393,13 @@ mod test {
             }
         }
 
+        pub fn new_test_single_shard() -> Cluster {
+            let mut cluster = Self::new_test();
+            cluster.shards.pop();
+
+            cluster
+        }
+
         pub fn set_read_write_strategy(&mut self, rw_strategy: ReadWriteStrategy) {
             self.rw_strategy = rw_strategy;
         }
