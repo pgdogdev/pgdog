@@ -83,13 +83,12 @@ impl QueryParser {
                 context.params,
                 context.in_transaction,
             )?;
+        }
 
-            // If the cluster only has one shard, use direct-to-shard queries.
-            if let Command::Query(ref mut query) = self.command {
-                if !matches!(query.shard(), Shard::Direct(_)) && context.cluster.shards().len() == 1
-                {
-                    query.set_shard_mut(0);
-                }
+        // If the cluster only has one shard, use direct-to-shard queries.
+        if let Command::Query(ref mut query) = self.command {
+            if !matches!(query.shard(), Shard::Direct(_)) && context.cluster.shards().len() == 1 {
+                query.set_shard_mut(0);
             }
         }
 
@@ -872,7 +871,7 @@ mod test {
 
     use crate::net::{
         messages::{parse::Parse, Parameter},
-        Format,
+        Close, Format, Sync,
     };
 
     use super::{super::Shard, *};
@@ -1394,5 +1393,24 @@ mod test {
 
         assert_eq!(cmd.limit().limit, Some(1));
         assert_eq!(cmd.limit().offset, Some(25));
+    }
+
+    #[test]
+    fn test_close_direct_one_shard() {
+        let cluster = Cluster::new_test_single_shard();
+        let mut qp = QueryParser::default();
+
+        let buf: Buffer = vec![Close::named("test").into(), Sync.into()].into();
+        let mut pp = PreparedStatements::default();
+        let params = Parameters::default();
+
+        let context = RouterContext::new(&buf, &cluster, &mut pp, &params, false).unwrap();
+
+        let cmd = qp.parse(context).unwrap();
+
+        match cmd {
+            Command::Query(route) => assert_eq!(route.shard(), &Shard::Direct(0)),
+            _ => panic!("not a query"),
+        }
     }
 }
