@@ -105,6 +105,7 @@ impl MultiShard {
                     self.buffer
                         .aggregate(self.route.aggregate(), &self.decoder)?;
                     self.buffer.sort(self.route.order_by(), &self.decoder);
+                    self.buffer.distinct(self.route.distinct(), &self.decoder);
 
                     if has_rows {
                         let rows = if self.route.should_buffer() {

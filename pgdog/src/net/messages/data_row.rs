@@ -6,7 +6,7 @@ use super::{code, prelude::*, Datum, Format, FromDataType, Numeric, RowDescripti
 use bytes::BytesMut;
 use std::ops::{Deref, DerefMut};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, Hash, PartialEq)]
 pub struct Data {
     data: Bytes,
     is_null: bool,
@@ -54,7 +54,7 @@ impl Data {
 }
 
 /// DataRow message.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Hash, Eq, PartialEq)]
 pub struct DataRow {
     columns: Vec<Data>,
 }
@@ -68,6 +68,12 @@ pub trait ToDataRowColumn {
 impl ToDataRowColumn for Bytes {
     fn to_data_row_column(&self) -> Data {
         self.clone().into()
+    }
+}
+
+impl ToDataRowColumn for Data {
+    fn to_data_row_column(&self) -> Data {
+        self.clone()
     }
 }
 

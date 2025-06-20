@@ -1,9 +1,12 @@
 //! Buffer messages to sort and aggregate them later.
 
-use std::{cmp::Ordering, collections::VecDeque};
+use std::{
+    cmp::Ordering,
+    collections::{HashSet, VecDeque},
+};
 
 use crate::{
-    frontend::router::parser::{Aggregate, OrderBy},
+    frontend::router::parser::{Aggregate, DistinctBy, DistinctColumn, OrderBy},
     net::{
         messages::{DataRow, FromBytes, Message, Protocol, ToBytes, Vector},
         Decoder,
@@ -17,6 +20,7 @@ use super::Aggregates;
 pub(super) struct Buffer {
     buffer: VecDeque<DataRow>,
     full: bool,
+    distinct: HashSet<DataRow>,
 }
 
 impl Buffer {
@@ -145,6 +149,41 @@ impl Buffer {
         }
 
         Ok(())
+    }
+
+    pub(super) fn distinct(&mut self, distinct: &Option<DistinctBy>, decoder: &Decoder) {
+        if let Some(distinct) = distinct {
+            match distinct {
+                DistinctBy::Row => {
+                    self.buffer.retain(|row| self.distinct.insert(row.clone()));
+                }
+
+                DistinctBy::Columns(ref columns) => {
+                    self.buffer.retain(|row| {
+                        let mut dr = DataRow::new();
+                        for col in columns {
+                            match col {
+                                DistinctColumn::Index(index) => {
+                                    if let Some(data) = row.column(*index) {
+                                        dr.add(data);
+                                    }
+                                }
+
+                                DistinctColumn::Name(name) => {
+                                    if let Some(index) = decoder.rd().field_index(name) {
+                                        if let Some(data) = row.column(index) {
+                                            dr.add(data);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        self.distinct.insert(dr)
+                    });
+                }
+            }
+        }
     }
 
     /// Take messages from buffer.
