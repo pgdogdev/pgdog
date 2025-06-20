@@ -329,6 +329,10 @@ impl Connection {
         self.binding.has_more_messages()
     }
 
+    pub(crate) fn copy_mode(&self) -> bool {
+        self.binding.copy_mode()
+    }
+
     /// Get connected servers addresses.
     pub(crate) fn addr(&mut self) -> Result<Vec<&Address>, Error> {
         Ok(match self.binding {

@@ -313,4 +313,14 @@ impl Binding {
             _ => false,
         }
     }
+
+    pub(super) fn copy_mode(&self) -> bool {
+        match self {
+            Binding::Admin(_) => false,
+            Binding::MultiShard(ref servers, _state) => servers.iter().all(|s| s.copy_mode()),
+            Binding::Server(Some(ref server)) => server.copy_mode(),
+            Binding::Replication(Some(ref server), _) => server.copy_mode(),
+            _ => false,
+        }
+    }
 }

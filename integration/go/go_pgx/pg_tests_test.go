@@ -292,7 +292,8 @@ func TestBatch(t *testing.T) {
 	}
 	rows.Close()
 
-	tx.Commit(context.Background())
+	err = tx.Commit(context.Background())
+	assert.NoError(t, err)
 
 	tx2, err := conn.Begin(context.Background())
 	assert.NoError(t, err)

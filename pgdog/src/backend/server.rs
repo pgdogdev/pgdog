@@ -425,7 +425,11 @@ impl Server {
 
     /// Server hasn't sent all messages yet.
     pub fn has_more_messages(&self) -> bool {
-        !self.prepared_statements.done() || self.streaming
+        self.prepared_statements.has_more_messages() || self.streaming
+    }
+
+    pub fn copy_mode(&self) -> bool {
+        self.prepared_statements.copy_mode()
     }
 
     /// Server is still inside a transaction.
