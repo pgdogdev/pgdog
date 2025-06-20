@@ -4,7 +4,7 @@ use bytes::{BufMut, BytesMut};
 use pin_project::pin_project;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufStream, ReadBuf};
 use tokio::net::TcpStream;
-use tracing::trace;
+use tracing::{debug, enabled, trace, Level};
 
 use std::io::Error;
 use std::net::SocketAddr;
@@ -122,6 +122,12 @@ impl Stream {
             Stream::Tls(ref mut stream) => stream.write_all(&bytes).await?,
         }
 
+        if !enabled!(Level::TRACE) {
+            debug!("{:?} <-- {}", self.peer_addr(), message.code());
+        } else {
+            trace!("{:?} <-- {:#?}", self.peer_addr(), message);
+        }
+
         #[cfg(debug_assertions)]
         {
             use crate::net::messages::FromBytes;
@@ -130,7 +136,7 @@ impl Stream {
             if message.code() == 'E' {
                 let error = ErrorResponse::from_bytes(bytes.clone())?;
                 if !error.message.is_empty() {
-                    error!("{:?} <= {}", self.peer_addr(), error)
+                    error!("{:?} <-- {}", self.peer_addr(), error)
                 }
             }
         }

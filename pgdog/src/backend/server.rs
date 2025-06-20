@@ -243,8 +243,6 @@ impl Server {
         };
 
         for message in queue.into_iter().flatten() {
-            trace!(">>> {:?} [{}]", message, self.addr());
-
             match self.stream().send(message).await {
                 Ok(sent) => self.stats.send(sent),
                 Err(err) => {
@@ -362,8 +360,6 @@ impl Server {
             _ => (),
         }
 
-        trace!("<<< {:?} [{}]", message, self.addr());
-
         Ok(message.backend())
     }
 
@@ -383,7 +379,6 @@ impl Server {
 
         // Compare client and server params.
         if !params.identical(&self.client_params) {
-            debug!("params are different");
             let tracked = params.tracked();
             let mut queries = self.client_params.reset_queries();
             queries.extend(tracked.set_queries());

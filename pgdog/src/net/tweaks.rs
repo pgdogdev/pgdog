@@ -2,13 +2,11 @@ use std::io::Result;
 
 use socket2::{SockRef, TcpKeepalive};
 use tokio::net::TcpStream;
-use tracing::debug;
 
 use crate::config::config;
 
 pub fn tweak(socket: &TcpStream) -> Result<()> {
     let config = config().config.tcp;
-    debug!("TCP settings: {}", config);
 
     // Disable the Nagle algorithm.
     socket.set_nodelay(true)?;

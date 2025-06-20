@@ -334,7 +334,6 @@ impl Monitor {
                         let mut lock = pool.lock();
                         lock.stats.calc_averages(duration);
                     }
-                    debug!("calculated averages [{}]", pool.addr());
                 }
 
                 _ = comms.shutdown.notified() => {
