@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-use super::{Aggregate, FunctionBehavior, Limit, LockingBehavior, OrderBy};
+use super::{Aggregate, DistinctBy, FunctionBehavior, Limit, LockingBehavior, OrderBy};
 
 #[derive(Debug, Clone, PartialEq, PartialOrd, Ord, Eq, Hash, Default)]
 pub enum Shard {
@@ -54,6 +54,7 @@ pub struct Route {
     aggregate: Aggregate,
     limit: Limit,
     lock_session: bool,
+    distinct: Option<DistinctBy>,
 }
 
 impl Display for Route {
@@ -74,6 +75,7 @@ impl Route {
         order_by: Vec<OrderBy>,
         aggregate: Aggregate,
         limit: Limit,
+        distinct: Option<DistinctBy>,
     ) -> Self {
         Self {
             shard,
@@ -81,6 +83,7 @@ impl Route {
             read: true,
             aggregate,
             limit,
+            distinct,
             ..Default::default()
         }
     }
@@ -142,7 +145,7 @@ impl Route {
     }
 
     pub fn should_buffer(&self) -> bool {
-        !self.order_by().is_empty() || !self.aggregate().is_empty()
+        !self.order_by().is_empty() || !self.aggregate().is_empty() || self.distinct().is_some()
     }
 
     pub fn limit(&self) -> &Limit {
@@ -179,5 +182,9 @@ impl Route {
 
     pub fn lock_session(&self) -> bool {
         self.lock_session
+    }
+
+    pub fn distinct(&self) -> &Option<DistinctBy> {
+        &self.distinct
     }
 }

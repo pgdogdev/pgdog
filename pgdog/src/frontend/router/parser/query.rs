@@ -712,9 +712,10 @@ impl QueryParser {
         let shard = Self::converge(shards);
         let aggregates = Aggregate::parse(stmt)?;
         let limit = LimitClause::new(stmt, params).limit_offset()?;
+        let distinct = Distinct::new(stmt).distinct()?;
 
         Ok(Command::Query(Route::select(
-            shard, order_by, aggregates, limit,
+            shard, order_by, aggregates, limit, distinct,
         )))
     }
 
@@ -1412,5 +1413,22 @@ mod test {
             Command::Query(route) => assert_eq!(route.shard(), &Shard::Direct(0)),
             _ => panic!("not a query"),
         }
+    }
+
+    #[test]
+    fn test_distinct() {
+        let route = query!("SELECT DISTINCT * FROM users");
+        let distinct = route.distinct().as_ref().unwrap();
+        assert_eq!(distinct, &DistinctBy::Row);
+
+        let route = query!("SELECT DISTINCT ON(1, email) * FROM users");
+        let distinct = route.distinct().as_ref().unwrap();
+        assert_eq!(
+            distinct,
+            &DistinctBy::Columns(vec![
+                DistinctColumn::Index(0),
+                DistinctColumn::Name(std::string::String::from("email"))
+            ])
+        );
     }
 }
