@@ -120,14 +120,14 @@ async fn test_test_client() {
     conn.write_all(&query).await.unwrap();
 
     client.buffer().await.unwrap();
-    assert_eq!(client.request_buffer.len(), query.len());
+    assert_eq!(client.request_buffer.total_message_len(), query.len());
 
     let disconnect = client.client_messages(inner.get()).await.unwrap();
     assert!(!disconnect);
     assert!(!client.in_transaction);
     assert_eq!(inner.stats.state, State::Active);
     // Buffer not cleared yet.
-    assert_eq!(client.request_buffer.len(), query.len());
+    assert_eq!(client.request_buffer.total_message_len(), query.len());
 
     assert!(inner.backend.connected());
     let command = inner

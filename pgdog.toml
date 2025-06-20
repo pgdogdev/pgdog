@@ -8,7 +8,7 @@ shutdown_timeout = 5_000
 openmetrics_port = 9090
 openmetrics_namespace = "pgdog."
 idle_healthcheck_delay = 2342343243
-read_write_strategy = "conservative"
+read_write_strategy = "aggressive"
 
 #
 # Admin database password.
@@ -62,6 +62,7 @@ host = "127.0.0.1"
 database_name = "shard_0"
 shard = 0
 role = "replica"
+read_only = true
 
 [[databases]]
 name = "pgdog_sharded"
@@ -69,6 +70,7 @@ host = "127.0.0.1"
 database_name = "shard_1"
 shard = 1
 role = "replica"
+read_only = true
 
 #
 # Read/write access to theses tables will be automatically

@@ -39,15 +39,18 @@ impl<'a> Engine<'a> {
     }
 
     fn intercept(&self, buffer: &Buffer) -> Result<Vec<Message>, Error> {
-        let only_close = buffer.iter().all(|m| ['C', 'S'].contains(&m.code()));
+        let only_sync = buffer.iter().all(|m| m.code() == 'S');
+        let only_close = buffer.iter().all(|m| ['C', 'S'].contains(&m.code())) && !only_sync;
         if only_close {
-            let mut messages = buffer
-                .iter()
-                .filter(|m| m.code() == 'C')
-                .map(|_| CloseComplete.message())
-                .collect::<Result<Vec<Message>, crate::net::Error>>()?;
-            if buffer.last().map(|m| m.code() == 'S').unwrap_or(false) {
-                messages.push(ReadyForQuery::in_transaction(self.in_transaction).message()?);
+            let mut messages = vec![];
+            for msg in buffer.iter() {
+                match msg.code() {
+                    'C' => messages.push(CloseComplete.message()?),
+                    'S' => {
+                        messages.push(ReadyForQuery::in_transaction(self.in_transaction).message()?)
+                    }
+                    c => return Err(Error::UnexpectedMessage(c)), // Impossible.
+                }
             }
 
             Ok(messages)
