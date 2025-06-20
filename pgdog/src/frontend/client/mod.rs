@@ -8,7 +8,7 @@ use bytes::BytesMut;
 use timeouts::Timeouts;
 use tokio::time::timeout;
 use tokio::{select, spawn};
-use tracing::{debug, error, info, trace};
+use tracing::{debug, enabled, error, info, trace, Level as LogLevel};
 
 use super::{Buffer, Command, Comms, Error, PreparedStatements};
 use crate::auth::{md5, scram::Server};
@@ -568,8 +568,6 @@ impl Client {
             }
         }
 
-        trace!("[{}] <- {:#?}", self.addr, message);
-
         if flush {
             self.stream.send_flush(&message).await?;
         } else {
@@ -626,11 +624,22 @@ impl Client {
             }
         }
 
-        trace!(
-            "request buffered [{:.4}ms]\n{:#?}",
-            timer.unwrap().elapsed().as_secs_f64() * 1000.0,
-            self.request_buffer,
-        );
+        if !enabled!(LogLevel::TRACE) {
+            debug!(
+                "request buffered [{:.4}ms] {:?}",
+                timer.unwrap().elapsed().as_secs_f64() * 1000.0,
+                self.request_buffer
+                    .iter()
+                    .map(|m| m.code())
+                    .collect::<Vec<_>>(),
+            );
+        } else {
+            trace!(
+                "request buffered [{:.4}ms]\n{:#?}",
+                timer.unwrap().elapsed().as_secs_f64() * 1000.0,
+                self.request_buffer,
+            );
+        }
 
         Ok(BufferEvent::HaveRequest)
     }
