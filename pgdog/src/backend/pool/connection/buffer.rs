@@ -16,7 +16,7 @@ use crate::{
 use super::Aggregates;
 
 /// Sort and aggregate rows received from multiple shards.
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 pub(super) struct Buffer {
     buffer: VecDeque<DataRow>,
     full: bool,
@@ -288,5 +288,60 @@ mod test {
             let count = dr.get::<i64>(0, Format::Text).unwrap();
             assert_eq!(count, 15 * 6);
         }
+    }
+
+    #[test]
+    fn test_distinct() {
+        let mut buf = Buffer::default();
+        let rd = RowDescription::new(&[Field::bigint("id"), Field::text("email")]);
+        let decoder = Decoder::from(&rd);
+
+        for email in ["test@test.com", "apples@test.com", "domain@test.com"] {
+            for i in 0..5 {
+                let mut dr = DataRow::new();
+                dr.add(i as i64);
+                dr.add(email);
+                buf.add(dr.message().unwrap()).unwrap();
+            }
+        }
+
+        let mut distinct_row = buf.clone();
+        distinct_row.distinct(&Some(DistinctBy::Row), &decoder);
+
+        assert_eq!(distinct_row.buffer.len(), 15);
+
+        for distinct in [
+            DistinctColumn::Index(0),
+            DistinctColumn::Name("id".to_string()),
+        ] {
+            let mut distinct_id = buf.clone();
+            distinct_id.distinct(&Some(DistinctBy::Columns(vec![distinct])), &decoder);
+            assert_eq!(distinct_id.buffer.len(), 5);
+        }
+
+        for distinct in [
+            DistinctColumn::Index(1),
+            DistinctColumn::Name("email".to_string()),
+        ] {
+            let mut distinct_id = buf.clone();
+            distinct_id.distinct(&Some(DistinctBy::Columns(vec![distinct])), &decoder);
+            assert_eq!(distinct_id.buffer.len(), 3);
+        }
+
+        let mut buf = Buffer::default();
+
+        for email in ["test@test.com", "apples@test.com", "domain@test.com"] {
+            for _ in 0..5 {
+                let mut dr = DataRow::new();
+                dr.add(5_i64);
+                dr.add(email);
+                buf.add(dr.message().unwrap()).unwrap();
+            }
+        }
+
+        assert_eq!(buf.buffer.len(), 15);
+        buf.distinct(&Some(DistinctBy::Row), &decoder);
+
+        assert_eq!(buf.buffer.len(), 3);
     }
 }

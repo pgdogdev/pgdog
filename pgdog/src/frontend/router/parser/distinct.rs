@@ -40,7 +40,7 @@ impl<'a> Distinct<'a> {
                 match node {
                     NodeEnum::AConst(AConst { val: Some(val), .. }) => match val {
                         Val::Ival(Integer { ival }) => {
-                            columns.push(DistinctColumn::Index(*ival as usize))
+                            columns.push(DistinctColumn::Index(*ival as usize - 1))
                         }
                         _ => (),
                     },

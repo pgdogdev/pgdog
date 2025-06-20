@@ -1417,7 +1417,18 @@ mod test {
 
     #[test]
     fn test_distinct() {
-        let q = parse("SELECT DISTINCT * FROM users").unwrap();
-        println!("{:#?}", q);
+        let route = query!("SELECT DISTINCT * FROM users");
+        let distinct = route.distinct().as_ref().unwrap();
+        assert_eq!(distinct, &DistinctBy::Row);
+
+        let route = query!("SELECT DISTINCT ON(1, email) * FROM users");
+        let distinct = route.distinct().as_ref().unwrap();
+        assert_eq!(
+            distinct,
+            &DistinctBy::Columns(vec![
+                DistinctColumn::Index(0),
+                DistinctColumn::Name(std::string::String::from("email"))
+            ])
+        );
     }
 }
