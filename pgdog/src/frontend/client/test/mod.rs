@@ -16,8 +16,9 @@ use crate::{
         Client, Command,
     },
     net::{
-        bind::Parameter, Bind, CommandComplete, DataRow, Describe, Execute, Field, Format,
-        FromBytes, Parse, Protocol, Query, ReadyForQuery, RowDescription, Sync, Terminate, ToBytes,
+        bind::Parameter, Bind, Close, CommandComplete, DataRow, Describe, Execute, Field, Flush,
+        Format, FromBytes, Parse, Protocol, Query, ReadyForQuery, RowDescription, Sync, Terminate,
+        ToBytes,
     },
     state::State,
 };
@@ -527,4 +528,48 @@ async fn test_transaction_state() {
 
     assert!(!client.in_transaction);
     assert!(!inner.router.routed());
+}
+
+#[tokio::test]
+async fn test_close_parse() {
+    let (mut conn, mut client, mut inner) = new_client!(true);
+
+    conn.write_all(&buffer!({ Close::named("test") }, { Sync }))
+        .await
+        .unwrap();
+
+    conn.write_all(&buffer!({ Query::new("SELECT 1") }))
+        .await
+        .unwrap();
+
+    client.buffer().await.unwrap();
+    client.client_messages(inner.get()).await.unwrap();
+
+    client.buffer().await.unwrap();
+    client.client_messages(inner.get()).await.unwrap();
+
+    for _ in ['T', 'D', 'C', 'Z'] {
+        let msg = inner.backend.read().await.unwrap();
+        client.server_message(inner.get(), msg).await.unwrap();
+    }
+
+    read!(conn, ['3', 'Z', 'T', 'D', 'C', 'Z']);
+
+    conn.write_all(&buffer!(
+        { Close::named("test1") },
+        { Parse::named("test1", "SELECT $1") },
+        { Flush }
+    ))
+    .await
+    .unwrap();
+
+    client.buffer().await.unwrap();
+    client.client_messages(inner.get()).await.unwrap();
+
+    for _ in ['3', '1'] {
+        let msg = inner.backend.read().await.unwrap();
+        client.server_message(inner.get(), msg).await.unwrap();
+    }
+
+    read!(conn, ['3', '1']);
 }

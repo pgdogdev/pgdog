@@ -29,9 +29,11 @@ use crate::net::{parameter::Parameters, Stream};
 use crate::net::{DataRow, EmptyQueryResponse, Field, NoticeResponse, RowDescription};
 
 pub mod counter;
+pub mod engine;
 pub mod inner;
 pub mod timeouts;
 
+pub use engine::Engine;
 use inner::{Inner, InnerBorrow};
 
 /// Frontend client.
@@ -338,6 +340,24 @@ impl Client {
             );
             QueryLogger::new(&self.request_buffer).log().await?;
         }
+
+        // Query execution engine.
+        let mut engine = Engine::new(
+            &mut self.prepared_statements,
+            &self.params,
+            self.in_transaction,
+        );
+
+        use engine::Action;
+
+        match engine.execute(&self.request_buffer).await? {
+            Action::Intercept(msgs) => {
+                self.stream.send_many(&msgs).await?;
+                return Ok(false);
+            }
+
+            Action::Forward => (),
+        };
 
         let connected = inner.connected();
 
