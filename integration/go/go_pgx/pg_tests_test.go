@@ -283,16 +283,21 @@ func TestBatch(t *testing.T) {
 
 	results := tx.SendBatch(context.Background(), &batch)
 
-	rows, err := results.Query()
-	assert.NoError(t, err)
-
-	for rows.Next() {
-		_, err := rows.Values()
+	for range 2 {
+		rows, err := results.Query()
 		assert.NoError(t, err)
-	}
-	rows.Close()
 
-	tx.Commit(context.Background())
+		for rows.Next() {
+			_, err := rows.Values()
+			assert.NoError(t, err)
+		}
+		rows.Close()
+	}
+
+	results.Close()
+
+	err = tx.Commit(context.Background())
+	assert.NoError(t, err)
 
 	tx2, err := conn.Begin(context.Background())
 	assert.NoError(t, err)
