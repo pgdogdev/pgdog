@@ -48,7 +48,7 @@ impl Buffer {
 
             // CopyData (F)
             // Flush data to backend if we've buffered 4K.
-            if message.code() == 'd' && self.len() >= 4096 {
+            if message.code() == 'd' && self.total_message_len() >= 4096 {
                 return true;
             }
 
@@ -62,13 +62,13 @@ impl Buffer {
     }
 
     /// Number of bytes in the buffer.
-    pub fn len(&self) -> usize {
+    pub fn total_message_len(&self) -> usize {
         self.buffer.iter().map(|b| b.len()).sum()
     }
 
     /// Check if the buffer is empty.
     pub fn is_empty(&self) -> bool {
-        self.len() == 0
+        self.total_message_len() == 0
     }
 
     /// If this buffer contains a query, retrieve it.

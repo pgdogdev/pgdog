@@ -29,9 +29,11 @@ use crate::net::{parameter::Parameters, Stream};
 use crate::net::{DataRow, EmptyQueryResponse, Field, NoticeResponse, RowDescription};
 
 pub mod counter;
+pub mod engine;
 pub mod inner;
 pub mod timeouts;
 
+pub use engine::Engine;
 use inner::{Inner, InnerBorrow};
 
 /// Frontend client.
@@ -326,7 +328,9 @@ impl Client {
 
     /// Handle client messages.
     async fn client_messages(&mut self, mut inner: InnerBorrow<'_>) -> Result<bool, Error> {
-        inner.stats.received(self.request_buffer.len());
+        inner
+            .stats
+            .received(self.request_buffer.total_message_len());
 
         #[cfg(debug_assertions)]
         if let Some(query) = self.request_buffer.query()? {
@@ -338,6 +342,24 @@ impl Client {
             );
             QueryLogger::new(&self.request_buffer).log().await?;
         }
+
+        // Query execution engine.
+        let mut engine = Engine::new(
+            &mut self.prepared_statements,
+            &self.params,
+            self.in_transaction,
+        );
+
+        use engine::Action;
+
+        match engine.execute(&self.request_buffer).await? {
+            Action::Intercept(msgs) => {
+                self.stream.send_many(&msgs).await?;
+                return Ok(false);
+            }
+
+            Action::Forward => (),
+        };
 
         let connected = inner.connected();
 
