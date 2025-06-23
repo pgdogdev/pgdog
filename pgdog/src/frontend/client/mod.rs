@@ -55,8 +55,6 @@ pub struct Client {
     request_buffer: Buffer,
     stream_buffer: BytesMut,
     message_buffer: VecDeque<ProtocolMessage>,
-    #[cfg(test)]
-    testing: bool,
 }
 
 impl Client {
@@ -206,8 +204,6 @@ impl Client {
             stream_buffer: BytesMut::new(),
             message_buffer: VecDeque::new(),
             shutdown: false,
-            #[cfg(test)]
-            testing: true,
         };
 
         drop(conn);
@@ -249,8 +245,6 @@ impl Client {
             stream_buffer: BytesMut::new(),
             message_buffer: VecDeque::new(),
             shutdown: false,
-            #[cfg(test)]
-            testing: true,
         }
     }
 
@@ -518,7 +512,7 @@ impl Client {
         inner.backend.mirror(&self.request_buffer);
 
         #[cfg(test)]
-        let handle_response = !self.testing && !self.streaming;
+        let handle_response = false;
         #[cfg(not(test))]
         let handle_response = !self.streaming;
 
