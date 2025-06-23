@@ -55,6 +55,8 @@ pub struct Client {
     request_buffer: Buffer,
     stream_buffer: BytesMut,
     message_buffer: VecDeque<ProtocolMessage>,
+    #[cfg(test)]
+    testing: bool,
 }
 
 impl Client {
@@ -204,6 +206,8 @@ impl Client {
             stream_buffer: BytesMut::new(),
             message_buffer: VecDeque::new(),
             shutdown: false,
+            #[cfg(test)]
+            testing: true,
         };
 
         drop(conn);
@@ -245,6 +249,8 @@ impl Client {
             stream_buffer: BytesMut::new(),
             message_buffer: VecDeque::new(),
             shutdown: false,
+            #[cfg(test)]
+            testing: true,
         }
     }
 
@@ -511,7 +517,12 @@ impl Client {
         // Send traffic to mirrors, if any.
         inner.backend.mirror(&self.request_buffer);
 
-        if !self.streaming {
+        #[cfg(test)]
+        let handle_response = !self.testing && !self.streaming;
+        #[cfg(not(test))]
+        let handle_response = !self.streaming;
+
+        if handle_response {
             let query_timeout = self.timeouts.query_timeout(&inner.stats.state);
 
             while inner.backend.has_more_messages() && !inner.backend.copy_mode() {
