@@ -228,6 +228,14 @@ impl PreparedStatements {
         self.state.done() && self.parses.is_empty() && self.describes.is_empty()
     }
 
+    pub(crate) fn has_more_messages(&self) -> bool {
+        self.state.has_more_messages()
+    }
+
+    pub(crate) fn copy_mode(&self) -> bool {
+        self.state.copy_mode()
+    }
+
     fn check_prepared(&mut self, name: &str) -> Result<Option<ProtocolMessage>, Error> {
         if !self.contains(name) {
             let parse = self.parse(name);

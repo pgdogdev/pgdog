@@ -146,7 +146,7 @@ async fn test_test_client() {
         let msg = inner.backend.read().await.unwrap();
         len += msg.len();
         assert_eq!(msg.code(), c);
-        let disconnect = client.server_message(inner.get(), msg).await.unwrap();
+        let disconnect = client.server_message(&mut inner.get(), msg).await.unwrap();
         assert!(!disconnect);
     }
 
@@ -422,7 +422,7 @@ async fn test_lock_session() {
     for c in ['T', 'D', 'C', 'Z'] {
         let msg = inner.backend.read().await.unwrap();
         assert_eq!(msg.code(), c);
-        client.server_message(inner.get(), msg).await.unwrap();
+        client.server_message(&mut inner.get(), msg).await.unwrap();
     }
 
     // Session locked.
@@ -470,7 +470,7 @@ async fn test_transaction_state() {
         let msg = inner.backend.read().await.unwrap();
         assert_eq!(msg.code(), c);
 
-        client.server_message(inner.get(), msg).await.unwrap();
+        client.server_message(&mut inner.get(), msg).await.unwrap();
     }
 
     read!(conn, ['1', 't', 'T', 'Z']);
@@ -500,7 +500,7 @@ async fn test_transaction_state() {
         let msg = inner.backend.read().await.unwrap();
         assert_eq!(msg.code(), c);
 
-        client.server_message(inner.get(), msg).await.unwrap();
+        client.server_message(&mut inner.get(), msg).await.unwrap();
     }
 
     read!(conn, ['2', 'D', 'C', 'Z']);
@@ -521,7 +521,7 @@ async fn test_transaction_state() {
         let msg = inner.backend.read().await.unwrap();
         assert_eq!(msg.code(), c);
 
-        client.server_message(inner.get(), msg).await.unwrap();
+        client.server_message(&mut inner.get(), msg).await.unwrap();
     }
 
     read!(conn, ['C', 'Z']);
@@ -550,7 +550,7 @@ async fn test_close_parse() {
 
     for _ in ['T', 'D', 'C', 'Z'] {
         let msg = inner.backend.read().await.unwrap();
-        client.server_message(inner.get(), msg).await.unwrap();
+        client.server_message(&mut inner.get(), msg).await.unwrap();
     }
 
     read!(conn, ['3', 'Z', 'T', 'D', 'C', 'Z']);
@@ -568,7 +568,7 @@ async fn test_close_parse() {
 
     for _ in ['3', '1'] {
         let msg = inner.backend.read().await.unwrap();
-        client.server_message(inner.get(), msg).await.unwrap();
+        client.server_message(&mut inner.get(), msg).await.unwrap();
     }
 
     read!(conn, ['3', '1']);

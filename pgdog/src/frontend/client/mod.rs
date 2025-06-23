@@ -285,7 +285,7 @@ impl Client {
                 // Async messages.
                 message = timeout(query_timeout, inner.backend.read()) => {
                     let message = message??;
-                    let disconnect = self.server_message(inner.get(), message).await?;
+                    let disconnect = self.server_message(&mut inner.get(), message).await?;
                     if disconnect {
                         break;
                     }
@@ -511,13 +511,29 @@ impl Client {
         // Send traffic to mirrors, if any.
         inner.backend.mirror(&self.request_buffer);
 
+        #[cfg(test)]
+        let handle_response = false;
+        #[cfg(not(test))]
+        let handle_response = !self.streaming;
+
+        if handle_response {
+            let query_timeout = self.timeouts.query_timeout(&inner.stats.state);
+
+            while inner.backend.has_more_messages() && !inner.backend.copy_mode() {
+                let message = timeout(query_timeout, inner.backend.read()).await??;
+                if self.server_message(&mut inner, message).await? {
+                    return Ok(true);
+                }
+            }
+        }
+
         Ok(false)
     }
 
     /// Handle message from server(s).
     async fn server_message(
         &mut self,
-        mut inner: InnerBorrow<'_>,
+        inner: &mut InnerBorrow<'_>,
         message: Message,
     ) -> Result<bool, Error> {
         let code = message.code();

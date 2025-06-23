@@ -170,6 +170,10 @@ impl ProtocolState {
         }
     }
 
+    pub(crate) fn copy_mode(&self) -> bool {
+        self.queue.front() == Some(&ExecutionItem::Code(ExecutionCode::Copy))
+    }
+
     pub(crate) fn is_empty(&self) -> bool {
         self.len() == 0
     }
@@ -185,6 +189,10 @@ impl ProtocolState {
 
     pub(crate) fn done(&self) -> bool {
         self.is_empty() && !self.out_of_sync
+    }
+
+    pub(crate) fn has_more_messages(&self) -> bool {
+        !self.is_empty()
     }
 
     #[cfg(test)]
