@@ -512,8 +512,10 @@ impl Client {
         inner.backend.mirror(&self.request_buffer);
 
         if !self.streaming {
+            let query_timeout = self.timeouts.query_timeout(&inner.stats.state);
+
             while inner.backend.has_more_messages() && !inner.backend.copy_mode() {
-                let message = inner.backend.read().await?;
+                let message = timeout(query_timeout, inner.backend.read()).await??;
                 if self.server_message(&mut inner, message).await? {
                     return Ok(true);
                 }
