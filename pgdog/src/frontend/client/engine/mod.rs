@@ -46,7 +46,9 @@ impl<'a> Engine<'a> {
             match msg.code() {
                 'C' => {
                     let close = Close::from_bytes(msg.to_bytes()?)?;
-                    self.prepared_statements.close(close.name());
+                    if !close.anonymous() {
+                        self.prepared_statements.close(close.name());
+                    }
                     if only_close {
                         messages.push(CloseComplete.message()?)
                     }
