@@ -31,8 +31,14 @@ pub struct Stats {
     transaction_timer: Instant,
     query_timer: Instant,
     wait_timer: Instant,
+    /// Last time this client sent a query.
     pub last_request: SystemTime,
+    /// Number of bytes used by the stream buffer, where all the messages
+    /// are stored until they are processed.
     pub memory_used: usize,
+    /// Number of prepared statements in the local cache.
+    pub prepared_statements: usize,
+    /// Client is locked to a particular server.
     pub locked: bool,
 }
 
@@ -55,6 +61,7 @@ impl Stats {
             wait_timer: now,
             last_request: SystemTime::now(),
             memory_used: 0,
+            prepared_statements: 0,
             locked: false,
         }
     }
@@ -133,5 +140,10 @@ impl Stats {
         }
 
         self.state = State::Active;
+    }
+
+    /// Number of prepared statements currently in the cache.
+    pub(super) fn prepared_statements(&mut self, prepared: usize) {
+        self.prepared_statements = prepared;
     }
 }

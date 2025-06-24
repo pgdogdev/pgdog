@@ -355,6 +355,7 @@ impl Client {
         match engine.execute(&self.request_buffer).await? {
             Action::Intercept(msgs) => {
                 self.stream.send_many(&msgs).await?;
+                self.update_stats(&mut inner);
                 return Ok(false);
             }
 
@@ -506,7 +507,7 @@ impl Client {
             .handle_buffer(&self.request_buffer, self.streaming)
             .await?;
 
-        inner.stats.memory_used(self.stream_buffer.capacity());
+        self.update_stats(&mut inner);
 
         // Send traffic to mirrors, if any.
         inner.backend.mirror(&self.request_buffer);
@@ -704,6 +705,13 @@ impl Client {
         inner.comms.update_params(&self.params);
         debug!("set");
         Ok(())
+    }
+
+    fn update_stats(&self, inner: &mut InnerBorrow<'_>) {
+        inner
+            .stats
+            .prepared_statements(self.prepared_statements.len_local());
+        inner.stats.memory_used(self.stream_buffer.capacity());
     }
 }
 
