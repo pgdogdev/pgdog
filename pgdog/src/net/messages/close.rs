@@ -43,6 +43,10 @@ impl Close {
         self.name().is_empty() || self.kind() != 'S'
     }
 
+    pub fn is_statement(&self) -> bool {
+        self.kind() == 'S'
+    }
+
     pub fn name(&self) -> &str {
         // SAFETY: Name is checked for utf-8 in Bytes::from_bytes
         unsafe { from_utf8_unchecked(&self.payload[6..self.payload.len() - 1]) }
