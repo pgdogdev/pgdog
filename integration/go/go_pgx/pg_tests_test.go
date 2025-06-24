@@ -333,3 +333,26 @@ func TestLimitOffset(t *testing.T) {
 		assert.NoError(t, err)
 	}
 }
+
+func TestClosePrepared(t *testing.T) {
+	conns := connectBoth()
+
+	for _, conn := range conns {
+		defer conn.Close(context.Background())
+	}
+
+	for _, conn := range conns {
+		for range 25 {
+			_, err := conn.Prepare(context.Background(), "test", "SELECT $1::bigint")
+			assert.NoError(t, err)
+
+			var one int64
+			err = conn.QueryRow(context.Background(), "test", 1).Scan(&one)
+			assert.NoError(t, err)
+			assert.Equal(t, int64(1), one)
+
+			err = conn.Deallocate(context.Background(), "test")
+			assert.NoError(t, err)
+		}
+	}
+}

@@ -83,6 +83,11 @@ impl PreparedStatements {
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
+
+    /// Remove prepared statement from local cache.
+    pub fn close(&mut self, name: &str) {
+        self.local.remove(name);
+    }
 }
 
 #[cfg(test)]
