@@ -9,12 +9,11 @@ use crate::{backend::ProtocolMessage, net::Parse};
 
 pub mod error;
 pub mod global_cache;
-pub mod request;
 pub mod rewrite;
 
 pub use error::Error;
 pub use global_cache::GlobalCache;
-pub use request::PreparedRequest;
+
 pub use rewrite::Rewrite;
 
 static CACHE: Lazy<PreparedStatements> = Lazy::new(PreparedStatements::default);
