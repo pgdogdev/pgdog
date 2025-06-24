@@ -60,6 +60,16 @@ func connectNormal() (*pgx.Conn, error) {
 	return conn, nil
 }
 
+func connectAdmin() (*pgx.Conn, error) {
+	conn, err := pgx.Connect(context.Background(), "postgres://admin:pgdog@127.0.0.1:6432/admin")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Can't connect: %v\n", err)
+		return nil, err
+	}
+
+	return conn, nil
+}
+
 func connectSharded() (*pgx.Conn, error) {
 	conn, err := pgx.Connect(context.Background(), "postgres://pgdog:pgdog@127.0.0.1:6432/pgdog_sharded")
 
@@ -355,4 +365,103 @@ func TestClosePrepared(t *testing.T) {
 			assert.NoError(t, err)
 		}
 	}
+}
+
+func TestPreparedCounter(t *testing.T) {
+	conn, err := pgx.Connect(context.Background(), "postgres://pgdog:pgdog@127.0.0.1:6432/pgdog?application_name=test_preapred_counter")
+	assert.NoError(t, err)
+	defer conn.Close(context.Background())
+
+	admin, err := connectAdmin()
+	assert.NoError(t, err)
+
+	defer admin.Close(context.Background())
+
+	for i := range 5 {
+		var found bool
+		name := fmt.Sprintf("test_%d", i)
+		_, err := conn.Prepare(context.Background(), name, "SELECT $1::bigint")
+		assert.NoError(t, err)
+
+		rows, err := admin.Query(context.Background(), "SHOW CLIENTS prepared_statements, application_name", pgx.QueryExecModeSimpleProtocol)
+		assert.NoError(t, err)
+		defer rows.Close()
+
+		for rows.Next() {
+			values, err := rows.Values()
+			if err != nil {
+				panic(err)
+			}
+
+			var application_name string
+			var prepared_statements pgtype.Numeric
+
+			for i, description := range rows.FieldDescriptions() {
+				if description.Name == "application_name" {
+					application_name = values[i].(string)
+				}
+
+				if description.Name == "prepared_statements" {
+					prepared_statements = values[i].(pgtype.Numeric)
+				}
+			}
+
+			if application_name == "test_preapred_counter" {
+				prepared := pgtype.Numeric{
+					Int:   big.NewInt(int64(i + 1)),
+					Exp:   0,
+					NaN:   false,
+					Valid: true,
+				}
+
+				assert.Equal(t, prepared, prepared_statements)
+				found = true
+			}
+		}
+		assert.True(t, found)
+	}
+
+	for i := range 5 {
+		name := fmt.Sprintf("test_%d", i)
+		conn.Deallocate(context.Background(), name)
+	}
+
+	var found bool
+
+	rows, err := admin.Query(context.Background(), "SHOW CLIENTS prepared_statements, application_name", pgx.QueryExecModeSimpleProtocol)
+	assert.NoError(t, err)
+	defer rows.Close()
+
+	for rows.Next() {
+		values, err := rows.Values()
+		if err != nil {
+			panic(err)
+		}
+
+		var application_name string
+		var prepared_statements pgtype.Numeric
+
+		for i, description := range rows.FieldDescriptions() {
+			if description.Name == "application_name" {
+				application_name = values[i].(string)
+			}
+
+			if description.Name == "prepared_statements" {
+				prepared_statements = values[i].(pgtype.Numeric)
+			}
+		}
+
+		if application_name == "test_preapred_counter" {
+			zero := pgtype.Numeric{
+				Int:   big.NewInt(int64(0)),
+				Exp:   0,
+				NaN:   false,
+				Valid: true,
+			}
+
+			assert.Equal(t, zero, prepared_statements)
+			found = true
+		}
+	}
+	assert.True(t, found)
 }

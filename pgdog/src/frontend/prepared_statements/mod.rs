@@ -74,13 +74,13 @@ impl PreparedStatements {
     }
 
     /// Number of prepared statements in the local cache.
-    pub fn len(&self) -> usize {
+    pub fn len_local(&self) -> usize {
         self.local.len()
     }
 
     /// Is the local cache empty?
     pub fn is_empty(&self) -> bool {
-        self.len() == 0
+        self.len_local() == 0
     }
 
     /// Remove prepared statement from local cache.
