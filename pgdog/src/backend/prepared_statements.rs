@@ -1,5 +1,6 @@
+use lru::LruCache;
 use std::{
-    collections::{HashSet, VecDeque},
+    collections::{BTreeSet, HashSet, VecDeque},
     sync::Arc,
 };
 
@@ -26,6 +27,18 @@ pub enum HandleResult {
     Prepend(ProtocolMessage),
 }
 
+#[derive(Debug, PartialEq, PartialOrd, Eq)]
+struct Lru {
+    count: usize,
+    name: String,
+}
+
+impl Ord for Lru {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.count.cmp(&other.count)
+    }
+}
+
 /// Server-specific prepared statements.
 ///
 /// The global cache has names and Parse messages,
@@ -34,7 +47,7 @@ pub enum HandleResult {
 #[derive(Debug)]
 pub struct PreparedStatements {
     global_cache: Arc<Mutex<GlobalCache>>,
-    local_cache: HashSet<String>,
+    local_cache: LruCache<String, ()>,
     state: ProtocolState,
     // Prepared statements being prepared now on the connection.
     parses: VecDeque<String>,
@@ -53,7 +66,7 @@ impl PreparedStatements {
     pub fn new() -> Self {
         Self {
             global_cache: frontend::PreparedStatements::global(),
-            local_cache: HashSet::new(),
+            local_cache: LruCache::new(500.try_into().unwrap()),
             state: ProtocolState::default(),
             parses: VecDeque::new(),
             describes: VecDeque::new(),
@@ -250,13 +263,19 @@ impl PreparedStatements {
     }
 
     /// The server has prepared this statement already.
-    pub fn contains(&self, name: &str) -> bool {
-        self.local_cache.contains(name)
+    pub fn contains(&mut self, name: &str) -> bool {
+        let exists = self.local_cache.contains(name);
+
+        if exists {
+            self.local_cache.promote(name);
+        }
+
+        exists
     }
 
     /// Indicate this statement is prepared on the connection.
     pub fn prepared(&mut self, name: &str) {
-        self.local_cache.insert(name.to_owned());
+        self.local_cache.push(name.to_owned(), ());
     }
 
     /// Get the Parse message stored in the global prepared statements
@@ -284,7 +303,7 @@ impl PreparedStatements {
     /// This should only be done when a statement has been closed,
     /// or failed to parse.
     pub(crate) fn remove(&mut self, name: &str) -> bool {
-        self.local_cache.remove(name)
+        self.local_cache.pop(name).is_some()
     }
 
     /// Indicate all prepared statements have been removed

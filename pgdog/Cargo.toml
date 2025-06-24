@@ -55,6 +55,7 @@ http-body-util = "0.1"
 hyper-util = { version = "0.1", features = ["full"] }
 socket2 = "0.5.9"
 sha1 = "0.10"
+lru = "0.14"
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 tikv-jemallocator = "0.6"

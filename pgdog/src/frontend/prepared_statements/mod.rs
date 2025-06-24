@@ -85,7 +85,9 @@ impl PreparedStatements {
 
     /// Remove prepared statement from local cache.
     pub fn close(&mut self, name: &str) {
-        self.local.remove(name);
+        if let Some(global_name) = self.local.remove(name) {
+            self.global.lock().close(&global_name);
+        }
     }
 }
 

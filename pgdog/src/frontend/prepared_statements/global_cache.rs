@@ -19,6 +19,14 @@ impl Statement {
     pub fn query(&self) -> &str {
         self.parse.query()
     }
+
+    fn cache_key(&self) -> CacheKey {
+        CacheKey {
+            query: self.parse.query_ref(),
+            data_types: self.parse.data_types_ref(),
+            version: 0,
+        }
+    }
 }
 
 /// Prepared statements cache key.
@@ -35,6 +43,12 @@ struct CacheKey {
     version: usize,
 }
 
+#[derive(Debug, Copy, Clone)]
+struct CachedStmt {
+    counter: usize,
+    used: usize,
+}
+
 /// Global prepared statements cache.
 ///
 /// The cache contains two mappings:
@@ -48,7 +62,7 @@ struct CacheKey {
 ///
 #[derive(Default, Debug, Clone)]
 pub struct GlobalCache {
-    statements: HashMap<CacheKey, usize>,
+    statements: HashMap<CacheKey, CachedStmt>,
     names: HashMap<String, Statement>,
     counter: usize,
     versions: usize,
@@ -67,10 +81,17 @@ impl GlobalCache {
             version: 0,
         };
         match self.statements.entry(parse_key) {
-            Entry::Occupied(entry) => (false, global_name(*entry.get())),
+            Entry::Occupied(entry) => {
+                let mut entry = *entry.get();
+                entry.used += 1;
+                (false, global_name(entry.counter))
+            }
             Entry::Vacant(entry) => {
                 self.counter += 1;
-                entry.insert(self.counter);
+                entry.insert(CachedStmt {
+                    counter: self.counter,
+                    used: 1,
+                });
                 let name = global_name(self.counter);
                 let parse = parse.rename(&name);
                 self.names.insert(
@@ -97,7 +118,13 @@ impl GlobalCache {
             version: self.versions,
         };
 
-        self.statements.insert(key, self.counter);
+        self.statements.insert(
+            key,
+            CachedStmt {
+                counter: self.counter,
+                used: 1,
+            },
+        );
         let name = global_name(self.counter);
         let parse = parse.rename(&name);
         self.names.insert(
@@ -153,6 +180,29 @@ impl GlobalCache {
     /// True if the local cache is empty.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    /// Close prepared statement.
+    pub fn close(&mut self, name: &str) {
+        let used = if let Some(stmt) = self.names.get(name) {
+            let used = if let Some(stmt) = self.statements.get(&stmt.cache_key()) {
+                stmt.used.saturating_sub(1) > 0
+            } else {
+                false
+            };
+
+            if !used {
+                self.statements.remove(&stmt.cache_key());
+            }
+
+            used
+        } else {
+            false
+        };
+
+        if !used {
+            self.names.remove(name);
+        }
     }
 
     pub fn names(&self) -> &HashMap<String, Statement> {
