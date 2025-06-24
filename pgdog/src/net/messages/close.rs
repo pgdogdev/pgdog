@@ -1,60 +1,65 @@
 //! Close (F) message.
-use crate::net::c_string_buf;
+use std::str::from_utf8;
+use std::str::from_utf8_unchecked;
 
 use super::code;
 use super::prelude::*;
 
 #[derive(Debug, Clone)]
 pub struct Close {
-    pub kind: char,
-    pub name: String,
+    payload: Bytes,
 }
 
 impl Close {
     pub fn named(name: &str) -> Self {
+        let mut payload = Payload::named('C');
+        payload.put_u8(b'S');
+        payload.put_string(name);
         Self {
-            kind: 'S',
-            name: name.to_owned(),
+            payload: payload.freeze(),
         }
     }
 
     pub fn portal(name: &str) -> Self {
+        let mut payload = Payload::named('C');
+        payload.put_u8(b'P');
+        payload.put_string(name);
         Self {
-            kind: 'P',
-            name: name.to_owned(),
+            payload: payload.freeze(),
         }
     }
 
     pub fn anonymous(&self) -> bool {
-        self.name.is_empty() || self.kind != 'S'
+        self.name().is_empty() || self.kind() != 'S'
+    }
+
+    pub fn name(&self) -> &str {
+        // SAFETY: Name is checked for utf-8 in Bytes::from_bytes
+        unsafe { from_utf8_unchecked(&self.payload[6..self.payload.len() - 1]) }
+    }
+
+    pub fn kind(&self) -> char {
+        self.payload[5] as char
     }
 
     pub fn len(&self) -> usize {
-        self.name.len() + 1 // NULL
-        + 4 // len
-        + 1 // code
-        + 1 // kind
+        self.payload.len()
     }
 }
 
 impl FromBytes for Close {
     fn from_bytes(mut bytes: Bytes) -> Result<Self, Error> {
+        let original = bytes.clone();
         code!(bytes, 'C');
-        let _len = bytes.get_i32();
-        let kind = bytes.get_u8() as char;
-        let name = c_string_buf(&mut bytes);
+        from_utf8(&original[6..original.len() - 1])?;
 
-        Ok(Self { kind, name })
+        Ok(Self { payload: original })
     }
 }
 
 impl ToBytes for Close {
     fn to_bytes(&self) -> Result<Bytes, Error> {
-        let mut payload = Payload::named(self.code());
-        payload.put_u8(self.kind as u8);
-        payload.put_string(&self.name);
-
-        Ok(payload.freeze())
+        Ok(self.payload.clone())
     }
 }
 
