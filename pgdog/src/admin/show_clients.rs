@@ -79,6 +79,9 @@ impl Command for ShowClients {
                 .clone()
                 .add("user", user)
                 .add("database", client.paramters.get_default("database", user))
+                .add("addr", client.addr.ip().to_string())
+                .add("port", client.addr.port().to_string())
+                .add("state", client.stats.state.to_string())
                 .add(
                     "replication",
                     if client.paramters.get("replication").is_some() {
@@ -87,9 +90,6 @@ impl Command for ShowClients {
                         "none"
                     },
                 )
-                .add("state", client.stats.state.to_string())
-                .add("addr", client.addr.ip().to_string())
-                .add("port", client.addr.port().to_string())
                 .add("connect_time", format_time(client.connected_at))
                 .add(
                     "last_request",
