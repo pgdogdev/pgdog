@@ -89,6 +89,19 @@ impl PreparedStatements {
             self.global.lock().close(&global_name);
         }
     }
+
+    /// Close all prepared statements on this client.
+    pub fn close_all(&mut self) {
+        if !self.local.is_empty() {
+            let mut global = self.global.lock();
+
+            for global_name in self.local.values() {
+                global.close(global_name);
+            }
+
+            self.local.clear();
+        }
+    }
 }
 
 #[cfg(test)]

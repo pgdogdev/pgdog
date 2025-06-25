@@ -234,6 +234,10 @@ impl Server {
     pub async fn send_one(&mut self, message: &ProtocolMessage) -> Result<(), Error> {
         self.stats.state(State::Active);
 
+        if let Some(close) = self.prepared_statements.check_capacity(message) {
+            self.stream().send(&close).await?;
+        }
+
         let result = self.prepared_statements.handle(message)?;
 
         let queue = match result {

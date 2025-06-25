@@ -1,7 +1,8 @@
-use lru::LruCache;
+use rand::{thread_rng, Rng};
 use std::{
-    collections::{BTreeSet, HashSet, VecDeque},
+    collections::{HashSet, VecDeque},
     sync::Arc,
+    usize,
 };
 
 use parking_lot::Mutex;
@@ -10,7 +11,7 @@ use crate::{
     frontend::{self, prepared_statements::GlobalCache},
     net::{
         messages::{parse::Parse, RowDescription},
-        CloseComplete, FromBytes, Message, ParseComplete, Protocol, ToBytes,
+        Close, CloseComplete, FromBytes, Message, ParseComplete, Protocol, ToBytes,
     },
 };
 
@@ -27,18 +28,6 @@ pub enum HandleResult {
     Prepend(ProtocolMessage),
 }
 
-#[derive(Debug, PartialEq, PartialOrd, Eq)]
-struct Lru {
-    count: usize,
-    name: String,
-}
-
-impl Ord for Lru {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.count.cmp(&other.count)
-    }
-}
-
 /// Server-specific prepared statements.
 ///
 /// The global cache has names and Parse messages,
@@ -47,12 +36,13 @@ impl Ord for Lru {
 #[derive(Debug)]
 pub struct PreparedStatements {
     global_cache: Arc<Mutex<GlobalCache>>,
-    local_cache: LruCache<String, ()>,
+    local_cache: HashSet<String>,
     state: ProtocolState,
     // Prepared statements being prepared now on the connection.
     parses: VecDeque<String>,
     // Describes being executed now on the connection.
     describes: VecDeque<String>,
+    capacity: usize,
 }
 
 impl Default for PreparedStatements {
@@ -66,11 +56,16 @@ impl PreparedStatements {
     pub fn new() -> Self {
         Self {
             global_cache: frontend::PreparedStatements::global(),
-            local_cache: LruCache::new(500.try_into().unwrap()),
+            local_cache: HashSet::new(),
             state: ProtocolState::default(),
             parses: VecDeque::new(),
             describes: VecDeque::new(),
+            capacity: usize::MAX,
         }
+    }
+
+    pub fn update_capacity(&mut self, capacity: usize) {
+        self.capacity = capacity;
     }
 
     /// Handle extended protocol message.
@@ -264,18 +259,12 @@ impl PreparedStatements {
 
     /// The server has prepared this statement already.
     pub fn contains(&mut self, name: &str) -> bool {
-        let exists = self.local_cache.contains(name);
-
-        if exists {
-            self.local_cache.promote(name);
-        }
-
-        exists
+        self.local_cache.contains(name)
     }
 
     /// Indicate this statement is prepared on the connection.
     pub fn prepared(&mut self, name: &str) {
-        self.local_cache.push(name.to_owned(), ());
+        self.local_cache.insert(name.to_owned());
     }
 
     /// Get the Parse message stored in the global prepared statements
@@ -303,7 +292,7 @@ impl PreparedStatements {
     /// This should only be done when a statement has been closed,
     /// or failed to parse.
     pub(crate) fn remove(&mut self, name: &str) -> bool {
-        self.local_cache.pop(name).is_some()
+        self.local_cache.remove(name)
     }
 
     /// Indicate all prepared statements have been removed
@@ -330,5 +319,32 @@ impl PreparedStatements {
     /// True if the local (connection) prepared statement cache is empty.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    pub fn check_capacity(&mut self, message: &ProtocolMessage) -> Option<Close> {
+        match message {
+            ProtocolMessage::Parse(parse) => {
+                if self.local_cache.len() < self.capacity {
+                    return None;
+                }
+
+                let name = parse.name();
+                let random = thread_rng().gen_range(0..self.local_cache.len());
+
+                let candidate = self.local_cache.iter().skip(random).next().cloned();
+
+                if let Some(candidate) = candidate {
+                    if candidate != parse.name() {
+                        self.local_cache.remove(&candidate);
+                        self.state.add_ignore('3', name);
+                        return Some(Close::named(name));
+                    }
+                }
+            }
+
+            _ => (),
+        }
+
+        None
     }
 }
