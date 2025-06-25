@@ -7,6 +7,7 @@ use tokio::{spawn, time::Instant};
 use tracing::{debug, error};
 
 use crate::backend::Server;
+use crate::state::State;
 
 use super::Error;
 use super::{cleanup::Cleanup, Pool};
@@ -128,6 +129,14 @@ impl Guard {
                 }
                 Ok(_) => {
                     server.cleaned();
+                }
+            }
+
+            match server.close_many(cleanup.close()).await {
+                Ok(_) => (),
+                Err(err) => {
+                    server.stats_mut().state(State::Error);
+                    error!("server close error: {} [{}]", err, server.addr());
                 }
             }
         }

@@ -56,7 +56,7 @@ hyper-util = { version = "0.1", features = ["full"] }
 socket2 = "0.5.9"
 sha1 = "0.10"
 lru = "0.14"
-indexman = "2.9"
+indexmap = "2.9"
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 tikv-jemallocator = "0.6"

@@ -1,9 +1,5 @@
 use rand::{thread_rng, Rng};
-use std::{
-    collections::{HashSet, VecDeque},
-    sync::Arc,
-    usize,
-};
+use std::{collections::VecDeque, sync::Arc, usize};
 
 use indexmap::IndexSet;
 use parking_lot::Mutex;
@@ -27,10 +23,6 @@ pub enum HandleResult {
     Forward,
     Drop,
     Prepend(ProtocolMessage),
-}
-
-struct LocalCache {
-    unique: HashSet<String>,
 }
 
 /// Server-specific prepared statements.
@@ -61,7 +53,7 @@ impl PreparedStatements {
     pub fn new() -> Self {
         Self {
             global_cache: frontend::PreparedStatements::global(),
-            local_cache: HashSet::new(),
+            local_cache: IndexSet::new(),
             state: ProtocolState::default(),
             parses: VecDeque::new(),
             describes: VecDeque::new(),
@@ -69,8 +61,14 @@ impl PreparedStatements {
         }
     }
 
-    pub fn update_capacity(&mut self, capacity: usize) {
-        self.capacity = capacity;
+    /// Set maximum prepared statements capacity.
+    pub fn set_capacity(&mut self, capacity: usize) {
+        self.capacity = std::cmp::max(capacity, 2);
+    }
+
+    /// Get prepared statements capacity.
+    pub fn capacity(&self) -> usize {
+        self.capacity
     }
 
     /// Handle extended protocol message.
@@ -297,7 +295,7 @@ impl PreparedStatements {
     /// This should only be done when a statement has been closed,
     /// or failed to parse.
     pub(crate) fn remove(&mut self, name: &str) -> bool {
-        self.local_cache.remove(name)
+        self.local_cache.swap_remove(name)
     }
 
     /// Indicate all prepared statements have been removed
@@ -326,35 +324,18 @@ impl PreparedStatements {
         self.len() == 0
     }
 
-    pub fn check_capacity(&mut self, message: &ProtocolMessage) -> Option<Close> {
-        match message {
-            ProtocolMessage::Parse(parse) => {
-                if self.local_cache.len() < self.capacity {
-                    return None;
-                }
+    /// Ensure capacity of prepared statements is respected.
+    pub fn ensure_capacity(&mut self) -> Vec<Close> {
+        let mut close = vec![];
+        while self.local_cache.len() > self.capacity {
+            let random = thread_rng().gen_range(0..self.local_cache.len());
+            let candidate = self.local_cache.swap_remove_index(random);
 
-                loop {
-                    let name = parse.name();
-                    let random = thread_rng().gen_range(0..self.local_cache.len());
-
-                    let candidate = self.local_cache.iter().skip(random).next().cloned();
-
-                    if let Some(candidate) = candidate {
-                        if candidate != parse.name() {
-                            self.local_cache.remove(&candidate);
-                            self.state.add_ignore('3', name);
-                            return Some(Close::named(name));
-                        } else if self.local_cache.len() == 1 {
-                            // Edge case when there is only one statement in the cache & the limit is 1.
-                            return None;
-                        }
-                    }
-                }
+            if let Some(name) = candidate {
+                close.push(Close::named(&name));
             }
-
-            _ => (),
         }
 
-        None
+        close
     }
 }

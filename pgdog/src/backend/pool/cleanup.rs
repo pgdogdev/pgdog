@@ -1,7 +1,7 @@
 //! Cleanup queries for servers altered by client behavior.
 use once_cell::sync::Lazy;
 
-use crate::net::Query;
+use crate::net::{Close, Query};
 
 use super::{super::Server, Guard};
 
@@ -24,6 +24,7 @@ pub struct Cleanup {
     reset: bool,
     dirty: bool,
     deallocate: bool,
+    close: Vec<Close>,
 }
 
 impl Default for Cleanup {
@@ -33,6 +34,7 @@ impl Default for Cleanup {
             reset: false,
             dirty: false,
             deallocate: false,
+            close: vec![],
         }
     }
 }
@@ -53,8 +55,8 @@ impl std::fmt::Display for Cleanup {
 
 impl Cleanup {
     /// New cleanup operation.
-    pub fn new(guard: &Guard, server: &Server) -> Self {
-        if guard.reset {
+    pub fn new(guard: &mut Guard, server: &Server) -> Self {
+        let mut clean = if guard.reset {
             Self::all()
         } else if server.dirty() {
             Self::parameters()
@@ -62,7 +64,11 @@ impl Cleanup {
             Self::prepared_statements()
         } else {
             Self::none()
-        }
+        };
+
+        clean.close = guard.ensure_prepared_capacity();
+
+        clean
     }
 
     /// Cleanup prepared statements.
@@ -90,6 +96,7 @@ impl Cleanup {
             dirty: true,
             deallocate: true,
             queries: &*ALL,
+            close: vec![],
         }
     }
 
@@ -100,12 +107,17 @@ impl Cleanup {
 
     /// Cleanup needed?
     pub fn needed(&self) -> bool {
-        !self.queries.is_empty()
+        !self.queries.is_empty() || !self.close.is_empty()
     }
 
     /// Get queries to execute on the server to perform cleanup.
     pub fn queries(&self) -> &[Query] {
         self.queries
+    }
+
+    /// Prepared statemens to close.
+    pub fn close(&self) -> &[Close] {
+        &self.close
     }
 
     pub fn is_reset_params(&self) -> bool {

@@ -23,7 +23,7 @@ use crate::{
             hello::SslReply, Authentication, BackendKeyData, ErrorResponse, FromBytes, Message,
             ParameterStatus, Password, Protocol, Query, ReadyForQuery, Startup, Terminate, ToBytes,
         },
-        Parameter, Sync,
+        Close, Parameter, Sync,
     },
 };
 use crate::{
@@ -233,10 +233,6 @@ impl Server {
     /// accelerating bulk transfers.
     pub async fn send_one(&mut self, message: &ProtocolMessage) -> Result<(), Error> {
         self.stats.state(State::Active);
-
-        if let Some(close) = self.prepared_statements.check_capacity(message) {
-            self.stream().send(&close).await?;
-        }
 
         let result = self.prepared_statements.handle(message)?;
 
@@ -618,6 +614,45 @@ impl Server {
         }
 
         debug!("prepared statements synchronized [{}]", self.addr());
+
+        Ok(())
+    }
+
+    /// Close any prepared statements that exceed cache capacity.
+    pub fn ensure_prepared_capacity(&mut self) -> Vec<Close> {
+        self.prepared_statements.ensure_capacity()
+    }
+
+    /// Close multiple prepared statements.
+    pub async fn close_many(&mut self, close: &[Close]) -> Result<(), Error> {
+        if close.is_empty() {
+            return Ok(());
+        }
+
+        let mut buf = vec![];
+        for close in close {
+            buf.push(close.message()?);
+        }
+
+        buf.push(Sync.message()?);
+
+        self.stream().send_many(&buf).await?;
+
+        for _ in 0..close.len() + 1 {
+            let response = self.stream().read().await?;
+            match response.code() {
+                '3' => (),
+                'E' => {
+                    return Err(Error::PreparedStatementError(Box::new(
+                        ErrorResponse::from_bytes(response.to_bytes()?)?,
+                    )));
+                }
+                'Z' => break,
+                c => {
+                    return Err(Error::UnexpectedMessage(c));
+                }
+            };
+        }
 
         Ok(())
     }
@@ -1774,5 +1809,65 @@ pub mod test {
         }
 
         assert!(server.done());
+    }
+
+    #[tokio::test]
+    async fn test_close_many() {
+        let mut server = test_server().await;
+
+        for _ in 0..5 {
+            server
+                .close_many(&[Close::named("test"), Close::named("test2")])
+                .await
+                .unwrap();
+
+            let in_sync = server.fetch_all::<i64>("SELECT 1::bigint").await.unwrap();
+            assert_eq!(in_sync[0], 1);
+
+            server.prepared_statements.set_capacity(1);
+            assert_eq!(server.prepared_statements.capacity(), 2); // minimum is 2.
+
+            server.prepared_statements.set_capacity(3);
+            assert_eq!(server.prepared_statements.capacity(), 3);
+
+            server
+                .send(
+                    &vec![
+                        Parse::named("__pgdog_1", "SELECT $1::bigint").into(),
+                        Parse::named("__pgdog_2", "SELECT 123").into(),
+                        Parse::named("__pgdog_3", "SELECT 1234").into(),
+                        Parse::named("__pgdog_4", "SELECT 12345").into(),
+                        Flush.into(),
+                    ]
+                    .into(),
+                )
+                .await
+                .unwrap();
+
+            for _ in 0..4 {
+                let msg = server.read().await.unwrap();
+                assert_eq!(msg.code(), '1');
+            }
+
+            assert_eq!(server.prepared_statements.len(), 4);
+            let extra = server.prepared_statements.ensure_capacity();
+            let name = extra[0].name();
+            assert!(name.starts_with("__pgdog_"));
+
+            assert_eq!(extra.len(), 1);
+            assert!(server.prepared_statements.ensure_capacity().is_empty());
+
+            server.close_many(&extra).await.unwrap();
+
+            server
+                .send(&vec![Parse::named(name, "SELECT $1::bigint").into(), Sync.into()].into())
+                .await
+                .unwrap();
+
+            for c in ['1', 'Z'] {
+                let msg = server.read().await.unwrap();
+                assert_eq!(msg.code(), c);
+            }
+        }
     }
 }
