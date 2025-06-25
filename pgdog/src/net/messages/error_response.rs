@@ -1,6 +1,8 @@
 //! ErrorResponse (B) message.
 use std::fmt::Display;
 
+use std::time::Duration;
+
 use crate::net::c_string_buf;
 
 use super::prelude::*;
@@ -42,6 +44,21 @@ impl ErrorResponse {
                 user, database
             ),
             detail: None,
+            context: None,
+            file: None,
+            routine: None,
+        }
+    }
+
+    pub fn client_idle_timeout(duration: Duration) -> ErrorResponse {
+        ErrorResponse {
+            severity: "FATAL".into(),
+            code: "57P05".into(),
+            message: "disconnecting idle client".into(),
+            detail: Some(format!(
+                "client_idle_timeout of {}ms expired",
+                duration.as_millis()
+            )),
             context: None,
             file: None,
             routine: None,

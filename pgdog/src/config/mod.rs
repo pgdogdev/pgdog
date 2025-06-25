@@ -351,6 +351,9 @@ pub struct General {
     /// Idle timeout.
     #[serde(default = "General::idle_timeout")]
     pub idle_timeout: u64,
+    /// Client idle timeout.
+    #[serde(default = "General::default_client_idle_timeout")]
+    pub client_idle_timeout: u64,
     /// Mirror queue size.
     #[serde(default = "General::mirror_queue")]
     pub mirror_queue: usize,
@@ -449,6 +452,7 @@ impl Default for General {
             checkout_timeout: Self::checkout_timeout(),
             dry_run: bool::default(),
             idle_timeout: Self::idle_timeout(),
+            client_idle_timeout: Self::default_client_idle_timeout(),
             mirror_queue: Self::mirror_queue(),
             auth_type: AuthType::default(),
         }
@@ -500,12 +504,20 @@ impl General {
         Duration::from_secs(60).as_millis() as u64
     }
 
+    fn default_client_idle_timeout() -> u64 {
+        Duration::MAX.as_millis() as u64
+    }
+
     fn default_query_timeout() -> u64 {
         Duration::MAX.as_millis() as u64
     }
 
     pub(crate) fn query_timeout(&self) -> Duration {
         Duration::from_millis(self.query_timeout)
+    }
+
+    pub(crate) fn client_idle_timeout(&self) -> Duration {
+        Duration::from_millis(self.client_idle_timeout)
     }
 
     fn load_balancing_strategy() -> LoadBalancingStrategy {

@@ -9,6 +9,7 @@ openmetrics_port = 9090
 openmetrics_namespace = "pgdog."
 idle_healthcheck_delay = 2342343243
 read_write_strategy = "aggressive"
+# client_idle_timeout = 5_000
 
 #
 # Admin database password.

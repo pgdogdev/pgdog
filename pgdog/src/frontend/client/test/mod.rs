@@ -1,6 +1,9 @@
+use std::time::{Duration, Instant};
+
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt, BufStream},
     net::{TcpListener, TcpStream},
+    time::timeout,
 };
 
 use bytes::{Buf, BufMut, BytesMut};
@@ -8,6 +11,7 @@ use bytes::{Buf, BufMut, BytesMut};
 use crate::{
     backend::databases::databases,
     config::{
+        config, set,
         test::{load_test, load_test_replicas},
         Role,
     },
@@ -16,9 +20,9 @@ use crate::{
         Client, Command,
     },
     net::{
-        bind::Parameter, Bind, Close, CommandComplete, DataRow, Describe, Execute, Field, Flush,
-        Format, FromBytes, Parse, Protocol, Query, ReadyForQuery, RowDescription, Sync, Terminate,
-        ToBytes,
+        bind::Parameter, Bind, Close, CommandComplete, DataRow, Describe, ErrorResponse, Execute,
+        Field, Flush, Format, FromBytes, Parse, Protocol, Query, ReadyForQuery, RowDescription,
+        Sync, Terminate, ToBytes,
     },
     state::State,
 };
@@ -119,7 +123,7 @@ async fn test_test_client() {
 
     conn.write_all(&query).await.unwrap();
 
-    client.buffer().await.unwrap();
+    client.buffer(&State::Idle).await.unwrap();
     assert_eq!(client.request_buffer.total_message_len(), query.len());
 
     let disconnect = client.client_messages(inner.get()).await.unwrap();
@@ -393,7 +397,7 @@ async fn test_abrupt_disconnect() {
 
     drop(conn);
 
-    let event = client.buffer().await.unwrap();
+    let event = client.buffer(&State::Idle).await.unwrap();
     assert_eq!(event, BufferEvent::DisconnectAbrupt);
     assert!(client.request_buffer.is_empty());
 
@@ -415,7 +419,7 @@ async fn test_lock_session() {
     .unwrap();
 
     for _ in 0..2 {
-        client.buffer().await.unwrap();
+        client.buffer(&State::Idle).await.unwrap();
         client.client_messages(inner.get()).await.unwrap();
     }
 
@@ -441,7 +445,7 @@ async fn test_transaction_state() {
         .await
         .unwrap();
 
-    client.buffer().await.unwrap();
+    client.buffer(&State::Idle).await.unwrap();
     client.client_messages(inner.get()).await.unwrap();
 
     read!(conn, ['C', 'Z']);
@@ -458,7 +462,7 @@ async fn test_transaction_state() {
     .await
     .unwrap();
 
-    client.buffer().await.unwrap();
+    client.buffer(&State::Idle).await.unwrap();
     client.client_messages(inner.get()).await.unwrap();
 
     assert!(inner.router.routed());
@@ -492,7 +496,7 @@ async fn test_transaction_state() {
     .unwrap();
 
     assert!(!inner.router.routed());
-    client.buffer().await.unwrap();
+    client.buffer(&State::Idle).await.unwrap();
     client.client_messages(inner.get()).await.unwrap();
     assert!(inner.router.routed());
 
@@ -514,7 +518,7 @@ async fn test_transaction_state() {
         .await
         .unwrap();
 
-    client.buffer().await.unwrap();
+    client.buffer(&State::Idle).await.unwrap();
     client.client_messages(inner.get()).await.unwrap();
 
     for c in ['C', 'Z'] {
@@ -542,10 +546,10 @@ async fn test_close_parse() {
         .await
         .unwrap();
 
-    client.buffer().await.unwrap();
+    client.buffer(&State::Idle).await.unwrap();
     client.client_messages(inner.get()).await.unwrap();
 
-    client.buffer().await.unwrap();
+    client.buffer(&State::Idle).await.unwrap();
     client.client_messages(inner.get()).await.unwrap();
 
     for _ in ['T', 'D', 'C', 'Z'] {
@@ -563,7 +567,7 @@ async fn test_close_parse() {
     .await
     .unwrap();
 
-    client.buffer().await.unwrap();
+    client.buffer(&State::Idle).await.unwrap();
     client.client_messages(inner.get()).await.unwrap();
 
     for _ in ['3', '1'] {
@@ -572,4 +576,29 @@ async fn test_close_parse() {
     }
 
     read!(conn, ['3', '1']);
+}
+
+#[tokio::test]
+async fn test_client_idle_timeout() {
+    let (mut conn, mut client, _inner) = new_client!(false);
+
+    let mut config = (*config()).clone();
+    config.config.general.client_idle_timeout = 25;
+    set(config).unwrap();
+
+    let start = Instant::now();
+    let res = client.buffer(&State::Idle).await.unwrap();
+    assert_eq!(res, BufferEvent::DisconnectAbrupt);
+
+    let err = read_one!(conn);
+    assert!(start.elapsed() >= Duration::from_millis(25));
+    let err = ErrorResponse::from_bytes(err.freeze()).unwrap();
+    assert_eq!(err.code, "57P05");
+
+    assert!(timeout(
+        Duration::from_millis(50),
+        client.buffer(&State::IdleInTransaction)
+    )
+    .await
+    .is_err());
 }
