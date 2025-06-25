@@ -79,6 +79,7 @@ mod test {
     #[tokio::test]
     async fn test_close_prepared() {
         let mut prepared = PreparedStatements::default();
+        prepared.enforcing_capacity = true;
         let _renamed = prepared.insert(Parse::named("test", "SELECT $1"));
 
         assert_eq!(prepared.local.len(), 1);
