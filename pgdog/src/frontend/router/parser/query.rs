@@ -586,9 +586,14 @@ impl QueryParser {
                         shards.insert(ctx.apply()?);
                     }
 
-                    Key::Parameter(param) => {
+                    Key::Parameter { pos, array } => {
+                        // Don't hash individual values yet.
+                        // The odds are high this will go to all shards anyway.
+                        if array {
+                            return Ok(HashSet::from([Shard::All]));
+                        }
                         if let Some(params) = params {
-                            if let Some(param) = params.parameter(param)? {
+                            if let Some(param) = params.parameter(pos)? {
                                 let value = ShardingValue::from_param(&param, table.data_type)?;
                                 let ctx = ContextBuilder::new(table)
                                     .value(value)

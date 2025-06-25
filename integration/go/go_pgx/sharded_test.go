@@ -42,5 +42,23 @@ func TestShardedVarchar(t *testing.T) {
 		rows.Close()
 		assert.Equal(t, 1, len)
 	}
+}
 
+func TestShardedVarcharArray(t *testing.T) {
+	conn, err := pgx.Connect(context.Background(), "postgres://pgdog:pgdog@127.0.0.1:6432/pgdog_sharded")
+	assert.NoError(t, err)
+	defer conn.Close(context.Background())
+
+	conn.Exec(context.Background(), "TRUNCATE TABLE sharded_varchar")
+	values := [7]string{"one", "two", "three", "four", "five", "six", "seven"}
+
+	for _, value := range values {
+		conn.Exec(context.Background(), "INSERT INTO sharded_varchar (id_varchar) VALUES ($1)", value)
+	}
+
+	for range 100 {
+		rows, err := conn.Query(context.Background(), "SELECT * FROM sharded_varchar WHERE id_varchar = ANY($1)", [5]string{"one", "two", "three", "four", "five"})
+		assert.NoError(t, err)
+		rows.Close()
+	}
 }

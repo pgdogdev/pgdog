@@ -4,6 +4,7 @@ use super::{bind::Format, data_row::Data, Error, ToDataRowColumn};
 use ::uuid::Uuid;
 use bytes::Bytes;
 
+pub mod array;
 pub mod bigint;
 pub mod integer;
 pub mod interval;

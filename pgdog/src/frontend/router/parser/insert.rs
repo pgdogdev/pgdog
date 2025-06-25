@@ -72,6 +72,7 @@ impl<'a> Insert<'a> {
         if let Some(key) = key {
             if let Some(bind) = bind {
                 if let Ok(Some(param)) = bind.parameter(key.position) {
+                    // Arrays not supported as sharding keys at the moment.
                     let value = ShardingValue::from_param(&param, key.table.data_type)?;
                     let ctx = ContextBuilder::new(key.table)
                         .value(value)
