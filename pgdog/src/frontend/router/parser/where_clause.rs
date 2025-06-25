@@ -20,8 +20,8 @@ pub struct Column<'a> {
 #[derive(Debug)]
 enum Output<'a> {
     Parameter { pos: i32, array: bool },
-    Value(String),
-    Int(i32),
+    Value { value: String, array: bool },
+    Int { value: i32, array: bool },
     Column(Column<'a>),
     NullCheck(Column<'a>),
     Filter(Vec<Output<'a>>, Vec<Output<'a>>),
@@ -69,12 +69,18 @@ impl<'a> WhereClause<'a> {
 
     fn get_key(output: &Output) -> Option<Key> {
         match output {
-            Output::Int(value) => Some(Key::Constant(value.to_string())),
+            Output::Int { value, array } => Some(Key::Constant {
+                value: value.to_string(),
+                array: *array,
+            }),
             Output::Parameter { pos, array } => Some(Key::Parameter {
                 pos: *pos as usize - 1,
                 array: *array,
             }),
-            Output::Value(val) => Some(Key::Constant(val.to_string())),
+            Output::Value { value, array } => Some(Key::Constant {
+                value: value.to_string(),
+                array: *array,
+            }),
             _ => None,
         }
     }
@@ -197,9 +203,18 @@ impl<'a> WhereClause<'a> {
             Some(NodeEnum::AConst(ref value)) => {
                 if let Some(ref val) = value.val {
                     match val {
-                        Val::Ival(int) => keys.push(Output::Int(int.ival)),
-                        Val::Sval(sval) => keys.push(Output::Value(sval.sval.clone())),
-                        Val::Fval(fval) => keys.push(Output::Value(fval.fval.clone())),
+                        Val::Ival(int) => keys.push(Output::Int {
+                            value: int.ival,
+                            array,
+                        }),
+                        Val::Sval(sval) => keys.push(Output::Value {
+                            value: sval.sval.clone(),
+                            array,
+                        }),
+                        Val::Fval(fval) => keys.push(Output::Value {
+                            value: fval.fval.clone(),
+                            array,
+                        }),
                         _ => (),
                     }
                 }
@@ -261,7 +276,13 @@ mod test {
         if let Some(NodeEnum::SelectStmt(stmt)) = stmt.node {
             let where_ = WhereClause::new(Some("sharded"), &stmt.where_clause).unwrap();
             let mut keys = where_.keys(Some("sharded"), "id");
-            assert_eq!(keys.pop().unwrap(), Key::Constant("5".into()));
+            assert_eq!(
+                keys.pop().unwrap(),
+                Key::Constant {
+                    value: "5".into(),
+                    array: false
+                }
+            );
         }
     }
 
@@ -302,6 +323,45 @@ mod test {
             let where_ = WhereClause::new(Some("users"), &stmt.where_clause).unwrap();
             let keys = where_.keys(Some("users"), "tenant_id");
             assert_eq!(keys.len(), 4);
+        } else {
+            panic!("not a select");
+        }
+    }
+
+    #[test]
+    fn test_any() {
+        let query = "SELECT * FROM users WHERE tenant_id = ANY($1)";
+        let ast = parse(query).unwrap();
+        let stmt = ast.protobuf.stmts.first().cloned().unwrap().stmt.unwrap();
+
+        if let Some(NodeEnum::SelectStmt(stmt)) = stmt.node {
+            let where_ = WhereClause::new(Some("users"), &stmt.where_clause).unwrap();
+            let keys = where_.keys(Some("users"), "tenant_id");
+            assert_eq!(
+                keys[0],
+                Key::Parameter {
+                    pos: 0,
+                    array: true
+                }
+            );
+        } else {
+            panic!("not a select");
+        }
+
+        let query = "SELECT * FROM users WHERE tenant_id = ANY('{1, 2, 3}')";
+        let ast = parse(query).unwrap();
+        let stmt = ast.protobuf.stmts.first().cloned().unwrap().stmt.unwrap();
+
+        if let Some(NodeEnum::SelectStmt(stmt)) = stmt.node {
+            let where_ = WhereClause::new(Some("users"), &stmt.where_clause).unwrap();
+            let keys = where_.keys(Some("users"), "tenant_id");
+            assert_eq!(
+                keys[0],
+                Key::Constant {
+                    value: "{1, 2, 3}".to_string(),
+                    array: true
+                },
+            );
         } else {
             panic!("not a select");
         }
