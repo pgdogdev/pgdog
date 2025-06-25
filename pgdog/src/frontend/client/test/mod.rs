@@ -119,7 +119,7 @@ async fn test_test_client() {
 
     conn.write_all(&query).await.unwrap();
 
-    client.buffer().await.unwrap();
+    client.buffer(&State::Idle).await.unwrap();
     assert_eq!(client.request_buffer.total_message_len(), query.len());
 
     let disconnect = client.client_messages(inner.get()).await.unwrap();
@@ -393,7 +393,7 @@ async fn test_abrupt_disconnect() {
 
     drop(conn);
 
-    let event = client.buffer().await.unwrap();
+    let event = client.buffer(&State::Idle).await.unwrap();
     assert_eq!(event, BufferEvent::DisconnectAbrupt);
     assert!(client.request_buffer.is_empty());
 
@@ -415,7 +415,7 @@ async fn test_lock_session() {
     .unwrap();
 
     for _ in 0..2 {
-        client.buffer().await.unwrap();
+        client.buffer(&State::Idle).await.unwrap();
         client.client_messages(inner.get()).await.unwrap();
     }
 
@@ -441,7 +441,7 @@ async fn test_transaction_state() {
         .await
         .unwrap();
 
-    client.buffer().await.unwrap();
+    client.buffer(&State::Idle).await.unwrap();
     client.client_messages(inner.get()).await.unwrap();
 
     read!(conn, ['C', 'Z']);
@@ -458,7 +458,7 @@ async fn test_transaction_state() {
     .await
     .unwrap();
 
-    client.buffer().await.unwrap();
+    client.buffer(&State::Idle).await.unwrap();
     client.client_messages(inner.get()).await.unwrap();
 
     assert!(inner.router.routed());
@@ -492,7 +492,7 @@ async fn test_transaction_state() {
     .unwrap();
 
     assert!(!inner.router.routed());
-    client.buffer().await.unwrap();
+    client.buffer(&State::Idle).await.unwrap();
     client.client_messages(inner.get()).await.unwrap();
     assert!(inner.router.routed());
 
@@ -514,7 +514,7 @@ async fn test_transaction_state() {
         .await
         .unwrap();
 
-    client.buffer().await.unwrap();
+    client.buffer(&State::Idle).await.unwrap();
     client.client_messages(inner.get()).await.unwrap();
 
     for c in ['C', 'Z'] {
@@ -542,10 +542,10 @@ async fn test_close_parse() {
         .await
         .unwrap();
 
-    client.buffer().await.unwrap();
+    client.buffer(&State::Idle).await.unwrap();
     client.client_messages(inner.get()).await.unwrap();
 
-    client.buffer().await.unwrap();
+    client.buffer(&State::Idle).await.unwrap();
     client.client_messages(inner.get()).await.unwrap();
 
     for _ in ['T', 'D', 'C', 'Z'] {
@@ -563,7 +563,7 @@ async fn test_close_parse() {
     .await
     .unwrap();
 
-    client.buffer().await.unwrap();
+    client.buffer(&State::Idle).await.unwrap();
     client.client_messages(inner.get()).await.unwrap();
 
     for _ in ['3', '1'] {

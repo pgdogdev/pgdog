@@ -27,6 +27,7 @@ use crate::net::messages::{
 };
 use crate::net::{parameter::Parameters, Stream};
 use crate::net::{DataRow, EmptyQueryResponse, Field, NoticeResponse, RowDescription};
+use crate::state::State;
 
 pub mod counter;
 pub mod engine;
@@ -291,7 +292,7 @@ impl Client {
                     }
                 }
 
-                buffer = self.buffer() => {
+                buffer = self.buffer(&inner.stats.state) => {
                     let event = buffer?;
                     if !self.request_buffer.is_empty() {
                         let disconnect = self.client_messages(inner.get()).await?;
@@ -603,7 +604,7 @@ impl Client {
     ///
     /// This ensures we don't check out a connection from the pool until the client
     /// sent a complete request.
-    async fn buffer(&mut self) -> Result<BufferEvent, Error> {
+    async fn buffer(&mut self, state: &State) -> Result<BufferEvent, Error> {
         self.request_buffer.clear();
 
         // Only start timer once we receive the first message.
@@ -615,12 +616,22 @@ impl Client {
         self.timeouts = Timeouts::from_config(&config.config.general);
 
         while !self.request_buffer.full() {
-            let message = match self.stream.read_buf(&mut self.stream_buffer).await {
-                Ok(message) => message.stream(self.streaming).frontend(),
-                Err(_) => {
-                    return Ok(BufferEvent::DisconnectAbrupt);
-                }
-            };
+            let idle_timeout = self
+                .timeouts
+                .client_idle_timeout(state, &self.request_buffer);
+
+            let message =
+                match timeout(idle_timeout, self.stream.read_buf(&mut self.stream_buffer)).await {
+                    Err(_) => {
+                        self.stream
+                            .fatal(ErrorResponse::client_idle_timeout(idle_timeout))
+                            .await?;
+                        return Ok(BufferEvent::DisconnectAbrupt);
+                    }
+
+                    Ok(Ok(message)) => message.stream(self.streaming).frontend(),
+                    Ok(Err(_)) => return Ok(BufferEvent::DisconnectAbrupt),
+                };
 
             if timer.is_none() {
                 timer = Some(Instant::now());
