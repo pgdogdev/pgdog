@@ -636,9 +636,15 @@ impl Server {
 
         buf.push(Sync.message()?);
 
+        debug!(
+            "closing {} prepared statements [{}]",
+            close.len(),
+            self.addr()
+        );
+
         self.stream().send_many(&buf).await?;
 
-        for _ in 0..close.len() + 1 {
+        for _ in 0..buf.len() {
             let response = self.stream().read().await?;
             match response.code() {
                 '3' => (),

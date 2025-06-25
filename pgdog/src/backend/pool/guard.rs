@@ -54,7 +54,7 @@ impl Guard {
 
         if let Some(mut server) = server {
             let rollback = server.in_transaction();
-            let cleanup = Cleanup::new(self, &server);
+            let cleanup = Cleanup::new(self, &mut server);
             let reset = cleanup.needed();
             let sync_prepared = server.sync_prepared();
             let needs_drain = server.needs_drain();

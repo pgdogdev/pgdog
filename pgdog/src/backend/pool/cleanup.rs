@@ -55,7 +55,7 @@ impl std::fmt::Display for Cleanup {
 
 impl Cleanup {
     /// New cleanup operation.
-    pub fn new(guard: &mut Guard, server: &Server) -> Self {
+    pub fn new(guard: &Guard, server: &mut Server) -> Self {
         let mut clean = if guard.reset {
             Self::all()
         } else if server.dirty() {
@@ -66,7 +66,7 @@ impl Cleanup {
             Self::none()
         };
 
-        clean.close = guard.ensure_prepared_capacity();
+        clean.close = server.ensure_prepared_capacity();
 
         clean
     }
