@@ -23,6 +23,7 @@ pub struct PreparedStatements {
     pub(super) global: Arc<Mutex<GlobalCache>>,
     pub(super) local: HashMap<String, String>,
     pub(super) enabled: bool,
+    pub(super) enforcing_capacity: bool,
 }
 
 impl Default for PreparedStatements {
@@ -31,6 +32,7 @@ impl Default for PreparedStatements {
             global: Arc::new(Mutex::new(GlobalCache::default())),
             local: HashMap::default(),
             enabled: true,
+            enforcing_capacity: false,
         }
     }
 }
@@ -101,6 +103,11 @@ impl PreparedStatements {
 
             self.local.clear();
         }
+    }
+
+    /// Are we closing prepared statements?
+    pub fn enforcing_capacity(&self) -> bool {
+        self.enforcing_capacity
     }
 }
 

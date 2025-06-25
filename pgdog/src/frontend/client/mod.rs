@@ -612,7 +612,11 @@ impl Client {
 
         // Check config once per request.
         let config = config::config();
+        // Configure prepared statements cache.
         self.prepared_statements.enabled = config.prepared_statements();
+        self.prepared_statements.enforcing_capacity =
+            config.config.general.prepared_statements_limit.is_some()
+                && self.prepared_statements.enabled;
         self.timeouts = Timeouts::from_config(&config.config.general);
 
         while !self.request_buffer.full() {
@@ -729,7 +733,9 @@ impl Client {
 impl Drop for Client {
     fn drop(&mut self) {
         self.comms.disconnect();
-        self.prepared_statements.close_all();
+        if self.prepared_statements.enforcing_capacity() {
+            self.prepared_statements.close_all();
+        }
     }
 }
 

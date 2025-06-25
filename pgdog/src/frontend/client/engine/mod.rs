@@ -46,7 +46,7 @@ impl<'a> Engine<'a> {
             match msg.code() {
                 'C' => {
                     let close = Close::from_bytes(msg.to_bytes()?)?;
-                    if close.is_statement() {
+                    if close.is_statement() && self.prepared_statements.enforcing_capacity() {
                         self.prepared_statements.close(close.name());
                     }
                     if only_close {
