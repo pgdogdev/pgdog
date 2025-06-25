@@ -733,9 +733,7 @@ impl Client {
 impl Drop for Client {
     fn drop(&mut self) {
         self.comms.disconnect();
-        if self.prepared_statements.enforcing_capacity() {
-            self.prepared_statements.close_all();
-        }
+        self.prepared_statements.close_all();
     }
 }
 

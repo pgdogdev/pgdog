@@ -88,26 +88,23 @@ impl PreparedStatements {
     /// Remove prepared statement from local cache.
     pub fn close(&mut self, name: &str) {
         if let Some(global_name) = self.local.remove(name) {
-            self.global.lock().close(&global_name);
+            if self.enforcing_capacity {
+                self.global.lock().close(&global_name);
+            }
         }
     }
 
     /// Close all prepared statements on this client.
     pub fn close_all(&mut self) {
-        if !self.local.is_empty() {
+        if !self.local.is_empty() && self.enforcing_capacity {
             let mut global = self.global.lock();
 
             for global_name in self.local.values() {
                 global.close(global_name);
             }
-
-            self.local.clear();
         }
-    }
 
-    /// Are we closing prepared statements?
-    pub fn enforcing_capacity(&self) -> bool {
-        self.enforcing_capacity
+        self.local.clear();
     }
 }
 
