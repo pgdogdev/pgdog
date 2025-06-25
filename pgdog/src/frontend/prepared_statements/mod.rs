@@ -117,6 +117,7 @@ mod test {
     #[test]
     fn test_maybe_rewrite() {
         let mut statements = PreparedStatements::default();
+        statements.enforcing_capacity = true;
 
         let messages = vec![
             Parse::named("__sqlx_1", "SELECT 1").into(),
