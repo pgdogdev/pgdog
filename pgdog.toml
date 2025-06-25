@@ -88,6 +88,12 @@ column = "customer_id"
 database = "pgdog_sharded"
 data_type = "bigint"
 
+[[sharded_tables]]
+database = "pgdog_sharded"
+name = "sharded_varchar"
+column = "id_varchar"
+data_type = "varchar"
+
 
 #
 # ActiveRecord sends these queries

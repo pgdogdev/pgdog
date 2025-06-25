@@ -75,4 +75,7 @@ pub enum Error {
 
     #[error("only simple protocols supported for rewrites")]
     OnlySimpleForRewrites,
+
+    #[error("array has {0} dimensions, only 1 is supported")]
+    ArrayDimensions(usize),
 }

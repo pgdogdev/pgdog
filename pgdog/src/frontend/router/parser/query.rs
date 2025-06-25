@@ -578,7 +578,12 @@ impl QueryParser {
             let keys = where_clause.keys(table_name, &table.column);
             for key in keys {
                 match key {
-                    Key::Constant(value) => {
+                    Key::Constant { value, array } => {
+                        if array {
+                            shards.insert(Shard::All);
+                            break;
+                        }
+
                         let ctx = ContextBuilder::new(table)
                             .data(value.as_str())
                             .shards(sharding_schema.shards)
@@ -586,9 +591,14 @@ impl QueryParser {
                         shards.insert(ctx.apply()?);
                     }
 
-                    Key::Parameter(param) => {
-                        if let Some(params) = params {
-                            if let Some(param) = params.parameter(param)? {
+                    Key::Parameter { pos, array } => {
+                        // Don't hash individual values yet.
+                        // The odds are high this will go to all shards anyway.
+                        if array {
+                            shards.insert(Shard::All);
+                            break;
+                        } else if let Some(params) = params {
+                            if let Some(param) = params.parameter(pos)? {
                                 let value = ShardingValue::from_param(&param, table.data_type)?;
                                 let ctx = ContextBuilder::new(table)
                                     .value(value)
@@ -1430,5 +1440,18 @@ mod test {
                 DistinctColumn::Name(std::string::String::from("email"))
             ])
         );
+    }
+
+    #[test]
+    fn test_any() {
+        let route = query!("SELECT * FROM sharded WHERE id = ANY('{1, 2, 3}')");
+        assert_eq!(route.shard(), &Shard::All);
+
+        let route = parse!(
+            "SELECT * FROM sharded WHERE id = ANY($1)",
+            &["{1, 2, 3}".as_bytes()]
+        );
+
+        assert_eq!(route.shard(), &Shard::All);
     }
 }

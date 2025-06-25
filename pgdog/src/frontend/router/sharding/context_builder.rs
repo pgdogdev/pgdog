@@ -9,6 +9,8 @@ pub struct ContextBuilder<'a> {
     centroids: Option<Centroids<'a>>,
     probes: usize,
     hasher: Hasher,
+    #[allow(dead_code)]
+    array: bool,
 }
 
 impl<'a> ContextBuilder<'a> {
@@ -27,6 +29,7 @@ impl<'a> ContextBuilder<'a> {
                 HasherConfig::Sha1 => Hasher::Sha1,
                 HasherConfig::Postgres => Hasher::Postgres,
             },
+            array: false,
         }
     }
 
@@ -43,6 +46,7 @@ impl<'a> ContextBuilder<'a> {
                 centroids: None,
                 operator: None,
                 hasher: Hasher::Postgres,
+                array: false,
             })
         } else if uuid.valid() {
             Ok(Self {
@@ -52,6 +56,7 @@ impl<'a> ContextBuilder<'a> {
                 centroids: None,
                 operator: None,
                 hasher: Hasher::Postgres,
+                array: false,
             })
         } else {
             Err(Error::IncompleteContext)

@@ -19,9 +19,9 @@ pub struct Column<'a> {
 
 #[derive(Debug)]
 enum Output<'a> {
-    Parameter(i32),
-    Value(String),
-    Int(i32),
+    Parameter { pos: i32, array: bool },
+    Value { value: String, array: bool },
+    Int { value: i32, array: bool },
     Column(Column<'a>),
     NullCheck(Column<'a>),
     Filter(Vec<Output<'a>>, Vec<Output<'a>>),
@@ -44,7 +44,7 @@ impl<'a> WhereClause<'a> {
             return None;
         };
 
-        let output = Self::parse(table_name, where_clause);
+        let output = Self::parse(table_name, where_clause, false);
 
         Some(Self { output })
     }
@@ -69,9 +69,18 @@ impl<'a> WhereClause<'a> {
 
     fn get_key(output: &Output) -> Option<Key> {
         match output {
-            Output::Int(value) => Some(Key::Constant(value.to_string())),
-            Output::Parameter(param) => Some(Key::Parameter(*param as usize - 1)),
-            Output::Value(val) => Some(Key::Constant(val.to_string())),
+            Output::Int { value, array } => Some(Key::Constant {
+                value: value.to_string(),
+                array: *array,
+            }),
+            Output::Parameter { pos, array } => Some(Key::Parameter {
+                pos: *pos as usize - 1,
+                array: *array,
+            }),
+            Output::Value { value, array } => Some(Key::Constant {
+                value: value.to_string(),
+                array: *array,
+            }),
             _ => None,
         }
     }
@@ -136,7 +145,7 @@ impl<'a> WhereClause<'a> {
         None
     }
 
-    fn parse(table_name: Option<&'a str>, node: &'a Node) -> Vec<Output<'a>> {
+    fn parse(table_name: Option<&'a str>, node: &'a Node, array: bool) -> Vec<Output<'a>> {
         let mut keys = vec![];
 
         match node.node {
@@ -146,7 +155,7 @@ impl<'a> WhereClause<'a> {
                     let left = null_test
                         .arg
                         .as_ref()
-                        .and_then(|node| Self::parse(table_name, node).pop());
+                        .and_then(|node| Self::parse(table_name, node, array).pop());
 
                     if let Some(Output::Column(c)) = left {
                         keys.push(Output::NullCheck(c));
@@ -163,12 +172,16 @@ impl<'a> WhereClause<'a> {
                 }
 
                 for arg in &expr.args {
-                    keys.extend(Self::parse(table_name, arg));
+                    keys.extend(Self::parse(table_name, arg, array));
                 }
             }
 
             Some(NodeEnum::AExpr(ref expr)) => {
-                if matches!(expr.kind(), AExprKind::AexprOp | AExprKind::AexprIn) {
+                let kind = expr.kind();
+                if matches!(
+                    kind,
+                    AExprKind::AexprOp | AExprKind::AexprIn | AExprKind::AexprOpAny
+                ) {
                     let op = Self::string(expr.name.first());
                     if let Some(op) = op {
                         if op != "=" {
@@ -176,10 +189,11 @@ impl<'a> WhereClause<'a> {
                         }
                     }
                 }
+                let array = matches!(kind, AExprKind::AexprOpAny);
                 if let Some(ref left) = expr.lexpr {
                     if let Some(ref right) = expr.rexpr {
-                        let left = Self::parse(table_name, left);
-                        let right = Self::parse(table_name, right);
+                        let left = Self::parse(table_name, left, array);
+                        let right = Self::parse(table_name, right, array);
 
                         keys.push(Output::Filter(left, right));
                     }
@@ -189,9 +203,18 @@ impl<'a> WhereClause<'a> {
             Some(NodeEnum::AConst(ref value)) => {
                 if let Some(ref val) = value.val {
                     match val {
-                        Val::Ival(int) => keys.push(Output::Int(int.ival)),
-                        Val::Sval(sval) => keys.push(Output::Value(sval.sval.clone())),
-                        Val::Fval(fval) => keys.push(Output::Value(fval.fval.clone())),
+                        Val::Ival(int) => keys.push(Output::Int {
+                            value: int.ival,
+                            array,
+                        }),
+                        Val::Sval(sval) => keys.push(Output::Value {
+                            value: sval.sval.clone(),
+                            array,
+                        }),
+                        Val::Fval(fval) => keys.push(Output::Value {
+                            value: fval.fval.clone(),
+                            array,
+                        }),
                         _ => (),
                     }
                 }
@@ -212,18 +235,21 @@ impl<'a> WhereClause<'a> {
             }
 
             Some(NodeEnum::ParamRef(ref param)) => {
-                keys.push(Output::Parameter(param.number));
+                keys.push(Output::Parameter {
+                    pos: param.number,
+                    array,
+                });
             }
 
             Some(NodeEnum::List(ref list)) => {
                 for node in &list.items {
-                    keys.extend(Self::parse(table_name, node));
+                    keys.extend(Self::parse(table_name, node, array));
                 }
             }
 
             Some(NodeEnum::TypeCast(ref cast)) => {
                 if let Some(ref arg) = cast.arg {
-                    keys.extend(Self::parse(table_name, arg));
+                    keys.extend(Self::parse(table_name, arg, array));
                 }
             }
 
@@ -250,7 +276,13 @@ mod test {
         if let Some(NodeEnum::SelectStmt(stmt)) = stmt.node {
             let where_ = WhereClause::new(Some("sharded"), &stmt.where_clause).unwrap();
             let mut keys = where_.keys(Some("sharded"), "id");
-            assert_eq!(keys.pop().unwrap(), Key::Constant("5".into()));
+            assert_eq!(
+                keys.pop().unwrap(),
+                Key::Constant {
+                    value: "5".into(),
+                    array: false
+                }
+            );
         }
     }
 
@@ -291,6 +323,45 @@ mod test {
             let where_ = WhereClause::new(Some("users"), &stmt.where_clause).unwrap();
             let keys = where_.keys(Some("users"), "tenant_id");
             assert_eq!(keys.len(), 4);
+        } else {
+            panic!("not a select");
+        }
+    }
+
+    #[test]
+    fn test_any() {
+        let query = "SELECT * FROM users WHERE tenant_id = ANY($1)";
+        let ast = parse(query).unwrap();
+        let stmt = ast.protobuf.stmts.first().cloned().unwrap().stmt.unwrap();
+
+        if let Some(NodeEnum::SelectStmt(stmt)) = stmt.node {
+            let where_ = WhereClause::new(Some("users"), &stmt.where_clause).unwrap();
+            let keys = where_.keys(Some("users"), "tenant_id");
+            assert_eq!(
+                keys[0],
+                Key::Parameter {
+                    pos: 0,
+                    array: true
+                }
+            );
+        } else {
+            panic!("not a select");
+        }
+
+        let query = "SELECT * FROM users WHERE tenant_id = ANY('{1, 2, 3}')";
+        let ast = parse(query).unwrap();
+        let stmt = ast.protobuf.stmts.first().cloned().unwrap().stmt.unwrap();
+
+        if let Some(NodeEnum::SelectStmt(stmt)) = stmt.node {
+            let where_ = WhereClause::new(Some("users"), &stmt.where_clause).unwrap();
+            let keys = where_.keys(Some("users"), "tenant_id");
+            assert_eq!(
+                keys[0],
+                Key::Constant {
+                    value: "{1, 2, 3}".to_string(),
+                    array: true
+                },
+            );
         } else {
             panic!("not a select");
         }
