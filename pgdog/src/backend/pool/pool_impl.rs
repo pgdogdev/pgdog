@@ -136,17 +136,11 @@ impl Pool {
         }
 
         let (server, granted_at) = if let Some(mut server) = server {
-            (
-                Guard::new(
-                    pool,
-                    {
-                        server.set_pooler_mode(self.inner.config.pooler_mode);
-                        server
-                    },
-                    granted_at,
-                ),
-                granted_at,
-            )
+            server
+                .prepared_statements_mut()
+                .set_capacity(self.inner.config.prepared_statements_limit);
+            server.set_pooler_mode(self.inner.config.pooler_mode);
+            (Guard::new(pool, server, granted_at), granted_at)
         } else {
             // Slow path, pool is empty, will create new connection
             // or wait for one to be returned if the pool is maxed out.

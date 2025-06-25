@@ -62,8 +62,9 @@ impl PreparedStatements {
     }
 
     /// Set maximum prepared statements capacity.
+    #[inline]
     pub fn set_capacity(&mut self, capacity: usize) {
-        self.capacity = std::cmp::max(capacity, 2);
+        self.capacity = capacity;
     }
 
     /// Get prepared statements capacity.
@@ -325,6 +326,11 @@ impl PreparedStatements {
     }
 
     /// Ensure capacity of prepared statements is respected.
+    ///
+    /// WARNING: This removes prepared statements from the cache.
+    /// Make sure to actually execute the close messages you receive
+    /// from this method, or the statements will be out of sync with
+    /// what's actually inside Postgres.
     pub fn ensure_capacity(&mut self) -> Vec<Close> {
         let mut close = vec![];
         while self.local_cache.len() > self.capacity {

@@ -11,7 +11,7 @@ use tokio::time::{sleep, timeout};
 use tokio_util::task::TaskTracker;
 
 use crate::backend::ProtocolMessage;
-use crate::net::Query;
+use crate::net::{Parse, Protocol, Query, Sync};
 use crate::state::State;
 
 use super::*;
@@ -22,6 +22,28 @@ pub fn pool() -> Pool {
     let config = Config {
         max: 1,
         min: 1,
+        ..Default::default()
+    };
+
+    let pool = Pool::new(&PoolConfig {
+        address: Address {
+            host: "127.0.0.1".into(),
+            port: 5432,
+            database_name: "pgdog".into(),
+            user: "pgdog".into(),
+            password: "pgdog".into(),
+        },
+        config,
+    });
+    pool.launch();
+    pool
+}
+
+pub fn pool_with_prepared_capacity(capacity: usize) -> Pool {
+    let config = Config {
+        max: 1,
+        min: 1,
+        prepared_statements_limit: capacity,
         ..Default::default()
     };
 
@@ -333,4 +355,82 @@ async fn test_query_stats() {
         25 * 26 + after.stats.counts.healthchecks
     );
     assert_eq!(after.stats.counts.healthchecks, 1)
+}
+
+#[tokio::test]
+async fn test_prepared_statements_limit() {
+    crate::logger();
+    let pool = pool_with_prepared_capacity(2);
+
+    // Let's churn them like crazy
+    for id in 0..100 {
+        let mut guard = pool.get(&Request::default()).await.unwrap();
+        guard
+            .send(
+                &vec![
+                    Parse::named(&format!("__pgdog_{}", id), "SELECT $1::bigint").into(),
+                    Sync.into(),
+                ]
+                .into(),
+            )
+            .await
+            .unwrap();
+
+        for c in ['1', 'Z'] {
+            let msg = guard.read().await.unwrap();
+            assert_eq!(msg.code(), c);
+        }
+        drop(guard); // Cleanup happens now.
+    }
+
+    let mut guard = pool.get(&Request::default()).await.unwrap();
+    // It's random!
+    assert!(
+        guard.prepared_statements_mut().contains("__pgdog_99")
+            || guard.prepared_statements_mut().contains("__pgdog_98")
+    );
+    assert_eq!(guard.prepared_statements_mut().len(), 2);
+
+    // Let's make sure Postgres agreees.
+    guard.sync_prepared_statements().await.unwrap();
+
+    // It's random!
+    assert!(
+        guard.prepared_statements_mut().contains("__pgdog_99")
+            || guard.prepared_statements_mut().contains("__pgdog_98")
+    );
+    assert_eq!(guard.prepared_statements_mut().len(), 2);
+
+    let pool = pool_with_prepared_capacity(100);
+
+    // Won't churn any.
+    for id in 0..100 {
+        let mut guard = pool.get(&Request::default()).await.unwrap();
+        guard
+            .send(
+                &vec![
+                    Parse::named(&format!("__pgdog_{}", id), "SELECT $1::bigint").into(),
+                    Sync.into(),
+                ]
+                .into(),
+            )
+            .await
+            .unwrap();
+
+        for c in ['1', 'Z'] {
+            let msg = guard.read().await.unwrap();
+            assert_eq!(msg.code(), c);
+        }
+        drop(guard); // Cleanup happens now.
+    }
+
+    let mut guard = pool.get(&Request::default()).await.unwrap();
+    assert!(guard.prepared_statements_mut().contains("__pgdog_99"));
+    assert_eq!(guard.prepared_statements_mut().len(), 100);
+
+    // Let's make sure Postgres agreees.
+    guard.sync_prepared_statements().await.unwrap();
+
+    assert!(guard.prepared_statements_mut().contains("__pgdog_99"));
+    assert_eq!(guard.prepared_statements_mut().len(), 100);
 }

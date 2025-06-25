@@ -767,6 +767,11 @@ impl Server {
     pub fn pooler_mode(&self) -> &PoolerMode {
         &self.pooler_mode
     }
+
+    #[inline]
+    pub fn prepared_statements_mut(&mut self) -> &mut PreparedStatements {
+        &mut self.prepared_statements
+    }
 }
 
 impl Drop for Server {
@@ -1829,9 +1834,6 @@ pub mod test {
 
             let in_sync = server.fetch_all::<i64>("SELECT 1::bigint").await.unwrap();
             assert_eq!(in_sync[0], 1);
-
-            server.prepared_statements.set_capacity(1);
-            assert_eq!(server.prepared_statements.capacity(), 2); // minimum is 2.
 
             server.prepared_statements.set_capacity(3);
             assert_eq!(server.prepared_statements.capacity(), 3);
