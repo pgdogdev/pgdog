@@ -13,6 +13,7 @@ fn global_name(counter: usize) -> String {
 pub struct Statement {
     parse: Parse,
     row_description: Option<RowDescription>,
+    version: usize,
 }
 
 impl Statement {
@@ -24,7 +25,7 @@ impl Statement {
         CacheKey {
             query: self.parse.query_ref(),
             data_types: self.parse.data_types_ref(),
-            version: 0,
+            version: self.version,
         }
     }
 }
@@ -81,8 +82,8 @@ impl GlobalCache {
             version: 0,
         };
         match self.statements.entry(parse_key) {
-            Entry::Occupied(entry) => {
-                let mut entry = *entry.get();
+            Entry::Occupied(mut entry) => {
+                let entry = entry.get_mut();
                 entry.used += 1;
                 (false, global_name(entry.counter))
             }
@@ -99,6 +100,7 @@ impl GlobalCache {
                     Statement {
                         parse,
                         row_description: None,
+                        version: 0,
                     },
                 );
 
@@ -132,6 +134,7 @@ impl GlobalCache {
             Statement {
                 parse,
                 row_description: None,
+                version: self.versions,
             },
         );
 
@@ -185,8 +188,9 @@ impl GlobalCache {
     /// Close prepared statement.
     pub fn close(&mut self, name: &str) {
         let used = if let Some(stmt) = self.names.get(name) {
-            let used = if let Some(stmt) = self.statements.get(&stmt.cache_key()) {
-                stmt.used.saturating_sub(1) > 0
+            let used = if let Some(stmt) = self.statements.get_mut(&stmt.cache_key()) {
+                stmt.used = stmt.used.saturating_sub(1);
+                stmt.used > 0
             } else {
                 false
             };
@@ -205,7 +209,49 @@ impl GlobalCache {
         }
     }
 
+    /// Get all prepared statements by name.
     pub fn names(&self) -> &HashMap<String, Statement> {
         &self.names
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_prep_stmt_cache_close() {
+        let mut cache = GlobalCache::default();
+        let parse = Parse::named("test", "SELECT $1");
+        let (new, name) = cache.insert(&parse);
+        assert!(new);
+        assert_eq!(name, "__pgdog_1");
+
+        for _ in 0..25 {
+            let (new, name) = cache.insert(&parse);
+            assert!(!new);
+            assert_eq!(name, "__pgdog_1");
+        }
+        let stmt = cache.names.get("__pgdog_1").unwrap().clone();
+        let entry = cache.statements.get(&stmt.cache_key()).unwrap();
+
+        assert_eq!(entry.used, 26);
+
+        for _ in 0..25 {
+            cache.close("__pgdog_1");
+        }
+
+        let entry = cache.statements.get(&stmt.cache_key()).unwrap();
+        assert_eq!(entry.used, 1);
+
+        cache.close("__pgdog_1");
+        assert!(cache.statements.is_empty());
+        assert!(cache.names.is_empty());
+
+        let name = cache.insert_anyway(&parse);
+        cache.close(&name);
+
+        assert!(cache.names.is_empty());
+        assert!(cache.statements.is_empty());
     }
 }

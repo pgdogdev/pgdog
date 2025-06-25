@@ -122,5 +122,30 @@ mod test {
         for message in messages {
             statements.maybe_rewrite(message).unwrap();
         }
+
+        assert_eq!(statements.local.len(), 1);
+        assert_eq!(statements.global.lock().names().len(), 1);
+
+        statements.close_all();
+
+        assert!(statements.local.is_empty());
+        assert!(statements.global.lock().names().is_empty());
+
+        let messages = vec![
+            Parse::named("__sqlx_1", "SELECT 1").into(),
+            Bind::test_statement("__sqlx_1").into(),
+        ];
+
+        for message in messages {
+            statements.maybe_rewrite(message).unwrap();
+        }
+
+        assert_eq!(statements.local.len(), 1);
+        assert_eq!(statements.global.lock().names().len(), 1);
+
+        statements.close("__sqlx_1");
+
+        assert!(statements.local.is_empty());
+        assert!(statements.global.lock().names().is_empty());
     }
 }

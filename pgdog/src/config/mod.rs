@@ -334,6 +334,8 @@ pub struct General {
     /// Prepared statatements support.
     #[serde(default)]
     pub prepared_statements: PreparedStatements,
+    /// Limit on the number of prepared statements in the server cache.
+    pub prepared_statements_limit: Option<usize>,
     /// Automatically add connection pools for user/database pairs we don't have.
     #[serde(default)]
     pub passthrough_auth: PassthoughAuth,
@@ -446,6 +448,7 @@ impl Default for General {
             openmetrics_port: None,
             openmetrics_namespace: None,
             prepared_statements: PreparedStatements::default(),
+            prepared_statements_limit: None,
             passthrough_auth: PassthoughAuth::default(),
             connect_timeout: Self::default_connect_timeout(),
             query_timeout: Self::default_query_timeout(),

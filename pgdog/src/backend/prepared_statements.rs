@@ -5,6 +5,7 @@ use std::{
     usize,
 };
 
+use indexmap::IndexSet;
 use parking_lot::Mutex;
 
 use crate::{
@@ -28,6 +29,10 @@ pub enum HandleResult {
     Prepend(ProtocolMessage),
 }
 
+struct LocalCache {
+    unique: HashSet<String>,
+}
+
 /// Server-specific prepared statements.
 ///
 /// The global cache has names and Parse messages,
@@ -36,7 +41,7 @@ pub enum HandleResult {
 #[derive(Debug)]
 pub struct PreparedStatements {
     global_cache: Arc<Mutex<GlobalCache>>,
-    local_cache: HashSet<String>,
+    local_cache: IndexSet<String>,
     state: ProtocolState,
     // Prepared statements being prepared now on the connection.
     parses: VecDeque<String>,
@@ -328,16 +333,21 @@ impl PreparedStatements {
                     return None;
                 }
 
-                let name = parse.name();
-                let random = thread_rng().gen_range(0..self.local_cache.len());
+                loop {
+                    let name = parse.name();
+                    let random = thread_rng().gen_range(0..self.local_cache.len());
 
-                let candidate = self.local_cache.iter().skip(random).next().cloned();
+                    let candidate = self.local_cache.iter().skip(random).next().cloned();
 
-                if let Some(candidate) = candidate {
-                    if candidate != parse.name() {
-                        self.local_cache.remove(&candidate);
-                        self.state.add_ignore('3', name);
-                        return Some(Close::named(name));
+                    if let Some(candidate) = candidate {
+                        if candidate != parse.name() {
+                            self.local_cache.remove(&candidate);
+                            self.state.add_ignore('3', name);
+                            return Some(Close::named(name));
+                        } else if self.local_cache.len() == 1 {
+                            // Edge case when there is only one statement in the cache & the limit is 1.
+                            return None;
+                        }
                     }
                 }
             }
