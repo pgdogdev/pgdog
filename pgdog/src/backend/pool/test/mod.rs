@@ -400,6 +400,7 @@ async fn test_prepared_statements_limit() {
             || guard.prepared_statements_mut().contains("__pgdog_98")
     );
     assert_eq!(guard.prepared_statements_mut().len(), 2);
+    assert_eq!(guard.stats().total.prepared_statements, 2); // stats are accurate.
 
     let pool = pool_with_prepared_capacity(100);
 
@@ -427,10 +428,12 @@ async fn test_prepared_statements_limit() {
     let mut guard = pool.get(&Request::default()).await.unwrap();
     assert!(guard.prepared_statements_mut().contains("__pgdog_99"));
     assert_eq!(guard.prepared_statements_mut().len(), 100);
+    assert_eq!(guard.stats().total.prepared_statements, 100); // stats are accurate.
 
     // Let's make sure Postgres agreees.
     guard.sync_prepared_statements().await.unwrap();
 
     assert!(guard.prepared_statements_mut().contains("__pgdog_99"));
     assert_eq!(guard.prepared_statements_mut().len(), 100);
+    assert_eq!(guard.stats().total.prepared_statements, 100); // stats are accurate.
 }

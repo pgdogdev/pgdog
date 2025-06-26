@@ -162,9 +162,9 @@ impl Stats {
         self.last_checkout.prepared_statements += 1;
     }
 
-    /// Indicate we closed several prepared statements
-    /// to maintain cache capacity.
-    pub fn close_many(&mut self, size: usize) {
+    /// Overwrite how many prepared statements we have in the cache
+    /// for stats.
+    pub fn set_prepared_statements(&mut self, size: usize) {
         self.total.prepared_statements = size;
         self.update();
     }

@@ -615,13 +615,17 @@ impl Server {
 
         debug!("prepared statements synchronized [{}]", self.addr());
 
+        let count = self.prepared_statements.len();
+        self.stats_mut().set_prepared_statements(count);
+
         Ok(())
     }
 
     /// Close any prepared statements that exceed cache capacity.
     pub fn ensure_prepared_capacity(&mut self) -> Vec<Close> {
         let close = self.prepared_statements.ensure_capacity();
-        self.stats.close_many(self.prepared_statements.len());
+        self.stats
+            .set_prepared_statements(self.prepared_statements.len());
         close
     }
 
