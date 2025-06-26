@@ -1,7 +1,6 @@
-use rand::{thread_rng, Rng};
+use lru::LruCache;
 use std::{collections::VecDeque, sync::Arc, usize};
 
-use indexmap::IndexSet;
 use parking_lot::Mutex;
 
 use crate::{
@@ -33,7 +32,7 @@ pub enum HandleResult {
 #[derive(Debug)]
 pub struct PreparedStatements {
     global_cache: Arc<Mutex<GlobalCache>>,
-    local_cache: IndexSet<String>,
+    local_cache: LruCache<String, ()>,
     state: ProtocolState,
     // Prepared statements being prepared now on the connection.
     parses: VecDeque<String>,
@@ -53,7 +52,7 @@ impl PreparedStatements {
     pub fn new() -> Self {
         Self {
             global_cache: frontend::PreparedStatements::global(),
-            local_cache: IndexSet::new(),
+            local_cache: LruCache::unbounded(),
             state: ProtocolState::default(),
             parses: VecDeque::new(),
             describes: VecDeque::new(),
@@ -263,12 +262,17 @@ impl PreparedStatements {
 
     /// The server has prepared this statement already.
     pub fn contains(&mut self, name: &str) -> bool {
-        self.local_cache.contains(name)
+        if self.local_cache.contains(name) {
+            self.local_cache.promote(name);
+            true
+        } else {
+            false
+        }
     }
 
     /// Indicate this statement is prepared on the connection.
     pub fn prepared(&mut self, name: &str) {
-        self.local_cache.insert(name.to_owned());
+        self.local_cache.push(name.to_owned(), ());
     }
 
     /// Get the Parse message stored in the global prepared statements
@@ -296,7 +300,7 @@ impl PreparedStatements {
     /// This should only be done when a statement has been closed,
     /// or failed to parse.
     pub(crate) fn remove(&mut self, name: &str) -> bool {
-        self.local_cache.swap_remove(name)
+        self.local_cache.pop(name).is_some()
     }
 
     /// Indicate all prepared statements have been removed
@@ -334,10 +338,9 @@ impl PreparedStatements {
     pub fn ensure_capacity(&mut self) -> Vec<Close> {
         let mut close = vec![];
         while self.local_cache.len() > self.capacity {
-            let random = thread_rng().gen_range(0..self.local_cache.len());
-            let candidate = self.local_cache.swap_remove_index(random);
+            let candidate = self.local_cache.pop_lru();
 
-            if let Some(name) = candidate {
+            if let Some((name, _)) = candidate {
                 close.push(Close::named(&name));
             }
         }
