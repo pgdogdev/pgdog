@@ -620,7 +620,9 @@ impl Server {
 
     /// Close any prepared statements that exceed cache capacity.
     pub fn ensure_prepared_capacity(&mut self) -> Vec<Close> {
-        self.prepared_statements.ensure_capacity()
+        let close = self.prepared_statements.ensure_capacity();
+        self.stats.close_many(self.prepared_statements.len());
+        close
     }
 
     /// Close multiple prepared statements.

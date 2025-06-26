@@ -162,6 +162,13 @@ impl Stats {
         self.last_checkout.prepared_statements += 1;
     }
 
+    /// Indicate we closed several prepared statements
+    /// to maintain cache capacity.
+    pub fn close_many(&mut self, size: usize) {
+        self.total.prepared_statements = size;
+        self.update();
+    }
+
     pub fn copy_mode(&mut self) {
         self.state(State::CopyMode);
     }
