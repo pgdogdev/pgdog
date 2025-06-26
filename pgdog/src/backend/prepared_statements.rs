@@ -1,15 +1,14 @@
-use std::{
-    collections::{HashSet, VecDeque},
-    sync::Arc,
-};
+use rand::{thread_rng, Rng};
+use std::{collections::VecDeque, sync::Arc, usize};
 
+use indexmap::IndexSet;
 use parking_lot::Mutex;
 
 use crate::{
     frontend::{self, prepared_statements::GlobalCache},
     net::{
         messages::{parse::Parse, RowDescription},
-        CloseComplete, FromBytes, Message, ParseComplete, Protocol, ToBytes,
+        Close, CloseComplete, FromBytes, Message, ParseComplete, Protocol, ToBytes,
     },
 };
 
@@ -34,12 +33,13 @@ pub enum HandleResult {
 #[derive(Debug)]
 pub struct PreparedStatements {
     global_cache: Arc<Mutex<GlobalCache>>,
-    local_cache: HashSet<String>,
+    local_cache: IndexSet<String>,
     state: ProtocolState,
     // Prepared statements being prepared now on the connection.
     parses: VecDeque<String>,
     // Describes being executed now on the connection.
     describes: VecDeque<String>,
+    capacity: usize,
 }
 
 impl Default for PreparedStatements {
@@ -53,11 +53,23 @@ impl PreparedStatements {
     pub fn new() -> Self {
         Self {
             global_cache: frontend::PreparedStatements::global(),
-            local_cache: HashSet::new(),
+            local_cache: IndexSet::new(),
             state: ProtocolState::default(),
             parses: VecDeque::new(),
             describes: VecDeque::new(),
+            capacity: usize::MAX,
         }
+    }
+
+    /// Set maximum prepared statements capacity.
+    #[inline]
+    pub fn set_capacity(&mut self, capacity: usize) {
+        self.capacity = capacity;
+    }
+
+    /// Get prepared statements capacity.
+    pub fn capacity(&self) -> usize {
+        self.capacity
     }
 
     /// Handle extended protocol message.
@@ -250,7 +262,7 @@ impl PreparedStatements {
     }
 
     /// The server has prepared this statement already.
-    pub fn contains(&self, name: &str) -> bool {
+    pub fn contains(&mut self, name: &str) -> bool {
         self.local_cache.contains(name)
     }
 
@@ -284,7 +296,7 @@ impl PreparedStatements {
     /// This should only be done when a statement has been closed,
     /// or failed to parse.
     pub(crate) fn remove(&mut self, name: &str) -> bool {
-        self.local_cache.remove(name)
+        self.local_cache.swap_remove(name)
     }
 
     /// Indicate all prepared statements have been removed
@@ -311,5 +323,25 @@ impl PreparedStatements {
     /// True if the local (connection) prepared statement cache is empty.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    /// Ensure capacity of prepared statements is respected.
+    ///
+    /// WARNING: This removes prepared statements from the cache.
+    /// Make sure to actually execute the close messages you receive
+    /// from this method, or the statements will be out of sync with
+    /// what's actually inside Postgres.
+    pub fn ensure_capacity(&mut self) -> Vec<Close> {
+        let mut close = vec![];
+        while self.local_cache.len() > self.capacity {
+            let random = thread_rng().gen_range(0..self.local_cache.len());
+            let candidate = self.local_cache.swap_remove_index(random);
+
+            if let Some(name) = candidate {
+                close.push(Close::named(&name));
+            }
+        }
+
+        close
     }
 }

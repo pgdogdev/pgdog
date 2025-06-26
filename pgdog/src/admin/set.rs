@@ -1,6 +1,7 @@
 use crate::{
     backend::databases,
     config::{self, config},
+    frontend::PreparedStatements,
 };
 
 use super::prelude::*;
@@ -77,6 +78,13 @@ impl Command for Set {
 
             "load_balancing_strategy" => {
                 config.config.general.load_balancing_strategy = Self::from_json(&self.value)?;
+            }
+
+            "prepared_statements_limit" => {
+                config.config.general.prepared_statements_limit = self.value.parse()?;
+                PreparedStatements::global()
+                    .lock()
+                    .close_unused(config.config.general.prepared_statements_limit);
             }
 
             _ => return Err(Error::Syntax),

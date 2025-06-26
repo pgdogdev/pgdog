@@ -465,3 +465,13 @@ func TestPreparedCounter(t *testing.T) {
 	}
 	assert.True(t, found)
 }
+
+func TestPreparedError(t *testing.T) {
+	conn, err := connectNormal()
+	assert.NoError(t, err)
+	defer conn.Close(context.Background())
+
+	rows, err := conn.Query(context.Background(), "SELECT $1::bigint, apples", 1)
+	rows.Close()
+	assert.Error(t, err)
+}

@@ -1,4 +1,7 @@
-use crate::frontend::router::parser::{cache::Stats, Cache};
+use crate::frontend::{
+    router::parser::{cache::Stats, Cache},
+    PreparedStatements,
+};
 
 use super::*;
 
@@ -11,12 +14,14 @@ pub struct QueryCacheMetric {
 
 pub struct QueryCache {
     stats: Stats,
+    prepared_statements: usize,
 }
 
 impl QueryCache {
     pub(crate) fn load() -> Self {
         QueryCache {
             stats: Cache::stats(),
+            prepared_statements: PreparedStatements::global().lock().len(),
         }
     }
 
@@ -50,6 +55,12 @@ impl QueryCache {
                 name: "query_cache_size".into(),
                 help: "Number of queries in the cache".into(),
                 value: self.stats.size,
+                gauge: true,
+            }),
+            Metric::new(QueryCacheMetric {
+                name: "prepared_statements".into(),
+                help: "Number of prepared statements in the cache".into(),
+                value: self.prepared_statements,
                 gauge: true,
             }),
         ]

@@ -51,5 +51,7 @@ async fn test_distinct() {
             emails,
             vec!["apples@test.com".to_string(), "test@test.com".to_string()]
         );
+
+        conn.close().await;
     }
 }

@@ -13,5 +13,7 @@ async fn test_syntax_error() {
             let res = conn.execute("SELECT 1").await;
             assert!(res.is_ok());
         }
+
+        conn.close().await;
     }
 }

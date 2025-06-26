@@ -1,5 +1,6 @@
 //! Describe (F) message.
-use crate::net::c_string_buf;
+use std::str::from_utf8;
+use std::str::from_utf8_unchecked;
 
 use super::code;
 use super::prelude::*;
@@ -7,8 +8,7 @@ use super::prelude::*;
 /// Describe (F) message.
 #[derive(Debug, Clone)]
 pub struct Describe {
-    kind: char,
-    statement: String,
+    payload: Bytes,
     original: Option<Bytes>,
 }
 
@@ -16,13 +16,11 @@ impl FromBytes for Describe {
     fn from_bytes(mut bytes: Bytes) -> Result<Self, Error> {
         let original = bytes.clone();
         code!(bytes, 'D');
-        let _len = bytes.get_i32();
-        let kind = bytes.get_u8() as char;
-        let statement = c_string_buf(&mut bytes);
+
+        from_utf8(&original[6..original.len() - 1])?;
 
         Ok(Self {
-            kind,
-            statement,
+            payload: original.clone(),
             original: Some(original),
         })
     }
@@ -34,11 +32,7 @@ impl ToBytes for Describe {
             return Ok(original.clone());
         }
 
-        let mut payload = Payload::named(self.code());
-        payload.put_u8(self.kind as u8);
-        payload.put_string(&self.statement);
-
-        Ok(payload.freeze())
+        Ok(self.payload.clone())
     }
 }
 
@@ -50,52 +44,59 @@ impl Protocol for Describe {
 
 impl Describe {
     pub fn len(&self) -> usize {
-        self.statement.len() + 1 + 1 + 1 + 4
+        self.payload.len()
     }
 
     pub fn anonymous(&self) -> bool {
-        self.kind != 'S' || self.statement.is_empty()
+        self.kind() != 'S' || self.statement().is_empty()
     }
 
-    pub fn rename(mut self, name: impl ToString) -> Self {
-        self.statement = name.to_string();
-        self.original = None;
-        self
+    pub fn rename(self, name: impl ToString) -> Self {
+        let mut payload = Payload::named('D');
+        payload.put_u8(self.kind() as u8);
+        payload.put_string(&name.to_string());
+        Describe {
+            payload: payload.freeze(),
+            original: None,
+        }
     }
 
     pub fn new_statement(name: &str) -> Describe {
+        let mut payload = Payload::named('D');
+        payload.put_u8(b'S');
+        payload.put_string(name);
         Describe {
-            kind: 'S',
-            statement: name.to_string(),
+            payload: payload.freeze(),
             original: None,
         }
     }
 
     pub fn is_statement(&self) -> bool {
-        self.kind == 'S'
+        self.kind() == 'S'
     }
 
     pub fn is_portal(&self) -> bool {
-        self.kind == 'P'
+        self.kind() == 'P'
     }
 
     pub fn new_portal(name: &str) -> Describe {
+        let mut payload = Payload::named('D');
+        payload.put_u8(b'P');
+        payload.put_string(name);
         Describe {
-            kind: 'P',
-            statement: name.to_string(),
+            payload: payload.freeze(),
             original: None,
         }
     }
 
     #[inline]
     pub(crate) fn statement(&self) -> &str {
-        &self.statement
+        // SAFETY: Name is checked for utf-8 in Bytes::from_bytes
+        unsafe { from_utf8_unchecked(&self.payload[6..self.payload.len() - 1]) }
     }
 
-    #[inline]
-    #[cfg(test)]
-    pub(crate) fn kind(&self) -> char {
-        self.kind
+    pub fn kind(&self) -> char {
+        self.payload[5] as char
     }
 }
 
@@ -114,11 +115,7 @@ mod test {
     async fn test_describe() {
         let pool = pool();
         let mut conn = pool.get(&Request::default()).await.unwrap();
-        let describe = Describe {
-            kind: 'P',
-            statement: "".into(),
-            original: None,
-        };
+        let describe = Describe::new_portal("");
         conn.send(&vec![ProtocolMessage::from(describe.message().unwrap())].into())
             .await
             .unwrap();

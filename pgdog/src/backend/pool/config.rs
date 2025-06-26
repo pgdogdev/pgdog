@@ -1,6 +1,6 @@
 //! Pool configuration.
 
-use std::time::Duration;
+use std::{time::Duration, usize};
 
 use serde::{Deserialize, Serialize};
 
@@ -49,6 +49,8 @@ pub struct Config {
     pub pooler_mode: PoolerMode,
     /// Read only mode.
     pub read_only: bool,
+    /// Maximum prepared statements per connection.
+    pub prepared_statements_limit: usize,
 }
 
 impl Config {
@@ -159,6 +161,7 @@ impl Config {
             read_only: database
                 .read_only
                 .unwrap_or(user.read_only.unwrap_or_default()),
+            prepared_statements_limit: general.prepared_statements_limit,
             ..Default::default()
         }
     }
@@ -187,6 +190,7 @@ impl Default for Config {
             replication_mode: false,
             pooler_mode: PoolerMode::default(),
             read_only: false,
+            prepared_statements_limit: usize::MAX,
         }
     }
 }

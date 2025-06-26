@@ -93,5 +93,7 @@ async fn test_ban_unban() {
             .await
             .unwrap();
         t.rollback().await.unwrap();
+
+        pool.close().await;
     }
 }

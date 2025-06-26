@@ -7,6 +7,7 @@ use tokio::{spawn, time::Instant};
 use tracing::{debug, error};
 
 use crate::backend::Server;
+use crate::state::State;
 
 use super::Error;
 use super::{cleanup::Cleanup, Pool};
@@ -53,7 +54,7 @@ impl Guard {
 
         if let Some(mut server) = server {
             let rollback = server.in_transaction();
-            let cleanup = Cleanup::new(self, &server);
+            let cleanup = Cleanup::new(self, &mut server);
             let reset = cleanup.needed();
             let sync_prepared = server.sync_prepared();
             let needs_drain = server.needs_drain();
@@ -128,6 +129,14 @@ impl Guard {
                 }
                 Ok(_) => {
                     server.cleaned();
+                }
+            }
+
+            match server.close_many(cleanup.close()).await {
+                Ok(_) => (),
+                Err(err) => {
+                    server.stats_mut().state(State::Error);
+                    error!("server close error: {} [{}]", err, server.addr());
                 }
             }
         }

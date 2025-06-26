@@ -1,6 +1,6 @@
 //! Prepared statements cache.
 
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc, usize};
 
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
@@ -23,6 +23,7 @@ pub struct PreparedStatements {
     pub(super) global: Arc<Mutex<GlobalCache>>,
     pub(super) local: HashMap<String, String>,
     pub(super) enabled: bool,
+    pub(super) capacity: usize,
 }
 
 impl Default for PreparedStatements {
@@ -31,6 +32,7 @@ impl Default for PreparedStatements {
             global: Arc::new(Mutex::new(GlobalCache::default())),
             local: HashMap::default(),
             enabled: true,
+            capacity: usize::MAX,
         }
     }
 }
@@ -56,7 +58,16 @@ impl PreparedStatements {
     /// Register prepared statement with the global cache.
     pub fn insert(&mut self, parse: Parse) -> Parse {
         let (_new, name) = { self.global.lock().insert(&parse) };
-        self.local.insert(parse.name().to_owned(), name.clone());
+        let existed = self.local.insert(parse.name().to_owned(), name.clone());
+
+        // Client prepared it again because it got an error the first time.
+        // We can check if this is a new statement first, but this is an error
+        // condition which happens very infrequently, so we optimize for the happy path.
+        if existed.is_some() {
+            {
+                self.global.lock().decrement(&name);
+            }
+        }
 
         parse.rename(&name)
     }
@@ -85,7 +96,22 @@ impl PreparedStatements {
 
     /// Remove prepared statement from local cache.
     pub fn close(&mut self, name: &str) {
-        self.local.remove(name);
+        if let Some(global_name) = self.local.remove(name) {
+            self.global.lock().close(&global_name, self.capacity);
+        }
+    }
+
+    /// Close all prepared statements on this client.
+    pub fn close_all(&mut self) {
+        if !self.local.is_empty() {
+            let mut global = self.global.lock();
+
+            for global_name in self.local.values() {
+                global.close(global_name, self.capacity);
+            }
+        }
+
+        self.local.clear();
     }
 }
 
@@ -98,6 +124,7 @@ mod test {
     #[test]
     fn test_maybe_rewrite() {
         let mut statements = PreparedStatements::default();
+        statements.capacity = 0;
 
         let messages = vec![
             Parse::named("__sqlx_1", "SELECT 1").into(),
@@ -107,5 +134,74 @@ mod test {
         for message in messages {
             statements.maybe_rewrite(message).unwrap();
         }
+
+        assert_eq!(statements.local.len(), 1);
+        assert_eq!(statements.global.lock().names().len(), 1);
+
+        statements.close_all();
+
+        assert!(statements.local.is_empty());
+        assert!(statements.global.lock().names().is_empty());
+
+        let messages = vec![
+            Parse::named("__sqlx_1", "SELECT 1").into(),
+            Bind::test_statement("__sqlx_1").into(),
+        ];
+
+        for message in messages {
+            statements.maybe_rewrite(message).unwrap();
+        }
+
+        assert_eq!(statements.local.len(), 1);
+        assert_eq!(statements.global.lock().names().len(), 1);
+
+        statements.close("__sqlx_1");
+
+        assert!(statements.local.is_empty());
+        assert!(statements.global.lock().names().is_empty());
+    }
+
+    #[test]
+    fn test_counted_only_once_per_client() {
+        let mut statements = PreparedStatements::default();
+
+        let messages = vec![
+            Parse::named("__sqlx_1", "SELECT 1").into(),
+            Bind::test_statement("__sqlx_1").into(),
+        ];
+
+        for _ in 0..25 {
+            for message in messages.clone() {
+                statements.maybe_rewrite(message).unwrap();
+            }
+        }
+
+        assert_eq!(
+            statements
+                .global
+                .lock()
+                .statements()
+                .iter()
+                .next()
+                .unwrap()
+                .1
+                .used,
+            1
+        );
+
+        statements.close("__sqlx_1");
+
+        assert_eq!(
+            statements
+                .global
+                .lock()
+                .statements()
+                .iter()
+                .next()
+                .unwrap()
+                .1
+                .used,
+            0
+        );
     }
 }
