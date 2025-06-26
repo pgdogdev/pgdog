@@ -49,6 +49,8 @@ async fn test_fake_transactions() {
         check_client_state("idle", admin.clone()).await;
         assert!(check_server_state("idle", admin.clone()).await);
     }
+
+    conn.close().await;
 }
 
 async fn check_client_state(expected: &str, admin: Pool<Postgres>) {

@@ -11,6 +11,7 @@ use parking_lot::{Mutex, RawMutex};
 use tracing::{info, warn};
 
 use crate::config::PoolerMode;
+use crate::frontend::PreparedStatements;
 use crate::{
     backend::pool::PoolConfig,
     config::{config, load, ConfigAndUsers, ManualQuery, Role},
@@ -74,15 +75,17 @@ pub fn shutdown() {
 }
 
 /// Re-create pools from config.
-///
-/// TODO: Avoid creating new pools if they haven't changed at all
-/// or the configuration between the two is compatible.
 pub fn reload() -> Result<(), Error> {
     let old_config = config();
     let new_config = load(&old_config.config_path, &old_config.users_path)?;
     let databases = from_config(&new_config);
 
     replace_databases(databases, true);
+
+    // Remove any unused prepared statements.
+    PreparedStatements::global()
+        .lock()
+        .close_unused(new_config.config.general.prepared_statements_limit);
 
     Ok(())
 }

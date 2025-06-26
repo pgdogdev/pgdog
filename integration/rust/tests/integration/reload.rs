@@ -31,6 +31,7 @@ async fn test_reload() {
 
     let some_survived = backends_after.iter().any(|b| backends_before.contains(b));
     assert!(some_survived);
+    conn.close().await;
 }
 
 #[tokio::test]
@@ -56,4 +57,6 @@ async fn test_reconnect() {
 
     let none_survived = backends_after.iter().any(|b| backends_before.contains(b));
     assert!(!none_survived);
+
+    conn.close().await;
 }

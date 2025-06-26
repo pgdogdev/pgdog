@@ -1,6 +1,7 @@
 use crate::{
     backend::databases,
     config::{self, config},
+    frontend::PreparedStatements,
 };
 
 use super::prelude::*;
@@ -81,6 +82,9 @@ impl Command for Set {
 
             "prepared_statements_limit" => {
                 config.config.general.prepared_statements_limit = self.value.parse()?;
+                PreparedStatements::global()
+                    .lock()
+                    .close_unused(config.config.general.prepared_statements_limit);
             }
 
             _ => return Err(Error::Syntax),

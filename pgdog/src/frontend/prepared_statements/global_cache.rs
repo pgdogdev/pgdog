@@ -202,7 +202,7 @@ impl GlobalCache {
     }
 
     /// Close prepared statement.
-    pub fn close(&mut self, name: &str, capacity: usize) {
+    pub fn close(&mut self, name: &str, capacity: usize) -> bool {
         let used = if let Some(stmt) = self.names.get(name) {
             if let Some(stmt) = self.statements.get_mut(&stmt.cache_key()) {
                 stmt.used = stmt.used.saturating_sub(1);
@@ -216,7 +216,32 @@ impl GlobalCache {
 
         if !used && self.len() > capacity {
             self.remove(name);
+            true
+        } else {
+            false
         }
+    }
+
+    /// Close all unused statements exceeding capacity.
+    pub fn close_unused(&mut self, capacity: usize) -> usize {
+        let mut remove = self.statements.len() as i64 - capacity as i64;
+        let mut to_remove = vec![];
+        for stmt in self.statements.values() {
+            if remove <= 0 {
+                break;
+            }
+
+            if stmt.used == 0 {
+                to_remove.push(stmt.name());
+                remove -= 1;
+            }
+        }
+
+        for name in &to_remove {
+            self.remove(name);
+        }
+
+        to_remove.len()
     }
 
     /// Remove statement from global cache.
@@ -283,5 +308,31 @@ mod test {
 
         assert!(cache.names.is_empty());
         assert!(cache.statements.is_empty());
+    }
+
+    #[test]
+    fn test_remove_unused() {
+        let mut cache = GlobalCache::default();
+        let mut names = vec![];
+
+        for stmt in 0..25 {
+            let parse = Parse::named("__sqlx_1", format!("SELECT {}", stmt));
+            let (new, name) = cache.insert(&parse);
+            assert!(new);
+            names.push(name);
+        }
+
+        assert_eq!(cache.close_unused(0), 0);
+
+        for name in &names[0..5] {
+            assert!(!cache.close(name, 25)); // Won't close because
+                                             // capacity is enough to keep unused around.
+        }
+
+        assert_eq!(cache.close_unused(26), 0);
+        assert_eq!(cache.close_unused(21), 4);
+        assert_eq!(cache.close_unused(20), 1);
+        assert_eq!(cache.close_unused(19), 0);
+        assert_eq!(cache.len(), 20);
     }
 }

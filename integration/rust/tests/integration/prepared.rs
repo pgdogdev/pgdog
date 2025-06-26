@@ -8,8 +8,6 @@ async fn test_prepared_cache() {
         conns.push(connections_sqlx().await);
     }
 
-    let clients = conns.iter().map(|conns| conns.len()).sum::<usize>();
-
     for conns in &conns {
         for conn in conns.iter() {
             sqlx::query("/* test_prepared_cache_rust */ SELECT $1")
@@ -39,11 +37,18 @@ async fn test_prepared_cache() {
         .next()
         .unwrap();
 
+    let clients = conns
+        .iter()
+        .map(|conns| conns.iter().map(|p| p.size()).sum::<u32>() as usize)
+        .sum::<usize>();
+
     assert_eq!(
         prepared
             .get::<BigDecimal, &str>("used_by")
-            .to_plain_string(),
-        clients.to_string(),
+            .to_plain_string()
+            .parse::<i64>()
+            .unwrap(),
+        clients as i64
     );
 
     for pools in &conns {
@@ -79,6 +84,13 @@ async fn test_prepard_cache_eviction() {
     let conns = connections_sqlx().await;
     // Clear all server stats.
     admin.execute("RECONNECT").await.unwrap();
+
+    // Remove all prepared statements.
+    admin
+        .execute("SET prepared_statements_limit TO 0")
+        .await
+        .unwrap();
+
     admin
         .execute("SET prepared_statements_limit TO 2")
         .await
