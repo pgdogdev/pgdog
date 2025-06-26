@@ -1616,6 +1616,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "lru"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9f8cc7106155f10bdf99a6f379688f543ad6596a415375b36a59a054ceda1198"
+dependencies = [
+ "hashbrown",
+]
+
+[[package]]
 name = "mac_address"
 version = "1.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2058,6 +2067,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "indexmap",
+ "lru 0.14.0",
  "md5",
  "once_cell",
  "parking_lot",
@@ -2464,7 +2474,7 @@ dependencies = [
  "indoc",
  "itertools 0.13.0",
  "kasuari",
- "lru",
+ "lru 0.12.5",
  "strum",
  "thiserror 2.0.12",
  "unicode-segmentation",
