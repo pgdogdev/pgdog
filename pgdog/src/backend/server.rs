@@ -650,20 +650,24 @@ impl Server {
 
         self.stream().send_many(&buf).await?;
 
-        for _ in 0..buf.len() {
+        for close in close {
             let response = self.stream().read().await?;
             match response.code() {
-                '3' => (),
+                '3' => self.prepared_statements.remove(close.name()),
                 'E' => {
                     return Err(Error::PreparedStatementError(Box::new(
                         ErrorResponse::from_bytes(response.to_bytes()?)?,
                     )));
                 }
-                'Z' => break,
                 c => {
                     return Err(Error::UnexpectedMessage(c));
                 }
             };
+        }
+
+        let rfq = self.stream().read().await?;
+        if rfq.code() != 'Z' {
+            return Err(Error::UnexpectedMessage(rfq.code()));
         }
 
         Ok(())
