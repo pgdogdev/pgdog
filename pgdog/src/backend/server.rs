@@ -625,7 +625,7 @@ impl Server {
     pub fn ensure_prepared_capacity(&mut self) -> Vec<Close> {
         let close = self.prepared_statements.ensure_capacity();
         self.stats
-            .set_prepared_statements(self.prepared_statements.len());
+            .close_many(close.len(), self.prepared_statements.len());
         close
     }
 

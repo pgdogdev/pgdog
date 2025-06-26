@@ -61,6 +61,8 @@ impl Pools {
         let mut avg_xact_time = vec![];
         let mut total_query_time = vec![];
         let mut avg_query_time = vec![];
+        let mut total_close = vec![];
+        let mut avg_close = vec![];
         for (user, cluster) in databases().all() {
             for (shard_num, shard) in cluster.shards().iter().enumerate() {
                 for (role, pool) in shard.pools_with_roles() {
@@ -166,6 +168,16 @@ impl Pools {
                     avg_query_time.push(Measurement {
                         labels: labels.clone(),
                         measurement: averages.query_time.as_millis().into(),
+                    });
+
+                    total_close.push(Measurement {
+                        labels: labels.clone(),
+                        measurement: totals.close.into(),
+                    });
+
+                    avg_close.push(Measurement {
+                        labels: labels.clone(),
+                        measurement: averages.close.into(),
                     });
                 }
             }
@@ -311,6 +323,22 @@ impl Pools {
             name: "avg_query_time".into(),
             measurements: avg_query_time,
             help: "Average time spent executing queries.".into(),
+            unit: None,
+            metric_type: None,
+        }));
+
+        metrics.push(Metric::new(PoolMetric {
+            name: "total_prepared_evictions".into(),
+            measurements: total_close,
+            help: "Total number of prepared statements closed because of cache evictions.".into(),
+            unit: None,
+            metric_type: Some("counter".into()),
+        }));
+
+        metrics.push(Metric::new(PoolMetric {
+            name: "avg_prepared_evictions".into(),
+            measurements: avg_close,
+            help: "Average number of prepared statements closed because of cache evictions.".into(),
             unit: None,
             metric_type: None,
         }));

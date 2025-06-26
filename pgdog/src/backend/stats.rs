@@ -62,6 +62,7 @@ pub struct Counts {
     pub parse: usize,
     pub bind: usize,
     pub healthchecks: usize,
+    pub close: usize,
 }
 
 impl Add for Counts {
@@ -83,6 +84,7 @@ impl Add for Counts {
             parse: self.parse.saturating_add(rhs.parse),
             bind: self.bind.saturating_add(rhs.bind),
             healthchecks: self.healthchecks.saturating_add(rhs.healthchecks),
+            close: self.close.saturating_add(rhs.close),
         }
     }
 }
@@ -166,6 +168,13 @@ impl Stats {
     /// for stats.
     pub fn set_prepared_statements(&mut self, size: usize) {
         self.total.prepared_statements = size;
+        self.update();
+    }
+
+    pub fn close_many(&mut self, closed: usize, size: usize) {
+        self.total.prepared_statements = size;
+        self.total.close += closed;
+        self.last_checkout.close += closed;
         self.update();
     }
 
