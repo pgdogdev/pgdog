@@ -215,7 +215,7 @@ func TestCrud(t *testing.T) {
 				assert.Equal(t, int64(id), values[0].(int64))
 			}
 
-			rows, err = conn.Query(context.Background(), "SELECT * FROM sharded WHERE id = $1", id)
+			rows, err = conn.Query(context.Background(), "/* this */ SELECT * FROM sharded WHERE id = $1", id)
 
 			var len int
 
@@ -464,4 +464,14 @@ func TestPreparedCounter(t *testing.T) {
 		}
 	}
 	assert.True(t, found)
+}
+
+func TestPreparedError(t *testing.T) {
+	conn, err := connectNormal()
+	assert.NoError(t, err)
+	defer conn.Close(context.Background())
+
+	rows, err := conn.Query(context.Background(), "SELECT $1::bigint, apples", 1)
+	rows.Close()
+	assert.Error(t, err)
 }

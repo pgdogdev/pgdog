@@ -14,6 +14,7 @@ use std::fs::read_to_string;
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::time::Duration;
+use std::usize;
 use std::{collections::HashMap, path::PathBuf};
 
 use arc_swap::ArcSwap;
@@ -335,7 +336,8 @@ pub struct General {
     #[serde(default)]
     pub prepared_statements: PreparedStatements,
     /// Limit on the number of prepared statements in the server cache.
-    pub prepared_statements_limit: Option<usize>,
+    #[serde(default = "General::prepared_statements_limit")]
+    pub prepared_statements_limit: usize,
     /// Automatically add connection pools for user/database pairs we don't have.
     #[serde(default)]
     pub passthrough_auth: PassthoughAuth,
@@ -448,7 +450,7 @@ impl Default for General {
             openmetrics_port: None,
             openmetrics_namespace: None,
             prepared_statements: PreparedStatements::default(),
-            prepared_statements_limit: None,
+            prepared_statements_limit: Self::prepared_statements_limit(),
             passthrough_auth: PassthoughAuth::default(),
             connect_timeout: Self::default_connect_timeout(),
             query_timeout: Self::default_query_timeout(),
@@ -545,6 +547,10 @@ impl General {
 
     fn mirror_queue() -> usize {
         128
+    }
+
+    fn prepared_statements_limit() -> usize {
+        usize::MAX
     }
 
     /// Get shutdown timeout as a duration.

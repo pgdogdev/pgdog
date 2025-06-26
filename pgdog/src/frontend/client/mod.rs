@@ -614,9 +614,7 @@ impl Client {
         let config = config::config();
         // Configure prepared statements cache.
         self.prepared_statements.enabled = config.prepared_statements();
-        self.prepared_statements.enforcing_capacity =
-            config.config.general.prepared_statements_limit.is_some()
-                && self.prepared_statements.enabled;
+        self.prepared_statements.capacity = config.config.general.prepared_statements_limit;
         self.timeouts = Timeouts::from_config(&config.config.general);
 
         while !self.request_buffer.full() {

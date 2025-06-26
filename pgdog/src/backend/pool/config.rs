@@ -161,7 +161,7 @@ impl Config {
             read_only: database
                 .read_only
                 .unwrap_or(user.read_only.unwrap_or_default()),
-            prepared_statements_limit: general.prepared_statements_limit.unwrap_or(usize::MAX),
+            prepared_statements_limit: general.prepared_statements_limit,
             ..Default::default()
         }
     }

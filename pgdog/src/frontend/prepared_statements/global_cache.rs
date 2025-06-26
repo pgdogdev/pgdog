@@ -1,7 +1,10 @@
 use bytes::Bytes;
 
 use crate::net::messages::{Parse, RowDescription};
-use std::collections::hash_map::{Entry, HashMap};
+use std::{
+    collections::hash_map::{Entry, HashMap},
+    str::from_utf8,
+};
 
 // Format the globally unique prepared statement
 // name based on the counter.
@@ -38,16 +41,29 @@ impl Statement {
 /// need to plan a new one.
 ///
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
-struct CacheKey {
-    query: Bytes,
-    data_types: Bytes,
-    version: usize,
+pub struct CacheKey {
+    pub query: Bytes,
+    pub data_types: Bytes,
+    pub version: usize,
+}
+
+impl CacheKey {
+    pub fn query(&self) -> Result<&str, crate::net::Error> {
+        // Postgres string.
+        Ok(from_utf8(&self.query[0..self.query.len() - 1])?)
+    }
 }
 
 #[derive(Debug, Copy, Clone)]
-struct CachedStmt {
-    counter: usize,
-    used: usize,
+pub struct CachedStmt {
+    pub counter: usize,
+    pub used: usize,
+}
+
+impl CachedStmt {
+    pub fn name(&self) -> String {
+        global_name(self.counter)
+    }
 }
 
 /// Global prepared statements cache.
@@ -186,32 +202,46 @@ impl GlobalCache {
     }
 
     /// Close prepared statement.
-    pub fn close(&mut self, name: &str) {
+    pub fn close(&mut self, name: &str, capacity: usize) {
         let used = if let Some(stmt) = self.names.get(name) {
-            let used = if let Some(stmt) = self.statements.get_mut(&stmt.cache_key()) {
+            if let Some(stmt) = self.statements.get_mut(&stmt.cache_key()) {
                 stmt.used = stmt.used.saturating_sub(1);
                 stmt.used > 0
             } else {
                 false
-            };
-
-            if !used {
-                self.statements.remove(&stmt.cache_key());
             }
-
-            used
         } else {
             false
         };
 
-        if !used {
-            self.names.remove(name);
+        if !used && self.len() > capacity {
+            self.remove(name);
+        }
+    }
+
+    /// Remove statement from global cache.
+    fn remove(&mut self, name: &str) {
+        if let Some(stmt) = self.names.remove(name) {
+            self.statements.remove(&stmt.cache_key());
+        }
+    }
+
+    /// Decrement usage of prepared statement without removing it.
+    pub fn decrement(&mut self, name: &str) {
+        if let Some(stmt) = self.names.get(name) {
+            if let Some(stmt) = self.statements.get_mut(&stmt.cache_key()) {
+                stmt.used = stmt.used.saturating_sub(1);
+            }
         }
     }
 
     /// Get all prepared statements by name.
     pub fn names(&self) -> &HashMap<String, Statement> {
         &self.names
+    }
+
+    pub fn statements(&self) -> &HashMap<CacheKey, CachedStmt> {
+        &self.statements
     }
 }
 
@@ -238,18 +268,18 @@ mod test {
         assert_eq!(entry.used, 26);
 
         for _ in 0..25 {
-            cache.close("__pgdog_1");
+            cache.close("__pgdog_1", 0);
         }
 
         let entry = cache.statements.get(&stmt.cache_key()).unwrap();
         assert_eq!(entry.used, 1);
 
-        cache.close("__pgdog_1");
+        cache.close("__pgdog_1", 0);
         assert!(cache.statements.is_empty());
         assert!(cache.names.is_empty());
 
         let name = cache.insert_anyway(&parse);
-        cache.close(&name);
+        cache.close(&name, 0);
 
         assert!(cache.names.is_empty());
         assert!(cache.statements.is_empty());
