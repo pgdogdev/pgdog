@@ -61,6 +61,8 @@ impl PreparedStatements {
         let existed = self.local.insert(parse.name().to_owned(), name.clone());
 
         // Client prepared it again because it got an error the first time.
+        // We can check if this is a new statement first, but this is an error
+        // condition which happens very infrequently, so we optimize for the happy path.
         if existed.is_some() {
             {
                 self.global.lock().decrement(&name);

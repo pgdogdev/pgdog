@@ -79,6 +79,10 @@ impl Command for Set {
                 config.config.general.load_balancing_strategy = Self::from_json(&self.value)?;
             }
 
+            "prepared_statements_limit" => {
+                config.config.general.prepared_statements_limit = self.value.parse()?;
+            }
+
             _ => return Err(Error::Syntax),
         }
 
