@@ -45,6 +45,9 @@ pub enum Error {
     #[error("all replicas down")]
     AllReplicasDown,
 
+    #[error("replication lag")]
+    ReplicationLag,
+
     #[error("router error")]
     Router,
 }

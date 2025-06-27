@@ -4,8 +4,10 @@ use crate::{
     config::{LoadBalancingStrategy, ReadWriteSplit, Role},
     net::messages::BackendKeyData,
 };
+use tokio::{spawn, time::interval};
+use tracing::{debug, error};
 
-use super::{Error, Guard, Pool, PoolConfig, Replicas, Request};
+use super::{Error, Guard, Pool, PoolConfig, Replicas, Request, ReplicationLagChecker};
 
 /// Primary and replicas.
 #[derive(Clone, Default, Debug)]
@@ -134,11 +136,65 @@ impl Shard {
     /// Launch the shard, bringing all pools online.
     pub fn launch(&self) {
         self.pools().iter().for_each(|pool| pool.launch());
+        
+        // Launch replication lag monitoring if we have both primary and replicas
+        if let Some(primary) = &self.primary {
+            if !self.replicas.is_empty() {
+                Self::launch_lag_monitoring(primary.clone(), self.replicas.clone());
+            }
+        }
     }
 
     /// Shutdown all pools, taking the shard offline.
     pub fn shutdown(&self) {
         self.pools().iter().for_each(|pool| pool.shutdown());
+    }
+
+    /// Launch replication lag monitoring task.
+    fn launch_lag_monitoring(primary: Pool, replicas: Replicas) {
+        spawn(async move {
+            Self::replication_lag_monitor(primary, replicas).await;
+        });
+    }
+
+    /// Monitor replication lag and ban lagging replicas.
+    async fn replication_lag_monitor(primary: Pool, replicas: Replicas) {
+        debug!("Starting replication lag monitoring");
+
+        // Get configuration from one of the replica pools
+        let (check_interval, max_lag_bytes) = {
+            if let Some(pool) = replicas.pools.first() {
+                let config = pool.lock().config;
+                (config.replication_lag_check_interval(), config.max_replication_lag_bytes())
+            } else {
+                return; // No replicas to monitor
+            }
+        };
+
+        let mut interval = interval(check_interval);
+
+        loop {
+            // Wait for next check interval
+            interval.tick().await;
+
+            // Check if primary is online
+            {
+                let primary_guard = primary.lock();
+                if !primary_guard.online {
+                    debug!("Primary is offline, stopping replication lag monitoring");
+                    break;
+                }
+            }
+
+            // Perform replication lag check
+            let checker = ReplicationLagChecker::new(&primary, &replicas, max_lag_bytes);
+            if let Err(err) = checker.check_and_ban_lagging_replicas().await {
+                error!("Replication lag check failed: {}", err);
+                // Continue monitoring even if this check failed
+            }
+        }
+
+        debug!("Replication lag monitoring stopped");
     }
 }
 

@@ -51,6 +51,10 @@ pub struct Config {
     pub read_only: bool,
     /// Maximum prepared statements per connection.
     pub prepared_statements_limit: usize,
+    /// Replication lag check interval.
+    pub replication_lag_check_interval: Duration,
+    /// Maximum allowed replication lag in bytes.
+    pub max_replication_lag_bytes: u64,
 }
 
 impl Config {
@@ -102,6 +106,16 @@ impl Config {
     /// Rollback timeout.
     pub fn rollback_timeout(&self) -> Duration {
         self.rollback_timeout
+    }
+
+    /// Replication lag check interval.
+    pub fn replication_lag_check_interval(&self) -> Duration {
+        self.replication_lag_check_interval
+    }
+
+    /// Maximum allowed replication lag in bytes.
+    pub fn max_replication_lag_bytes(&self) -> u64 {
+        self.max_replication_lag_bytes
     }
 
     /// Read timeout.
@@ -162,6 +176,8 @@ impl Config {
                 .read_only
                 .unwrap_or(user.read_only.unwrap_or_default()),
             prepared_statements_limit: general.prepared_statements_limit,
+            replication_lag_check_interval: Duration::from_millis(general.replication_lag_check_interval),
+            max_replication_lag_bytes: general.max_replication_lag_bytes,
             ..Default::default()
         }
     }
@@ -191,6 +207,8 @@ impl Default for Config {
             pooler_mode: PoolerMode::default(),
             read_only: false,
             prepared_statements_limit: usize::MAX,
+            replication_lag_check_interval: Duration::from_millis(10_000), // 10 seconds
+            max_replication_lag_bytes: 1024 * 1024, // 1MB
         }
     }
 }

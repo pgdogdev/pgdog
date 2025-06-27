@@ -363,6 +363,12 @@ pub struct General {
     pub mirror_queue: usize,
     #[serde(default)]
     pub auth_type: AuthType,
+    /// Replication lag check interval.
+    #[serde(default = "General::replication_lag_check_interval")]
+    pub replication_lag_check_interval: u64,
+    /// Maximum allowed replication lag in bytes.
+    #[serde(default = "General::max_replication_lag_bytes")]
+    pub max_replication_lag_bytes: u64,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -460,6 +466,8 @@ impl Default for General {
             client_idle_timeout: Self::default_client_idle_timeout(),
             mirror_queue: Self::mirror_queue(),
             auth_type: AuthType::default(),
+            replication_lag_check_interval: Self::replication_lag_check_interval(),
+            max_replication_lag_bytes: Self::max_replication_lag_bytes(),
         }
     }
 }
@@ -551,6 +559,14 @@ impl General {
 
     fn prepared_statements_limit() -> usize {
         usize::MAX
+    }
+
+    fn replication_lag_check_interval() -> u64 {
+        10_000 // 10 seconds
+    }
+
+    fn max_replication_lag_bytes() -> u64 {
+        1024 * 1024 // 1MB
     }
 
     /// Get shutdown timeout as a duration.
