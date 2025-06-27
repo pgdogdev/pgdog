@@ -352,6 +352,9 @@ pub struct General {
     /// Dry run for sharding. Parse the query, route to shard 0.
     #[serde(default)]
     pub dry_run: bool,
+    /// Require explicit shard selection for every query.
+    #[serde(default)]
+    pub require_shard_selection: bool,
     /// Idle timeout.
     #[serde(default = "General::idle_timeout")]
     pub idle_timeout: u64,
@@ -456,6 +459,7 @@ impl Default for General {
             query_timeout: Self::default_query_timeout(),
             checkout_timeout: Self::checkout_timeout(),
             dry_run: bool::default(),
+            require_shard_selection: bool::default(),
             idle_timeout: Self::idle_timeout(),
             client_idle_timeout: Self::default_client_idle_timeout(),
             mirror_queue: Self::mirror_queue(),
