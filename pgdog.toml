@@ -12,6 +12,10 @@ read_write_strategy = "aggressive"
 prepared_statements_limit = 500
 # client_idle_timeout = 5_000
 
+# Replication lag detection settings
+# replication_lag_check_interval = 10_000  # Check every 10 seconds (default)
+# max_replication_lag_bytes = 1048576      # Ban replicas lagging by more than 1MB (default)
+
 #
 # Admin database password.
 #
