@@ -316,6 +316,7 @@ pub(crate) fn new_pool(
 ) -> Option<(User, Cluster)> {
     let sharded_tables = config.sharded_tables();
     let omnisharded_tables = config.omnisharded_tables();
+    let sharded_mappings = config.sharded_mappings();
     let general = &config.general;
     let databases = config.databases();
     let shards = databases.get(&user.database);
@@ -349,10 +350,23 @@ pub(crate) fn new_pool(
             shard_configs.push(ClusterShardConfig { primary, replicas });
         }
 
-        let sharded_tables = sharded_tables
+        let mut sharded_tables = sharded_tables
             .get(&user.database)
             .cloned()
             .unwrap_or(vec![]);
+
+        for sharded_table in &mut sharded_tables {
+            let mappings = sharded_mappings.get(&(
+                sharded_table.database.clone(),
+                sharded_table.column.clone(),
+                sharded_table.name.clone(),
+            ));
+
+            if let Some(mappings) = mappings {
+                sharded_table.mappings = mappings.to_vec();
+            }
+        }
+
         let omnisharded_tables = omnisharded_tables
             .get(&user.database)
             .cloned()

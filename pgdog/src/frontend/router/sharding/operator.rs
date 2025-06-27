@@ -1,4 +1,4 @@
-use super::Centroids;
+use super::{Centroids, Lists, Ranges};
 
 #[derive(Debug)]
 pub enum Operator<'a> {
@@ -8,4 +8,6 @@ pub enum Operator<'a> {
         probes: usize,
         centroids: Centroids<'a>,
     },
+    Range(Ranges<'a>),
+    List(Lists<'a>),
 }

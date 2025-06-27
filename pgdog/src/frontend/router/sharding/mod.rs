@@ -12,7 +12,9 @@ pub mod context_builder;
 pub mod error;
 pub mod ffi;
 pub mod hasher;
+pub mod list;
 pub mod operator;
+pub mod range;
 pub mod tables;
 #[cfg(test)]
 pub mod test;
@@ -29,6 +31,8 @@ pub use value::*;
 pub use vector::{Centroids, Distance};
 
 use super::parser::Shard;
+use list::Lists;
+use range::Ranges;
 
 /// Hash `BIGINT`.
 pub fn bigint(id: i64) -> u64 {
