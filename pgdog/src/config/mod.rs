@@ -943,7 +943,7 @@ pub enum DataType {
     Varchar,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct ShardedMapping {
     pub database: String,
@@ -966,9 +966,10 @@ pub struct ShardedMapping {
     pub shard: usize,
 }
 
-#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Default)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum ShardedMappingKind {
+    #[default]
     List,
     Range,
 }
