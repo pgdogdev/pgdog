@@ -393,6 +393,9 @@ pub struct General {
     pub mirror_queue: usize,
     #[serde(default)]
     pub auth_type: AuthType,
+    /// Disable cross-shard queries.
+    #[serde(default)]
+    pub cross_shard_disabled: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -490,6 +493,7 @@ impl Default for General {
             client_idle_timeout: Self::default_client_idle_timeout(),
             mirror_queue: Self::mirror_queue(),
             auth_type: AuthType::default(),
+            cross_shard_disabled: bool::default(),
         }
     }
 }

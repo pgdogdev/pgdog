@@ -11,6 +11,7 @@ use parking_lot::{Mutex, RawMutex};
 use tracing::{info, warn};
 
 use crate::config::PoolerMode;
+use crate::frontend::router::{Lists, Ranges};
 use crate::frontend::PreparedStatements;
 use crate::{
     backend::pool::PoolConfig,
@@ -364,6 +365,26 @@ pub(crate) fn new_pool(
 
             if let Some(mappings) = mappings {
                 sharded_table.mappings = mappings.to_vec();
+            }
+
+            if let Some(ranges) = Ranges::new(sharded_table) {
+                if !ranges.valid() {
+                    warn!(
+                        "sharded table name=\"{}\", column=\"{}\" has overlapping ranges",
+                        sharded_table.name.as_ref().unwrap_or(&String::from("")),
+                        sharded_table.column
+                    );
+                }
+            }
+
+            if let Some(lists) = Lists::new(sharded_table) {
+                if !lists.valid() {
+                    warn!(
+                        "sharded table name=\"{}\", column=\"{}\" has overlapping lists",
+                        sharded_table.name.as_ref().unwrap_or(&String::from("")),
+                        sharded_table.column
+                    );
+                }
             }
         }
 

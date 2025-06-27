@@ -31,8 +31,8 @@ pub use value::*;
 pub use vector::{Centroids, Distance};
 
 use super::parser::Shard;
-use list::Lists;
-use range::Ranges;
+pub use list::Lists;
+pub use range::Ranges;
 
 /// Hash `BIGINT`.
 pub fn bigint(id: i64) -> u64 {

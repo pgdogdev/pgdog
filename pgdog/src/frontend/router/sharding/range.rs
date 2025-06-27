@@ -10,7 +10,7 @@ pub struct Ranges<'a> {
 }
 
 impl<'a> Ranges<'a> {
-    pub(super) fn new(table: &'a ShardedTable) -> Option<Self> {
+    pub fn new(table: &'a ShardedTable) -> Option<Self> {
         if table
             .mappings
             .iter()
@@ -20,6 +20,50 @@ impl<'a> Ranges<'a> {
         } else {
             None
         }
+    }
+
+    pub fn valid(&self) -> bool {
+        let bounds = self
+            .table
+            .mappings
+            .iter()
+            .filter(|m| m.kind == ShardedMappingKind::Range)
+            .map(|m| [m.start.clone(), m.end.clone()]);
+
+        let ranges: Vec<_> = self
+            .table
+            .mappings
+            .iter()
+            .filter(|m| m.kind == ShardedMappingKind::Range)
+            .map(Range::new)
+            .collect();
+
+        for bound in bounds {
+            for range in &ranges {
+                let mut matches = 0;
+                for value in &bound {
+                    match value {
+                        Some(FlexibleType::String(s)) => {
+                            if range.varchar(&s) {
+                                matches += 1;
+                            }
+                        }
+                        Some(FlexibleType::Integer(i)) => {
+                            if range.integer(&i) {
+                                matches += 1;
+                            }
+                        }
+                        _ => (),
+                    }
+                }
+
+                if matches > 1 {
+                    return false;
+                }
+            }
+        }
+
+        true
     }
 
     pub(super) fn shard(&self, value: &Value) -> Result<Shard, Error> {
@@ -64,17 +108,6 @@ impl<'a> Range<'a> {
             start: &mapping.start,
             end: &mapping.end,
             shard: mapping.shard,
-        }
-    }
-
-    #[allow(dead_code)]
-    fn matches(&self, value: &Value) -> Result<bool, Error> {
-        if let Some(integer) = value.integer()? {
-            Ok(self.integer(&integer))
-        } else if let Some(varchar) = value.varchar()? {
-            Ok(self.varchar(varchar))
-        } else {
-            Ok(false)
         }
     }
 

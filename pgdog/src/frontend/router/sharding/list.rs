@@ -10,7 +10,7 @@ pub struct Lists<'a> {
 }
 
 impl<'a> Lists<'a> {
-    pub(super) fn new(table: &'a ShardedTable) -> Option<Self> {
+    pub fn new(table: &'a ShardedTable) -> Option<Self> {
         if table
             .mappings
             .iter()
@@ -20,6 +20,41 @@ impl<'a> Lists<'a> {
         } else {
             None
         }
+    }
+
+    pub fn valid(&self) -> bool {
+        let a = self
+            .table
+            .mappings
+            .iter()
+            .filter(|m| m.kind == ShardedMappingKind::List);
+
+        let b = a.clone();
+
+        for a in a {
+            let mut matches = 0;
+            for b in b.clone() {
+                for va in &a.values_integer {
+                    if b.values_integer.contains(va) {
+                        matches += 1;
+                        break;
+                    }
+                }
+
+                for va in &a.values_str {
+                    if b.values_str.contains(va) {
+                        matches += 1;
+                        break;
+                    }
+                }
+            }
+
+            if matches > 1 {
+                return false;
+            }
+        }
+
+        true
     }
 
     pub(super) fn shard(&self, value: &Value) -> Result<Shard, Error> {
