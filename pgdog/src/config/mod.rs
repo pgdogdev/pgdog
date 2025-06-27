@@ -353,6 +353,8 @@ pub struct General {
     #[serde(default)]
     pub dry_run: bool,
     /// Require explicit shard selection for every query.
+    /// When enabled, queries without explicit shard selection will fail with an error.
+    /// This prevents unintended cross-shard queries in multi-tenant environments.
     #[serde(default)]
     pub require_shard_selection: bool,
     /// Idle timeout.
