@@ -262,12 +262,7 @@ impl PreparedStatements {
 
     /// The server has prepared this statement already.
     pub fn contains(&mut self, name: &str) -> bool {
-        if self.local_cache.contains(name) {
-            self.local_cache.promote(name);
-            true
-        } else {
-            false
-        }
+        self.local_cache.promote(name)
     }
 
     /// Indicate this statement is prepared on the connection.
