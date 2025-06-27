@@ -17,6 +17,7 @@ use crate::state::State;
 use super::*;
 
 mod replica;
+mod replication_lag;
 
 pub fn pool() -> Pool {
     let config = Config {
