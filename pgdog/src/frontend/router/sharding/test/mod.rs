@@ -1,9 +1,10 @@
-use std::str::from_utf8;
+use std::{collections::HashSet, str::from_utf8};
 
 use rand::{seq::SliceRandom, thread_rng};
 
 use crate::{
     backend::server::test::test_server,
+    config::{FlexibleType, ShardedMapping, ShardedMappingKind},
     net::{bind::Parameter, Bind, DataRow, Execute, FromBytes, Parse, Protocol, Query, Sync},
 };
 
@@ -144,5 +145,110 @@ async fn test_binary_encoding() {
             assert_eq!(dr.column(0).unwrap(), "test1".as_bytes()); // Binary encoding is just UTF-8, no null terminator.
         }
         assert!(msg.code() == c);
+    }
+}
+
+#[tokio::test]
+async fn test_shard_by_range() {
+    let mut server = test_server().await;
+    let inserts = (0..99)
+        .map(|i| {
+            Query::new(format!(
+                "INSERT INTO test_shard_bigint_range (c) VALUES ({})",
+                i
+            ))
+        })
+        .collect::<Vec<_>>();
+    let mut queries = vec![
+        Query::new("BEGIN"),
+        Query::new("CREATE TABLE test_shard_bigint_range (c BIGINT) PARTITION BY RANGE(c)"),
+        Query::new("CREATE TABLE test_shard_bigint_range_0 PARTITION OF test_shard_bigint_range FOR VALUES FROM (0) TO (33)"),
+        Query::new("CREATE TABLE test_shard_bigint_range_1 PARTITION OF test_shard_bigint_range FOR VALUES FROM (33) TO (66)"),
+        Query::new("CREATE TABLE test_shard_bigint_range_2 PARTITION OF test_shard_bigint_range FOR VALUES FROM (66) TO (99)"),
+    ];
+    queries.extend(inserts);
+
+    server.execute_batch(&queries).await.unwrap();
+
+    let mut table = ShardedTable::default();
+    table.data_type = DataType::Bigint;
+    table.mappings = (0..3)
+        .into_iter()
+        .map(|s| ShardedMapping {
+            kind: ShardedMappingKind::Range,
+            start: Some(FlexibleType::Integer(s * 33)),
+            end: Some(FlexibleType::Integer((s + 1) * 33)),
+            shard: s as usize,
+            ..Default::default()
+        })
+        .collect::<Vec<_>>();
+
+    for shard in 0..3 {
+        let table_name = format!("SELECT * FROM test_shard_bigint_range_{}", shard);
+        let values = server.fetch_all::<i64>(&table_name).await.unwrap();
+        for value in values {
+            let context = ContextBuilder::new(&table)
+                .data(value)
+                .shards(3)
+                .build()
+                .unwrap();
+            let calc = context.apply().unwrap();
+            match calc {
+                Shard::Direct(direct) => assert_eq!(direct, shard),
+                _ => panic!("not a direct shard"),
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn test_shard_by_list() {
+    let mut server = test_server().await;
+    let inserts = (0..30)
+        .map(|i| {
+            Query::new(format!(
+                "INSERT INTO test_shard_bigint_list (c) VALUES ({})",
+                i
+            ))
+        })
+        .collect::<Vec<_>>();
+    let mut queries = vec![
+        Query::new("BEGIN"),
+        Query::new("CREATE TABLE test_shard_bigint_list (c BIGINT) PARTITION BY LIST(c)"),
+        Query::new("CREATE TABLE test_shard_bigint_list_0 PARTITION OF test_shard_bigint_list FOR VALUES IN (0, 1, 2, 3, 4, 5, 6, 7, 8, 9)"),
+        Query::new("CREATE TABLE test_shard_bigint_list_1 PARTITION OF test_shard_bigint_list FOR VALUES IN (10, 11, 12, 13, 14, 15, 16, 17, 18, 19)"),
+        Query::new("CREATE TABLE test_shard_bigint_list_2 PARTITION OF test_shard_bigint_list FOR VALUES IN (20, 21, 22, 23, 24, 25, 26, 27, 28, 29)"),
+    ];
+    queries.extend(inserts);
+
+    server.execute_batch(&queries).await.unwrap();
+
+    let mut table = ShardedTable::default();
+    table.data_type = DataType::Bigint;
+    table.mappings = (0..3)
+        .into_iter()
+        .map(|s| ShardedMapping {
+            kind: ShardedMappingKind::List,
+            values_integer: (s..((s + 1) * 10)).into_iter().collect::<HashSet<_>>(),
+            shard: s as usize,
+            ..Default::default()
+        })
+        .collect::<Vec<_>>();
+
+    for shard in 0..3 {
+        let table_name = format!("SELECT * FROM test_shard_bigint_list_{}", shard);
+        let values = server.fetch_all::<i64>(&table_name).await.unwrap();
+        for value in values {
+            let context = ContextBuilder::new(&table)
+                .data(value)
+                .shards(3)
+                .build()
+                .unwrap();
+            let calc = context.apply().unwrap();
+            match calc {
+                Shard::Direct(direct) => assert_eq!(direct, shard),
+                _ => panic!("not a direct shard"),
+            }
+        }
     }
 }

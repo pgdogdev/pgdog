@@ -100,6 +100,35 @@ impl<'a> Value<'a> {
         &self.data
     }
 
+    pub fn integer(&self) -> Result<Option<i64>, Error> {
+        if self.data_type == DataType::Bigint {
+            match self.data {
+                Data::Integer(int) => Ok(Some(int)),
+                Data::Text(text) => Ok(Some(text.parse()?)),
+                Data::Binary(data) => match data.len() {
+                    2 => Ok(Some(i16::from_be_bytes(data.try_into()?) as i64)),
+                    4 => Ok(Some(i32::from_be_bytes(data.try_into()?) as i64)),
+                    8 => Ok(Some(i64::from_be_bytes(data.try_into()?))),
+                    _ => return Err(Error::IntegerSize),
+                },
+            }
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn varchar(&self) -> Result<Option<&str>, Error> {
+        if self.data_type == DataType::Varchar {
+            match self.data {
+                Data::Integer(_) => Ok(None),
+                Data::Text(text) => Ok(Some(text)),
+                Data::Binary(data) => Ok(Some(from_utf8(data)?)),
+            }
+        } else {
+            Ok(None)
+        }
+    }
+
     pub fn hash(&self, hasher: Hasher) -> Result<Option<u64>, Error> {
         match self.data_type {
             DataType::Bigint => match self.data {

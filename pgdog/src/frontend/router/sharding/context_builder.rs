@@ -1,12 +1,15 @@
 use crate::config::{DataType, Hasher as HasherConfig, ShardedTable};
 
-use super::{Centroids, Context, Data, Error, Hasher, Operator, Value};
+use super::{Centroids, Context, Data, Error, Hasher, Lists, Operator, Ranges, Value};
 
+#[derive(Debug)]
 pub struct ContextBuilder<'a> {
     data_type: DataType,
     value: Option<Value<'a>>,
     operator: Option<Operator<'a>>,
     centroids: Option<Centroids<'a>>,
+    ranges: Option<Ranges<'a>>,
+    lists: Option<Lists<'a>>,
     probes: usize,
     hasher: Hasher,
     #[allow(dead_code)]
@@ -29,6 +32,8 @@ impl<'a> ContextBuilder<'a> {
                 HasherConfig::Sha1 => Hasher::Sha1,
                 HasherConfig::Postgres => Hasher::Postgres,
             },
+            ranges: Ranges::new(table),
+            lists: Lists::new(table),
             array: false,
         }
     }
@@ -47,6 +52,8 @@ impl<'a> ContextBuilder<'a> {
                 operator: None,
                 hasher: Hasher::Postgres,
                 array: false,
+                ranges: None,
+                lists: None,
             })
         } else if uuid.valid() {
             Ok(Self {
@@ -57,6 +64,8 @@ impl<'a> ContextBuilder<'a> {
                 operator: None,
                 hasher: Hasher::Postgres,
                 array: false,
+                ranges: None,
+                lists: None,
             })
         } else {
             Err(Error::IncompleteContext)
@@ -70,6 +79,10 @@ impl<'a> ContextBuilder<'a> {
                 probes: self.probes,
                 centroids,
             });
+        } else if let Some(ranges) = self.ranges.take() {
+            self.operator = Some(Operator::Range(ranges));
+        } else if let Some(lists) = self.lists.take() {
+            self.operator = Some(Operator::List(lists));
         } else {
             self.operator = Some(Operator::Shards(shards))
         }

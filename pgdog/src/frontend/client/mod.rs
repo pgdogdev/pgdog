@@ -56,6 +56,7 @@ pub struct Client {
     request_buffer: Buffer,
     stream_buffer: BytesMut,
     message_buffer: VecDeque<ProtocolMessage>,
+    cross_shard_disabled: bool,
 }
 
 impl Client {
@@ -205,6 +206,7 @@ impl Client {
             stream_buffer: BytesMut::new(),
             message_buffer: VecDeque::new(),
             shutdown: false,
+            cross_shard_disabled: false,
         };
 
         drop(conn);
@@ -246,6 +248,7 @@ impl Client {
             stream_buffer: BytesMut::new(),
             message_buffer: VecDeque::new(),
             shutdown: false,
+            cross_shard_disabled: false,
         }
     }
 
@@ -458,6 +461,17 @@ impl Client {
                     self.set(inner).await?;
                     return Ok(false);
                 }
+
+                Some(Command::Query(query)) => {
+                    if query.is_cross_shard() && self.cross_shard_disabled {
+                        self.stream
+                            .error(ErrorResponse::cross_shard_disabled(), self.in_transaction)
+                            .await?;
+                        inner.done(self.in_transaction);
+                        inner.reset_router();
+                        return Ok(false);
+                    }
+                }
                 _ => (),
             };
 
@@ -616,6 +630,7 @@ impl Client {
         self.prepared_statements.enabled = config.prepared_statements();
         self.prepared_statements.capacity = config.config.general.prepared_statements_limit;
         self.timeouts = Timeouts::from_config(&config.config.general);
+        self.cross_shard_disabled = config.config.general.cross_shard_disabled;
 
         while !self.request_buffer.full() {
             let idle_timeout = self

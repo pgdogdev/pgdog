@@ -91,6 +91,59 @@ name = "sharded_varchar"
 column = "id_varchar"
 data_type = "varchar"
 
+#
+# Shard by range
+#
+[[sharded_tables]]
+database = "pgdog_sharded"
+name = "sharded_range"
+column = "id"
+data_type = "bigint"
+
+[[sharded_mappings]]
+database = "pgdog_sharded"
+table = "sharded_range"
+column = "id"
+kind = "range"
+start = 0
+end = 100
+shard = 0
+
+[[sharded_mappings]]
+database = "pgdog_sharded"
+table = "sharded_range"
+column = "id"
+kind = "range"
+start = 100
+end = 200
+shard = 1
+
+
+#
+# Shard by list
+#
+[[sharded_tables]]
+database = "pgdog_sharded"
+name = "sharded_list"
+column = "id"
+data_type = "bigint"
+
+[[sharded_mappings]]
+database = "pgdog_sharded"
+table = "sharded_list"
+column = "id"
+kind = "list"
+values = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+shard = 0
+
+[[sharded_mappings]]
+database = "pgdog_sharded"
+table = "sharded_list"
+column = "id"
+kind = "list"
+values = [10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+shard = 1
+
 [[omnisharded_tables]]
 database = "pgdog_sharded"
 tables = ["sharded_omni"]

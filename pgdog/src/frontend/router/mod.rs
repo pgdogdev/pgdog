@@ -16,6 +16,7 @@ pub use parser::{Command, QueryParser, Route};
 use super::Buffer;
 pub use context::RouterContext;
 pub use search_path::SearchPath;
+pub use sharding::{Lists, Ranges};
 
 /// Query router.
 #[derive(Debug)]

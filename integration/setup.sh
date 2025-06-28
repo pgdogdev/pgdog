@@ -38,6 +38,11 @@ for db in pgdog shard_0 shard_1; do
     done
 
     psql -c "CREATE TABLE IF NOT EXISTS sharded_varchar (id_varchar VARCHAR)" ${db} -U pgdog
+
+    for table in list range; do
+        psql -c "CREATE TABLE IF NOT EXISTS sharded_${table} (id BIGINT)" ${db} -U pgdog
+    done
+
     psql -f ${SCRIPT_DIR}/../pgdog/src/backend/schema/setup.sql ${db} -U ${user}
 done
 

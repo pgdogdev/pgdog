@@ -50,6 +50,18 @@ impl ErrorResponse {
         }
     }
 
+    pub fn cross_shard_disabled() -> ErrorResponse {
+        ErrorResponse {
+            severity: "ERROR".into(),
+            code: "58000".into(),
+            message: "cross-shard queries are disabled".into(),
+            detail: Some("query doesn't have a sharding key".into()),
+            context: None,
+            file: None,
+            routine: None,
+        }
+    }
+
     pub fn client_idle_timeout(duration: Duration) -> ErrorResponse {
         ErrorResponse {
             severity: "FATAL".into(),

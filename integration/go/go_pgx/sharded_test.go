@@ -62,3 +62,61 @@ func TestShardedVarcharArray(t *testing.T) {
 		rows.Close()
 	}
 }
+
+func TestShardedList(t *testing.T) {
+	conn, err := pgx.Connect(context.Background(), "postgres://pgdog:pgdog@127.0.0.1:6432/pgdog_sharded")
+	assert.NoError(t, err)
+	defer conn.Close(context.Background())
+
+	_, err = conn.Exec(context.Background(), "TRUNCATE TABLE sharded_list")
+	assert.NoError(t, err)
+
+	for i := range 20 {
+		for _, query := range [4]string{
+			"INSERT INTO sharded_list (id) VALUES ($1) RETURNING *",
+			"SELECT * FROM sharded_list WHERE id = $1",
+			"UPDATE sharded_list SET id = $1 WHERE id = $1 RETURNING *",
+			"DELETE FROM sharded_list WHERE id = $1 RETURNING *",
+		} {
+			rows, err := conn.Query(context.Background(), query, int64(i))
+			assert.NoError(t, err)
+			count := 0
+
+			for rows.Next() {
+				count += 1
+			}
+
+			rows.Close()
+			assert.Equal(t, 1, count)
+		}
+	}
+}
+
+func TestShardedRange(t *testing.T) {
+	conn, err := pgx.Connect(context.Background(), "postgres://pgdog:pgdog@127.0.0.1:6432/pgdog_sharded")
+	assert.NoError(t, err)
+	defer conn.Close(context.Background())
+
+	_, err = conn.Exec(context.Background(), "TRUNCATE TABLE sharded_range")
+	assert.NoError(t, err)
+
+	for i := range 200 {
+		for _, query := range [4]string{
+			"INSERT INTO sharded_range (id) VALUES ($1) RETURNING *",
+			"SELECT * FROM sharded_range WHERE id = $1",
+			"UPDATE sharded_range SET id = $1 WHERE id = $1 RETURNING *",
+			"DELETE FROM sharded_range WHERE id = $1 RETURNING *",
+		} {
+			rows, err := conn.Query(context.Background(), query, int64(i))
+			assert.NoError(t, err)
+			count := 0
+
+			for rows.Next() {
+				count += 1
+			}
+
+			rows.Close()
+			assert.Equal(t, 1, count)
+		}
+	}
+}

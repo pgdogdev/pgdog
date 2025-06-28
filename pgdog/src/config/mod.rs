@@ -181,6 +181,8 @@ pub struct Config {
     pub manual_queries: Vec<ManualQuery>,
     #[serde(default)]
     pub omnisharded_tables: Vec<OmnishardedTables>,
+    #[serde(default)]
+    pub sharded_mappings: Vec<ShardedMapping>,
 }
 
 impl Config {
@@ -240,6 +242,34 @@ impl Config {
         }
 
         queries
+    }
+
+    /// Sharded mappings.
+    pub fn sharded_mappings(
+        &self,
+    ) -> HashMap<(String, String, Option<String>), Vec<ShardedMapping>> {
+        let mut mappings = HashMap::new();
+
+        for mapping in &self.sharded_mappings {
+            let mut mapping = mapping.clone();
+            let values = std::mem::take(&mut mapping.values);
+            for value in values {
+                match value {
+                    FlexibleType::String(s) => mapping.values_str.insert(s),
+                    FlexibleType::Integer(i) => mapping.values_integer.insert(i),
+                };
+            }
+            let entry = mappings
+                .entry((
+                    mapping.database.clone(),
+                    mapping.column.clone(),
+                    mapping.table.clone(),
+                ))
+                .or_insert_with(Vec::new);
+            entry.push(mapping);
+        }
+
+        mappings
     }
 
     pub fn check(&self) {
@@ -363,6 +393,9 @@ pub struct General {
     pub mirror_queue: usize,
     #[serde(default)]
     pub auth_type: AuthType,
+    /// Disable cross-shard queries.
+    #[serde(default)]
+    pub cross_shard_disabled: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -460,6 +493,7 @@ impl Default for General {
             client_idle_timeout: Self::default_client_idle_timeout(),
             mirror_queue: Self::mirror_queue(),
             auth_type: AuthType::default(),
+            cross_shard_disabled: bool::default(),
         }
     }
 }
@@ -856,6 +890,9 @@ pub struct ShardedTable {
     /// Hasher function.
     #[serde(default)]
     pub hasher: Hasher,
+    /// Explicit routing rules.
+    #[serde(skip, default)]
+    pub mappings: Vec<ShardedMapping>,
 }
 
 impl ShardedTable {
@@ -904,6 +941,56 @@ pub enum DataType {
     Uuid,
     Vector,
     Varchar,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct ShardedMapping {
+    pub database: String,
+    pub column: String,
+    pub table: Option<String>,
+    pub kind: ShardedMappingKind,
+    pub start: Option<FlexibleType>,
+    pub end: Option<FlexibleType>,
+
+    // Be flexible with user inputs.
+    #[serde(default)]
+    pub values: HashSet<FlexibleType>,
+
+    // Be strict and fast when calculating the shard.
+    #[serde(skip, default)]
+    pub values_str: HashSet<String>,
+    #[serde(skip, default)]
+    pub values_integer: HashSet<i64>,
+
+    pub shard: usize,
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Default)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum ShardedMappingKind {
+    #[default]
+    List,
+    Range,
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Eq, Hash)]
+#[serde(untagged)]
+pub enum FlexibleType {
+    Integer(i64),
+    String(String),
+}
+
+impl From<i64> for FlexibleType {
+    fn from(value: i64) -> Self {
+        Self::Integer(value)
+    }
+}
+
+impl From<String> for FlexibleType {
+    fn from(value: String) -> Self {
+        Self::String(value)
+    }
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Default)]

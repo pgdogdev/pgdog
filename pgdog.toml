@@ -11,6 +11,7 @@ idle_healthcheck_delay = 2342343243
 read_write_strategy = "aggressive"
 prepared_statements_limit = 500
 # client_idle_timeout = 5_000
+# cross_shard_disabled = false
 
 #
 # Admin database password.
@@ -84,6 +85,40 @@ name = "sharded"
 column = "id"
 data_type = "bigint"
 primary = true
+
+# [[sharded_mappings]]
+# database = "pgdog_sharded"
+# table = "sharded"
+# column = "id"
+# kind = "range"
+# start = 0
+# end = 100
+# shard = 0
+
+# [[sharded_mappings]]
+# database = "pgdog_sharded"
+# table = "sharded"
+# column = "id"
+# kind = "range"
+# start = 100
+# shard = 1
+
+[[sharded_mappings]]
+database = "pgdog_sharded"
+table = "sharded"
+column = "id"
+kind = "list"
+values = [1, 2, 3, 4]
+shard = 0
+
+[[sharded_mappings]]
+database = "pgdog_sharded"
+table = "sharded"
+column = "id"
+kind = "list"
+values = [5, 6, 7]
+shard = 1
+
 
 [[sharded_tables]]
 column = "customer_id"
