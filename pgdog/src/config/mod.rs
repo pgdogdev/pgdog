@@ -17,16 +17,14 @@ use std::time::Duration;
 use std::usize;
 use std::{collections::HashMap, path::PathBuf};
 
+use crate::frontend::router::sharding::Mapping;
+use crate::net::messages::Vector;
+use crate::util::{human_duration_optional, random_string};
 use arc_swap::ArcSwap;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use tracing::info;
 use tracing::warn;
-
-use crate::frontend::router::sharding::list::ListShards;
-use crate::frontend::router::sharding::Mapping;
-use crate::net::messages::Vector;
-use crate::util::{human_duration_optional, random_string};
 
 static CONFIG: Lazy<ArcSwap<ConfigAndUsers>> =
     Lazy::new(|| ArcSwap::from_pointee(ConfigAndUsers::default()));
@@ -253,7 +251,7 @@ impl Config {
         let mut mappings = HashMap::new();
 
         for mapping in &self.sharded_mappings {
-            let mut mapping = mapping.clone();
+            let mapping = mapping.clone();
             let entry = mappings
                 .entry((
                     mapping.database.clone(),
