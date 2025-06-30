@@ -23,6 +23,8 @@ use serde::{Deserialize, Serialize};
 use tracing::info;
 use tracing::warn;
 
+use crate::frontend::router::sharding::list::ListShards;
+use crate::frontend::router::sharding::Mapping;
 use crate::net::messages::Vector;
 use crate::util::{human_duration_optional, random_string};
 
@@ -252,13 +254,6 @@ impl Config {
 
         for mapping in &self.sharded_mappings {
             let mut mapping = mapping.clone();
-            let values = std::mem::take(&mut mapping.values);
-            for value in values {
-                match value {
-                    FlexibleType::String(s) => mapping.values_str.insert(s),
-                    FlexibleType::Integer(i) => mapping.values_integer.insert(i),
-                };
-            }
             let entry = mappings
                 .entry((
                     mapping.database.clone(),
@@ -892,7 +887,7 @@ pub struct ShardedTable {
     pub hasher: Hasher,
     /// Explicit routing rules.
     #[serde(skip, default)]
-    pub mappings: Vec<ShardedMapping>,
+    pub mapping: Option<Mapping>,
 }
 
 impl ShardedTable {
@@ -952,17 +947,8 @@ pub struct ShardedMapping {
     pub kind: ShardedMappingKind,
     pub start: Option<FlexibleType>,
     pub end: Option<FlexibleType>,
-
-    // Be flexible with user inputs.
     #[serde(default)]
     pub values: HashSet<FlexibleType>,
-
-    // Be strict and fast when calculating the shard.
-    #[serde(skip, default)]
-    pub values_str: HashSet<String>,
-    #[serde(skip, default)]
-    pub values_integer: HashSet<i64>,
-
     pub shard: usize,
 }
 
@@ -974,7 +960,7 @@ pub enum ShardedMappingKind {
     Range,
 }
 
-#[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Eq, Hash, PartialOrd, Ord)]
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Eq, Hash)]
 #[serde(untagged)]
 pub enum FlexibleType {
     Integer(i64),
