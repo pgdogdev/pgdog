@@ -13,6 +13,7 @@ pub mod error;
 pub mod ffi;
 pub mod hasher;
 pub mod list;
+pub mod mapping;
 pub mod operator;
 pub mod range;
 pub mod tables;
@@ -31,7 +32,8 @@ pub use value::*;
 pub use vector::{Centroids, Distance};
 
 use super::parser::Shard;
-pub use list::Lists;
+pub use list::{ListShards, Lists};
+pub use mapping::Mapping;
 pub use range::Ranges;
 
 /// Hash `BIGINT`.

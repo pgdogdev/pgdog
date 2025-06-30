@@ -172,16 +172,18 @@ async fn test_shard_by_range() {
 
     let mut table = ShardedTable::default();
     table.data_type = DataType::Bigint;
-    table.mappings = (0..3)
-        .into_iter()
-        .map(|s| ShardedMapping {
-            kind: ShardedMappingKind::Range,
-            start: Some(FlexibleType::Integer(s * 33)),
-            end: Some(FlexibleType::Integer((s + 1) * 33)),
-            shard: s as usize,
-            ..Default::default()
-        })
-        .collect::<Vec<_>>();
+    table.mapping = Mapping::new(
+        &(0..3)
+            .into_iter()
+            .map(|s| ShardedMapping {
+                kind: ShardedMappingKind::Range,
+                start: Some(FlexibleType::Integer(s * 33)),
+                end: Some(FlexibleType::Integer((s + 1) * 33)),
+                shard: s as usize,
+                ..Default::default()
+            })
+            .collect::<Vec<_>>(),
+    );
 
     for shard in 0..3 {
         let table_name = format!("SELECT * FROM test_shard_bigint_range_{}", shard);
@@ -225,15 +227,20 @@ async fn test_shard_by_list() {
 
     let mut table = ShardedTable::default();
     table.data_type = DataType::Bigint;
-    table.mappings = (0..3)
-        .into_iter()
-        .map(|s| ShardedMapping {
-            kind: ShardedMappingKind::List,
-            values_integer: (s..((s + 1) * 10)).into_iter().collect::<HashSet<_>>(),
-            shard: s as usize,
-            ..Default::default()
-        })
-        .collect::<Vec<_>>();
+    table.mapping = Mapping::new(
+        &(0..3)
+            .into_iter()
+            .map(|s| ShardedMapping {
+                kind: ShardedMappingKind::List,
+                values: (s * 10..((s + 1) * 10))
+                    .into_iter()
+                    .map(|v| FlexibleType::Integer(v))
+                    .collect::<HashSet<_>>(),
+                shard: s as usize,
+                ..Default::default()
+            })
+            .collect::<Vec<_>>(),
+    );
 
     for shard in 0..3 {
         let table_name = format!("SELECT * FROM test_shard_bigint_list_{}", shard);

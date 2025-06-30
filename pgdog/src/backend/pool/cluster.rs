@@ -367,7 +367,7 @@ mod test {
                         centroids_path: None,
                         centroid_probes: 1,
                         hasher: Hasher::Postgres,
-                        mappings: vec![],
+                        mapping: None,
                     }],
                     vec!["sharded_omni".into()],
                     false,

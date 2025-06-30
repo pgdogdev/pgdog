@@ -1,22 +1,18 @@
-use super::{Error, Value};
+use super::{Error, Mapping, Value};
 use crate::{
-    config::{FlexibleType, ShardedMapping, ShardedMappingKind, ShardedTable},
+    config::{FlexibleType, ShardedMapping, ShardedMappingKind},
     frontend::router::parser::Shard,
 };
 
 #[derive(Debug)]
 pub struct Ranges<'a> {
-    table: &'a ShardedTable,
+    mappings: &'a [ShardedMapping],
 }
 
 impl<'a> Ranges<'a> {
-    pub fn new(table: &'a ShardedTable) -> Option<Self> {
-        if table
-            .mappings
-            .iter()
-            .any(|m| m.kind == ShardedMappingKind::Range)
-        {
-            Some(Self { table })
+    pub fn new(mapping: &'a Option<Mapping>) -> Option<Self> {
+        if let Some(Mapping::Range(mappings)) = mapping {
+            Some(Self { mappings })
         } else {
             None
         }
@@ -24,14 +20,12 @@ impl<'a> Ranges<'a> {
 
     pub fn valid(&self) -> bool {
         let bounds = self
-            .table
             .mappings
             .iter()
             .filter(|m| m.kind == ShardedMappingKind::Range)
             .map(|m| [m.start.clone(), m.end.clone()]);
 
         let ranges: Vec<_> = self
-            .table
             .mappings
             .iter()
             .filter(|m| m.kind == ShardedMappingKind::Range)
@@ -72,7 +66,6 @@ impl<'a> Ranges<'a> {
         let varchar = value.varchar()?;
 
         for mapping in self
-            .table
             .mappings
             .iter()
             .filter(|m| m.kind == ShardedMappingKind::Range)

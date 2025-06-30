@@ -17,14 +17,14 @@ use std::time::Duration;
 use std::usize;
 use std::{collections::HashMap, path::PathBuf};
 
+use crate::frontend::router::sharding::Mapping;
+use crate::net::messages::Vector;
+use crate::util::{human_duration_optional, random_string};
 use arc_swap::ArcSwap;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use tracing::info;
 use tracing::warn;
-
-use crate::net::messages::Vector;
-use crate::util::{human_duration_optional, random_string};
 
 static CONFIG: Lazy<ArcSwap<ConfigAndUsers>> =
     Lazy::new(|| ArcSwap::from_pointee(ConfigAndUsers::default()));
@@ -251,14 +251,7 @@ impl Config {
         let mut mappings = HashMap::new();
 
         for mapping in &self.sharded_mappings {
-            let mut mapping = mapping.clone();
-            let values = std::mem::take(&mut mapping.values);
-            for value in values {
-                match value {
-                    FlexibleType::String(s) => mapping.values_str.insert(s),
-                    FlexibleType::Integer(i) => mapping.values_integer.insert(i),
-                };
-            }
+            let mapping = mapping.clone();
             let entry = mappings
                 .entry((
                     mapping.database.clone(),
@@ -892,7 +885,7 @@ pub struct ShardedTable {
     pub hasher: Hasher,
     /// Explicit routing rules.
     #[serde(skip, default)]
-    pub mappings: Vec<ShardedMapping>,
+    pub mapping: Option<Mapping>,
 }
 
 impl ShardedTable {
@@ -952,17 +945,8 @@ pub struct ShardedMapping {
     pub kind: ShardedMappingKind,
     pub start: Option<FlexibleType>,
     pub end: Option<FlexibleType>,
-
-    // Be flexible with user inputs.
     #[serde(default)]
     pub values: HashSet<FlexibleType>,
-
-    // Be strict and fast when calculating the shard.
-    #[serde(skip, default)]
-    pub values_str: HashSet<String>,
-    #[serde(skip, default)]
-    pub values_integer: HashSet<i64>,
-
     pub shard: usize,
 }
 

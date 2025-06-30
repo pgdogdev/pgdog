@@ -32,8 +32,8 @@ impl<'a> ContextBuilder<'a> {
                 HasherConfig::Sha1 => Hasher::Sha1,
                 HasherConfig::Postgres => Hasher::Postgres,
             },
-            ranges: Ranges::new(table),
-            lists: Lists::new(table),
+            ranges: Ranges::new(&table.mapping),
+            lists: Lists::new(&table.mapping),
             array: false,
         }
     }
