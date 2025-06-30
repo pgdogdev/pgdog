@@ -252,7 +252,6 @@ async fn test_shard_by_list() {
                 .build()
                 .unwrap();
             let calc = context.apply().unwrap();
-            println!("shard: {:?}, value: {}", calc, value);
             match calc {
                 Shard::Direct(direct) => assert_eq!(direct, shard),
                 _ => panic!("not a direct shard"),
