@@ -974,7 +974,7 @@ pub enum ShardedMappingKind {
     Range,
 }
 
-#[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Eq, Hash)]
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Eq, Hash, PartialOrd, Ord)]
 #[serde(untagged)]
 pub enum FlexibleType {
     Integer(i64),

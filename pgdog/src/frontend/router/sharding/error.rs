@@ -27,4 +27,10 @@ pub enum Error {
 
     #[error("{0}")]
     NullError(#[from] NulError),
+
+    #[error("btree node error")]
+    BtreeNodeError,
+
+    #[error("range is overlapping or incorrect")]
+    IncorrectRange,
 }

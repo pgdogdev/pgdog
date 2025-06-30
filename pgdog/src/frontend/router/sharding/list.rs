@@ -1,8 +1,8 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use super::{Error, Shard, Value};
 
-use crate::config::{ShardedMappingKind, ShardedTable};
+use crate::config::{FlexibleType, ShardedMappingKind, ShardedTable};
 
 #[derive(Debug)]
 pub struct Lists<'a> {
@@ -103,5 +103,39 @@ impl<'a> List<'a> {
 
     fn varchar(&self, value: &str) -> Result<bool, Error> {
         Ok(self.values_str.contains(value))
+    }
+}
+
+#[derive(Debug)]
+pub struct ListShards {
+    mapping: HashMap<FlexibleType, usize>,
+}
+
+impl ListShards {
+    pub fn is_empty(&self) -> bool {
+        self.mapping.is_empty()
+    }
+
+    pub fn new(table: &ShardedTable) -> Self {
+        let mut mapping = HashMap::new();
+        for map in table
+            .mappings
+            .iter()
+            .filter(|m| m.kind == ShardedMappingKind::List)
+        {
+            for value in &map.values {
+                mapping.insert(value.clone(), map.shard);
+            }
+        }
+
+        Self { mapping }
+    }
+
+    pub fn shard(&self, value: &FlexibleType) -> Result<Shard, Error> {
+        if let Some(shard) = self.mapping.get(value) {
+            Ok(Shard::Direct(*shard))
+        } else {
+            Ok(Shard::All)
+        }
     }
 }
