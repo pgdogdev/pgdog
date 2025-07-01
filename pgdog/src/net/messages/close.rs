@@ -3,12 +3,16 @@ use std::fmt::Debug;
 use std::str::from_utf8;
 use std::str::from_utf8_unchecked;
 
+use crate::frontend::prepared_statements::global_name;
+use crate::frontend::prepared_statements::Counter;
+
 use super::code;
 use super::prelude::*;
 
 #[derive(Clone)]
 pub struct Close {
     payload: Bytes,
+    counter: Option<Counter>,
 }
 
 impl Debug for Close {
@@ -16,17 +20,25 @@ impl Debug for Close {
         f.debug_struct("Close")
             .field("kind", &self.kind())
             .field("name", &self.name())
+            .field("counter", &self.counter)
             .finish()
     }
 }
 
 impl Close {
+    pub fn counted(counter: &Counter) -> Self {
+        let mut close = Self::named(&global_name(*counter));
+        close.counter = Some(*counter);
+        close
+    }
+
     pub fn named(name: &str) -> Self {
         let mut payload = Payload::named('C');
         payload.put_u8(b'S');
-        payload.put_string(name);
+        payload.put_string(&name);
         Self {
             payload: payload.freeze(),
+            counter: None,
         }
     }
 
@@ -36,11 +48,16 @@ impl Close {
         payload.put_string(name);
         Self {
             payload: payload.freeze(),
+            counter: None,
         }
     }
 
     pub fn anonymous(&self) -> bool {
         self.name().is_empty() || self.kind() != 'S'
+    }
+
+    pub fn counter(&self) -> Counter {
+        self.counter.unwrap_or_default()
     }
 
     pub fn is_statement(&self) -> bool {
@@ -67,7 +84,10 @@ impl FromBytes for Close {
         code!(bytes, 'C');
         from_utf8(&original[6..original.len() - 1])?;
 
-        Ok(Self { payload: original })
+        Ok(Self {
+            payload: original,
+            counter: None,
+        })
     }
 }
 
@@ -89,7 +109,7 @@ mod test {
 
     #[test]
     fn test_close() {
-        let close = Close::named("test");
+        let close = Close::counted(&1);
         assert_eq!(close.len(), close.to_bytes().unwrap().len());
     }
 }

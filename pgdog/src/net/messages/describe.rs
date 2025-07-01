@@ -2,6 +2,8 @@
 use std::str::from_utf8;
 use std::str::from_utf8_unchecked;
 
+use crate::frontend::prepared_statements::{global_name, Counter};
+
 use super::code;
 use super::prelude::*;
 
@@ -10,6 +12,7 @@ use super::prelude::*;
 pub struct Describe {
     payload: Bytes,
     original: Option<Bytes>,
+    counter: Option<Counter>,
 }
 
 impl FromBytes for Describe {
@@ -22,6 +25,7 @@ impl FromBytes for Describe {
         Ok(Self {
             payload: original.clone(),
             original: Some(original),
+            counter: None,
         })
     }
 }
@@ -51,14 +55,20 @@ impl Describe {
         self.kind() != 'S' || self.statement().is_empty()
     }
 
-    pub fn rename(self, name: impl ToString) -> Self {
+    /// Rename describe given prepared statement counter.
+    pub fn rename(self, counter: &Counter) -> Self {
         let mut payload = Payload::named('D');
         payload.put_u8(self.kind() as u8);
-        payload.put_string(&name.to_string());
+        payload.put_string(&global_name(*counter));
         Describe {
             payload: payload.freeze(),
             original: None,
+            counter: Some(*counter),
         }
+    }
+
+    pub fn counter(&self) -> Counter {
+        self.counter.unwrap_or(Counter::default())
     }
 
     pub fn new_statement(name: &str) -> Describe {
@@ -68,7 +78,14 @@ impl Describe {
         Describe {
             payload: payload.freeze(),
             original: None,
+            counter: None,
         }
+    }
+
+    pub fn new_counter(counter: &Counter) -> Self {
+        let mut desc = Self::new_statement(&global_name(*counter));
+        desc.counter = Some(*counter);
+        desc
     }
 
     pub fn is_statement(&self) -> bool {
@@ -86,6 +103,7 @@ impl Describe {
         Describe {
             payload: payload.freeze(),
             original: None,
+            counter: None,
         }
     }
 

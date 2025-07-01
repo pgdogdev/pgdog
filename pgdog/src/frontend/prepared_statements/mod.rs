@@ -12,7 +12,7 @@ pub mod global_cache;
 pub mod rewrite;
 
 pub use error::Error;
-pub use global_cache::GlobalCache;
+pub use global_cache::{global_name, parse_counter, Counter, GlobalCache};
 
 pub use rewrite::Rewrite;
 
@@ -21,7 +21,7 @@ static CACHE: Lazy<PreparedStatements> = Lazy::new(PreparedStatements::default);
 #[derive(Clone, Debug)]
 pub struct PreparedStatements {
     pub(super) global: Arc<Mutex<GlobalCache>>,
-    pub(super) local: HashMap<String, String>,
+    pub(super) local: HashMap<String, Counter>,
     pub(super) enabled: bool,
     pub(super) capacity: usize,
 }
@@ -80,7 +80,7 @@ impl PreparedStatements {
     }
 
     /// Get global statement counter.
-    pub fn name(&self, name: &str) -> Option<&String> {
+    pub fn name(&self, name: &str) -> Option<&Counter> {
         self.local.get(name)
     }
 

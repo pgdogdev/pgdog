@@ -85,7 +85,7 @@ impl Buffer {
                     if !bind.anonymous() {
                         return Ok(PreparedStatements::global()
                             .lock()
-                            .parse(bind.statement())
+                            .parse(&bind.counter())
                             .map(BufferedQuery::Prepared));
                     }
                 }
@@ -93,7 +93,7 @@ impl Buffer {
                     if !describe.anonymous() {
                         return Ok(PreparedStatements::global()
                             .lock()
-                            .parse(describe.statement())
+                            .parse(&describe.counter())
                             .map(BufferedQuery::Prepared));
                     }
                 }

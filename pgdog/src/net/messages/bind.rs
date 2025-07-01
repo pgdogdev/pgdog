@@ -1,4 +1,8 @@
 //! Bind (F) message.
+#[cfg(test)]
+use crate::frontend::client::counter;
+use crate::frontend::prepared_statements::global_name;
+use crate::frontend::prepared_statements::Counter;
 use crate::net::c_string_buf_len;
 use uuid::Uuid;
 
@@ -112,6 +116,8 @@ pub struct Bind {
     results: Vec<i16>,
     /// Original payload.
     original: Option<Bytes>,
+    /// Global counter
+    counter: Option<Counter>,
 }
 
 impl Default for Bind {
@@ -123,6 +129,7 @@ impl Default for Bind {
             params: vec![],
             results: vec![],
             original: None,
+            counter: None,
         }
     }
 }
@@ -161,9 +168,10 @@ impl Bind {
     }
 
     /// Rename this Bind message to a different prepared statement.
-    pub fn rename(mut self, name: impl ToString) -> Self {
-        self.statement = Bytes::from(name.to_string() + "\0");
+    pub fn rename(mut self, counter: &Counter) -> Self {
+        self.statement = Bytes::from(global_name(*counter) + "\0");
         self.original = None;
+        self.counter = Some(*counter);
         self
     }
 
@@ -176,6 +184,12 @@ impl Bind {
     pub(crate) fn statement(&self) -> &str {
         // SAFETY: We check that this is valid UTF-8 in FromBytes::from_bytes below.
         unsafe { from_utf8_unchecked(&self.statement[0..self.statement.len() - 1]) }
+    }
+
+    /// Prepared statement counter.
+    #[inline]
+    pub(crate) fn counter(&self) -> Counter {
+        self.counter.unwrap_or(Counter::default())
     }
 
     /// Format codes, if any.
@@ -273,6 +287,7 @@ impl FromBytes for Bind {
             params,
             results,
             original: Some(original),
+            counter: None,
         })
     }
 }
@@ -346,6 +361,7 @@ mod test {
                     data: "test".as_bytes().to_vec(),
                 },
             ],
+            counter: Some(1),
             results: vec![0],
         };
         let bytes = bind.to_bytes().unwrap();

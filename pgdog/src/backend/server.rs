@@ -17,7 +17,7 @@ use super::{
 };
 use crate::{
     auth::{md5, scram::Client},
-    frontend::Buffer,
+    frontend::{prepared_statements::parse_counter, Buffer},
     net::{
         messages::{
             hello::SslReply, Authentication, BackendKeyData, ErrorResponse, FromBytes, Message,
@@ -610,7 +610,9 @@ impl Server {
             .await?;
 
         for name in names {
-            self.prepared_statements.prepared(&name);
+            if let Some(counter) = parse_counter(&name) {
+                self.prepared_statements.prepared(&counter);
+            }
         }
 
         debug!("prepared statements synchronized [{}]", self.addr());
@@ -653,7 +655,7 @@ impl Server {
         for close in close {
             let response = self.stream().read().await?;
             match response.code() {
-                '3' => self.prepared_statements.remove(close.name()),
+                '3' => self.prepared_statements.remove(&close.counter()),
                 'E' => {
                     return Err(Error::PreparedStatementError(Box::new(
                         ErrorResponse::from_bytes(response.to_bytes()?)?,
@@ -810,7 +812,12 @@ impl Drop for Server {
 // Used for testing.
 #[cfg(test)]
 pub mod test {
-    use crate::{frontend::PreparedStatements, net::*};
+    use std::collections::HashMap;
+
+    use crate::{
+        frontend::{prepared_statements::global_name, PreparedStatements},
+        net::*,
+    };
 
     use super::*;
 
@@ -985,9 +992,9 @@ pub mod test {
             let parse = parse.rename(&name);
             assert!(new);
 
-            let describe = Describe::new_statement(&name);
+            let describe = Describe::new_counter(&name);
             let bind = Bind::test_params(
-                &name,
+                &global_name(name),
                 &[Parameter {
                     len: 1,
                     data: "1".as_bytes().to_vec(),
@@ -1015,7 +1022,7 @@ pub mod test {
             let global = server.prepared_statements.parse(&name).unwrap();
             server
                 .prepared_statements
-                .row_description(global.name())
+                .row_description(&global.counter())
                 .unwrap();
 
             server
@@ -1129,6 +1136,7 @@ pub mod test {
             let parse = Parse::named(&name, "SELECT $1");
             let describe = Describe::new_statement(&name);
             let bind = Bind::test_statement(&name);
+            println!("parse: {:?}", parse);
             server
                 .send(
                     &vec![
@@ -1144,6 +1152,13 @@ pub mod test {
 
             for c in ['1', 't', 'T', 'E', 'Z'] {
                 let msg = server.read().await.unwrap();
+                println!("code: {}, run {}", c, i);
+                if msg.code() == 'E' {
+                    println!(
+                        "{:?}",
+                        ErrorResponse::from_bytes(msg.to_bytes().unwrap()).unwrap()
+                    );
+                }
                 assert_eq!(c, msg.code());
             }
 
@@ -1250,12 +1265,12 @@ pub mod test {
     async fn test_extended() {
         let mut server = test_server().await;
         let msgs = vec![
-            ProtocolMessage::from(Parse::named("test_1", "SELECT $1")),
-            Describe::new_statement("test_1").into(),
+            ProtocolMessage::from(Parse::named("__pgdog_1", "SELECT $1")),
+            Describe::new_statement("__pgdog_1").into(),
             Flush.into(),
             Query::new("BEGIN").into(),
             Bind::test_params(
-                "test_1",
+                "__pgdog_1",
                 &[crate::net::bind::Parameter {
                     len: 1,
                     data: "1".as_bytes().to_vec(),
@@ -1312,20 +1327,20 @@ pub mod test {
 
         let msgs = vec![
             ProtocolMessage::from(Query::new("SET statement_timeout TO 5000")),
-            Parse::named("test", "SELECT $1").into(),
-            Parse::named("test_2", "SELECT $1, $2, $3").into(),
-            Describe::new_statement("test_2").into(),
+            Parse::named("__pgdog_1", "SELECT $1").into(),
+            Parse::named("__pgdog_2", "SELECT $1, $2, $3").into(),
+            Describe::new_statement("__pgdog_2").into(),
             Bind::test_params(
-                "test",
+                "__pgdog_1",
                 &[crate::net::bind::Parameter {
                     len: 1,
                     data: "1".as_bytes().to_vec(),
                 }],
             )
             .into(),
-            Bind::test_statement("test_2").into(),
+            Bind::test_statement("__pgdog_2").into(),
             Execute::new().into(), // Will be ignored
-            Bind::test_statement("test").into(),
+            Bind::test_statement("__pgdog_1").into(),
             Flush.into(),
         ];
 
@@ -1362,7 +1377,7 @@ pub mod test {
             server
                 .send(
                     &vec![
-                        ProtocolMessage::from(Parse::named("test", "SELECT $1")),
+                        ProtocolMessage::from(Parse::named("__pgdog_1", "SELECT $1")),
                         Sync.into(),
                     ]
                     .into(),
@@ -1381,7 +1396,7 @@ pub mod test {
                 .send(
                     &vec![
                         Bind::test_params(
-                            "test",
+                            "__pgdog_1",
                             &[crate::net::bind::Parameter {
                                 len: 1,
                                 data: "1".as_bytes().to_vec(),
@@ -1476,7 +1491,7 @@ pub mod test {
         }
         assert!(server.sync_prepared());
         server.sync_prepared_statements().await.unwrap();
-        assert!(server.prepared_statements.contains("__pgdog_1"));
+        assert!(server.prepared_statements.contains(&1));
 
         let describe = Describe::new_statement("__pgdog_1");
         let bind = Bind::test_statement("__pgdog_1");

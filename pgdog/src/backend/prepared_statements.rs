@@ -4,7 +4,10 @@ use std::{collections::VecDeque, sync::Arc, usize};
 use parking_lot::Mutex;
 
 use crate::{
-    frontend::{self, prepared_statements::GlobalCache},
+    frontend::{
+        self,
+        prepared_statements::{Counter, GlobalCache},
+    },
     net::{
         messages::{parse::Parse, RowDescription},
         Close, CloseComplete, FromBytes, Message, ParseComplete, Protocol, ToBytes,
@@ -32,12 +35,12 @@ pub enum HandleResult {
 #[derive(Debug)]
 pub struct PreparedStatements {
     global_cache: Arc<Mutex<GlobalCache>>,
-    local_cache: LruCache<String, ()>,
+    local_cache: LruCache<Counter, ()>,
     state: ProtocolState,
     // Prepared statements being prepared now on the connection.
-    parses: VecDeque<String>,
+    parses: VecDeque<Counter>,
     // Describes being executed now on the connection.
-    describes: VecDeque<String>,
+    describes: VecDeque<Counter>,
     capacity: usize,
 }
 
@@ -76,11 +79,11 @@ impl PreparedStatements {
         match request {
             ProtocolMessage::Bind(bind) => {
                 if !bind.anonymous() {
-                    let message = self.check_prepared(bind.statement())?;
+                    let message = self.check_prepared(&bind.counter())?;
                     match message {
                         Some(message) => {
-                            self.state.add_ignore('1', bind.statement());
-                            self.prepared(bind.statement());
+                            self.state.add_ignore('1', &bind.counter());
+                            self.prepared(&bind.counter());
                             self.state.add('2');
                             return Ok(HandleResult::Prepend(message));
                         }
@@ -95,12 +98,12 @@ impl PreparedStatements {
             }
             ProtocolMessage::Describe(describe) => {
                 if !describe.anonymous() {
-                    let message = self.check_prepared(describe.statement())?;
+                    let message = self.check_prepared(&describe.counter())?;
 
                     match message {
                         Some(message) => {
-                            self.state.add_ignore('1', describe.statement());
-                            self.prepared(describe.statement());
+                            self.state.add_ignore('1', &describe.counter());
+                            self.prepared(&describe.counter());
                             self.state.add(ExecutionCode::DescriptionOrNothing); // t
                             self.state.add(ExecutionCode::DescriptionOrNothing); // T
                             return Ok(HandleResult::Prepend(message));
@@ -113,7 +116,7 @@ impl PreparedStatements {
                         }
                     }
 
-                    self.describes.push_back(describe.statement().to_string());
+                    self.describes.push_back(describe.counter());
                 } else if describe.is_portal() {
                     self.state.add(ExecutionCode::DescriptionOrNothing);
                 } else if describe.is_statement() {
@@ -136,13 +139,13 @@ impl PreparedStatements {
 
             ProtocolMessage::Parse(parse) => {
                 if !parse.anonymous() {
-                    if self.contains(parse.name()) {
+                    if self.contains(&parse.counter()) {
                         self.state.add_simulated(ParseComplete.message()?);
                         return Ok(HandleResult::Drop);
                     } else {
-                        self.prepared(parse.name());
+                        self.prepared(&parse.counter());
                         self.state.add('1');
-                        self.parses.push_back(parse.name().to_string());
+                        self.parses.push_back(parse.counter());
                     }
                 } else {
                     self.state.add('1');
@@ -247,9 +250,9 @@ impl PreparedStatements {
         self.state.copy_mode()
     }
 
-    fn check_prepared(&mut self, name: &str) -> Result<Option<ProtocolMessage>, Error> {
-        if !self.contains(name) {
-            let parse = self.parse(name);
+    fn check_prepared(&mut self, counter: &Counter) -> Result<Option<ProtocolMessage>, Error> {
+        if !self.contains(counter) {
+            let parse = self.parse(counter);
             if let Some(parse) = parse {
                 Ok(Some(ProtocolMessage::Parse(parse)))
             } else {
@@ -261,41 +264,41 @@ impl PreparedStatements {
     }
 
     /// The server has prepared this statement already.
-    pub fn contains(&mut self, name: &str) -> bool {
-        self.local_cache.promote(name)
+    pub fn contains(&mut self, counter: &Counter) -> bool {
+        self.local_cache.promote(counter)
     }
 
     /// Indicate this statement is prepared on the connection.
-    pub fn prepared(&mut self, name: &str) {
-        self.local_cache.push(name.to_owned(), ());
+    pub fn prepared(&mut self, name: &Counter) {
+        self.local_cache.push(*name, ());
     }
 
     /// Get the Parse message stored in the global prepared statements
     /// cache for this statement.
-    pub(crate) fn parse(&self, name: &str) -> Option<Parse> {
-        self.global_cache.lock().parse(name)
+    pub(crate) fn parse(&self, counter: &Counter) -> Option<Parse> {
+        self.global_cache.lock().parse(counter)
     }
 
     /// Get the globally stored RowDescription for this prepared statement,
     /// if any.
-    pub fn row_description(&self, name: &str) -> Option<RowDescription> {
-        self.global_cache.lock().row_description(name)
+    pub fn row_description(&self, counter: &Counter) -> Option<RowDescription> {
+        self.global_cache.lock().row_description(counter)
     }
 
     /// Handle a Describe message, storing the RowDescription for the
     /// statement in the global cache.
-    fn add_row_description(&self, name: &str, row_description: &RowDescription) {
+    fn add_row_description(&self, counter: &Counter, row_description: &RowDescription) {
         self.global_cache
             .lock()
-            .insert_row_description(name, row_description);
+            .insert_row_description(counter, row_description);
     }
 
     /// Remove statement from local cache.
     ///
     /// This should only be done when a statement has been closed,
     /// or failed to parse.
-    pub(crate) fn remove(&mut self, name: &str) -> bool {
-        self.local_cache.pop(name).is_some()
+    pub(crate) fn remove(&mut self, counter: &Counter) -> bool {
+        self.local_cache.pop(counter).is_some()
     }
 
     /// Indicate all prepared statements have been removed
@@ -335,8 +338,8 @@ impl PreparedStatements {
         while self.local_cache.len() > self.capacity {
             let candidate = self.local_cache.pop_lru();
 
-            if let Some((name, _)) = candidate {
-                close.push(Close::named(&name));
+            if let Some((counter, _)) = candidate {
+                close.push(Close::counted(&counter));
             }
         }
 

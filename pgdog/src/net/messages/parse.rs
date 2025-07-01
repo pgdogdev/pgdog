@@ -1,5 +1,6 @@
 //! Parse (F) message.
 
+use crate::frontend::prepared_statements::{global_name, Counter};
 use crate::net::c_string_buf_len;
 use std::fmt::Debug;
 use std::io::Cursor;
@@ -21,6 +22,8 @@ pub struct Parse {
     data_types: Bytes,
     /// Original payload.
     original: Option<Bytes>,
+    /// Prepared statement global counter.
+    counter: Option<Counter>,
 }
 
 impl Debug for Parse {
@@ -29,6 +32,7 @@ impl Debug for Parse {
             .field("name", &self.name())
             .field("query", &self.query())
             .field("modified", &self.original.is_none())
+            .field("counter", &self.counter)
             .finish()
     }
 }
@@ -46,6 +50,7 @@ impl Parse {
             query: Bytes::from(query.to_owned() + "\0"),
             data_types: Bytes::copy_from_slice(&0i16.to_be_bytes()),
             original: None,
+            counter: None,
         }
     }
 
@@ -56,6 +61,7 @@ impl Parse {
             query: Bytes::from(query.to_string() + "\0"),
             data_types: Bytes::copy_from_slice(&0i16.to_be_bytes()),
             original: None,
+            counter: None,
         }
     }
 
@@ -79,11 +85,25 @@ impl Parse {
         unsafe { from_utf8_unchecked(&self.name[0..self.name.len() - 1]) }
     }
 
-    pub fn rename(&self, name: &str) -> Parse {
+    pub fn rename(&self, counter: &Counter) -> Parse {
         let mut parse = self.clone();
-        parse.name = Bytes::from(name.to_string() + "\0");
+        parse.name = Bytes::from(global_name(*counter) + "\0");
         parse.original = None;
+        parse.counter = Some(*counter);
         parse
+    }
+
+    /// Get the counter from the name.
+    pub fn parse_counter(&self) -> Counter {
+        self.name()
+            .replace("__pgdog_", "")
+            .parse()
+            .ok()
+            .unwrap_or_default()
+    }
+
+    pub fn counter(&self) -> Counter {
+        self.counter.unwrap_or_default()
     }
 
     pub fn data_types(&self) -> DataTypesIter<'_> {
@@ -147,6 +167,7 @@ impl FromBytes for Parse {
             query,
             data_types,
             original: Some(original),
+            counter: None,
         })
     }
 }
@@ -190,7 +211,7 @@ mod test {
 
     #[test]
     fn test_parse_from_bytes() {
-        let mut parse = Parse::named("__pgdog_1", "SELECT * FROM users");
+        let mut parse = Parse::named("__pgdog_1", "SELECT * FROM users").rename(&1);
         let mut data_types = BytesMut::new();
         data_types.put_i16(3);
         data_types.put_i32(1);
@@ -205,6 +226,7 @@ mod test {
         }
 
         assert_eq!(parse.name(), "__pgdog_1");
+        assert_eq!(parse.counter(), 1);
         assert_eq!(parse.query(), "SELECT * FROM users");
         assert_eq!(&parse.query[..], b"SELECT * FROM users\0");
         assert_eq!(&parse.name[..], b"__pgdog_1\0");

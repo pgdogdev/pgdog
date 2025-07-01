@@ -41,7 +41,7 @@ impl Decoder {
         if self.rd.is_empty() {
             if let Some(rd) = PreparedStatements::global()
                 .lock()
-                .row_description(bind.statement())
+                .row_description(&bind.counter())
             {
                 self.rd = rd;
             }

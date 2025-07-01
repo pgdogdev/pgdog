@@ -6,10 +6,17 @@ use std::{
     str::from_utf8,
 };
 
+pub type Counter = u32;
+
 // Format the globally unique prepared statement
 // name based on the counter.
-fn global_name(counter: usize) -> String {
+pub fn global_name(counter: Counter) -> String {
     format!("__pgdog_{}", counter)
+}
+
+/// Parse counter.
+pub fn parse_counter(name: &str) -> Option<Counter> {
+    name.replace("__pgdog_", "").parse().ok()
 }
 
 #[derive(Debug, Clone)]
@@ -56,7 +63,7 @@ impl CacheKey {
 
 #[derive(Debug, Copy, Clone)]
 pub struct CachedStmt {
-    pub counter: usize,
+    pub counter: Counter,
     pub used: usize,
 }
 
@@ -80,8 +87,8 @@ impl CachedStmt {
 #[derive(Default, Debug, Clone)]
 pub struct GlobalCache {
     statements: HashMap<CacheKey, CachedStmt>,
-    names: HashMap<String, Statement>,
-    counter: usize,
+    names: HashMap<u32, Statement>,
+    counter: Counter,
     versions: usize,
 }
 
@@ -91,7 +98,7 @@ impl GlobalCache {
     ///
     /// If the statement exists, no entry is created
     /// and the global name is returned instead.
-    pub fn insert(&mut self, parse: &Parse) -> (bool, String) {
+    pub fn insert(&mut self, parse: &Parse) -> (bool, Counter) {
         let parse_key = CacheKey {
             query: parse.query_ref(),
             data_types: parse.data_types_ref(),
@@ -101,7 +108,7 @@ impl GlobalCache {
             Entry::Occupied(mut entry) => {
                 let entry = entry.get_mut();
                 entry.used += 1;
-                (false, global_name(entry.counter))
+                (false, entry.counter)
             }
             Entry::Vacant(entry) => {
                 self.counter += 1;
@@ -109,10 +116,9 @@ impl GlobalCache {
                     counter: self.counter,
                     used: 1,
                 });
-                let name = global_name(self.counter);
-                let parse = parse.rename(&name);
+                let parse = parse.rename(&self.counter);
                 self.names.insert(
-                    name.clone(),
+                    self.counter,
                     Statement {
                         parse,
                         row_description: None,
@@ -120,14 +126,14 @@ impl GlobalCache {
                     },
                 );
 
-                (true, name)
+                (true, self.counter)
             }
         }
     }
 
     /// Insert a prepared statement into the global cache ignoring
     /// duplicate check.
-    pub fn insert_anyway(&mut self, parse: &Parse) -> String {
+    pub fn insert_anyway(&mut self, parse: &Parse) -> Counter {
         self.counter += 1;
         self.versions += 1;
         let key = CacheKey {
@@ -143,10 +149,9 @@ impl GlobalCache {
                 used: 1,
             },
         );
-        let name = global_name(self.counter);
-        let parse = parse.rename(&name);
+        let parse = parse.rename(&self.counter);
         self.names.insert(
-            name.clone(),
+            self.counter,
             Statement {
                 parse,
                 row_description: None,
@@ -154,13 +159,13 @@ impl GlobalCache {
             },
         );
 
-        name
+        self.counter
     }
 
     /// Client sent a Describe for a prepared statement and received a RowDescription.
     /// We record the RowDescription for later use by the results decoder.
-    pub fn insert_row_description(&mut self, name: &str, row_description: &RowDescription) {
-        if let Some(ref mut entry) = self.names.get_mut(name) {
+    pub fn insert_row_description(&mut self, counter: &Counter, row_description: &RowDescription) {
+        if let Some(ref mut entry) = self.names.get_mut(counter) {
             if entry.row_description.is_none() {
                 entry.row_description = Some(row_description.clone());
             }
@@ -170,8 +175,8 @@ impl GlobalCache {
     /// Get the query string stored in the global cache
     /// for the given globally unique prepared statement name.
     #[inline]
-    pub fn query(&self, name: &str) -> Option<&str> {
-        self.names.get(name).map(|s| s.query())
+    pub fn query(&self, counter: u32) -> Option<&str> {
+        self.names.get(&counter).map(|s| s.query())
     }
 
     /// Get the Parse message for a globally unique prepared statement
@@ -179,16 +184,18 @@ impl GlobalCache {
     ///
     /// It can be used to prepare this statement on a server connection
     /// or to inspect the original query.
-    pub fn parse(&self, name: &str) -> Option<Parse> {
-        self.names.get(name).map(|p| p.parse.clone())
+    pub fn parse(&self, counter: &Counter) -> Option<Parse> {
+        self.names.get(counter).map(|p| p.parse.clone())
     }
 
     /// Get the RowDescription message for the prepared statement.
     ///
     /// It can be used to decode results received from executing the prepared
     /// statement.
-    pub fn row_description(&self, name: &str) -> Option<RowDescription> {
-        self.names.get(name).and_then(|p| p.row_description.clone())
+    pub fn row_description(&self, counter: &Counter) -> Option<RowDescription> {
+        self.names
+            .get(counter)
+            .and_then(|p| p.row_description.clone())
     }
 
     /// Number of prepared statements in the local cache.
@@ -202,8 +209,8 @@ impl GlobalCache {
     }
 
     /// Close prepared statement.
-    pub fn close(&mut self, name: &str, capacity: usize) -> bool {
-        let used = if let Some(stmt) = self.names.get(name) {
+    pub fn close(&mut self, counter: &Counter, capacity: usize) -> bool {
+        let used = if let Some(stmt) = self.names.get(counter) {
             if let Some(stmt) = self.statements.get_mut(&stmt.cache_key()) {
                 stmt.used = stmt.used.saturating_sub(1);
                 stmt.used > 0
@@ -215,7 +222,7 @@ impl GlobalCache {
         };
 
         if !used && self.len() > capacity {
-            self.remove(name);
+            self.remove(counter);
             true
         } else {
             false
@@ -232,7 +239,7 @@ impl GlobalCache {
             }
 
             if stmt.used == 0 {
-                to_remove.push(stmt.name());
+                to_remove.push(stmt.counter);
                 remove -= 1;
             }
         }
@@ -245,15 +252,15 @@ impl GlobalCache {
     }
 
     /// Remove statement from global cache.
-    fn remove(&mut self, name: &str) {
-        if let Some(stmt) = self.names.remove(name) {
+    fn remove(&mut self, counter: &Counter) {
+        if let Some(stmt) = self.names.remove(counter) {
             self.statements.remove(&stmt.cache_key());
         }
     }
 
     /// Decrement usage of prepared statement without removing it.
-    pub fn decrement(&mut self, name: &str) {
-        if let Some(stmt) = self.names.get(name) {
+    pub fn decrement(&mut self, counter: &Counter) {
+        if let Some(stmt) = self.names.get(counter) {
             if let Some(stmt) = self.statements.get_mut(&stmt.cache_key()) {
                 stmt.used = stmt.used.saturating_sub(1);
             }
@@ -261,7 +268,7 @@ impl GlobalCache {
     }
 
     /// Get all prepared statements by name.
-    pub fn names(&self) -> &HashMap<String, Statement> {
+    pub fn names(&self) -> &HashMap<Counter, Statement> {
         &self.names
     }
 
@@ -280,26 +287,26 @@ mod test {
         let parse = Parse::named("test", "SELECT $1");
         let (new, name) = cache.insert(&parse);
         assert!(new);
-        assert_eq!(name, "__pgdog_1");
+        assert_eq!(name, 1);
 
         for _ in 0..25 {
             let (new, name) = cache.insert(&parse);
             assert!(!new);
-            assert_eq!(name, "__pgdog_1");
+            assert_eq!(name, 1);
         }
-        let stmt = cache.names.get("__pgdog_1").unwrap().clone();
+        let stmt = cache.names.get(&1).unwrap().clone();
         let entry = cache.statements.get(&stmt.cache_key()).unwrap();
 
         assert_eq!(entry.used, 26);
 
         for _ in 0..25 {
-            cache.close("__pgdog_1", 0);
+            cache.close(&1, 0);
         }
 
         let entry = cache.statements.get(&stmt.cache_key()).unwrap();
         assert_eq!(entry.used, 1);
 
-        cache.close("__pgdog_1", 0);
+        cache.close(&1, 0);
         assert!(cache.statements.is_empty());
         assert!(cache.names.is_empty());
 

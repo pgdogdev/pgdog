@@ -1,4 +1,7 @@
-use crate::net::{Message, Protocol};
+use crate::{
+    frontend::prepared_statements::Counter,
+    net::{Message, Protocol},
+};
 
 use super::super::Error;
 use std::{collections::VecDeque, fmt::Debug};
@@ -7,7 +10,7 @@ use std::{collections::VecDeque, fmt::Debug};
 pub enum Action {
     Forward,
     Ignore,
-    ForwardAndRemove(VecDeque<String>),
+    ForwardAndRemove(VecDeque<Counter>),
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -54,7 +57,7 @@ pub enum ExecutionItem {
 #[derive(Debug, Clone, Default)]
 pub struct ProtocolState {
     queue: VecDeque<ExecutionItem>,
-    names: VecDeque<String>,
+    names: VecDeque<Counter>,
     simulated: VecDeque<Message>,
     extended: bool,
     out_of_sync: bool,
@@ -67,11 +70,11 @@ impl ProtocolState {
     /// This is used for preparing statements that the client expects to be there
     /// but the server connection doesn't have yet.
     ///
-    pub(crate) fn add_ignore(&mut self, code: impl Into<ExecutionCode>, name: &str) {
+    pub(crate) fn add_ignore(&mut self, code: impl Into<ExecutionCode>, counter: &Counter) {
         let code = code.into();
         self.extended = self.extended || code.extended();
         self.queue.push_back(ExecutionItem::Ignore(code));
-        self.names.push_back(name.to_owned());
+        self.names.push_back(*counter);
     }
 
     /// Add a message to the execution queue. We expect this message
@@ -208,7 +211,7 @@ mod test {
     #[test]
     fn test_state() {
         let mut state = ProtocolState::default();
-        state.add_ignore('1', "test");
+        state.add_ignore('1', &1);
         assert_eq!(state.action('1').unwrap(), Action::Ignore);
     }
 }

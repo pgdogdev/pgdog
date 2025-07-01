@@ -368,7 +368,9 @@ async fn test_prepared_statements_limit() {
         guard
             .send(
                 &vec![
-                    Parse::named(&format!("__pgdog_{}", id), "SELECT $1::bigint").into(),
+                    Parse::named(&format!("__pgdog_{}", id), "SELECT $1::bigint")
+                        .rename(&id)
+                        .into(),
                     Sync.into(),
                 ]
                 .into(),
@@ -386,8 +388,8 @@ async fn test_prepared_statements_limit() {
     let mut guard = pool.get(&Request::default()).await.unwrap();
     // It's random!
     assert!(
-        guard.prepared_statements_mut().contains("__pgdog_99")
-            || guard.prepared_statements_mut().contains("__pgdog_98")
+        guard.prepared_statements_mut().contains(&99)
+            || guard.prepared_statements_mut().contains(&98)
     );
     assert_eq!(guard.prepared_statements_mut().len(), 2);
 
@@ -396,8 +398,8 @@ async fn test_prepared_statements_limit() {
 
     // It's random!
     assert!(
-        guard.prepared_statements_mut().contains("__pgdog_99")
-            || guard.prepared_statements_mut().contains("__pgdog_98")
+        guard.prepared_statements_mut().contains(&99)
+            || guard.prepared_statements_mut().contains(&98)
     );
     assert_eq!(guard.prepared_statements_mut().len(), 2);
     assert_eq!(guard.stats().total.prepared_statements, 2); // stats are accurate.
@@ -410,7 +412,9 @@ async fn test_prepared_statements_limit() {
         guard
             .send(
                 &vec![
-                    Parse::named(&format!("__pgdog_{}", id), "SELECT $1::bigint").into(),
+                    Parse::named(&format!("__pgdog_{}", id), "SELECT $1::bigint")
+                        .rename(&id)
+                        .into(),
                     Sync.into(),
                 ]
                 .into(),
@@ -426,14 +430,14 @@ async fn test_prepared_statements_limit() {
     }
 
     let mut guard = pool.get(&Request::default()).await.unwrap();
-    assert!(guard.prepared_statements_mut().contains("__pgdog_99"));
+    assert!(guard.prepared_statements_mut().contains(&99));
     assert_eq!(guard.prepared_statements_mut().len(), 100);
     assert_eq!(guard.stats().total.prepared_statements, 100); // stats are accurate.
 
     // Let's make sure Postgres agreees.
     guard.sync_prepared_statements().await.unwrap();
 
-    assert!(guard.prepared_statements_mut().contains("__pgdog_99"));
+    assert!(guard.prepared_statements_mut().contains(&99));
     assert_eq!(guard.prepared_statements_mut().len(), 100);
     assert_eq!(guard.stats().total.prepared_statements, 100); // stats are accurate.
 }
