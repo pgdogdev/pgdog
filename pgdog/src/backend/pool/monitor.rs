@@ -259,7 +259,7 @@ impl Monitor {
     async fn healthcheck(pool: &Pool) -> Result<bool, Error> {
         let conn = {
             let mut guard = pool.lock();
-            if !guard.online || guard.manually_banned() {
+            if !guard.online || guard.banned() {
                 return Ok(false);
             }
             guard.take(&Request::default())
@@ -346,5 +346,24 @@ impl Monitor {
         }
 
         Err(error)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::backend::pool::test::pool;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn test_healthcheck() {
+        crate::logger();
+        let pool = pool();
+        let ok = Monitor::healthcheck(&pool).await.unwrap();
+        assert!(ok);
+
+        pool.ban(Error::ManualBan);
+        let ok = Monitor::healthcheck(&pool).await.unwrap();
+        assert!(!ok);
     }
 }

@@ -259,6 +259,7 @@ impl Pool {
     }
 
     /// Unban this pool from serving traffic, unless manually banned.
+    #[allow(dead_code)]
     pub fn maybe_unban(&self) {
         let unbanned = self.lock().maybe_unban();
         if unbanned {
