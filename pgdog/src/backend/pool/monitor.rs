@@ -100,7 +100,6 @@ impl Monitor {
                 _ = comms.request.notified() => {
                     let (
                         should_create,
-                        connect_timeout,
                         online,
                     ) = {
                         let mut guard = self.pool.lock();
@@ -112,7 +111,6 @@ impl Monitor {
 
                         (
                             guard.should_create(),
-                            guard.config().connect_timeout,
                             guard.online,
                         )
                     };
@@ -122,7 +120,7 @@ impl Monitor {
                     }
 
                     if should_create {
-                        let ok = self.replenish(connect_timeout).await;
+                        let ok = self.replenish().await;
                         if !ok {
                             self.pool.ban(Error::ServerError);
                         }
@@ -232,29 +230,15 @@ impl Monitor {
     }
 
     /// Replenish pool with one new connection.
-    async fn replenish(&self, connect_timeout: Duration) -> bool {
-        let mut ok = false;
-        let options = self.pool.server_options();
-
-        match timeout(connect_timeout, Server::connect(self.pool.addr(), options)).await {
-            Ok(Ok(conn)) => {
-                ok = true;
-                let server = Box::new(conn);
-
-                let mut guard = self.pool.lock();
-                guard.put(server, Instant::now());
-            }
-
-            Ok(Err(err)) => {
-                error!("error connecting to server: {} [{}]", err, self.pool.addr());
-            }
-
-            Err(_) => {
-                error!("server connection timeout [{}]", self.pool.addr());
-            }
+    async fn replenish(&self) -> bool {
+        if let Ok(conn) = Self::create_connection(&self.pool).await {
+            let server = Box::new(conn);
+            let mut guard = self.pool.lock();
+            guard.put(server, Instant::now());
+            true
+        } else {
+            false
         }
-
-        ok
     }
 
     #[allow(dead_code)]
@@ -273,17 +257,15 @@ impl Monitor {
 
     /// Perform a periodic healthcheck on the pool.
     async fn healthcheck(pool: &Pool) -> Result<bool, Error> {
-        let (conn, healthcheck_timeout, connect_timeout) = {
+        let conn = {
             let mut guard = pool.lock();
             if !guard.online || guard.banned() {
                 return Ok(false);
             }
-            (
-                guard.take(&Request::default()),
-                guard.config.healthcheck_timeout,
-                guard.config.connect_timeout,
-            )
+            guard.take(&Request::default())
         };
+
+        let healthcheck_timeout = pool.config().healthcheck_timeout;
 
         // Have an idle connection, use that for the healthcheck.
         if let Some(conn) = conn {
@@ -297,29 +279,18 @@ impl Monitor {
 
             Ok(true)
         } else {
-            // Create a new one and close it. once done.
+            // Create a new one and close it.
             info!("creating new healthcheck connection [{}]", pool.addr());
-            match timeout(
-                connect_timeout,
-                Server::connect(pool.addr(), pool.server_options()),
-            )
-            .await
-            {
-                Ok(Ok(mut server)) => {
-                    Healtcheck::mandatory(&mut server, pool, healthcheck_timeout)
-                        .healthcheck()
-                        .await?
-                }
-                Ok(Err(err)) => {
-                    error!("healthcheck error: {} [{}]", err, pool.addr());
-                }
 
-                Err(_) => {
-                    error!("healthcheck timeout [{}]", pool.addr());
-                }
-            }
+            let mut server = Self::create_connection(pool)
+                .await
+                .map_err(|_| Error::HealthcheckError)?;
 
-            Err(Error::HealthcheckError)
+            Healtcheck::mandatory(&mut server, pool, healthcheck_timeout)
+                .healthcheck()
+                .await?;
+
+            Ok(true)
         }
     }
 
@@ -341,5 +312,58 @@ impl Monitor {
                 }
             }
         }
+    }
+
+    async fn create_connection(pool: &Pool) -> Result<Server, Error> {
+        let connect_timeout = pool.config().connect_timeout;
+        let connect_attempts = pool.config().connect_attempts;
+        let connect_attempt_delay = pool.config().connect_attempt_delay;
+        let options = pool.server_options();
+
+        let mut error = Error::ServerError;
+
+        for _ in 0..connect_attempts {
+            match timeout(
+                connect_timeout,
+                Server::connect(pool.addr(), options.clone()),
+            )
+            .await
+            {
+                Ok(Ok(conn)) => return Ok(conn),
+
+                Ok(Err(err)) => {
+                    error!("error connecting to server: {} [{}]", err, pool.addr());
+                    error = Error::ServerError;
+                }
+
+                Err(_) => {
+                    error!("server connection timeout [{}]", pool.addr());
+                    error = Error::ConnectTimeout;
+                }
+            }
+
+            sleep(connect_attempt_delay).await;
+        }
+
+        Err(error)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::backend::pool::test::pool;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn test_healthcheck() {
+        crate::logger();
+        let pool = pool();
+        let ok = Monitor::healthcheck(&pool).await.unwrap();
+        assert!(ok);
+
+        pool.ban(Error::ManualBan);
+        let ok = Monitor::healthcheck(&pool).await.unwrap();
+        assert!(!ok);
     }
 }

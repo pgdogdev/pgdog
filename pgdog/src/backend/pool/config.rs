@@ -19,6 +19,10 @@ pub struct Config {
     pub idle_timeout: Duration, // ms
     /// How long to wait for connections to be created.
     pub connect_timeout: Duration, // ms
+    /// How many times to attempt a connection before returning an error.
+    pub connect_attempts: u64,
+    /// How long to wait between connection attempts.
+    pub connect_attempt_delay: Duration,
     /// How long a connection can be open.
     pub max_age: Duration,
     /// Can this pool be banned from serving traffic?
@@ -152,6 +156,8 @@ impl Config {
                 .pooler_mode
                 .unwrap_or(user.pooler_mode.unwrap_or(general.pooler_mode)),
             connect_timeout: Duration::from_millis(general.connect_timeout),
+            connect_attempts: general.connect_attempts,
+            connect_attempt_delay: general.connect_attempt_delay(),
             query_timeout: Duration::from_millis(general.query_timeout),
             checkout_timeout: Duration::from_millis(general.checkout_timeout),
             idle_timeout: Duration::from_millis(
@@ -175,6 +181,8 @@ impl Default for Config {
             checkout_timeout: Duration::from_millis(5_000),
             idle_timeout: Duration::from_millis(60_000),
             connect_timeout: Duration::from_millis(5_000),
+            connect_attempts: 1,
+            connect_attempt_delay: Duration::from_millis(10),
             max_age: Duration::from_millis(24 * 3600 * 1000),
             bannable: true,
             healthcheck_timeout: Duration::from_millis(5_000),

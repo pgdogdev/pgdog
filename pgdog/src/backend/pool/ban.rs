@@ -32,6 +32,10 @@ impl Ban {
             duration > self.ban_timeout
         }
     }
+
+    pub(super) fn manual(&self) -> bool {
+        self.reason == Error::ManualBan
+    }
 }
 
 #[cfg(test)]

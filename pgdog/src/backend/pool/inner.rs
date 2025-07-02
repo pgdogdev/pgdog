@@ -403,6 +403,12 @@ impl Inner {
     pub fn banned(&self) -> bool {
         self.ban.is_some()
     }
+
+    #[inline(always)]
+    #[allow(dead_code)]
+    pub fn manually_banned(&self) -> bool {
+        self.ban.map(|ban| ban.manual()).unwrap_or(false)
+    }
 }
 
 #[derive(Debug, Copy, Clone)]

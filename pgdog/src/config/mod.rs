@@ -367,6 +367,13 @@ pub struct General {
     /// Server connect timeout.
     #[serde(default = "General::default_connect_timeout")]
     pub connect_timeout: u64,
+    /// Attempt connections multiple times on bad networks.
+    #[serde(default = "General::connect_attempts")]
+    pub connect_attempts: u64,
+    /// How long to wait between connection attempts.
+    #[serde(default = "General::default_connect_attempt_delay")]
+    pub connect_attempt_delay: u64,
+    /// How long to wait for a query to return the result before aborting. Dangerous: don't use unless your network is bad.
     #[serde(default = "General::default_query_timeout")]
     pub query_timeout: u64,
     /// Checkout timeout.
@@ -479,6 +486,8 @@ impl Default for General {
             prepared_statements_limit: Self::prepared_statements_limit(),
             passthrough_auth: PassthoughAuth::default(),
             connect_timeout: Self::default_connect_timeout(),
+            connect_attempt_delay: Self::default_connect_attempt_delay(),
+            connect_attempts: Self::connect_attempts(),
             query_timeout: Self::default_query_timeout(),
             checkout_timeout: Self::checkout_timeout(),
             dry_run: bool::default(),
@@ -552,6 +561,10 @@ impl General {
         Duration::from_millis(self.client_idle_timeout)
     }
 
+    pub(crate) fn connect_attempt_delay(&self) -> Duration {
+        Duration::from_millis(self.connect_attempt_delay)
+    }
+
     fn load_balancing_strategy() -> LoadBalancingStrategy {
         LoadBalancingStrategy::Random
     }
@@ -562,6 +575,14 @@ impl General {
 
     fn default_connect_timeout() -> u64 {
         5_000
+    }
+
+    fn default_connect_attempt_delay() -> u64 {
+        0
+    }
+
+    fn connect_attempts() -> u64 {
+        1
     }
 
     fn broadcast_port() -> u16 {
