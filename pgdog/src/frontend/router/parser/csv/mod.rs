@@ -186,8 +186,8 @@ mod test {
         let csv = "column_a,column_b,column_c\n1,2,3\n";
         let mut reader = CsvStream::new(',', true, CopyFormat::Csv);
         reader.write(csv.as_bytes());
-        let record = reader.record().unwrap().unwrap();
         assert_eq!(reader.headers().unwrap().unwrap().get(0), Some("column_a"));
+        let record = reader.record().unwrap().unwrap();
         assert_eq!(record.get(0), Some("1"));
     }
 }
