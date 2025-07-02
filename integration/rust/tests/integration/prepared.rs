@@ -1,5 +1,6 @@
 use rust::setup::*;
-use sqlx::{Executor, Row, types::BigDecimal};
+use sqlx::{Executor, Row, postgres::PgPoolOptions, types::BigDecimal};
+use tokio::spawn;
 
 #[tokio::test]
 async fn test_prepared_cache() {
@@ -134,4 +135,35 @@ async fn test_prepard_cache_eviction() {
 
     // Reset config
     admin.execute("RELOAD").await.unwrap();
+}
+
+#[tokio::test]
+#[ignore]
+async fn test_memory_realloc() {
+    let pool = PgPoolOptions::new()
+        .max_connections(20)
+        .connect(&format!(
+            "postgres://pgdog:pgdog@127.0.0.1:6432/pgdog?application_name=test_memory_alloc",
+        ))
+        .await
+        .unwrap();
+
+    let mut tasks = vec![];
+
+    for _ in 0..25 {
+        let pool = pool.clone();
+        tasks.push(spawn(async move {
+                let mut conn = pool.acquire().await.unwrap();
+                loop {
+                    for i in 0..1000 {
+                        let _stmt = conn.prepare(format!("SELECT $1, $2, $3, 'Splits the bytes into two at the given index.Afterwards self contains elements [at, len), and the returned Bytes contains elements [0, at).This is an O(1) operation that just increases the reference count and sets a few indices.', 'Splits the bytes into two at the given index.Afterwards self contains elements [at, len), and the returned Bytes contains elements [0, at).This is an O(1) operation that just increases the reference count and sets a few indices.', 'Splits the bytes into two at the given index.Afterwards self contains elements [at, len), and the returned Bytes contains elements [0, at).This is an O(1) operation that just increases the reference count and sets a few indices.', 'Splits the bytes into two at the given index.Afterwards self contains elements [at, len), and the returned Bytes contains elements [0, at).This is an O(1) operation that just increases the reference count and sets a few indices.', 'Splits the bytes into two at the given index.Afterwards self contains elements [at, len), and the returned Bytes contains elements [0, at).This is an O(1) operation that just increases the reference count and sets a few indices.', 'Splits the bytes into two at the given index.Afterwards self contains elements [at, len), and the returned Bytes contains elements [0, at).This is an O(1) operation that just increases the reference count and sets a few indices.', 'Splits the bytes into two at the given index.Afterwards self contains elements [at, len), and the returned Bytes contains elements [0, at).This is an O(1) operation that just increases the reference count and sets a few indices.', 'Splits the bytes into two at the given index.Afterwards self contains elements [at, len), and the returned Bytes contains elements [0, at).This is an O(1) operation that just increases the reference count and sets a few indices.', 'Splits the bytes into two at the given index.Afterwards self contains elements [at, len), and the returned Bytes contains elements [0, at).This is an O(1) operation that just increases the reference count and sets a few indices.', 'Splits the bytes into two at the given index.Afterwards self contains elements [at, len), and the returned Bytes contains elements [0, at).This is an O(1) operation that just increases the reference count and sets a few indices.', 'Splits the bytes into two at the given index.Afterwards self contains elements [at, len), and the returned Bytes contains elements [0, at).This is an O(1) operation that just increases the reference count and sets a few indices.', 'Splits the bytes into two at the given index.Afterwards self contains elements [at, len), and the returned Bytes contains elements [0, at).This is an O(1) operation that just increases the reference count and sets a few indices.', 'Splits the bytes into two at the given index.Afterwards self contains elements [at, len), and the returned Bytes contains elements [0, at).This is an O(1) operation that just increases the reference count and sets a few indices.', 'Splits the bytes into two at the given index.Afterwards self contains elements [at, len), and the returned Bytes contains elements [0, at).This is an O(1) operation that just increases the reference count and sets a few indices.', 'Splits the bytes into two at the given index.Afterwards self contains elements [at, len), and the returned Bytes contains elements [0, at).This is an O(1) operation that just increases the reference count and sets a few indices.', 'Splits the bytes into two at the given index.Afterwards self contains elements [at, len), and the returned Bytes contains elements [0, at).This is an O(1) operation that just increases the reference count and sets a few indices.', 'Splits the bytes into two at the given index.Afterwards self contains elements [at, len), and the returned Bytes contains elements [0, at).This is an O(1) operation that just increases the reference count and sets a few indices.', 'Splits the bytes into two at the given index.Afterwards self contains elements [at, len), and the returned Bytes contains elements [0, at).This is an O(1) operation that just increases the reference count and sets a few indices.', 'Splits the bytes into two at the given index.Afterwards self contains elements [at, len), and the returned Bytes contains elements [0, at).This is an O(1) operation that just increases the reference count and sets a few indices.', 'Splits the bytes into two at the given index.Afterwards self contains elements [at, len), and the returned Bytes contains elements [0, at).This is an O(1) operation that just increases the reference count and sets a few indices.', 'Splits the bytes into two at the given index.Afterwards self contains elements [at, len), and the returned Bytes contains elements [0, at).This is an O(1) operation that just increases the reference count and sets a few indices.', 'Splits the bytes into two at the given index.Afterwards self contains elements [at, len), and the returned Bytes contains elements [0, at).This is an O(1) operation that just increases the reference count and sets a few indices.', 'Splits the bytes into two at the given index.Afterwards self contains elements [at, len), and the returned Bytes contains elements [0, at).This is an O(1) operation that just increases the reference count and sets a few indices.', 'Splits the bytes into two at the given index.Afterwards self contains elements [at, len), and the returned Bytes contains elements [0, at).This is an O(1) operation that just increases the reference count and sets a few indices.', '{}'", i).as_str()).await.unwrap();
+                    }
+                }
+                // Leak it so we can close it.
+            }));
+    }
+
+    for task in tasks {
+        task.await.unwrap();
+    }
 }
