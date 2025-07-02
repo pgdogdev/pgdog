@@ -6,6 +6,9 @@ pub enum Error {
     #[error("checkout timeout")]
     CheckoutTimeout,
 
+    #[error("connect timeout")]
+    ConnectTimeout,
+
     #[error("replica checkout timeout")]
     ReplicaCheckoutTimeout,
 

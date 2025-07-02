@@ -355,6 +355,12 @@ impl Pool {
         &self.inner.addr
     }
 
+    /// Get pool configuration.
+    #[inline]
+    pub fn config(&self) -> &Config {
+        &self.inner.config
+    }
+
     /// Get startup parameters for new server connections.
     pub(super) fn server_options(&self) -> ServerOptions {
         let mut params = vec![
