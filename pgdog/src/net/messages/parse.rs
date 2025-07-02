@@ -84,15 +84,12 @@ impl Parse {
         // Allocate entirely new Parse statement.
         // This ensures we release the memory we got from the client and this statement
         // has ref count = 1.
-        let mut parse = Parse {
+        Parse {
             query: Bytes::copy_from_slice(&self.query[..]),
             data_types: Bytes::copy_from_slice(&self.data_types[..]),
-            name: Bytes::new(),
+            name: Bytes::from(name.to_string() + "\0"),
             original: None,
-        };
-
-        parse.name = Bytes::from(name.to_string() + "\0");
-        parse
+        }
     }
 
     /// Rename statement while holding existing memory.
