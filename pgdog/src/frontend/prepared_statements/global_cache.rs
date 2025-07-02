@@ -1,10 +1,7 @@
 use bytes::Bytes;
 
 use crate::net::messages::{Parse, RowDescription};
-use std::{
-    collections::hash_map::{Entry, HashMap},
-    str::from_utf8,
-};
+use std::{collections::hash_map::HashMap, str::from_utf8};
 
 // Format the globally unique prepared statement
 // name based on the counter.
@@ -52,6 +49,15 @@ impl CacheKey {
         // Postgres string.
         Ok(from_utf8(&self.query[0..self.query.len() - 1])?)
     }
+
+    /// Reallocate using new memory.
+    pub fn realloc(&self) -> Self {
+        Self {
+            query: Bytes::copy_from_slice(&self.query[..]),
+            data_types: Bytes::copy_from_slice(&self.data_types[..]),
+            version: self.version,
+        }
+    }
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -97,31 +103,32 @@ impl GlobalCache {
             data_types: parse.data_types_ref(),
             version: 0,
         };
-        match self.statements.entry(parse_key) {
-            Entry::Occupied(mut entry) => {
-                let entry = entry.get_mut();
-                entry.used += 1;
-                (false, global_name(entry.counter))
-            }
-            Entry::Vacant(entry) => {
-                self.counter += 1;
-                entry.insert(CachedStmt {
+
+        if let Some(entry) = self.statements.get_mut(&parse_key) {
+            entry.used += 1;
+            (false, global_name(entry.counter))
+        } else {
+            self.counter += 1;
+            self.statements.insert(
+                parse_key.realloc(),
+                CachedStmt {
                     counter: self.counter,
                     used: 1,
-                });
-                let name = global_name(self.counter);
-                let parse = parse.rename(&name);
-                self.names.insert(
-                    name.clone(),
-                    Statement {
-                        parse,
-                        row_description: None,
-                        version: 0,
-                    },
-                );
+                },
+            );
 
-                (true, name)
-            }
+            let name = global_name(self.counter);
+            let parse = parse.rename_new(&name);
+            self.names.insert(
+                name.clone(),
+                Statement {
+                    parse,
+                    row_description: None,
+                    version: 0,
+                },
+            );
+
+            (true, name)
         }
     }
 
@@ -137,14 +144,14 @@ impl GlobalCache {
         };
 
         self.statements.insert(
-            key,
+            key.realloc(),
             CachedStmt {
                 counter: self.counter,
                 used: 1,
             },
         );
         let name = global_name(self.counter);
-        let parse = parse.rename(&name);
+        let parse = parse.rename_new(&name);
         self.names.insert(
             name.clone(),
             Statement {

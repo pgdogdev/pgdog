@@ -7,7 +7,7 @@ use super::replication::ReplicationMeta;
 use super::replication::XLogData;
 
 /// CopyData (F & B) message.
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct CopyData {
     data: Bytes,
 }

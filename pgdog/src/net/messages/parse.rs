@@ -79,10 +79,24 @@ impl Parse {
         unsafe { from_utf8_unchecked(&self.name[0..self.name.len() - 1]) }
     }
 
+    /// Create entirely new Parse with the given name.
+    pub fn rename_new(&self, name: &str) -> Parse {
+        // Allocate entirely new Parse statement.
+        // This ensures we release the memory we got from the client and this statement
+        // has ref count = 1.
+        Parse {
+            query: Bytes::copy_from_slice(&self.query[..]),
+            data_types: Bytes::copy_from_slice(&self.data_types[..]),
+            name: Bytes::from(name.to_string() + "\0"),
+            original: None,
+        }
+    }
+
+    /// Rename statement while holding existing memory.
     pub fn rename(&self, name: &str) -> Parse {
         let mut parse = self.clone();
-        parse.name = Bytes::from(name.to_string() + "\0");
         parse.original = None;
+        parse.name = Bytes::from(name.to_string() + "\0");
         parse
     }
 

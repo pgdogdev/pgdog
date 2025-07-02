@@ -1,0 +1,46 @@
+[[databases]]
+name = "prod"
+host = "127.0.0.1"
+port = 6000
+shard = 0
+database_name = "postgres"
+
+[[databases]]
+name = "prod"
+host = "127.0.0.1"
+port = 6001
+shard = 1
+database_name = "postgres"
+
+[[databases]]
+name = "prod"
+host = "127.0.0.1"
+port = 6002
+shard = 2
+database_name = "postgres"
+
+[[sharded_tables]]
+database = "prod"
+column = "tenant_id"
+data_type = "bigint"
+
+[[sharded_mappings]]
+database = "prod"
+column = "tenant_id"
+kind = "list"
+values = [1]
+shard = 0
+
+[[sharded_mappings]]
+database = "prod"
+column = "tenant_id"
+kind = "list"
+values = [2]
+shard = 1
+
+[[sharded_mappings]]
+database = "prod"
+column = "tenant_id"
+kind = "list"
+values = [3]
+shard = 2
