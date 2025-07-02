@@ -114,6 +114,7 @@ impl CsvStream {
 
                     if self.headers && self.headers_record.is_none() {
                         self.headers_record = Some(record);
+                        return Ok(None);
                     } else {
                         return Ok(Some(record));
                     }
