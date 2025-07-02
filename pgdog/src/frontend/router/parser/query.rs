@@ -236,7 +236,9 @@ impl QueryParser {
         // Get the AST from cache or parse the statement live.
         let ast = match query {
             // Only prepared statements (or just extended) are cached.
-            BufferedQuery::Prepared(query) => cache.parse(query.query()).map_err(Error::PgQuery)?,
+            BufferedQuery::Prepared(query) => cache
+                .parse(query.query()?.value())
+                .map_err(Error::PgQuery)?,
             // Don't cache simple queries.
             //
             // They contain parameter values, which makes the cache

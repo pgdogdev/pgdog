@@ -1,3 +1,4 @@
+pub mod compressed_string;
 pub mod decoder;
 pub mod discovery;
 pub mod error;
@@ -8,6 +9,7 @@ pub mod tls;
 pub mod tweaks;
 
 use bytes::{Buf, Bytes};
+pub use compressed_string::{CompressedString, DecompressedString};
 pub use decoder::Decoder;
 pub use error::Error;
 pub use messages::*;

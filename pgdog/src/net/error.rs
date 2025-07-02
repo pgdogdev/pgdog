@@ -2,6 +2,7 @@
 
 use std::array::TryFromSliceError;
 
+use lz4_flex::block::DecompressError;
 use thiserror::Error;
 use tokio_rustls::rustls;
 
@@ -78,4 +79,7 @@ pub enum Error {
 
     #[error("array has {0} dimensions, only 1 is supported")]
     ArrayDimensions(usize),
+
+    #[error("{0}")]
+    Lz4(#[from] DecompressError),
 }

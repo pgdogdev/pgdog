@@ -1,6 +1,8 @@
 //! Parse (F) message.
 
 use crate::net::c_string_buf_len;
+use crate::net::CompressedString;
+use crate::net::DecompressedString;
 use std::fmt::Debug;
 use std::io::Cursor;
 use std::mem::size_of;
@@ -16,7 +18,7 @@ pub struct Parse {
     /// Prepared statement name.
     name: Bytes,
     /// Prepared statement query.
-    query: Bytes,
+    query: CompressedString,
     /// List of data types if any are declared.
     data_types: Bytes,
     /// Original payload.
@@ -27,7 +29,7 @@ impl Debug for Parse {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Parse")
             .field("name", &self.name())
-            .field("query", &self.query())
+            .field("query", &self.query)
             .field("modified", &self.original.is_none())
             .finish()
     }
@@ -43,7 +45,7 @@ impl Parse {
     pub fn new_anonymous(query: &str) -> Self {
         Self {
             name: Bytes::from("\0"),
-            query: Bytes::from(query.to_owned() + "\0"),
+            query: Bytes::from(query.to_owned() + "\0").into(),
             data_types: Bytes::copy_from_slice(&0i16.to_be_bytes()),
             original: None,
         }
@@ -53,7 +55,7 @@ impl Parse {
     pub fn named(name: impl ToString, query: impl ToString) -> Self {
         Self {
             name: Bytes::from(name.to_string() + "\0"),
-            query: Bytes::from(query.to_string() + "\0"),
+            query: Bytes::from(query.to_string() + "\0").into(),
             data_types: Bytes::copy_from_slice(&0i16.to_be_bytes()),
             original: None,
         }
@@ -64,14 +66,13 @@ impl Parse {
         self.name.len() == 1 // Just the null byte.
     }
 
-    pub fn query(&self) -> &str {
-        // SAFETY: We check that this is valid UTF-8 in Self::from_bytes.
-        unsafe { from_utf8_unchecked(&self.query[0..self.query.len() - 1]) }
+    pub fn query(&self) -> Result<DecompressedString, Error> {
+        self.query.decompress()
     }
 
     /// Get query reference.
     pub fn query_ref(&self) -> Bytes {
-        self.query.clone()
+        self.query.payload().clone()
     }
 
     pub fn name(&self) -> &str {
@@ -144,7 +145,7 @@ impl FromBytes for Parse {
 
         Ok(Self {
             name,
-            query,
+            query: CompressedString::new(query),
             data_types,
             original: Some(original),
         })
@@ -161,8 +162,11 @@ impl ToBytes for Parse {
         let mut payload = Payload::named(self.code());
         payload.reserve(self.len());
 
+        let mut query = self.query.clone();
+        let query = query.decompress()?;
+
         payload.put(self.name.clone());
-        payload.put(self.query.clone());
+        payload.put(query.payload().clone());
         payload.put(self.data_types.clone());
 
         Ok(payload.freeze())
@@ -205,8 +209,8 @@ mod test {
         }
 
         assert_eq!(parse.name(), "__pgdog_1");
-        assert_eq!(parse.query(), "SELECT * FROM users");
-        assert_eq!(&parse.query[..], b"SELECT * FROM users\0");
+        assert_eq!(parse.query().unwrap().value(), "SELECT * FROM users");
+        assert_eq!(parse.query.payload(), &Bytes::from("SELECT * FROM users\0"));
         assert_eq!(&parse.name[..], b"__pgdog_1\0");
         assert_eq!(parse.to_bytes().unwrap().len(), parse.len());
 
@@ -218,7 +222,7 @@ mod test {
         b.put_i16(0);
         let parse = Parse::from_bytes(b.freeze()).unwrap();
         assert_eq!(parse.name(), "__pgdog_1");
-        assert_eq!(parse.query(), "SELECT * FROM users");
+        assert_eq!(parse.query.payload(), &Bytes::from("SELECT * FROM users"));
         assert_eq!(parse.data_types().len(), 0);
 
         assert!(Parse::new_anonymous("SELECT 1").anonymous());

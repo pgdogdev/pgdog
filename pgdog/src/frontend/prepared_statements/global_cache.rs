@@ -1,6 +1,9 @@
 use bytes::Bytes;
 
-use crate::net::messages::{Parse, RowDescription};
+use crate::net::{
+    messages::{Parse, RowDescription},
+    DecompressedString, Error,
+};
 use std::{
     collections::hash_map::{Entry, HashMap},
     str::from_utf8,
@@ -20,7 +23,7 @@ pub struct Statement {
 }
 
 impl Statement {
-    pub fn query(&self) -> &str {
+    pub fn query(&self) -> Result<DecompressedString, Error> {
         self.parse.query()
     }
 

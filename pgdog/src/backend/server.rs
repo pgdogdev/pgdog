@@ -1464,7 +1464,7 @@ pub mod test {
                 &vec![ProtocolMessage::from(Query::new(format!(
                     "PREPARE {} AS {}",
                     parse.name(),
-                    parse.query()
+                    parse.clone().query().unwrap().value()
                 )))]
                 .into(),
             )

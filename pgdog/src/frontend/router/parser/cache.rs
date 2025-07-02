@@ -112,7 +112,7 @@ impl Cache {
     ) -> std::result::Result<(), Error> {
         match query {
             BufferedQuery::Prepared(parse) => self
-                .record_command_for_normalized(parse.query(), route, false)
+                .record_command_for_normalized(parse.query()?.value(), route, false)
                 .map_err(Error::PgQuery),
             BufferedQuery::Query(query) => {
                 let query = normalize(query.query()).map_err(Error::PgQuery)?;

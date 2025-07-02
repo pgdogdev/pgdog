@@ -76,7 +76,7 @@ mod test {
 
         assert!(!parse.anonymous());
         assert_eq!(parse.name(), "__pgdog_1");
-        assert_eq!(parse.query(), "SELECT * FROM users");
+        assert_eq!(parse.query().unwrap().value(), "SELECT * FROM users");
 
         let bind = Bind::test_statement("__sqlx_1");
 
@@ -111,7 +111,7 @@ mod test {
             Parse::from_bytes(rewrite.rewrite(parse.into()).unwrap().to_bytes().unwrap()).unwrap();
 
         assert!(!parse.anonymous());
-        assert_eq!(parse.query(), "SELECT * FROM users");
+        assert_eq!(parse.query().unwrap().value(), "SELECT * FROM users");
 
         assert_eq!(statements.len_local(), 1);
         assert_eq!(statements.global.lock().len(), 1);
