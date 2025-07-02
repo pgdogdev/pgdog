@@ -110,7 +110,7 @@ impl GlobalCache {
         } else {
             self.counter += 1;
             self.statements.insert(
-                parse_key.clone(),
+                parse_key.realloc(),
                 CachedStmt {
                     counter: self.counter,
                     used: 1,
@@ -118,7 +118,7 @@ impl GlobalCache {
             );
 
             let name = global_name(self.counter);
-            let parse = parse.rename(&name);
+            let parse = parse.rename_new(&name);
             self.names.insert(
                 name.clone(),
                 Statement {
