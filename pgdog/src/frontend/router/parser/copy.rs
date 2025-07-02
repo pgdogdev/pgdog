@@ -332,6 +332,32 @@ mod test {
     }
 
     #[test]
+    fn test_copy_csv_stream() {
+        let copy_data = CopyData::new(b"id,value\n1,test\n6,test6\n");
+
+        let copy = "COPY sharded (id, value) FROM STDIN CSV HEADER";
+        let stmt = parse(copy).unwrap();
+        let stmt = stmt.protobuf.stmts.first().unwrap();
+        let copy = match stmt.stmt.clone().unwrap().node.unwrap() {
+            NodeEnum::CopyStmt(copy) => copy,
+            _ => panic!("not a copy"),
+        };
+
+        let mut copy = CopyParser::new(&copy, &Cluster::new_test())
+            .unwrap()
+            .unwrap();
+
+        let rows = copy.shard(vec![copy_data]).unwrap();
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].message(), CopyData::new(b"\"id\",\"value\"\n"));
+        assert_eq!(rows[0].shard(), &Shard::All);
+        assert_eq!(rows[1].message(), CopyData::new(b"\"1\",\"test\"\n"));
+        assert_eq!(rows[2].message(), CopyData::new(b"\"6\",\"test6\"\n"));
+        assert_eq!(rows[1].shard(), &Shard::Direct(0));
+        assert_eq!(rows[2].shard(), &Shard::Direct(1));
+    }
+
+    #[test]
     fn test_copy_binary() {
         let copy = "COPY sharded (id, value) FROM STDIN (FORMAT 'binary')";
         let stmt = parse(copy).unwrap();
