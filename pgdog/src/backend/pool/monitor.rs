@@ -322,7 +322,7 @@ impl Monitor {
 
         let mut error = Error::ServerError;
 
-        for _ in 0..connect_attempts {
+        for attempt in 0..connect_attempts {
             match timeout(
                 connect_timeout,
                 Server::connect(pool.addr(), options.clone()),
@@ -332,12 +332,29 @@ impl Monitor {
                 Ok(Ok(conn)) => return Ok(conn),
 
                 Ok(Err(err)) => {
-                    error!("error connecting to server: {} [{}]", err, pool.addr());
+                    error!(
+                        "{}error connecting to server: {} [{}]",
+                        if attempt > 0 {
+                            format!("[attempt {}] ", attempt)
+                        } else {
+                            String::new()
+                        },
+                        err,
+                        pool.addr(),
+                    );
                     error = Error::ServerError;
                 }
 
                 Err(_) => {
-                    error!("server connection timeout [{}]", pool.addr());
+                    error!(
+                        "{}server connection timeout [{}]",
+                        if attempt > 0 {
+                            format!("[attempt {}] ", attempt)
+                        } else {
+                            String::new()
+                        },
+                        pool.addr(),
+                    );
                     error = Error::ConnectTimeout;
                 }
             }
