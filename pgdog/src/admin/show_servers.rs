@@ -44,6 +44,7 @@ impl Command for ShowServers {
             Field::numeric("bytes_sent"),
             Field::numeric("age"),
             Field::text("application_name"),
+            Field::text("memory_used"),
         ])
         .message()?];
 
@@ -73,7 +74,8 @@ impl Command for ShowServers {
                 .add(server.stats.total.bytes_received)
                 .add(server.stats.total.bytes_sent)
                 .add(age.as_secs() as i64)
-                .add(server.application_name.as_str());
+                .add(server.application_name.as_str())
+                .add(server.stats.total.memory_used);
             messages.push(dr.message()?);
         }
 

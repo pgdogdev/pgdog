@@ -1,6 +1,7 @@
 //! Parse (F) message.
 
 use crate::net::c_string_buf_len;
+use crate::net::zero_data_size;
 use std::fmt::Debug;
 use std::io::Cursor;
 use std::mem::size_of;
@@ -22,6 +23,8 @@ pub struct Parse {
     /// Original payload.
     original: Option<Bytes>,
 }
+
+zero_data_size!(Parse);
 
 impl Debug for Parse {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

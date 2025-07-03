@@ -1,4 +1,5 @@
 use bytes::Bytes;
+use datasize::DataSize;
 
 use crate::net::messages::{Parse, RowDescription};
 use std::{collections::hash_map::HashMap, str::from_utf8};
@@ -14,6 +15,20 @@ pub struct Statement {
     parse: Parse,
     row_description: Option<RowDescription>,
     version: usize,
+}
+
+impl DataSize for Statement {
+    const IS_DYNAMIC: bool = false;
+    const STATIC_HEAP_SIZE: usize = 0;
+
+    fn estimate_heap_size(&self) -> usize {
+        self.parse.len()
+            + if let Some(ref row_description) = self.row_description {
+                (*row_description).estimate_heap_size()
+            } else {
+                0
+            }
+    }
 }
 
 impl Statement {
@@ -44,6 +59,16 @@ pub struct CacheKey {
     pub version: usize,
 }
 
+impl DataSize for CacheKey {
+    const IS_DYNAMIC: bool = false;
+    const STATIC_HEAP_SIZE: usize = 0;
+
+    // We re-allocate this.
+    fn estimate_heap_size(&self) -> usize {
+        self.query.len() + self.data_types.len()
+    }
+}
+
 impl CacheKey {
     pub fn query(&self) -> Result<&str, crate::net::Error> {
         // Postgres string.
@@ -60,7 +85,7 @@ impl CacheKey {
     }
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, DataSize)]
 pub struct CachedStmt {
     pub counter: usize,
     pub used: usize,
@@ -83,7 +108,7 @@ impl CachedStmt {
 ///    used to prepare the statement on server connections and to decode
 ///    results returned by executing those statements in a multi-shard context.
 ///
-#[derive(Default, Debug, Clone)]
+#[derive(Default, Debug, Clone, DataSize)]
 pub struct GlobalCache {
     statements: HashMap<CacheKey, CachedStmt>,
     names: HashMap<String, Statement>,

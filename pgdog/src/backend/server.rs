@@ -2,6 +2,7 @@
 use std::time::Duration;
 
 use bytes::{BufMut, BytesMut};
+use datasize::DataSize;
 use rustls_pki_types::ServerName;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -23,7 +24,7 @@ use crate::{
             hello::SslReply, Authentication, BackendKeyData, ErrorResponse, FromBytes, Message,
             ParameterStatus, Password, Protocol, Query, ReadyForQuery, Startup, Terminate, ToBytes,
         },
-        Close, Parameter, Sync,
+        BytesMutSized, Close, Parameter, Sync,
     },
 };
 use crate::{
@@ -38,9 +39,10 @@ use crate::{
 use crate::{net::tweak, state::State};
 
 /// PostgreSQL server connection.
-#[derive(Debug)]
+#[derive(Debug, datasize::DataSize)]
 pub struct Server {
     addr: Address,
+    #[data_size(skip)]
     stream: Option<Stream>,
     id: BackendKeyData,
     params: Parameters,
@@ -55,7 +57,7 @@ pub struct Server {
     in_transaction: bool,
     re_synced: bool,
     pooler_mode: PoolerMode,
-    stream_buffer: BytesMut,
+    stream_buffer: BytesMutSized,
 }
 
 impl Server {
@@ -178,7 +180,7 @@ impl Server {
 
         info!("new server connection [{}]", addr);
 
-        Ok(Server {
+        let mut server = Server {
             addr: addr.clone(),
             stream: Some(stream),
             id,
@@ -194,8 +196,14 @@ impl Server {
             in_transaction: false,
             re_synced: false,
             pooler_mode: PoolerMode::Transaction,
-            stream_buffer: BytesMut::with_capacity(1024),
-        })
+            stream_buffer: BytesMutSized::with_capacity(1024),
+        };
+
+        let memory_used = server.estimate_heap_size();
+        server.stats_mut().memory_used(memory_used);
+        server.stats().update();
+
+        Ok(server)
     }
 
     /// Request query cancellation for the given backend server identifier.
@@ -312,6 +320,7 @@ impl Server {
             'Z' => {
                 let now = Instant::now();
                 self.stats.query(now);
+                self.stats.memory_used((*self).estimate_heap_size());
 
                 let rfq = ReadyForQuery::from_bytes(message.payload())?;
 
@@ -834,7 +843,7 @@ pub mod test {
                 in_transaction: false,
                 re_synced: false,
                 pooler_mode: PoolerMode::Transaction,
-                stream_buffer: BytesMut::with_capacity(1024),
+                stream_buffer: BytesMutSized::with_capacity(1024),
             }
         }
     }

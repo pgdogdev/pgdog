@@ -6,6 +6,7 @@ use std::sync::{
     Arc,
 };
 
+use datasize::DataSize;
 use fnv::FnvHashMap as HashMap;
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
@@ -36,7 +37,7 @@ struct Global {
 }
 
 /// Bi-directional communications between client and internals.
-#[derive(Clone)]
+#[derive(Clone, DataSize)]
 pub struct Comms {
     global: Arc<Global>,
     id: Option<BackendKeyData>,
@@ -70,6 +71,15 @@ impl Comms {
     /// Number of connected clients.
     pub fn clients_len(&self) -> usize {
         self.global.clients.lock().len()
+    }
+
+    pub fn clients_memory(&self) -> usize {
+        self.global
+            .clients
+            .lock()
+            .values()
+            .map(|v| v.stats.memory_used)
+            .sum::<usize>()
     }
 
     pub fn tracker(&self) -> &TaskTracker {

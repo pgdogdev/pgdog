@@ -1,4 +1,6 @@
 //! Query (F) message.
+use crate::net::zero_data_size;
+
 use super::prelude::*;
 
 use bytes::Bytes;
@@ -10,6 +12,8 @@ pub struct Query {
     /// Query string.
     pub payload: Bytes,
 }
+
+zero_data_size!(Query);
 
 impl std::fmt::Debug for Query {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

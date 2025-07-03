@@ -7,6 +7,7 @@ use std::{
     ops::{Deref, DerefMut},
 };
 
+use datasize::DataSize;
 use once_cell::sync::Lazy;
 
 use super::{messages::Query, Error};
@@ -45,7 +46,7 @@ pub struct MergeResult {
     pub changed_params: usize,
 }
 
-#[derive(Debug, Clone, Hash, PartialEq)]
+#[derive(Debug, Clone, Hash, PartialEq, DataSize)]
 pub enum ParameterValue {
     String(String),
     Tuple(Vec<String>),
@@ -89,7 +90,7 @@ impl ParameterValue {
 }
 
 /// List of parameters.
-#[derive(Default, Debug, Clone, PartialEq)]
+#[derive(Default, Debug, Clone, PartialEq, DataSize)]
 pub struct Parameters {
     params: BTreeMap<String, ParameterValue>,
     hash: u64,

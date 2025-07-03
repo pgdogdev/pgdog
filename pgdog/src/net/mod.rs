@@ -14,7 +14,9 @@ pub use messages::*;
 pub use parameter::{Parameter, Parameters};
 pub use stream::Stream;
 pub use tweaks::tweak;
+pub mod bytes_sized;
 
+pub use bytes_sized::{BytesMutSized, BytesSized};
 use std::{io::Cursor, marker::Unpin};
 use tokio::io::{AsyncRead, AsyncReadExt};
 
@@ -82,6 +84,21 @@ pub fn c_string_buf_len(buf: &[u8]) -> usize {
 
     len
 }
+
+macro_rules! zero_data_size {
+    ($t:tt) => {
+        impl datasize::DataSize for $t {
+            const IS_DYNAMIC: bool = false;
+            const STATIC_HEAP_SIZE: usize = 0;
+
+            fn estimate_heap_size(&self) -> usize {
+                0
+            }
+        }
+    };
+}
+
+pub(crate) use zero_data_size;
 
 #[cfg(test)]
 mod test {

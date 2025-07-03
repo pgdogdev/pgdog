@@ -138,7 +138,6 @@ async fn test_prepard_cache_eviction() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn test_memory_realloc() {
     let pool = PgPoolOptions::new()
         .max_connections(20)

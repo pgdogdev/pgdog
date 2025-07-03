@@ -2,6 +2,7 @@
 
 use std::{collections::HashMap, sync::Arc, usize};
 
+use datasize::DataSize;
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 
@@ -18,8 +19,9 @@ pub use rewrite::Rewrite;
 
 static CACHE: Lazy<PreparedStatements> = Lazy::new(PreparedStatements::default);
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, DataSize)]
 pub struct PreparedStatements {
+    #[data_size(skip)]
     pub(super) global: Arc<Mutex<GlobalCache>>,
     pub(super) local: HashMap<String, String>,
     pub(super) enabled: bool,
@@ -112,6 +114,14 @@ impl PreparedStatements {
         }
 
         self.local.clear();
+    }
+
+    /// Estimated memory used by the local cache.
+    pub fn memory_usage(&self) -> usize {
+        self.local
+            .iter()
+            .map(|(k, v)| k.capacity() + v.capacity())
+            .sum::<usize>()
     }
 }
 

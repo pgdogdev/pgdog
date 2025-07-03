@@ -3,6 +3,8 @@
 use std::ops::Deref;
 use std::sync::Arc;
 
+use datasize::DataSize;
+
 use crate::net::c_string_buf;
 
 use super::{code, DataType};
@@ -109,7 +111,7 @@ impl Field {
 }
 
 /// RowDescription message.
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Default, DataSize)]
 pub struct RowDescription {
     /// Fields.
     pub fields: Arc<Vec<Field>>,

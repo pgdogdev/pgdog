@@ -1,13 +1,14 @@
 use std::io::Cursor;
 
 use bytes::Buf;
+use datasize::DataSize;
 
 use crate::net::{
     Bind, Close, CopyData, CopyDone, CopyFail, Describe, Execute, Flush, FromBytes, Message, Parse,
     Protocol, Query, Sync, ToBytes,
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, DataSize)]
 pub enum ProtocolMessage {
     Bind(Bind),
     Parse(Parse),

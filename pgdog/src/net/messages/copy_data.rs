@@ -1,6 +1,8 @@
 //! CopyData (F & B) message.
 use std::str::from_utf8;
 
+use crate::net::zero_data_size;
+
 use super::code;
 use super::prelude::*;
 use super::replication::ReplicationMeta;
@@ -11,6 +13,8 @@ use super::replication::XLogData;
 pub struct CopyData {
     data: Bytes,
 }
+
+zero_data_size!(CopyData);
 
 impl CopyData {
     pub fn len(&self) -> usize {

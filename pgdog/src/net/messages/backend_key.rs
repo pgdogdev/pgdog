@@ -2,10 +2,11 @@
 
 use crate::net::messages::code;
 use crate::net::messages::prelude::*;
+use datasize::DataSize;
 use rand::Rng;
 
 /// BackendKeyData (B)
-#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, DataSize)]
 pub struct BackendKeyData {
     /// Process ID.
     pub pid: i32,

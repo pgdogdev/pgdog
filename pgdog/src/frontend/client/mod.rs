@@ -4,7 +4,7 @@ use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::time::Instant;
 
-use bytes::BytesMut;
+use datasize::DataSize;
 use timeouts::Timeouts;
 use tokio::time::timeout;
 use tokio::{select, spawn};
@@ -26,7 +26,9 @@ use crate::net::messages::{
     Protocol, ReadyForQuery, ToBytes,
 };
 use crate::net::{parameter::Parameters, Stream};
-use crate::net::{DataRow, EmptyQueryResponse, Field, NoticeResponse, RowDescription};
+use crate::net::{
+    BytesMutSized, DataRow, EmptyQueryResponse, Field, NoticeResponse, RowDescription,
+};
 use crate::state::State;
 
 pub mod counter;
@@ -38,7 +40,7 @@ pub use engine::Engine;
 use inner::{Inner, InnerBorrow};
 
 /// Frontend client.
-#[allow(dead_code)]
+#[derive(DataSize)]
 pub struct Client {
     addr: SocketAddr,
     stream: Stream,
@@ -54,7 +56,7 @@ pub struct Client {
     in_transaction: bool,
     timeouts: Timeouts,
     request_buffer: Buffer,
-    stream_buffer: BytesMut,
+    stream_buffer: BytesMutSized,
     message_buffer: VecDeque<ProtocolMessage>,
     cross_shard_disabled: bool,
 }
@@ -203,7 +205,7 @@ impl Client {
             in_transaction: false,
             timeouts: Timeouts::from_config(&config.config.general),
             request_buffer: Buffer::new(),
-            stream_buffer: BytesMut::new(),
+            stream_buffer: BytesMutSized::new(),
             message_buffer: VecDeque::new(),
             shutdown: false,
             cross_shard_disabled: false,
@@ -245,7 +247,7 @@ impl Client {
             in_transaction: false,
             timeouts: Timeouts::from_config(&config().config.general),
             request_buffer: Buffer::new(),
-            stream_buffer: BytesMut::new(),
+            stream_buffer: BytesMutSized::new(),
             message_buffer: VecDeque::new(),
             shutdown: false,
             cross_shard_disabled: false,
@@ -739,7 +741,7 @@ impl Client {
         inner
             .stats
             .prepared_statements(self.prepared_statements.len_local());
-        inner.stats.memory_used(self.stream_buffer.capacity());
+        inner.stats.memory_used((*self).estimate_heap_size());
     }
 }
 
