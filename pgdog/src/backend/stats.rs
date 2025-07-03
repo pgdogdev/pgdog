@@ -5,6 +5,7 @@ use std::{
     time::{Duration, SystemTime},
 };
 
+use datasize::DataSize;
 use fnv::FnvHashMap as HashMap;
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
@@ -48,7 +49,7 @@ pub struct ConnectedServer {
 }
 
 /// Server connection stats.
-#[derive(Copy, Clone, Debug, Default)]
+#[derive(Copy, Clone, Debug, Default, DataSize)]
 pub struct Counts {
     pub bytes_sent: usize,
     pub bytes_received: usize,
@@ -63,6 +64,7 @@ pub struct Counts {
     pub bind: usize,
     pub healthchecks: usize,
     pub close: usize,
+    pub memory_used: usize,
 }
 
 impl Add for Counts {
@@ -85,22 +87,28 @@ impl Add for Counts {
             bind: self.bind.saturating_add(rhs.bind),
             healthchecks: self.healthchecks.saturating_add(rhs.healthchecks),
             close: self.close.saturating_add(rhs.close),
+            memory_used: self.memory_used, // It's a gauge.
         }
     }
 }
 
 /// Server statistics.
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, DataSize)]
 pub struct Stats {
     pub id: BackendKeyData,
     pub state: State,
+    #[data_size(skip)]
     pub last_used: Instant,
+    #[data_size(skip)]
     pub last_healthcheck: Option<Instant>,
+    #[data_size(skip)]
     pub created_at: Instant,
     pub created_at_time: SystemTime,
     pub total: Counts,
     pub last_checkout: Counts,
+    #[data_size(skip)]
     query_timer: Option<Instant>,
+    #[data_size(skip)]
     transaction_timer: Option<Instant>,
 }
 
@@ -259,6 +267,12 @@ impl Stats {
         self.last_checkout.healthchecks += 1;
         self.last_healthcheck = Some(Instant::now());
         self.update();
+    }
+
+    #[inline]
+    pub fn memory_used(&mut self, memory: usize) {
+        self.total.memory_used = memory;
+        self.last_checkout.memory_used = memory;
     }
 
     /// Track rollbacks.

@@ -57,6 +57,7 @@ socket2 = "0.5.9"
 sha1 = "0.10"
 indexmap = "2.9"
 lru = "0.15"
+datasize = "0.2"
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 tikv-jemallocator = "0.6"

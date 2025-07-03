@@ -1,6 +1,8 @@
+use datasize::DataSize;
+
 use super::{code, prelude::*};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, DataSize)]
 pub struct CopyDone;
 
 impl FromBytes for CopyDone {

@@ -1,7 +1,9 @@
 //! Connection state.
 
+use datasize::DataSize;
+
 /// Client/server state.
-#[derive(Debug, PartialEq, Default, Copy, Clone)]
+#[derive(Debug, PartialEq, Default, Copy, Clone, DataSize)]
 pub enum State {
     /// Waiting for work.
     #[default]
