@@ -2,6 +2,8 @@
 
 use std::ops::{Deref, DerefMut};
 
+use datasize::DataSize;
+
 use crate::{
     backend::ProtocolMessage,
     net::{
@@ -16,6 +18,15 @@ use super::PreparedStatements;
 #[derive(Debug, Clone)]
 pub struct Buffer {
     buffer: Vec<ProtocolMessage>,
+}
+
+impl DataSize for Buffer {
+    const IS_DYNAMIC: bool = false;
+    const STATIC_HEAP_SIZE: usize = 0;
+
+    fn estimate_heap_size(&self) -> usize {
+        0
+    }
 }
 
 impl Default for Buffer {

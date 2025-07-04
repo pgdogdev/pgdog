@@ -59,7 +59,7 @@ pub use row_description::{Field, RowDescription};
 pub use sync::Sync;
 pub use terminate::Terminate;
 
-use crate::net::Error;
+use crate::net::{zero_data_size, Error};
 
 use bytes::Bytes;
 
@@ -107,6 +107,8 @@ pub struct Message {
     stream: bool,
     source: Source,
 }
+
+zero_data_size!(Message);
 
 impl std::fmt::Debug for Message {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

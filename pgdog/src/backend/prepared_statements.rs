@@ -1,5 +1,11 @@
+use datasize::DataSize;
 use lru::LruCache;
-use std::{collections::VecDeque, sync::Arc, usize};
+use std::{
+    collections::VecDeque,
+    ops::{Deref, DerefMut},
+    sync::Arc,
+    usize,
+};
 
 use parking_lot::Mutex;
 
@@ -24,15 +30,43 @@ pub enum HandleResult {
     Prepend(ProtocolMessage),
 }
 
+#[derive(Debug)]
+struct LruCacheSized(LruCache<String, ()>);
+
+impl Deref for LruCacheSized {
+    type Target = LruCache<String, ()>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for LruCacheSized {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl DataSize for LruCacheSized {
+    const IS_DYNAMIC: bool = true;
+    const STATIC_HEAP_SIZE: usize = 0;
+
+    fn estimate_heap_size(&self) -> usize {
+        self.0.iter().map(|(k, _)| k.capacity()).sum::<usize>()
+    }
+}
+
 /// Server-specific prepared statements.
 ///
 /// The global cache has names and Parse messages,
 /// while the local cache has the names of the prepared statements
 /// currently prepared on the server connection.
-#[derive(Debug)]
+#[derive(Debug, DataSize)]
 pub struct PreparedStatements {
+    #[data_size(skip)]
     global_cache: Arc<Mutex<GlobalCache>>,
-    local_cache: LruCache<String, ()>,
+
+    local_cache: LruCacheSized,
     state: ProtocolState,
     // Prepared statements being prepared now on the connection.
     parses: VecDeque<String>,
@@ -52,7 +86,7 @@ impl PreparedStatements {
     pub fn new() -> Self {
         Self {
             global_cache: frontend::PreparedStatements::global(),
-            local_cache: LruCache::unbounded(),
+            local_cache: LruCacheSized(LruCache::unbounded()),
             state: ProtocolState::default(),
             parses: VecDeque::new(),
             describes: VecDeque::new(),

@@ -5,6 +5,7 @@ pub mod error;
 pub mod overrides;
 pub mod url;
 
+use datasize::DataSize;
 use error::Error;
 pub use overrides::Overrides;
 use parking_lot::Mutex;
@@ -626,7 +627,9 @@ impl General {
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Stats {}
 
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Copy, Eq, Ord, PartialOrd)]
+#[derive(
+    Serialize, Deserialize, Debug, Clone, Default, PartialEq, Copy, Eq, Ord, PartialOrd, DataSize,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum PoolerMode {
     #[default]
