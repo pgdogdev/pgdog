@@ -202,7 +202,7 @@ impl Binding {
         match self {
             Binding::Admin(admin) => admin.done(),
             Binding::Server(Some(server)) => server.done(),
-            Binding::MultiShard(servers, _state) => servers.iter().all(|s| s.done()),
+            Binding::MultiShard(servers, state) => servers.iter().all(|s| s.done()) && state.done(),
             Binding::Replication(Some(server), _) => server.done(),
             _ => true,
         }
