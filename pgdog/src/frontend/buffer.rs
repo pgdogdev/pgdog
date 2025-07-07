@@ -19,6 +19,7 @@ pub struct Buffer {
 }
 
 impl MemoryUsage for Buffer {
+    #[inline]
     fn memory_usage(&self) -> usize {
         // ProtocolMessage uses memory allocated by BytesMut (mostly).
         self.buffer.len() * std::mem::size_of::<ProtocolMessage>()

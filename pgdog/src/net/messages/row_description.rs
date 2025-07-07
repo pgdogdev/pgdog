@@ -29,6 +29,7 @@ pub struct Field {
 }
 
 impl MemoryUsage for Field {
+    #[inline]
     fn memory_usage(&self) -> usize {
         self.name.capacity()
             + self.table_oid.memory_usage()
@@ -129,6 +130,7 @@ pub struct RowDescription {
 }
 
 impl MemoryUsage for RowDescription {
+    #[inline]
     fn memory_usage(&self) -> usize {
         self.fields.iter().map(|f| f.memory_usage()).sum::<usize>()
     }

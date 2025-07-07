@@ -62,6 +62,7 @@ pub enum ExecutionItem {
 }
 
 impl MemoryUsage for ExecutionItem {
+    #[inline(always)]
     fn memory_usage(&self) -> usize {
         std::mem::size_of::<Self>()
     }
@@ -77,6 +78,7 @@ pub struct ProtocolState {
 }
 
 impl MemoryUsage for ProtocolState {
+    #[inline]
     fn memory_usage(&self) -> usize {
         self.queue.memory_usage()
             + self.names.memory_usage()

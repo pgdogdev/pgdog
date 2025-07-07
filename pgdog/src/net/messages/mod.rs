@@ -109,6 +109,7 @@ pub struct Message {
 }
 
 impl MemoryUsage for Message {
+    #[inline]
     fn memory_usage(&self) -> usize {
         std::mem::size_of::<Bytes>() + self.stream.memory_usage() + std::mem::size_of::<Source>()
     }

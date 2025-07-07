@@ -20,6 +20,7 @@ pub struct Statement {
 }
 
 impl MemoryUsage for Statement {
+    #[inline]
     fn memory_usage(&self) -> usize {
         self.parse.len()
             + if let Some(ref row_description) = self.row_description {
@@ -59,6 +60,7 @@ pub struct CacheKey {
 }
 
 impl MemoryUsage for CacheKey {
+    #[inline]
     fn memory_usage(&self) -> usize {
         // Bytes refer to memory allocated by someone else.
         std::mem::size_of::<Bytes>() * 2 + self.version.memory_usage()
@@ -79,6 +81,7 @@ pub struct CachedStmt {
 }
 
 impl MemoryUsage for CachedStmt {
+    #[inline]
     fn memory_usage(&self) -> usize {
         self.counter.memory_usage() + self.used.memory_usage()
     }
@@ -110,6 +113,7 @@ pub struct GlobalCache {
 }
 
 impl MemoryUsage for GlobalCache {
+    #[inline]
     fn memory_usage(&self) -> usize {
         self.statements.memory_usage()
             + self.names.memory_usage()

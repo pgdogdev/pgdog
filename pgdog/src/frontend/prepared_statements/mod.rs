@@ -27,6 +27,7 @@ pub struct PreparedStatements {
 }
 
 impl MemoryUsage for PreparedStatements {
+    #[inline]
     fn memory_usage(&self) -> usize {
         self.local.memory_usage()
             + self.enabled.memory_usage()
