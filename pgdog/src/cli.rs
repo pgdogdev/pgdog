@@ -6,7 +6,7 @@ use std::fs::read_to_string;
 /// pgDog is a PostgreSQL pooler, proxy, load balancer and
 /// query router.
 #[derive(Parser, Debug)]
-#[clap(version)]
+#[command(version = env!("GIT_HASH"))]
 pub struct Cli {
     /// Path to the configuration file. Default: "pgdog.toml"
     #[arg(short, long, default_value = "pgdog.toml")]
