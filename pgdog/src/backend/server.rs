@@ -213,7 +213,7 @@ impl Server {
             stream_buffer: BytesMut::with_capacity(1024),
         };
 
-        server.stats_mut().memory_used(1024); // Stream capacity.
+        server.stats.memory_used(server.memory_usage()); // Stream capacity.
         server.stats().update();
 
         Ok(server)
