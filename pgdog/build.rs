@@ -1,5 +1,6 @@
 use std::process::Command;
 
+// Compile time checks.
 fn main() {
     println!("cargo:rerun-if-changed=src/frontend/router/sharding/hashfn.c");
 
