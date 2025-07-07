@@ -1,5 +1,3 @@
-use datasize::DataSize;
-
 use crate::net::{Message, Protocol};
 
 use super::super::Error;
@@ -12,7 +10,7 @@ pub enum Action {
     ForwardAndRemove(VecDeque<String>),
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, DataSize)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub enum ExecutionCode {
     ReadyForQuery,
     ExecutionCompleted,
@@ -47,13 +45,13 @@ impl From<char> for ExecutionCode {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, DataSize)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ExecutionItem {
     Code(ExecutionCode),
     Ignore(ExecutionCode),
 }
 
-#[derive(Debug, Clone, Default, DataSize)]
+#[derive(Debug, Clone, Default)]
 pub struct ProtocolState {
     queue: VecDeque<ExecutionItem>,
     names: VecDeque<String>,

@@ -5,6 +5,8 @@ connect_timeout = 1_000
 load_balancing_strategy = "round_robin"
 rollback_timeout = 1_000
 read_write_strategy = "aggressive"
+openmetrics_port = 9090
+openmetrics_namespace = "pgdog_"
 
 [[databases]]
 name = "pgdog"

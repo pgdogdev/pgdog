@@ -21,6 +21,7 @@ impl DataSize for Statement {
     const IS_DYNAMIC: bool = false;
     const STATIC_HEAP_SIZE: usize = 0;
 
+    // We re-allocate the statement.
     fn estimate_heap_size(&self) -> usize {
         self.parse.len()
             + if let Some(ref row_description) = self.row_description {
@@ -63,9 +64,9 @@ impl DataSize for CacheKey {
     const IS_DYNAMIC: bool = false;
     const STATIC_HEAP_SIZE: usize = 0;
 
-    // We re-allocate this.
+    // We don't re-allocate this.
     fn estimate_heap_size(&self) -> usize {
-        self.query.len() + self.data_types.len()
+        0
     }
 }
 
@@ -73,15 +74,6 @@ impl CacheKey {
     pub fn query(&self) -> Result<&str, crate::net::Error> {
         // Postgres string.
         Ok(from_utf8(&self.query[0..self.query.len() - 1])?)
-    }
-
-    /// Reallocate using new memory.
-    pub fn realloc(&self) -> Self {
-        Self {
-            query: Bytes::copy_from_slice(&self.query[..]),
-            data_types: Bytes::copy_from_slice(&self.data_types[..]),
-            version: self.version,
-        }
     }
 }
 
@@ -108,12 +100,21 @@ impl CachedStmt {
 ///    used to prepare the statement on server connections and to decode
 ///    results returned by executing those statements in a multi-shard context.
 ///
-#[derive(Default, Debug, Clone, DataSize)]
+#[derive(Default, Debug, Clone)]
 pub struct GlobalCache {
     statements: HashMap<CacheKey, CachedStmt>,
     names: HashMap<String, Statement>,
     counter: usize,
     versions: usize,
+}
+
+impl DataSize for GlobalCache {
+    const IS_DYNAMIC: bool = true;
+    const STATIC_HEAP_SIZE: usize = 0;
+
+    fn estimate_heap_size(&self) -> usize {
+        self.statements.estimate_heap_size() + self.names.estimate_heap_size()
+    }
 }
 
 impl GlobalCache {
@@ -134,16 +135,23 @@ impl GlobalCache {
             (false, global_name(entry.counter))
         } else {
             self.counter += 1;
+            let name = global_name(self.counter);
+
+            let parse = parse.rename_new(&name);
+            let parse_key = CacheKey {
+                query: parse.query_ref(),
+                data_types: parse.data_types_ref(),
+                version: 0,
+            };
+
             self.statements.insert(
-                parse_key.realloc(),
+                parse_key,
                 CachedStmt {
                     counter: self.counter,
                     used: 1,
                 },
             );
 
-            let name = global_name(self.counter);
-            let parse = parse.rename_new(&name);
             self.names.insert(
                 name.clone(),
                 Statement {
@@ -162,21 +170,24 @@ impl GlobalCache {
     pub fn insert_anyway(&mut self, parse: &Parse) -> String {
         self.counter += 1;
         self.versions += 1;
+
+        let name = global_name(self.counter);
+        let parse = parse.rename_new(&name);
+
         let key = CacheKey {
             query: parse.query_ref(),
             data_types: parse.data_types_ref(),
-            version: self.versions,
+            version: 0,
         };
 
         self.statements.insert(
-            key.realloc(),
+            key.clone(),
             CachedStmt {
                 counter: self.counter,
                 used: 1,
             },
         );
-        let name = global_name(self.counter);
-        let parse = parse.rename_new(&name);
+
         self.names.insert(
             name.clone(),
             Statement {

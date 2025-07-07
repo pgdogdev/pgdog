@@ -99,13 +99,11 @@ impl<'a> ParameterWithFormat<'a> {
 }
 
 /// Bind (F) message.
-#[derive(Debug, Clone, PartialEq, PartialOrd, Ord, Eq, DataSize)]
+#[derive(Debug, Clone, PartialEq, PartialOrd, Ord, Eq)]
 pub struct Bind {
     /// Portal name.
-    #[data_size(skip)]
     portal: Bytes,
     /// Prepared statement name.
-    #[data_size(skip)]
     statement: Bytes,
     /// Format codes.
     codes: Vec<Format>,
@@ -114,7 +112,6 @@ pub struct Bind {
     /// Results format.
     results: Vec<i16>,
     /// Original payload.
-    #[data_size(skip)]
     original: Option<Bytes>,
 }
 

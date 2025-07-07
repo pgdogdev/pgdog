@@ -61,11 +61,9 @@ impl DataSize for LruCacheSized {
 /// The global cache has names and Parse messages,
 /// while the local cache has the names of the prepared statements
 /// currently prepared on the server connection.
-#[derive(Debug, DataSize)]
+#[derive(Debug)]
 pub struct PreparedStatements {
-    #[data_size(skip)]
     global_cache: Arc<Mutex<GlobalCache>>,
-
     local_cache: LruCacheSized,
     state: ProtocolState,
     // Prepared statements being prepared now on the connection.
@@ -73,6 +71,17 @@ pub struct PreparedStatements {
     // Describes being executed now on the connection.
     describes: VecDeque<String>,
     capacity: usize,
+}
+
+impl DataSize for PreparedStatements {
+    const IS_DYNAMIC: bool = true;
+    const STATIC_HEAP_SIZE: usize = 0;
+
+    fn estimate_heap_size(&self) -> usize {
+        self.parses.estimate_heap_size()
+            + self.describes.estimate_heap_size()
+            + self.local_cache.estimate_heap_size()
+    }
 }
 
 impl Default for PreparedStatements {
