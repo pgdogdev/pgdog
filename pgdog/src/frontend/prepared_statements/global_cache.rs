@@ -141,13 +141,7 @@ impl GlobalCache {
         } else {
             self.counter += 1;
             let name = global_name(self.counter);
-
-            let parse = parse.rename_new(&name);
-            let parse_key = CacheKey {
-                query: parse.query_ref(),
-                data_types: parse.data_types_ref(),
-                version: 0,
-            };
+            let parse = parse.rename(&name);
 
             self.statements.insert(
                 parse_key,
@@ -177,12 +171,12 @@ impl GlobalCache {
         self.versions += 1;
 
         let name = global_name(self.counter);
-        let parse = parse.rename_new(&name);
+        let parse = parse.rename(&name);
 
         let key = CacheKey {
             query: parse.query_ref(),
             data_types: parse.data_types_ref(),
-            version: 0,
+            version: self.versions,
         };
 
         self.statements.insert(
