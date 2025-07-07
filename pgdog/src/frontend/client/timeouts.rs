@@ -1,10 +1,8 @@
 use std::time::Duration;
 
-use datasize::DataSize;
-
 use crate::{config::General, frontend::Buffer, state::State};
 
-#[derive(Debug, Clone, Copy, DataSize)]
+#[derive(Debug, Clone, Copy)]
 pub struct Timeouts {
     pub(super) query_timeout: Duration,
     pub(super) client_idle_timeout: Duration,

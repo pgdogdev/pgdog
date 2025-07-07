@@ -2,7 +2,6 @@
 use std::time::Duration;
 
 use bytes::{BufMut, BytesMut};
-use datasize::DataSize;
 use rustls_pki_types::ServerName;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -26,6 +25,7 @@ use crate::{
         },
         Close, Parameter, Sync,
     },
+    stats::memory::MemoryUsage,
 };
 use crate::{
     config::PoolerMode,
@@ -57,6 +57,21 @@ pub struct Server {
     re_synced: bool,
     pooler_mode: PoolerMode,
     stream_buffer: BytesMut,
+}
+
+impl MemoryUsage for Server {
+    #[inline]
+    fn memory_usage(&self) -> usize {
+        std::mem::size_of::<BackendKeyData>()
+            + self.params.memory_usage()
+            + self.changed_params.memory_usage()
+            + self.client_params.memory_usage()
+            + std::mem::size_of::<Stats>()
+            + self.prepared_statements.memory_usage()
+            + 6 * std::mem::size_of::<bool>()
+            + std::mem::size_of::<PoolerMode>()
+            + self.stream_buffer.capacity()
+    }
 }
 
 impl Server {
@@ -318,9 +333,7 @@ impl Server {
             'Z' => {
                 let now = Instant::now();
                 self.stats.query(now);
-                self.stats.memory_used(
-                    self.stream_buffer.capacity() + self.prepared_statements.estimate_heap_size(),
-                );
+                self.stats.memory_used(self.memory_usage());
 
                 let rfq = ReadyForQuery::from_bytes(message.payload())?;
 

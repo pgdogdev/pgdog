@@ -1,7 +1,9 @@
 use bytes::Bytes;
-use datasize::DataSize;
 
-use crate::net::messages::{Parse, RowDescription};
+use crate::{
+    net::messages::{Parse, RowDescription},
+    stats::memory::MemoryUsage,
+};
 use std::{collections::hash_map::HashMap, str::from_utf8};
 
 // Format the globally unique prepared statement
@@ -17,15 +19,11 @@ pub struct Statement {
     version: usize,
 }
 
-impl DataSize for Statement {
-    const IS_DYNAMIC: bool = false;
-    const STATIC_HEAP_SIZE: usize = 0;
-
-    // We re-allocate the statement.
-    fn estimate_heap_size(&self) -> usize {
+impl MemoryUsage for Statement {
+    fn memory_usage(&self) -> usize {
         self.parse.len()
             + if let Some(ref row_description) = self.row_description {
-                (*row_description).estimate_heap_size()
+                row_description.memory_usage()
             } else {
                 0
             }
@@ -60,13 +58,10 @@ pub struct CacheKey {
     pub version: usize,
 }
 
-impl DataSize for CacheKey {
-    const IS_DYNAMIC: bool = false;
-    const STATIC_HEAP_SIZE: usize = 0;
-
-    // We don't re-allocate this.
-    fn estimate_heap_size(&self) -> usize {
-        0
+impl MemoryUsage for CacheKey {
+    fn memory_usage(&self) -> usize {
+        // Bytes refer to memory allocated by someone else.
+        std::mem::size_of::<Bytes>() * 2 + self.version.memory_usage()
     }
 }
 
@@ -77,10 +72,16 @@ impl CacheKey {
     }
 }
 
-#[derive(Debug, Copy, Clone, DataSize)]
+#[derive(Debug, Copy, Clone)]
 pub struct CachedStmt {
     pub counter: usize,
     pub used: usize,
+}
+
+impl MemoryUsage for CachedStmt {
+    fn memory_usage(&self) -> usize {
+        self.counter.memory_usage() + self.used.memory_usage()
+    }
 }
 
 impl CachedStmt {
@@ -108,12 +109,12 @@ pub struct GlobalCache {
     versions: usize,
 }
 
-impl DataSize for GlobalCache {
-    const IS_DYNAMIC: bool = true;
-    const STATIC_HEAP_SIZE: usize = 0;
-
-    fn estimate_heap_size(&self) -> usize {
-        self.statements.estimate_heap_size() + self.names.estimate_heap_size()
+impl MemoryUsage for GlobalCache {
+    fn memory_usage(&self) -> usize {
+        self.statements.memory_usage()
+            + self.names.memory_usage()
+            + self.counter.memory_usage()
+            + self.versions.memory_usage()
     }
 }
 

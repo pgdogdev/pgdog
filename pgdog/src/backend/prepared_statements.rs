@@ -1,11 +1,5 @@
-use datasize::DataSize;
 use lru::LruCache;
-use std::{
-    collections::VecDeque,
-    ops::{Deref, DerefMut},
-    sync::Arc,
-    usize,
-};
+use std::{collections::VecDeque, sync::Arc, usize};
 
 use parking_lot::Mutex;
 
@@ -15,6 +9,7 @@ use crate::{
         messages::{parse::Parse, RowDescription},
         Close, CloseComplete, FromBytes, Message, ParseComplete, Protocol, ToBytes,
     },
+    stats::memory::MemoryUsage,
 };
 
 use super::Error;
@@ -30,32 +25,6 @@ pub enum HandleResult {
     Prepend(ProtocolMessage),
 }
 
-#[derive(Debug)]
-struct LruCacheSized(LruCache<String, ()>);
-
-impl Deref for LruCacheSized {
-    type Target = LruCache<String, ()>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl DerefMut for LruCacheSized {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
-impl DataSize for LruCacheSized {
-    const IS_DYNAMIC: bool = true;
-    const STATIC_HEAP_SIZE: usize = 0;
-
-    fn estimate_heap_size(&self) -> usize {
-        self.0.iter().map(|(k, _)| k.capacity()).sum::<usize>()
-    }
-}
-
 /// Server-specific prepared statements.
 ///
 /// The global cache has names and Parse messages,
@@ -64,7 +33,7 @@ impl DataSize for LruCacheSized {
 #[derive(Debug)]
 pub struct PreparedStatements {
     global_cache: Arc<Mutex<GlobalCache>>,
-    local_cache: LruCacheSized,
+    local_cache: LruCache<String, ()>,
     state: ProtocolState,
     // Prepared statements being prepared now on the connection.
     parses: VecDeque<String>,
@@ -73,14 +42,14 @@ pub struct PreparedStatements {
     capacity: usize,
 }
 
-impl DataSize for PreparedStatements {
-    const IS_DYNAMIC: bool = true;
-    const STATIC_HEAP_SIZE: usize = 0;
-
-    fn estimate_heap_size(&self) -> usize {
-        self.parses.estimate_heap_size()
-            + self.describes.estimate_heap_size()
-            + self.local_cache.estimate_heap_size()
+impl MemoryUsage for PreparedStatements {
+    fn memory_usage(&self) -> usize {
+        self.local_cache.memory_usage()
+            + self.parses.memory_usage()
+            + self.describes.memory_usage()
+            + self.capacity.memory_usage()
+            + std::mem::size_of::<Arc<Mutex<GlobalCache>>>()
+            + self.state.memory_usage()
     }
 }
 
@@ -95,7 +64,7 @@ impl PreparedStatements {
     pub fn new() -> Self {
         Self {
             global_cache: frontend::PreparedStatements::global(),
-            local_cache: LruCacheSized(LruCache::unbounded()),
+            local_cache: LruCache::unbounded(),
             state: ProtocolState::default(),
             parses: VecDeque::new(),
             describes: VecDeque::new(),

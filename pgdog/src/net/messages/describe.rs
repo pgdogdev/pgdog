@@ -2,8 +2,6 @@
 use std::str::from_utf8;
 use std::str::from_utf8_unchecked;
 
-use crate::net::zero_data_size;
-
 use super::code;
 use super::prelude::*;
 
@@ -13,8 +11,6 @@ pub struct Describe {
     payload: Bytes,
     original: Option<Bytes>,
 }
-
-zero_data_size!(Describe);
 
 impl FromBytes for Describe {
     fn from_bytes(mut bytes: Bytes) -> Result<Self, Error> {

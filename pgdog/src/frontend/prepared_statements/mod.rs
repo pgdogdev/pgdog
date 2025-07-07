@@ -2,11 +2,10 @@
 
 use std::{collections::HashMap, sync::Arc, usize};
 
-use datasize::DataSize;
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 
-use crate::{backend::ProtocolMessage, net::Parse};
+use crate::{backend::ProtocolMessage, net::Parse, stats::memory::MemoryUsage};
 
 pub mod error;
 pub mod global_cache;
@@ -19,13 +18,21 @@ pub use rewrite::Rewrite;
 
 static CACHE: Lazy<PreparedStatements> = Lazy::new(PreparedStatements::default);
 
-#[derive(Clone, Debug, DataSize)]
+#[derive(Clone, Debug)]
 pub struct PreparedStatements {
-    #[data_size(skip)]
     pub(super) global: Arc<Mutex<GlobalCache>>,
     pub(super) local: HashMap<String, String>,
     pub(super) enabled: bool,
     pub(super) capacity: usize,
+}
+
+impl MemoryUsage for PreparedStatements {
+    fn memory_usage(&self) -> usize {
+        self.local.memory_usage()
+            + self.enabled.memory_usage()
+            + self.capacity.memory_usage()
+            + std::mem::size_of::<Arc<Mutex<GlobalCache>>>()
+    }
 }
 
 impl Default for PreparedStatements {

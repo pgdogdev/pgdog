@@ -1,13 +1,12 @@
 //! Server address.
 
-use datasize::DataSize;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::config::{Database, User};
 
 /// Server address.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default, DataSize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct Address {
     /// Server host.
     pub host: String,

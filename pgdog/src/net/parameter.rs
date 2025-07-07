@@ -7,8 +7,9 @@ use std::{
     ops::{Deref, DerefMut},
 };
 
-use datasize::DataSize;
 use once_cell::sync::Lazy;
+
+use crate::stats::memory::MemoryUsage;
 
 use super::{messages::Query, Error};
 
@@ -46,10 +47,19 @@ pub struct MergeResult {
     pub changed_params: usize,
 }
 
-#[derive(Debug, Clone, Hash, PartialEq, DataSize)]
+#[derive(Debug, Clone, Hash, PartialEq)]
 pub enum ParameterValue {
     String(String),
     Tuple(Vec<String>),
+}
+
+impl MemoryUsage for ParameterValue {
+    fn memory_usage(&self) -> usize {
+        match self {
+            Self::String(v) => v.memory_usage(),
+            Self::Tuple(vals) => vals.memory_usage(),
+        }
+    }
 }
 
 impl Display for ParameterValue {
@@ -90,10 +100,16 @@ impl ParameterValue {
 }
 
 /// List of parameters.
-#[derive(Default, Debug, Clone, PartialEq, DataSize)]
+#[derive(Default, Debug, Clone, PartialEq)]
 pub struct Parameters {
     params: BTreeMap<String, ParameterValue>,
     hash: u64,
+}
+
+impl MemoryUsage for Parameters {
+    fn memory_usage(&self) -> usize {
+        self.params.memory_usage() + self.hash.memory_usage()
+    }
 }
 
 impl From<BTreeMap<String, ParameterValue>> for Parameters {

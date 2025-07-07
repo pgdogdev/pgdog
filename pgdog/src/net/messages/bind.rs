@@ -1,6 +1,5 @@
 //! Bind (F) message.
 use crate::net::c_string_buf_len;
-use datasize::DataSize;
 use uuid::Uuid;
 
 use super::code;
@@ -13,7 +12,7 @@ use std::fmt::Debug;
 use std::str::from_utf8;
 use std::str::from_utf8_unchecked;
 
-#[derive(PartialEq, Debug, Copy, Clone, PartialOrd, Ord, Eq, DataSize)]
+#[derive(PartialEq, Debug, Copy, Clone, PartialOrd, Ord, Eq)]
 pub enum Format {
     Text,
     Binary,
@@ -29,7 +28,7 @@ impl From<Format> for i16 {
 }
 
 /// Parameter data.
-#[derive(Clone, PartialEq, PartialOrd, Ord, Eq, DataSize)]
+#[derive(Clone, PartialEq, PartialOrd, Ord, Eq)]
 pub struct Parameter {
     /// Parameter data length.
     pub len: i32,

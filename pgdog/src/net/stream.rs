@@ -1,7 +1,6 @@
 //! Network socket wrapper allowing us to treat secure, plain and UNIX
 //! connections the same across the code.
 use bytes::{BufMut, BytesMut};
-use datasize::DataSize;
 use pin_project::pin_project;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufStream, ReadBuf};
 use tokio::net::TcpStream;
@@ -21,14 +20,6 @@ use super::messages::{ErrorResponse, Message, Protocol, ReadyForQuery, Terminate
 pub enum Stream {
     Plain(#[pin] BufStream<TcpStream>),
     Tls(#[pin] BufStream<tokio_rustls::TlsStream<TcpStream>>),
-}
-
-impl DataSize for Stream {
-    const IS_DYNAMIC: bool = false;
-    const STATIC_HEAP_SIZE: usize = 0;
-    fn estimate_heap_size(&self) -> usize {
-        0
-    }
 }
 
 impl AsyncRead for Stream {

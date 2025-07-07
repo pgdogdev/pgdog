@@ -1,12 +1,8 @@
-use crate::net::zero_data_size;
-
 use super::code;
 use super::prelude::*;
 
 #[derive(Debug, Clone)]
 pub struct Sync;
-
-zero_data_size!(Sync);
 
 impl Default for Sync {
     fn default() -> Self {

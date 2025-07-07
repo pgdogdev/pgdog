@@ -1,10 +1,7 @@
 use super::{code, prelude::*};
-use crate::net::zero_data_size;
 
 #[derive(Debug, Clone)]
 pub struct CopyDone;
-
-zero_data_size!(CopyDone);
 
 impl FromBytes for CopyDone {
     fn from_bytes(mut bytes: Bytes) -> Result<Self, Error> {

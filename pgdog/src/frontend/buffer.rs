@@ -1,16 +1,14 @@
 //! Message buffer.
 
-use std::ops::{Deref, DerefMut};
-
-use datasize::DataSize;
-
 use crate::{
     backend::ProtocolMessage,
     net::{
         messages::{parse::Parse, Bind, CopyData, Protocol, Query},
         Error,
     },
+    stats::memory::MemoryUsage,
 };
+use std::ops::{Deref, DerefMut};
 
 use super::PreparedStatements;
 
@@ -20,12 +18,10 @@ pub struct Buffer {
     buffer: Vec<ProtocolMessage>,
 }
 
-impl DataSize for Buffer {
-    const IS_DYNAMIC: bool = false;
-    const STATIC_HEAP_SIZE: usize = 0;
-
-    fn estimate_heap_size(&self) -> usize {
-        0
+impl MemoryUsage for Buffer {
+    fn memory_usage(&self) -> usize {
+        // ProtocolMessage uses memory allocated by BytesMut (mostly).
+        self.buffer.len() * std::mem::size_of::<ProtocolMessage>()
     }
 }
 

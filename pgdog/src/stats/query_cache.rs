@@ -1,8 +1,9 @@
-use datasize::DataSize;
-
-use crate::frontend::{
-    router::parser::{cache::Stats, Cache},
-    PreparedStatements,
+use crate::{
+    frontend::{
+        router::parser::{cache::Stats, Cache},
+        PreparedStatements,
+    },
+    stats::memory::MemoryUsage,
 };
 
 use super::*;
@@ -28,7 +29,7 @@ impl QueryCache {
         QueryCache {
             stats: Cache::stats(),
             prepared_statements: stmts.len(),
-            prepared_statements_memory: stmts.estimate_heap_size(),
+            prepared_statements_memory: stmts.memory_usage(),
         }
     }
 

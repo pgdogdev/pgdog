@@ -3,8 +3,6 @@ use std::fmt::Debug;
 use std::str::from_utf8;
 use std::str::from_utf8_unchecked;
 
-use crate::net::zero_data_size;
-
 use super::code;
 use super::prelude::*;
 
@@ -12,8 +10,6 @@ use super::prelude::*;
 pub struct Close {
     payload: Bytes,
 }
-
-zero_data_size!(Close);
 
 impl Debug for Close {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

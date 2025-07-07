@@ -1,6 +1,4 @@
-use datasize::DataSize;
-
-use crate::frontend::PreparedStatements;
+use crate::{frontend::PreparedStatements, stats::memory::MemoryUsage};
 
 use super::prelude::*;
 
@@ -30,7 +28,7 @@ impl Command for ShowPreparedStatements {
             let name_memory = statements
                 .names()
                 .get(&stmt.name())
-                .map(|s| (*s).estimate_heap_size())
+                .map(|s| s.memory_usage())
                 .unwrap_or(0);
             let mut dr = DataRow::new();
             dr.add(stmt.name())

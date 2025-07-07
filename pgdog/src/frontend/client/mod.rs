@@ -27,6 +27,7 @@ use crate::net::messages::{
 use crate::net::{parameter::Parameters, Stream};
 use crate::net::{DataRow, EmptyQueryResponse, Field, NoticeResponse, RowDescription};
 use crate::state::State;
+use crate::stats::memory::MemoryUsage;
 
 pub mod counter;
 pub mod engine;
@@ -55,6 +56,22 @@ pub struct Client {
     request_buffer: Buffer,
     stream_buffer: BytesMut,
     cross_shard_disabled: bool,
+}
+
+impl MemoryUsage for Client {
+    fn memory_usage(&self) -> usize {
+        std::mem::size_of::<SocketAddr>()
+            + std::mem::size_of::<Stream>()
+            + std::mem::size_of::<BackendKeyData>()
+            + self.connect_params.memory_usage()
+            + self.params.memory_usage()
+            + std::mem::size_of::<Comms>()
+            + std::mem::size_of::<bool>() * 5
+            + self.prepared_statements.memory_usage()
+            + std::mem::size_of::<Timeouts>()
+            + self.stream_buffer.memory_usage()
+            + self.request_buffer.memory_usage()
+    }
 }
 
 impl Client {
@@ -735,7 +752,7 @@ impl Client {
         inner
             .stats
             .prepared_statements(self.prepared_statements.len_local());
-        inner.stats.memory_used(self.stream_buffer.capacity());
+        inner.stats.memory_used(self.memory_usage());
     }
 }
 

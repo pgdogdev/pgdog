@@ -2,7 +2,6 @@ use std::fmt::Debug;
 use std::str::from_utf8;
 
 use crate::net::c_string_buf_len;
-use crate::net::zero_data_size;
 
 use super::code;
 use super::prelude::*;
@@ -12,8 +11,6 @@ pub struct Execute {
     payload: Bytes,
     portal_len: usize,
 }
-
-zero_data_size!(Execute);
 
 impl Default for Execute {
     fn default() -> Self {

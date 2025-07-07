@@ -6,7 +6,6 @@ use std::sync::{
     Arc,
 };
 
-use datasize::DataSize;
 use fnv::FnvHashMap as HashMap;
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
@@ -37,7 +36,7 @@ struct Global {
 }
 
 /// Bi-directional communications between client and internals.
-#[derive(Clone, DataSize)]
+#[derive(Clone)]
 pub struct Comms {
     global: Arc<Global>,
     id: Option<BackendKeyData>,

@@ -1,13 +1,9 @@
-use crate::net::zero_data_size;
-
 use super::{code, prelude::*};
 
 #[derive(Debug, Clone)]
 pub struct CopyFail {
     error: Bytes,
 }
-
-zero_data_size!(CopyFail);
 
 impl FromBytes for CopyFail {
     fn from_bytes(mut bytes: Bytes) -> Result<Self, Error> {

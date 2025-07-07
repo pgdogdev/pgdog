@@ -59,7 +59,7 @@ pub use row_description::{Field, RowDescription};
 pub use sync::Sync;
 pub use terminate::Terminate;
 
-use crate::net::{zero_data_size, Error};
+use crate::{net::Error, stats::memory::MemoryUsage};
 
 use bytes::Bytes;
 
@@ -108,7 +108,11 @@ pub struct Message {
     source: Source,
 }
 
-zero_data_size!(Message);
+impl MemoryUsage for Message {
+    fn memory_usage(&self) -> usize {
+        std::mem::size_of::<Bytes>() + self.stream.memory_usage() + std::mem::size_of::<Source>()
+    }
+}
 
 impl std::fmt::Debug for Message {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

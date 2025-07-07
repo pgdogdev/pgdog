@@ -5,7 +5,6 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use datasize::DataSize;
 use fnv::FnvHashMap as HashMap;
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
@@ -49,7 +48,7 @@ pub struct ConnectedServer {
 }
 
 /// Server connection stats.
-#[derive(Copy, Clone, Debug, Default, DataSize)]
+#[derive(Copy, Clone, Debug, Default)]
 pub struct Counts {
     pub bytes_sent: usize,
     pub bytes_received: usize,
@@ -93,22 +92,17 @@ impl Add for Counts {
 }
 
 /// Server statistics.
-#[derive(Copy, Clone, Debug, DataSize)]
+#[derive(Copy, Clone, Debug)]
 pub struct Stats {
     pub id: BackendKeyData,
     pub state: State,
-    #[data_size(skip)]
     pub last_used: Instant,
-    #[data_size(skip)]
     pub last_healthcheck: Option<Instant>,
-    #[data_size(skip)]
     pub created_at: Instant,
     pub created_at_time: SystemTime,
     pub total: Counts,
     pub last_checkout: Counts,
-    #[data_size(skip)]
     query_timer: Option<Instant>,
-    #[data_size(skip)]
     transaction_timer: Option<Instant>,
 }
 
