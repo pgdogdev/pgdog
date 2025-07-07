@@ -3,9 +3,9 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 use std::fs::read_to_string;
 
-/// pgDog is a PostgreSQL pooler, proxy, load balancer and
-/// query router.
+/// PgDog is a PostgreSQL pooler, proxy, load balancer and query router.
 #[derive(Parser, Debug)]
+#[command(name = "", version = concat!("PgDog v", env!("GIT_HASH")))]
 pub struct Cli {
     /// Path to the configuration file. Default: "pgdog.toml"
     #[arg(short, long, default_value = "pgdog.toml")]
