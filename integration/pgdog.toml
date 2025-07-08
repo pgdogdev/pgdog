@@ -7,6 +7,7 @@ rollback_timeout = 1_000
 read_write_strategy = "aggressive"
 openmetrics_port = 9090
 openmetrics_namespace = "pgdog_"
+prepared_statements_limit = 500
 
 [[databases]]
 name = "pgdog"
