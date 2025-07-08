@@ -146,7 +146,7 @@ impl Inner {
             // until they disconnect.
             //
             // Used in case the client runs an advisory lock
-            // or another leaky transaction mode abostraction.
+            // or another leaky transaction mode abstraction.
             self.backend.lock(route.lock_session());
 
             if let Ok(addr) = self.backend.addr() {
