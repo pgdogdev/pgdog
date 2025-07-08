@@ -14,7 +14,6 @@ pub use messages::*;
 pub use parameter::{Parameter, Parameters};
 pub use stream::Stream;
 pub use tweaks::tweak;
-pub mod bytes_sized;
 
 use std::{io::Cursor, marker::Unpin};
 use tokio::io::{AsyncRead, AsyncReadExt};
