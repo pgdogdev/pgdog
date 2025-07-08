@@ -602,3 +602,33 @@ async fn test_client_idle_timeout() {
     .await
     .is_err());
 }
+
+#[tokio::test]
+async fn test_prepared_syntax_error() {
+    let (mut conn, mut client, mut inner) = new_client!(false);
+
+    conn.write_all(&buffer!({ Parse::named("test", "SELECT sdfsf") }, { Sync }))
+        .await
+        .unwrap();
+
+    client.buffer(&State::Idle).await.unwrap();
+    client.client_messages(inner.get()).await.unwrap();
+
+    for c in ['E', 'Z'] {
+        let msg = inner.backend.read().await.unwrap();
+        assert_eq!(msg.code(), c);
+        client.server_message(&mut inner.get(), msg).await.unwrap();
+    }
+    read!(conn, ['E', 'Z']);
+
+    let stmts = client.prepared_statements.global.clone();
+
+    assert_eq!(stmts.lock().statements().iter().next().unwrap().1.used, 1);
+
+    conn.write_all(&buffer!({ Terminate })).await.unwrap();
+    let event = client.buffer(&State::Idle).await.unwrap();
+    assert_eq!(event, BufferEvent::DisconnectGraceful);
+    drop(client);
+
+    assert_eq!(stmts.lock().statements().iter().next().unwrap().1.used, 0);
+}
