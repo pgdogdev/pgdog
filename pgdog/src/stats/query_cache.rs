@@ -72,7 +72,7 @@ impl QueryCache {
                 gauge: true,
             }),
             Metric::new(QueryCacheMetric {
-                name: "prepared_statements_memory".into(),
+                name: "prepared_statements_memory_used".into(),
                 help: "Amount of bytes used for the prepared statements cache".into(),
                 value: self.prepared_statements_memory,
                 gauge: true,
