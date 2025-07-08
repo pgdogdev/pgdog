@@ -34,18 +34,21 @@ impl_memory_usage_static!(());
 impl_memory_usage_static!(bool);
 
 impl MemoryUsage for String {
+    #[inline(always)]
     fn memory_usage(&self) -> usize {
         self.capacity()
     }
 }
 
 impl<V: MemoryUsage> MemoryUsage for VecDeque<V> {
+    #[inline(always)]
     fn memory_usage(&self) -> usize {
         self.iter().map(|v| v.memory_usage()).sum::<usize>()
     }
 }
 
 impl<V: MemoryUsage> MemoryUsage for Vec<V> {
+    #[inline(always)]
     fn memory_usage(&self) -> usize {
         self.iter().map(|v| v.memory_usage()).sum::<usize>()
     }
@@ -86,12 +89,14 @@ impl<K: MemoryUsage + Hash + Eq, V: MemoryUsage + Eq> MemoryUsage for LruCache<K
 }
 
 impl MemoryUsage for BytesMut {
+    #[inline(always)]
     fn memory_usage(&self) -> usize {
         self.capacity()
     }
 }
 
 impl MemoryUsage for Bytes {
+    #[inline(always)]
     fn memory_usage(&self) -> usize {
         0
     }
