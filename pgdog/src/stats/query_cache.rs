@@ -23,13 +23,16 @@ pub struct QueryCache {
 
 impl QueryCache {
     pub(crate) fn load() -> Self {
-        let global = PreparedStatements::global();
-        let stmts = global.lock();
+        let (prepared_statements, prepared_statements_memory) = {
+            let global = PreparedStatements::global();
+            let guard = global.lock();
+            (guard.len(), guard.memory_usage())
+        };
 
         QueryCache {
             stats: Cache::stats(),
-            prepared_statements: stmts.len(),
-            prepared_statements_memory: stmts.memory_usage(),
+            prepared_statements,
+            prepared_statements_memory,
         }
     }
 
