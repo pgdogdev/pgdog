@@ -1,6 +1,5 @@
 //! Frontend client.
 
-use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::time::Instant;
 
@@ -28,6 +27,7 @@ use crate::net::messages::{
 use crate::net::{parameter::Parameters, Stream};
 use crate::net::{DataRow, EmptyQueryResponse, Field, NoticeResponse, RowDescription};
 use crate::state::State;
+use crate::stats::memory::MemoryUsage;
 
 pub mod counter;
 pub mod engine;
@@ -38,11 +38,11 @@ pub use engine::Engine;
 use inner::{Inner, InnerBorrow};
 
 /// Frontend client.
-#[allow(dead_code)]
 pub struct Client {
     addr: SocketAddr,
     stream: Stream,
     id: BackendKeyData,
+    #[allow(dead_code)]
     connect_params: Parameters,
     params: Parameters,
     comms: Comms,
@@ -55,8 +55,24 @@ pub struct Client {
     timeouts: Timeouts,
     request_buffer: Buffer,
     stream_buffer: BytesMut,
-    message_buffer: VecDeque<ProtocolMessage>,
     cross_shard_disabled: bool,
+}
+
+impl MemoryUsage for Client {
+    #[inline]
+    fn memory_usage(&self) -> usize {
+        std::mem::size_of::<SocketAddr>()
+            + std::mem::size_of::<Stream>()
+            + std::mem::size_of::<BackendKeyData>()
+            + self.connect_params.memory_usage()
+            + self.params.memory_usage()
+            + std::mem::size_of::<Comms>()
+            + std::mem::size_of::<bool>() * 5
+            + self.prepared_statements.memory_used()
+            + std::mem::size_of::<Timeouts>()
+            + self.stream_buffer.memory_usage()
+            + self.request_buffer.memory_usage()
+    }
 }
 
 impl Client {
@@ -204,7 +220,6 @@ impl Client {
             timeouts: Timeouts::from_config(&config.config.general),
             request_buffer: Buffer::new(),
             stream_buffer: BytesMut::new(),
-            message_buffer: VecDeque::new(),
             shutdown: false,
             cross_shard_disabled: false,
         };
@@ -246,7 +261,6 @@ impl Client {
             timeouts: Timeouts::from_config(&config().config.general),
             request_buffer: Buffer::new(),
             stream_buffer: BytesMut::new(),
-            message_buffer: VecDeque::new(),
             shutdown: false,
             cross_shard_disabled: false,
         }
@@ -739,7 +753,7 @@ impl Client {
         inner
             .stats
             .prepared_statements(self.prepared_statements.len_local());
-        inner.stats.memory_used(self.stream_buffer.capacity());
+        inner.stats.memory_used(self.memory_usage());
     }
 }
 

@@ -5,7 +5,7 @@ use std::{collections::HashMap, sync::Arc, usize};
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 
-use crate::{backend::ProtocolMessage, net::Parse};
+use crate::{backend::ProtocolMessage, net::Parse, stats::memory::MemoryUsage};
 
 pub mod error;
 pub mod global_cache;
@@ -24,6 +24,17 @@ pub struct PreparedStatements {
     pub(super) local: HashMap<String, String>,
     pub(super) enabled: bool,
     pub(super) capacity: usize,
+    pub(super) memory_used: usize,
+}
+
+impl MemoryUsage for PreparedStatements {
+    #[inline]
+    fn memory_usage(&self) -> usize {
+        self.local.memory_usage()
+            + self.enabled.memory_usage()
+            + self.capacity.memory_usage()
+            + std::mem::size_of::<Arc<Mutex<GlobalCache>>>()
+    }
 }
 
 impl Default for PreparedStatements {
@@ -33,6 +44,7 @@ impl Default for PreparedStatements {
             local: HashMap::default(),
             enabled: true,
             capacity: usize::MAX,
+            memory_used: 0,
         }
     }
 }
@@ -59,6 +71,7 @@ impl PreparedStatements {
     pub fn insert(&mut self, parse: Parse) -> Parse {
         let (_new, name) = { self.global.lock().insert(&parse) };
         let existed = self.local.insert(parse.name().to_owned(), name.clone());
+        self.memory_used = self.memory_usage();
 
         // Client prepared it again because it got an error the first time.
         // We can check if this is a new statement first, but this is an error
@@ -69,14 +82,15 @@ impl PreparedStatements {
             }
         }
 
-        parse.rename(&name)
+        parse.rename_fast(&name)
     }
 
     /// Insert statement into the cache bypassing duplicate checks.
     pub fn insert_anyway(&mut self, parse: Parse) -> Parse {
         let (_, name) = self.global.lock().insert(&parse);
         self.local.insert(parse.name().to_owned(), name.clone());
-        parse.rename(&name)
+        self.memory_used = self.memory_usage();
+        parse.rename_fast(&name)
     }
 
     /// Get global statement counter.
@@ -98,6 +112,7 @@ impl PreparedStatements {
     pub fn close(&mut self, name: &str) {
         if let Some(global_name) = self.local.remove(name) {
             self.global.lock().close(&global_name, self.capacity);
+            self.memory_used = self.memory_usage();
         }
     }
 
@@ -112,6 +127,12 @@ impl PreparedStatements {
         }
 
         self.local.clear();
+        self.memory_used = self.memory_usage();
+    }
+
+    /// How much memory is used, approx.
+    pub fn memory_used(&self) -> usize {
+        self.memory_used
     }
 }
 

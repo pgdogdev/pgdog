@@ -25,6 +25,7 @@ use crate::{
         },
         Close, Parameter, Sync,
     },
+    stats::memory::MemoryUsage,
 };
 use crate::{
     config::PoolerMode,
@@ -56,6 +57,21 @@ pub struct Server {
     re_synced: bool,
     pooler_mode: PoolerMode,
     stream_buffer: BytesMut,
+}
+
+impl MemoryUsage for Server {
+    #[inline]
+    fn memory_usage(&self) -> usize {
+        std::mem::size_of::<BackendKeyData>()
+            + self.params.memory_usage()
+            + self.changed_params.memory_usage()
+            + self.client_params.memory_usage()
+            + std::mem::size_of::<Stats>()
+            + self.prepared_statements.memory_used()
+            + 6 * std::mem::size_of::<bool>()
+            + std::mem::size_of::<PoolerMode>()
+            + self.stream_buffer.capacity()
+    }
 }
 
 impl Server {
@@ -178,7 +194,7 @@ impl Server {
 
         info!("new server connection [{}]", addr);
 
-        Ok(Server {
+        let mut server = Server {
             addr: addr.clone(),
             stream: Some(stream),
             id,
@@ -195,7 +211,12 @@ impl Server {
             re_synced: false,
             pooler_mode: PoolerMode::Transaction,
             stream_buffer: BytesMut::with_capacity(1024),
-        })
+        };
+
+        server.stats.memory_used(server.memory_usage()); // Stream capacity.
+        server.stats().update();
+
+        Ok(server)
     }
 
     /// Request query cancellation for the given backend server identifier.
@@ -312,6 +333,7 @@ impl Server {
             'Z' => {
                 let now = Instant::now();
                 self.stats.query(now);
+                self.stats.memory_used(self.memory_usage());
 
                 let rfq = ReadyForQuery::from_bytes(message.payload())?;
 

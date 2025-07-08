@@ -1,6 +1,9 @@
 use bytes::Bytes;
 
-use crate::net::messages::{Parse, RowDescription};
+use crate::{
+    net::messages::{Parse, RowDescription},
+    stats::memory::MemoryUsage,
+};
 use std::{collections::hash_map::HashMap, str::from_utf8};
 
 // Format the globally unique prepared statement
@@ -14,6 +17,18 @@ pub struct Statement {
     parse: Parse,
     row_description: Option<RowDescription>,
     version: usize,
+}
+
+impl MemoryUsage for Statement {
+    #[inline]
+    fn memory_usage(&self) -> usize {
+        self.parse.len()
+            + if let Some(ref row_description) = self.row_description {
+                row_description.memory_usage()
+            } else {
+                0
+            }
+    }
 }
 
 impl Statement {
@@ -44,19 +59,18 @@ pub struct CacheKey {
     pub version: usize,
 }
 
+impl MemoryUsage for CacheKey {
+    #[inline]
+    fn memory_usage(&self) -> usize {
+        // Bytes refer to memory allocated by someone else.
+        std::mem::size_of::<Bytes>() * 2 + self.version.memory_usage()
+    }
+}
+
 impl CacheKey {
     pub fn query(&self) -> Result<&str, crate::net::Error> {
         // Postgres string.
         Ok(from_utf8(&self.query[0..self.query.len() - 1])?)
-    }
-
-    /// Reallocate using new memory.
-    pub fn realloc(&self) -> Self {
-        Self {
-            query: Bytes::copy_from_slice(&self.query[..]),
-            data_types: Bytes::copy_from_slice(&self.data_types[..]),
-            version: self.version,
-        }
     }
 }
 
@@ -64,6 +78,13 @@ impl CacheKey {
 pub struct CachedStmt {
     pub counter: usize,
     pub used: usize,
+}
+
+impl MemoryUsage for CachedStmt {
+    #[inline]
+    fn memory_usage(&self) -> usize {
+        self.counter.memory_usage() + self.used.memory_usage()
+    }
 }
 
 impl CachedStmt {
@@ -91,6 +112,16 @@ pub struct GlobalCache {
     versions: usize,
 }
 
+impl MemoryUsage for GlobalCache {
+    #[inline]
+    fn memory_usage(&self) -> usize {
+        self.statements.memory_usage()
+            + self.names.memory_usage()
+            + self.counter.memory_usage()
+            + self.versions.memory_usage()
+    }
+}
+
 impl GlobalCache {
     /// Record a Parse message with the global cache and return a globally unique
     /// name PgDog is using for that statement.
@@ -109,16 +140,23 @@ impl GlobalCache {
             (false, global_name(entry.counter))
         } else {
             self.counter += 1;
+            let name = global_name(self.counter);
+            let parse = parse.rename(&name);
+
+            let parse_key = CacheKey {
+                query: parse.query_ref(),
+                data_types: parse.data_types_ref(),
+                version: 0,
+            };
+
             self.statements.insert(
-                parse_key.realloc(),
+                parse_key,
                 CachedStmt {
                     counter: self.counter,
                     used: 1,
                 },
             );
 
-            let name = global_name(self.counter);
-            let parse = parse.rename_new(&name);
             self.names.insert(
                 name.clone(),
                 Statement {
@@ -137,6 +175,10 @@ impl GlobalCache {
     pub fn insert_anyway(&mut self, parse: &Parse) -> String {
         self.counter += 1;
         self.versions += 1;
+
+        let name = global_name(self.counter);
+        let parse = parse.rename(&name);
+
         let key = CacheKey {
             query: parse.query_ref(),
             data_types: parse.data_types_ref(),
@@ -144,14 +186,13 @@ impl GlobalCache {
         };
 
         self.statements.insert(
-            key.realloc(),
+            key.clone(),
             CachedStmt {
                 counter: self.counter,
                 used: 1,
             },
         );
-        let name = global_name(self.counter);
-        let parse = parse.rename_new(&name);
+
         self.names.insert(
             name.clone(),
             Statement {

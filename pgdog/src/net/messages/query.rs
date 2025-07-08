@@ -1,4 +1,5 @@
 //! Query (F) message.
+
 use super::prelude::*;
 
 use bytes::Bytes;

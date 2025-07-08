@@ -1,4 +1,4 @@
-use crate::frontend::PreparedStatements;
+use crate::{frontend::PreparedStatements, stats::memory::MemoryUsage};
 
 use super::prelude::*;
 
@@ -21,11 +21,20 @@ impl Command for ShowPreparedStatements {
             Field::text("name"),
             Field::text("statement"),
             Field::numeric("used_by"),
+            Field::numeric("memory_used"),
         ])
         .message()?];
         for (key, stmt) in statements.statements() {
+            let name_memory = statements
+                .names()
+                .get(&stmt.name())
+                .map(|s| s.memory_usage())
+                .unwrap_or(0);
             let mut dr = DataRow::new();
-            dr.add(stmt.name()).add(key.query()?).add(stmt.used);
+            dr.add(stmt.name())
+                .add(key.query()?)
+                .add(stmt.used)
+                .add(name_memory);
             messages.push(dr.message()?);
         }
         Ok(messages)

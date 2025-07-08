@@ -72,6 +72,15 @@ impl Comms {
         self.global.clients.lock().len()
     }
 
+    pub fn clients_memory(&self) -> usize {
+        self.global
+            .clients
+            .lock()
+            .values()
+            .map(|v| v.stats.memory_used)
+            .sum::<usize>()
+    }
+
     pub fn tracker(&self) -> &TaskTracker {
         &self.global.tracker
     }

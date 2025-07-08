@@ -5,6 +5,7 @@ pub mod open_metric;
 pub mod pools;
 pub use open_metric::*;
 pub mod logger;
+pub mod memory;
 pub mod query_cache;
 
 pub use clients::Clients;

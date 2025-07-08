@@ -1,6 +1,9 @@
-use crate::frontend::{
-    router::parser::{cache::Stats, Cache},
-    PreparedStatements,
+use crate::{
+    frontend::{
+        router::parser::{cache::Stats, Cache},
+        PreparedStatements,
+    },
+    stats::memory::MemoryUsage,
 };
 
 use super::*;
@@ -15,13 +18,21 @@ pub struct QueryCacheMetric {
 pub struct QueryCache {
     stats: Stats,
     prepared_statements: usize,
+    prepared_statements_memory: usize,
 }
 
 impl QueryCache {
     pub(crate) fn load() -> Self {
+        let (prepared_statements, prepared_statements_memory) = {
+            let global = PreparedStatements::global();
+            let guard = global.lock();
+            (guard.len(), guard.memory_usage())
+        };
+
         QueryCache {
             stats: Cache::stats(),
-            prepared_statements: PreparedStatements::global().lock().len(),
+            prepared_statements,
+            prepared_statements_memory,
         }
     }
 
@@ -61,6 +72,12 @@ impl QueryCache {
                 name: "prepared_statements".into(),
                 help: "Number of prepared statements in the cache".into(),
                 value: self.prepared_statements,
+                gauge: true,
+            }),
+            Metric::new(QueryCacheMetric {
+                name: "prepared_statements_memory_used".into(),
+                help: "Amount of bytes used for the prepared statements cache".into(),
+                value: self.prepared_statements_memory,
                 gauge: true,
             }),
         ]

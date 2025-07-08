@@ -63,6 +63,7 @@ pub struct Counts {
     pub bind: usize,
     pub healthchecks: usize,
     pub close: usize,
+    pub memory_used: usize,
 }
 
 impl Add for Counts {
@@ -85,6 +86,7 @@ impl Add for Counts {
             bind: self.bind.saturating_add(rhs.bind),
             healthchecks: self.healthchecks.saturating_add(rhs.healthchecks),
             close: self.close.saturating_add(rhs.close),
+            memory_used: self.memory_used, // It's a gauge.
         }
     }
 }
@@ -259,6 +261,12 @@ impl Stats {
         self.last_checkout.healthchecks += 1;
         self.last_healthcheck = Some(Instant::now());
         self.update();
+    }
+
+    #[inline]
+    pub fn memory_used(&mut self, memory: usize) {
+        self.total.memory_used = memory;
+        self.last_checkout.memory_used = memory;
     }
 
     /// Track rollbacks.

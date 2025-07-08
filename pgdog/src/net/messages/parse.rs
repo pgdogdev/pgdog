@@ -1,5 +1,4 @@
 //! Parse (F) message.
-
 use crate::net::c_string_buf_len;
 use std::fmt::Debug;
 use std::io::Cursor;
@@ -79,25 +78,21 @@ impl Parse {
         unsafe { from_utf8_unchecked(&self.name[0..self.name.len() - 1]) }
     }
 
-    /// Create entirely new Parse with the given name.
-    pub fn rename_new(&self, name: &str) -> Parse {
-        // Allocate entirely new Parse statement.
-        // This ensures we release the memory we got from the client and this statement
-        // has ref count = 1.
+    /// Rename prepared statement, re-allocating it into its own memory space.
+    pub fn rename(&self, name: &str) -> Parse {
         Parse {
-            query: Bytes::copy_from_slice(&self.query[..]),
-            data_types: Bytes::copy_from_slice(&self.data_types[..]),
             name: Bytes::from(name.to_string() + "\0"),
+            query: Bytes::from(self.query().to_owned() + "\0"),
+            data_types: Bytes::copy_from_slice(&self.data_types[..]),
             original: None,
         }
     }
 
-    /// Rename statement while holding existing memory.
-    pub fn rename(&self, name: &str) -> Parse {
-        let mut parse = self.clone();
-        parse.original = None;
-        parse.name = Bytes::from(name.to_string() + "\0");
-        parse
+    /// Rename the prepared statement with minimal allocations.
+    pub fn rename_fast(mut self, name: &str) -> Parse {
+        self.name = Bytes::from(name.to_string() + "\0");
+        self.original = None;
+        self
     }
 
     pub fn data_types(&self) -> DataTypesIter<'_> {

@@ -1,4 +1,7 @@
-use crate::net::{Message, Protocol};
+use crate::{
+    net::{Message, Protocol},
+    stats::memory::MemoryUsage,
+};
 
 use super::super::Error;
 use std::{collections::VecDeque, fmt::Debug};
@@ -21,6 +24,13 @@ pub enum ExecutionCode {
     Copy,
     Error,
     Untracked,
+}
+
+impl MemoryUsage for ExecutionCode {
+    #[inline(always)]
+    fn memory_usage(&self) -> usize {
+        std::mem::size_of::<ExecutionCode>()
+    }
 }
 
 impl ExecutionCode {
@@ -51,6 +61,13 @@ pub enum ExecutionItem {
     Ignore(ExecutionCode),
 }
 
+impl MemoryUsage for ExecutionItem {
+    #[inline(always)]
+    fn memory_usage(&self) -> usize {
+        std::mem::size_of::<Self>()
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct ProtocolState {
     queue: VecDeque<ExecutionItem>,
@@ -58,6 +75,17 @@ pub struct ProtocolState {
     simulated: VecDeque<Message>,
     extended: bool,
     out_of_sync: bool,
+}
+
+impl MemoryUsage for ProtocolState {
+    #[inline]
+    fn memory_usage(&self) -> usize {
+        self.queue.memory_usage()
+            + self.names.memory_usage()
+            + self.simulated.memory_usage()
+            + self.extended.memory_usage()
+            + self.out_of_sync.memory_usage()
+    }
 }
 
 impl ProtocolState {

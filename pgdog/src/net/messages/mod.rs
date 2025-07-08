@@ -59,7 +59,7 @@ pub use row_description::{Field, RowDescription};
 pub use sync::Sync;
 pub use terminate::Terminate;
 
-use crate::net::Error;
+use crate::{net::Error, stats::memory::MemoryUsage};
 
 use bytes::Bytes;
 
@@ -106,6 +106,13 @@ pub struct Message {
     payload: Bytes,
     stream: bool,
     source: Source,
+}
+
+impl MemoryUsage for Message {
+    #[inline]
+    fn memory_usage(&self) -> usize {
+        std::mem::size_of::<Bytes>() + self.stream.memory_usage() + std::mem::size_of::<Source>()
+    }
 }
 
 impl std::fmt::Debug for Message {

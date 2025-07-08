@@ -4,6 +4,7 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use crate::net::c_string_buf;
+use crate::stats::memory::MemoryUsage;
 
 use super::{code, DataType};
 use super::{prelude::*, Format};
@@ -25,6 +26,19 @@ pub struct Field {
     pub type_modifier: i32,
     /// Format code.
     pub format: i16,
+}
+
+impl MemoryUsage for Field {
+    #[inline]
+    fn memory_usage(&self) -> usize {
+        self.name.capacity()
+            + self.table_oid.memory_usage()
+            + self.column.memory_usage()
+            + self.type_oid.memory_usage()
+            + self.type_size.memory_usage()
+            + self.type_modifier.memory_usage()
+            + self.format.memory_usage()
+    }
 }
 
 impl Field {
@@ -113,6 +127,13 @@ impl Field {
 pub struct RowDescription {
     /// Fields.
     pub fields: Arc<Vec<Field>>,
+}
+
+impl MemoryUsage for RowDescription {
+    #[inline]
+    fn memory_usage(&self) -> usize {
+        self.fields.iter().map(|f| f.memory_usage()).sum::<usize>()
+    }
 }
 
 impl RowDescription {

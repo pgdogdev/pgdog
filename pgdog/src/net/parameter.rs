@@ -9,6 +9,8 @@ use std::{
 
 use once_cell::sync::Lazy;
 
+use crate::stats::memory::MemoryUsage;
+
 use super::{messages::Query, Error};
 
 static IMMUTABLE_PARAMS: Lazy<Vec<String>> = Lazy::new(|| {
@@ -49,6 +51,16 @@ pub struct MergeResult {
 pub enum ParameterValue {
     String(String),
     Tuple(Vec<String>),
+}
+
+impl MemoryUsage for ParameterValue {
+    #[inline]
+    fn memory_usage(&self) -> usize {
+        match self {
+            Self::String(v) => v.memory_usage(),
+            Self::Tuple(vals) => vals.memory_usage(),
+        }
+    }
 }
 
 impl Display for ParameterValue {
@@ -93,6 +105,13 @@ impl ParameterValue {
 pub struct Parameters {
     params: BTreeMap<String, ParameterValue>,
     hash: u64,
+}
+
+impl MemoryUsage for Parameters {
+    #[inline]
+    fn memory_usage(&self) -> usize {
+        self.params.memory_usage() + self.hash.memory_usage()
+    }
 }
 
 impl From<BTreeMap<String, ParameterValue>> for Parameters {
