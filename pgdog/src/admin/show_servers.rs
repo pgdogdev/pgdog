@@ -47,9 +47,9 @@ impl Command for ShowServers {
                 &[
                     Field::text("database"),
                     Field::text("user"),
-                    Field::text("state"),
                     Field::text("addr"),
                     Field::numeric("port"),
+                    Field::text("state"),
                     Field::text("connect_time"),
                     Field::text("request_time"),
                     Field::numeric("remote_pid"),
