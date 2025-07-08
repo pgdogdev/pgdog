@@ -142,7 +142,7 @@ async fn test_memory_realloc() {
     let pool = PgPoolOptions::new()
         .max_connections(20)
         .connect(&format!(
-            "postgres://pgdog:pgdog@127.0.0.1:6432/pgdog?application_name=test_memory_alloc",
+            "postgres://pgdog:pgdog@127.0.0.1:6432/pgdog?application_name=test_memory_alloc&statement_cache_capacity=500",
         ))
         .await
         .unwrap();
