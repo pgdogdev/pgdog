@@ -130,14 +130,6 @@ impl PreparedStatements {
         self.memory_used = self.memory_usage();
     }
 
-    /// Estimated memory used by the local cache.
-    pub fn memory_usage(&self) -> usize {
-        self.local
-            .iter()
-            .map(|(k, v)| k.capacity() + v.capacity())
-            .sum::<usize>()
-    }
-
     /// How much memory is used, approx.
     pub fn memory_used(&self) -> usize {
         self.memory_used
