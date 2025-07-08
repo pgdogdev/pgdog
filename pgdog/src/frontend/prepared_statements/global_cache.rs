@@ -143,6 +143,12 @@ impl GlobalCache {
             let name = global_name(self.counter);
             let parse = parse.rename(&name);
 
+            let parse_key = CacheKey {
+                query: parse.query_ref(),
+                data_types: parse.data_types_ref(),
+                version: 0,
+            };
+
             self.statements.insert(
                 parse_key,
                 CachedStmt {

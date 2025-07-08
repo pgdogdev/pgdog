@@ -5,7 +5,7 @@ use tokio::time::Instant;
 
 use crate::{
     backend::stats::stats,
-    net::messages::{DataRow, Field, Protocol, RowDescription},
+    net::messages::{Field, Protocol},
     util::format_time,
 };
 

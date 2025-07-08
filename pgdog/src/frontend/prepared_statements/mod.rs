@@ -79,14 +79,14 @@ impl PreparedStatements {
             }
         }
 
-        parse.rename(&name)
+        parse.rename_fast(&name)
     }
 
     /// Insert statement into the cache bypassing duplicate checks.
     pub fn insert_anyway(&mut self, parse: Parse) -> Parse {
         let (_, name) = self.global.lock().insert(&parse);
         self.local.insert(parse.name().to_owned(), name.clone());
-        parse.rename(&name)
+        parse.rename_fast(&name)
     }
 
     /// Get global statement counter.
