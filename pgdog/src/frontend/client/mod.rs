@@ -68,7 +68,7 @@ impl MemoryUsage for Client {
             + self.params.memory_usage()
             + std::mem::size_of::<Comms>()
             + std::mem::size_of::<bool>() * 5
-            + self.prepared_statements.memory_usage()
+            + self.prepared_statements.memory_used()
             + std::mem::size_of::<Timeouts>()
             + self.stream_buffer.memory_usage()
             + self.request_buffer.memory_usage()

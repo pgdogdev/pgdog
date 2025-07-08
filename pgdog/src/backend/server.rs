@@ -67,7 +67,7 @@ impl MemoryUsage for Server {
             + self.changed_params.memory_usage()
             + self.client_params.memory_usage()
             + std::mem::size_of::<Stats>()
-            + self.prepared_statements.memory_usage()
+            + self.prepared_statements.memory_used()
             + 6 * std::mem::size_of::<bool>()
             + std::mem::size_of::<PoolerMode>()
             + self.stream_buffer.capacity()

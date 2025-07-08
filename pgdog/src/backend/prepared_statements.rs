@@ -40,6 +40,7 @@ pub struct PreparedStatements {
     // Describes being executed now on the connection.
     describes: VecDeque<String>,
     capacity: usize,
+    memory_used: usize,
 }
 
 impl MemoryUsage for PreparedStatements {
@@ -70,6 +71,7 @@ impl PreparedStatements {
             parses: VecDeque::new(),
             describes: VecDeque::new(),
             capacity: usize::MAX,
+            memory_used: 0,
         }
     }
 
@@ -281,6 +283,12 @@ impl PreparedStatements {
     /// Indicate this statement is prepared on the connection.
     pub fn prepared(&mut self, name: &str) {
         self.local_cache.push(name.to_owned(), ());
+        self.memory_used = self.memory_usage();
+    }
+
+    /// How much memory is used by this structure, approx.
+    pub fn memory_used(&self) -> usize {
+        self.memory_used
     }
 
     /// Get the Parse message stored in the global prepared statements
@@ -308,13 +316,16 @@ impl PreparedStatements {
     /// This should only be done when a statement has been closed,
     /// or failed to parse.
     pub(crate) fn remove(&mut self, name: &str) -> bool {
-        self.local_cache.pop(name).is_some()
+        let exists = self.local_cache.pop(name).is_some();
+        self.memory_used = self.memory_usage();
+        exists
     }
 
     /// Indicate all prepared statements have been removed
     /// from the server connection.
     pub fn clear(&mut self) {
         self.local_cache.clear();
+        self.memory_used = self.memory_usage();
     }
 
     /// Get current extended protocol state.
@@ -351,6 +362,10 @@ impl PreparedStatements {
             if let Some((name, _)) = candidate {
                 close.push(Close::named(&name));
             }
+        }
+
+        if !close.is_empty() {
+            self.memory_used = self.memory_usage();
         }
 
         close
