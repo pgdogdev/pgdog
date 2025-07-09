@@ -56,6 +56,7 @@ pub struct Client {
     request_buffer: Buffer,
     stream_buffer: BytesMut,
     cross_shard_disabled: bool,
+    passthrough_password: Option<String>,
 }
 
 impl MemoryUsage for Client {
@@ -72,6 +73,11 @@ impl MemoryUsage for Client {
             + std::mem::size_of::<Timeouts>()
             + self.stream_buffer.memory_usage()
             + self.request_buffer.memory_usage()
+            + self
+                .passthrough_password
+                .as_ref()
+                .map(|s| s.capacity())
+                .unwrap_or(0)
     }
 }
 
@@ -95,7 +101,8 @@ impl Client {
 
         // Auto database.
         let exists = databases::databases().exists((user, database));
-        if !exists && config.config.general.passthrough_auth() {
+        let passthrough_password = if !exists && config.config.general.passthrough_auth() && !admin
+        {
             let password = if auth_type.trust() {
                 // Use empty password.
                 // TODO: Postgres must be using "trust" auth
@@ -113,10 +120,13 @@ impl Client {
             if let Some(user) = user {
                 databases::add(user);
             }
-        }
+            password.password().map(|p| p.to_owned())
+        } else {
+            None
+        };
 
         // Get server parameters and send them to the client.
-        let mut conn = match Connection::new(user, database, admin) {
+        let mut conn = match Connection::new(user, database, admin, &passthrough_password) {
             Ok(conn) => conn,
             Err(_) => {
                 stream.fatal(ErrorResponse::auth(user, database)).await?;
@@ -222,6 +232,7 @@ impl Client {
             stream_buffer: BytesMut::new(),
             shutdown: false,
             cross_shard_disabled: false,
+            passthrough_password,
         };
 
         drop(conn);
@@ -263,6 +274,7 @@ impl Client {
             stream_buffer: BytesMut::new(),
             shutdown: false,
             cross_shard_disabled: false,
+            passthrough_password: None,
         }
     }
 

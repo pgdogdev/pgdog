@@ -44,7 +44,7 @@ pub(crate) struct Mirror {
 
 impl Mirror {
     pub(crate) fn spawn(cluster: &Cluster) -> Result<MirrorHandler, Error> {
-        let connection = Connection::new(cluster.user(), cluster.name(), false)?;
+        let connection = Connection::new(cluster.user(), cluster.name(), false, &None)?;
 
         let mut mirror = Self {
             connection,
