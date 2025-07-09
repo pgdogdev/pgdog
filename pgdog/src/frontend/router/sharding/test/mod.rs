@@ -83,8 +83,6 @@ async fn test_shard_varchar() {
     server.execute("ROLLBACK").await.unwrap();
 }
 
-// GOTTA DO SOMETHING HERE!!!
-
 fn assert_shard(val: &[u8], expected_shard: usize) {
     let mut schema = ShardingSchema::default();
     schema.shards = 3;
