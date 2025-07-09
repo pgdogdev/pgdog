@@ -21,8 +21,11 @@ impl<'a> Lists<'a> {
     pub(super) fn shard(&self, value: &Value) -> Result<Shard, Error> {
         let integer = value.integer()?;
         let varchar = value.varchar()?;
+        let uuid = value.uuid()?;
 
-        if let Some(integer) = integer {
+        if let Some(uuid) = uuid {
+            self.list.shard(&FlexibleType::Uuid(uuid))
+        } else if let Some(integer) = integer {
             self.list.shard(&FlexibleType::Integer(integer))
         } else if let Some(varchar) = varchar {
             self.list.shard(&FlexibleType::String(varchar.to_string()))
@@ -44,6 +47,15 @@ impl ListShards {
 
     pub fn new(mappings: &[ShardedMapping]) -> Self {
         let mut mapping = HashMap::new();
+
+        println!("FUUUUULOLOLOLO");
+
+        for map in mappings {
+            println!(
+                "incoming mapping: kind={:?} shard={} values={:?}",
+                map.kind, map.shard, map.values
+            );
+        }
 
         for map in mappings
             .iter()

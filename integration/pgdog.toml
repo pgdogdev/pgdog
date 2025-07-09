@@ -1,3 +1,6 @@
+# ------------------------------------------------------------------------------
+# ----- General ----------------------------------------------------------------
+
 [general]
 query_timeout = 1_000
 checkout_timeout = 1_000
@@ -5,6 +8,9 @@ connect_timeout = 1_000
 load_balancing_strategy = "round_robin"
 rollback_timeout = 1_000
 read_write_strategy = "aggressive"
+
+# ------------------------------------------------------------------------------
+# ----- Database :: pgdog ------------------------------------------------------
 
 [[databases]]
 name = "pgdog"
@@ -16,6 +22,9 @@ host = "127.0.0.1"
 role = "replica"
 read_only = true
 
+# ------------------------------------------------------------------------------
+# ----- Database :: pgdog_sharded ----------------------------------------------
+
 [[databases]]
 name = "pgdog_sharded"
 host = "127.0.0.1"
@@ -41,6 +50,9 @@ host = "127.0.0.1"
 database_name = "shard_1"
 shard = 1
 role = "replica"
+
+# ------------------------------------------------------------------------------
+# ----- Database :: failover ---------------------------------------------------
 
 [[databases]]
 name = "failover"
@@ -73,6 +85,9 @@ role = "replica"
 database_name = "pgdog"
 read_only = true
 
+# ------------------------------------------------------------------------------
+# ----- Hash Sharded :: BIGINT -------------------------------------------------
+
 [[sharded_tables]]
 database = "pgdog_sharded"
 name = "sharded"
@@ -85,15 +100,27 @@ database = "pgdog_sharded"
 column = "customer_id"
 data_type = "bigint"
 
+# ------------------------------------------------------------------------------
+# ----- Hash Sharded :: VARCHAR ------------------------------------------------
+
 [[sharded_tables]]
 database = "pgdog_sharded"
 name = "sharded_varchar"
 column = "id_varchar"
 data_type = "varchar"
 
-#
-# Shard by range
-#
+# ------------------------------------------------------------------------------
+# ----- Hash Sharded :: UUID ---------------------------------------------------
+
+[[sharded_tables]]
+database = "pgdog_sharded"
+name = "sharded_uuid"
+column = "id_uuid"
+data_type = "uuid"
+
+# ------------------------------------------------------------------------------
+# ----- Range Sharded :: BIGINT ------------------------------------------------
+
 [[sharded_tables]]
 database = "pgdog_sharded"
 name = "sharded_range"
@@ -118,10 +145,9 @@ start = 100
 end = 200
 shard = 1
 
+# ------------------------------------------------------------------------------
+# ----- List Sharded :: BIGINT -------------------------------------------------
 
-#
-# Shard by list
-#
 [[sharded_tables]]
 database = "pgdog_sharded"
 name = "sharded_list"
@@ -144,21 +170,52 @@ kind = "list"
 values = [10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
 shard = 1
 
+# ------------------------------------------------------------------------------
+# ----- List Sharded :: UUID ---------------------------------------------------
+
+[[sharded_tables]]
+database = "pgdog_sharded"
+name = "sharded_list_uuid"
+column = "id_uuid"
+data_type = "uuid"
+
+[[sharded_mappings]]
+database = "pgdog_sharded"
+table = "sharded_list_uuid"
+column = "id_uuid"
+kind = "list"
+values = ['00000000-0000-0000-0000-000000000000']
+shard = 0
+
+[[sharded_mappings]]
+database = "pgdog_sharded"
+table = "sharded_list_uuid"
+column = "id_uuid"
+kind = "list"
+values = ['11111111-1111-1111-1111-111111111111']
+shard = 1
+
+# ------------------------------------------------------------------------------
+# ----- Omnisharded Tables -----------------------------------------------------
+
 [[omnisharded_tables]]
 database = "pgdog_sharded"
 tables = ["sharded_omni"]
 
+# ------------------------------------------------------------------------------
+# ----- Admin ------------------------------------------------------------------
+
 [admin]
 password = "pgdog"
 
+# ------------------------------------------------------------------------------
+# ----- ActiveRecord Tables ----------------------------------------------------
+#
+#  ActiveRecord sends these queries at startup to figure out the schema.
+#  This will route them to only one shard instead of issuing cross-shard
+#  queries and getting incorrect results.
+#
 
-#
-# ActiveRecord sends these queries
-# at startup to figure out the schema.
-#
-# This will route them to only one shard instead of issuing
-# cross-shard queries and getting incorrect results.
-#
 [[manual_queries]]
 fingerprint = "e78fe2c08de5f079" #[16685804461073231993]
 
@@ -182,3 +239,6 @@ fingerprint = "04dc05f480b702d3"
 
 [[manual_queries]]
 fingerprint = "2d9944fc9caeaadd" # [3285733254894627549]
+
+# ------------------------------------------------------------------------------
+# ------------------------------------------------------------------------------

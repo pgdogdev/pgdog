@@ -12,6 +12,11 @@ pub struct Context<'a> {
 
 impl Context<'_> {
     pub fn apply(&self) -> Result<Shard, Error> {
+        println!("FUUUUUU");
+        println!("FUUUUUU");
+        println!("FUUUUUU");
+        println!("FUUUUUU");
+
         match &self.operator {
             Operator::Shards(shards) => {
                 debug!("sharding using hash");

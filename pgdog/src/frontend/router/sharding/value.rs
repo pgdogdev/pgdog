@@ -129,6 +129,20 @@ impl<'a> Value<'a> {
         }
     }
 
+    pub fn uuid(&self) -> Result<Option<Uuid>, Error> {
+        if self.data_type != DataType::Uuid {
+            return Ok(None);
+        }
+
+        let uuid = match &self.data {
+            Data::Text(s) => Uuid::parse_str(s)?,
+            Data::Binary(b) => Uuid::from_slice(b)?,
+            _ => return Ok(None),
+        };
+
+        Ok(Some(uuid))
+    }
+
     pub fn hash(&self, hasher: Hasher) -> Result<Option<u64>, Error> {
         match self.data_type {
             DataType::Bigint => match self.data {
@@ -155,5 +169,29 @@ impl<'a> Value<'a> {
                 Data::Integer(_) => Ok(None),
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use uuid::Uuid;
+
+    #[test]
+    fn uuid_binary_parses_correctly() -> Result<(), Error> {
+        // 16-byte array for UUID 00112233-4455-6677-8899-aabbccddeeff
+        let raw_bytes: [u8; 16] = [
+            0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd,
+            0xee, 0xff,
+        ];
+        let expected_uuid = Uuid::parse_str("00112233-4455-6677-8899-aabbccddeeff")?;
+
+        let value = Value {
+            data_type: DataType::Uuid,
+            data: Data::Binary(&raw_bytes), // &[u8;16] → &[u8]
+        };
+
+        assert_eq!(value.uuid()?, Some(expected_uuid));
+        Ok(())
     }
 }
