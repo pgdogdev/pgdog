@@ -23,10 +23,11 @@ impl<'a> Lists<'a> {
         let varchar = value.varchar()?;
         let uuid = value.uuid()?;
 
-        if let Some(uuid) = uuid {
-            self.list.shard(&FlexibleType::Uuid(uuid))
-        } else if let Some(integer) = integer {
+        if let Some(integer) = integer {
             self.list.shard(&FlexibleType::Integer(integer))
+        } else if let Some(uuid) = uuid {
+            println!("\n\n-> Got a match by uuid\n");
+            self.list.shard(&FlexibleType::Uuid(uuid))
         } else if let Some(varchar) = varchar {
             self.list.shard(&FlexibleType::String(varchar.to_string()))
         } else {
@@ -47,8 +48,6 @@ impl ListShards {
 
     pub fn new(mappings: &[ShardedMapping]) -> Self {
         let mut mapping = HashMap::new();
-
-        println!("FUUUUULOLOLOLO");
 
         for map in mappings {
             println!(

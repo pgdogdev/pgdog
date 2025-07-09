@@ -38,13 +38,13 @@ for db in pgdog shard_0 shard_1; do
     done
 
     psql -c "CREATE TABLE IF NOT EXISTS sharded_varchar (id_varchar VARCHAR)" ${db} -U pgdog
-    psql -c "CREATE TABLE IF NOT EXISTS sharded_uuid (id_uuid UUID)" -d "$db" -U pgdog
+    psql -c "CREATE TABLE IF NOT EXISTS sharded_uuid (id_uuid UUID PRIMARY KEY)" -d "$db" -U pgdog
 
     for table in list range; do
         psql -c "CREATE TABLE IF NOT EXISTS sharded_${table} (id BIGINT)" ${db} -U pgdog
     done
 
-    psql -c "CREATE TABLE IF NOT EXISTS sharded_list_uuid (id_uuid UUID)" -d "$db" -U pgdog
+    psql -c "CREATE TABLE IF NOT EXISTS sharded_list_uuid (id_uuid UUID PRIMARY KEY)" -d "$db" -U pgdog
 
     psql -f ${SCRIPT_DIR}/../pgdog/src/backend/schema/setup.sql ${db} -U ${user}
 done

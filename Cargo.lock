@@ -3857,6 +3857,7 @@ checksum = "458f7a779bf54acc9f347480ac654f68407d3aab21269a6e3c9f922acd9e2da9"
 dependencies = [
  "atomic",
  "getrandom 0.3.3",
+ "serde",
 ]
 
 [[package]]

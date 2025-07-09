@@ -983,12 +983,19 @@ pub enum ShardedMappingKind {
 #[serde(untagged)]
 pub enum FlexibleType {
     Integer(i64),
+    Uuid(uuid::Uuid),
     String(String),
 }
 
 impl From<i64> for FlexibleType {
     fn from(value: i64) -> Self {
         Self::Integer(value)
+    }
+}
+
+impl From<uuid::Uuid> for FlexibleType {
+    fn from(value: uuid::Uuid) -> Self {
+        Self::Uuid(value)
     }
 }
 
