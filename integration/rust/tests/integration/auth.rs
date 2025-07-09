@@ -68,10 +68,33 @@ async fn test_passthrough_auth() {
 
     assert_setting_str("passthrough_auth", "enabled_plain").await;
 
+    // First connection after auth changed to passthrough.
+    let mut original = PgConnection::connect("postgres://pgdog1:pgdog@127.0.0.1:6432/pgdog")
+        .await
+        .unwrap();
+    original.execute("SELECT 1").await.unwrap();
+
+    let mut tasks = vec![];
+
+    for _ in 0..10 {
+        tasks.push(tokio::spawn(async move {
+            let mut user = PgConnection::connect("postgres://pgdog1:pgdog@127.0.0.1:6432/pgdog")
+                .await
+                .unwrap();
+
+            user.execute("SELECT 1").await.unwrap();
+            user.close().await.unwrap();
+        }));
+    }
+
+    for task in tasks {
+        task.await.unwrap();
+    }
+
+    // Test reload survival.
     let mut user = PgConnection::connect("postgres://pgdog1:pgdog@127.0.0.1:6432/pgdog")
         .await
         .unwrap();
-
     user.execute("SELECT 1").await.unwrap();
 
     // Survive the reload.
@@ -82,4 +105,5 @@ async fn test_passthrough_auth() {
         .unwrap();
 
     user.execute("SELECT 1").await.unwrap();
+    original.execute("SELECT 1").await.unwrap();
 }

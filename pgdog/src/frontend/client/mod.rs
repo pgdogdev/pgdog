@@ -101,8 +101,7 @@ impl Client {
 
         // Auto database.
         let exists = databases::databases().exists((user, database));
-        let passthrough_password = if !exists && config.config.general.passthrough_auth() && !admin
-        {
+        let passthrough_password = if config.config.general.passthrough_auth() && !admin {
             let password = if auth_type.trust() {
                 // Use empty password.
                 // TODO: Postgres must be using "trust" auth
@@ -116,9 +115,12 @@ impl Client {
                 let password = stream.read().await?;
                 Password::from_bytes(password.to_bytes()?)?
             };
-            let user = config::User::from_params(&params, &password).ok();
-            if let Some(user) = user {
-                databases::add(user);
+
+            if !exists {
+                let user = config::User::from_params(&params, &password).ok();
+                if let Some(user) = user {
+                    databases::add(user);
+                }
             }
             password.password().map(|p| p.to_owned())
         } else {
