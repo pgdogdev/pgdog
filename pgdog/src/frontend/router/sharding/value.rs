@@ -135,8 +135,8 @@ impl<'a> Value<'a> {
         }
 
         let uuid = match &self.data {
-            Data::Text(s) => Uuid::parse_str(s)?,
-            Data::Binary(b) => Uuid::from_slice(b)?,
+            Data::Text(text) => Uuid::parse_str(text)?,
+            Data::Binary(data) => Uuid::from_slice(data)?,
             _ => return Ok(None),
         };
 
