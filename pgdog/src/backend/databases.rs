@@ -8,7 +8,7 @@ use arc_swap::ArcSwap;
 use once_cell::sync::Lazy;
 use parking_lot::lock_api::MutexGuard;
 use parking_lot::{Mutex, RawMutex};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::config::PoolerMode;
 use crate::frontend::router::sharding::Mapping;
@@ -93,6 +93,14 @@ pub fn reload() -> Result<(), Error> {
 
 /// Add new user to pool.
 pub(crate) fn add(mut user: crate::config::User) {
+    // One user at a time.
+    let _lock = lock();
+
+    debug!(
+        "adding user \"{}\" for database \"{}\" via auth passthrough",
+        user.name, user.database
+    );
+
     let config = config();
     for existing in &config.users.users {
         if existing.name == user.name && existing.database == user.database {
@@ -103,7 +111,6 @@ pub(crate) fn add(mut user: crate::config::User) {
     }
     let pool = new_pool(&user, &config.config);
     if let Some((user, cluster)) = pool {
-        let _lock = LOCK.lock();
         let databases = (*databases()).clone();
         let (added, databases) = databases.add(user, cluster);
         if added {

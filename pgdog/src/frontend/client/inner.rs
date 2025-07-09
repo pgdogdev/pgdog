@@ -40,7 +40,8 @@ impl Inner {
         let user = client.params.get_required("user")?;
         let database = client.params.get_default("database", user);
 
-        let mut backend = Connection::new(user, database, client.admin)?;
+        let mut backend =
+            Connection::new(user, database, client.admin, &client.passthrough_password)?;
         let mut router = Router::new();
 
         // Configure replication mode.

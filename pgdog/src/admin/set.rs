@@ -68,6 +68,10 @@ impl Command for Set {
                 config.config.general.auth_type = Self::from_json(&self.value)?;
             }
 
+            "passthrough_auth" => {
+                config.config.general.passthrough_auth = Self::from_json(&self.value)?;
+            }
+
             "read_write_strategy" => {
                 config.config.general.read_write_strategy = Self::from_json(&self.value)?;
             }

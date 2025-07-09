@@ -20,4 +20,14 @@ impl User {
             ..Default::default()
         })
     }
+
+    /// New user from user, password and database.
+    pub(crate) fn new(user: &str, password: &str, database: &str) -> Self {
+        Self {
+            name: user.to_owned(),
+            database: database.to_owned(),
+            password: Some(password.to_owned()),
+            ..Default::default()
+        }
+    }
 }

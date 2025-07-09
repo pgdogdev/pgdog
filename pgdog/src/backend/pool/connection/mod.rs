@@ -7,11 +7,11 @@ use tracing::debug;
 use crate::{
     admin::backend::Backend,
     backend::{
-        databases::databases,
+        databases::{self, databases},
         reload_notify,
         replication::{Buffer, ReplicationConfig},
     },
-    config::PoolerMode,
+    config::{config, PoolerMode, User},
     frontend::{
         router::{parser::Shard, CopyRow, Route},
         Router,
@@ -42,6 +42,7 @@ use multi_shard::MultiShard;
 #[derive(Default, Debug)]
 pub struct Connection {
     user: String,
+    passthrough_password: Option<String>,
     database: String,
     binding: Binding,
     cluster: Option<Cluster>,
@@ -51,7 +52,12 @@ pub struct Connection {
 
 impl Connection {
     /// Create new server connection handler.
-    pub(crate) fn new(user: &str, database: &str, admin: bool) -> Result<Self, Error> {
+    pub(crate) fn new(
+        user: &str,
+        database: &str,
+        admin: bool,
+        passthrough_password: &Option<String>,
+    ) -> Result<Self, Error> {
         let mut conn = Self {
             binding: if admin {
                 Binding::Admin(Backend::new())
@@ -63,6 +69,7 @@ impl Connection {
             database: database.to_owned(),
             mirrors: vec![],
             locked: false,
+            passthrough_password: passthrough_password.clone(),
         };
 
         if !admin {
@@ -271,8 +278,16 @@ impl Connection {
     pub(crate) fn reload(&mut self) -> Result<(), Error> {
         match self.binding {
             Binding::Server(_) | Binding::MultiShard(_, _) | Binding::Replication(_, _) => {
-                let databases = databases();
                 let user = (self.user.as_str(), self.database.as_str());
+                // Check passthrough auth.
+                if config().config.general.passthrough_auth() && !databases().exists(user) {
+                    if let Some(ref passthrough_password) = self.passthrough_password {
+                        let new_user = User::new(&self.user, passthrough_password, &self.database);
+                        databases::add(new_user);
+                    }
+                }
+
+                let databases = databases();
                 let cluster = databases.cluster(user)?;
 
                 self.cluster = Some(cluster);
