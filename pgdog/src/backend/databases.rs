@@ -325,7 +325,6 @@ pub(crate) fn new_pool(
 
     if let Some(shards) = shards {
         let mut shard_configs = vec![];
-
         for user_databases in shards {
             let primary = user_databases
                 .iter()
@@ -337,7 +336,6 @@ pub(crate) fn new_pool(
                         config: Config::new(general, primary, user),
                     }
                 });
-
             let replicas = user_databases
                 .iter()
                 .filter(|d| d.role == Role::Replica)
@@ -384,10 +382,8 @@ pub(crate) fn new_pool(
             .get(&user.database)
             .cloned()
             .unwrap_or(vec![]);
-
         let sharded_tables =
             ShardedTables::new(sharded_tables, omnisharded_tables, general.dry_run);
-
         // Make sure all nodes in the cluster agree they are mirroring the same cluster.
         let mirror_of = match mirrors_of.len() {
             0 => None,
@@ -411,17 +407,6 @@ pub(crate) fn new_pool(
             mirror_of,
             config.multi_tenant(),
         );
-
-        println!("");
-        println!("");
-        println!("");
-        println!("");
-        println!("");
-        println!("");
-        println!("Cluster Config - Sharded Tables:");
-        println!("");
-        println!("{:?}", cluster_config.sharded_tables);
-        println!("");
 
         Some((
             User {

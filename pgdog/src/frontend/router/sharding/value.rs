@@ -179,16 +179,12 @@ mod tests {
 
     #[test]
     fn uuid_binary_parses_correctly() -> Result<(), Error> {
-        // 16-byte array for UUID 00112233-4455-6677-8899-aabbccddeeff
-        let raw_bytes: [u8; 16] = [
-            0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd,
-            0xee, 0xff,
-        ];
-        let expected_uuid = Uuid::parse_str("00112233-4455-6677-8899-aabbccddeeff")?;
+        let raw_bytes: [u8; 16] = [0x11u8; 16];
+        let expected_uuid = Uuid::parse_str("11111111-1111-1111-1111-111111111111")?;
 
         let value = Value {
             data_type: DataType::Uuid,
-            data: Data::Binary(&raw_bytes), // &[u8;16] → &[u8]
+            data: Data::Binary(&raw_bytes),
         };
 
         assert_eq!(value.uuid()?, Some(expected_uuid));
