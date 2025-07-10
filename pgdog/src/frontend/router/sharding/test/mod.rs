@@ -146,6 +146,8 @@ async fn test_binary_encoding() {
         }
         assert!(msg.code() == c);
     }
+
+    server.execute("ROLLBACK").await.unwrap();
 }
 
 #[tokio::test]
@@ -201,6 +203,8 @@ async fn test_shard_by_range() {
             }
         }
     }
+
+    server.execute("ROLLBACK").await.unwrap();
 }
 
 #[tokio::test]
@@ -258,4 +262,100 @@ async fn test_shard_by_list() {
             }
         }
     }
+
+    server.execute("ROLLBACK").await.unwrap();
+}
+
+#[tokio::test]
+async fn test_shard_by_uuid_list() {
+    let mut server = test_server().await;
+
+    let shard_0_uuids = vec![
+        uuid::Uuid::parse_str("00000000-0000-0000-0000-000000000000").unwrap(),
+        uuid::Uuid::parse_str("00000000-0000-0000-0000-000000000001").unwrap(),
+    ];
+
+    let shard_1_uuids = vec![
+        uuid::Uuid::parse_str("11111111-1111-1111-1111-111111111111").unwrap(),
+        uuid::Uuid::parse_str("11111111-1111-1111-1111-111111111112").unwrap(),
+    ];
+
+    let shard_2_uuids = vec![
+        uuid::Uuid::parse_str("22222222-2222-2222-2222-222222222222").unwrap(),
+        uuid::Uuid::parse_str("22222222-2222-2222-2222-222222222223").unwrap(),
+    ];
+
+    let uuid_sets = vec![
+        shard_0_uuids.clone(),
+        shard_1_uuids.clone(),
+        shard_2_uuids.clone(),
+    ];
+
+    let mut insert_queries = Vec::new();
+    for uuid in uuid_sets.clone().concat() {
+        insert_queries.push(Query::new(format!(
+            "INSERT INTO test_shard_uuid_list (id) VALUES ('{}')",
+            uuid
+        )));
+    }
+
+    let ddl_queries = vec![
+        Query::new("CREATE TABLE test_shard_uuid_list (id UUID) PARTITION BY LIST(id)"),
+        Query::new(&format!(
+            "CREATE TABLE test_shard_uuid_list_0 PARTITION OF test_shard_uuid_list FOR VALUES IN ({})",
+            shard_0_uuids.iter().map(|u| format!("'{}'", u)).collect::<Vec<_>>().join(", ")
+        )),
+        Query::new(&format!(
+            "CREATE TABLE test_shard_uuid_list_1 PARTITION OF test_shard_uuid_list FOR VALUES IN ({})",
+            shard_1_uuids.iter().map(|u| format!("'{}'", u)).collect::<Vec<_>>().join(", ")
+        )),
+        Query::new(&format!(
+            "CREATE TABLE test_shard_uuid_list_2 PARTITION OF test_shard_uuid_list FOR VALUES IN ({})",
+            shard_2_uuids.iter().map(|u| format!("'{}'", u)).collect::<Vec<_>>().join(", ")
+        )),
+    ];
+
+    server.execute("BEGIN").await.unwrap();
+
+    server.execute_batch(&ddl_queries).await.unwrap();
+    server.execute_batch(&insert_queries).await.unwrap();
+
+    let mut table = ShardedTable::default();
+    table.data_type = DataType::Uuid;
+    table.mapping = Mapping::new(
+        &uuid_sets
+            .into_iter()
+            .enumerate()
+            .map(|(shard, uuids)| ShardedMapping {
+                kind: ShardedMappingKind::List,
+                values: uuids
+                    .into_iter()
+                    .map(FlexibleType::Uuid)
+                    .collect::<HashSet<_>>(),
+                shard,
+                ..Default::default()
+            })
+            .collect::<Vec<_>>(),
+    );
+
+    for shard in 0..3 {
+        let query = format!("SELECT * FROM test_shard_uuid_list_{}", shard);
+        let values = server.fetch_all::<String>(&query).await.unwrap();
+
+        for value in values {
+            let value = value.parse::<String>().unwrap();
+            let context = ContextBuilder::new(&table)
+                .data(value.as_str())
+                .shards(3)
+                .build()
+                .unwrap();
+            let calc = context.apply().unwrap();
+            match calc {
+                Shard::Direct(direct) => assert_eq!(direct, shard),
+                _ => panic!("not a direct shard"),
+            }
+        }
+    }
+
+    server.execute("ROLLBACK").await.unwrap();
 }

@@ -21,9 +21,12 @@ impl<'a> Lists<'a> {
     pub(super) fn shard(&self, value: &Value) -> Result<Shard, Error> {
         let integer = value.integer()?;
         let varchar = value.varchar()?;
+        let uuid = value.uuid()?;
 
         if let Some(integer) = integer {
             self.list.shard(&FlexibleType::Integer(integer))
+        } else if let Some(uuid) = uuid {
+            self.list.shard(&FlexibleType::Uuid(uuid))
         } else if let Some(varchar) = varchar {
             self.list.shard(&FlexibleType::String(varchar.to_string()))
         } else {
