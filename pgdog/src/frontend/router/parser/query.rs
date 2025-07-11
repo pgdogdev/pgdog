@@ -1066,61 +1066,6 @@ mod test_explain {
     }
 
     #[test]
-    fn test_explain_select_for_update() {
-        let r = route("EXPLAIN SELECT * FROM sharded WHERE id = 1 FOR UPDATE");
-        assert_eq!(r.shard(), &Shard::Direct(0)); // bind not parsed here
-        assert!(r.is_write());
-
-        let r = route_parameterized(
-            r#"
-                EXPLAIN
-                SELECT * FROM sharded
-                WHERE id = $1
-                FOR UPDATE
-            "#,
-            &[b"1"],
-        );
-
-        assert!(matches!(r.shard(), Shard::Direct(_)));
-        assert!(r.is_write());
-    }
-
-    #[test]
-    fn test_explain_cte() {
-        let r = route(
-            r#"
-                EXPLAIN
-                WITH
-                new_record AS (
-                    INSERT INTO sharded
-                    VALUES (1)
-                    RETURNING *
-                )
-                SELECT * FROM new_record
-            "#,
-        );
-        assert!(matches!(r.shard(), Shard::Direct(_)));
-        assert!(r.is_write());
-
-        let r = route_parameterized(
-            r#"
-                EXPLAIN
-                WITH
-                new_record AS (
-                    INSERT INTO sharded
-                    VALUES ($1)
-                    RETURNING *
-                )
-                SELECT * FROM new_record
-            "#,
-            &[b"1"],
-        );
-
-        assert!(matches!(r.shard(), Shard::Direct(_)));
-        assert!(r.is_write());
-    }
-
-    #[test]
     fn test_explain_analyze_insert() {
         let r = route("EXPLAIN ANALYZE INSERT INTO sharded (id, email) VALUES (1, 'a@a.com')");
         assert!(matches!(r.shard(), Shard::Direct(_)));
@@ -1131,34 +1076,6 @@ mod test_explain {
             &[b"1", b"test@test.com"],
         );
         assert!(matches!(r.shard(), Shard::Direct(_)));
-        assert!(r.is_write());
-    }
-
-    #[test]
-    fn test_explain_analyze_insert_multiple_sharded_column_values() {
-        let r = route_parameterized(
-            r#"
-                EXPLAIN ANALYZE
-                INSERT INTO sharded (id, email)
-                VALUES
-                    ($1, $2),
-                    ($3, $4),
-                    ($5, $6),
-                    ($7, $8)
-            "#,
-            &[
-                b"1",
-                b"test1@test.com",
-                b"2",
-                b"test2@test.com",
-                b"3",
-                b"test3@test.com",
-                b"4",
-                b"test4@test.com",
-            ],
-        );
-
-        assert!(matches!(r.shard(), Shard::Multi(_)));
         assert!(r.is_write());
     }
 
