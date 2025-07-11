@@ -39,8 +39,8 @@ impl Router {
     }
 
     /// Set into replication mode.
-    pub fn replication_mode(&mut self) {
-        self.query_parser.replication_mode();
+    pub fn enter_replication_mode(&mut self) {
+        self.query_parser.enter_replication_mode();
     }
 
     /// Route a query to a shard.
