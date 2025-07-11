@@ -34,12 +34,8 @@ use pg_query::{
 use regex::Regex;
 use tracing::{debug, trace};
 
-static REPLICATION_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(
-        "(CREATE_REPLICATION_SLOT|IDENTIFY_SYSTEM|DROP_REPLICATION_SLOT|READ_REPLICATION_SLOT|ALTER_REPLICATION_SLOT|TIMELINE_HISTORY).*",
-    )
-    .unwrap()
-});
+// -------------------------------------------------------------------------------------------------
+// ----- QueryParser :: Public Interface -----------------------------------------------------------
 
 #[derive(Debug)]
 pub struct QueryParser {
@@ -63,12 +59,10 @@ impl Default for QueryParser {
 }
 
 impl QueryParser {
-    /// Set parser to handle replication commands.
-    pub fn replication_mode(&mut self) {
-        self.replication_mode = true;
+    pub fn routed(&self) -> bool {
+        self.routed
     }
 
-    /// In transaction.
     pub fn in_transaction(&self) -> bool {
         self.in_transaction
     }
@@ -95,7 +89,10 @@ impl QueryParser {
         Ok(&self.command)
     }
 
-    /// Shard copy data.
+    pub fn enter_replication_mode(&mut self) {
+        self.replication_mode = true;
+    }
+
     pub fn copy_data(&mut self, rows: Vec<CopyData>) -> Result<Vec<CopyRow>, Error> {
         match &mut self.command {
             Command::Copy(copy) => copy.shard(rows),
@@ -103,7 +100,6 @@ impl QueryParser {
         }
     }
 
-    /// Get the route currently determined by the parser.
     pub fn route(&self) -> Route {
         match self.command {
             Command::Query(ref route) => route.clone(),
@@ -111,18 +107,25 @@ impl QueryParser {
         }
     }
 
-    pub fn routed(&self) -> bool {
-        self.routed
-    }
-
-    /// Reset shard.
     pub fn reset(&mut self) {
         self.routed = false;
         self.in_transaction = false;
         self.command = Command::Query(Route::default());
         self.write_override = None;
     }
+}
 
+// -------------------------------------------------------------------------------------------------
+// ----- QueryParser :: query() --------------------------------------------------------------------
+
+static REPLICATION_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        "(CREATE_REPLICATION_SLOT|IDENTIFY_SYSTEM|DROP_REPLICATION_SLOT|READ_REPLICATION_SLOT|ALTER_REPLICATION_SLOT|TIMELINE_HISTORY).*",
+    )
+    .unwrap()
+});
+
+impl QueryParser {
     fn query(
         &mut self,
         query: &BufferedQuery,
@@ -447,26 +450,20 @@ impl QueryParser {
             Ok(command)
         }
     }
+}
 
-    fn show(
-        &mut self,
-        stmt: &VariableShowStmt,
-        sharding_schema: &ShardingSchema,
-        read_only: bool,
-    ) -> Result<Command, Error> {
-        match stmt.name.as_str() {
-            "pgdog.shards" => Ok(Command::Shards(sharding_schema.shards)),
-            _ => Ok(Command::Query(Route::write(Shard::All).set_read(read_only))),
-        }
-    }
+// -------------------------------------------------------------------------------------------------
+// ----- QueryParser :: Command :: SET -------------------------------------------------------------
 
-    /// Handle the SET command.
-    ///
-    /// We allow setting shard/sharding key manually outside
-    /// the normal protocol flow. This command is not forwarded to the server.
-    ///
-    /// All other SETs change the params on the client and are eventually sent to the server
-    /// when the client is connected to the server.
+// Handle the SET command.
+//
+// We allow setting shard/sharding key manually outside
+// the normal protocol flow. This command is not forwarded to the server.
+//
+// All other SETs change the params on the client and are eventually sent to the server
+// when the client is connected to the server.
+
+impl QueryParser {
     fn set(
         &mut self,
         stmt: &VariableSetStmt,
@@ -568,127 +565,43 @@ impl QueryParser {
 
         Ok(Command::Query(Route::write(Shard::All).set_read(read_only)))
     }
+}
 
-    fn where_clause(
+// -------------------------------------------------------------------------------------------------
+// ----- QueryParser :: Command :: SHOW ------------------------------------------------------------
+
+impl QueryParser {
+    fn show(
+        &mut self,
+        stmt: &VariableShowStmt,
         sharding_schema: &ShardingSchema,
-        where_clause: &WhereClause,
-        params: Option<&Bind>,
-    ) -> Result<HashSet<Shard>, Error> {
-        let mut shards = HashSet::new();
-        // Complexity: O(number of sharded tables * number of columns in the query)
-        for table in sharding_schema.tables().tables() {
-            let table_name = table.name.as_deref();
-            let keys = where_clause.keys(table_name, &table.column);
-            for key in keys {
-                match key {
-                    Key::Constant { value, array } => {
-                        if array {
-                            shards.insert(Shard::All);
-                            break;
-                        }
-
-                        let ctx = ContextBuilder::new(table)
-                            .data(value.as_str())
-                            .shards(sharding_schema.shards)
-                            .build()?;
-                        shards.insert(ctx.apply()?);
-                    }
-
-                    Key::Parameter { pos, array } => {
-                        // Don't hash individual values yet.
-                        // The odds are high this will go to all shards anyway.
-                        if array {
-                            shards.insert(Shard::All);
-                            break;
-                        } else if let Some(params) = params {
-                            if let Some(param) = params.parameter(pos)? {
-                                let value = ShardingValue::from_param(&param, table.data_type)?;
-                                let ctx = ContextBuilder::new(table)
-                                    .value(value)
-                                    .shards(sharding_schema.shards)
-                                    .build()?;
-                                shards.insert(ctx.apply()?);
-                            }
-                        }
-                    }
-
-                    // Null doesn't help.
-                    Key::Null => (),
-                }
-            }
+        read_only: bool,
+    ) -> Result<Command, Error> {
+        match stmt.name.as_str() {
+            "pgdog.shards" => Ok(Command::Shards(sharding_schema.shards)),
+            _ => Ok(Command::Query(Route::write(Shard::All).set_read(read_only))),
         }
-
-        Ok(shards)
     }
+}
 
-    fn converge(shards: HashSet<Shard>) -> Shard {
-        let shard = if shards.len() == 1 {
-            shards.iter().next().cloned().unwrap()
+// -------------------------------------------------------------------------------------------------
+// ----- QueryParser :: Command :: COPY ------------------------------------------------------------
+
+impl QueryParser {
+    fn copy(stmt: &CopyStmt, cluster: &Cluster) -> Result<Command, Error> {
+        let parser = CopyParser::new(stmt, cluster)?;
+        if let Some(parser) = parser {
+            Ok(Command::Copy(Box::new(parser)))
         } else {
-            let mut multi = vec![];
-            let mut all = false;
-            for shard in &shards {
-                match shard {
-                    Shard::All => {
-                        all = true;
-                        break;
-                    }
-                    Shard::Direct(v) => multi.push(*v),
-                    Shard::Multi(m) => multi.extend(m),
-                };
-            }
-            if all || shards.is_empty() {
-                Shard::All
-            } else {
-                Shard::Multi(multi)
-            }
-        };
-
-        shard
-    }
-
-    fn cte_writes(stmt: &SelectStmt) -> bool {
-        if let Some(ref with_clause) = stmt.with_clause {
-            for cte in &with_clause.ctes {
-                if let Some(ref node) = cte.node {
-                    if let NodeEnum::CommonTableExpr(expr) = node {
-                        if let Some(ref query) = expr.ctequery {
-                            if let Some(ref node) = query.node {
-                                match node {
-                                    NodeEnum::SelectStmt(stmt) => {
-                                        if Self::cte_writes(stmt) {
-                                            return true;
-                                        }
-                                    }
-
-                                    _ => {
-                                        return true;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            Ok(Command::Query(Route::write(None)))
         }
-
-        false
     }
+}
 
-    fn functions(stmt: &SelectStmt) -> Result<FunctionBehavior, Error> {
-        for target in &stmt.target_list {
-            if let Ok(func) = Function::try_from(target) {
-                return Ok(func.behavior());
-            }
-        }
+// -------------------------------------------------------------------------------------------------
+// ----- QueryParser :: Command :: SELECT ----------------------------------------------------------
 
-        Ok(if stmt.locking_clause.is_empty() {
-            FunctionBehavior::default()
-        } else {
-            FunctionBehavior::writes_only()
-        })
-    }
-
+impl QueryParser {
     fn select(
         stmt: &SelectStmt,
         sharding_schema: &ShardingSchema,
@@ -827,15 +740,25 @@ impl QueryParser {
         order_by
     }
 
-    fn copy(stmt: &CopyStmt, cluster: &Cluster) -> Result<Command, Error> {
-        let parser = CopyParser::new(stmt, cluster)?;
-        if let Some(parser) = parser {
-            Ok(Command::Copy(Box::new(parser)))
-        } else {
-            Ok(Command::Query(Route::write(None)))
+    fn functions(stmt: &SelectStmt) -> Result<FunctionBehavior, Error> {
+        for target in &stmt.target_list {
+            if let Ok(func) = Function::try_from(target) {
+                return Ok(func.behavior());
+            }
         }
-    }
 
+        Ok(if stmt.locking_clause.is_empty() {
+            FunctionBehavior::default()
+        } else {
+            FunctionBehavior::writes_only()
+        })
+    }
+}
+
+// -------------------------------------------------------------------------------------------------
+// ----- QueryParser :: Command :: INSERT ----------------------------------------------------------
+
+impl QueryParser {
     fn insert(
         stmt: &InsertStmt,
         sharding_schema: &ShardingSchema,
@@ -845,7 +768,12 @@ impl QueryParser {
         let shard = insert.shard(sharding_schema, params)?;
         Ok(Command::Query(Route::write(shard)))
     }
+}
 
+// -------------------------------------------------------------------------------------------------
+// ----- QueryParser :: Command :: UPDATE ----------------------------------------------------------
+
+impl QueryParser {
     fn update(
         stmt: &UpdateStmt,
         sharding_schema: &ShardingSchema,
@@ -862,7 +790,12 @@ impl QueryParser {
 
         Ok(Command::Query(Route::write(Shard::All)))
     }
+}
 
+// -------------------------------------------------------------------------------------------------
+// ----- QueryParser :: Command :: DELETE ----------------------------------------------------------
+
+impl QueryParser {
     fn delete(
         stmt: &DeleteStmt,
         sharding_schema: &ShardingSchema,
@@ -881,7 +814,7 @@ impl QueryParser {
 }
 
 // -------------------------------------------------------------------------------------------------
-// ----- QueryParser :: EXPLAIN / EXPLAIN (ANALYZE) ------------------------------------------------
+// ----- QueryParser :: Command :: EXPLAIN & ANALYZE -----------------------------------------------
 
 impl QueryParser {
     fn explain(
@@ -1123,7 +1056,123 @@ mod test_explain {
 }
 
 // -------------------------------------------------------------------------------------------------
-// ----- MOD TESTS ---------------------------------------------------------------------------------
+// ----- QueryParser :: Routing Overrides ----------------------------------------------------------
+
+impl QueryParser {
+    fn converge(shards: HashSet<Shard>) -> Shard {
+        let shard = if shards.len() == 1 {
+            shards.iter().next().cloned().unwrap()
+        } else {
+            let mut multi = vec![];
+            let mut all = false;
+            for shard in &shards {
+                match shard {
+                    Shard::All => {
+                        all = true;
+                        break;
+                    }
+                    Shard::Direct(v) => multi.push(*v),
+                    Shard::Multi(m) => multi.extend(m),
+                };
+            }
+            if all || shards.is_empty() {
+                Shard::All
+            } else {
+                Shard::Multi(multi)
+            }
+        };
+
+        shard
+    }
+
+    fn where_clause(
+        sharding_schema: &ShardingSchema,
+        where_clause: &WhereClause,
+        params: Option<&Bind>,
+    ) -> Result<HashSet<Shard>, Error> {
+        let mut shards = HashSet::new();
+        // Complexity: O(number of sharded tables * number of columns in the query)
+        for table in sharding_schema.tables().tables() {
+            let table_name = table.name.as_deref();
+            let keys = where_clause.keys(table_name, &table.column);
+            for key in keys {
+                match key {
+                    Key::Constant { value, array } => {
+                        if array {
+                            shards.insert(Shard::All);
+                            break;
+                        }
+
+                        let ctx = ContextBuilder::new(table)
+                            .data(value.as_str())
+                            .shards(sharding_schema.shards)
+                            .build()?;
+                        shards.insert(ctx.apply()?);
+                    }
+
+                    Key::Parameter { pos, array } => {
+                        // Don't hash individual values yet.
+                        // The odds are high this will go to all shards anyway.
+                        if array {
+                            shards.insert(Shard::All);
+                            break;
+                        } else if let Some(params) = params {
+                            if let Some(param) = params.parameter(pos)? {
+                                let value = ShardingValue::from_param(&param, table.data_type)?;
+                                let ctx = ContextBuilder::new(table)
+                                    .value(value)
+                                    .shards(sharding_schema.shards)
+                                    .build()?;
+                                shards.insert(ctx.apply()?);
+                            }
+                        }
+                    }
+
+                    // Null doesn't help.
+                    Key::Null => (),
+                }
+            }
+        }
+
+        Ok(shards)
+    }
+
+    fn cte_writes(stmt: &SelectStmt) -> bool {
+        if let Some(ref with_clause) = stmt.with_clause {
+            for cte in &with_clause.ctes {
+                if let Some(ref node) = cte.node {
+                    if let NodeEnum::CommonTableExpr(expr) = node {
+                        if let Some(ref query) = expr.ctequery {
+                            if let Some(ref node) = query.node {
+                                match node {
+                                    NodeEnum::SelectStmt(stmt) => {
+                                        if Self::cte_writes(stmt) {
+                                            return true;
+                                        }
+                                    }
+
+                                    _ => {
+                                        return true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        false
+    }
+}
+
+// -------------------------------------------------------------------------------------------------
+// ----- QueryParser :: Transaction Control --------------------------------------------------------
+
+// -> TODO
+
+// -------------------------------------------------------------------------------------------------
+// ----- QueryParser :: Module Tests ---------------------------------------------------------------
 
 #[cfg(test)]
 mod test {
@@ -1216,7 +1265,7 @@ mod test {
         buffer.push(query.into());
 
         let mut query_parser = QueryParser::default();
-        query_parser.replication_mode();
+        query_parser.enter_replication_mode();
 
         let cluster = Cluster::default();
 
@@ -1242,7 +1291,7 @@ mod test {
         buffer.push(query.into());
 
         let mut query_parser = QueryParser::default();
-        query_parser.replication_mode();
+        query_parser.enter_replication_mode();
 
         let cluster = Cluster::default();
 
@@ -1703,3 +1752,6 @@ mod test {
         assert_eq!(route.shard(), &Shard::All);
     }
 }
+
+// -------------------------------------------------------------------------------------------------
+// -------------------------------------------------------------------------------------------------
