@@ -287,19 +287,22 @@ impl QueryParser {
             .ok_or(Error::EmptyQuery)?;
 
         let mut command = match root.node {
-            // SELECT statements.
-            Some(NodeEnum::SelectStmt(ref stmt)) => {
-                self.select(stmt, &ast, cluster, &mut shard, bind, &sharding_schema)
-            }
-            // SET statements
+            // SET statements -> return immediately.
             Some(NodeEnum::VariableSetStmt(ref stmt)) => {
                 return self.set(stmt, &sharding_schema, read_only)
             }
+            // SHOW statements -> return immediately.
             Some(NodeEnum::VariableShowStmt(ref stmt)) => {
                 return self.show(stmt, &sharding_schema, read_only)
             }
+            // DEALLOCATE statements -> return immediately.
             Some(NodeEnum::DeallocateStmt(_)) => {
                 return Ok(Command::Deallocate);
+            }
+
+            // SELECT statements.
+            Some(NodeEnum::SelectStmt(ref stmt)) => {
+                self.select(stmt, &ast, cluster, &mut shard, bind, &sharding_schema)
             }
             // COPY statements.
             Some(NodeEnum::CopyStmt(ref stmt)) => Self::copy(stmt, cluster),
