@@ -8,7 +8,7 @@ use tokio::net::lookup_host;
 use tokio::select;
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 // -------------------------------------------------------------------------------------------------
 // ------ Constant(s) ------------------------------------------------------------------------------
@@ -89,7 +89,7 @@ impl DnsCache {
                         cache_ref.refresh_all_hostnames().await;
                     }
                     _ = cancel_clone.cancelled() => {
-                        info!("DNS Cache :: Refresh loop cancelled");
+                        warn!("DNS Cache :: Refresh loop cancelled!");
                         break;
                     }
                 }
@@ -131,6 +131,12 @@ impl DnsCache {
                     let hostname = hostname.clone();
                     let cache_ref = Arc::clone(self);
                     tokio::spawn(async move {
+                        // Skip if already cached and not expired
+                        if cache_ref.get_cached_ip(&hostname).is_some() {
+                            debug!("Skipped refresh for fresh entry: {}", hostname);
+                            return;
+                        }
+
                         if let Err(e) = cache_ref.resolve_and_cache(&hostname).await {
                             error!("Failed to refresh DNS for {}: {}", hostname, e);
                         } else {
