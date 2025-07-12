@@ -1,6 +1,6 @@
 use futures::future::join_all;
 use once_cell::sync::Lazy;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
@@ -21,7 +21,7 @@ const DEFAULT_TTL: Duration = Duration::from_secs(30);
 static DNS_CACHE: Lazy<Arc<DnsCache>> = Lazy::new(|| {
     Arc::new(DnsCache {
         cache: Arc::new(RwLock::new(HashMap::new())),
-        hostnames: Arc::new(RwLock::new(Vec::new())),
+        hostnames: Arc::new(RwLock::new(HashSet::new())),
         ttl: Arc::new(RwLock::new(DEFAULT_TTL)),
     })
 });
@@ -38,7 +38,7 @@ struct DnsCacheEntry {
 
 pub struct DnsCache {
     cache: Arc<RwLock<HashMap<String, DnsCacheEntry>>>,
-    hostnames: Arc<RwLock<Vec<String>>>,
+    hostnames: Arc<RwLock<HashSet<String>>>,
     ttl: Arc<RwLock<Duration>>,
 }
 
@@ -56,9 +56,8 @@ impl DnsCache {
 
         // Track hostname for future refreshes.
         {
-            let mut hosts = self.hostnames.write().unwrap();
-            if !hosts.contains(&hostname.to_string()) {
-                hosts.push(hostname.to_string());
+            let mut hostnames = self.hostnames.write().unwrap();
+            if hostnames.insert(hostname.to_string()) {
                 info!("DNS Cache :: Added hostname: {}", hostname);
             }
         }
@@ -124,24 +123,23 @@ impl DnsCache {
 
     /// Refresh all hostnames in the refresh list.
     async fn refresh_all_hostnames(self: &Arc<Self>) {
-        let hostnames = {
+        let tasks: Vec<_> = {
             let hostnames_guard = self.hostnames.read().unwrap();
-            hostnames_guard.clone()
-        };
-
-        let tasks: Vec<_> = hostnames
-            .into_iter()
-            .map(|hostname| {
-                let cache_ref = Arc::clone(self);
-                tokio::spawn(async move {
-                    if let Err(e) = cache_ref.resolve_and_cache(&hostname).await {
-                        error!("Failed to refresh DNS for {}: {}", hostname, e);
-                    } else {
-                        debug!("DNS Cache :: Refreshed hostname: {}", hostname);
-                    }
+            hostnames_guard
+                .iter()
+                .map(|hostname| {
+                    let hostname = hostname.clone();
+                    let cache_ref = Arc::clone(self);
+                    tokio::spawn(async move {
+                        if let Err(e) = cache_ref.resolve_and_cache(&hostname).await {
+                            error!("Failed to refresh DNS for {}: {}", hostname, e);
+                        } else {
+                            debug!("Refreshed hostname: {}", hostname);
+                        }
+                    })
                 })
-            })
-            .collect();
+                .collect()
+        };
 
         join_all(tasks).await;
     }
@@ -357,7 +355,7 @@ impl DnsCache {
     #[cfg(test)]
     pub fn get_cached_hostnames_for_testing(&self) -> Vec<String> {
         let hostnames = self.hostnames.read().unwrap();
-        hostnames.clone()
+        hostnames.iter().cloned().collect()
     }
 
     /// Create a test cache with custom TTL
@@ -365,7 +363,7 @@ impl DnsCache {
     pub fn new_for_testing(ttl: Duration) -> Arc<DnsCache> {
         Arc::new(DnsCache {
             cache: Arc::new(RwLock::new(HashMap::new())),
-            hostnames: Arc::new(RwLock::new(Vec::new())),
+            hostnames: Arc::new(RwLock::new(HashSet::new())),
             ttl: Arc::new(RwLock::new(ttl)),
         })
     }
