@@ -78,7 +78,7 @@ impl Server {
     /// Create new PostgreSQL server connection.
     pub async fn connect(addr: &Address, options: ServerOptions) -> Result<Self, Error> {
         debug!("=> {}", addr);
-        let stream = TcpStream::connect(addr.addr()).await?;
+        let stream = TcpStream::connect(addr.addr().await?).await?;
         tweak(&stream)?;
 
         let mut stream = Stream::plain(stream);
@@ -221,7 +221,7 @@ impl Server {
 
     /// Request query cancellation for the given backend server identifier.
     pub async fn cancel(addr: &Address, id: &BackendKeyData) -> Result<(), Error> {
-        let mut stream = TcpStream::connect(addr.addr()).await?;
+        let mut stream = TcpStream::connect(addr.addr().await?).await?;
         stream
             .write_all(
                 &Startup::Cancel {

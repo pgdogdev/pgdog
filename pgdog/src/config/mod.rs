@@ -396,6 +396,9 @@ pub struct General {
     /// Disable cross-shard queries.
     #[serde(default)]
     pub cross_shard_disabled: bool,
+    /// How often to refresh DNS entries, in ms.
+    #[serde(default = "General::default_dns_ttl")]
+    pub dns_ttl: u64,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -489,6 +492,7 @@ impl Default for General {
             connect_attempt_delay: Self::default_connect_attempt_delay(),
             connect_attempts: Self::connect_attempts(),
             query_timeout: Self::default_query_timeout(),
+            dns_ttl: Self::default_dns_ttl(),
             checkout_timeout: Self::checkout_timeout(),
             dry_run: bool::default(),
             idle_timeout: Self::idle_timeout(),
@@ -545,6 +549,10 @@ impl General {
         Duration::from_secs(60).as_millis() as u64
     }
 
+    fn default_dns_ttl() -> u64 {
+        Duration::from_secs(60).as_millis() as u64
+    }
+
     fn default_client_idle_timeout() -> u64 {
         Duration::MAX.as_millis() as u64
     }
@@ -555,6 +563,10 @@ impl General {
 
     pub(crate) fn query_timeout(&self) -> Duration {
         Duration::from_millis(self.query_timeout)
+    }
+
+    pub fn dns_ttl(&self) -> Duration {
+        Duration::from_millis(self.dns_ttl)
     }
 
     pub(crate) fn client_idle_timeout(&self) -> Duration {
