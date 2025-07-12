@@ -89,6 +89,9 @@ pub enum Error {
 
     #[error("router error: {0}")]
     Router(String),
+
+    #[error("dns lookup for hostname {0} failed")]
+    DnsLookupError(String),
 }
 
 impl Error {

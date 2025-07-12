@@ -104,8 +104,13 @@ async fn pgdog() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Start DNS cache refresh loop with the specified TTL.
-    DnsCache::global().set_ttl(general.dns_ttl());
-    let _ = DnsCache::global().start_refresh_loop();
+    let has_dns_override = general.dns_ttl().is_some();
+    if has_dns_override {
+        println!("YOOOHHOOOOO");
+        println!("YOOOHHOOOOO");
+        println!("YOOOHHOOOOO");
+        DnsCache::global().start_refresh_loop();
+    }
 
     let stats_logger = stats::StatsLogger::new();
 
