@@ -832,29 +832,18 @@ impl QueryParser {
 
         match node {
             NodeEnum::SelectStmt(ref select_stmt) => {
-                // For simple queries without tables, route to a single shard read
-                if select_stmt.from_clause.is_empty() {
-                    let shard_index = round_robin::next() % sharding_schema.shards;
-                    let route = Route::read(Some(shard_index));
-                    return Ok(Command::Query(route));
-                }
-
-                // Otherwise, route based on the SELECT statement
                 self.select(select_stmt, ast, cluster, shard, bind, sharding_schema)
             }
 
             NodeEnum::InsertStmt(ref insert_stmt) => {
-                // Route INSERT inside EXPLAIN
                 Self::insert(insert_stmt, sharding_schema, bind)
             }
 
             NodeEnum::UpdateStmt(ref update_stmt) => {
-                // Route UPDATE inside EXPLAIN
                 Self::update(update_stmt, sharding_schema, bind)
             }
 
             NodeEnum::DeleteStmt(ref delete_stmt) => {
-                // Route DELETE inside EXPLAIN
                 Self::delete(delete_stmt, sharding_schema, bind)
             }
 
