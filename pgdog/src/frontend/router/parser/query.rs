@@ -293,7 +293,7 @@ impl QueryParser {
             }
             // SET statements
             Some(NodeEnum::VariableSetStmt(ref stmt)) => {
-                self.set(stmt, &sharding_schema, read_only)
+                return self.set(stmt, &sharding_schema, read_only)
             }
             Some(NodeEnum::VariableShowStmt(ref stmt)) => {
                 return self.show(stmt, &sharding_schema, read_only)
@@ -427,7 +427,6 @@ impl QueryParser {
         sharding_schema: &ShardingSchema,
         read_only: bool,
     ) -> Result<Command, Error> {
-        println!("SEEEEETTTT");
         match stmt.name.as_str() {
             "pgdog.shard" => {
                 let node = stmt
