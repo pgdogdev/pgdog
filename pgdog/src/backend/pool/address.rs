@@ -51,9 +51,9 @@ impl Address {
     }
 
     pub async fn addr(&self) -> Result<SocketAddr, Error> {
-        let has_dns_override = config().config.general.dns_ttl().is_some();
+        let dns_cache_override_enabled = config().config.general.dns_ttl().is_some();
 
-        if has_dns_override {
+        if dns_cache_override_enabled {
             let ip = DnsCache::global().resolve(&self.host).await?;
             return Ok(SocketAddr::new(ip, self.port));
         }
