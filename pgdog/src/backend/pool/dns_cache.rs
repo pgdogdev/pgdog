@@ -1,11 +1,11 @@
 use futures::future::join_all;
+use hickory_resolver::{name_server::TokioConnectionProvider, ResolveError, Resolver};
 use once_cell::sync::Lazy;
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::net::lookup_host;
 use tokio::time::sleep;
 use tracing::{debug, error};
 
@@ -21,6 +21,7 @@ static DNS_CACHE: Lazy<Arc<DnsCache>> = Lazy::new(|| Arc::new(DnsCache::new()));
 // ------ DnsCache :: Public interface -------------------------------------------------------------
 
 pub struct DnsCache {
+    resolver: Arc<Resolver<TokioConnectionProvider>>,
     cache: Arc<RwLock<HashMap<String, IpAddr>>>,
     hostnames: Arc<RwLock<HashSet<String>>>,
 }
@@ -33,7 +34,13 @@ impl DnsCache {
 
     /// Create a new DNS cache instance.
     pub fn new() -> Self {
+        // Initialize the Resolver with system config (e.g., /etc/resolv.conf on Unix)
+        let resolver = Resolver::builder(TokioConnectionProvider::default())
+            .unwrap()
+            .build();
+
         DnsCache {
+            resolver: Arc::new(resolver),
             cache: Arc::new(RwLock::new(HashMap::new())),
             hostnames: Arc::new(RwLock::new(HashSet::new())),
         }
@@ -61,11 +68,7 @@ impl DnsCache {
     /// This spawns an infinite loop that runs until the process exits.
     /// For testing, use short TTLs and allow the test runtime to handle shutdown.
     pub fn start_refresh_loop(self: &Arc<Self>) {
-        let interval = config()
-            .config
-            .general
-            .dns_ttl()
-            .unwrap_or(Duration::from_secs(60));
+        let interval = Self::ttl();
 
         let cache_ref = Arc::clone(self);
         tokio::spawn(async move {
@@ -82,6 +85,19 @@ impl DnsCache {
 // ------ DnsCache :: Private methods --------------------------------------------------------------
 
 impl DnsCache {
+    /// Get the DNS refresh interval (short in tests, config-based otherwise).
+    fn ttl() -> Duration {
+        if cfg!(test) {
+            return Duration::from_millis(50);
+        }
+
+        config()
+            .config
+            .general
+            .dns_ttl()
+            .unwrap_or(Duration::from_secs(60)) // Should never happen in practice
+    }
+
     /// Get IP address from cache only. Returns None if not cached or expired.
     fn get_cached_ip(&self, hostname: &str) -> Option<IpAddr> {
         if let Ok(ip) = hostname.parse::<IpAddr>() {
@@ -116,13 +132,17 @@ impl DnsCache {
 
     /// Do the actual DNS resolution and cache the result.
     async fn resolve_and_cache(&self, hostname: &str) -> Result<IpAddr, Error> {
-        let addr = format!("{}:0", hostname);
-        let resolved = lookup_host(&addr)
-            .await?
-            .next()
-            .ok_or_else(|| Error::DnsLookupError(hostname.to_string()))?;
+        let response = self
+            .resolver
+            .lookup_ip(hostname)
+            .await
+            .map_err(|e: ResolveError| Error::DnsLookupError(format!("{}: {}", hostname, e)))?;
 
-        let ip = resolved.ip();
+        let ip = response
+            .iter()
+            .next()
+            .ok_or_else(|| Error::DnsLookupError(format!("{}: no IPs found", hostname)))?;
+
         self.cache_ip(hostname, ip);
 
         Ok(ip)
@@ -248,10 +268,81 @@ mod tests {
             assert!(result.unwrap().is_ok());
         }
     }
+
+    #[tokio::test]
+    async fn test_refresh_updates_cache() {
+        let cache = Arc::new(DnsCache::new());
+
+        cache.start_refresh_loop();
+
+        // Initial resolve and cache
+        let hostname = "github.com";
+        let ip1 = cache.resolve(hostname).await.unwrap();
+
+        // Clear for simulation (in reality, DNS might change)
+        cache.clear_cache_for_testing();
+
+        // Manually trigger refresh
+        cache.refresh_all_hostnames().await;
+
+        let ip2 = cache.resolve(hostname).await.unwrap();
+        assert_eq!(
+            ip1, ip2,
+            "IP should be re-resolved and cached after refresh"
+        );
+
+        // Check hostname was tracked
+        let cached_hostnames = cache.get_cached_hostnames_for_testing();
+        assert!(cached_hostnames.contains(&hostname.to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_hostname_uniqueness() {
+        let cache = DnsCache::new();
+        let hostname = "example.com";
+
+        // Resolve twice
+        cache.resolve(hostname).await.unwrap();
+        cache.resolve(hostname).await.unwrap();
+
+        let cached_hostnames = cache.get_cached_hostnames_for_testing();
+        assert_eq!(
+            cached_hostnames.len(),
+            1,
+            "Hostname should be added only once"
+        );
+        assert!(cached_hostnames.contains(&hostname.to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_ipv6_only_resolution() {
+        let cache = DnsCache::new();
+        let hostname = "ipv6.google.com"; // Known IPv6-only or dual-stack
+
+        let ip = cache.resolve(hostname).await.unwrap();
+        assert!(ip.is_ipv6(), "Expected IPv6 address, got {}", ip);
+    }
+
+    #[tokio::test]
+    async fn test_refresh_handles_errors() {
+        let cache = Arc::new(DnsCache::new());
+
+        // Add an invalid hostname to trigger error
+        {
+            let mut hostnames = cache.hostnames.write();
+            hostnames.insert("invalid-host-xyz.invalid".to_string());
+        }
+
+        // Trigger refresh; it should not panic
+        cache.refresh_all_hostnames().await;
+
+        // Verify cache isn't polluted (no entry added on error)
+        assert!(cache.get_cached_ip("invalid-host-xyz.invalid").is_none());
+    }
 }
 
 // -------------------------------------------------------------------------------------------------
-// ------ DnsCache :: Test-only methods ------------------------------------------------------------
+// ------ DnsCache :: Test-specific methods --------------------------------------------------------
 
 impl DnsCache {
     #[cfg(test)]

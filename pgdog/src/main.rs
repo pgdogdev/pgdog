@@ -103,12 +103,8 @@ async fn pgdog() -> Result<(), Box<dyn std::error::Error>> {
         tokio::spawn(async move { stats::http_server::server(openmetrics_port).await });
     }
 
-    // Start DNS cache refresh loop with the specified TTL.
     let has_dns_override = general.dns_ttl().is_some();
     if has_dns_override {
-        println!("YOOOHHOOOOO");
-        println!("YOOOHHOOOOO");
-        println!("YOOOHHOOOOO");
         DnsCache::global().start_refresh_loop();
     }
 
