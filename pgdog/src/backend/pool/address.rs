@@ -1,8 +1,10 @@
 //! Server address.
+use std::net::SocketAddr;
 
 use serde::{Deserialize, Serialize};
 use url::Url;
 
+use crate::backend::pool::dns::DnsCache;
 use crate::config::{Database, User};
 
 /// Server address.
@@ -48,9 +50,9 @@ impl Address {
         }
     }
 
-    /// Get address for `TCPStream`.
-    pub fn addr(&self) -> String {
-        format!("{}:{}", self.host, self.port)
+    pub async fn addr(&self) -> Result<SocketAddr, std::io::Error> {
+        let ip = DnsCache::global().resolve(&self.host).await?;
+        Ok(SocketAddr::new(ip, self.port))
     }
 
     #[cfg(test)]
