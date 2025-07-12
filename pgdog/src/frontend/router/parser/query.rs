@@ -289,56 +289,11 @@ impl QueryParser {
         let mut command = match root.node {
             // SELECT statements.
             Some(NodeEnum::SelectStmt(ref stmt)) => {
-                let cte_writes = Self::cte_writes(stmt);
-                let mut writes = Self::functions(stmt)?;
-
-                // Write overwrite because of conservative read/write split.
-                if let Some(true) = self.write_override {
-                    writes.writes = true;
-                }
-
-                if cte_writes {
-                    writes.writes = true;
-                }
-
-                if matches!(shard, Shard::Direct(_)) {
-                    self.routed = true;
-                    return Ok(Command::Query(Route::read(shard).set_write(writes)));
-                }
-                // `SELECT NOW()`, `SELECT 1`, etc.
-                else if ast.tables().is_empty() {
-                    self.routed = true;
-                    return Ok(Command::Query(
-                        Route::read(Some(round_robin::next() % cluster.shards().len()))
-                            .set_write(writes),
-                    ));
-                } else {
-                    let command = Self::select(stmt, &sharding_schema, bind)?;
-                    let mut omni = false;
-                    if let Command::Query(mut query) = command {
-                        // Try to route an all-shard query to one
-                        // shard if the table(s) it's touching contain
-                        // the same data on all shards.
-                        if query.is_all_shards() {
-                            let tables = ast.tables();
-                            omni = tables
-                                .iter()
-                                .all(|t| sharding_schema.tables.omnishards().contains(t));
-                        }
-
-                        if omni {
-                            query.set_shard_mut(round_robin::next() % cluster.shards().len());
-                        }
-
-                        Ok(Command::Query(query.set_write(writes)))
-                    } else {
-                        Ok(command)
-                    }
-                }
+                self.select(stmt, &ast, cluster, &mut shard, bind, &sharding_schema)
             }
-            // SET statements.
+            // SET statements
             Some(NodeEnum::VariableSetStmt(ref stmt)) => {
-                return self.set(stmt, &sharding_schema, read_only)
+                self.set(stmt, &sharding_schema, read_only)
             }
             Some(NodeEnum::VariableShowStmt(ref stmt)) => {
                 return self.show(stmt, &sharding_schema, read_only)
@@ -383,7 +338,9 @@ impl QueryParser {
                 }
             }
 
-            Some(NodeEnum::ExplainStmt(ref stmt)) => Self::explain(stmt, &sharding_schema, bind),
+            Some(NodeEnum::ExplainStmt(ref stmt)) => {
+                self.explain(stmt, &ast, cluster, &mut shard, bind, &sharding_schema)
+            }
 
             // All others are not handled.
             // They are sent to all shards concurrently.
@@ -470,6 +427,7 @@ impl QueryParser {
         sharding_schema: &ShardingSchema,
         read_only: bool,
     ) -> Result<Command, Error> {
+        println!("SEEEEETTTT");
         match stmt.name.as_str() {
             "pgdog.shard" => {
                 let node = stmt
@@ -603,17 +561,46 @@ impl QueryParser {
 
 impl QueryParser {
     fn select(
+        &mut self,
         stmt: &SelectStmt,
+        ast: &Arc<pg_query::ParseResult>,
+        cluster: &Cluster,
+        shard: &mut Shard,
+        bind: Option<&Bind>,
         sharding_schema: &ShardingSchema,
-        params: Option<&Bind>,
     ) -> Result<Command, Error> {
-        let order_by = Self::select_sort(&stmt.sort_clause, params);
+        let cte_writes = Self::cte_writes(stmt);
+        let mut writes = Self::functions(stmt)?;
+
+        // Write overwrite because of conservative read/write split.
+        if let Some(true) = self.write_override {
+            writes.writes = true;
+        }
+
+        if cte_writes {
+            writes.writes = true;
+        }
+
+        if matches!(shard, Shard::Direct(_)) {
+            self.routed = true;
+            return Ok(Command::Query(Route::read(shard.clone()).set_write(writes)));
+        }
+
+        // `SELECT NOW()`, `SELECT 1`, etc.
+        if ast.tables().is_empty() {
+            self.routed = true;
+            return Ok(Command::Query(
+                Route::read(Some(round_robin::next() % cluster.shards().len())).set_write(writes),
+            ));
+        }
+
+        let order_by = Self::select_sort(&stmt.sort_clause, bind);
         let mut shards = HashSet::new();
         let the_table = Table::try_from(&stmt.from_clause).ok();
         if let Some(where_clause) =
             WhereClause::new(the_table.as_ref().map(|t| t.name), &stmt.where_clause)
         {
-            shards = Self::where_clause(sharding_schema, &where_clause, params)?;
+            shards = Self::where_clause(sharding_schema, &where_clause, bind)?;
         }
 
         // Shard by vector in ORDER BY clause.
@@ -637,12 +624,24 @@ impl QueryParser {
 
         let shard = Self::converge(shards);
         let aggregates = Aggregate::parse(stmt)?;
-        let limit = LimitClause::new(stmt, params).limit_offset()?;
+        let limit = LimitClause::new(stmt, bind).limit_offset()?;
         let distinct = Distinct::new(stmt).distinct()?;
 
-        Ok(Command::Query(Route::select(
-            shard, order_by, aggregates, limit, distinct,
-        )))
+        let mut query = Route::select(shard, order_by, aggregates, limit, distinct);
+
+        let mut omni = false;
+        if query.is_all_shards() {
+            let tables = ast.tables();
+            omni = tables
+                .iter()
+                .all(|t| sharding_schema.tables.omnishards().contains(t));
+        }
+
+        if omni {
+            query.set_shard_mut(round_robin::next() % cluster.shards().len());
+        }
+
+        Ok(Command::Query(query.set_write(writes)))
     }
 
     /// Parse the `ORDER BY` clause of a `SELECT` statement.
@@ -818,9 +817,13 @@ impl QueryParser {
 
 impl QueryParser {
     fn explain(
+        &mut self,
         stmt: &ExplainStmt,
-        sharding_schema: &ShardingSchema,
+        ast: &Arc<pg_query::ParseResult>,
+        cluster: &Cluster,
+        shard: &mut Shard,
         bind: Option<&Bind>,
+        sharding_schema: &ShardingSchema,
     ) -> Result<Command, Error> {
         let query = stmt.query.as_ref().ok_or(Error::EmptyQuery)?;
         let node = query.node.as_ref().ok_or(Error::EmptyQuery)?;
@@ -835,7 +838,7 @@ impl QueryParser {
                 }
 
                 // Otherwise, route based on the SELECT statement
-                Self::select(select_stmt, sharding_schema, bind)
+                self.select(select_stmt, ast, cluster, shard, bind, sharding_schema)
             }
 
             NodeEnum::InsertStmt(ref insert_stmt) => {
