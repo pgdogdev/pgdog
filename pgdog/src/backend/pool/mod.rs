@@ -7,7 +7,7 @@ pub mod cluster;
 pub mod comms;
 pub mod config;
 pub mod connection;
-pub mod dns;
+pub mod dns_cache;
 pub mod error;
 pub mod guard;
 pub mod healthcheck;

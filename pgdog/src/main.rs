@@ -2,7 +2,7 @@
 
 use clap::Parser;
 use pgdog::backend::databases;
-use pgdog::backend::pool::dns::DnsCache;
+use pgdog::backend::pool::dns_cache::DnsCache;
 use pgdog::cli::{self, Commands};
 use pgdog::config;
 use pgdog::frontend::listener::Listener;

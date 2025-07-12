@@ -206,7 +206,7 @@ impl Default for Config {
             pooler_mode: PoolerMode::default(),
             read_only: false,
             prepared_statements_limit: usize::MAX,
-            dns_ttl: Duration::from_secs(60),
+            dns_ttl: Duration::from_millis(60_000),
         }
     }
 }

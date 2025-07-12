@@ -4,7 +4,7 @@ use std::net::SocketAddr;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use crate::backend::pool::dns::DnsCache;
+use crate::backend::pool::dns_cache::DnsCache;
 use crate::config::{Database, User};
 
 /// Server address.
