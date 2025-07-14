@@ -63,7 +63,7 @@ impl Address {
 
         socket_addrs
             .next()
-            .ok_or(Error::DnsLookupError(self.host.clone()))
+            .ok_or(Error::DnsResolutionFailed(self.host.clone()))
     }
 
     #[cfg(test)]

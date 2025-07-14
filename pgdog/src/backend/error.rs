@@ -90,8 +90,11 @@ pub enum Error {
     #[error("router error: {0}")]
     Router(String),
 
-    #[error("dns lookup for hostname {0} failed")]
-    DnsLookupError(String),
+    #[error("{0}")]
+    DnsLookupError(#[from] hickory_resolver::ResolveError),
+
+    #[error("could not resolve to any address for hostname {0}")]
+    DnsResolutionFailed(String),
 }
 
 impl Error {

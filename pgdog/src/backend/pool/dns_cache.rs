@@ -1,5 +1,5 @@
 use futures::future::join_all;
-use hickory_resolver::{name_server::TokioConnectionProvider, ResolveError, Resolver};
+use hickory_resolver::{name_server::TokioConnectionProvider, Resolver};
 use once_cell::sync::Lazy;
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
@@ -68,14 +68,12 @@ impl DnsCache {
     /// This spawns an infinite loop that runs until the process exits.
     /// For testing, use short TTLs and allow the test runtime to handle shutdown.
     pub fn start_refresh_loop(self: &Arc<Self>) {
-        let interval = Self::ttl();
-
-        let cache_ref = Arc::clone(self);
+        let cache = self.clone();
         tokio::spawn(async move {
+            let interval = Self::ttl();
             loop {
-                println!("-> I AM REFRESHING!!! {:?}", interval);
                 sleep(interval).await;
-                cache_ref.refresh_all_hostnames().await;
+                cache.refresh_all_hostnames().await;
             }
         });
     }
@@ -117,11 +115,9 @@ impl DnsCache {
                 let cache_ref = Arc::clone(self);
                 tokio::spawn(async move {
                     if let Err(e) = cache_ref.resolve_and_cache(&hostname).await {
-                        error!("failed to refresh DNS for {}: {}", hostname, e);
-                        println!("failed to refresh DNS for {}: {}", hostname, e);
+                        error!("failed to refresh DNS for \"{}\": {}", hostname, e);
                     } else {
-                        println!("refreshed hostname: {}", hostname);
-                        debug!("refreshed hostname: {}", hostname);
+                        debug!("refreshed hostname \"{}\"", hostname);
                     }
                 })
             })
@@ -132,16 +128,12 @@ impl DnsCache {
 
     /// Do the actual DNS resolution and cache the result.
     async fn resolve_and_cache(&self, hostname: &str) -> Result<IpAddr, Error> {
-        let response = self
-            .resolver
-            .lookup_ip(hostname)
-            .await
-            .map_err(|e: ResolveError| Error::DnsLookupError(format!("{}: {}", hostname, e)))?;
+        let response = self.resolver.lookup_ip(hostname).await?;
 
         let ip = response
             .iter()
             .next()
-            .ok_or_else(|| Error::DnsLookupError(format!("{}: no IPs found", hostname)))?;
+            .ok_or(Error::DnsResolutionFailed(hostname.to_string()))?;
 
         self.cache_ip(hostname, ip);
 
