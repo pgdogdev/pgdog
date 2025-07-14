@@ -111,6 +111,7 @@ impl Cache {
             });
             if let Some(ast) = ast {
                 guard.stats.hits += 1;
+                guard.queries.promote(query);
                 return Ok(ast);
             }
         }
