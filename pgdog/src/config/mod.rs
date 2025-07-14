@@ -340,6 +340,11 @@ pub struct General {
     pub tls_certificate: Option<PathBuf>,
     /// TLS private key.
     pub tls_private_key: Option<PathBuf>,
+    /// TLS verification mode (for connecting to servers)
+    #[serde(default = "General::default_tls_verify")]
+    pub tls_verify: TlsVerifyMode,
+    /// TLS CA certificate (for connecting to servers).
+    pub tls_server_ca_certificate: Option<PathBuf>,
     /// Shutdown timeout.
     #[serde(default = "General::default_shutdown_timeout")]
     pub shutdown_timeout: u64,
@@ -476,6 +481,8 @@ impl Default for General {
             read_write_split: ReadWriteSplit::default(),
             tls_certificate: None,
             tls_private_key: None,
+            tls_verify: Self::default_tls_verify(),
+            tls_server_ca_certificate: None,
             shutdown_timeout: Self::default_shutdown_timeout(),
             broadcast_address: None,
             broadcast_port: Self::broadcast_port(),
@@ -569,6 +576,10 @@ impl General {
         LoadBalancingStrategy::Random
     }
 
+    fn default_tls_verify() -> TlsVerifyMode {
+        TlsVerifyMode::Allow
+    }
+
     fn default_shutdown_timeout() -> u64 {
         60_000
     }
@@ -650,6 +661,16 @@ pub enum LoadBalancingStrategy {
     Random,
     RoundRobin,
     LeastActiveConnections,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Copy)]
+#[serde(rename_all = "snake_case")]
+pub enum TlsVerifyMode {
+    #[default]
+    None,
+    Allow,
+    Certificate,
+    Full,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Copy)]
