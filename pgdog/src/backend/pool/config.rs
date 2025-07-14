@@ -15,6 +15,8 @@ pub struct Config {
     pub max: usize,
     /// How long to wait for a connection before giving up.
     pub checkout_timeout: Duration, // ms
+    /// Interval duration of DNS cache refresh.
+    pub dns_ttl: Duration, // ms
     /// Close connections that have been idle for longer than this.
     pub idle_timeout: Duration, // ms
     /// How long to wait for connections to be created.
@@ -66,6 +68,11 @@ impl Config {
     /// Checkout timeout duration.
     pub fn checkout_timeout(&self) -> Duration {
         self.checkout_timeout
+    }
+
+    /// DNS TTL duration.
+    pub fn dns_ttl(&self) -> Duration {
+        self.dns_ttl
     }
 
     /// Idle timeout duration.
@@ -199,6 +206,7 @@ impl Default for Config {
             pooler_mode: PoolerMode::default(),
             read_only: false,
             prepared_statements_limit: usize::MAX,
+            dns_ttl: Duration::from_millis(60_000),
         }
     }
 }

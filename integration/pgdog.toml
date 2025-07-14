@@ -11,6 +11,7 @@ read_write_strategy = "aggressive"
 openmetrics_port = 9090
 openmetrics_namespace = "pgdog_"
 prepared_statements_limit = 500
+# dns_ttl = 15_000
 query_cache_limit = 500
 
 # ------------------------------------------------------------------------------
@@ -31,26 +32,26 @@ read_only = true
 
 [[databases]]
 name = "pgdog_sharded"
-host = "127.0.0.1"
+host = "localhost"
 database_name = "shard_0"
 shard = 0
 
 [[databases]]
 name = "pgdog_sharded"
-host = "127.0.0.1"
+host = "localhost"
 database_name = "shard_1"
 shard = 1
 
 [[databases]]
 name = "pgdog_sharded"
-host = "127.0.0.1"
+host = "localhost"
 database_name = "shard_0"
 shard = 0
 role = "replica"
 
 [[databases]]
 name = "pgdog_sharded"
-host = "127.0.0.1"
+host = "localhost"
 database_name = "shard_1"
 shard = 1
 role = "replica"

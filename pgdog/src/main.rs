@@ -2,6 +2,7 @@
 
 use clap::Parser;
 use pgdog::backend::databases;
+use pgdog::backend::pool::dns_cache::DnsCache;
 use pgdog::cli::{self, Commands};
 use pgdog::config;
 use pgdog::frontend::listener::Listener;
@@ -100,6 +101,11 @@ async fn pgdog() -> Result<(), Box<dyn std::error::Error>> {
 
     if let Some(openmetrics_port) = general.openmetrics_port {
         tokio::spawn(async move { stats::http_server::server(openmetrics_port).await });
+    }
+
+    let dns_cache_override_enabled = general.dns_ttl().is_some();
+    if dns_cache_override_enabled {
+        DnsCache::global().start_refresh_loop();
     }
 
     let stats_logger = stats::StatsLogger::new();
