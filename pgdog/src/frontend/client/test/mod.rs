@@ -365,7 +365,7 @@ async fn test_client_with_replicas() {
                 assert_eq!(state.stats.counts.bind_count, 13);
                 // strange behavior locally here, is `idle`/1 on CI, but 2 on local.
                 assert!(state.stats.counts.parse_count >= idle);
-                assert!(state.stats.counts.parse_count <= idle +1)
+                assert!(state.stats.counts.parse_count <= idle + 1);
                 assert_eq!(state.stats.counts.rollbacks, 0);
                 assert_eq!(state.stats.counts.healthchecks, idle);
                 pool_recv -= (healthcheck_len_recv * state.stats.counts.healthchecks) as isize;
