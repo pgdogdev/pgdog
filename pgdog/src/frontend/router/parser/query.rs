@@ -302,7 +302,7 @@ impl QueryParser {
 
             // SELECT statements.
             Some(NodeEnum::SelectStmt(ref stmt)) => {
-                self.select(stmt, &ast, cluster, &mut shard, bind, &sharding_schema)
+                self.select(stmt, &ast, cluster, &shard, bind, &sharding_schema)
             }
             // COPY statements.
             Some(NodeEnum::CopyStmt(ref stmt)) => Self::copy(stmt, cluster),
@@ -342,7 +342,7 @@ impl QueryParser {
             }
 
             Some(NodeEnum::ExplainStmt(ref stmt)) => {
-                self.explain(stmt, &ast, cluster, &mut shard, bind, &sharding_schema)
+                self.explain(stmt, &ast, cluster, &shard, bind, &sharding_schema)
             }
 
             // All others are not handled.
@@ -567,7 +567,7 @@ impl QueryParser {
         stmt: &SelectStmt,
         ast: &Arc<pg_query::ParseResult>,
         cluster: &Cluster,
-        shard: &mut Shard,
+        shard: &Shard,
         bind: Option<&Bind>,
         sharding_schema: &ShardingSchema,
     ) -> Result<Command, Error> {
@@ -823,7 +823,7 @@ impl QueryParser {
         stmt: &ExplainStmt,
         ast: &Arc<pg_query::ParseResult>,
         cluster: &Cluster,
-        shard: &mut Shard,
+        shard: &Shard,
         bind: Option<&Bind>,
         sharding_schema: &ShardingSchema,
     ) -> Result<Command, Error> {
