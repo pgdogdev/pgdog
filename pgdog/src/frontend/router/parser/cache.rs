@@ -2,17 +2,19 @@
 //!
 //! Shared between all clients and databases.
 
+use lru::LruCache;
 use once_cell::sync::Lazy;
 use pg_query::*;
-use std::{collections::HashMap, time::Duration};
+use std::time::Duration;
 
 use parking_lot::Mutex;
 use std::sync::Arc;
+use tracing::debug;
 
 use super::{Error, Route};
 use crate::frontend::buffer::BufferedQuery;
 
-static CACHE: Lazy<Cache> = Lazy::new(Cache::default);
+static CACHE: Lazy<Cache> = Lazy::new(Cache::new);
 
 /// AST cache statistics.
 #[derive(Default, Debug, Copy, Clone)]
@@ -57,19 +59,43 @@ impl CachedAst {
     }
 }
 
-#[derive(Default, Debug)]
+#[derive(Debug)]
 struct Inner {
-    queries: HashMap<String, CachedAst>,
+    queries: LruCache<String, CachedAst>,
     stats: Stats,
 }
 
 /// AST cache.
-#[derive(Default, Clone, Debug)]
+#[derive(Clone, Debug)]
 pub struct Cache {
     inner: Arc<Mutex<Inner>>,
 }
 
 impl Cache {
+    fn new() -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(Inner {
+                queries: LruCache::unbounded(),
+                stats: Stats::default(),
+            })),
+        }
+    }
+
+    /// Resize to capacity.
+    ///
+    /// Minimum capacity is 1.
+    pub fn resize(capacity: usize) {
+        let capacity = if capacity == 0 { 1 } else { capacity };
+
+        CACHE
+            .inner
+            .lock()
+            .queries
+            .resize(capacity.try_into().unwrap());
+
+        debug!("ast cache size set to {}", capacity);
+    }
+
     /// Parse a statement by either getting it from cache
     /// or using pg_query parser.
     ///
@@ -85,6 +111,7 @@ impl Cache {
             });
             if let Some(ast) = ast {
                 guard.stats.hits += 1;
+                guard.queries.promote(query);
                 return Ok(ast);
             }
         }
@@ -94,7 +121,7 @@ impl Cache {
         let ast = entry.ast.clone();
 
         let mut guard = self.inner.lock();
-        guard.queries.insert(query.to_owned(), entry);
+        guard.queries.put(query.to_owned(), entry);
         guard.stats.misses += 1;
 
         Ok(ast)
@@ -161,7 +188,7 @@ impl Cache {
             entry.direct += 1;
         }
 
-        guard.queries.insert(query.to_string(), entry);
+        guard.queries.put(query.to_string(), entry);
 
         Ok(())
     }
@@ -176,7 +203,7 @@ impl Cache {
     }
 
     /// Get a copy of all queries stored in the cache.
-    pub fn queries() -> HashMap<String, CachedAst> {
+    pub fn queries() -> LruCache<String, CachedAst> {
         Self::get().inner.lock().queries.clone()
     }
 
@@ -185,7 +212,6 @@ impl Cache {
         let cache = Self::get();
         let mut guard = cache.inner.lock();
         guard.queries.clear();
-        guard.queries.shrink_to_fit();
         guard.stats.hits = 0;
         guard.stats.misses = 0;
     }

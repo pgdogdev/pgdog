@@ -118,7 +118,7 @@ impl Connection {
     }
 
     /// Set the connection into replication mode.
-    pub(crate) fn replication_mode(
+    pub(crate) fn enter_replication_mode(
         &mut self,
         shard: Shard,
         replication_config: &ReplicationConfig,

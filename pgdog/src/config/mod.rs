@@ -361,6 +361,8 @@ pub struct General {
     /// Limit on the number of prepared statements in the server cache.
     #[serde(default = "General::prepared_statements_limit")]
     pub prepared_statements_limit: usize,
+    #[serde(default = "General::query_cache_limit")]
+    pub query_cache_limit: usize,
     /// Automatically add connection pools for user/database pairs we don't have.
     #[serde(default)]
     pub passthrough_auth: PassthoughAuth,
@@ -487,6 +489,7 @@ impl Default for General {
             openmetrics_namespace: None,
             prepared_statements: PreparedStatements::default(),
             prepared_statements_limit: Self::prepared_statements_limit(),
+            query_cache_limit: Self::query_cache_limit(),
             passthrough_auth: PassthoughAuth::default(),
             connect_timeout: Self::default_connect_timeout(),
             connect_attempt_delay: Self::default_connect_attempt_delay(),
@@ -606,6 +609,10 @@ impl General {
     }
 
     fn prepared_statements_limit() -> usize {
+        usize::MAX
+    }
+
+    fn query_cache_limit() -> usize {
         usize::MAX
     }
 
