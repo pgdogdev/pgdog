@@ -5,7 +5,7 @@
 use lru::LruCache;
 use once_cell::sync::Lazy;
 use pg_query::*;
-use std::time::Duration;
+use std::{collections::HashMap, time::Duration};
 
 use parking_lot::Mutex;
 use std::sync::Arc;
@@ -203,8 +203,14 @@ impl Cache {
     }
 
     /// Get a copy of all queries stored in the cache.
-    pub fn queries() -> LruCache<String, CachedAst> {
-        Self::get().inner.lock().queries.clone()
+    pub fn queries() -> HashMap<String, CachedAst> {
+        Self::get()
+            .inner
+            .lock()
+            .queries
+            .iter()
+            .map(|i| (i.0.clone(), i.1.clone()))
+            .collect()
     }
 
     /// Reset cache.
