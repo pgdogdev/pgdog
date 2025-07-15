@@ -1,9 +1,11 @@
 //! Server address.
+use std::net::{SocketAddr, ToSocketAddrs};
 
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use crate::config::{Database, User};
+use crate::backend::{pool::dns_cache::DnsCache, Error};
+use crate::config::{config, Database, User};
 
 /// Server address.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -48,9 +50,20 @@ impl Address {
         }
     }
 
-    /// Get address for `TCPStream`.
-    pub fn addr(&self) -> String {
-        format!("{}:{}", self.host, self.port)
+    pub async fn addr(&self) -> Result<SocketAddr, Error> {
+        let dns_cache_override_enabled = config().config.general.dns_ttl().is_some();
+
+        if dns_cache_override_enabled {
+            let ip = DnsCache::global().resolve(&self.host).await?;
+            return Ok(SocketAddr::new(ip, self.port));
+        }
+
+        let addr_str = format!("{}:{}", self.host, self.port);
+        let mut socket_addrs = addr_str.to_socket_addrs()?;
+
+        socket_addrs
+            .next()
+            .ok_or(Error::DnsResolutionFailed(self.host.clone()))
     }
 
     #[cfg(test)]

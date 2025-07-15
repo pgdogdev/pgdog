@@ -92,6 +92,12 @@ pub enum Error {
 
     #[error("TLS connection required but server does not support TLS")]
     TlsRequired,
+
+    #[error("{0}")]
+    DnsLookupError(#[from] hickory_resolver::ResolveError),
+
+    #[error("could not resolve to any address for hostname {0}")]
+    DnsResolutionFailed(String),
 }
 
 impl Error {

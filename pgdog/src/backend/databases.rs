@@ -11,6 +11,7 @@ use parking_lot::{Mutex, RawMutex};
 use tracing::{debug, info, warn};
 
 use crate::config::PoolerMode;
+use crate::frontend::router::parser::Cache;
 use crate::frontend::router::sharding::Mapping;
 use crate::frontend::PreparedStatements;
 use crate::{
@@ -68,6 +69,9 @@ pub fn reconnect() {
 pub fn init() {
     let config = config();
     replace_databases(from_config(&config), false);
+
+    // Resize query cache
+    Cache::resize(config.config.general.query_cache_limit);
 }
 
 /// Shutdown all databases.
@@ -87,6 +91,9 @@ pub fn reload() -> Result<(), Error> {
     PreparedStatements::global()
         .lock()
         .close_unused(new_config.config.general.prepared_statements_limit);
+
+    // Resize query cache
+    Cache::resize(new_config.config.general.query_cache_limit);
 
     Ok(())
 }

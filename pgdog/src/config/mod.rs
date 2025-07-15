@@ -366,6 +366,8 @@ pub struct General {
     /// Limit on the number of prepared statements in the server cache.
     #[serde(default = "General::prepared_statements_limit")]
     pub prepared_statements_limit: usize,
+    #[serde(default = "General::query_cache_limit")]
+    pub query_cache_limit: usize,
     /// Automatically add connection pools for user/database pairs we don't have.
     #[serde(default)]
     pub passthrough_auth: PassthoughAuth,
@@ -401,6 +403,9 @@ pub struct General {
     /// Disable cross-shard queries.
     #[serde(default)]
     pub cross_shard_disabled: bool,
+    /// How often to refresh DNS entries, in ms.
+    #[serde(default)]
+    pub dns_ttl: Option<u64>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -491,6 +496,7 @@ impl Default for General {
             openmetrics_namespace: None,
             prepared_statements: PreparedStatements::default(),
             prepared_statements_limit: Self::prepared_statements_limit(),
+            query_cache_limit: Self::query_cache_limit(),
             passthrough_auth: PassthoughAuth::default(),
             connect_timeout: Self::default_connect_timeout(),
             connect_attempt_delay: Self::default_connect_attempt_delay(),
@@ -503,6 +509,7 @@ impl Default for General {
             mirror_queue: Self::mirror_queue(),
             auth_type: AuthType::default(),
             cross_shard_disabled: bool::default(),
+            dns_ttl: None,
         }
     }
 }
@@ -564,6 +571,10 @@ impl General {
         Duration::from_millis(self.query_timeout)
     }
 
+    pub fn dns_ttl(&self) -> Option<Duration> {
+        self.dns_ttl.map(Duration::from_millis)
+    }
+
     pub(crate) fn client_idle_timeout(&self) -> Duration {
         Duration::from_millis(self.client_idle_timeout)
     }
@@ -609,6 +620,10 @@ impl General {
     }
 
     fn prepared_statements_limit() -> usize {
+        usize::MAX
+    }
+
+    fn query_cache_limit() -> usize {
         usize::MAX
     }
 
