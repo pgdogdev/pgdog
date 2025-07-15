@@ -42,3 +42,15 @@ toxi.log
 *.sqlite3
 perf.data
 perf.data.old
+
+# Integration test artifacts
+integration/.setup_complete
+integration/bin/
+integration/**/*.log
+integration/**/venv/
+integration/**/__pycache__/
+integration/**/*.pyc
+integration/**/node_modules/
+integration/**/.bundle/
+integration/**/go.sum
+integration/toxiproxy.log
