@@ -28,11 +28,11 @@ use crate::{
     stats::memory::MemoryUsage,
 };
 use crate::{
-    config::PoolerMode,
+    config::{config, PoolerMode, TlsVerifyMode},
     net::{
         messages::{DataRow, NoticeResponse},
         parameter::Parameters,
-        tls::connector,
+        tls::connector_with_verify_mode,
         CommandComplete, Stream,
     },
 };
@@ -82,25 +82,37 @@ impl Server {
         tweak(&stream)?;
 
         let mut stream = Stream::plain(stream);
+        
+        let cfg = config();
+        let tls_mode = cfg.config.general.tls_verify;
+        
+        // Only attempt TLS if not in None mode
+        if tls_mode != TlsVerifyMode::None {
+            // Request TLS.
+            stream.write_all(&Startup::tls().to_bytes()?).await?;
+            stream.flush().await?;
 
-        // Request TLS.
-        stream.write_all(&Startup::tls().to_bytes()?).await?;
-        stream.flush().await?;
+            let mut ssl = BytesMut::new();
+            ssl.put_u8(stream.read_u8().await?);
+            let ssl = SslReply::from_bytes(ssl.freeze())?;
 
-        let mut ssl = BytesMut::new();
-        ssl.put_u8(stream.read_u8().await?);
-        let ssl = SslReply::from_bytes(ssl.freeze())?;
+            if ssl == SslReply::Yes {
+                let connector = connector_with_verify_mode(
+                    tls_mode,
+                    cfg.config.general.tls_server_ca_certificate.as_ref(),
+                )?;
+                let plain = stream.take()?;
 
-        if ssl == SslReply::Yes {
-            let connector = connector()?;
-            let plain = stream.take()?;
+                let server_name = ServerName::try_from(addr.host.clone())?;
 
-            let server_name = ServerName::try_from(addr.host.clone())?;
+                let cipher =
+                    tokio_rustls::TlsStream::Client(connector.connect(server_name, plain).await?);
 
-            let cipher =
-                tokio_rustls::TlsStream::Client(connector.connect(server_name, plain).await?);
-
-            stream = Stream::tls(cipher);
+                stream = Stream::tls(cipher);
+            } else if tls_mode == TlsVerifyMode::Full || tls_mode == TlsVerifyMode::Certificate {
+                // If we require TLS but server doesn't support it, fail
+                return Err(Error::TlsRequired);
+            }
         }
 
         stream
