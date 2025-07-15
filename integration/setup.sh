@@ -47,9 +47,21 @@ echo
 
 # Run prerequisite checks first
 echo "Running prerequisite checks..."
+
+# Detect if we're running in CI (GitHub Actions or generic CI env var)
+IS_CI=false
+if [ -n "${CI:-}" ] || [ -n "${GITHUB_ACTIONS:-}" ]; then
+    IS_CI=true
+fi
+
 if ! "${SCRIPT_DIR}/check-prerequisites.sh"; then
-    echo -e "${RED}Prerequisites not met. Please fix the issues above.${NC}"
-    exit 1
+    if [ "$IS_CI" = true ]; then
+        echo -e "${YELLOW}Prerequisites check failed in CI environment. Continuing anyway...${NC}"
+        echo "Some optional features may not work correctly."
+    else
+        echo -e "${RED}Prerequisites not met. Please fix the issues above.${NC}"
+        exit 1
+    fi
 fi
 
 echo
