@@ -233,7 +233,8 @@ pub fn connector_with_verify_mode(
         roots.add(ca_cert)?;
     } else {
         // Load system native certificates
-        for cert in rustls_native_certs::load_native_certs().expect("load native certs") {
+        for cert in rustls_native_certs::load_native_certs()
+            .expect("Failed to load system native certificates. Ensure that your system has valid root certificates installed and that the application has sufficient permissions to access them.") {
             roots.add(cert)?;
         }
     }
