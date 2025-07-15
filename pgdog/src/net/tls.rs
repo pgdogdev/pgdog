@@ -229,10 +229,24 @@ pub fn connector_with_verify_mode(
 
     // If a custom CA certificate is provided, load it
     if let Some(ca_path) = ca_cert_path {
-        let pem_data = std::fs::read(ca_path)?;
-        let parsed_certs = rustls::RootCertStore::add_parsable_certificates(&pem_data);
-        if parsed_certs == 0 {
-            return Err(Error::new("No valid certificates found in CA file"));
+        let certs = CertificateDer::pem_file_iter(ca_path)
+            .map_err(|e| Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e)))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e)))?;
+
+        if certs.is_empty() {
+            return Err(Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "No valid certificates found in CA file",
+            )));
+        }
+
+        let (added, _ignored) = roots.add_parsable_certificates(certs);
+        if added == 0 {
+            return Err(Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "No valid certificates could be added from CA file",
+            )));
         }
     } else {
         // Load system native certificates
