@@ -64,7 +64,7 @@ wait_for_port() {
 run_pgdog() {
     local config_file="${1:-integration/pgdog.toml}"
     local users_file="${2:-integration/users.toml}"
-    local log_file="${SCRIPT_DIR:-${COMMON_DIR}}/pgdog.log"
+    local log_file="${SCRIPT_DIR}/pgdog.log"
     
     # Ensure any existing PgDog is stopped
     stop_pgdog_quiet
