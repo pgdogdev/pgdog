@@ -82,10 +82,10 @@ impl Server {
         tweak(&stream)?;
 
         let mut stream = Stream::plain(stream);
-        
+
         let cfg = config();
         let tls_mode = cfg.config.general.tls_verify;
-        
+
         // Only attempt TLS if not in None mode
         if tls_mode != TlsVerifyMode::None {
             // Request TLS.

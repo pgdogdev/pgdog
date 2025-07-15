@@ -2,8 +2,8 @@
 
 use std::{path::PathBuf, sync::Arc};
 
-use once_cell::sync::OnceCell;
 use crate::config::TlsVerifyMode;
+use once_cell::sync::OnceCell;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use tokio_rustls::rustls::{
     self,
@@ -148,7 +148,7 @@ mod tests {
     #[tokio::test]
     async fn test_connector_with_none_mode() {
         crate::logger();
-        
+
         // Test that connector with None mode is created correctly
         // This should create a connector that won't be used (connection should be plain TCP)
         let result = connector_with_verify_mode(TlsVerifyMode::None, None);
@@ -158,11 +158,11 @@ mod tests {
     #[tokio::test]
     async fn test_connector_with_allow_mode() {
         crate::logger();
-        
+
         // Test that connector with Allow mode accepts any certificate
         let result = connector_with_verify_mode(TlsVerifyMode::Allow, None);
         assert!(result.is_ok(), "Should create connector for Allow mode");
-        
+
         // The connector should use our custom verifier that accepts any cert
         // We can't easily test the internal behavior here, but we ensure it's created
     }
@@ -170,16 +170,19 @@ mod tests {
     #[tokio::test]
     async fn test_connector_with_certificate_mode() {
         crate::logger();
-        
+
         // Test that connector with Certificate mode validates certs but not hostname
         let result = connector_with_verify_mode(TlsVerifyMode::Certificate, None);
-        assert!(result.is_ok(), "Should create connector for Certificate mode");
+        assert!(
+            result.is_ok(),
+            "Should create connector for Certificate mode"
+        );
     }
 
     #[tokio::test]
     async fn test_connector_with_full_mode() {
         crate::logger();
-        
+
         // Test that connector with Full mode validates both cert and hostname
         let result = connector_with_verify_mode(TlsVerifyMode::Full, None);
         assert!(result.is_ok(), "Should create connector for Full mode");
@@ -188,12 +191,12 @@ mod tests {
     #[tokio::test]
     async fn test_connector_with_custom_ca() {
         crate::logger();
-        
+
         // For now, we'll test with a non-existent CA file path
         // In a real test, we'd create a proper test CA certificate
         let ca_path = PathBuf::from("/tmp/test_ca.pem");
         let result = connector_with_verify_mode(TlsVerifyMode::Full, Some(&ca_path));
-        
+
         // This should fail because the file doesn't exist
         assert!(result.is_err(), "Should fail with non-existent CA file");
     }
@@ -201,17 +204,17 @@ mod tests {
     #[tokio::test]
     async fn test_connector_mode_differences() {
         crate::logger();
-        
+
         // Test that different modes produce different configurations
         let allow = connector_with_verify_mode(TlsVerifyMode::Allow, None);
         let certificate = connector_with_verify_mode(TlsVerifyMode::Certificate, None);
         let full = connector_with_verify_mode(TlsVerifyMode::Full, None);
-        
+
         // All should succeed
         assert!(allow.is_ok());
         assert!(certificate.is_ok());
         assert!(full.is_ok());
-        
+
         // In the real implementation, these would have different verifiers
     }
 }
@@ -223,7 +226,7 @@ pub fn connector_with_verify_mode(
 ) -> Result<TlsConnector, Error> {
     // Load root certificates
     let mut roots = rustls::RootCertStore::empty();
-    
+
     // If a custom CA certificate is provided, load it
     if let Some(ca_path) = ca_cert_path {
         let ca_cert = CertificateDer::from_pem_file(ca_path)?;
@@ -234,7 +237,7 @@ pub fn connector_with_verify_mode(
             roots.add(cert)?;
         }
     }
-    
+
     // Create the appropriate config based on the verification mode
     let config = match mode {
         TlsVerifyMode::None => {
@@ -250,15 +253,15 @@ pub fn connector_with_verify_mode(
                 .build()
                 .unwrap();
             let verifier = CertificateVerifyer { verifier };
-            
+
             let mut config = ClientConfig::builder()
                 .with_root_certificates(roots)
                 .with_no_client_auth();
-            
+
             config
                 .dangerous()
                 .set_certificate_verifier(Arc::new(verifier));
-                
+
             config
         }
         TlsVerifyMode::Certificate => {
@@ -267,11 +270,11 @@ pub fn connector_with_verify_mode(
             let mut config = ClientConfig::builder()
                 .with_root_certificates(roots)
                 .with_no_client_auth();
-                
+
             config
                 .dangerous()
                 .set_certificate_verifier(Arc::new(verifier));
-                
+
             config
         }
         TlsVerifyMode::Full => {
@@ -281,7 +284,7 @@ pub fn connector_with_verify_mode(
                 .with_no_client_auth()
         }
     };
-    
+
     Ok(TlsConnector::from(Arc::new(config)))
 }
 
@@ -297,9 +300,7 @@ impl NoHostnameVerifier {
         let webpki_verifier = rustls::client::WebPkiServerVerifier::builder(roots.into())
             .build()
             .unwrap();
-        Self { 
-            webpki_verifier,
-        }
+        Self { webpki_verifier }
     }
 }
 
@@ -314,7 +315,7 @@ impl ServerCertVerifier for NoHostnameVerifier {
     ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
         // Use a dummy server name for verification - we only care about cert validity
         let dummy_name = rustls::pki_types::ServerName::try_from("example.com").unwrap();
-        
+
         // Try to verify with the dummy name
         match self.webpki_verifier.verify_server_cert(
             end_entity,
@@ -331,25 +332,27 @@ impl ServerCertVerifier for NoHostnameVerifier {
             Err(e) => Err(e),
         }
     }
-    
+
     fn verify_tls12_signature(
         &self,
         message: &[u8],
         cert: &CertificateDer<'_>,
         dss: &rustls::DigitallySignedStruct,
     ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        self.webpki_verifier.verify_tls12_signature(message, cert, dss)
+        self.webpki_verifier
+            .verify_tls12_signature(message, cert, dss)
     }
-    
+
     fn verify_tls13_signature(
         &self,
         message: &[u8],
         cert: &CertificateDer<'_>,
         dss: &rustls::DigitallySignedStruct,
     ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        self.webpki_verifier.verify_tls13_signature(message, cert, dss)
+        self.webpki_verifier
+            .verify_tls13_signature(message, cert, dss)
     }
-    
+
     fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
         self.webpki_verifier.supported_verify_schemes()
     }
