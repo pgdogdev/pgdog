@@ -15,7 +15,7 @@ echo "=== PgDog Integration Test Cleanup ==="
 echo
 
 # Check if we should proceed
-if [ "${FORCE_CLEANUP:-0}" != "1" ]; then
+if [ "${FORCE_CLEANUP:-0}" != "1" ] && [ "${CLEANUP:-0}" != "1" ]; then
     echo -e "${YELLOW}Warning: This will remove all test databases and users!${NC}"
     read -p "Are you sure you want to continue? (y/N) " -n 1 -r
     echo
