@@ -90,6 +90,9 @@ pub enum Error {
     #[error("router error: {0}")]
     Router(String),
 
+    #[error("TLS connection required but server does not support TLS")]
+    TlsRequired,
+
     #[error("{0}")]
     DnsLookupError(#[from] hickory_resolver::ResolveError),
 

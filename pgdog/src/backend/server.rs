@@ -28,11 +28,11 @@ use crate::{
     stats::memory::MemoryUsage,
 };
 use crate::{
-    config::PoolerMode,
+    config::{config, PoolerMode, TlsVerifyMode},
     net::{
         messages::{DataRow, NoticeResponse},
         parameter::Parameters,
-        tls::connector,
+        tls::connector_with_verify_mode,
         CommandComplete, Stream,
     },
 };
@@ -83,24 +83,71 @@ impl Server {
 
         let mut stream = Stream::plain(stream);
 
-        // Request TLS.
-        stream.write_all(&Startup::tls().to_bytes()?).await?;
-        stream.flush().await?;
+        let cfg = config();
+        let tls_mode = cfg.config.general.tls_verify;
 
-        let mut ssl = BytesMut::new();
-        ssl.put_u8(stream.read_u8().await?);
-        let ssl = SslReply::from_bytes(ssl.freeze())?;
+        // Only attempt TLS if not in Disabled mode
+        if tls_mode != TlsVerifyMode::Disabled {
+            debug!(
+                "requesting TLS connection to {} with verify mode: {:?}",
+                addr.host, tls_mode
+            );
 
-        if ssl == SslReply::Yes {
-            let connector = connector()?;
-            let plain = stream.take()?;
+            // Request TLS.
+            stream.write_all(&Startup::tls().to_bytes()?).await?;
+            stream.flush().await?;
 
-            let server_name = ServerName::try_from(addr.host.clone())?;
+            let mut ssl = BytesMut::new();
+            ssl.put_u8(stream.read_u8().await?);
+            let ssl = SslReply::from_bytes(ssl.freeze())?;
 
-            let cipher =
-                tokio_rustls::TlsStream::Client(connector.connect(server_name, plain).await?);
+            if ssl == SslReply::Yes {
+                debug!(
+                    "server {} supports TLS, initiating TLS handshake",
+                    addr.host
+                );
 
-            stream = Stream::tls(cipher);
+                let connector = connector_with_verify_mode(
+                    tls_mode,
+                    cfg.config.general.tls_server_ca_certificate.as_ref(),
+                )?;
+                let plain = stream.take()?;
+
+                let server_name = ServerName::try_from(addr.host.clone())?;
+                debug!("connecting with TLS to server name: {:?}", server_name);
+
+                match connector.connect(server_name.clone(), plain).await {
+                    Ok(tls_stream) => {
+                        debug!("TLS handshake successful with {}", addr.host);
+                        let cipher = tokio_rustls::TlsStream::Client(tls_stream);
+                        stream = Stream::tls(cipher);
+                    }
+                    Err(e) => {
+                        error!("TLS handshake failed with {}: {:?}", addr.host, e);
+                        return Err(Error::Io(std::io::Error::new(
+                            std::io::ErrorKind::ConnectionRefused,
+                            format!("TLS handshake failed: {}", e),
+                        )));
+                    }
+                }
+            } else if tls_mode == TlsVerifyMode::VerifyFull || tls_mode == TlsVerifyMode::VerifyCa {
+                // If we require TLS but server doesn't support it, fail
+                error!(
+                    "server {} does not support TLS but it is required",
+                    addr.host
+                );
+                return Err(Error::TlsRequired);
+            } else {
+                warn!(
+                    "server {} does not support TLS, continuing without encryption",
+                    addr.host
+                );
+            }
+        } else {
+            debug!(
+                "TLS verification mode is None, skipping TLS entirely for {}",
+                addr.host
+            );
         }
 
         stream
