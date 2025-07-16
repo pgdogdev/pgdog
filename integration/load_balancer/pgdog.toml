@@ -17,6 +17,10 @@ load_balancing_strategy = "round_robin"
 auth_type = "trust"
 read_write_split = "exclude_primary"
 
+[replica_lag]
+# check_interval = 100
+# max_age = 50
+
 [admin]
 user = "pgdog"
 password = "pgdog"
@@ -38,7 +42,6 @@ name = "postgres"
 host = "localhost"
 role = "replica"
 port = 45002
-
 
 
 [tcp]
