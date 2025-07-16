@@ -9,7 +9,6 @@ use tokio_rustls::rustls::{
     self,
     client::danger::{ServerCertVerified, ServerCertVerifier},
     pki_types::pem::PemObject,
-    server::danger::ClientCertVerifier,
     ClientConfig,
 };
 use tokio_rustls::{TlsAcceptor, TlsConnector};
@@ -99,11 +98,9 @@ pub fn load() -> Result<(), Error> {
 }
 
 #[derive(Debug)]
-struct CertificateVerifyer {
-    verifier: Arc<dyn ClientCertVerifier>,
-}
+struct AllowAllVerifier;
 
-impl ServerCertVerifier for CertificateVerifyer {
+impl ServerCertVerifier for AllowAllVerifier {
     fn verify_server_cert(
         &self,
         end_entity: &CertificateDer<'_>,
@@ -122,24 +119,37 @@ impl ServerCertVerifier for CertificateVerifyer {
 
     fn verify_tls12_signature(
         &self,
-        message: &[u8],
-        cert: &CertificateDer<'_>,
-        dss: &rustls::DigitallySignedStruct,
+        _message: &[u8],
+        _cert: &CertificateDer<'_>,
+        _dss: &rustls::DigitallySignedStruct,
     ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        self.verifier.verify_tls12_signature(message, cert, dss)
+        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
     }
 
     fn verify_tls13_signature(
         &self,
-        message: &[u8],
-        cert: &CertificateDer<'_>,
-        dss: &rustls::DigitallySignedStruct,
+        _message: &[u8],
+        _cert: &CertificateDer<'_>,
+        _dss: &rustls::DigitallySignedStruct,
     ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        self.verifier.verify_tls13_signature(message, cert, dss)
+        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
     }
 
     fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
-        self.verifier.supported_verify_schemes()
+        vec![
+            rustls::SignatureScheme::RSA_PKCS1_SHA1,
+            rustls::SignatureScheme::RSA_PKCS1_SHA256,
+            rustls::SignatureScheme::RSA_PKCS1_SHA384,
+            rustls::SignatureScheme::RSA_PKCS1_SHA512,
+            rustls::SignatureScheme::RSA_PSS_SHA256,
+            rustls::SignatureScheme::RSA_PSS_SHA384,
+            rustls::SignatureScheme::RSA_PSS_SHA512,
+            rustls::SignatureScheme::ECDSA_NISTP256_SHA256,
+            rustls::SignatureScheme::ECDSA_NISTP384_SHA384,
+            rustls::SignatureScheme::ECDSA_NISTP521_SHA512,
+            rustls::SignatureScheme::ED25519,
+            rustls::SignatureScheme::ED448,
+        ]
     }
 }
 
@@ -294,21 +304,13 @@ pub fn connector_with_verify_mode(
         }
         TlsVerifyMode::Allow => {
             info!("TLS verification mode: Allow - accepting any certificate");
-            // Use our custom verifier that accepts any certificate
-            let verifier = rustls::server::WebPkiClientVerifier::builder(roots.clone().into())
-                .build()
-                .unwrap();
-            let verifier = CertificateVerifyer { verifier };
+            // Use a custom verifier that accepts any certificate without needing root certificates
+            let verifier = AllowAllVerifier;
 
-            let mut config = ClientConfig::builder()
-                .with_root_certificates(roots)
-                .with_no_client_auth();
-
-            config
+            ClientConfig::builder()
                 .dangerous()
-                .set_certificate_verifier(Arc::new(verifier));
-
-            config
+                .with_custom_certificate_verifier(Arc::new(verifier))
+                .with_no_client_auth()
         }
         TlsVerifyMode::Certificate => {
             info!("TLS verification mode: Certificate - verifying certificate validity without hostname");
