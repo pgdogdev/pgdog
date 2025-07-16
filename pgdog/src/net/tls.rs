@@ -12,7 +12,7 @@ use tokio_rustls::rustls::{
     ClientConfig,
 };
 use tokio_rustls::{TlsAcceptor, TlsConnector};
-use tracing::{info, warn};
+use tracing::{info, debug};
 
 use crate::config::config;
 
@@ -103,17 +103,14 @@ struct AllowAllVerifier;
 impl ServerCertVerifier for AllowAllVerifier {
     fn verify_server_cert(
         &self,
-        end_entity: &CertificateDer<'_>,
-        intermediates: &[CertificateDer<'_>],
-        server_name: &rustls::pki_types::ServerName<'_>,
+        _end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _server_name: &rustls::pki_types::ServerName<'_>,
         _ocsp_response: &[u8],
         _now: rustls::pki_types::UnixTime,
     ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
         // Accept self-signed certs or certs signed by any CA.
         // Doesn't protect against MITM attacks.
-        info!("Certificate verification (Allow mode): accepting certificate for {:?} without validation", server_name);
-        info!("Certificate subject: {:?}", end_entity);
-        info!("Intermediate certificates: {}", intermediates.len());
         Ok(ServerCertVerified::assertion())
     }
 
@@ -153,85 +150,6 @@ impl ServerCertVerifier for AllowAllVerifier {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::config::TlsVerifyMode;
-
-    #[tokio::test]
-    async fn test_connector_with_none_mode() {
-        crate::logger();
-
-        // Test that connector with None mode is created correctly
-        // This should create a connector that won't be used (connection should be plain TCP)
-        let result = connector_with_verify_mode(TlsVerifyMode::None, None);
-        assert!(result.is_ok(), "Should create connector even for None mode");
-    }
-
-    #[tokio::test]
-    async fn test_connector_with_allow_mode() {
-        crate::logger();
-
-        // Test that connector with Allow mode accepts any certificate
-        let result = connector_with_verify_mode(TlsVerifyMode::Allow, None);
-        assert!(result.is_ok(), "Should create connector for Allow mode");
-
-        // The connector should use our custom verifier that accepts any cert
-        // We can't easily test the internal behavior here, but we ensure it's created
-    }
-
-    #[tokio::test]
-    async fn test_connector_with_certificate_mode() {
-        crate::logger();
-
-        // Test that connector with Certificate mode validates certs but not hostname
-        let result = connector_with_verify_mode(TlsVerifyMode::Certificate, None);
-        assert!(
-            result.is_ok(),
-            "Should create connector for Certificate mode"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_connector_with_full_mode() {
-        crate::logger();
-
-        // Test that connector with Full mode validates both cert and hostname
-        let result = connector_with_verify_mode(TlsVerifyMode::Full, None);
-        assert!(result.is_ok(), "Should create connector for Full mode");
-    }
-
-    #[tokio::test]
-    async fn test_connector_with_custom_ca() {
-        crate::logger();
-
-        // For now, we'll test with a non-existent CA file path
-        // In a real test, we'd create a proper test CA certificate
-        let ca_path = PathBuf::from("/tmp/test_ca.pem");
-        let result = connector_with_verify_mode(TlsVerifyMode::Full, Some(&ca_path));
-
-        // This should fail because the file doesn't exist
-        assert!(result.is_err(), "Should fail with non-existent CA file");
-    }
-
-    #[tokio::test]
-    async fn test_connector_mode_differences() {
-        crate::logger();
-
-        // Test that different modes produce different configurations
-        let allow = connector_with_verify_mode(TlsVerifyMode::Allow, None);
-        let certificate = connector_with_verify_mode(TlsVerifyMode::Certificate, None);
-        let full = connector_with_verify_mode(TlsVerifyMode::Full, None);
-
-        // All should succeed
-        assert!(allow.is_ok());
-        assert!(certificate.is_ok());
-        assert!(full.is_ok());
-
-        // In the real implementation, these would have different verifiers
-    }
-}
-
 /// Create a TLS connector with the specified verification mode.
 pub fn connector_with_verify_mode(
     mode: TlsVerifyMode,
@@ -267,7 +185,7 @@ pub fn connector_with_verify_mode(
         }
 
         let (added, _ignored) = roots.add_parsable_certificates(certs);
-        info!("Added {} CA certificates from file", added);
+        debug!("Added {} CA certificates from file", added);
 
         if added == 0 {
             return Err(Error::Io(std::io::Error::new(
@@ -275,46 +193,40 @@ pub fn connector_with_verify_mode(
                 "No valid certificates could be added from CA file",
             )));
         }
-    } else if mode == TlsVerifyMode::Certificate || mode == TlsVerifyMode::Full {
+    } else if mode == TlsVerifyMode::VerifyCa || mode == TlsVerifyMode::VerifyFull {
         // For Certificate and Full modes, we need CA certificates
         // Load system native certificates as fallback
-        info!("No custom CA certificate provided, loading system certificates");
+        debug!("no custom CA certificate provided, loading system certificates");
         let result = rustls_native_certs::load_native_certs();
         for cert in result.certs {
             roots.add(cert)?;
         }
         if !result.errors.is_empty() {
-            warn!(
-                "Some system certificates could not be loaded: {:?}",
+            debug!(
+                "some system certificates could not be loaded: {:?}",
                 result.errors
             );
         }
-        info!("Loaded {} system CA certificates", roots.len());
+        debug!("loaded {} system CA certificates", roots.len());
     }
 
     // Create the appropriate config based on the verification mode
     let config = match mode {
-        TlsVerifyMode::None => {
-            info!("TLS verification mode: None - TLS will not be used");
-            // For None mode, we still create a connector but it won't be used
+        TlsVerifyMode::Disabled => {
+            // For Disabled mode, we still create a connector but it won't be used
             // The server connection logic should skip TLS entirely
             ClientConfig::builder()
                 .with_root_certificates(roots)
                 .with_no_client_auth()
         }
-        TlsVerifyMode::Allow => {
-            info!("TLS verification mode: Allow - accepting any certificate");
-            // Use a custom verifier that accepts any certificate without needing root certificates
+        TlsVerifyMode::Prefer => {
             let verifier = AllowAllVerifier;
-
             ClientConfig::builder()
                 .dangerous()
                 .with_custom_certificate_verifier(Arc::new(verifier))
                 .with_no_client_auth()
         }
-        TlsVerifyMode::Certificate => {
-            info!("TLS verification mode: Certificate - verifying certificate validity without hostname");
-            // Verify certificate validity but not hostname
+        TlsVerifyMode::VerifyCa => {
             let verifier = NoHostnameVerifier::new(roots.clone());
             let mut config = ClientConfig::builder()
                 .with_root_certificates(roots)
@@ -326,8 +238,7 @@ pub fn connector_with_verify_mode(
 
             config
         }
-        TlsVerifyMode::Full => {
-            info!("TLS verification mode: Full - verifying certificate and hostname");
+        TlsVerifyMode::VerifyFull => {
             ClientConfig::builder()
                 .with_root_certificates(roots)
                 .with_no_client_auth()
@@ -416,5 +327,51 @@ impl ServerCertVerifier for NoHostnameVerifier {
 
     fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
         self.webpki_verifier.supported_verify_schemes()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::TlsVerifyMode;
+
+    #[tokio::test]
+    async fn test_connector_with_verify_mode() {
+        crate::logger();
+
+        let prefer = connector_with_verify_mode(TlsVerifyMode::Prefer, None);
+        let certificate = connector_with_verify_mode(TlsVerifyMode::VerifyCa, None);
+        let full = connector_with_verify_mode(TlsVerifyMode::VerifyFull, None);
+
+        // All should succeed
+        assert!(prefer.is_ok());
+        assert!(certificate.is_ok());
+        assert!(full.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_connector_with_verify_mode_missing_ca_file() {
+        crate::logger();
+
+        let bad_ca_path = PathBuf::from("/tmp/test_ca.pem");
+        let result = connector_with_verify_mode(TlsVerifyMode::VerifyFull, Some(&bad_ca_path));
+
+        // This should fail because the file doesn't exist
+        assert!(result.is_err(), "Should fail with non-existent cert file");
+    }
+
+    #[tokio::test]
+    async fn test_connector_with_verify_mode_good_ca_file() {
+        crate::logger();
+
+        let good_ca_path = PathBuf::from("tests/tls/cert.pem");
+
+        info!("Using test CA file: {}", good_ca_path.display());
+        // check that the file exists
+        assert!(good_ca_path.exists(), "Test CA file should exist");
+
+        let result = connector_with_verify_mode(TlsVerifyMode::VerifyFull, Some(&good_ca_path));
+
+        assert!(result.is_ok(), "Should succeed with valid cert file");
     }
 }

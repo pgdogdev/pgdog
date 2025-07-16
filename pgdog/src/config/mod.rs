@@ -588,7 +588,7 @@ impl General {
     }
 
     fn default_tls_verify() -> TlsVerifyMode {
-        TlsVerifyMode::Allow
+        TlsVerifyMode::Prefer
     }
 
     fn default_shutdown_timeout() -> u64 {
@@ -682,10 +682,10 @@ pub enum LoadBalancingStrategy {
 #[serde(rename_all = "snake_case")]
 pub enum TlsVerifyMode {
     #[default]
-    None,
-    Allow,
-    Certificate,
-    Full,
+    Disabled,
+    Prefer,
+    VerifyCa,
+    VerifyFull,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Copy)]

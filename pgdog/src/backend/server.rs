@@ -86,10 +86,10 @@ impl Server {
         let cfg = config();
         let tls_mode = cfg.config.general.tls_verify;
 
-        // Only attempt TLS if not in None mode
-        if tls_mode != TlsVerifyMode::None {
-            info!(
-                "Requesting TLS connection to {} with verify mode: {:?}",
+        // Only attempt TLS if not in Disabled mode
+        if tls_mode != TlsVerifyMode::Disabled {
+            debug!(
+                "requesting TLS connection to {} with verify mode: {:?}",
                 addr.host, tls_mode
             );
 
@@ -102,8 +102,8 @@ impl Server {
             let ssl = SslReply::from_bytes(ssl.freeze())?;
 
             if ssl == SslReply::Yes {
-                info!(
-                    "Server {} supports TLS, initiating TLS handshake",
+                debug!(
+                    "server {} supports TLS, initiating TLS handshake",
                     addr.host
                 );
 
@@ -114,11 +114,11 @@ impl Server {
                 let plain = stream.take()?;
 
                 let server_name = ServerName::try_from(addr.host.clone())?;
-                info!("Connecting with TLS to server name: {:?}", server_name);
+                debug!("connecting with TLS to server name: {:?}", server_name);
 
                 match connector.connect(server_name.clone(), plain).await {
                     Ok(tls_stream) => {
-                        info!("TLS handshake successful with {}", addr.host);
+                        debug!("TLS handshake successful with {}", addr.host);
                         let cipher = tokio_rustls::TlsStream::Client(tls_stream);
                         stream = Stream::tls(cipher);
                     }
@@ -130,21 +130,21 @@ impl Server {
                         )));
                     }
                 }
-            } else if tls_mode == TlsVerifyMode::Full || tls_mode == TlsVerifyMode::Certificate {
+            } else if tls_mode == TlsVerifyMode::VerifyFull || tls_mode == TlsVerifyMode::VerifyCa {
                 // If we require TLS but server doesn't support it, fail
                 error!(
-                    "Server {} does not support TLS but it is required",
+                    "server {} does not support TLS but it is required",
                     addr.host
                 );
                 return Err(Error::TlsRequired);
             } else {
-                info!(
-                    "Server {} does not support TLS, continuing without encryption",
+                warn!(
+                    "server {} does not support TLS, continuing without encryption",
                     addr.host
                 );
             }
         } else {
-            info!(
+            debug!(
                 "TLS verification mode is None, skipping TLS entirely for {}",
                 addr.host
             );
