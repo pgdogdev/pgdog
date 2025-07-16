@@ -6,7 +6,7 @@ source ${SCRIPT_DIR}/../common.sh
 run_pgdog
 wait_for_pgdog
 
-active_venv
+activate_venv
 
 pushd ${SCRIPT_DIR}
 python shutdown.py pgdog
