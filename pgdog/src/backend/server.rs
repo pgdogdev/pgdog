@@ -89,8 +89,8 @@ impl Server {
         // Only attempt TLS if not in Disabled mode
         if tls_mode != TlsVerifyMode::Disabled {
             debug!(
-                "requesting TLS connection to {} with verify mode: {:?}",
-                addr.host, tls_mode
+                "requesting TLS connection with verify mode: {:?} [{}]",
+                tls_mode, addr,
             );
 
             // Request TLS.
@@ -102,10 +102,7 @@ impl Server {
             let ssl = SslReply::from_bytes(ssl.freeze())?;
 
             if ssl == SslReply::Yes {
-                debug!(
-                    "server {} supports TLS, initiating TLS handshake",
-                    addr.host
-                );
+                debug!("server supports TLS, initiating TLS handshake [{}]", addr);
 
                 let connector = connector_with_verify_mode(
                     tls_mode,
@@ -123,7 +120,7 @@ impl Server {
                         stream = Stream::tls(cipher);
                     }
                     Err(e) => {
-                        error!("TLS handshake failed with {}: {:?}", addr.host, e);
+                        error!("TLS handshake failed with {:?} [{}]", e, addr);
                         return Err(Error::Io(std::io::Error::new(
                             std::io::ErrorKind::ConnectionRefused,
                             format!("TLS handshake failed: {}", e),
@@ -132,21 +129,18 @@ impl Server {
                 }
             } else if tls_mode == TlsVerifyMode::VerifyFull || tls_mode == TlsVerifyMode::VerifyCa {
                 // If we require TLS but server doesn't support it, fail
-                error!(
-                    "server {} does not support TLS but it is required",
-                    addr.host
-                );
+                error!("server does not support TLS but it is required [{}]", addr,);
                 return Err(Error::TlsRequired);
             } else {
                 warn!(
-                    "server {} does not support TLS, continuing without encryption",
-                    addr.host
+                    "server does not support TLS, continuing without encryption [{}]",
+                    addr
                 );
             }
         } else {
             debug!(
-                "TLS verification mode is None, skipping TLS entirely for {}",
-                addr.host
+                "TLS verification mode is None, skipping TLS entirely [{}]",
+                addr
             );
         }
 
