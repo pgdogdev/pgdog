@@ -13,7 +13,7 @@ use tokio_rustls::rustls::{
     ClientConfig,
 };
 use tokio_rustls::{TlsAcceptor, TlsConnector};
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::config::config;
 
@@ -106,14 +106,17 @@ struct CertificateVerifyer {
 impl ServerCertVerifier for CertificateVerifyer {
     fn verify_server_cert(
         &self,
-        _end_entity: &CertificateDer<'_>,
-        _intermediates: &[CertificateDer<'_>],
-        _server_name: &rustls::pki_types::ServerName<'_>,
+        end_entity: &CertificateDer<'_>,
+        intermediates: &[CertificateDer<'_>],
+        server_name: &rustls::pki_types::ServerName<'_>,
         _ocsp_response: &[u8],
         _now: rustls::pki_types::UnixTime,
     ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
         // Accept self-signed certs or certs signed by any CA.
         // Doesn't protect against MITM attacks.
+        info!("Certificate verification (Allow mode): accepting certificate for {:?} without validation", server_name);
+        info!("Certificate subject: {:?}", end_entity);
+        info!("Intermediate certificates: {}", intermediates.len());
         Ok(ServerCertVerified::assertion())
     }
 
@@ -229,10 +232,22 @@ pub fn connector_with_verify_mode(
 
     // If a custom CA certificate is provided, load it
     if let Some(ca_path) = ca_cert_path {
+        info!("Loading CA certificate from: {}", ca_path.display());
+
         let certs = CertificateDer::pem_file_iter(ca_path)
-            .map_err(|e| Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e)))?
+            .map_err(|e| {
+                Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("Failed to read CA certificate file: {}", e),
+                ))
+            })?
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e)))?;
+            .map_err(|e| {
+                Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("Failed to parse CA certificates: {}", e),
+                ))
+            })?;
 
         if certs.is_empty() {
             return Err(Error::Io(std::io::Error::new(
@@ -242,23 +257,35 @@ pub fn connector_with_verify_mode(
         }
 
         let (added, _ignored) = roots.add_parsable_certificates(certs);
+        info!("Added {} CA certificates from file", added);
+
         if added == 0 {
             return Err(Error::Io(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 "No valid certificates could be added from CA file",
             )));
         }
-    } else {
-        // Load system native certificates
-        for cert in rustls_native_certs::load_native_certs()
-            .expect("Failed to load system native certificates. Ensure that your system has valid root certificates installed and that the application has sufficient permissions to access them.") {
+    } else if mode == TlsVerifyMode::Certificate || mode == TlsVerifyMode::Full {
+        // For Certificate and Full modes, we need CA certificates
+        // Load system native certificates as fallback
+        info!("No custom CA certificate provided, loading system certificates");
+        let result = rustls_native_certs::load_native_certs();
+        for cert in result.certs {
             roots.add(cert)?;
         }
+        if !result.errors.is_empty() {
+            warn!(
+                "Some system certificates could not be loaded: {:?}",
+                result.errors
+            );
+        }
+        info!("Loaded {} system CA certificates", roots.len());
     }
 
     // Create the appropriate config based on the verification mode
     let config = match mode {
         TlsVerifyMode::None => {
+            info!("TLS verification mode: None - TLS will not be used");
             // For None mode, we still create a connector but it won't be used
             // The server connection logic should skip TLS entirely
             ClientConfig::builder()
@@ -266,6 +293,7 @@ pub fn connector_with_verify_mode(
                 .with_no_client_auth()
         }
         TlsVerifyMode::Allow => {
+            info!("TLS verification mode: Allow - accepting any certificate");
             // Use our custom verifier that accepts any certificate
             let verifier = rustls::server::WebPkiClientVerifier::builder(roots.clone().into())
                 .build()
@@ -283,6 +311,7 @@ pub fn connector_with_verify_mode(
             config
         }
         TlsVerifyMode::Certificate => {
+            info!("TLS verification mode: Certificate - verifying certificate validity without hostname");
             // Verify certificate validity but not hostname
             let verifier = NoHostnameVerifier::new(roots.clone());
             let mut config = ClientConfig::builder()
@@ -296,7 +325,7 @@ pub fn connector_with_verify_mode(
             config
         }
         TlsVerifyMode::Full => {
-            // Full verification: both certificate and hostname
+            info!("TLS verification mode: Full - verifying certificate and hostname");
             ClientConfig::builder()
                 .with_root_certificates(roots)
                 .with_no_client_auth()
@@ -327,10 +356,15 @@ impl ServerCertVerifier for NoHostnameVerifier {
         &self,
         end_entity: &CertificateDer<'_>,
         intermediates: &[CertificateDer<'_>],
-        _server_name: &rustls::pki_types::ServerName<'_>,
+        server_name: &rustls::pki_types::ServerName<'_>,
         ocsp_response: &[u8],
         now: rustls::pki_types::UnixTime,
     ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        info!(
+            "Certificate verification (Certificate mode): validating certificate for {:?}",
+            server_name
+        );
+
         // Use a dummy server name for verification - we only care about cert validity
         let dummy_name = rustls::pki_types::ServerName::try_from("example.com").unwrap();
 
@@ -342,12 +376,19 @@ impl ServerCertVerifier for NoHostnameVerifier {
             ocsp_response,
             now,
         ) {
-            Ok(_) => Ok(ServerCertVerified::assertion()),
-            Err(rustls::Error::InvalidCertificate(rustls::CertificateError::NotValidForName)) => {
-                // If the only error is hostname mismatch, that's fine for Certificate mode
+            Ok(_) => {
+                info!("Certificate validation successful (ignoring hostname)");
                 Ok(ServerCertVerified::assertion())
             }
-            Err(e) => Err(e),
+            Err(rustls::Error::InvalidCertificate(rustls::CertificateError::NotValidForName)) => {
+                // If the only error is hostname mismatch, that's fine for Certificate mode
+                info!("Certificate validation successful (hostname mismatch ignored)");
+                Ok(ServerCertVerified::assertion())
+            }
+            Err(e) => {
+                info!("Certificate validation failed: {:?}", e);
+                Err(e)
+            }
         }
     }
 

@@ -88,6 +88,11 @@ impl Server {
 
         // Only attempt TLS if not in None mode
         if tls_mode != TlsVerifyMode::None {
+            info!(
+                "Requesting TLS connection to {} with verify mode: {:?}",
+                addr.host, tls_mode
+            );
+
             // Request TLS.
             stream.write_all(&Startup::tls().to_bytes()?).await?;
             stream.flush().await?;
@@ -97,6 +102,11 @@ impl Server {
             let ssl = SslReply::from_bytes(ssl.freeze())?;
 
             if ssl == SslReply::Yes {
+                info!(
+                    "Server {} supports TLS, initiating TLS handshake",
+                    addr.host
+                );
+
                 let connector = connector_with_verify_mode(
                     tls_mode,
                     cfg.config.general.tls_server_ca_certificate.as_ref(),
@@ -104,15 +114,40 @@ impl Server {
                 let plain = stream.take()?;
 
                 let server_name = ServerName::try_from(addr.host.clone())?;
+                info!("Connecting with TLS to server name: {:?}", server_name);
 
-                let cipher =
-                    tokio_rustls::TlsStream::Client(connector.connect(server_name, plain).await?);
-
-                stream = Stream::tls(cipher);
+                match connector.connect(server_name.clone(), plain).await {
+                    Ok(tls_stream) => {
+                        info!("TLS handshake successful with {}", addr.host);
+                        let cipher = tokio_rustls::TlsStream::Client(tls_stream);
+                        stream = Stream::tls(cipher);
+                    }
+                    Err(e) => {
+                        error!("TLS handshake failed with {}: {:?}", addr.host, e);
+                        return Err(Error::Io(std::io::Error::new(
+                            std::io::ErrorKind::ConnectionRefused,
+                            format!("TLS handshake failed: {}", e),
+                        )));
+                    }
+                }
             } else if tls_mode == TlsVerifyMode::Full || tls_mode == TlsVerifyMode::Certificate {
                 // If we require TLS but server doesn't support it, fail
+                error!(
+                    "Server {} does not support TLS but it is required",
+                    addr.host
+                );
                 return Err(Error::TlsRequired);
+            } else {
+                info!(
+                    "Server {} does not support TLS, continuing without encryption",
+                    addr.host
+                );
             }
+        } else {
+            info!(
+                "TLS verification mode is None, skipping TLS entirely for {}",
+                addr.host
+            );
         }
 
         stream
