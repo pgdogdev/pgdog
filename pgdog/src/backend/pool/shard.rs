@@ -1,23 +1,106 @@
-//! A shard is a collection of replicas and a primary.
+//! A shard is a collection of replicas and an optional primary.
 
-use crate::{
-    config::{LoadBalancingStrategy, ReadWriteSplit, Role},
-    net::messages::BackendKeyData,
-};
+use std::sync::Arc;
+
+use crate::config::{LoadBalancingStrategy, ReadWriteSplit, Role};
+use crate::net::messages::BackendKeyData;
 
 use super::{Error, Guard, Pool, PoolConfig, Replicas, Request};
 
-/// Primary and replicas.
-#[derive(Clone, Default, Debug)]
+// -------------------------------------------------------------------------------------------------
+// ----- Public Interface --------------------------------------------------------------------------
+
+#[derive(Clone, Debug)]
 pub struct Shard {
-    pub(super) primary: Option<Pool>,
-    pub(super) replicas: Replicas,
-    pub(super) rw_split: ReadWriteSplit,
+    inner: Arc<ShardInner>,
 }
 
 impl Shard {
-    /// Create new shard connection pool.
+    /// Build a new shard.
     pub fn new(
+        primary: &Option<PoolConfig>,
+        replicas: &[PoolConfig],
+        lb_strategy: LoadBalancingStrategy,
+        rw_split: ReadWriteSplit,
+    ) -> Self {
+        Self {
+            inner: Arc::new(ShardInner::new(primary, replicas, lb_strategy, rw_split)),
+        }
+    }
+
+    /// Get a connection to the shard primary database.
+    pub async fn primary(&self, request: &Request) -> Result<Guard, Error> {
+        self.inner.primary(request).await
+    }
+
+    /// Get a connection to a shard replica (or primary, if allowed).
+    pub async fn replica(&self, request: &Request) -> Result<Guard, Error> {
+        self.inner.replica(request).await
+    }
+
+    /// Move pool connections from this shard to `destination`.
+    pub fn move_conns_to(&self, destination: &Shard) {
+        self.inner.move_conns_to(&destination.inner);
+    }
+
+    /// Check if pools can be moved to `other`.
+    pub(crate) fn can_move_conns_to(&self, other: &Shard) -> bool {
+        self.inner.can_move_conns_to(&other.inner)
+    }
+
+    /// Clone pools but keep them independent.
+    pub fn duplicate(&self) -> Self {
+        Self {
+            inner: Arc::new(self.inner.duplicate()),
+        }
+    }
+
+    /// Cancel a running query.
+    pub async fn cancel(&self, id: &BackendKeyData) -> Result<(), super::super::Error> {
+        self.inner.cancel(id).await
+    }
+
+    /// All pools in this shard.
+    pub fn pools(&self) -> Vec<Pool> {
+        self.inner.pools()
+    }
+
+    /// All pools with their roles.
+    pub fn pools_with_roles(&self) -> Vec<(Role, Pool)> {
+        self.inner.pools_with_roles()
+    }
+
+    /// Bring every pool online.
+    pub fn launch(&self) {
+        self.inner.launch();
+    }
+
+    /// Shut everything down.
+    pub fn shutdown(&self) {
+        self.inner.shutdown();
+    }
+
+    pub fn is_write_only(&self) -> bool {
+        self.inner.replicas.is_empty()
+    }
+
+    pub fn is_read_only(&self) -> bool {
+        self.inner.primary.is_none()
+    }
+}
+
+// -------------------------------------------------------------------------------------------------
+// ----- Private Implementation --------------------------------------------------------------------
+
+#[derive(Default, Debug)]
+struct ShardInner {
+    primary: Option<Pool>,
+    replicas: Replicas,
+    rw_split: ReadWriteSplit,
+}
+
+impl ShardInner {
+    fn new(
         primary: &Option<PoolConfig>,
         replicas: &[PoolConfig],
         lb_strategy: LoadBalancingStrategy,
@@ -33,8 +116,7 @@ impl Shard {
         }
     }
 
-    /// Get a connection to the shard primary database.
-    pub async fn primary(&self, request: &Request) -> Result<Guard, Error> {
+    async fn primary(&self, request: &Request) -> Result<Guard, Error> {
         self.primary
             .as_ref()
             .ok_or(Error::NoPrimary)?
@@ -42,8 +124,7 @@ impl Shard {
             .await
     }
 
-    /// Get a connection to a shard replica, if any.
-    pub async fn replica(&self, request: &Request) -> Result<Guard, Error> {
+    async fn replica(&self, request: &Request) -> Result<Guard, Error> {
         if self.replicas.is_empty() {
             self.primary
                 .as_ref()
@@ -52,95 +133,84 @@ impl Shard {
                 .await
         } else {
             use ReadWriteSplit::*;
-
             let primary = match self.rw_split {
                 IncludePrimary => &self.primary,
                 ExcludePrimary => &None,
             };
-
             self.replicas.get(request, primary).await
         }
     }
 
-    /// Move pool connections from self to destination.
-    /// This shuts down my pool.
-    pub fn move_conns_to(&self, destination: &Shard) {
-        if let Some(ref primary) = self.primary {
-            if let Some(ref other) = destination.primary {
-                primary.move_conns_to(other);
-            }
+    fn move_conns_to(&self, destination: &ShardInner) {
+        if let (Some(src), Some(dst)) = (self.primary.as_ref(), destination.primary.as_ref()) {
+            src.move_conns_to(dst);
         }
-
         self.replicas.move_conns_to(&destination.replicas);
     }
 
-    /// The two shards have the same databases.
-    pub(crate) fn can_move_conns_to(&self, other: &Shard) -> bool {
-        if let Some(ref primary) = self.primary {
-            if let Some(ref other) = other.primary {
-                if !primary.can_move_conns_to(other) {
-                    return false;
-                }
-            } else {
+    fn can_move_conns_to(&self, other: &ShardInner) -> bool {
+        if let (Some(a), Some(b)) = (self.primary.as_ref(), other.primary.as_ref()) {
+            if !a.can_move_conns_to(b) {
                 return false;
             }
+        } else if self.primary.is_some() || other.primary.is_some() {
+            return false;
         }
-
         self.replicas.can_move_conns_to(&other.replicas)
     }
 
-    /// Create new identical connection pool.
-    pub fn duplicate(&self) -> Self {
+    fn duplicate(&self) -> Self {
         Self {
-            primary: self.primary.as_ref().map(|primary| primary.duplicate()),
+            primary: self.primary.as_ref().map(|p| p.duplicate()),
             replicas: self.replicas.duplicate(),
             rw_split: self.rw_split,
         }
     }
 
-    /// Cancel a query if one is running.
-    pub async fn cancel(&self, id: &BackendKeyData) -> Result<(), super::super::Error> {
+    async fn cancel(&self, id: &BackendKeyData) -> Result<(), super::super::Error> {
         if let Some(ref primary) = self.primary {
             primary.cancel(id).await?;
         }
         self.replicas.cancel(id).await?;
-
         Ok(())
     }
 
-    /// Get all pools. Used for administrative tasks.
-    pub fn pools(&self) -> Vec<Pool> {
+    fn pools(&self) -> Vec<Pool> {
         self.pools_with_roles()
             .into_iter()
-            .map(|(_, pool)| pool)
+            .map(|(_, p)| p)
             .collect()
     }
 
-    pub fn pools_with_roles(&self) -> Vec<(Role, Pool)> {
-        let mut pools = vec![];
-        if let Some(primary) = self.primary.clone() {
-            pools.push((Role::Primary, primary));
+    fn pools_with_roles(&self) -> Vec<(Role, Pool)> {
+        let mut pools = Vec::new();
+        if let Some(p) = self.primary.clone() {
+            pools.push((Role::Primary, p));
         }
         pools.extend(
             self.replicas
                 .pools()
                 .iter()
-                .map(|p| (Role::Replica, p.clone())),
+                .cloned()
+                .map(|p| (Role::Replica, p)),
         );
-
         pools
     }
 
-    /// Launch the shard, bringing all pools online.
-    pub fn launch(&self) {
-        self.pools().iter().for_each(|pool| pool.launch());
+    fn launch(&self) {
+        self.pools().iter().for_each(Pool::launch);
     }
 
-    /// Shutdown all pools, taking the shard offline.
-    pub fn shutdown(&self) {
-        self.pools().iter().for_each(|pool| pool.shutdown());
+    fn shutdown(&self) {
+        self.pools().iter().for_each(Pool::shutdown);
     }
 }
+
+// -------------------------------------------------------------------------------------------------
+// ----- Monitoring --------------------------------------------------------------------------------
+
+// -------------------------------------------------------------------------------------------------
+// ----- Tests -------------------------------------------------------------------------------------
 
 #[cfg(test)]
 mod test {
@@ -164,7 +234,7 @@ mod test {
             config: Config::default(),
         }];
 
-        let shard = Shard::new(
+        let shard = ShardInner::new(
             primary,
             replicas,
             LoadBalancingStrategy::Random,
@@ -196,7 +266,7 @@ mod test {
             config: Config::default(),
         }];
 
-        let shard = Shard::new(
+        let shard = ShardInner::new(
             primary,
             replicas,
             LoadBalancingStrategy::Random,
@@ -215,3 +285,6 @@ mod test {
         assert_eq!(ids.len(), 2);
     }
 }
+
+// -------------------------------------------------------------------------------------------------
+// -------------------------------------------------------------------------------------------------
