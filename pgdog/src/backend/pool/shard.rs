@@ -1,8 +1,13 @@
 //! A shard is a collection of replicas and an optional primary.
 
+use parking_lot::RwLock;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
+use tokio::spawn;
+use tokio::time::interval;
+use tracing::{debug, error};
 
-use crate::config::{LoadBalancingStrategy, ReadWriteSplit, Role};
+use crate::config::{config, LoadBalancingStrategy, ReadWriteSplit, Role};
 use crate::net::messages::BackendKeyData;
 
 use super::{Error, Guard, Pool, PoolConfig, Replicas, Request};
@@ -73,6 +78,7 @@ impl Shard {
     /// Bring every pool online.
     pub fn launch(&self) {
         self.inner.launch();
+        ShardMonitor::run(self);
     }
 
     /// Shut everything down.
@@ -86,6 +92,18 @@ impl Shard {
 
     pub fn is_read_only(&self) -> bool {
         self.inner.primary.is_none()
+    }
+
+    pub fn get_primary(&self) -> Option<&Pool> {
+        self.inner.primary.as_ref()
+    }
+
+    pub fn get_replicas(&self) -> &Replicas {
+        &self.inner.replicas
+    }
+
+    pub fn has_replicas(&self) -> bool {
+        !self.inner.replicas.is_empty()
     }
 }
 
@@ -208,6 +226,216 @@ impl ShardInner {
 
 // -------------------------------------------------------------------------------------------------
 // ----- Monitoring --------------------------------------------------------------------------------
+
+struct ShardMonitor {}
+
+impl ShardMonitor {
+    pub fn run(shard: &Shard) {
+        let history: Arc<RwLock<RecentLsnHistory>> = Arc::default();
+
+        println!("WHAT THE FUCK...");
+
+        // ----- primary loop -----------------------------------------
+        {
+            let shard = shard.clone();
+            let hist = history.clone();
+            spawn(async move { Self::monitor_primary(shard, hist).await });
+        }
+
+        // -----replica loop -----------------------------------------
+        {
+            let shard = shard.clone();
+            let hist = history.clone();
+            spawn(async move { Self::monitor_replicas(shard, hist).await });
+        }
+    }
+
+    async fn monitor_primary(shard: Shard, hist: Arc<RwLock<RecentLsnHistory>>) {
+        let max_age = match config().config.replica_lag.as_ref().map(|rl| rl.max_age) {
+            Some(v) => v,
+            None => return,
+        };
+
+        let primary = match shard.get_primary() {
+            Some(p) => p,
+            None => return,
+        };
+
+        let mut tick = interval(max_age);
+
+        loop {
+            if let Ok(lsn) = primary.wal_flush_lsn().await {
+                if let Some(mut h) = hist.try_write() {
+                    h.push(lsn);
+                }
+            } else {
+                error!("primary lsn query failed");
+            }
+
+            tick.tick().await;
+        }
+    }
+
+    async fn monitor_replicas(shard: Shard, hist: Arc<RwLock<RecentLsnHistory>>) {
+        let cfg_handle = config();
+        let Some(replica_lag) = cfg_handle.config.replica_lag.as_ref() else {
+            return;
+        };
+
+        if !shard.has_replicas() {
+            return;
+        }
+
+        let mut tick = interval(replica_lag.check_interval);
+
+        loop {
+            for replica in shard.get_replicas().pools() {
+                match replica.wal_replay_lsn().await {
+                    Ok(replay_lsn) => {
+                        let delay_opt = hist.read().delay_for(replay_lsn);
+                        match delay_opt {
+                            Some(delay) if delay > replica_lag.max_age => {
+                                println!("");
+                                println!("");
+                                println!("");
+                                println!("");
+                                println!("");
+                                println!("");
+                                error!(
+                                    "replica {} lag {:?} exceeds {:?}; pausing routing",
+                                    replica.id(),
+                                    delay,
+                                    replica_lag.max_age
+                                );
+                            }
+                            Some(delay) => {
+                                println!("");
+                                println!("");
+                                println!("");
+                                println!("");
+                                println!("");
+                                println!("");
+                                debug!("replica {} lag {:?}", replica.id(), delay);
+                            }
+                            None => {
+                                println!("");
+                                println!("");
+                                println!("");
+                                println!("");
+                                println!("");
+                                error!(
+                                    "replica {} LSN {} older than history window",
+                                    replica.id(),
+                                    replay_lsn
+                                );
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        println!("");
+                        println!("");
+                        println!("");
+                        println!("");
+                        println!("");
+                        error!("replica {} LSN query failed: {}", replica.id(), e);
+                    }
+                }
+            }
+            tick.tick().await;
+        }
+    }
+}
+
+// -------------------------------------------------------------------------------------------------
+// ----- ShardMonitoring :: LSN History ------------------------------------------------------------
+
+#[derive(Clone, Copy)]
+struct LsnEntry {
+    lsn: u64,
+    captured_at: Instant,
+}
+
+#[derive(Default)]
+struct RecentLsnHistory {
+    entries: Vec<LsnEntry>,
+}
+
+impl RecentLsnHistory {
+    const CAPACITY: usize = 20;
+
+    /// record the latest primary LSN
+    fn push(&mut self, lsn: u64) {
+        let entry = LsnEntry {
+            lsn,
+            captured_at: Instant::now(),
+        };
+
+        self.entries.push(entry);
+        if self.entries.len() > Self::CAPACITY {
+            self.entries.remove(0);
+        }
+    }
+
+    /// Estimate replica delay.
+    fn delay_for(&self, replay_lsn: u64) -> Option<Duration> {
+        if self.entries.len() < Self::CAPACITY {
+            return Some(Duration::ZERO);
+        }
+
+        let now = Instant::now();
+        for entry in self.entries.iter().rev() {
+            if entry.lsn <= replay_lsn {
+                return Some(now.duration_since(entry.captured_at));
+            }
+        }
+
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Instant;
+
+    #[test]
+    fn bench_push_and_delay_for() {
+        let mut hist = RecentLsnHistory::default();
+        let ops: u32 = 100_000;
+
+        // warm up buffer
+        for i in 0..(RecentLsnHistory::CAPACITY as u32) {
+            hist.push(i as u64);
+        }
+
+        // measure push()
+        let start_push = Instant::now();
+        for i in 0..ops {
+            hist.push(i as u64);
+        }
+        let push_duration = start_push.elapsed();
+        println!(
+            "push: {} ops in {:?} (avg {:?})",
+            ops,
+            push_duration,
+            push_duration / ops
+        );
+
+        // measure delay_for()
+        let sample_lsn = (ops / 2) as u64;
+        let start_delay = Instant::now();
+        for _ in 0..ops {
+            let _ = hist.delay_for(sample_lsn);
+        }
+        let delay_duration = start_delay.elapsed();
+        println!(
+            "delay_for: {} ops in {:?} (avg {:?})",
+            ops,
+            delay_duration,
+            delay_duration / ops
+        );
+    }
+}
 
 // -------------------------------------------------------------------------------------------------
 // ----- Tests -------------------------------------------------------------------------------------

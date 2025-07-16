@@ -18,8 +18,8 @@ auth_type = "trust"
 read_write_split = "exclude_primary"
 
 [replica_lag]
-# check_interval = 100
-# max_age = 50
+check_interval = 100
+max_age = 25
 
 [admin]
 user = "pgdog"

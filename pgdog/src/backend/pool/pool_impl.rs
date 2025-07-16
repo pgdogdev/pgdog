@@ -4,6 +4,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+// Remove me
+use rand::{thread_rng, Rng};
+
 use once_cell::sync::Lazy;
 use parking_lot::{lock_api::MutexGuard, Mutex, RawMutex};
 use tokio::time::Instant;
@@ -11,7 +14,7 @@ use tracing::{error, info};
 
 use crate::backend::{Server, ServerOptions};
 use crate::config::PoolerMode;
-use crate::net::messages::BackendKeyData;
+use crate::net::messages::{BackendKeyData, DataRow, Format};
 use crate::net::Parameter;
 
 use super::inner::CheckInResult;
@@ -416,4 +419,52 @@ impl Pool {
     pub fn oids(&self) -> Option<Oids> {
         self.lock().oids
     }
+
+    /// `pg_current_wal_flush_lsn()` on the primary.
+    pub async fn wal_flush_lsn(&self) -> Result<u64, Error> {
+        let mut guard = self.get(&Request::default()).await?;
+
+        let rows: Vec<DataRow> = guard
+            .fetch_all("SELECT pg_current_wal_flush_lsn()")
+            .await
+            .map_err(|_| Error::HealthcheckError)?;
+
+        let lsn = rows
+            .first()
+            .map(|r| r.get::<String>(0, Format::Text).unwrap_or_default())
+            .unwrap_or_default();
+
+        parse_pg_lsn(&lsn).ok_or(Error::HealthcheckError)
+    }
+
+    /// `pg_last_wal_replay_lsn()` on a replica.
+    pub async fn wal_replay_lsn(&self) -> Result<u64, Error> {
+        let mut guard = self.get(&Request::default()).await?;
+
+        let rows: Vec<DataRow> = guard
+            .fetch_all("SELECT pg_last_wal_replay_lsn()")
+            .await
+            .map_err(|_| Error::HealthcheckError)?;
+
+        let lsn = rows
+            .first()
+            .map(|r| r.get::<String>(0, Format::Text).unwrap_or_default())
+            .unwrap_or_default();
+
+        let original = parse_pg_lsn(&lsn).ok_or(Error::HealthcheckError);
+
+        let mut rng = thread_rng();
+        if rng.gen_ratio(1, 10) {
+            return Ok(1000);
+        }
+
+        original
+    }
+}
+
+fn parse_pg_lsn(s: &str) -> Option<u64> {
+    let mut parts = s.split('/');
+    let hi = u64::from_str_radix(parts.next()?, 16).ok()?;
+    let lo = u64::from_str_radix(parts.next()?, 16).ok()?;
+    Some((hi << 32) | lo)
 }
