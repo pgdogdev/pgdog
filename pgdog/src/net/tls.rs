@@ -12,7 +12,7 @@ use tokio_rustls::rustls::{
     ClientConfig,
 };
 use tokio_rustls::{TlsAcceptor, TlsConnector};
-use tracing::{info, debug};
+use tracing::{debug, info};
 
 use crate::config::config;
 
@@ -238,11 +238,9 @@ pub fn connector_with_verify_mode(
 
             config
         }
-        TlsVerifyMode::VerifyFull => {
-            ClientConfig::builder()
-                .with_root_certificates(roots)
-                .with_no_client_auth()
-        }
+        TlsVerifyMode::VerifyFull => ClientConfig::builder()
+            .with_root_certificates(roots)
+            .with_no_client_auth(),
     };
 
     Ok(TlsConnector::from(Arc::new(config)))
