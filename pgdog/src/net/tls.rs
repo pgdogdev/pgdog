@@ -160,7 +160,7 @@ pub fn connector_with_verify_mode(
 
     // If a custom CA certificate is provided, load it
     if let Some(ca_path) = ca_cert_path {
-        info!("Loading CA certificate from: {}", ca_path.display());
+        debug!("loading CA certificate from: {}", ca_path.display());
 
         let certs = CertificateDer::pem_file_iter(ca_path)
             .map_err(|e| {
@@ -185,7 +185,7 @@ pub fn connector_with_verify_mode(
         }
 
         let (added, _ignored) = roots.add_parsable_certificates(certs);
-        debug!("Added {} CA certificates from file", added);
+        debug!("added {} CA certificates from file", added);
 
         if added == 0 {
             return Err(Error::Io(std::io::Error::new(
@@ -271,8 +271,8 @@ impl ServerCertVerifier for NoHostnameVerifier {
         ocsp_response: &[u8],
         now: rustls::pki_types::UnixTime,
     ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
-        info!(
-            "Certificate verification (Certificate mode): validating certificate for {:?}",
+        debug!(
+            "certificate verification (Certificate mode): validating certificate for {:?}",
             server_name
         );
 
@@ -288,16 +288,16 @@ impl ServerCertVerifier for NoHostnameVerifier {
             now,
         ) {
             Ok(_) => {
-                info!("Certificate validation successful (ignoring hostname)");
+                debug!("certificate validation successful (ignoring hostname)");
                 Ok(ServerCertVerified::assertion())
             }
             Err(rustls::Error::InvalidCertificate(rustls::CertificateError::NotValidForName)) => {
                 // If the only error is hostname mismatch, that's fine for Certificate mode
-                info!("Certificate validation successful (hostname mismatch ignored)");
+                debug!("certificate validation successful (hostname mismatch ignored)");
                 Ok(ServerCertVerified::assertion())
             }
             Err(e) => {
-                info!("Certificate validation failed: {:?}", e);
+                debug!("certificate validation failed: {:?}", e);
                 Err(e)
             }
         }
