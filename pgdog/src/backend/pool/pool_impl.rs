@@ -453,8 +453,9 @@ impl Pool {
 
         let original = parse_pg_lsn(&lsn).ok_or(Error::HealthcheckError);
 
+        // TODO(NIC) :: REMOVE ME <- this siumlates lag.
         let mut rng = thread_rng();
-        if rng.gen_ratio(1, 10) {
+        if rng.gen_ratio(1, 50) {
             return Ok(1000);
         }
 

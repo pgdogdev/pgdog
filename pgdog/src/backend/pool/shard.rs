@@ -261,7 +261,8 @@ impl ShardMonitor {
             None => return,
         };
 
-        let mut tick = interval(max_age);
+        // interval must run more often than max_age
+        let mut tick = interval(max_age / 2);
 
         loop {
             if let Ok(lsn) = primary.wal_flush_lsn().await {
@@ -288,59 +289,48 @@ impl ShardMonitor {
 
         let mut tick = interval(replica_lag.check_interval);
 
+        // Perhaps the analytics column could be an enum value Enum { Time(Duration), Bytes(u64) }
+        // We can keep time = 20x value of [max_lag] but once our history is full, we can only measure the lag in bytes
+        // replica_lag : t:0ns
+        // replica_lag : t:13ns
+        // replica_lag : b:23104
+
         loop {
             for replica in shard.get_replicas().pools() {
                 match replica.wal_replay_lsn().await {
                     Ok(replay_lsn) => {
                         let delay_opt = hist.read().delay_for(replay_lsn);
                         match delay_opt {
-                            Some(delay) if delay > replica_lag.max_age => {
-                                println!("");
-                                println!("");
-                                println!("");
-                                println!("");
-                                println!("");
-                                println!("");
+                            None => {
                                 error!(
-                                    "replica {} lag {:?} exceeds {:?}; pausing routing",
+                                    "\n\n\n\n -> replica {} lag. LSN {} older than history window; pausing routing\n\n\n",
+                                    replica.id(),
+                                    replay_lsn
+                                );
+
+                                replica.ban(Error::HealthcheckTimeout);
+                            }
+                            Some(delay) if delay > replica_lag.max_age => {
+                                error!(
+                                    "\n\n\n\nreplica {} lag {:?} exceeds {:?}; pausing routing",
                                     replica.id(),
                                     delay,
                                     replica_lag.max_age
                                 );
+
+                                replica.ban(Error::HealthcheckTimeout);
                             }
-                            Some(delay) => {
-                                println!("");
-                                println!("");
-                                println!("");
-                                println!("");
-                                println!("");
-                                println!("");
-                                debug!("replica {} lag {:?}", replica.id(), delay);
-                            }
-                            None => {
-                                println!("");
-                                println!("");
-                                println!("");
-                                println!("");
-                                println!("");
-                                error!(
-                                    "replica {} LSN {} older than history window",
-                                    replica.id(),
-                                    replay_lsn
-                                );
+                            Some(acceptable_delay) => {
+                                debug!("replica {} lag {:?}", replica.id(), acceptable_delay);
                             }
                         }
                     }
                     Err(e) => {
-                        println!("");
-                        println!("");
-                        println!("");
-                        println!("");
-                        println!("");
                         error!("replica {} LSN query failed: {}", replica.id(), e);
                     }
                 }
             }
+
             tick.tick().await;
         }
     }
@@ -355,35 +345,60 @@ struct LsnEntry {
     captured_at: Instant,
 }
 
-#[derive(Default)]
+#[derive(Clone)]
 struct RecentLsnHistory {
-    entries: Vec<LsnEntry>,
+    // Stack-allocated circular buffer
+    entries: [LsnEntry; Self::CAPACITY],
+    // Points to the next write position
+    head: usize,
+    // Number of valid entries (0 to CAPACITY)
+    len: usize,
 }
 
 impl RecentLsnHistory {
-    const CAPACITY: usize = 20;
+    const CAPACITY: usize = 25;
 
-    /// record the latest primary LSN
-    fn push(&mut self, lsn: u64) {
+    /// Create a new empty history
+    pub fn new() -> Self {
+        Self {
+            entries: [LsnEntry {
+                lsn: 0,
+                captured_at: Instant::now(),
+            }; Self::CAPACITY],
+            head: 0,
+            len: 0,
+        }
+    }
+
+    /// Record the latest primary LSN
+    pub fn push(&mut self, lsn: u64) {
         let entry = LsnEntry {
             lsn,
             captured_at: Instant::now(),
         };
 
-        self.entries.push(entry);
-        if self.entries.len() > Self::CAPACITY {
-            self.entries.remove(0);
+        self.entries[self.head] = entry;
+        self.head = (self.head + 1) % Self::CAPACITY;
+
+        if self.len < Self::CAPACITY {
+            self.len += 1;
         }
     }
 
-    /// Estimate replica delay.
-    fn delay_for(&self, replay_lsn: u64) -> Option<Duration> {
-        if self.entries.len() < Self::CAPACITY {
+    /// Estimate replica delay
+    pub fn delay_for(&self, replay_lsn: u64) -> Option<Duration> {
+        if self.len < Self::CAPACITY {
             return Some(Duration::ZERO);
         }
 
         let now = Instant::now();
-        for entry in self.entries.iter().rev() {
+
+        // Iterate from newest to oldest entry
+        for i in 0..self.len {
+            // Calculate the actual index in reverse order
+            let idx = (self.head + Self::CAPACITY - 1 - i) % Self::CAPACITY;
+            let entry = &self.entries[idx];
+
             if entry.lsn <= replay_lsn {
                 return Some(now.duration_since(entry.captured_at));
             }
@@ -393,47 +408,9 @@ impl RecentLsnHistory {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::time::Instant;
-
-    #[test]
-    fn bench_push_and_delay_for() {
-        let mut hist = RecentLsnHistory::default();
-        let ops: u32 = 100_000;
-
-        // warm up buffer
-        for i in 0..(RecentLsnHistory::CAPACITY as u32) {
-            hist.push(i as u64);
-        }
-
-        // measure push()
-        let start_push = Instant::now();
-        for i in 0..ops {
-            hist.push(i as u64);
-        }
-        let push_duration = start_push.elapsed();
-        println!(
-            "push: {} ops in {:?} (avg {:?})",
-            ops,
-            push_duration,
-            push_duration / ops
-        );
-
-        // measure delay_for()
-        let sample_lsn = (ops / 2) as u64;
-        let start_delay = Instant::now();
-        for _ in 0..ops {
-            let _ = hist.delay_for(sample_lsn);
-        }
-        let delay_duration = start_delay.elapsed();
-        println!(
-            "delay_for: {} ops in {:?} (avg {:?})",
-            ops,
-            delay_duration,
-            delay_duration / ops
-        );
+impl Default for RecentLsnHistory {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
