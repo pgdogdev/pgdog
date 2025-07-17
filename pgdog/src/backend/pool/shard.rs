@@ -2,6 +2,7 @@
 
 use parking_lot::RwLock;
 use std::collections::VecDeque;
+use std::ops::Deref;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::select;
@@ -36,81 +37,138 @@ impl Shard {
         }
     }
 
-    /// Get a connection to the shard primary database.
     pub async fn primary(&self, request: &Request) -> Result<Guard, Error> {
-        self.inner.primary(request).await
+        self.primary
+            .as_ref()
+            .ok_or(Error::NoPrimary)?
+            .get_forced(request)
+            .await
     }
 
-    /// Get a connection to a shard replica (or primary, if allowed).
     pub async fn replica(&self, request: &Request) -> Result<Guard, Error> {
-        self.inner.replica(request).await
+        if self.replicas.is_empty() {
+            self.primary
+                .as_ref()
+                .ok_or(Error::NoDatabases)?
+                .get(request)
+                .await
+        } else {
+            use ReadWriteSplit::*;
+
+            let primary = match self.rw_split {
+                IncludePrimary => &self.primary,
+                ExcludePrimary => &None,
+            };
+
+            self.replicas.get(request, primary).await
+        }
     }
 
-    /// Move pool connections from this shard to `destination`.
     pub fn move_conns_to(&self, destination: &Shard) {
-        self.inner.move_conns_to(&destination);
+        if let Some(ref primary) = self.primary {
+            if let Some(ref other) = destination.primary {
+                primary.move_conns_to(other);
+            }
+        }
+
+        self.replicas.move_conns_to(&destination.replicas);
     }
 
-    /// Check if pools can be moved to `other`.
     pub(crate) fn can_move_conns_to(&self, other: &Shard) -> bool {
-        self.inner.can_move_conns_to(&other)
+        if let Some(ref primary) = self.primary {
+            if let Some(ref other) = other.primary {
+                if !primary.can_move_conns_to(other) {
+                    return false;
+                }
+            } else {
+                return false;
+            }
+        }
+
+        self.replicas.can_move_conns_to(&other.replicas)
     }
 
     /// Clone pools but keep them independent.
     pub fn duplicate(&self) -> Self {
         Self {
-            inner: Arc::new(self.inner.duplicate()),
+            inner: Arc::new(ShardInner {
+                primary: self
+                    .inner
+                    .primary
+                    .as_ref()
+                    .map(|primary| primary.duplicate()),
+                replicas: self.inner.replicas.duplicate(),
+                rw_split: self.inner.rw_split,
+                comms: ShardComms::default(), // Create new comms instead of duplicating
+            }),
         }
-    }
-
-    /// Cancel a running query.
-    pub async fn cancel(&self, id: &BackendKeyData) -> Result<(), super::super::Error> {
-        self.inner.cancel(id).await
-    }
-
-    /// All pools in this shard.
-    pub fn pools(&self) -> Vec<Pool> {
-        self.inner.pools()
-    }
-
-    /// All pools with their roles.
-    pub fn pools_with_roles(&self) -> Vec<(Role, Pool)> {
-        self.inner.pools_with_roles()
     }
 
     /// Bring every pool online.
     pub fn launch(&self) {
-        self.inner.launch();
         ShardMonitor::run(self);
-    }
-
-    /// Shut everything down.
-    pub fn shutdown(&self) {
-        self.inner.shutdown();
+        self.pools().iter().for_each(|pool| pool.launch());
     }
 
     pub fn is_write_only(&self) -> bool {
-        self.inner.replicas.is_empty()
+        self.replicas.is_empty()
     }
 
     pub fn is_read_only(&self) -> bool {
-        self.inner.primary.is_none()
-    }
-
-    pub fn get_primary(&self) -> Option<&Pool> {
-        self.inner.primary.as_ref()
-    }
-
-    pub fn get_replicas(&self) -> &Replicas {
-        &self.inner.replicas
+        self.primary.is_none()
     }
 
     pub fn has_replicas(&self) -> bool {
-        !self.inner.replicas.is_empty()
+        !self.replicas.is_empty()
+    }
+
+    pub async fn cancel(&self, id: &BackendKeyData) -> Result<(), super::super::Error> {
+        if let Some(ref primary) = self.primary {
+            primary.cancel(id).await?;
+        }
+        self.replicas.cancel(id).await?;
+
+        Ok(())
+    }
+
+    pub fn pools(&self) -> Vec<Pool> {
+        self.pools_with_roles()
+            .into_iter()
+            .map(|(_, pool)| pool)
+            .collect()
+    }
+
+    pub fn pools_with_roles(&self) -> Vec<(Role, Pool)> {
+        let mut pools = vec![];
+        if let Some(primary) = self.primary.clone() {
+            pools.push((Role::Primary, primary));
+        }
+
+        pools.extend(
+            self.replicas
+                .pools()
+                .iter()
+                .map(|p| (Role::Replica, p.clone())),
+        );
+
+        pools
+    }
+
+    pub fn shutdown(&self) {
+        self.comms.shutdown.notify_waiters();
+        self.pools().iter().for_each(|pool| pool.shutdown());
     }
 
     fn comms(&self) -> &ShardComms {
-        &self.inner.comms
+        &self.comms
+    }
+}
+
+impl Deref for Shard {
+    type Target = ShardInner;
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.inner
     }
 }
 
@@ -144,107 +202,6 @@ impl ShardInner {
             rw_split,
             comms,
         }
-    }
-
-    async fn primary(&self, request: &Request) -> Result<Guard, Error> {
-        self.primary
-            .as_ref()
-            .ok_or(Error::NoPrimary)?
-            .get_forced(request)
-            .await
-    }
-
-    async fn replica(&self, request: &Request) -> Result<Guard, Error> {
-        if self.replicas.is_empty() {
-            self.primary
-                .as_ref()
-                .ok_or(Error::NoDatabases)?
-                .get(request)
-                .await
-        } else {
-            use ReadWriteSplit::*;
-
-            let primary = match self.rw_split {
-                IncludePrimary => &self.primary,
-                ExcludePrimary => &None,
-            };
-
-            self.replicas.get(request, primary).await
-        }
-    }
-
-    pub fn move_conns_to(&self, destination: &Shard) {
-        if let Some(ref primary) = self.primary {
-            if let Some(ref other) = destination.get_primary() {
-                primary.move_conns_to(other);
-            }
-        }
-
-        self.replicas.move_conns_to(&destination.get_replicas());
-    }
-
-    pub(crate) fn can_move_conns_to(&self, other: &Shard) -> bool {
-        if let Some(ref primary) = self.primary {
-            if let Some(ref other) = other.get_primary() {
-                if !primary.can_move_conns_to(other) {
-                    return false;
-                }
-            } else {
-                return false;
-            }
-        }
-
-        self.replicas.can_move_conns_to(&other.get_replicas())
-    }
-
-    fn duplicate(&self) -> Self {
-        Self {
-            primary: self.primary.as_ref().map(|primary| primary.duplicate()),
-            replicas: self.replicas.duplicate(),
-            rw_split: self.rw_split,
-            comms: ShardComms::default(),
-        }
-    }
-
-    async fn cancel(&self, id: &BackendKeyData) -> Result<(), super::super::Error> {
-        if let Some(ref primary) = self.primary {
-            primary.cancel(id).await?;
-        }
-        self.replicas.cancel(id).await?;
-
-        Ok(())
-    }
-
-    fn pools(&self) -> Vec<Pool> {
-        self.pools_with_roles()
-            .into_iter()
-            .map(|(_, pool)| pool)
-            .collect()
-    }
-
-    pub fn pools_with_roles(&self) -> Vec<(Role, Pool)> {
-        let mut pools = vec![];
-        if let Some(primary) = self.primary.clone() {
-            pools.push((Role::Primary, primary));
-        }
-
-        pools.extend(
-            self.replicas
-                .pools()
-                .iter()
-                .map(|p| (Role::Replica, p.clone())),
-        );
-
-        pools
-    }
-
-    fn launch(&self) {
-        self.pools().iter().for_each(|pool| pool.launch());
-    }
-
-    fn shutdown(&self) {
-        self.comms.shutdown.notify_waiters();
-        self.pools().iter().for_each(|pool| pool.shutdown());
     }
 }
 
@@ -299,7 +256,7 @@ impl ShardMonitor {
             None => return,
         };
 
-        let primary = match shard.get_primary() {
+        let primary = match shard.primary.as_ref() {
             Some(p) => p,
             None => return,
         };
@@ -360,7 +317,7 @@ impl ShardMonitor {
         history: &Arc<RwLock<RecentLsnHistory>>,
         max_age: Duration,
     ) {
-        let Some(primary) = shard.get_primary() else {
+        let Some(primary) = shard.primary.as_ref() else {
             return;
         };
 
@@ -369,7 +326,7 @@ impl ShardMonitor {
             return;
         };
 
-        for replica in shard.get_replicas().pools() {
+        for replica in shard.replicas.pools() {
             Self::process_single_replica(&replica, lsn, history, max_age).await;
         }
     }
@@ -535,7 +492,7 @@ mod test {
             config: Config::default(),
         }];
 
-        let shard = ShardInner::new(
+        let shard = Shard::new(
             primary,
             replicas,
             LoadBalancingStrategy::Random,
@@ -567,7 +524,7 @@ mod test {
             config: Config::default(),
         }];
 
-        let shard = ShardInner::new(
+        let shard = Shard::new(
             primary,
             replicas,
             LoadBalancingStrategy::Random,
