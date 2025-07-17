@@ -615,7 +615,7 @@ impl General {
         Self::port() + 1
     }
 
-    fn healthckeck_timeout() -> u64 {
+    fn healthcheck_timeout() -> u64 {
         Duration::from_secs(5).as_millis() as u64
     }
 
