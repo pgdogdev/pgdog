@@ -8,8 +8,9 @@ test = true
 
 [dependencies]
 tokio-postgres = {version = "0.7.13", features = ["with-uuid-1"]}
-sqlx = { version = "*", features = ["postgres", "runtime-tokio", "tls-native-tls", "bigdecimal"]}
+sqlx = { version = "*", features = ["postgres", "runtime-tokio", "tls-native-tls", "bigdecimal", "chrono"]}
 tokio = { version = "1", features = ["full"]}
 futures-util = "*"
 uuid  = "*"
 serial_test = "3"
+chrono = "0.4"

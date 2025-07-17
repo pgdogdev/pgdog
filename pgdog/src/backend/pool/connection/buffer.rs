@@ -291,6 +291,49 @@ mod test {
     }
 
     #[test]
+    fn test_sort_buffer_with_timestamps() {
+        let mut buf = Buffer::default();
+        let rd = RowDescription::new(&[Field::timestamp("created_at"), Field::text("name")]);
+        let columns = [OrderBy::Asc(1)]; // Sort by timestamp column
+
+        // Add timestamps in random order
+        let timestamps = [
+            "2025-01-15 10:30:45.123456",
+            "2025-01-14 09:15:30.000000",
+            "2025-01-16 14:45:00.987654",
+            "2025-01-13 08:00:00.000000",
+            "2025-01-15 10:30:45.123455", // 1 microsecond before first
+        ];
+
+        for (i, ts) in timestamps.iter().enumerate() {
+            let mut dr = DataRow::new();
+            dr.add(ts.to_string()).add(format!("item_{}", i));
+            buf.add(dr.message().unwrap()).unwrap();
+        }
+
+        let decoder = Decoder::from(&rd);
+
+        buf.sort(&columns, &decoder);
+        buf.full();
+
+        // Verify timestamps are sorted
+        let expected_order = [
+            "2025-01-13 08:00:00.000000",
+            "2025-01-14 09:15:30.000000",
+            "2025-01-15 10:30:45.123455",
+            "2025-01-15 10:30:45.123456",
+            "2025-01-16 14:45:00.987654",
+        ];
+
+        for expected in expected_order {
+            let message = buf.take().expect("Should have message");
+            let dr = DataRow::from_bytes(message.to_bytes().unwrap()).unwrap();
+            let ts = dr.get::<String>(0, Format::Text).unwrap();
+            assert_eq!(ts, expected);
+        }
+    }
+
+    #[test]
     fn test_distinct() {
         let mut buf = Buffer::default();
         let rd = RowDescription::new(&[Field::bigint("id"), Field::text("email")]);

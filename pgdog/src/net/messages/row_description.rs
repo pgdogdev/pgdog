@@ -93,6 +93,19 @@ impl Field {
         }
     }
 
+    /// Timestamp field.
+    pub fn timestamp(name: &str) -> Self {
+        Self {
+            name: name.into(),
+            table_oid: 0,
+            column: 0,
+            type_oid: 1114, // PostgreSQL OID for timestamp without time zone
+            type_size: 8,
+            type_modifier: -1,
+            format: 0, // We always use text format.
+        }
+    }
+
     /// Get the column data type.
     #[inline]
     pub fn data_type(&self) -> DataType {

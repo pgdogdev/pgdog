@@ -268,3 +268,94 @@ async def test_stress():
 
 async def in_transaction(conn):
     await conn.fetch("SELECT now() != statement_timestamp()")
+
+
+@pytest.mark.asyncio
+async def test_timestamp_sorting_binary_format():
+    """Test timestamp sorting with binary format (asyncpg uses binary by default)."""
+    from datetime import datetime, timedelta, timezone
+    
+    print("\n=== ASYNCPG BINARY FORMAT TIMESTAMP TEST ===")
+    print("Note: asyncpg uses binary format by default for all data types")
+    
+    # Use sharded connection
+    conn = await sharded_async()
+    
+    try:
+        # Drop and recreate timestamp_test table
+        try:
+            await conn.execute("DROP TABLE IF EXISTS timestamp_test CASCADE")
+        except asyncpg.exceptions.UndefinedTableError:
+            pass
+            
+        await conn.execute("""
+            CREATE TABLE timestamp_test (
+                id BIGINT PRIMARY KEY,
+                name TEXT,
+                ts TIMESTAMP NOT NULL
+            )
+        """)
+        
+        # Insert test data - same pattern as Rust test
+        base_time = datetime.now(timezone.utc).replace(tzinfo=None)  # Remove timezone for TIMESTAMP
+        test_data = [
+            (1, "Oldest", base_time - timedelta(days=10)),
+            (101, "Old", base_time - timedelta(days=5)),
+            (2, "Recent", base_time - timedelta(days=1)),
+            (102, "Current", base_time),
+            (3, "Future", base_time + timedelta(days=1)),
+            (103, "Far future", base_time + timedelta(days=10)),
+        ]
+        
+        # Insert data
+        for id_val, name, ts in test_data:
+            await conn.execute(
+                "INSERT INTO timestamp_test (id, name, ts) VALUES ($1, $2, $3)",
+                id_val, name, ts
+            )
+        
+        # Query with ORDER BY ts DESC
+        rows = await conn.fetch(
+            "SELECT id, name, ts FROM timestamp_test ORDER BY ts DESC"
+        )
+        
+        print(f"\nRows returned: {len(rows)}")
+        print("Actual order:")
+        actual_order = []
+        for i, row in enumerate(rows):
+            id_val = row['id']
+            name = row['name']
+            ts = row['ts']
+            actual_order.append((id_val, name))
+            print(f"  Row {i}: id={id_val}, name='{name}', ts={ts}")
+        
+        # Expected order (newest first for DESC)
+        expected_order = [
+            (103, "Far future"),
+            (3, "Future"),
+            (102, "Current"),
+            (2, "Recent"),
+            (101, "Old"),
+            (1, "Oldest"),
+        ]
+        
+        print("\nExpected order:")
+        for i, (id_val, name) in enumerate(expected_order):
+            print(f"  Row {i}: id={id_val}, name='{name}'")
+        
+        # Check if ordering is correct
+        if actual_order == expected_order:
+            print("\n✅ SUCCESS: Timestamps are correctly sorted!")
+            print("This suggests the binary format implementation works correctly.")
+        else:
+            print("\n❌ FAILURE: Timestamps are NOT correctly sorted!")
+            print("This suggests a general routing issue, not client-specific.")
+            
+        # Clean up
+        await conn.execute("DROP TABLE IF EXISTS timestamp_test CASCADE")
+        
+        # Assert for pytest
+        assert actual_order == expected_order, "Timestamp sorting failed with asyncpg binary format"
+        
+    finally:
+        await conn.close()
