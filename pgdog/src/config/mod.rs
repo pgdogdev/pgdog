@@ -321,6 +321,9 @@ pub struct General {
     /// Delay idle healthchecks by this time at startup.
     #[serde(default = "General::idle_healthcheck_delay")]
     pub idle_healthcheck_delay: u64,
+    /// Healthcheck timeout.
+    #[serde(default = "General::healthcheck_timeout")]
+    pub healthcheck_timeout: u64,
     /// Maximum duration of a ban.
     #[serde(default = "General::ban_timeout")]
     pub ban_timeout: u64,
@@ -479,6 +482,7 @@ impl Default for General {
             healthcheck_interval: Self::healthcheck_interval(),
             idle_healthcheck_interval: Self::idle_healthcheck_interval(),
             idle_healthcheck_delay: Self::idle_healthcheck_delay(),
+            healthcheck_timeout: Self::healthcheck_timeout(),
             ban_timeout: Self::ban_timeout(),
             rollback_timeout: Self::rollback_timeout(),
             load_balancing_strategy: Self::load_balancing_strategy(),
@@ -609,6 +613,10 @@ impl General {
 
     fn broadcast_port() -> u16 {
         Self::port() + 1
+    }
+
+    fn healthckeck_timeout() -> u64 {
+        Duration::from_secs(5).as_millis() as u64
     }
 
     fn checkout_timeout() -> u64 {
