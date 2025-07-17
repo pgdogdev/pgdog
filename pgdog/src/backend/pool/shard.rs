@@ -46,12 +46,12 @@ impl Shard {
 
     /// Move pool connections from this shard to `destination`.
     pub fn move_conns_to(&self, destination: &Shard) {
-        self.inner.move_conns_to(&destination.inner);
+        self.inner.move_conns_to(&destination);
     }
 
     /// Check if pools can be moved to `other`.
     pub(crate) fn can_move_conns_to(&self, other: &Shard) -> bool {
-        self.inner.can_move_conns_to(&other.inner)
+        self.inner.can_move_conns_to(&other)
     }
 
     /// Clone pools but keep them independent.
@@ -169,27 +169,33 @@ impl ShardInner {
         }
     }
 
-    fn move_conns_to(&self, destination: &ShardInner) {
-        if let (Some(src), Some(dst)) = (self.primary.as_ref(), destination.primary.as_ref()) {
-            src.move_conns_to(dst);
+    pub fn move_conns_to(&self, destination: &Shard) {
+        if let Some(ref primary) = self.primary {
+            if let Some(ref other) = destination.get_primary() {
+                primary.move_conns_to(other);
+            }
         }
-        self.replicas.move_conns_to(&destination.replicas);
+
+        self.replicas.move_conns_to(&destination.get_replicas());
     }
 
-    fn can_move_conns_to(&self, other: &ShardInner) -> bool {
-        if let (Some(a), Some(b)) = (self.primary.as_ref(), other.primary.as_ref()) {
-            if !a.can_move_conns_to(b) {
+    pub(crate) fn can_move_conns_to(&self, other: &Shard) -> bool {
+        if let Some(ref primary) = self.primary {
+            if let Some(ref other) = other.get_primary() {
+                if !primary.can_move_conns_to(other) {
+                    return false;
+                }
+            } else {
                 return false;
             }
-        } else if self.primary.is_some() || other.primary.is_some() {
-            return false;
         }
-        self.replicas.can_move_conns_to(&other.replicas)
+
+        self.replicas.can_move_conns_to(&other.get_replicas())
     }
 
     fn duplicate(&self) -> Self {
         Self {
-            primary: self.primary.as_ref().map(|p| p.duplicate()),
+            primary: self.primary.as_ref().map(|primary| primary.duplicate()),
             replicas: self.replicas.duplicate(),
             rw_split: self.rw_split,
             comms: ShardComms::default(),
@@ -207,32 +213,33 @@ impl ShardInner {
     fn pools(&self) -> Vec<Pool> {
         self.pools_with_roles()
             .into_iter()
-            .map(|(_, p)| p)
+            .map(|(_, pool)| pool)
             .collect()
     }
 
-    fn pools_with_roles(&self) -> Vec<(Role, Pool)> {
-        let mut pools = Vec::new();
-        if let Some(p) = self.primary.clone() {
-            pools.push((Role::Primary, p));
+    pub fn pools_with_roles(&self) -> Vec<(Role, Pool)> {
+        let mut pools = vec![];
+        if let Some(primary) = self.primary.clone() {
+            pools.push((Role::Primary, primary));
         }
+
         pools.extend(
             self.replicas
                 .pools()
                 .iter()
-                .cloned()
-                .map(|p| (Role::Replica, p)),
+                .map(|p| (Role::Replica, p.clone())),
         );
+
         pools
     }
 
     fn launch(&self) {
-        self.pools().iter().for_each(Pool::launch);
+        self.pools().iter().for_each(|pool| pool.launch());
     }
 
     fn shutdown(&self) {
         self.comms.shutdown.notify_waiters();
-        self.pools().iter().for_each(Pool::shutdown);
+        self.pools().iter().for_each(|pool| pool.shutdown());
     }
 }
 
