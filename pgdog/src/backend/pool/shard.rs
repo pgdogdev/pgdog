@@ -1,6 +1,7 @@
 //! A shard is a collection of replicas and an optional primary.
 
 use parking_lot::RwLock;
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::select;
@@ -12,6 +13,7 @@ use tracing::{debug, error};
 use crate::config::{config, LoadBalancingStrategy, ReadWriteSplit, Role};
 use crate::net::messages::BackendKeyData;
 
+use super::inner::ReplicaLag;
 use super::{Error, Guard, Pool, PoolConfig, Replicas, Request};
 
 // -------------------------------------------------------------------------------------------------
@@ -306,6 +308,8 @@ impl ShardMonitor {
         let interval_duration = (check_interval / 2).min(min_interval);
         let mut tick = interval(interval_duration);
 
+        primary.set_replica_lag(ReplicaLag::NonApplicable);
+
         debug!("primary LSN tracking running");
         let comms = shard.comms();
 
@@ -411,11 +415,14 @@ impl ShardMonitor {
             }
             None => {}
         }
+
+        let replica_lag = h.get_replica_lag(primary_lsn, replay_lsn);
+        replica.set_replica_lag(replica_lag);
     }
 }
 
 // -------------------------------------------------------------------------------------------------
-// ----- ShardMonitoring :: LSN History ------------------------------------------------------------
+// ----- Monitoring :: LSN History -----------------------------------------------------------------
 
 #[derive(Clone, Copy)]
 struct LsnEntry {
@@ -423,14 +430,8 @@ struct LsnEntry {
     captured_at: Instant,
 }
 
-#[derive(Clone)]
-struct RecentLsnHistory {
-    // Stack-allocated circular buffer
-    entries: [LsnEntry; Self::CAPACITY],
-    // Points to the next write position
-    head: usize,
-    // Number of valid entries (0 to CAPACITY)
-    len: usize,
+pub struct RecentLsnHistory {
+    entries: VecDeque<LsnEntry>,
 }
 
 impl RecentLsnHistory {
@@ -438,31 +439,34 @@ impl RecentLsnHistory {
 
     /// Create a new empty history
     pub fn new() -> Self {
-        let empty_entry = LsnEntry {
-            lsn: 0,
-            captured_at: Instant::now(),
-        };
-
         Self {
-            entries: [empty_entry; Self::CAPACITY],
-            head: 0,
-            len: 0,
+            entries: VecDeque::with_capacity(Self::CAPACITY),
         }
     }
 
     /// Record the latest primary LSN
     pub fn push(&mut self, lsn: u64) {
-        let entry = LsnEntry {
+        if self.entries.len() == Self::CAPACITY {
+            self.entries.pop_front();
+        }
+
+        self.entries.push_back(LsnEntry {
             lsn,
             captured_at: Instant::now(),
+        });
+    }
+
+    pub fn get_replica_lag(&self, primary_lsn: u64, replay_lsn: u64) -> ReplicaLag {
+        let bytes_behind = primary_lsn.saturating_sub(replay_lsn);
+        if bytes_behind == 0 {
+            return ReplicaLag::Duration(Duration::ZERO);
+        }
+
+        if let Some(delay) = self.estimate_delay(primary_lsn, replay_lsn) {
+            return ReplicaLag::Duration(delay);
         };
 
-        self.entries[self.head] = entry;
-        self.head = (self.head + 1) % Self::CAPACITY;
-
-        if self.len < Self::CAPACITY {
-            self.len += 1;
-        }
+        ReplicaLag::Bytes(bytes_behind)
     }
 
     pub fn estimate_delay(&self, primary_lsn: u64, replay_lsn: u64) -> Option<Duration> {
@@ -481,30 +485,22 @@ impl RecentLsnHistory {
         Some(Duration::from_secs_f64(seconds_behind))
     }
 
-    /// Estimate WAL throughput in bytes per second
     fn wal_throughput(&self) -> Option<f64> {
-        if self.len < 2 {
+        if self.entries.len() < 2 {
             return None;
         }
 
-        let newest_idx = (self.head + Self::CAPACITY - 1) % Self::CAPACITY;
-        let oldest_idx = (self.head + Self::CAPACITY - self.len) % Self::CAPACITY;
+        let oldest = self.entries.front().unwrap();
+        let newest = self.entries.back().unwrap();
 
-        let newest = self.entries[newest_idx];
-        let oldest = self.entries[oldest_idx];
+        let elapsed = newest.captured_at.duration_since(oldest.captured_at);
+        let lsn_delta = newest.lsn.checked_sub(oldest.lsn)?;
 
-        if newest.lsn <= oldest.lsn {
+        if elapsed.is_zero() {
             return None;
         }
 
-        let delta_lsn = newest.lsn - oldest.lsn;
-        let delta_time = newest.captured_at.duration_since(oldest.captured_at);
-
-        if delta_time.is_zero() {
-            return None;
-        }
-
-        Some(delta_lsn as f64 / delta_time.as_secs_f64())
+        Some(lsn_delta as f64 / elapsed.as_secs_f64())
     }
 }
 

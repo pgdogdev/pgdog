@@ -15,6 +15,7 @@ use crate::net::messages::{BackendKeyData, DataRow, Format};
 use crate::net::Parameter;
 
 use super::inner::CheckInResult;
+use super::inner::ReplicaLag;
 use super::{
     Address, Comms, Config, Error, Guard, Healtcheck, Inner, Monitor, Oids, PoolConfig, Request,
     State, Waiting,
@@ -449,6 +450,10 @@ impl Pool {
             .unwrap_or_default();
 
         parse_pg_lsn(&lsn).ok_or(Error::ReplicaLsnQueryFailed)
+    }
+
+    pub fn set_replica_lag(&self, replica_lag: ReplicaLag) {
+        self.lock().replica_lag = replica_lag;
     }
 }
 
