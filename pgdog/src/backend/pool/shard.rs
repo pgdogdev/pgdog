@@ -3,7 +3,9 @@
 use parking_lot::RwLock;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tokio::select;
 use tokio::spawn;
+use tokio::sync::Notify;
 use tokio::time::interval;
 use tracing::{debug, error};
 
@@ -21,7 +23,6 @@ pub struct Shard {
 }
 
 impl Shard {
-    /// Build a new shard.
     pub fn new(
         primary: &Option<PoolConfig>,
         replicas: &[PoolConfig],
@@ -105,16 +106,21 @@ impl Shard {
     pub fn has_replicas(&self) -> bool {
         !self.inner.replicas.is_empty()
     }
+
+    fn comms(&self) -> &ShardComms {
+        &self.inner.comms
+    }
 }
 
 // -------------------------------------------------------------------------------------------------
 // ----- Private Implementation --------------------------------------------------------------------
 
 #[derive(Default, Debug)]
-struct ShardInner {
+pub struct ShardInner {
     primary: Option<Pool>,
     replicas: Replicas,
     rw_split: ReadWriteSplit,
+    comms: ShardComms,
 }
 
 impl ShardInner {
@@ -126,11 +132,15 @@ impl ShardInner {
     ) -> Self {
         let primary = primary.as_ref().map(Pool::new);
         let replicas = Replicas::new(replicas, lb_strategy);
+        let comms = ShardComms {
+            shutdown: Notify::new(),
+        };
 
         Self {
             primary,
             replicas,
             rw_split,
+            comms,
         }
     }
 
@@ -182,6 +192,7 @@ impl ShardInner {
             primary: self.primary.as_ref().map(|p| p.duplicate()),
             replicas: self.replicas.duplicate(),
             rw_split: self.rw_split,
+            comms: ShardComms::default(),
         }
     }
 
@@ -220,7 +231,24 @@ impl ShardInner {
     }
 
     fn shutdown(&self) {
+        self.comms.shutdown.notify_waiters();
         self.pools().iter().for_each(Pool::shutdown);
+    }
+}
+
+// -------------------------------------------------------------------------------------------------
+// ----- Comms -------------------------------------------------------------------------------------
+
+#[derive(Debug)]
+struct ShardComms {
+    pub shutdown: Notify,
+}
+
+impl Default for ShardComms {
+    fn default() -> Self {
+        Self {
+            shutdown: Notify::new(),
+        }
     }
 }
 
@@ -233,25 +261,28 @@ impl ShardMonitor {
     pub fn run(shard: &Shard) {
         let history: Arc<RwLock<RecentLsnHistory>> = Arc::default();
 
-        println!("WHAT THE FUCK...");
-
-        // ----- primary loop -----------------------------------------
         {
             let shard = shard.clone();
             let hist = history.clone();
-            spawn(async move { Self::monitor_primary(shard, hist).await });
+            spawn(async move { Self::track_primary_lsn(shard, hist).await });
         }
 
-        // -----replica loop -----------------------------------------
         {
             let shard = shard.clone();
             let hist = history.clone();
             spawn(async move { Self::monitor_replicas(shard, hist).await });
         }
     }
+}
 
-    async fn monitor_primary(shard: Shard, hist: Arc<RwLock<RecentLsnHistory>>) {
-        let max_age = match config().config.replica_lag.as_ref().map(|rl| rl.max_age) {
+impl ShardMonitor {
+    async fn track_primary_lsn(shard: Shard, hist: Arc<RwLock<RecentLsnHistory>>) {
+        let check_interval = match config()
+            .config
+            .replica_lag
+            .as_ref()
+            .map(|rl| rl.check_interval)
+        {
             Some(v) => v,
             None => return,
         };
@@ -261,77 +292,114 @@ impl ShardMonitor {
             None => return,
         };
 
-        // interval must run more often than max_age
-        let mut tick = interval(max_age / 2);
+        let min_interval = Duration::from_millis(250);
+        let interval_duration = (check_interval / 2).min(min_interval);
+        let mut tick = interval(interval_duration);
+
+        debug!("primary LSN tracking running");
+        let comms = shard.comms();
 
         loop {
-            if let Ok(lsn) = primary.wal_flush_lsn().await {
-                if let Some(mut h) = hist.try_write() {
-                    h.push(lsn);
+            select! {
+                _ = tick.tick() => {
+                    if let Ok(lsn) = primary.wal_flush_lsn().await {
+                        if let Some(mut h) = hist.try_write() {
+                            h.push(lsn);
+                        }
+                    } else {
+                        error!("primary WAL lsn query failed");
+                    }
                 }
-            } else {
-                error!("primary lsn query failed");
-            }
 
-            tick.tick().await;
+                _ = comms.shutdown.notified() => break,
+            }
         }
     }
+}
 
+impl ShardMonitor {
     async fn monitor_replicas(shard: Shard, hist: Arc<RwLock<RecentLsnHistory>>) {
         let cfg_handle = config();
         let Some(replica_lag) = cfg_handle.config.replica_lag.as_ref() else {
             return;
         };
 
-        if !shard.has_replicas() {
-            return;
-        }
-
         let mut tick = interval(replica_lag.check_interval);
 
-        // Perhaps the analytics column could be an enum value Enum { Time(Duration), Bytes(u64) }
-        // We can keep time = 20x value of [max_lag] but once our history is full, we can only measure the lag in bytes
-        // replica_lag : t:0ns
-        // replica_lag : t:13ns
-        // replica_lag : b:23104
+        debug!("replica monitoring running");
+        let comms = shard.comms();
 
         loop {
-            for replica in shard.get_replicas().pools() {
-                match replica.wal_replay_lsn().await {
-                    Ok(replay_lsn) => {
-                        let delay_opt = hist.read().delay_for(replay_lsn);
-                        match delay_opt {
-                            None => {
-                                error!(
-                                    "\n\n\n\n -> replica {} lag. LSN {} older than history window; pausing routing\n\n\n",
-                                    replica.id(),
-                                    replay_lsn
-                                );
-
-                                replica.ban(Error::HealthcheckTimeout);
-                            }
-                            Some(delay) if delay > replica_lag.max_age => {
-                                error!(
-                                    "\n\n\n\nreplica {} lag {:?} exceeds {:?}; pausing routing",
-                                    replica.id(),
-                                    delay,
-                                    replica_lag.max_age
-                                );
-
-                                replica.ban(Error::HealthcheckTimeout);
-                            }
-                            Some(acceptable_delay) => {
-                                debug!("replica {} lag {:?}", replica.id(), acceptable_delay);
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        error!("replica {} LSN query failed: {}", replica.id(), e);
-                    }
+            select! {
+                _ = tick.tick() => {
+                    Self::process_replicas(&shard, &hist, replica_lag.max_age).await;
                 }
+                _ = comms.shutdown.notified() => break,
             }
+        }
 
-            tick.tick().await;
+        debug!("replica monitoring stopped");
+    }
+
+    async fn process_replicas(
+        shard: &Shard,
+        history: &Arc<RwLock<RecentLsnHistory>>,
+        max_age: Duration,
+    ) {
+        let Some(primary) = shard.get_primary() else {
+            return;
+        };
+
+        let Ok(lsn) = primary.wal_flush_lsn().await else {
+            error!("primary WAL lsn query failed");
+            return;
+        };
+
+        for replica in shard.get_replicas().pools() {
+            Self::process_single_replica(&replica, lsn, history, max_age).await;
+        }
+    }
+
+    async fn process_single_replica(
+        replica: &Pool,
+        primary_lsn: u64,
+        history: &Arc<RwLock<RecentLsnHistory>>,
+        max_age: Duration,
+    ) {
+        let replay_lsn = match replica.wal_replay_lsn().await {
+            Ok(lsn) => lsn,
+            Err(e) => {
+                error!("replica {} LSN query failed: {}", replica.id(), e);
+                return;
+            }
+        };
+
+        let h = history.read();
+        let maybe_delay = h.estimate_delay(primary_lsn, replay_lsn);
+
+        // TODO(Nic):
+        // - The current query logic prevents pools from executing any query once banned.
+        // - This includes running their own LSN queries.
+        // - For this reason, we cannot ban replicas for lagging just yet
+        // - For now, we simply tracing::error!() it for now.
+        // - It's sensible to ban replicas from making user queries when it's lagging too much, but...
+        //   unexposed PgDog admin queries should be allowed on "banned" replicas.
+        // - TLDR; We need a way to distinguish between user and admin queries, and let admin...
+        //   queries run on "banned" replicas.
+
+        match maybe_delay {
+            Some(est_delay) if est_delay > max_age => {
+                error!(
+                    "replica {} estimated lag {:?} exceeds {:?}; pausing routing",
+                    replica.id(),
+                    est_delay,
+                    max_age
+                );
+            }
+            Some(est_delay) => {
+                debug!("replica {} lag {:?} (estimated)", replica.id(), est_delay);
+            }
+            None => {}
         }
     }
 }
@@ -360,11 +428,13 @@ impl RecentLsnHistory {
 
     /// Create a new empty history
     pub fn new() -> Self {
+        let empty_entry = LsnEntry {
+            lsn: 0,
+            captured_at: Instant::now(),
+        };
+
         Self {
-            entries: [LsnEntry {
-                lsn: 0,
-                captured_at: Instant::now(),
-            }; Self::CAPACITY],
+            entries: [empty_entry; Self::CAPACITY],
             head: 0,
             len: 0,
         }
@@ -385,26 +455,46 @@ impl RecentLsnHistory {
         }
     }
 
-    /// Estimate replica delay
-    pub fn delay_for(&self, replay_lsn: u64) -> Option<Duration> {
-        if self.len < Self::CAPACITY {
+    pub fn estimate_delay(&self, primary_lsn: u64, replay_lsn: u64) -> Option<Duration> {
+        let bytes_behind = primary_lsn.saturating_sub(replay_lsn);
+        if bytes_behind == 0 {
             return Some(Duration::ZERO);
         }
 
-        let now = Instant::now();
-
-        // Iterate from newest to oldest entry
-        for i in 0..self.len {
-            // Calculate the actual index in reverse order
-            let idx = (self.head + Self::CAPACITY - 1 - i) % Self::CAPACITY;
-            let entry = &self.entries[idx];
-
-            if entry.lsn <= replay_lsn {
-                return Some(now.duration_since(entry.captured_at));
-            }
+        let bytes_per_second = self.wal_throughput()?;
+        if bytes_per_second <= 0.0 {
+            return None;
         }
 
-        None
+        let seconds_behind = bytes_behind as f64 / bytes_per_second;
+
+        Some(Duration::from_secs_f64(seconds_behind))
+    }
+
+    /// Estimate WAL throughput in bytes per second
+    fn wal_throughput(&self) -> Option<f64> {
+        if self.len < 2 {
+            return None;
+        }
+
+        let newest_idx = (self.head + Self::CAPACITY - 1) % Self::CAPACITY;
+        let oldest_idx = (self.head + Self::CAPACITY - self.len) % Self::CAPACITY;
+
+        let newest = self.entries[newest_idx];
+        let oldest = self.entries[oldest_idx];
+
+        if newest.lsn <= oldest.lsn {
+            return None;
+        }
+
+        let delta_lsn = newest.lsn - oldest.lsn;
+        let delta_time = newest.captured_at.duration_since(oldest.captured_at);
+
+        if delta_time.is_zero() {
+            return None;
+        }
+
+        Some(delta_lsn as f64 / delta_time.as_secs_f64())
     }
 }
 

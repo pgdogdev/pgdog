@@ -33,6 +33,12 @@ pub enum Error {
     #[error("healthcheck error")]
     HealthcheckError,
 
+    #[error("primary lsn query failed")]
+    PrimaryLsnQueryFailed,
+
+    #[error("replica lsn query failed")]
+    ReplicaLsnQueryFailed,
+
     #[error("pool is shut down")]
     Offline,
 

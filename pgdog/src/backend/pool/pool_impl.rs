@@ -4,9 +4,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-// Remove me
-use rand::{thread_rng, Rng};
-
 use once_cell::sync::Lazy;
 use parking_lot::{lock_api::MutexGuard, Mutex, RawMutex};
 use tokio::time::Instant;
@@ -427,14 +424,14 @@ impl Pool {
         let rows: Vec<DataRow> = guard
             .fetch_all("SELECT pg_current_wal_flush_lsn()")
             .await
-            .map_err(|_| Error::HealthcheckError)?;
+            .map_err(|_| Error::PrimaryLsnQueryFailed)?;
 
         let lsn = rows
             .first()
             .map(|r| r.get::<String>(0, Format::Text).unwrap_or_default())
             .unwrap_or_default();
 
-        parse_pg_lsn(&lsn).ok_or(Error::HealthcheckError)
+        parse_pg_lsn(&lsn).ok_or(Error::PrimaryLsnQueryFailed)
     }
 
     /// `pg_last_wal_replay_lsn()` on a replica.
@@ -444,22 +441,14 @@ impl Pool {
         let rows: Vec<DataRow> = guard
             .fetch_all("SELECT pg_last_wal_replay_lsn()")
             .await
-            .map_err(|_| Error::HealthcheckError)?;
+            .map_err(|_| Error::ReplicaLsnQueryFailed)?;
 
         let lsn = rows
             .first()
             .map(|r| r.get::<String>(0, Format::Text).unwrap_or_default())
             .unwrap_or_default();
 
-        let original = parse_pg_lsn(&lsn).ok_or(Error::HealthcheckError);
-
-        // TODO(NIC) :: REMOVE ME <- this siumlates lag.
-        let mut rng = thread_rng();
-        if rng.gen_ratio(1, 50) {
-            return Ok(1000);
-        }
-
-        original
+        parse_pg_lsn(&lsn).ok_or(Error::ReplicaLsnQueryFailed)
     }
 }
 

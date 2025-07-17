@@ -1182,14 +1182,16 @@ impl ReplicaLag {
             }
         });
 
-        println!("");
-        println!("");
-        println!("");
-        println!("-> OUT {:?}", out);
-
         out
     }
 }
+
+// NOTE: serialize and deserialize are not inverses.
+// - Normally you'd expect ser <-> deser to round-trip, but here deser applies defaults...
+//   for missing fields
+// - Serializes takes those applied defaults into account so that ReplicaLag always reflects...
+//   the actual effective values.
+// - This ensures pgdog.admin sees the true config that is applied, not just what was configured.
 
 impl Serialize for ReplicaLag {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
