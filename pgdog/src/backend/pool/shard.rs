@@ -161,10 +161,12 @@ impl ShardInner {
                 .await
         } else {
             use ReadWriteSplit::*;
+
             let primary = match self.rw_split {
                 IncludePrimary => &self.primary,
                 ExcludePrimary => &None,
             };
+
             self.replicas.get(request, primary).await
         }
     }
@@ -207,6 +209,7 @@ impl ShardInner {
             primary.cancel(id).await?;
         }
         self.replicas.cancel(id).await?;
+
         Ok(())
     }
 
