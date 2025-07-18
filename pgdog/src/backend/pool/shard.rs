@@ -106,8 +106,8 @@ impl Shard {
 
     /// Bring every pool online.
     pub fn launch(&self) {
-        ShardMonitor::run(self);
         self.pools().iter().for_each(|pool| pool.launch());
+        ShardMonitor::run(self);
     }
 
     pub fn is_write_only(&self) -> bool {

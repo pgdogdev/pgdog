@@ -17,9 +17,9 @@ load_balancing_strategy = "round_robin"
 auth_type = "trust"
 read_write_split = "exclude_primary"
 
-[replica_lag]
-check_interval = 2000
-max_age = 50
+# [replica_lag]
+# check_interval = 2000
+# max_age = 50
 
 [admin]
 user = "pgdog"
