@@ -45,6 +45,7 @@ pub(super) struct Inner {
     /// to the new pool.
     moved: Option<Pool>,
     id: u64,
+    pub(super) replica_lag: ReplicaLag,
 }
 
 impl std::fmt::Debug for Inner {
@@ -78,6 +79,7 @@ impl Inner {
             oids: None,
             moved: None,
             id,
+            replica_lag: ReplicaLag::default(),
         }
     }
     /// Total number of connections managed by the pool.
@@ -416,6 +418,66 @@ pub(super) struct CheckInResult {
     pub(super) banned: bool,
     pub(super) replenish: bool,
 }
+
+// -------------------------------------------------------------------------------------------------
+// ----- ReplicaLag --------------------------------------------------------------------------------
+
+#[derive(Clone, Copy, Debug)]
+pub enum ReplicaLag {
+    NonApplicable,
+    Duration(std::time::Duration),
+    Bytes(u64),
+    Unknown,
+}
+
+impl ReplicaLag {
+    pub fn simple_display(&self) -> String {
+        match self {
+            Self::NonApplicable => "n/a".to_string(),
+            Self::Duration(d) => {
+                let total_secs = d.as_secs();
+                let minutes = total_secs / 60;
+                let seconds = total_secs % 60;
+
+                if minutes > 0 {
+                    return if seconds > 0 {
+                        format!("{}m{}s", minutes, seconds)
+                    } else {
+                        format!("{}m", minutes)
+                    };
+                }
+
+                if total_secs > 0 {
+                    return format!("{}s", total_secs);
+                }
+
+                format!("{}ms", d.as_millis())
+            }
+            Self::Bytes(b) => format!("{}B", b),
+            Self::Unknown => "unknown".to_string(),
+        }
+    }
+}
+
+impl Default for ReplicaLag {
+    fn default() -> Self {
+        Self::Unknown
+    }
+}
+
+impl std::fmt::Display for ReplicaLag {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NonApplicable => write!(f, "NonApplicable"),
+            Self::Duration(d) => write!(f, "Duration({:?})", d),
+            Self::Bytes(b) => write!(f, "Bytes({})", b),
+            Self::Unknown => write!(f, "Unknown"),
+        }
+    }
+}
+
+// -------------------------------------------------------------------------------------------------
+// -------------------------------------------------------------------------------------------------
 
 #[cfg(test)]
 mod test {

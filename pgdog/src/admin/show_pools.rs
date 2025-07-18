@@ -40,6 +40,7 @@ impl Command for ShowPools {
             Field::numeric("re_synced"),
             Field::numeric("out_of_sync"),
             Field::bool("online"),
+            Field::text("replica_lag"),
         ]);
         let mut messages = vec![rd.message()?];
         for (user, cluster) in databases().all() {
@@ -49,6 +50,7 @@ impl Command for ShowPools {
                     let state = pool.state();
                     let maxwait = state.maxwait.as_secs() as i64;
                     let maxwait_us = state.maxwait.subsec_micros() as i64;
+
                     row.add(pool.id() as i64)
                         .add(user.database.as_str())
                         .add(user.user.as_str())
@@ -68,7 +70,9 @@ impl Command for ShowPools {
                         .add(state.errors)
                         .add(state.re_synced)
                         .add(state.out_of_sync)
-                        .add(state.online);
+                        .add(state.online)
+                        .add(state.replica_lag.simple_display());
+
                     messages.push(row.message()?);
                 }
             }

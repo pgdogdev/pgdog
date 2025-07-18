@@ -245,10 +245,10 @@ impl Cluster {
         self.sharded_tables.sharded_column(table, columns)
     }
 
-    /// This cluster is read only (no primaries).
+    /// A cluster is read_only if zero shards have a primary.
     pub fn read_only(&self) -> bool {
         for shard in &self.shards {
-            if shard.primary.is_some() {
+            if shard.has_primary() {
                 return false;
             }
         }
@@ -256,10 +256,10 @@ impl Cluster {
         true
     }
 
-    ///  This cluster is write only (no replicas).
+    /// This cluster is write_only if zero shards have a replica.
     pub fn write_only(&self) -> bool {
         for shard in &self.shards {
-            if !shard.replicas.is_empty() {
+            if shard.has_replicas() {
                 return false;
             }
         }
@@ -347,8 +347,12 @@ impl Cluster {
 #[cfg(test)]
 mod test {
     use crate::{
-        backend::{Pool, Replicas, Shard, ShardedTables},
-        config::{DataType, Hasher, ReadWriteStrategy, ShardedTable},
+        backend::pool::{Address, Config, PoolConfig},
+        backend::{Shard, ShardedTables},
+        config::{
+            DataType, Hasher, LoadBalancingStrategy, ReadWriteSplit, ReadWriteStrategy,
+            ShardedTable,
+        },
     };
 
     use super::Cluster;
@@ -373,22 +377,30 @@ mod test {
                     false,
                 ),
                 shards: vec![
-                    Shard {
-                        primary: Some(Pool::new_test()),
-                        replicas: Replicas {
-                            pools: vec![Pool::new_test()],
-                            ..Default::default()
-                        },
-                        ..Default::default()
-                    },
-                    Shard {
-                        primary: Some(Pool::new_test()),
-                        replicas: Replicas {
-                            pools: vec![Pool::new_test()],
-                            ..Default::default()
-                        },
-                        ..Default::default()
-                    },
+                    Shard::new(
+                        &Some(PoolConfig {
+                            address: Address::new_test(),
+                            config: Config::default(),
+                        }),
+                        &[PoolConfig {
+                            address: Address::new_test(),
+                            config: Config::default(),
+                        }],
+                        LoadBalancingStrategy::Random,
+                        ReadWriteSplit::default(),
+                    ),
+                    Shard::new(
+                        &Some(PoolConfig {
+                            address: Address::new_test(),
+                            config: Config::default(),
+                        }),
+                        &[PoolConfig {
+                            address: Address::new_test(),
+                            config: Config::default(),
+                        }],
+                        LoadBalancingStrategy::Random,
+                        ReadWriteSplit::default(),
+                    ),
                 ],
                 ..Default::default()
             }

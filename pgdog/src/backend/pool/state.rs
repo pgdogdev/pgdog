@@ -3,7 +3,7 @@ use std::time::Duration;
 use crate::config::PoolerMode;
 use tokio::time::Instant;
 
-use super::{Ban, Config, Pool, Stats};
+use super::{inner::ReplicaLag, Ban, Config, Pool, Stats};
 
 /// Pool state.
 #[derive(Debug)]
@@ -40,6 +40,8 @@ pub struct State {
     pub maxwait: Duration,
     /// Pool mode
     pub pooler_mode: PoolerMode,
+    /// Lag
+    pub replica_lag: ReplicaLag,
 }
 
 impl State {
@@ -69,6 +71,7 @@ impl State {
                 .map(|req| now.duration_since(req.request.created_at))
                 .unwrap_or(Duration::ZERO),
             pooler_mode: guard.config().pooler_mode,
+            replica_lag: guard.replica_lag,
         }
     }
 }
