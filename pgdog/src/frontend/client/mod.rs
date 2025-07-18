@@ -102,17 +102,32 @@ impl Client {
         // Auto database.
         let exists = databases::databases().exists((user, database));
         let passthrough_password = if config.config.general.passthrough_auth() && !admin {
+            println!("");
+            println!("");
+            println!("");
+            println!("Client::spawn");
+
             let password = if auth_type.trust() {
+                println!("Client::spawn::auth_type.trust()");
+
                 // Use empty password.
                 // TODO: Postgres must be using "trust" auth
                 // or some other kind of authentication that doesn't require a password.
                 Password::new_password("")
             } else {
+                println!("Client::spawn::!auth_type.trust()");
+
                 // Get the password.
                 stream
                     .send_flush(&Authentication::ClearTextPassword)
                     .await?;
                 let password = stream.read().await?;
+
+                println!(
+                    "Client::spawn::!auth_type.trust() ~ password = {:?}",
+                    &password
+                );
+
                 Password::from_bytes(password.to_bytes()?)?
             };
 
@@ -126,6 +141,11 @@ impl Client {
         } else {
             None
         };
+
+        println!(
+            "Client::spawn ~ passthrough_password = {:?}",
+            &passthrough_password
+        );
 
         // Get server parameters and send them to the client.
         let mut conn = match Connection::new(user, database, admin, &passthrough_password) {

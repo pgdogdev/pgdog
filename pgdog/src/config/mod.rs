@@ -644,8 +644,28 @@ impl General {
     }
 
     pub fn passthrough_auth(&self) -> bool {
-        self.tls().is_some() && self.passthrough_auth == PassthoughAuth::Enabled
-            || self.passthrough_auth == PassthoughAuth::EnabledPlain
+        let tls_present = self.tls().is_some();
+        let auth_enabled_passthrough = self.passthrough_auth == PassthoughAuth::Enabled;
+        let auth_enabled_plain = self.passthrough_auth == PassthoughAuth::EnabledPlain;
+
+        println!("");
+        println!("");
+        println!("");
+        println!("");
+        println!(
+            "Config::General::passthrough ~ tls_present: {}",
+            tls_present
+        );
+        println!(
+            "Config::General::passthrough ~ auth_enabled_passthrough: {}",
+            auth_enabled_passthrough
+        );
+        println!(
+            "Config::General::passthrough ~ auth_enabled_plain: {}",
+            auth_enabled_plain
+        );
+
+        (tls_present && auth_enabled_passthrough) || auth_enabled_plain
     }
 }
 
