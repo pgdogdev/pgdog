@@ -14,9 +14,11 @@ def no_out_of_sync():
     conn = admin()
     cur = conn.cursor()
     cur.execute("SHOW POOLS;")
+    column_names = [desc[0] for desc in cur.description]
+    out_of_sync_idx = column_names.index("out_of_sync")
     pools = cur.fetchall()
     for pool in pools:
-        assert pool[-2] == 0
+        assert pool[out_of_sync_idx] == 0
 
 
 def sharded_sync():
