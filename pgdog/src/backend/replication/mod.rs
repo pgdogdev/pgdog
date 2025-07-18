@@ -1,6 +1,7 @@
 pub mod buffer;
 pub mod config;
 pub mod error;
+pub mod logical;
 pub mod sharded_tables;
 
 pub use buffer::Buffer;
