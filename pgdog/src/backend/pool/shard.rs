@@ -331,12 +331,27 @@ impl ShardMonitor {
         }
     }
 
+    // TODO -> [process_single_replica]
+    // - The current query logic prevents pools from executing any query once banned.
+    // - This includes running their own LSN queries.
+    // - For this reason, we cannot ban replicas for lagging just yet
+    // - For now, we simply tracing::error!() it for now.
+    // - It's sensible to ban replicas from making user queries when it's lagging too much, but...
+    //   unexposed PgDog admin queries should be allowed on "banned" replicas.
+    // - TLDR; We need a way to distinguish between user and admin queries, and let admin...
+    //   queries run on "banned" replicas.
+
     async fn process_single_replica(
         replica: &Pool,
         primary_lsn: u64,
         history: &Arc<RwLock<RecentLsnHistory>>,
         max_age: Duration,
     ) {
+        if replica.banned() {
+            replica.set_replica_lag(ReplicaLag::Unknown);
+            return;
+        };
+
         let replay_lsn = match replica.wal_replay_lsn().await {
             Ok(lsn) => lsn,
             Err(e) => {
@@ -348,27 +363,17 @@ impl ShardMonitor {
         let h = history.read();
         let maybe_delay = h.estimate_delay(primary_lsn, replay_lsn);
 
-        // TODO(Nic):
-        // - The current query logic prevents pools from executing any query once banned.
-        // - This includes running their own LSN queries.
-        // - For this reason, we cannot ban replicas for lagging just yet
-        // - For now, we simply tracing::error!() it for now.
-        // - It's sensible to ban replicas from making user queries when it's lagging too much, but...
-        //   unexposed PgDog admin queries should be allowed on "banned" replicas.
-        // - TLDR; We need a way to distinguish between user and admin queries, and let admin...
-        //   queries run on "banned" replicas.
-
         match maybe_delay {
-            Some(est_delay) if est_delay > max_age => {
+            Some(delay) if delay > max_age => {
                 error!(
-                    "replica {} estimated lag {:?} exceeds {:?}; pausing routing",
+                    "replica {} estimated lag {:?} exceeds {:?}; should ban replica",
                     replica.id(),
-                    est_delay,
+                    delay,
                     max_age
                 );
             }
-            Some(est_delay) => {
-                debug!("replica {} lag {:?} (estimated)", replica.id(), est_delay);
+            Some(delay) => {
+                debug!("replica {} lag {:?} (estimated)", replica.id(), delay);
             }
             None => {}
         }
