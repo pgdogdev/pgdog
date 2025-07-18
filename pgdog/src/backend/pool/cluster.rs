@@ -245,10 +245,10 @@ impl Cluster {
         self.sharded_tables.sharded_column(table, columns)
     }
 
-    /// This cluster is read only (no primaries).
+    /// A cluster is read_only if zero shards have a primary.
     pub fn read_only(&self) -> bool {
         for shard in &self.shards {
-            if shard.is_read_only() {
+            if shard.has_primary() {
                 return false;
             }
         }
@@ -256,10 +256,10 @@ impl Cluster {
         true
     }
 
-    ///  This cluster is write only (no replicas).
+    /// This cluster is write_only if zero shards have a replica.
     pub fn write_only(&self) -> bool {
         for shard in &self.shards {
-            if !shard.is_read_only() {
+            if shard.has_replicas() {
                 return false;
             }
         }

@@ -110,12 +110,8 @@ impl Shard {
         ShardMonitor::run(self);
     }
 
-    pub fn is_write_only(&self) -> bool {
-        self.replicas.is_empty()
-    }
-
-    pub fn is_read_only(&self) -> bool {
-        self.primary.is_none()
+    pub fn has_primary(&self) -> bool {
+        self.primary.is_some()
     }
 
     pub fn has_replicas(&self) -> bool {
