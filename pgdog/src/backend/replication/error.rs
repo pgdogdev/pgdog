@@ -26,6 +26,12 @@ pub enum Error {
 
     #[error("protocol error")]
     Protocol,
+
+    #[error("transaction required for copy")]
+    CopyNoTransaction,
+
+    #[error("{0}")]
+    PgQuery(#[from] pg_query::Error),
 }
 
 impl From<backend::Error> for Error {

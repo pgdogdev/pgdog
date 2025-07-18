@@ -109,7 +109,7 @@ impl ReplicationSlot {
     /// Start replication.
     pub async fn replicate(&self, conn: &mut Server) -> Result<(), Error> {
         let query = Query::new(&format!(
-            r#"START_REPLICATION SLOT "{}" LOGICAL {} ("p roto_version" '2', "publication_names" '{}')"#,
+            r#"START_REPLICATION SLOT "{}" LOGICAL {} ("proto_version" '2', "publication_names" '{}')"#,
             self.name, self.lsn, self.publication
         ));
         conn.send_one(&query.into()).await?;
@@ -127,39 +127,22 @@ impl ReplicationSlot {
 
 #[cfg(test)]
 mod test {
-    use crate::{
-        backend::{pool::Address, ServerOptions},
-        net::Parameter,
-    };
+    use crate::backend::{pool::Address, ServerOptions};
 
     use super::*;
 
     #[tokio::test]
-    #[ignore]
+    // #[ignore]
     async fn test_replication_slot() {
         crate::logger();
 
-        let mut server = Server::connect(
-            &Address {
-                host: "127.0.0.1".into(),
-                port: 5432,
-                user: "pgdog".into(),
-                password: "pgdog".into(),
-                database_name: "pgdog".into(),
-            },
-            ServerOptions {
-                params: vec![Parameter {
-                    name: "replication".into(),
-                    value: "database".into(),
-                }],
-            },
-        )
-        .await
-        .unwrap();
+        let mut server = Server::connect(&Address::new_test(), ServerOptions::new_replication())
+            .await
+            .unwrap();
 
-        // let _ = server
-        //     .execute("DROP PUBLICATION test_replication_slot")
-        //     .await;
+        let _ = server
+            .execute("DROP PUBLICATION test_replication_slot")
+            .await;
         server
             .execute("CREATE PUBLICATION test_replication_slot FOR ALL TABLES")
             .await
@@ -178,10 +161,13 @@ mod test {
         repl_temp.create_slot(&mut server).await.unwrap();
         server.execute("COMMIT").await.unwrap();
         repl_temp.replicate(&mut server).await.unwrap();
-        // repl_temp.drop_slot(&mut server).await.unwrap();
+        drop(server);
+
+        let mut server = Server::connect(&Address::new_test(), ServerOptions::new_replication())
+            .await
+            .unwrap();
+
+        repl_temp.drop_slot(&mut server).await.unwrap();
         repl.drop_slot(&mut server).await.unwrap();
-        let _ = server
-            .execute("DROP PUBLICATION test_replication_slot")
-            .await;
     }
 }

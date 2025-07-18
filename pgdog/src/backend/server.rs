@@ -55,6 +55,7 @@ pub struct Server {
     sync_prepared: bool,
     in_transaction: bool,
     re_synced: bool,
+    replication_mode: bool,
     pooler_mode: PoolerMode,
     stream_buffer: BytesMut,
 }
@@ -68,7 +69,7 @@ impl MemoryUsage for Server {
             + self.client_params.memory_usage()
             + std::mem::size_of::<Stats>()
             + self.prepared_statements.memory_used()
-            + 6 * std::mem::size_of::<bool>()
+            + 7 * std::mem::size_of::<bool>()
             + std::mem::size_of::<PoolerMode>()
             + self.stream_buffer.capacity()
     }
@@ -240,6 +241,7 @@ impl Server {
             stream: Some(stream),
             id,
             stats: Stats::connect(id, addr, &params),
+            replication_mode: options.replication_mode(),
             params,
             changed_params: Parameters::default(),
             client_params: Parameters::default(),
@@ -332,7 +334,7 @@ impl Server {
     pub async fn read(&mut self) -> Result<Message, Error> {
         let message = loop {
             if let Some(message) = self.prepared_statements.state_mut().get_simulated() {
-                return Ok(message);
+                return Ok(message.backend());
             }
             match self
                 .stream
@@ -399,7 +401,7 @@ impl Server {
             'E' => {
                 let error = ErrorResponse::from_bytes(message.to_bytes()?)?;
                 self.schema_changed = error.code == "0A000";
-                self.stats.error()
+                self.stats.error();
             }
             'W' => {
                 debug!("streaming replication on [{}]", self.addr());
@@ -423,7 +425,7 @@ impl Server {
             _ => (),
         }
 
-        Ok(message.backend())
+        Ok(message)
     }
 
     /// Synchronize parameters between client and server.
@@ -536,6 +538,7 @@ impl Server {
 
     /// Execute a batch of queries and return all results.
     pub async fn execute_batch(&mut self, queries: &[Query]) -> Result<Vec<Message>, Error> {
+        let mut err = None;
         if !self.in_sync() {
             return Err(Error::NotInSync);
         }
@@ -568,13 +571,16 @@ impl Server {
             }
 
             if message.code() == 'E' {
-                let err = ErrorResponse::from_bytes(message.to_bytes()?)?;
-                return Err(Error::ExecutionError(Box::new(err)));
+                err = Some(ErrorResponse::from_bytes(message.to_bytes()?)?);
             }
             messages.push(message);
         }
 
-        Ok(messages)
+        if let Some(err) = err {
+            Err(Error::ExecutionError(Box::new(err)))
+        } else {
+            Ok(messages)
+        }
     }
 
     /// Execute a query on the server and return the result.
@@ -842,6 +848,11 @@ impl Server {
     }
 
     #[inline]
+    pub fn replication_mode(&self) -> bool {
+        self.replication_mode
+    }
+
+    #[inline]
     pub fn prepared_statements_mut(&mut self) -> &mut PreparedStatements {
         &mut self.prepared_statements
     }
@@ -896,6 +907,7 @@ pub mod test {
                 sync_prepared: false,
                 in_transaction: false,
                 re_synced: false,
+                replication_mode: false,
                 pooler_mode: PoolerMode::Transaction,
                 stream_buffer: BytesMut::with_capacity(1024),
             }
