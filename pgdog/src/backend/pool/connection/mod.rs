@@ -276,16 +276,28 @@ impl Connection {
 
     /// Fetch the cluster from the global database store.
     pub(crate) fn reload(&mut self) -> Result<(), Error> {
+        println!("");
+        println!("");
+        println!("");
+        println!("backend::pool::Connection::reload");
+
         match self.binding {
             Binding::Server(_) | Binding::MultiShard(_, _) | Binding::Replication(_, _) => {
                 let user = (self.user.as_str(), self.database.as_str());
                 // Check passthrough auth.
                 if config().config.general.passthrough_auth() && !databases().exists(user) {
                     if let Some(ref passthrough_password) = self.passthrough_password {
+                        println!(
+                            "backend::pool::Connection::reload ~ passthrough_password = {:?}",
+                            passthrough_password
+                        );
+
                         let new_user = User::new(&self.user, passthrough_password, &self.database);
                         databases::add(new_user);
                     }
                 }
+
+                println!("backend::pool::Connection::reload ~ New user added");
 
                 let databases = databases();
                 let cluster = databases.cluster(user)?;
