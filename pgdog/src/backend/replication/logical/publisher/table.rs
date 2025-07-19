@@ -1,10 +1,13 @@
 //! Table.
 use pg_query::NodeEnum;
 
-use crate::backend::replication::Error;
+use crate::backend::pool::{Connection, Request};
 use crate::backend::{Cluster, Server};
 use crate::frontend::router::parser::CopyParser;
-use crate::net::Query;
+use crate::frontend::router::Route;
+use crate::net::{CopyData, ErrorResponse, FromBytes, Protocol, Query, ToBytes};
+
+use super::super::{CopyStatement, Error};
 
 #[derive(Debug, Clone)]
 pub struct Table {
@@ -22,41 +25,66 @@ impl Table {
         }
     }
 
-    pub async fn copy_out(&self, source: &mut Server, destination: &Cluster) -> Result<(), Error> {
+    pub async fn start_copy_out(
+        &self,
+        source: &mut Server,
+        destination: &Cluster,
+    ) -> Result<(), Error> {
         if !source.in_transaction() {
-            return Err(Error::CopyNoTransaction);
+            return Err(Error::TransactionNotStarted);
         }
 
-        let copy_query = format!(
-            r#"COPY "{}"."{}" ({}) TO STDOUT"#,
-            self.schema,
-            self.name,
-            self.columns
-                .iter()
-                .map(|c| format!(r#""{}""#, c))
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
+        let copy_stmt = CopyStatement::new_out(&self.schema, &self.name, &self.columns);
 
-        let stmt = pg_query::parse(&copy_query)?;
+        let stmt = pg_query::parse(&copy_stmt.to_string())?;
         let copy = stmt
             .protobuf
             .stmts
             .first()
-            .ok_or(Error::Protocol)?
+            .ok_or(Error::Copy)?
             .stmt
             .as_ref()
-            .ok_or(Error::Protocol)?;
-        match copy.node {
-            Some(NodeEnum::CopyStmt(ref stmt)) => {
-                let copy = CopyParser::new(stmt, destination).unwrap();
-            }
+            .ok_or(Error::Copy)?;
+        let mut copy = match copy.node {
+            Some(NodeEnum::CopyStmt(ref stmt)) => CopyParser::new(stmt, destination)
+                .map_err(|_| Error::Copy)?
+                .ok_or(Error::Copy)?,
 
-            _ => (),
+            _ => return Err(Error::Copy),
         };
 
-        source.send_one(Query::new(copy_query)).await?;
+        source
+            .send_one(&Query::new(copy_stmt.to_string()).into())
+            .await?;
         source.flush().await?;
+
+        let mut conn = Connection::new(destination.user(), destination.name(), false, &None)?;
+        conn.connect(&Request::default(), &Route::write(None))
+            .await?;
+
+        conn.send(&vec![Query::new(copy_in).into()].into()).await?;
+
+        let mut buffer = vec![];
+
+        while source.has_more_messages() {
+            let msg = source.read().await?;
+            match msg.code() {
+                'd' => {
+                    buffer.push(CopyData::from_bytes(msg.to_bytes()?)?);
+                    let sharded = copy
+                        .shard(std::mem::take(&mut buffer))
+                        .map_err(|_| Error::OutOfSync)?;
+                    conn.send_copy(sharded).await?;
+                }
+
+                'E' => {
+                    ErrorResponse::from_bytes(msg.to_bytes()?)?;
+                    return Err(Error::OutOfSync);
+                }
+
+                _ => return Err(Error::OutOfSync),
+            }
+        }
 
         Ok(())
     }
