@@ -3,7 +3,8 @@
 //
 // This module implements manual routing hints for PgDog via comments and CTEs.
 //
-// WARNING: This is not production-ready. It currently does not fully utilize ShardingSchema
+// WARNING:
+// This is not production-ready. It currently does not fully utilize ShardingSchema
 // for all hint types and does not handle transaction-level overrides via SET statements
 // (e.g., SET pgdog.shard or SET pgdog.sharding_key). These features must be implemented
 // and tested before using in production.
@@ -395,13 +396,12 @@ fn parse_sharding_key_param(param_number: i32, bind: Option<&Bind>) -> Option<Sh
 }
 
 // -------------------------------------------------------------------------------------------------
-// ----- Tests -------------------------------------------------------------------------------------
+// ----- Manual Routing :: CTE :: Tests ------------------------------------------------------------
 
 #[cfg(test)]
 mod cte_test {
 
     use super::*;
-
     use crate::net::messages::{Bind, Parameter};
     use pg_query::parse;
     use uuid::Uuid;
@@ -479,6 +479,7 @@ mod cte_test {
     #[test]
     fn shard_and_key_conflict() {
         let sql = r#"
+
             WITH
             pgdog_overrides AS (
                 SELECT
@@ -486,6 +487,7 @@ mod cte_test {
                     'abc'::text AS sharding_key
             )
             SELECT 1;
+
         "#;
         let sql = ast(sql);
 
@@ -518,23 +520,21 @@ mod cte_test {
                 recent_messages;
 
         "#;
+        let sql = ast(sql);
 
         let user_id = "550e8400-e29b-41d4-a716-446655440000";
         let user_id_param = Parameter {
             len: 36,
             data: Uuid::parse_str(user_id).unwrap().to_string().into_bytes(),
         };
-
         let params = vec![user_id_param];
         let bind = Bind::test_params("", &params);
-
-        let ast = Arc::new(parse(sql).unwrap());
         let schema = ShardingSchema::default();
 
-        let hint = find_cte_manual_routing_hint(ast, Some(&bind), &schema);
+        let result = find_cte_manual_routing_hint(sql, Some(&bind), &schema);
+        let mrh = ManualRoutingHint::Shard(12);
 
-        println!("HINT {:?}", hint);
-        assert_eq!(hint, None);
+        assert_eq!(result, Some(mrh));
     }
 
     #[test]
@@ -562,6 +562,7 @@ mod cte_test {
                 recent_messages;
 
         "#;
+        let sql = ast(sql);
 
         let params = vec![
             Parameter {
@@ -573,25 +574,23 @@ mod cte_test {
                 data: Uuid::parse_str(user_id).unwrap().to_string().into_bytes(),
             },
         ];
-
         let bind = Bind::test_params("", &params);
-
-        let ast = Arc::new(parse(sql).unwrap());
         let schema = ShardingSchema::default();
 
-        let hint = find_cte_manual_routing_hint(ast, Some(&bind), &schema);
-        assert_eq!(hint, None);
+        let result = find_cte_manual_routing_hint(sql, Some(&bind), &schema);
+        let mrh = ManualRoutingHint::Shard(12);
+
+        assert_eq!(result, Some(mrh));
     }
 }
 
 // -------------------------------------------------------------------------------------------------
-// ----- Tests ~ Multi-strategy-conflicts ----------------------------------------------------------
+// ----- Tests ~ Multi -----------------------------------------------------------------------------
 
 #[cfg(test)]
-mod conflict_tests {
+mod mutli_tests {
 
     use super::*;
-
     use pg_query::parse;
 
     fn ast(sql: &str) -> Arc<ParseResult> {
