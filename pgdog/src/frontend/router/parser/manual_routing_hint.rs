@@ -4,14 +4,21 @@
 // This module implements manual routing hints for PgDog via comments and CTEs.
 //
 // WARNING:
-// This is not production-ready. It currently does not fully utilize ShardingSchema
-// for all hint types and does not handle transaction-level overrides via SET statements
-// (e.g., SET pgdog.shard or SET pgdog.sharding_key). These features must be implemented
-// and tested before using in production.
+// - This is not production-ready.
+// - The idea is to have this for all manual routing hint detection go through one function.
+// - (e.g., SET pgdog.shard or SET pgdog.sharding_key).
+// - QueryParser can call this module and store the results in the QueryParser struct.
+//
+// UNCERTAIN:
+// - Should we widen then Regex rules for sharding_key?
+// - I added `_` to the old Regex which wasn't supported... but seems like any character should be
+//   allowed? I believe the example below would currently fail the Regex match.
+//
+//     ex: let video_id = nanoid();       // %_a8^a&!#@3g
+//
+// *** UNCERTAINS SHOULD BE HANDLED BEFORE MERGING TO TRUNK ***
 //
 // -------------------------------------------------------------------------------------------------
-
-use std::sync::Arc;
 
 use once_cell::sync::Lazy;
 use pg_query::protobuf::a_const::Val::{Ival, Sval};
@@ -20,7 +27,6 @@ use pg_query::NodeEnum;
 use pg_query::{protobuf::Token, scan, Node, ParseResult};
 use regex::Regex;
 
-use crate::backend::ShardingSchema;
 use crate::net::messages::Bind;
 
 // -------------------------------------------------------------------------------------------------
@@ -52,20 +58,22 @@ static SHARDING_KEY_COMMENT_REGEX: Lazy<Regex> =
 // -------------------------------------------------------------------------------------------------
 // ----- Public functions --------------------------------------------------------------------------
 
-pub fn find_manual_routing_hint(
-    query_ast: Arc<ParseResult>,
-    query_str: &str,
-    binds: Option<&Bind>,
-    sharding_schema: &ShardingSchema,
-) -> Option<ManualRoutingHint> {
-    let comment_hint = find_comment_manual_routing_hint(query_str);
-    let cte_hint = find_cte_manual_routing_hint(query_ast, binds, sharding_schema);
+pub struct ManualRouting;
 
-    match (comment_hint, cte_hint) {
-        (None, None) => None,
-        (Some(h), None) => Some(h),
-        (None, Some(h)) => Some(h),
-        (Some(_), Some(_)) => Some(ManualRoutingHint::Conflict),
+impl ManualRouting {
+    pub fn find_hint(
+        query_ast: &ParseResult,
+        query_str: &str,
+        binds: Option<&Bind>,
+    ) -> Option<ManualRoutingHint> {
+        let comment_hint = find_comment_manual_routing_hint(query_str);
+        let cte_hint = find_cte_manual_routing_hint(query_ast, binds);
+
+        match (comment_hint, cte_hint) {
+            (None, None) => None,
+            (Some(h), None) | (None, Some(h)) => Some(h),
+            (Some(_), Some(_)) => Some(ManualRoutingHint::Conflict),
+        }
     }
 }
 
@@ -226,9 +234,8 @@ mod comment_tests {
 // ----- Manual Routing :: CTE ---------------------------------------------------------------------
 
 fn find_cte_manual_routing_hint(
-    ast: Arc<ParseResult>,
+    ast: &ParseResult,
     bind: Option<&Bind>,
-    _schema: &ShardingSchema,
 ) -> Option<ManualRoutingHint> {
     let has_override_cte = ast.cte_names.iter().any(|cte| cte == "pgdog_overrides");
     if !has_override_cte {
@@ -406,12 +413,8 @@ mod cte_test {
     use pg_query::parse;
     use uuid::Uuid;
 
-    fn ast(sql: &str) -> Arc<ParseResult> {
-        Arc::new(parse(sql).unwrap())
-    }
-
-    fn ss() -> ShardingSchema {
-        ShardingSchema::default()
+    fn ast(sql: &str) -> ParseResult {
+        parse(sql).unwrap()
     }
 
     #[test]
@@ -419,7 +422,7 @@ mod cte_test {
         let sql = "WITH pgdog_overrides AS (SELECT 5::integer AS shard) SELECT 1;";
         let sql = ast(sql);
 
-        let result = find_cte_manual_routing_hint(sql, None, &ss());
+        let result = find_cte_manual_routing_hint(&sql, None);
         let mrh = ManualRoutingHint::Shard(5);
 
         assert_eq!(result, Some(mrh));
@@ -430,9 +433,7 @@ mod cte_test {
         let sql = "WITH pgdog_overrides AS (SELECT 'k1'::text AS sharding_key) SELECT 1;";
         let sql = ast(sql);
 
-        let ss = ShardingSchema::default();
-
-        let result = find_cte_manual_routing_hint(sql, None, &ss);
+        let result = find_cte_manual_routing_hint(&sql, None);
         let mrh = ManualRoutingHint::ShardKey(ShardKeyValue::Text("k1".into()));
 
         assert_eq!(result, Some(mrh));
@@ -449,9 +450,7 @@ mod cte_test {
         }];
         let bind = Bind::test_params("", &params);
 
-        let ss = ShardingSchema::default();
-
-        let result = find_cte_manual_routing_hint(sql, Some(&bind), &ss);
+        let result = find_cte_manual_routing_hint(&sql, Some(&bind));
         let mrh = ManualRoutingHint::Shard(99);
 
         assert_eq!(result, Some(mrh));
@@ -470,7 +469,7 @@ mod cte_test {
         }];
         let bind = Bind::test_params("", &params);
 
-        let result = find_cte_manual_routing_hint(sql, Some(&bind), &ss());
+        let result = find_cte_manual_routing_hint(&sql, Some(&bind));
         let mrh = ManualRoutingHint::ShardKey(ShardKeyValue::Uuid(Uuid::parse_str(uuid).unwrap()));
 
         assert_eq!(result, Some(mrh));
@@ -491,7 +490,7 @@ mod cte_test {
         "#;
         let sql = ast(sql);
 
-        let result = find_cte_manual_routing_hint(sql, None, &ShardingSchema::default());
+        let result = find_cte_manual_routing_hint(&sql, None);
         let mrh = ManualRoutingHint::Conflict;
 
         assert_eq!(result, Some(mrh));
@@ -529,9 +528,8 @@ mod cte_test {
         };
         let params = vec![user_id_param];
         let bind = Bind::test_params("", &params);
-        let schema = ShardingSchema::default();
 
-        let result = find_cte_manual_routing_hint(sql, Some(&bind), &schema);
+        let result = find_cte_manual_routing_hint(&sql, Some(&bind));
         let mrh = ManualRoutingHint::Shard(12);
 
         assert_eq!(result, Some(mrh));
@@ -575,9 +573,8 @@ mod cte_test {
             },
         ];
         let bind = Bind::test_params("", &params);
-        let schema = ShardingSchema::default();
 
-        let result = find_cte_manual_routing_hint(sql, Some(&bind), &schema);
+        let result = find_cte_manual_routing_hint(&sql, Some(&bind));
         let mrh = ManualRoutingHint::Shard(12);
 
         assert_eq!(result, Some(mrh));
@@ -593,8 +590,8 @@ mod mutli_tests {
     use super::*;
     use pg_query::parse;
 
-    fn ast(sql: &str) -> Arc<ParseResult> {
-        Arc::new(parse(sql).unwrap())
+    fn ast(sql: &str) -> ParseResult {
+        parse(sql).unwrap()
     }
 
     #[test]
@@ -611,9 +608,8 @@ mod mutli_tests {
         "#;
 
         let query_ast = ast(query_str);
-        let schema = ShardingSchema::default();
 
-        let result = find_manual_routing_hint(query_ast, query_str, None, &schema);
+        let result = ManualRouting::find_hint(&query_ast, query_str, None);
         let mrh = ManualRoutingHint::Conflict;
 
         assert_eq!(result, Some(mrh));
@@ -632,9 +628,8 @@ mod mutli_tests {
         "#;
 
         let query_ast = ast(query_str);
-        let schema = ShardingSchema::default();
 
-        let result = find_manual_routing_hint(query_ast, query_str, None, &schema);
+        let result = ManualRouting::find_hint(&query_ast, query_str, None);
         let mrh = ManualRoutingHint::Conflict;
 
         assert_eq!(result, Some(mrh));
@@ -655,9 +650,8 @@ mod mutli_tests {
         "#;
 
         let query_ast = ast(query_str);
-        let schema = ShardingSchema::default();
 
-        let result = find_manual_routing_hint(query_ast, query_str, None, &schema);
+        let result = ManualRouting::find_hint(&query_ast, query_str, None);
         let mrh = ManualRoutingHint::Conflict;
 
         assert_eq!(result, Some(mrh));
