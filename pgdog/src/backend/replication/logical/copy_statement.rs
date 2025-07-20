@@ -9,7 +9,7 @@ pub struct CopyStatement {
 }
 
 impl CopyStatement {
-    pub fn new_out(schema: &str, table: &str, columns: &[String]) -> CopyStatement {
+    pub fn new(schema: &str, table: &str, columns: &[String]) -> CopyStatement {
         CopyStatement {
             schema: schema.to_owned(),
             table: table.to_owned(),
@@ -18,11 +18,14 @@ impl CopyStatement {
         }
     }
 
-    pub fn new_in(schema: &str, table: &str, columns: &[String]) -> CopyStatement {
-        let mut in_ = Self::new_out(schema, table, columns);
-        in_.out = false;
+    pub fn copy_out(mut self) -> Self {
+        self.out = true;
+        self
+    }
 
-        in_
+    pub fn copy_in(mut self) -> Self {
+        self.out = false;
+        self
     }
 }
 
@@ -54,13 +57,13 @@ mod test {
 
     #[test]
     fn test_copy_stmt() {
-        let copy = CopyStatement::new_in("public", "test", &["id".into(), "email".into()]);
+        let copy = CopyStatement::new("public", "test", &["id".into(), "email".into()]).copy_in();
         assert_eq!(
             copy.to_string(),
             r#"COPY "public"."test" ("id", "email") FROM STDIN"#
         );
 
-        let copy = CopyStatement::new_out("public", "test", &["id".into(), "email".into()]);
+        let copy = CopyStatement::new("public", "test", &["id".into(), "email".into()]).copy_out();
         assert_eq!(
             copy.to_string(),
             r#"COPY "public"."test" ("id", "email") TO STDOUT"#

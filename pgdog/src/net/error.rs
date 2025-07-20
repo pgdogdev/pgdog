@@ -78,4 +78,7 @@ pub enum Error {
 
     #[error("array has {0} dimensions, only 1 is supported")]
     ArrayDimensions(usize),
+
+    #[error("not a boolean")]
+    NotBoolean,
 }

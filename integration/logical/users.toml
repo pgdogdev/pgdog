@@ -1,0 +1,5 @@
+[[users]]
+database = "pgdog"
+name = "pgdog"
+password = "pgdog"
+replication_mode = true

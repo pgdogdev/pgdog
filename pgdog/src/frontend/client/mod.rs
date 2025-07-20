@@ -57,6 +57,7 @@ pub struct Client {
     stream_buffer: BytesMut,
     cross_shard_disabled: bool,
     passthrough_password: Option<String>,
+    replication_mode: bool,
 }
 
 impl MemoryUsage for Client {
@@ -68,7 +69,7 @@ impl MemoryUsage for Client {
             + self.connect_params.memory_usage()
             + self.params.memory_usage()
             + std::mem::size_of::<Comms>()
-            + std::mem::size_of::<bool>() * 5
+            + std::mem::size_of::<bool>() * 6
             + self.prepared_statements.memory_used()
             + std::mem::size_of::<Timeouts>()
             + self.stream_buffer.memory_usage()
@@ -91,6 +92,10 @@ impl Client {
     ) -> Result<(), Error> {
         let user = params.get_default("user", "postgres");
         let database = params.get_default("database", user);
+        let replication_mode = params
+            .get("replication")
+            .map(|v| v.as_str() == Some("database"))
+            .unwrap_or(false);
         let config = config::config();
 
         let admin = database == config.config.admin.name && config.config.admin.user == user;
@@ -213,6 +218,9 @@ impl Client {
                 "".into()
             }
         );
+        if replication_mode {
+            debug!("replication mode [{}]", addr);
+        }
 
         let mut prepared_statements = PreparedStatements::new();
         prepared_statements.enabled = config.prepared_statements();
@@ -226,6 +234,7 @@ impl Client {
             streaming: false,
             shard,
             params: params.clone(),
+            replication_mode,
             connect_params: params,
             prepared_statements: PreparedStatements::new(),
             in_transaction: false,
@@ -277,6 +286,7 @@ impl Client {
             shutdown: false,
             cross_shard_disabled: false,
             passthrough_password: None,
+            replication_mode: false,
         }
     }
 
@@ -558,7 +568,7 @@ impl Client {
         #[cfg(test)]
         let handle_response = false;
         #[cfg(not(test))]
-        let handle_response = !self.streaming;
+        let handle_response = !self.streaming && !self.replication_mode;
 
         if handle_response {
             let query_timeout = self.timeouts.query_timeout(&inner.stats.state);
@@ -607,7 +617,7 @@ impl Client {
         // the connection from being reused.
         if inner.backend.done() {
             let changed_params = inner.backend.changed_params();
-            if inner.transaction_mode() {
+            if inner.transaction_mode() && !self.replication_mode {
                 inner.disconnect();
             }
             inner.stats.transaction();
