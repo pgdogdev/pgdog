@@ -66,12 +66,13 @@ impl ManualRouting {
         query_str: &str,
         binds: Option<&Bind>,
     ) -> Option<ManualRoutingHint> {
-        let comment_hint = find_comment_manual_routing_hint(query_str);
-        let cte_hint = find_cte_manual_routing_hint(query_ast, binds);
+        let comment_hint = find_comment_hint(query_str);
+        let cte_hint = find_cte_hint(query_ast, binds);
 
         match (comment_hint, cte_hint) {
             (None, None) => None,
-            (Some(h), None) | (None, Some(h)) => Some(h),
+            (Some(h), None) => Some(h),
+            (None, Some(h)) => Some(h),
             (Some(_), Some(_)) => Some(ManualRoutingHint::Conflict),
         }
     }
@@ -81,7 +82,7 @@ impl ManualRouting {
 // ----- Manual Routing :: Comment -----------------------------------------------------------------
 
 #[inline(always)]
-fn find_comment_manual_routing_hint(query: &str) -> Option<ManualRoutingHint> {
+fn find_comment_hint(query: &str) -> Option<ManualRoutingHint> {
     let mut hint: Option<ManualRoutingHint> = None;
     let mut hints_found = 0;
 
@@ -183,7 +184,7 @@ mod comment_tests {
     fn shard_numeric() {
         let q = "/* pgdog_shard: 42 */ SELECT * FROM users;";
 
-        let result = find_comment_manual_routing_hint(q);
+        let result = find_comment_hint(q);
         let msh = ManualRoutingHint::Shard(42);
 
         assert_eq!(result, Some(msh));
@@ -193,7 +194,7 @@ mod comment_tests {
     fn sharding_key_text() {
         let q = "/* pgdog_sharding_key: user_123 */ SELECT 1;";
 
-        let result = find_comment_manual_routing_hint(q);
+        let result = find_comment_hint(q);
         let msh = ManualRoutingHint::ShardKey(ShardKeyValue::Text("user_123".into()));
 
         assert_eq!(result, Some(msh));
@@ -203,7 +204,7 @@ mod comment_tests {
     fn multiple_shard_conflict() {
         let q = "/* pgdog_shard: 1 */ /* pgdog_shard: 2 */ SELECT 1;";
 
-        let result = find_comment_manual_routing_hint(q);
+        let result = find_comment_hint(q);
         let msh = ManualRoutingHint::Conflict;
 
         assert_eq!(result, Some(msh));
@@ -213,7 +214,7 @@ mod comment_tests {
     fn multiple_sharding_key_conflict() {
         let q = "/* pgdog_sharding_key: user_123 */ /* pgdog_sharding_key: user_456 */ SELECT 1;";
 
-        let result = find_comment_manual_routing_hint(q);
+        let result = find_comment_hint(q);
         let msh = ManualRoutingHint::Conflict;
 
         assert_eq!(result, Some(msh));
@@ -223,7 +224,7 @@ mod comment_tests {
     fn shard_and_sharding_key_conflict() {
         let q = "/* pgdog_shard: 1 */ /* pgdog_sharding_key: user_123 */ SELECT 1;";
 
-        let result = find_comment_manual_routing_hint(q);
+        let result = find_comment_hint(q);
         let msh = ManualRoutingHint::Conflict;
 
         assert_eq!(result, Some(msh));
@@ -233,10 +234,7 @@ mod comment_tests {
 // -------------------------------------------------------------------------------------------------
 // ----- Manual Routing :: CTE ---------------------------------------------------------------------
 
-fn find_cte_manual_routing_hint(
-    ast: &ParseResult,
-    bind: Option<&Bind>,
-) -> Option<ManualRoutingHint> {
+fn find_cte_hint(ast: &ParseResult, bind: Option<&Bind>) -> Option<ManualRoutingHint> {
     let has_override_cte = ast.cte_names.iter().any(|cte| cte == "pgdog_overrides");
     if !has_override_cte {
         return None;
@@ -422,7 +420,7 @@ mod cte_test {
         let sql = "WITH pgdog_overrides AS (SELECT 5::integer AS shard) SELECT 1;";
         let sql = ast(sql);
 
-        let result = find_cte_manual_routing_hint(&sql, None);
+        let result = find_cte_hint(&sql, None);
         let mrh = ManualRoutingHint::Shard(5);
 
         assert_eq!(result, Some(mrh));
@@ -433,7 +431,7 @@ mod cte_test {
         let sql = "WITH pgdog_overrides AS (SELECT 'k1'::text AS sharding_key) SELECT 1;";
         let sql = ast(sql);
 
-        let result = find_cte_manual_routing_hint(&sql, None);
+        let result = find_cte_hint(&sql, None);
         let mrh = ManualRoutingHint::ShardKey(ShardKeyValue::Text("k1".into()));
 
         assert_eq!(result, Some(mrh));
@@ -450,7 +448,7 @@ mod cte_test {
         }];
         let bind = Bind::test_params("", &params);
 
-        let result = find_cte_manual_routing_hint(&sql, Some(&bind));
+        let result = find_cte_hint(&sql, Some(&bind));
         let mrh = ManualRoutingHint::Shard(99);
 
         assert_eq!(result, Some(mrh));
@@ -469,7 +467,7 @@ mod cte_test {
         }];
         let bind = Bind::test_params("", &params);
 
-        let result = find_cte_manual_routing_hint(&sql, Some(&bind));
+        let result = find_cte_hint(&sql, Some(&bind));
         let mrh = ManualRoutingHint::ShardKey(ShardKeyValue::Uuid(Uuid::parse_str(uuid).unwrap()));
 
         assert_eq!(result, Some(mrh));
@@ -490,7 +488,7 @@ mod cte_test {
         "#;
         let sql = ast(sql);
 
-        let result = find_cte_manual_routing_hint(&sql, None);
+        let result = find_cte_hint(&sql, None);
         let mrh = ManualRoutingHint::Conflict;
 
         assert_eq!(result, Some(mrh));
@@ -529,7 +527,7 @@ mod cte_test {
         let params = vec![user_id_param];
         let bind = Bind::test_params("", &params);
 
-        let result = find_cte_manual_routing_hint(&sql, Some(&bind));
+        let result = find_cte_hint(&sql, Some(&bind));
         let mrh = ManualRoutingHint::Shard(12);
 
         assert_eq!(result, Some(mrh));
@@ -574,7 +572,7 @@ mod cte_test {
         ];
         let bind = Bind::test_params("", &params);
 
-        let result = find_cte_manual_routing_hint(&sql, Some(&bind));
+        let result = find_cte_hint(&sql, Some(&bind));
         let mrh = ManualRoutingHint::Shard(12);
 
         assert_eq!(result, Some(mrh));
