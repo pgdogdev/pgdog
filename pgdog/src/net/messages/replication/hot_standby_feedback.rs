@@ -1,3 +1,5 @@
+use bytes::BytesMut;
+
 use super::super::code;
 use super::super::prelude::*;
 
@@ -21,5 +23,19 @@ impl FromBytes for HotStandbyFeedback {
             catalog_min: bytes.get_i32(),
             epoch_catalog_min: bytes.get_i32(),
         })
+    }
+}
+
+impl ToBytes for HotStandbyFeedback {
+    fn to_bytes(&self) -> Result<Bytes, Error> {
+        let mut payload = BytesMut::new();
+        payload.put_u8('h' as u8);
+        payload.put_i64(self.system_clock);
+        payload.put_i32(self.global_xmin);
+        payload.put_i32(self.epoch);
+        payload.put_i32(self.catalog_min);
+        payload.put_i32(self.epoch_catalog_min);
+
+        Ok(payload.freeze())
     }
 }

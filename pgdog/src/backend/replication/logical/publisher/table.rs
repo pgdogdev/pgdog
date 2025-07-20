@@ -2,21 +2,22 @@
 use http_body_util::BodyExt;
 use pg_query::NodeEnum;
 
-use crate::backend::pool::{Connection, Request};
-use crate::backend::{Cluster, Server};
+use crate::backend::pool::{Address, Connection, Request};
+use crate::backend::{Cluster, Server, ServerOptions};
 use crate::frontend::router::parser::CopyParser;
 use crate::frontend::router::Route;
-use crate::net::{CopyData, ErrorResponse, FromBytes, Protocol, Query, ToBytes};
+use crate::net::replication::{ReplicationMeta, StatusUpdate};
+use crate::net::{CopyData, CopyDone, ErrorResponse, FromBytes, Protocol, Query, ToBytes};
 
 use super::super::{CopyStatement, Error};
-use super::{PublicationTable, PublicationTableColumn, ReplicaIdentity, ReplicationSlot};
+use super::{Copy, PublicationTable, PublicationTableColumn, ReplicaIdentity, ReplicationSlot};
 
 #[derive(Debug, Clone)]
 pub struct Table {
-    publication: String,
-    table: PublicationTable,
-    identity: ReplicaIdentity,
-    columns: Vec<PublicationTableColumn>,
+    pub(super) publication: String,
+    pub(super) table: PublicationTable,
+    pub(super) identity: ReplicaIdentity,
+    pub(super) columns: Vec<PublicationTableColumn>,
 }
 
 impl Table {
@@ -93,28 +94,46 @@ impl Table {
         Ok(())
     }
 
-    pub async fn data_sync(&mut self, server: &mut Server) -> Result<(), Error> {
+    pub async fn data_sync(&mut self, addr: &Address) -> Result<(), Error> {
+        let mut server = Server::connect(addr, ServerOptions::new_replication()).await?;
+        // Start transaction.
         server
             .execute("BEGIN READ ONLY ISOLATION LEVEL REPEATABLE READ")
             .await?;
-        self.reload(server).await?;
+
+        // Create sync slot.
         let mut slot = ReplicationSlot::data_sync(&self.publication);
-        slot.create_slot(server).await?;
+        slot.create_slot(&mut server).await?;
 
-        let copy_out = CopyStatement::new(
-            &self.table.schema,
-            &self.table.name,
-            &self
-                .columns
-                .iter()
-                .map(|c| c.name.clone())
-                .collect::<Vec<_>>(),
-        )
-        .copy_out();
+        // Reload table info just to be sure it's consistent.
+        self.reload(&mut server).await?;
 
-        // let copy_in = copy_out.clone().copy_in();
+        // Copy rows over.
+        let copy = Copy::new(self);
+        copy.start(&mut server).await?;
 
-        todo!()
+        while let Some(data_row) = copy.data(&mut server).await? {}
+        server.execute("COMMIT").await?;
+
+        // Stream remaining changes.
+        slot.start_replication(&mut server).await?;
+        while let Some(data) = slot.replicate(&mut server).await? {
+            if let Some(meta) = data.replication_meta() {
+                match meta {
+                    ReplicationMeta::KeepAlive(ka) => {
+                        server
+                            .send_one(&StatusUpdate::from(ka).wrapped()?.into())
+                            .await?;
+                        server.send_one(&CopyDone.into()).await?;
+                        server.flush().await?;
+                    }
+
+                    _ => (),
+                }
+            }
+        }
+
+        Ok(())
     }
 
     // pub fn new(schema: &str, name: &str, columns: &[String]) -> Self {
@@ -161,7 +180,7 @@ impl Table {
                 )?))
             }
             'G' => (),
-            _ => return Err(Error::OutOfSync),
+            c => return Err(Error::OutOfSync(c)),
         }
 
         // let mut conn = Connection::new(destination.user(), destination.name(), false, &None)?;
@@ -193,5 +212,27 @@ impl Table {
         // }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::backend::replication::logical::publisher::test::setup_publication;
+
+    use super::*;
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_publication() {
+        crate::logger();
+        let mut publication = setup_publication().await;
+        let tables = Table::load("publication_test", &mut publication.server)
+            .await
+            .unwrap();
+
+        for mut table in tables {
+            table.data_sync(&publication.server.addr()).await.unwrap();
+        }
+        publication.cleanup().await;
     }
 }

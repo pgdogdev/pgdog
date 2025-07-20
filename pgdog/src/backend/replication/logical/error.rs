@@ -15,8 +15,11 @@ pub enum Error {
     #[error("transaction not started")]
     TransactionNotStarted,
 
-    #[error("out of sync")]
-    OutOfSync,
+    #[error("out of sync, got {0}")]
+    OutOfSync(char),
+
+    #[error("missing data")]
+    MissingData,
 
     #[error("pg_query: {0}")]
     PgQuery(#[from] pg_query::Error),

@@ -1,3 +1,9 @@
+use bytes::BytesMut;
+
+use crate::net::replication::KeepAlive;
+use crate::net::replication::ReplicationMeta;
+use crate::net::CopyData;
+
 use super::super::code;
 use super::super::prelude::*;
 
@@ -8,6 +14,26 @@ pub struct StatusUpdate {
     pub last_applied: i64,
     pub system_clock: i64,
     pub reply: u8,
+}
+
+impl StatusUpdate {
+    pub fn wrapped(self) -> Result<CopyData, Error> {
+        Ok(CopyData::new(
+            &ReplicationMeta::StatusUpdate(self).to_bytes()?,
+        ))
+    }
+}
+
+impl From<KeepAlive> for StatusUpdate {
+    fn from(value: KeepAlive) -> Self {
+        Self {
+            last_written: value.wal_end,
+            last_flushed: value.wal_end,
+            last_applied: value.wal_end,
+            system_clock: value.system_clock + 1,
+            reply: 0,
+        }
+    }
 }
 
 impl FromBytes for StatusUpdate {
@@ -21,5 +47,53 @@ impl FromBytes for StatusUpdate {
             system_clock: bytes.get_i64(),
             reply: bytes.get_u8(),
         })
+    }
+}
+
+impl ToBytes for StatusUpdate {
+    fn to_bytes(&self) -> Result<Bytes, Error> {
+        let mut payload = BytesMut::new();
+        payload.put_u8('r' as u8);
+
+        payload.put_i64(self.last_written);
+        payload.put_i64(self.last_flushed);
+        payload.put_i64(self.last_applied);
+        payload.put_i64(self.system_clock);
+        payload.put_u8(self.reply);
+
+        Ok(payload.freeze())
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_status_update() {
+        let su = StatusUpdate {
+            last_applied: 1,
+            last_flushed: 2,
+            last_written: 3,
+            system_clock: 4,
+            reply: 5,
+        };
+        let su = StatusUpdate::from_bytes(su.to_bytes().unwrap()).unwrap();
+        assert_eq!(su.last_applied, 1);
+        assert_eq!(su.last_flushed, 2);
+        assert_eq!(su.last_written, 3);
+        assert_eq!(su.system_clock, 4);
+
+        let cd = su.wrapped().unwrap();
+        let su = cd.replication_meta().unwrap();
+        match su {
+            ReplicationMeta::StatusUpdate(su) => {
+                assert_eq!(su.last_applied, 1);
+                assert_eq!(su.last_flushed, 2);
+                assert_eq!(su.last_written, 3);
+                assert_eq!(su.system_clock, 4);
+            }
+            _ => panic!("not a status update"),
+        }
     }
 }

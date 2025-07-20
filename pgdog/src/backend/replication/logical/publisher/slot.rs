@@ -5,6 +5,7 @@ use crate::{
     util::random_string,
 };
 use std::{fmt::Display, str::FromStr};
+use tracing::{debug, trace};
 
 #[derive(Debug, Clone, Default, Copy)]
 pub struct Lsn {
@@ -88,22 +89,36 @@ impl ReplicationSlot {
             ))
             .await?
             .pop()
-            .ok_or(Error::OutOfSync)?;
+            .ok_or(Error::MissingData)?;
 
         let lsn = result
             .get::<String>(1, Format::Text)
-            .ok_or(Error::OutOfSync)?;
+            .ok_or(Error::MissingData)?;
 
         let lsn = Lsn::from_str(&lsn)?;
         self.lsn = lsn;
+
+        debug!(
+            "replication slot \"{}\" at lsn {} created [{}]",
+            self.name,
+            self.lsn,
+            server.addr(),
+        );
+
         Ok(lsn)
     }
 
     /// Drop the slot.
     pub async fn drop_slot(&mut self, server: &mut Server) -> Result<(), Error> {
         server
-            .execute(&format!(r#"DROP_REPLICATION_SLOT "{}""#, self.name))
+            .execute(&format!(r#"DROP_REPLICATION_SLOT "{}" WAIT"#, self.name))
             .await?;
+
+        debug!(
+            "replication slot \"{}\" dropped [{}]",
+            self.name,
+            server.addr()
+        );
 
         Ok(())
     }
@@ -112,17 +127,22 @@ impl ReplicationSlot {
     pub async fn start_replication(&mut self, server: &mut Server) -> Result<(), Error> {
         // TODO: This is definitely Postgres version-specific.
         let query = Query::new(&format!(
-            r#"START_REPLICATION SLOT "{}" LOGICAL {} ("proto_version" '2', origin 'any', "publication_names" '{}')"#,
+            r#"START_REPLICATION SLOT "{}" LOGICAL {} ("proto_version" '4', origin 'any', "publication_names" '"{}"')"#,
             self.name, self.lsn, self.publication
         ));
-        server.send_one(&query.into()).await?;
-        server.flush().await?;
+        server.send(&vec![query.into()].into()).await?;
 
         let copy_both = server.read().await?;
 
         if copy_both.code() != 'W' {
-            return Err(Error::OutOfSync);
+            return Err(Error::OutOfSync(copy_both.code()));
         }
+
+        debug!(
+            "replication from slot \"{}\" started [{}]",
+            self.name,
+            server.addr()
+        );
 
         Ok(())
     }
@@ -132,10 +152,19 @@ impl ReplicationSlot {
         loop {
             let message = server.read().await?;
             match message.code() {
-                'd' => return Ok(Some(CopyData::from_bytes(message.to_bytes()?)?)),
+                'd' => {
+                    let copy_data = CopyData::from_bytes(message.to_bytes()?)?;
+                    trace!("{:?} [{}]", copy_data, server.addr());
+
+                    return Ok(Some(copy_data));
+                }
                 'C' => (),
-                'Z' => return Ok(None),
-                _ => return Err(Error::OutOfSync),
+                'c' => (), // CopyDone.
+                'Z' => {
+                    debug!("slot \"{}\" drained [{}]", self.name, server.addr());
+                    return Ok(None);
+                }
+                c => return Err(Error::OutOfSync(c)),
             }
         }
     }

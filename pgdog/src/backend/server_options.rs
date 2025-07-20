@@ -12,7 +12,6 @@ impl ServerOptions {
             .any(|p| p.name == "replication" && p.value == "database")
     }
 
-    #[cfg(test)]
     pub fn new_replication() -> Self {
         Self {
             params: vec![Parameter {
