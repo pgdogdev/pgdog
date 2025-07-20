@@ -53,4 +53,7 @@ pub enum Error {
 
     #[error("missing parameter: ${0}")]
     MissingParameter(usize),
+
+    #[error("shard selection is required but not provided")]
+    ShardSelectionRequired,
 }
