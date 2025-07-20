@@ -1,3 +1,5 @@
+use std::num::ParseIntError;
+
 use thiserror::Error;
 
 use crate::net::ErrorResponse;
@@ -24,4 +26,13 @@ pub enum Error {
 
     #[error("{0}")]
     PgError(ErrorResponse),
+
+    #[error("table \"{0}\".\"{1}\" has no replica identity")]
+    NoReplicaIdentity(String, String),
+
+    #[error("lsn decode")]
+    LsnDecode,
+
+    #[error("parse int")]
+    ParseInt(#[from] ParseIntError),
 }

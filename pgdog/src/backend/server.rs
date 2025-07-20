@@ -924,15 +924,13 @@ pub mod test {
     }
 
     pub async fn test_server() -> Server {
-        let address = Address {
-            host: "127.0.0.1".into(),
-            port: 5432,
-            user: "pgdog".into(),
-            password: "pgdog".into(),
-            database_name: "pgdog".into(),
-        };
+        Server::connect(&Address::new_test(), ServerOptions::default())
+            .await
+            .unwrap()
+    }
 
-        Server::connect(&address, ServerOptions::default())
+    pub async fn test_replication_server() -> Server {
+        Server::connect(&Address::new_test(), ServerOptions::new_replication())
             .await
             .unwrap()
     }
