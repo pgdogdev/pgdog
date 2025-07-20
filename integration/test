@@ -1,0 +1,195 @@
+#!/bin/bash
+# Single-command test runner for PgDog integration tests
+
+set -euo pipefail
+
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Default values
+LANGUAGE=""
+CLEANUP=0
+FORCE_SETUP=0
+VERBOSE=0
+HELP=0
+
+# Parse command line arguments
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --language=*)
+            LANGUAGE="${1#*=}"
+            shift
+            ;;
+        --clean|--cleanup)
+            CLEANUP=1
+            shift
+            ;;
+        --force-setup)
+            FORCE_SETUP=1
+            shift
+            ;;
+        --verbose|-v)
+            VERBOSE=1
+            shift
+            ;;
+        --help|-h)
+            HELP=1
+            shift
+            ;;
+        *)
+            echo -e "${RED}Unknown option: $1${NC}"
+            HELP=1
+            shift
+            ;;
+    esac
+done
+
+# Show help if requested
+if [ "$HELP" -eq 1 ]; then
+    cat << EOF
+PgDog Integration Test Runner
+
+Usage: $0 [OPTIONS]
+
+Options:
+    --language=LANG    Run tests for specific language (python, go, ruby, js, java, rust)
+    --clean, --cleanup Clean up test environment after running
+    --force-setup      Force re-run of setup even if already complete
+    --verbose, -v      Enable verbose output
+    --help, -h         Show this help message
+
+Examples:
+    $0                     # Run all tests
+    $0 --language=python   # Run only Python tests
+    $0 --clean             # Run all tests and cleanup after
+    $0 --force-setup       # Force setup before running tests
+
+EOF
+    exit 0
+fi
+
+# Enable verbose mode if requested
+if [ "$VERBOSE" -eq 1 ]; then
+    set -x
+    export RUST_LOG=debug
+fi
+
+echo -e "${BLUE}=== PgDog Integration Test Runner ===${NC}"
+echo
+
+# Step 1: Check prerequisites
+echo "Checking prerequisites..."
+if ! "${SCRIPT_DIR}/check-prerequisites.sh"; then
+    echo
+    echo -e "${RED}Prerequisites not met. Please fix the issues above.${NC}"
+    echo "Run './integration/check-prerequisites.sh' for details."
+    exit 1
+fi
+
+# Step 2: Run setup if needed
+if [ ! -f "${SCRIPT_DIR}/.setup_complete" ] || [ "$FORCE_SETUP" -eq 1 ]; then
+    echo
+    echo "Running setup..."
+    if [ "$FORCE_SETUP" -eq 1 ]; then
+        echo "(Forced setup requested)"
+    fi
+    
+    if ! "${SCRIPT_DIR}/setup.sh"; then
+        echo -e "${RED}Setup failed!${NC}"
+        exit 1
+    fi
+else
+    echo -e "${GREEN}✓${NC} Setup already complete (use --force-setup to re-run)"
+fi
+
+# Step 3: Build PgDog if needed
+echo
+echo "Checking PgDog build..."
+PGDOG_BIN="${SCRIPT_DIR}/../target/release/pgdog"
+if [ ! -f "$PGDOG_BIN" ]; then
+    echo "Building PgDog (release mode)..."
+    pushd "${SCRIPT_DIR}/.." > /dev/null
+    if ! cargo build --release; then
+        echo -e "${RED}Failed to build PgDog!${NC}"
+        exit 1
+    fi
+    popd > /dev/null
+else
+    echo -e "${GREEN}✓${NC} PgDog already built"
+fi
+
+# Step 4: Run tests
+echo
+if [ -n "$LANGUAGE" ]; then
+    # Run specific language tests
+    TEST_SCRIPT="${SCRIPT_DIR}/${LANGUAGE}/run.sh"
+    if [ ! -f "$TEST_SCRIPT" ]; then
+        echo -e "${RED}Test script not found for language: $LANGUAGE${NC}"
+        echo "Available languages: python, go, ruby, js, java, rust"
+        exit 1
+    fi
+    
+    echo -e "${BLUE}Running $LANGUAGE tests...${NC}"
+    echo
+    
+    if bash "$TEST_SCRIPT"; then
+        echo
+        echo -e "${GREEN}✓ $LANGUAGE tests passed!${NC}"
+        TEST_RESULT=0
+    else
+        echo
+        echo -e "${RED}✗ $LANGUAGE tests failed!${NC}"
+        TEST_RESULT=1
+    fi
+else
+    # Run all tests
+    echo -e "${BLUE}Running all integration tests...${NC}"
+    echo
+    
+    if "${SCRIPT_DIR}/run.sh"; then
+        echo
+        echo -e "${GREEN}✓ All tests passed!${NC}"
+        TEST_RESULT=0
+    else
+        echo
+        echo -e "${RED}✗ Some tests failed!${NC}"
+        TEST_RESULT=1
+    fi
+fi
+
+# Step 5: Optional cleanup
+if [ "$CLEANUP" -eq 1 ]; then
+    echo
+    echo "Cleaning up test environment..."
+    if [ -f "${SCRIPT_DIR}/cleanup.sh" ]; then
+        "${SCRIPT_DIR}/cleanup.sh"
+    else
+        echo -e "${YELLOW}⚠ Cleanup script not found${NC}"
+    fi
+fi
+
+# Show summary
+echo
+if [ "$TEST_RESULT" -eq 0 ]; then
+    echo -e "${GREEN}=== Test run completed successfully ===${NC}"
+else
+    echo -e "${RED}=== Test run failed ===${NC}"
+fi
+
+# Helpful tips
+if [ "$TEST_RESULT" -ne 0 ]; then
+    echo
+    echo "Tips for debugging failures:"
+    echo "  • Check pgdog logs in the test directories"
+    echo "  • Run with --verbose for more output"
+    echo "  • Try running individual language tests"
+    echo "  • Ensure PostgreSQL is running and accessible"
+fi
+
+exit $TEST_RESULT
