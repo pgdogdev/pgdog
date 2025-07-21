@@ -1,7 +1,7 @@
 //! Table.
 
 use crate::backend::pool::Address;
-use crate::backend::{Cluster, Server, ServerOptions};
+use crate::backend::{Cluster, Server};
 use crate::net::replication::{ReplicationMeta, StatusUpdate};
 use crate::net::CopyDone;
 
@@ -40,7 +40,7 @@ impl Table {
     }
 
     /// Upsert record into table.
-    pub async fn insert(&self, upsert: bool) -> String {
+    pub fn insert(&self, upsert: bool) -> String {
         let names = format!(
             "({})",
             self.columns
@@ -98,51 +98,49 @@ impl Table {
     }
 
     pub async fn data_sync(&mut self, source: &Address, dest: &Cluster) -> Result<(), Error> {
+        // Sync data using COPY.
+        // Publisher uses COPY [...] TO STDOUT.
+        // Subscriber uses COPY [...] FROM STDIN.
         let copy = Copy::new(self);
 
-        let mut server = Server::connect(source, ServerOptions::new_replication()).await?;
+        // Create new standalone connection for the copy.
+        // let mut server = Server::connect(source, ServerOptions::new_replication()).await?;
         let mut dest = Subscriber::new(copy.statement(), dest)?;
-
         dest.connect().await?;
 
-        // Start transaction.
-        server
-            .execute("BEGIN READ ONLY ISOLATION LEVEL REPEATABLE READ")
-            .await?;
-
         // Create sync slot.
-        let mut slot = ReplicationSlot::data_sync(&self.publication);
-        slot.create_slot(&mut server).await?;
+        let mut slot = ReplicationSlot::data_sync(&self.publication, source);
+        slot.connect().await?;
+        slot.create_slot().await?;
 
         // Reload table info just to be sure it's consistent.
-        self.reload(&mut server).await?;
+        self.reload(slot.server()?).await?;
 
         // Copy rows over.
-        let copy = Copy::new(self);
-        copy.start(&mut server).await?;
+        copy.start(slot.server()?).await?;
         dest.start_copy().await?;
 
-        while let Some(data_row) = copy.data(&mut server).await? {
+        while let Some(data_row) = copy.data(slot.server()?).await? {
             dest.copy_data(data_row).await?;
         }
         dest.copy_done().await?;
 
-        server.execute("COMMIT").await?;
+        slot.server()?.execute("COMMIT").await?;
 
         // Stream remaining changes.
-        slot.start_replication(&mut server).await?;
-        while let Some(data) = slot.replicate(&mut server).await? {
+        slot.start_replication().await?;
+        while let Some(data) = slot.replicate().await? {
             match data {
                 ReplicationData::CopyData(data) => {
                     if let Some(meta) = data.replication_meta() {
                         match meta {
                             ReplicationMeta::KeepAlive(ka) => {
-                                // TODO: Keep track of the LSN and send the real one.
-                                server
+                                // TODO: Confirm we flushed everything to the subscriber.
+                                slot.server()?
                                     .send_one(&StatusUpdate::from(ka).wrapped()?.into())
                                     .await?;
-                                server.send_one(&CopyDone.into()).await?;
-                                server.flush().await?;
+                                slot.server()?.send_one(&CopyDone.into()).await?;
+                                slot.server()?.flush().await?;
                             }
 
                             _ => (),
@@ -156,7 +154,7 @@ impl Table {
                 }
             }
         }
-        slot.drop_slot(&mut server).await?;
+        slot.drop_slot().await?;
 
         Ok(())
     }
@@ -178,6 +176,11 @@ mod test {
             .unwrap();
 
         assert_eq!(tables.len(), 2);
+
+        for table in tables {
+            let upsert = table.insert(true);
+            assert!(pg_query::parse(&upsert).is_ok());
+        }
 
         publication.cleanup().await;
     }

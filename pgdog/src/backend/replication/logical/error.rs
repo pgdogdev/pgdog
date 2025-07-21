@@ -47,4 +47,7 @@ pub enum Error {
 
     #[error("{0}")]
     Parser(#[from] crate::frontend::router::parser::Error),
+
+    #[error("not connected")]
+    NotConnected,
 }

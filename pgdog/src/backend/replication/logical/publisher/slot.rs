@@ -1,11 +1,12 @@
 use super::super::Error;
 use crate::{
-    backend::Server,
+    backend::{pool::Address, Server, ServerOptions},
     net::{CopyData, DataRow, Format, FromBytes, Protocol, Query, ToBytes},
     util::random_string,
 };
 use std::{fmt::Display, str::FromStr};
-use tracing::{debug, trace};
+use tokio::spawn;
+use tracing::{debug, error, trace};
 
 #[derive(Debug, Clone, Default, Copy)]
 pub struct Lsn {
@@ -51,42 +52,69 @@ impl Display for Snapshot {
 
 #[derive(Debug)]
 pub struct ReplicationSlot {
+    address: Address,
     publication: String,
     name: String,
     snapshot: Snapshot,
     lsn: Lsn,
+    dropped: bool,
+    server: Option<Server>,
 }
 
 impl ReplicationSlot {
     /// Create replication slot used for streaming the WAL.
-    pub fn replication(name: &str, publication: &str) -> Self {
+    pub fn replication(name: &str, publication: &str, address: &Address) -> Self {
         Self {
+            address: address.clone(),
             name: name.to_string(),
             snapshot: Snapshot::Nothing,
             lsn: Lsn::default(),
             publication: publication.to_string(),
+            dropped: false,
+            server: None,
         }
     }
 
     /// Create replication slot for data sync.
-    pub fn data_sync(publication: &str) -> Self {
+    pub fn data_sync(publication: &str, address: &Address) -> Self {
         let name = format!("__pgdog_{}", random_string(24).to_lowercase());
 
         Self {
+            address: address.clone(),
             name,
             snapshot: Snapshot::Use,
             lsn: Lsn::default(),
             publication: publication.to_string(),
+            dropped: false,
+            server: None,
         }
     }
 
+    /// Connect to database using replication mode.
+    pub async fn connect(&mut self) -> Result<(), Error> {
+        self.server = Some(Server::connect(&self.address, ServerOptions::new_replication()).await?);
+
+        Ok(())
+    }
+
+    pub fn server(&mut self) -> Result<&mut Server, Error> {
+        self.server.as_mut().ok_or(Error::NotConnected)
+    }
+
     /// Create the slot.
-    pub async fn create_slot(&mut self, server: &mut Server) -> Result<Lsn, Error> {
-        let result = server
-            .fetch_all::<DataRow>(&format!(
-                r#"CREATE_REPLICATION_SLOT "{}" LOGICAL "pgoutput" (SNAPSHOT '{}')"#,
-                self.name, self.snapshot
-            ))
+    pub async fn create_slot(&mut self) -> Result<Lsn, Error> {
+        self.server()?
+            .execute("BEGIN READ ONLY ISOLATION LEVEL REPEATABLE READ")
+            .await?;
+
+        let start_replication = format!(
+            r#"CREATE_REPLICATION_SLOT "{}" LOGICAL "pgoutput" (SNAPSHOT '{}')"#,
+            self.name, self.snapshot
+        );
+
+        let result = self
+            .server()?
+            .fetch_all::<DataRow>(&start_replication)
             .await?
             .pop()
             .ok_or(Error::MissingData)?;
@@ -100,39 +128,44 @@ impl ReplicationSlot {
 
         debug!(
             "replication slot \"{}\" at lsn {} created [{}]",
-            self.name,
-            self.lsn,
-            server.addr(),
+            self.name, self.lsn, self.address,
         );
 
         Ok(lsn)
     }
 
     /// Drop the slot.
-    pub async fn drop_slot(&mut self, server: &mut Server) -> Result<(), Error> {
-        server
-            .execute(&format!(r#"DROP_REPLICATION_SLOT "{}" WAIT"#, self.name))
-            .await?;
+    pub async fn drop_slot(&mut self) -> Result<(), Error> {
+        let drop_slot = self.drop_slot_query(true);
+        self.server()?.execute(&drop_slot).await?;
 
         debug!(
             "replication slot \"{}\" dropped [{}]",
-            self.name,
-            server.addr()
+            self.name, self.address
         );
+        self.dropped = true;
 
         Ok(())
     }
 
+    fn drop_slot_query(&self, wait: bool) -> String {
+        format!(
+            r#"DROP_REPLICATION_SLOT "{}" {}"#,
+            self.name,
+            if wait { "WAIT" } else { "" }
+        )
+    }
+
     /// Start replication.
-    pub async fn start_replication(&mut self, server: &mut Server) -> Result<(), Error> {
+    pub async fn start_replication(&mut self) -> Result<(), Error> {
         // TODO: This is definitely Postgres version-specific.
         let query = Query::new(&format!(
             r#"START_REPLICATION SLOT "{}" LOGICAL {} ("proto_version" '4', origin 'any', "publication_names" '"{}"')"#,
             self.name, self.lsn, self.publication
         ));
-        server.send(&vec![query.into()].into()).await?;
+        self.server()?.send(&vec![query.into()].into()).await?;
 
-        let copy_both = server.read().await?;
+        let copy_both = self.server()?.read().await?;
 
         if copy_both.code() != 'W' {
             return Err(Error::OutOfSync(copy_both.code()));
@@ -140,34 +173,49 @@ impl ReplicationSlot {
 
         debug!(
             "replication from slot \"{}\" started [{}]",
-            self.name,
-            server.addr()
+            self.name, self.address
         );
 
         Ok(())
     }
 
     /// Replicate from slot until finished.
-    pub async fn replicate(
-        &mut self,
-        server: &mut Server,
-    ) -> Result<Option<ReplicationData>, Error> {
+    pub async fn replicate(&mut self) -> Result<Option<ReplicationData>, Error> {
         loop {
-            let message = server.read().await?;
+            let message = self.server()?.read().await?;
             match message.code() {
                 'd' => {
                     let copy_data = CopyData::from_bytes(message.to_bytes()?)?;
-                    trace!("{:?} [{}]", copy_data, server.addr());
+                    trace!("{:?} [{}]", copy_data, self.address);
 
                     return Ok(Some(ReplicationData::CopyData(copy_data)));
                 }
                 'C' => (),
                 'c' => return Ok(Some(ReplicationData::CopyDone)), // CopyDone.
                 'Z' => {
-                    debug!("slot \"{}\" drained [{}]", self.name, server.addr());
+                    debug!("slot \"{}\" drained [{}]", self.name, self.address);
                     return Ok(None);
                 }
                 c => return Err(Error::OutOfSync(c)),
+            }
+        }
+    }
+}
+
+impl Drop for ReplicationSlot {
+    fn drop(&mut self) {
+        let server = self.server.take();
+
+        if let Some(mut server) = server {
+            if !self.dropped {
+                let name = self.name.clone();
+                let address = self.address.clone();
+                let drop_query = self.drop_slot_query(false);
+                spawn(async move {
+                    if let Err(err) = server.execute(&drop_query).await {
+                        error!("failed to drop slot \"{}\": {} [{}]", name, err, address);
+                    }
+                });
             }
         }
     }
@@ -177,64 +225,4 @@ impl ReplicationSlot {
 pub enum ReplicationData {
     CopyData(CopyData),
     CopyDone,
-}
-
-#[cfg(test)]
-mod test {
-    // use crate::backend::{pool::Address, ServerOptions};
-
-    // use super::*;
-
-    // #[tokio::test]
-    // #[ignore]
-    // async fn test_replication_slot() {
-    //     crate::logger();
-
-    //     let mut server = Server::connect(&Address::new_test(), ServerOptions::new_replication())
-    //         .await
-    //         .unwrap();
-
-    //     server
-    //         .execute("DROP TABLE IF EXISTS test_replication_slot")
-    //         .await
-    //         .unwrap();
-    //     server
-    //         .execute("CREATE TABLE IF NOT EXISTS test_replication_slot (id bigint primary key)")
-    //         .await
-    //         .unwrap();
-    //     server
-    //         .execute("INSERT INTO test_replication_slot VALUES (1), (2), (3)")
-    //         .await
-    //         .unwrap();
-
-    //     let _ = server
-    //         .execute("DROP PUBLICATION test_replication_slot")
-    //         .await;
-    //     server
-    //         .execute("CREATE PUBLICATION test_replication_slot FOR TABLE test_replication_slot")
-    //         .await
-    //         .unwrap();
-
-    //     let mut repl =
-    //         ReplicationSlot::replication("test_replication_slot", "test_replication_slot", server);
-    //     let _ = repl.drop_slot().await;
-    //     repl.create_slot().await.unwrap();
-    //     repl.replicate().await.unwrap();
-
-    //     let mut server2 = Server::connect(&Address::new_test(), ServerOptions::new_replication())
-    //         .await
-    //         .unwrap();
-    //     server2
-    //         .execute("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")
-    //         .await
-    //         .unwrap();
-
-    //     let mut repl_temp = ReplicationSlot::data_sync("test_replication_slot", server2);
-
-    //     repl_temp.create_slot().await.unwrap();
-    //     repl_temp.replicate().await.unwrap();
-
-    //     repl_temp.drop_slot().await.unwrap();
-    //     repl.drop_slot().await.unwrap();
-    // }
 }
