@@ -254,6 +254,8 @@ impl ShardMonitor {
             return;
         };
 
+        primary.set_replica_lag(ReplicaLag::NonApplicable);
+
         let lsn_metrics = match collect_lsn_metrics(primary, max_age).await {
             Some(m) => m,
             None => {
@@ -287,7 +289,7 @@ impl ShardMonitor {
         replica: &Pool,
         primary_lsn: u64,
         lsn_throughput: f64,
-        max_age: Duration,
+        _max_age: Duration, // used to make banning decisions when it's supported later
     ) {
         if replica.banned() {
             replica.set_replica_lag(ReplicaLag::Unknown);
@@ -309,23 +311,8 @@ impl ShardMonitor {
             let duration = Duration::from_secs_f64(bytes_behind as f64 / lsn_throughput);
             lag = ReplicaLag::Duration(duration);
         }
-
-        match lag {
-            ReplicaLag::Duration(d) if d > max_age => {
-                error!(
-                    "replica {} estimated lag {:?} exceeds {:?}; should ban replica",
-                    replica.id(),
-                    d,
-                    max_age
-                );
-            }
-            ReplicaLag::Duration(d) => {
-                debug!("replica {} lag {:?} (estimated)", replica.id(), d);
-            }
-            ReplicaLag::Bytes(b) => {
-                debug!("replica {} lag {} bytes", replica.id(), b);
-            }
-            _ => {}
+        if bytes_behind == 0 {
+            lag = ReplicaLag::Duration(Duration::ZERO);
         }
 
         replica.set_replica_lag(lag);

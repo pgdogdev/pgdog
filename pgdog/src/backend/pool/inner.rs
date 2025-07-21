@@ -451,7 +451,12 @@ impl ReplicaLag {
                     return format!("{}s", total_secs);
                 }
 
-                format!("{}ms", d.as_millis())
+                let millis = d.as_millis();
+                if millis > 0 {
+                    return format!("{}ms", millis);
+                }
+
+                return "<1ms".to_string();
             }
             Self::Bytes(b) => format!("{}B", b),
             Self::Unknown => "unknown".to_string(),
