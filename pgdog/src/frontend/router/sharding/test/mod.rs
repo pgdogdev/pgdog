@@ -120,7 +120,7 @@ async fn test_binary_encoding() {
         .send(
             &vec![
                 Parse::new_anonymous("SELECT $1::varchar").into(),
-                Bind::test_params_codes_results(
+                Bind::new_params_codes_results(
                     "",
                     &[Parameter {
                         len: 5,

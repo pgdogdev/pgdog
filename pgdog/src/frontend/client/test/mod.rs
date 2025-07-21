@@ -253,7 +253,7 @@ async fn test_client_extended() {
 
     buf.put(Parse::named("test", "SELECT $1").to_bytes().unwrap());
     buf.put(
-        Bind::test_params(
+        Bind::new_params(
             "test",
             &[Parameter {
                 len: 3,
@@ -314,7 +314,7 @@ async fn test_client_with_replicas() {
         });
         let buf = buffer!(
             { Parse::new_anonymous("SELECT * FROM test_client_with_replicas") },
-            { Bind::test_statement("") },
+            { Bind::new_statement("") },
             { Execute::new() },
             { Sync }
         );
@@ -483,7 +483,7 @@ async fn test_transaction_state() {
 
     conn.write_all(&buffer!(
         {
-            Bind::test_params(
+            Bind::new_params(
                 "test",
                 &[Parameter {
                     len: 1,

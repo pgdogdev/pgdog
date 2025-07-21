@@ -8,10 +8,8 @@ replication_mode = true
 database = "source"
 name = "pgdog"
 password = "pgdog"
-min_pool_size = 0
 
 [[users]]
 database = "destination"
 name = "pgdog"
 password = "pgdog"
-min_pool_size = 0

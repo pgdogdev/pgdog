@@ -892,7 +892,7 @@ mod test_explain {
             })
             .collect::<Vec<_>>();
 
-        let bind = Bind::test_params("", &parameters);
+        let bind = Bind::new_params("", &parameters);
         let buffer: Buffer = vec![parse_msg.into(), bind.into()].into();
 
         let cluster = Cluster::new_test();
@@ -1223,7 +1223,7 @@ mod test {
                     data: p.to_vec(),
                 })
                 .collect::<Vec<_>>();
-            let bind = Bind::test_params_codes($name, &params, $codes);
+            let bind = Bind::new_params_codes($name, &params, $codes);
             let route = QueryParser::default()
                 .parse(
                     RouterContext::new(
@@ -1663,7 +1663,7 @@ mod test {
                     "/* pgdog_shard: 1234 */ SELECT * FROM sharded WHERE id = $1",
                 )),
                 &Cluster::new_test(),
-                Some(&Bind::test_params(
+                Some(&Bind::new_params(
                     "",
                     &[Parameter {
                         len: 1,

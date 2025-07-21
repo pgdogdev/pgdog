@@ -5,7 +5,7 @@ use crate::backend::{Cluster, Server};
 use crate::net::replication::{ReplicationMeta, StatusUpdate};
 use crate::net::CopyDone;
 
-use super::super::{subscriber::Subscriber, Error};
+use super::super::{subscriber::CopySubscriber, Error};
 use super::{
     Copy, PublicationTable, PublicationTableColumn, ReplicaIdentity, ReplicationData,
     ReplicationSlot,
@@ -15,10 +15,10 @@ use tracing::debug;
 
 #[derive(Debug, Clone)]
 pub struct Table {
-    pub(super) publication: String,
-    pub(super) table: PublicationTable,
-    pub(super) identity: ReplicaIdentity,
-    pub(super) columns: Vec<PublicationTableColumn>,
+    pub publication: String,
+    pub table: PublicationTable,
+    pub identity: ReplicaIdentity,
+    pub columns: Vec<PublicationTableColumn>,
 }
 
 impl Table {
@@ -112,7 +112,7 @@ impl Table {
 
         // Create new standalone connection for the copy.
         // let mut server = Server::connect(source, ServerOptions::new_replication()).await?;
-        let mut dest = Subscriber::new(copy.statement(), dest)?;
+        let mut dest = CopySubscriber::new(copy.statement(), dest)?;
         dest.connect().await?;
 
         // Create sync slot.

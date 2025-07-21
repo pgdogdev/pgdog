@@ -1019,7 +1019,7 @@ pub mod test {
         let mut server = test_server().await;
         use crate::net::bind::Parameter;
         for _ in 0..25 {
-            let bind = Bind::test_params_codes(
+            let bind = Bind::new_params_codes(
                 "",
                 &[Parameter {
                     len: 1,
@@ -1064,7 +1064,7 @@ pub mod test {
             assert!(new);
 
             let describe = Describe::new_statement(&name);
-            let bind = Bind::test_params(
+            let bind = Bind::new_params(
                 &name,
                 &[Parameter {
                     len: 1,
@@ -1150,7 +1150,7 @@ pub mod test {
             server
                 .send(
                     &vec![
-                        ProtocolMessage::from(Bind::test_params(
+                        ProtocolMessage::from(Bind::new_params(
                             "__pgdog_1",
                             &[Parameter {
                                 len: 1,
@@ -1206,7 +1206,7 @@ pub mod test {
             let name = format!("test_{}", i);
             let parse = Parse::named(&name, "SELECT $1");
             let describe = Describe::new_statement(&name);
-            let bind = Bind::test_statement(&name);
+            let bind = Bind::new_statement(&name);
             server
                 .send(
                     &vec![
@@ -1332,7 +1332,7 @@ pub mod test {
             Describe::new_statement("test_1").into(),
             Flush.into(),
             Query::new("BEGIN").into(),
-            Bind::test_params(
+            Bind::new_params(
                 "test_1",
                 &[crate::net::bind::Parameter {
                     len: 1,
@@ -1367,7 +1367,7 @@ pub mod test {
             Query::new("CREATE TABLE IF NOT EXISTS test_delete (id BIGINT PRIMARY KEY)").into(),
             ProtocolMessage::from(Parse::named("test", "DELETE FROM test_delete")),
             Describe::new_statement("test").into(),
-            Bind::test_statement("test").into(),
+            Bind::new_statement("test").into(),
             Execute::new().into(),
             Sync.into(),
             Query::new("ROLLBACK").into(),
@@ -1393,7 +1393,7 @@ pub mod test {
             Parse::named("test", "SELECT $1").into(),
             Parse::named("test_2", "SELECT $1, $2, $3").into(),
             Describe::new_statement("test_2").into(),
-            Bind::test_params(
+            Bind::new_params(
                 "test",
                 &[crate::net::bind::Parameter {
                     len: 1,
@@ -1401,9 +1401,9 @@ pub mod test {
                 }],
             )
             .into(),
-            Bind::test_statement("test_2").into(),
+            Bind::new_statement("test_2").into(),
             Execute::new().into(), // Will be ignored
-            Bind::test_statement("test").into(),
+            Bind::new_statement("test").into(),
             Flush.into(),
         ];
 
@@ -1458,7 +1458,7 @@ pub mod test {
             server
                 .send(
                     &vec![
-                        Bind::test_params(
+                        Bind::new_params(
                             "test",
                             &[crate::net::bind::Parameter {
                                 len: 1,
@@ -1507,7 +1507,7 @@ pub mod test {
             .send(
                 &vec![
                     ProtocolMessage::from(Parse::named("test", "SELECT 1")),
-                    Bind::test_name_portal("test", "test1").into(),
+                    Bind::new_name_portal("test", "test1").into(),
                     Execute::new_portal("test1").into(),
                     Close::portal("test1").into(),
                     Sync.into(),
@@ -1557,7 +1557,7 @@ pub mod test {
         assert!(server.prepared_statements.contains("__pgdog_1"));
 
         let describe = Describe::new_statement("__pgdog_1");
-        let bind = Bind::test_statement("__pgdog_1");
+        let bind = Bind::new_statement("__pgdog_1");
         let execute = Execute::new();
         server
             .send(
@@ -1884,7 +1884,7 @@ pub mod test {
         assert!(server.done());
 
         let buf = vec![
-            Bind::test_params(
+            Bind::new_params(
                 "",
                 &[Parameter {
                     len: 4,

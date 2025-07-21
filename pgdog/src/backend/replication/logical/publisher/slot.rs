@@ -40,6 +40,12 @@ pub enum Snapshot {
     Nothing,
 }
 
+#[derive(Debug, Clone, PartialEq, Copy)]
+pub enum SlotKind {
+    DataSync,
+    Replication,
+}
+
 impl Display for Snapshot {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -59,11 +65,14 @@ pub struct ReplicationSlot {
     lsn: Lsn,
     dropped: bool,
     server: Option<Server>,
+    kind: SlotKind,
 }
 
 impl ReplicationSlot {
     /// Create replication slot used for streaming the WAL.
-    pub fn replication(name: &str, publication: &str, address: &Address) -> Self {
+    pub fn replication(publication: &str, address: &Address) -> Self {
+        let name = format!("__pgdog_repl_{}", random_string(19).to_lowercase());
+
         Self {
             address: address.clone(),
             name: name.to_string(),
@@ -72,6 +81,7 @@ impl ReplicationSlot {
             publication: publication.to_string(),
             dropped: false,
             server: None,
+            kind: SlotKind::Replication,
         }
     }
 
@@ -87,6 +97,7 @@ impl ReplicationSlot {
             publication: publication.to_string(),
             dropped: false,
             server: None,
+            kind: SlotKind::DataSync,
         }
     }
 
@@ -103,9 +114,11 @@ impl ReplicationSlot {
 
     /// Create the slot.
     pub async fn create_slot(&mut self) -> Result<Lsn, Error> {
-        self.server()?
-            .execute("BEGIN READ ONLY ISOLATION LEVEL REPEATABLE READ")
-            .await?;
+        if self.kind == SlotKind::DataSync {
+            self.server()?
+                .execute("BEGIN READ ONLY ISOLATION LEVEL REPEATABLE READ")
+                .await?;
+        }
 
         let start_replication = format!(
             r#"CREATE_REPLICATION_SLOT "{}" LOGICAL "pgoutput" (SNAPSHOT '{}')"#,
@@ -210,7 +223,7 @@ impl Drop for ReplicationSlot {
         let server = self.server.take();
 
         if let Some(mut server) = server {
-            if !self.dropped {
+            if !self.dropped && self.kind == SlotKind::DataSync {
                 let name = self.name.clone();
                 let address = self.address.clone();
                 let drop_query = self.drop_slot_query(false);

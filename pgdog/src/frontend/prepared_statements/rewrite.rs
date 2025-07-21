@@ -78,7 +78,7 @@ mod test {
         assert_eq!(parse.name(), "__pgdog_1");
         assert_eq!(parse.query(), "SELECT * FROM users");
 
-        let bind = Bind::test_statement("__sqlx_1");
+        let bind = Bind::new_statement("__sqlx_1");
 
         let bind =
             Bind::from_bytes(rewrite.rewrite(bind.into()).unwrap().to_bytes().unwrap()).unwrap();

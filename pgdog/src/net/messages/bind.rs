@@ -53,6 +53,21 @@ impl Parameter {
     pub(crate) fn len(&self) -> usize {
         4 + self.data.len()
     }
+
+    /// Create a null parameter (no data).
+    pub fn new_null() -> Self {
+        Self {
+            len: -1,
+            data: vec![],
+        }
+    }
+
+    pub fn new(data: &[u8]) -> Self {
+        Self {
+            len: data.len() as i32,
+            data: data.to_vec(),
+        }
+    }
 }
 
 /// Parameter with encoded format.
@@ -182,18 +197,15 @@ impl Bind {
     pub fn codes(&self) -> &[Format] {
         &self.codes
     }
-}
 
-#[cfg(test)]
-impl Bind {
-    pub(crate) fn test_statement(name: &str) -> Self {
+    pub fn new_statement(name: &str) -> Self {
         Self {
             statement: Bytes::from(name.to_string() + "\0"),
             ..Default::default()
         }
     }
 
-    pub(crate) fn test_params(name: &str, params: &[Parameter]) -> Self {
+    pub fn new_params(name: &str, params: &[Parameter]) -> Self {
         Self {
             statement: Bytes::from(name.to_string() + "\0"),
             params: params.to_vec(),
@@ -201,7 +213,7 @@ impl Bind {
         }
     }
 
-    pub(crate) fn test_name_portal(name: &str, portal: &str) -> Self {
+    pub fn new_name_portal(name: &str, portal: &str) -> Self {
         Self {
             statement: Bytes::from(name.to_string() + "\0"),
             portal: Bytes::from(portal.to_string() + "\0"),
@@ -209,7 +221,7 @@ impl Bind {
         }
     }
 
-    pub(crate) fn test_params_codes(name: &str, params: &[Parameter], codes: &[Format]) -> Self {
+    pub fn new_params_codes(name: &str, params: &[Parameter], codes: &[Format]) -> Self {
         Self {
             statement: Bytes::from(name.to_string() + "\0"),
             codes: codes.to_vec(),
@@ -218,13 +230,13 @@ impl Bind {
         }
     }
 
-    pub(crate) fn test_params_codes_results(
+    pub fn new_params_codes_results(
         name: &str,
         params: &[Parameter],
         codes: &[Format],
         results: &[i16],
     ) -> Self {
-        let mut me = Self::test_params_codes(name, params, codes);
+        let mut me = Self::new_params_codes(name, params, codes);
         me.results = results.to_vec();
 
         me

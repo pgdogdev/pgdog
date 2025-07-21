@@ -12,7 +12,7 @@ use super::super::{CopyStatement, Error};
 static BUFFER_SIZE: usize = 10;
 
 #[derive(Debug)]
-pub struct Subscriber {
+pub struct CopySubscriber {
     copy: CopyParser,
     cluster: Cluster,
     buffer: Vec<CopyData>,
@@ -20,7 +20,7 @@ pub struct Subscriber {
     stmt: CopyStatement,
 }
 
-impl Subscriber {
+impl CopySubscriber {
     pub fn new(copy_stmt: &CopyStatement, cluster: &Cluster) -> Result<Self, Error> {
         let stmt = pg_query::parse(copy_stmt.clone().copy_in().as_str())?;
         let stmt = stmt
@@ -186,7 +186,7 @@ mod test {
             .await
             .unwrap();
 
-        let mut subscriber = Subscriber::new(&copy, &cluster).unwrap();
+        let mut subscriber = CopySubscriber::new(&copy, &cluster).unwrap();
         subscriber.start_copy().await.unwrap();
 
         for i in 0..25 {
