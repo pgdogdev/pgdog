@@ -1,5 +1,3 @@
-use std::fmt::Display;
-
 #[derive(Debug, Clone)]
 pub struct CopyStatement {
     schema: String,

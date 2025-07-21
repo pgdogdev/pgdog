@@ -12,7 +12,7 @@ use super::super::{CopyStatement, Error};
 static BUFFER_SIZE: usize = 10;
 
 #[derive(Debug)]
-pub struct Table {
+pub struct Subscriber {
     copy: CopyParser,
     cluster: Cluster,
     buffer: Vec<CopyData>,
@@ -20,7 +20,7 @@ pub struct Table {
     stmt: CopyStatement,
 }
 
-impl Table {
+impl Subscriber {
     pub fn new(copy_stmt: &CopyStatement, cluster: &Cluster) -> Result<Self, Error> {
         let stmt = pg_query::parse(copy_stmt.clone().copy_in().as_str())?;
         let stmt = stmt
@@ -80,6 +80,10 @@ impl Table {
     /// Start copy on the subscriber table.
     pub async fn start_copy(&mut self) -> Result<(), Error> {
         let stmt = Query::new(self.stmt.copy_in());
+
+        if self.connections.is_empty() {
+            self.connect().await?;
+        }
 
         for server in &mut self.connections {
             server.send_one(&stmt.clone().into()).await?;
@@ -148,5 +152,40 @@ impl Table {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_subscriber() {
+        crate::logger();
+
+        let copy = CopyStatement::new("pgdog", "sharded", &["id".into(), "value".into()]);
+        let cluster = Cluster::new_test();
+        cluster.launch();
+
+        cluster
+            .execute("TRUNCATE TABLE pgdog.sharded")
+            .await
+            .unwrap();
+
+        let mut subscriber = Subscriber::new(&copy, &cluster).unwrap();
+        subscriber.start_copy().await.unwrap();
+
+        for i in 0..25 {
+            let copy_data = CopyData::new(format!("{}\ttest@test.com\n", i).as_bytes());
+            subscriber.copy_data(copy_data).await.unwrap();
+        }
+
+        subscriber.copy_done().await.unwrap();
+        cluster
+            .execute("TRUNCATE TABLE pgdog.sharded")
+            .await
+            .unwrap();
+
+        cluster.shutdown();
     }
 }

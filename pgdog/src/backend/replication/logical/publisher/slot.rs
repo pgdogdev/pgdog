@@ -1,7 +1,7 @@
 use super::super::Error;
 use crate::{
     backend::Server,
-    net::{CommandComplete, CopyData, DataRow, Format, FromBytes, Protocol, Query, ToBytes},
+    net::{CopyData, DataRow, Format, FromBytes, Protocol, Query, ToBytes},
     util::random_string,
 };
 use std::{fmt::Display, str::FromStr};

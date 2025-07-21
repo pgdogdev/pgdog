@@ -62,4 +62,8 @@ impl Copy {
             }
         }
     }
+
+    pub fn statement(&self) -> &CopyStatement {
+        &self.stmt
+    }
 }

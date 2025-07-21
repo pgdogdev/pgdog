@@ -1,11 +1,11 @@
 //! Table.
 
 use crate::backend::pool::Address;
-use crate::backend::{Server, ServerOptions};
+use crate::backend::{Cluster, Server, ServerOptions};
 use crate::net::replication::{ReplicationMeta, StatusUpdate};
-use crate::net::{CopyDone, ErrorResponse, FromBytes, Protocol, ToBytes};
+use crate::net::CopyDone;
 
-use super::super::Error;
+use super::super::{subscriber::Subscriber, Error};
 use super::{
     Copy, PublicationTable, PublicationTableColumn, ReplicaIdentity, ReplicationData,
     ReplicationSlot,
@@ -97,8 +97,14 @@ impl Table {
         Ok(())
     }
 
-    pub async fn data_sync(&mut self, source: &Address) -> Result<(), Error> {
+    pub async fn data_sync(&mut self, source: &Address, dest: &Cluster) -> Result<(), Error> {
+        let copy = Copy::new(self);
+
         let mut server = Server::connect(source, ServerOptions::new_replication()).await?;
+        let mut dest = Subscriber::new(copy.statement(), dest)?;
+
+        dest.connect().await?;
+
         // Start transaction.
         server
             .execute("BEGIN READ ONLY ISOLATION LEVEL REPEATABLE READ")
@@ -114,8 +120,13 @@ impl Table {
         // Copy rows over.
         let copy = Copy::new(self);
         copy.start(&mut server).await?;
+        dest.start_copy().await?;
 
-        while let Some(data_row) = copy.data(&mut server).await? {}
+        while let Some(data_row) = copy.data(&mut server).await? {
+            dest.copy_data(data_row).await?;
+        }
+        dest.copy_done().await?;
+
         server.execute("COMMIT").await?;
 
         // Stream remaining changes.
@@ -149,100 +160,16 @@ impl Table {
 
         Ok(())
     }
-
-    // pub fn new(schema: &str, name: &str, columns: &[String]) -> Self {
-    //     Self {
-    //         schema: schema.to_owned(),
-    //         name: name.to_owned(),
-    //         columns: columns.to_vec(),
-    //     }
-    // }
-
-    pub async fn start_copy_out(&self, source: &mut Server) -> Result<(), Error> {
-        if !source.in_transaction() {
-            return Err(Error::TransactionNotStarted);
-        }
-
-        // let copy_stmt = CopyStatement::new(&self.schema, &self.name, &self.columns).copy_out();
-
-        // let stmt = pg_query::parse(&copy_stmt.to_string())?;
-        // let copy = stmt
-        //     .protobuf
-        //     .stmts
-        //     .first()
-        //     .ok_or(Error::Copy)?
-        //     .stmt
-        //     .as_ref()
-        //     .ok_or(Error::Copy)?;
-        // let mut copy = match copy.node {
-        //     Some(NodeEnum::CopyStmt(ref stmt)) => CopyParser::new(stmt, destination)
-        //         .map_err(|_| Error::Copy)?
-        //         .ok_or(Error::Copy)?,
-
-        //     _ => return Err(Error::Copy),
-        // };
-
-        // source
-        //     .send(&vec![Query::new(copy_stmt.to_string()).into()].into())
-        //     .await?;
-
-        let reply = source.read().await?;
-        match reply.code() {
-            'E' => {
-                return Err(Error::PgError(ErrorResponse::from_bytes(
-                    reply.to_bytes()?,
-                )?))
-            }
-            'G' => (),
-            c => return Err(Error::OutOfSync(c)),
-        }
-
-        // let mut conn = Connection::new(destination.user(), destination.name(), false, &None)?;
-        // conn.connect(&Request::default(), &Route::write(None))
-        //     .await?;
-
-        // conn.send(&vec![Query::new(copy_in).into()].into()).await?;
-
-        // let mut buffer = vec![];
-
-        // while source.has_more_messages() {
-        //     let msg = source.read().await?;
-        //     match msg.code() {
-        //         'd' => {
-        //             buffer.push(CopyData::from_bytes(msg.to_bytes()?)?);
-        //             let sharded = copy
-        //                 .shard(std::mem::take(&mut buffer))
-        //                 .map_err(|_| Error::OutOfSync)?;
-        //             conn.send_copy(sharded).await?;
-        //         }
-
-        //         'E' => {
-        //             ErrorResponse::from_bytes(msg.to_bytes()?)?;
-        //             return Err(Error::OutOfSync);
-        //         }
-
-        //         _ => return Err(Error::OutOfSync),
-        //     }
-        // }
-
-        Ok(())
-    }
 }
 
 #[cfg(test)]
 mod test {
-    use std::time::Duration;
 
-    use tokio::time::sleep;
-
-    use crate::backend::{
-        replication::logical::publisher::test::setup_publication, server::test::test_server,
-    };
+    use crate::backend::replication::logical::publisher::test::setup_publication;
 
     use super::*;
 
     #[tokio::test]
-    #[ignore]
     async fn test_publication() {
         crate::logger();
         let mut publication = setup_publication().await;
@@ -250,13 +177,8 @@ mod test {
             .await
             .unwrap();
 
-        let mut server = test_server().await;
+        assert_eq!(tables.len(), 2);
 
-        sleep(Duration::from_millis(1_000)).await;
-
-        for mut table in tables {
-            table.data_sync(&publication.server.addr()).await.unwrap();
-        }
         publication.cleanup().await;
     }
 }

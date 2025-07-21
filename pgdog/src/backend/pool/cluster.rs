@@ -14,7 +14,7 @@ use crate::{
     config::{
         General, MultiTenant, PoolerMode, ReadWriteSplit, ReadWriteStrategy, ShardedTable, User,
     },
-    net::messages::BackendKeyData,
+    net::{messages::BackendKeyData, Query},
 };
 
 use super::{Address, Config, Error, Guard, Request, Shard};
@@ -341,6 +341,19 @@ impl Cluster {
         for shard in self.shards() {
             shard.shutdown();
         }
+    }
+
+    /// Execute a query on every primary in the cluster.
+    pub async fn execute(
+        &self,
+        query: impl Into<Query> + Clone,
+    ) -> Result<(), crate::backend::Error> {
+        for shard in 0..self.shards.len() {
+            let mut server = self.primary(shard, &Request::default()).await?;
+            server.execute(query.clone()).await?;
+        }
+
+        Ok(())
     }
 }
 
