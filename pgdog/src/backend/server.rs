@@ -856,6 +856,11 @@ impl Server {
     pub fn prepared_statements_mut(&mut self) -> &mut PreparedStatements {
         &mut self.prepared_statements
     }
+
+    #[inline]
+    pub fn prepared_statements(&self) -> &PreparedStatements {
+        &self.prepared_statements
+    }
 }
 
 impl Drop for Server {

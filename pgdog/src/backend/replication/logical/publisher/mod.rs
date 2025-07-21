@@ -1,7 +1,7 @@
 pub mod slot;
 pub use slot::*;
 pub mod copy;
-pub mod publication;
+pub mod publisher_impl;
 pub mod queries;
 pub mod table;
 pub use copy::*;

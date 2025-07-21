@@ -93,7 +93,7 @@ impl QueryParser {
         self.replication_mode = true;
     }
 
-    pub fn copy_data(&mut self, rows: Vec<CopyData>) -> Result<Vec<CopyRow>, Error> {
+    pub fn copy_data(&mut self, rows: &[CopyData]) -> Result<Vec<CopyRow>, Error> {
         match &mut self.command {
             Command::Copy(copy) => copy.shard(rows),
             _ => Ok(vec![]),

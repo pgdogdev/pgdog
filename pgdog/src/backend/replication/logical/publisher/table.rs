@@ -1,16 +1,15 @@
 //! Table.
-use http_body_util::BodyExt;
-use pg_query::NodeEnum;
 
-use crate::backend::pool::{Address, Connection, Request};
-use crate::backend::{Cluster, Server, ServerOptions};
-use crate::frontend::router::parser::CopyParser;
-use crate::frontend::router::Route;
+use crate::backend::pool::Address;
+use crate::backend::{Server, ServerOptions};
 use crate::net::replication::{ReplicationMeta, StatusUpdate};
-use crate::net::{CopyData, CopyDone, ErrorResponse, FromBytes, Protocol, Query, ToBytes};
+use crate::net::{CopyDone, ErrorResponse, FromBytes, Protocol, ToBytes};
 
-use super::super::{CopyStatement, Error};
-use super::{Copy, PublicationTable, PublicationTableColumn, ReplicaIdentity, ReplicationSlot};
+use super::super::Error;
+use super::{
+    Copy, PublicationTable, PublicationTableColumn, ReplicaIdentity, ReplicationData,
+    ReplicationSlot,
+};
 
 #[derive(Debug, Clone)]
 pub struct Table {
@@ -41,7 +40,7 @@ impl Table {
     }
 
     /// Upsert record into table.
-    pub async fn upsert(&self) -> String {
+    pub async fn insert(&self, upsert: bool) -> String {
         let names = format!(
             "({})",
             self.columns
@@ -59,22 +58,26 @@ impl Table {
                 .collect::<Vec<_>>()
                 .join(", ")
         );
-        let on_conflict = format!(
-            "ON CONFLICT ({}) DO UPDATE {}",
-            self.columns
-                .iter()
-                .filter(|c| c.identity)
-                .map(|c| format!("\"{}\"", c.name.as_str()))
-                .collect::<Vec<_>>()
-                .join(", "),
-            self.columns
-                .iter()
-                .enumerate()
-                .filter(|(_, c)| c.identity)
-                .map(|(i, c)| format!("SET \"{}\" = ${}", c.name, i + 1))
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
+        let on_conflict = if upsert {
+            format!(
+                "ON CONFLICT ({}) DO UPDATE {}",
+                self.columns
+                    .iter()
+                    .filter(|c| c.identity)
+                    .map(|c| format!("\"{}\"", c.name.as_str()))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                self.columns
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, c)| c.identity)
+                    .map(|(i, c)| format!("SET \"{}\" = ${}", c.name, i + 1))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        } else {
+            "".to_string()
+        };
 
         format!(
             "INSERT INTO \"{}\".\"{}\" {} {} {}",
@@ -94,8 +97,8 @@ impl Table {
         Ok(())
     }
 
-    pub async fn data_sync(&mut self, addr: &Address) -> Result<(), Error> {
-        let mut server = Server::connect(addr, ServerOptions::new_replication()).await?;
+    pub async fn data_sync(&mut self, source: &Address) -> Result<(), Error> {
+        let mut server = Server::connect(source, ServerOptions::new_replication()).await?;
         // Start transaction.
         server
             .execute("BEGIN READ ONLY ISOLATION LEVEL REPEATABLE READ")
@@ -118,20 +121,31 @@ impl Table {
         // Stream remaining changes.
         slot.start_replication(&mut server).await?;
         while let Some(data) = slot.replicate(&mut server).await? {
-            if let Some(meta) = data.replication_meta() {
-                match meta {
-                    ReplicationMeta::KeepAlive(ka) => {
-                        server
-                            .send_one(&StatusUpdate::from(ka).wrapped()?.into())
-                            .await?;
-                        server.send_one(&CopyDone.into()).await?;
-                        server.flush().await?;
-                    }
+            match data {
+                ReplicationData::CopyData(data) => {
+                    if let Some(meta) = data.replication_meta() {
+                        match meta {
+                            ReplicationMeta::KeepAlive(ka) => {
+                                // TODO: Keep track of the LSN and send the real one.
+                                server
+                                    .send_one(&StatusUpdate::from(ka).wrapped()?.into())
+                                    .await?;
+                                server.send_one(&CopyDone.into()).await?;
+                                server.flush().await?;
+                            }
 
-                    _ => (),
+                            _ => (),
+                        }
+                    }
+                }
+                ReplicationData::CopyDone => {
+                    // TODO: Verify we flushed everything.
+                    // server.send_one(&CopyDone.into()).await?;
+                    // server.flush().await?;
                 }
             }
         }
+        slot.drop_slot(&mut server).await?;
 
         Ok(())
     }
@@ -217,7 +231,13 @@ impl Table {
 
 #[cfg(test)]
 mod test {
-    use crate::backend::replication::logical::publisher::test::setup_publication;
+    use std::time::Duration;
+
+    use tokio::time::sleep;
+
+    use crate::backend::{
+        replication::logical::publisher::test::setup_publication, server::test::test_server,
+    };
 
     use super::*;
 
@@ -229,6 +249,10 @@ mod test {
         let tables = Table::load("publication_test", &mut publication.server)
             .await
             .unwrap();
+
+        let mut server = test_server().await;
+
+        sleep(Duration::from_millis(1_000)).await;
 
         for mut table in tables {
             table.data_sync(&publication.server.addr()).await.unwrap();

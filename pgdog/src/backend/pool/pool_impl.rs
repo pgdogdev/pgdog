@@ -328,6 +328,11 @@ impl Pool {
         self.comms().ready.notify_waiters();
     }
 
+    /// Create a connection to the pool, untracked by the logic here.
+    pub async fn standalone(&self) -> Result<Server, Error> {
+        Monitor::create_connection(self).await
+    }
+
     /// Shutdown the pool.
     pub fn shutdown(&self) {
         let mut guard = self.lock();

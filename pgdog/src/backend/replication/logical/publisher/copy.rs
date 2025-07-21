@@ -24,8 +24,7 @@ impl Copy {
                 .iter()
                 .map(|c| c.name.clone())
                 .collect::<Vec<_>>(),
-        )
-        .copy_out();
+        );
 
         Self { stmt }
     }
@@ -36,7 +35,7 @@ impl Copy {
         }
 
         server
-            .send(&vec![Query::new(self.stmt.to_string()).into()].into())
+            .send(&vec![Query::new(self.stmt.copy_out()).into()].into())
             .await?;
         let result = server.read().await?;
         if result.code() != 'H' {
@@ -53,7 +52,7 @@ impl Copy {
             match msg.code() {
                 'd' => {
                     let data = CopyData::from_bytes(msg.to_bytes()?)?;
-                    trace!("{:?} [{}]", data, server.addr());
+                    trace!("[{}] --> {:?}", server.addr().addr().await?, data);
                     return Ok(Some(data));
                 }
                 'C' => (),

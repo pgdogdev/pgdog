@@ -314,7 +314,7 @@ impl Monitor {
         }
     }
 
-    async fn create_connection(pool: &Pool) -> Result<Server, Error> {
+    pub(super) async fn create_connection(pool: &Pool) -> Result<Server, Error> {
         let connect_timeout = pool.config().connect_timeout;
         let connect_attempts = pool.config().connect_attempts;
         let connect_attempt_delay = pool.config().connect_attempt_delay;

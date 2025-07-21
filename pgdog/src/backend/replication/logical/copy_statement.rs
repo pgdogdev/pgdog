@@ -5,7 +5,6 @@ pub struct CopyStatement {
     schema: String,
     table: String,
     columns: Vec<String>,
-    out: bool,
 }
 
 impl CopyStatement {
@@ -14,40 +13,29 @@ impl CopyStatement {
             schema: schema.to_owned(),
             table: table.to_owned(),
             columns: columns.to_vec(),
-            out: true,
         }
     }
 
-    pub fn copy_out(mut self) -> Self {
-        self.out = true;
-        self
+    pub fn copy_out(&self) -> String {
+        self.copy(true)
     }
 
-    pub fn copy_in(mut self) -> Self {
-        self.out = false;
-        self
+    pub fn copy_in(&self) -> String {
+        self.copy(false)
     }
-}
 
-impl Display for CopyStatement {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            r#"COPY "{}"."{}" ({}) "#,
+    fn copy(&self, out: bool) -> String {
+        format!(
+            r#"COPY "{}"."{}" ({}) {}"#,
             self.schema,
             self.table,
             self.columns
                 .iter()
                 .map(|c| format!(r#""{}""#, c))
                 .collect::<Vec<_>>()
-                .join(", ")
-        )?;
-
-        if self.out {
-            write!(f, "TO STDOUT")
-        } else {
-            write!(f, "FROM STDIN")
-        }
+                .join(", "),
+            if out { "TO STDOUT" } else { "FROM STDIN" }
+        )
     }
 }
 

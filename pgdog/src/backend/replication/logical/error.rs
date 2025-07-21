@@ -10,6 +10,9 @@ pub enum Error {
     Backend(#[from] crate::backend::Error),
 
     #[error("{0}")]
+    Pool(#[from] crate::backend::pool::Error),
+
+    #[error("{0}")]
     Net(#[from] crate::net::Error),
 
     #[error("transaction not started")]
@@ -38,4 +41,10 @@ pub enum Error {
 
     #[error("parse int")]
     ParseInt(#[from] ParseIntError),
+
+    #[error("shard has no primary")]
+    NoPrimary,
+
+    #[error("{0}")]
+    Parser(#[from] crate::frontend::router::parser::Error),
 }

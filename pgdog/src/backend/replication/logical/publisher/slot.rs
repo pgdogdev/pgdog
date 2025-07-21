@@ -148,7 +148,10 @@ impl ReplicationSlot {
     }
 
     /// Replicate from slot until finished.
-    pub async fn replicate(&mut self, server: &mut Server) -> Result<Option<CopyData>, Error> {
+    pub async fn replicate(
+        &mut self,
+        server: &mut Server,
+    ) -> Result<Option<ReplicationData>, Error> {
         loop {
             let message = server.read().await?;
             match message.code() {
@@ -156,10 +159,10 @@ impl ReplicationSlot {
                     let copy_data = CopyData::from_bytes(message.to_bytes()?)?;
                     trace!("{:?} [{}]", copy_data, server.addr());
 
-                    return Ok(Some(copy_data));
+                    return Ok(Some(ReplicationData::CopyData(copy_data)));
                 }
                 'C' => (),
-                'c' => (), // CopyDone.
+                'c' => return Ok(Some(ReplicationData::CopyDone)), // CopyDone.
                 'Z' => {
                     debug!("slot \"{}\" drained [{}]", self.name, server.addr());
                     return Ok(None);
@@ -168,6 +171,12 @@ impl ReplicationSlot {
             }
         }
     }
+}
+
+#[derive(Debug)]
+pub enum ReplicationData {
+    CopyData(CopyData),
+    CopyDone,
 }
 
 #[cfg(test)]
