@@ -2,6 +2,9 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 use std::fs::read_to_string;
+use tracing::error;
+
+use crate::backend::{databases::databases, replication::logical::publisher_impl::Publisher};
 
 /// PgDog is a PostgreSQL pooler, proxy, load balancer and query router.
 #[derive(Parser, Debug)]
@@ -21,7 +24,7 @@ pub struct Cli {
     pub command: Option<Commands>,
 }
 
-#[derive(Subcommand, Debug)]
+#[derive(Subcommand, Debug, Clone)]
 pub enum Commands {
     /// Run pgDog.
     Run {
@@ -46,7 +49,26 @@ pub enum Commands {
         path: Option<PathBuf>,
     },
 
-    Schema,
+    /// Copy data from source to destination cluster
+    /// using logical replication.
+    DataSync {
+        /// Source database name.
+        #[arg(long)]
+        from_database: String,
+        /// Source user name.
+        #[arg(long)]
+        from_user: String,
+        /// Publication name.
+        #[arg(long)]
+        publication: String,
+
+        /// Destination database.
+        #[arg(long)]
+        to_database: String,
+        /// Destination user name.
+        #[arg(long)]
+        to_user: String,
+    },
 }
 
 /// Fingerprint some queries.
@@ -73,6 +95,31 @@ fingerprint = "{}" #[{}]"#,
                 );
             }
         }
+    }
+
+    Ok(())
+}
+
+pub async fn data_sync(commands: Commands) -> Result<(), Box<dyn std::error::Error>> {
+    let (source, destination, publication) = if let Commands::DataSync {
+        from_database,
+        from_user,
+        to_database,
+        to_user,
+        publication,
+    } = commands
+    {
+        let source = databases().cluster((from_user.as_str(), from_database.as_str()))?;
+        let dest = databases().cluster((to_user.as_str(), to_database.as_str()))?;
+
+        (source, dest, publication)
+    } else {
+        return Ok(());
+    };
+
+    let publication = Publisher::new(&source, &publication);
+    if let Err(err) = publication.data_sync(&destination).await {
+        error!("{}", err);
     }
 
     Ok(())

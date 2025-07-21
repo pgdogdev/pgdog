@@ -4,7 +4,6 @@ pub mod logical;
 pub mod status_update;
 pub mod xlog_data;
 
-use bytes::BytesMut;
 pub use hot_standby_feedback::HotStandbyFeedback;
 pub use keep_alive::KeepAlive;
 pub use logical::begin::Begin;
@@ -40,19 +39,10 @@ impl FromBytes for ReplicationMeta {
 
 impl ToBytes for ReplicationMeta {
     fn to_bytes(&self) -> Result<Bytes, Error> {
-        let mut payload = BytesMut::new();
-        // payload.put_u8(match self {
-        //     Self::HotStandbyFeedback(_) => 'h' as u8,
-        //     Self::StatusUpdate(_) => 'r' as u8,
-        //     Self::KeepAlive(_) => 'k' as u8,
-        // });
-
-        payload.put(match self {
-            Self::HotStandbyFeedback(hot) => hot.to_bytes()?,
-            Self::StatusUpdate(status) => status.to_bytes()?,
-            Self::KeepAlive(ka) => ka.to_bytes()?,
-        });
-
-        Ok(payload.freeze())
+        match self {
+            Self::HotStandbyFeedback(hot) => hot.to_bytes(),
+            Self::StatusUpdate(status) => status.to_bytes(),
+            Self::KeepAlive(ka) => ka.to_bytes(),
+        }
     }
 }

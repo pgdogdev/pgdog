@@ -4,7 +4,7 @@ use crate::{
     backend::{Cluster, Server},
     config::Role,
     frontend::router::parser::{CopyParser, Shard},
-    net::{CopyData, CopyDone, Protocol, Query},
+    net::{CopyData, CopyDone, ErrorResponse, FromBytes, Protocol, Query, ToBytes},
 };
 
 use super::super::{CopyStatement, Error};
@@ -90,8 +90,10 @@ impl Subscriber {
             server.flush().await?;
 
             let msg = server.read().await?;
-            if msg.code() != 'G' {
-                return Err(Error::OutOfSync(msg.code()));
+            match msg.code() {
+                'G' => (),
+                'E' => return Err(Error::PgError(ErrorResponse::from_bytes(msg.to_bytes()?)?)),
+                c => return Err(Error::OutOfSync(c)),
             }
         }
 
@@ -107,9 +109,16 @@ impl Subscriber {
             server.flush().await?;
 
             let command_complete = server.read().await?;
-            if command_complete.code() != 'C' {
-                return Err(Error::OutOfSync(command_complete.code()));
+            match command_complete.code() {
+                'E' => {
+                    return Err(Error::PgError(ErrorResponse::from_bytes(
+                        command_complete.to_bytes()?,
+                    )?))
+                }
+                'C' => (),
+                c => return Err(Error::OutOfSync(c)),
             }
+
             let rfq = server.read().await?;
             if rfq.code() != 'Z' {
                 return Err(Error::OutOfSync(rfq.code()));

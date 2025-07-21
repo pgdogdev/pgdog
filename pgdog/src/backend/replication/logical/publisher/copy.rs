@@ -1,6 +1,6 @@
 use crate::{
     backend::Server,
-    net::{CopyData, FromBytes, Protocol, Query, ToBytes},
+    net::{CopyData, ErrorResponse, FromBytes, Protocol, Query, ToBytes},
 };
 use tracing::trace;
 
@@ -38,10 +38,11 @@ impl Copy {
             .send(&vec![Query::new(self.stmt.copy_out()).into()].into())
             .await?;
         let result = server.read().await?;
-        if result.code() != 'H' {
-            return Err(Error::OutOfSync(result.code()));
+        match result.code() {
+            'E' => return Err(ErrorResponse::from_bytes(result.to_bytes()?)?.into()),
+            'H' => (),
+            c => return Err(Error::OutOfSync(c)),
         }
-
         Ok(())
     }
 
@@ -58,6 +59,7 @@ impl Copy {
                 'C' => (),
                 'c' => (), // CopyDone.
                 'Z' => return Ok(None),
+                'E' => return Err(ErrorResponse::from_bytes(msg.to_bytes()?)?.into()),
                 c => return Err(Error::OutOfSync(c)),
             }
         }

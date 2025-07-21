@@ -11,6 +11,8 @@ use super::{
     ReplicationSlot,
 };
 
+use tracing::debug;
+
 #[derive(Debug, Clone)]
 pub struct Table {
     pub(super) publication: String,
@@ -98,6 +100,11 @@ impl Table {
     }
 
     pub async fn data_sync(&mut self, source: &Address, dest: &Cluster) -> Result<(), Error> {
+        debug!(
+            "data sync for \"{}\".\"{}\" started [{}]",
+            self.table.schema, self.table.name, source
+        );
+
         // Sync data using COPY.
         // Publisher uses COPY [...] TO STDOUT.
         // Subscriber uses COPY [...] FROM STDIN.

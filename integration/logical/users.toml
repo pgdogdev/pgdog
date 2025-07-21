@@ -3,3 +3,15 @@ database = "pgdog"
 name = "pgdog"
 password = "pgdog"
 replication_mode = true
+
+[[users]]
+database = "source"
+name = "pgdog"
+password = "pgdog"
+min_pool_size = 0
+
+[[users]]
+database = "destination"
+name = "pgdog"
+password = "pgdog"
+min_pool_size = 0

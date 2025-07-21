@@ -51,3 +51,9 @@ pub enum Error {
     #[error("not connected")]
     NotConnected,
 }
+
+impl From<ErrorResponse> for Error {
+    fn from(value: ErrorResponse) -> Self {
+        Self::PgError(value)
+    }
+}

@@ -1,7 +1,7 @@
 use super::super::Error;
 use crate::{
     backend::{pool::Address, Server, ServerOptions},
-    net::{CopyData, DataRow, Format, FromBytes, Protocol, Query, ToBytes},
+    net::{CopyData, DataRow, ErrorResponse, Format, FromBytes, Protocol, Query, ToBytes},
     util::random_string,
 };
 use std::{fmt::Display, str::FromStr};
@@ -167,8 +167,10 @@ impl ReplicationSlot {
 
         let copy_both = self.server()?.read().await?;
 
-        if copy_both.code() != 'W' {
-            return Err(Error::OutOfSync(copy_both.code()));
+        match copy_both.code() {
+            'E' => return Err(ErrorResponse::from_bytes(copy_both.to_bytes()?)?.into()),
+            'W' => (),
+            c => return Err(Error::OutOfSync(c)),
         }
 
         debug!(
@@ -196,6 +198,7 @@ impl ReplicationSlot {
                     debug!("slot \"{}\" drained [{}]", self.name, self.address);
                     return Ok(None);
                 }
+                'E' => return Err(ErrorResponse::from_bytes(message.to_bytes()?)?.into()),
                 c => return Err(Error::OutOfSync(c)),
             }
         }
