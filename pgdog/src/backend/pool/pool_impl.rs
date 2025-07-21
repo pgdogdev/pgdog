@@ -11,10 +11,11 @@ use tracing::{error, info};
 
 use crate::backend::{Server, ServerOptions};
 use crate::config::PoolerMode;
-use crate::net::messages::BackendKeyData;
+use crate::net::messages::{BackendKeyData, DataRow, Format};
 use crate::net::Parameter;
 
 use super::inner::CheckInResult;
+use super::inner::ReplicaLag;
 use super::{
     Address, Comms, Config, Error, Guard, Healtcheck, Inner, Monitor, Oids, PoolConfig, Request,
     State, Waiting,
@@ -416,4 +417,68 @@ impl Pool {
     pub fn oids(&self) -> Option<Oids> {
         self.lock().oids
     }
+
+    /// `pg_current_wal_flush_lsn()` on the primary.
+    pub async fn wal_flush_lsn(&self) -> Result<u64, Error> {
+        let mut guard = self.get(&Request::default()).await?;
+
+        let rows: Vec<DataRow> = guard
+            .fetch_all("SELECT pg_current_wal_flush_lsn()")
+            .await
+            .map_err(|_| Error::PrimaryLsnQueryFailed)?;
+
+        let lsn = rows
+            .first()
+            .map(|r| r.get::<String>(0, Format::Text).unwrap_or_default())
+            .unwrap_or_default();
+
+        parse_pg_lsn(&lsn).map_err(|_| Error::ReplicaLsnQueryFailed)
+    }
+
+    /// `pg_last_wal_replay_lsn()` on a replica.
+    pub async fn wal_replay_lsn(&self) -> Result<u64, Error> {
+        let mut guard = self.get(&Request::default()).await?;
+
+        let rows: Vec<DataRow> = guard
+            .fetch_all("SELECT pg_last_wal_replay_lsn()")
+            .await
+            .map_err(|_| Error::ReplicaLsnQueryFailed)?;
+
+        let lsn = rows
+            .first()
+            .map(|r| r.get::<String>(0, Format::Text).unwrap_or_default())
+            .unwrap_or_default();
+
+        parse_pg_lsn(&lsn).map_err(|_| Error::ReplicaLsnQueryFailed)
+    }
+
+    pub fn set_replica_lag(&self, replica_lag: ReplicaLag) {
+        self.lock().replica_lag = replica_lag;
+    }
 }
+
+// -------------------------------------------------------------------------------------------------
+// ----- Utils :: Parse LSN ------------------------------------------------------------------------
+
+#[derive(Debug)]
+enum ParseLsnError {
+    MissingSlash,
+    InvalidHex,
+}
+
+/// Parse PostgreSQL LSN string to u64 bytes.
+/// See spec: https://www.postgresql.org/docs/current/datatype-pg-lsn.html
+fn parse_pg_lsn(s: &str) -> Result<u64, ParseLsnError> {
+    let (hi_str, lo_str) = s.split_once('/').ok_or(ParseLsnError::MissingSlash)?;
+
+    let hi = u32::from_str_radix(hi_str, 16).map_err(|_| ParseLsnError::InvalidHex)? as u64;
+    let lo = u32::from_str_radix(lo_str, 16).map_err(|_| ParseLsnError::InvalidHex)? as u64;
+
+    let shifted_hi = hi << 32;
+    let lsn_value = shifted_hi | lo;
+
+    Ok(lsn_value)
+}
+
+// -------------------------------------------------------------------------------------------------
+// -------------------------------------------------------------------------------------------------

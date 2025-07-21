@@ -160,29 +160,42 @@ pub struct Config {
     /// General configuration.
     #[serde(default)]
     pub general: General,
+
     /// Statistics.
     #[serde(default)]
     pub stats: Stats,
+
     /// TCP settings
     #[serde(default)]
     pub tcp: Tcp,
+
     /// Multi-tenant
     pub multi_tenant: Option<MultiTenant>,
+
     /// Servers.
     #[serde(default)]
     pub databases: Vec<Database>,
+
     #[serde(default)]
     pub plugins: Vec<Plugin>,
+
     #[serde(default)]
     pub admin: Admin,
+
     #[serde(default)]
     pub sharded_tables: Vec<ShardedTable>,
+
     #[serde(default)]
     pub manual_queries: Vec<ManualQuery>,
+
     #[serde(default)]
     pub omnisharded_tables: Vec<OmnishardedTables>,
+
     #[serde(default)]
     pub sharded_mappings: Vec<ShardedMapping>,
+
+    #[serde(default, deserialize_with = "ReplicaLag::deserialize_optional")]
+    pub replica_lag: Option<ReplicaLag>,
 }
 
 impl Config {
@@ -1135,6 +1148,105 @@ pub struct MultiTenant {
     pub column: String,
 }
 
+//--------------------------------------------------------------------------------------------------
+//----- Replica Lag --------------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+struct RawReplicaLag {
+    #[serde(default)]
+    check_interval: Option<u64>,
+    #[serde(default)]
+    max_age: Option<u64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ReplicaLag {
+    pub check_interval: Duration,
+    pub max_age: Duration,
+}
+
+impl ReplicaLag {
+    fn default_max_age() -> Duration {
+        Duration::from_millis(25)
+    }
+
+    fn default_check_interval() -> Duration {
+        Duration::from_millis(1000)
+    }
+
+    /// Custom “all-or-none” deserializer that returns Option<Self>.
+    pub fn deserialize_optional<'de, D>(de: D) -> Result<Option<Self>, D::Error>
+    where
+        D: serde::de::Deserializer<'de>,
+    {
+        let maybe: Option<RawReplicaLag> = Option::deserialize(de)?;
+        let out = Ok(match maybe {
+            None => None,
+
+            Some(RawReplicaLag {
+                check_interval: None,
+                max_age: None,
+            }) => None,
+
+            Some(RawReplicaLag {
+                check_interval: Some(ci_u64),
+                max_age: Some(ma_u64),
+            }) => Some(ReplicaLag {
+                check_interval: Duration::from_millis(ci_u64),
+                max_age: Duration::from_millis(ma_u64),
+            }),
+
+            Some(RawReplicaLag {
+                check_interval: None,
+                max_age: Some(ma_u64),
+            }) => Some(ReplicaLag {
+                check_interval: Self::default_check_interval(),
+                max_age: Duration::from_millis(ma_u64),
+            }),
+
+            _ => {
+                return Err(serde::de::Error::custom(
+                    "replica_lag: cannot set check_interval without max_age",
+                ))
+            }
+        });
+
+        out
+    }
+}
+
+// NOTE: serialize and deserialize are not inverses.
+// - Normally you'd expect ser <-> deser to round-trip, but here deser applies defaults...
+//   for missing fields
+// - Serializes takes those applied defaults into account so that ReplicaLag always reflects...
+//   the actual effective values.
+// - This ensures pgdog.admin sees the true config that is applied, not just what was configured.
+
+impl Serialize for ReplicaLag {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut state = serializer.serialize_struct("ReplicaLag", 2)?;
+        state.serialize_field("check_interval", &(self.check_interval.as_millis() as u64))?;
+        state.serialize_field("max_age", &(self.max_age.as_millis() as u64))?;
+        state.end()
+    }
+}
+
+impl Default for ReplicaLag {
+    fn default() -> Self {
+        Self {
+            check_interval: Self::default_check_interval(),
+            max_age: Self::default_max_age(),
+        }
+    }
+}
+
+//--------------------------------------------------------------------------------------------------
+//----- Testing ------------------------------------------------------------------------------------
+
 #[cfg(test)]
 pub mod test {
     use crate::backend::databases::init;
@@ -1235,3 +1347,6 @@ column = "tenant_id"
         assert_eq!(config.multi_tenant.unwrap().column, "tenant_id");
     }
 }
+
+//--------------------------------------------------------------------------------------------------
+//--------------------------------------------------------------------------------------------------
