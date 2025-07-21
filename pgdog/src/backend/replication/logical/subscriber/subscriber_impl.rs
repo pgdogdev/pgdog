@@ -168,6 +168,11 @@ mod test {
         cluster.launch();
 
         cluster
+            .execute("CREATE TABLE IF NOT EXISTS pgdog.sharded (id BIGINT, value TEXT)")
+            .await
+            .unwrap();
+
+        cluster
             .execute("TRUNCATE TABLE pgdog.sharded")
             .await
             .unwrap();
