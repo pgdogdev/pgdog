@@ -1,14 +1,10 @@
 //! A shard is a collection of replicas and an optional primary.
 
-use parking_lot::RwLock;
-use std::collections::VecDeque;
 use std::ops::Deref;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
-use tokio::select;
-use tokio::spawn;
-use tokio::sync::Notify;
-use tokio::time::interval;
+use std::time::Duration;
+use tokio::time::{interval, sleep};
+use tokio::{join, select, spawn, sync::Notify};
 use tracing::{debug, error};
 
 use crate::config::{config, LoadBalancingStrategy, ReadWriteSplit, Role};
@@ -224,74 +220,19 @@ struct ShardMonitor {}
 
 impl ShardMonitor {
     pub fn run(shard: &Shard) {
-        let history: Arc<RwLock<RecentLsnHistory>> = Arc::default();
-
-        {
-            let shard = shard.clone();
-            let hist = history.clone();
-            spawn(async move { Self::track_primary_lsn(shard, hist).await });
-        }
-
-        {
-            let shard = shard.clone();
-            let hist = history.clone();
-            spawn(async move { Self::monitor_replicas(shard, hist).await });
-        }
+        let shard = shard.clone();
+        spawn(async move { Self::monitor_replicas(shard).await });
     }
 }
 
 impl ShardMonitor {
-    async fn track_primary_lsn(shard: Shard, hist: Arc<RwLock<RecentLsnHistory>>) {
-        let check_interval = match config()
-            .config
-            .replica_lag
-            .as_ref()
-            .map(|rl| rl.check_interval)
-        {
-            Some(v) => v,
-            None => return,
-        };
-
-        let primary = match shard.primary.as_ref() {
-            Some(p) => p,
-            None => return,
-        };
-
-        let min_interval = Duration::from_millis(250);
-        let interval_duration = (check_interval / 2).min(min_interval);
-        let mut tick = interval(interval_duration);
-
-        primary.set_replica_lag(ReplicaLag::NonApplicable);
-
-        debug!("primary LSN tracking running");
-        let comms = shard.comms();
-
-        loop {
-            select! {
-                _ = tick.tick() => {
-                    if let Ok(lsn) = primary.wal_flush_lsn().await {
-                        if let Some(mut h) = hist.try_write() {
-                            h.push(lsn);
-                        }
-                    } else {
-                        error!("primary WAL lsn query failed");
-                    }
-                }
-
-                _ = comms.shutdown.notified() => break,
-            }
-        }
-    }
-}
-
-impl ShardMonitor {
-    async fn monitor_replicas(shard: Shard, hist: Arc<RwLock<RecentLsnHistory>>) {
+    async fn monitor_replicas(shard: Shard) {
         let cfg_handle = config();
-        let Some(replica_lag) = cfg_handle.config.replica_lag.as_ref() else {
+        let Some(rl_config) = cfg_handle.config.replica_lag.as_ref() else {
             return;
         };
 
-        let mut tick = interval(replica_lag.check_interval);
+        let mut tick = interval(rl_config.check_interval);
 
         debug!("replica monitoring running");
         let comms = shard.comms();
@@ -299,7 +240,7 @@ impl ShardMonitor {
         loop {
             select! {
                 _ = tick.tick() => {
-                    Self::process_replicas(&shard, &hist, replica_lag.max_age).await;
+                    Self::process_replicas(&shard, rl_config.max_age).await;
                 }
                 _ = comms.shutdown.notified() => break,
             }
@@ -308,22 +249,27 @@ impl ShardMonitor {
         debug!("replica monitoring stopped");
     }
 
-    async fn process_replicas(
-        shard: &Shard,
-        history: &Arc<RwLock<RecentLsnHistory>>,
-        max_age: Duration,
-    ) {
+    async fn process_replicas(shard: &Shard, max_age: Duration) {
         let Some(primary) = shard.primary.as_ref() else {
             return;
         };
 
-        let Ok(lsn) = primary.wal_flush_lsn().await else {
-            error!("primary WAL lsn query failed");
-            return;
+        let lsn_metrics = match collect_lsn_metrics(primary, max_age).await {
+            Some(m) => m,
+            None => {
+                error!("failed to collect LSN metrics");
+                return;
+            }
         };
 
         for replica in shard.replicas.pools() {
-            Self::process_single_replica(&replica, lsn, history, max_age).await;
+            Self::process_single_replica(
+                &replica,
+                lsn_metrics.max_lsn,
+                lsn_metrics.average_bytes_per_sec,
+                max_age,
+            )
+            .await;
         }
     }
 
@@ -340,7 +286,7 @@ impl ShardMonitor {
     async fn process_single_replica(
         replica: &Pool,
         primary_lsn: u64,
-        history: &Arc<RwLock<RecentLsnHistory>>,
+        lsn_throughput: f64,
         max_age: Duration,
     ) {
         if replica.banned() {
@@ -356,116 +302,83 @@ impl ShardMonitor {
             }
         };
 
-        let h = history.read();
-        let maybe_delay = h.estimate_delay(primary_lsn, replay_lsn);
+        let bytes_behind = primary_lsn.saturating_sub(replay_lsn);
 
-        match maybe_delay {
-            Some(delay) if delay > max_age => {
+        let mut lag = ReplicaLag::Bytes(bytes_behind);
+        if lsn_throughput > 0.0 {
+            let duration = Duration::from_secs_f64(bytes_behind as f64 / lsn_throughput);
+            lag = ReplicaLag::Duration(duration);
+        }
+
+        match lag {
+            ReplicaLag::Duration(d) if d > max_age => {
                 error!(
                     "replica {} estimated lag {:?} exceeds {:?}; should ban replica",
                     replica.id(),
-                    delay,
+                    d,
                     max_age
                 );
             }
-            Some(delay) => {
-                debug!("replica {} lag {:?} (estimated)", replica.id(), delay);
+            ReplicaLag::Duration(d) => {
+                debug!("replica {} lag {:?} (estimated)", replica.id(), d);
             }
-            None => {}
+            ReplicaLag::Bytes(b) => {
+                debug!("replica {} lag {} bytes", replica.id(), b);
+            }
+            _ => {}
         }
 
-        let replica_lag = h.get_replica_lag(primary_lsn, replay_lsn);
-        replica.set_replica_lag(replica_lag);
+        replica.set_replica_lag(lag);
     }
 }
 
 // -------------------------------------------------------------------------------------------------
-// ----- Monitoring :: LSN History -----------------------------------------------------------------
+// ----- Utils :: Primary LSN Metrics --------------------------------------------------------------
 
-#[derive(Clone, Copy)]
-struct LsnEntry {
-    lsn: u64,
-    captured_at: Instant,
+struct LsnMetrics {
+    pub average_bytes_per_sec: f64,
+    pub max_lsn: u64,
 }
 
-pub struct RecentLsnHistory {
-    entries: VecDeque<LsnEntry>,
-}
-
-impl RecentLsnHistory {
-    const CAPACITY: usize = 25;
-
-    /// Create a new empty history
-    pub fn new() -> Self {
-        Self {
-            entries: VecDeque::with_capacity(Self::CAPACITY),
-        }
+/// Sample WAL LSN at 0, half, and full window; compute avg rate and max LSN.
+async fn collect_lsn_metrics(primary: &Pool, window: Duration) -> Option<LsnMetrics> {
+    if window.is_zero() {
+        return None;
     }
 
-    /// Record the latest primary LSN
-    pub fn push(&mut self, lsn: u64) {
-        if self.entries.len() == Self::CAPACITY {
-            self.entries.pop_front();
-        }
+    let half_window = window / 2;
+    let half_window_in_seconds = half_window.as_secs_f64();
 
-        self.entries.push_back(LsnEntry {
-            lsn,
-            captured_at: Instant::now(),
-        });
-    }
+    // fire three futures at once
+    let f0 = primary.wal_flush_lsn();
+    let f1 = async {
+        sleep(half_window).await;
+        primary.wal_flush_lsn().await
+    };
+    let f2 = async {
+        sleep(window).await;
+        primary.wal_flush_lsn().await
+    };
 
-    pub fn get_replica_lag(&self, primary_lsn: u64, replay_lsn: u64) -> ReplicaLag {
-        let bytes_behind = primary_lsn.saturating_sub(replay_lsn);
-        if bytes_behind == 0 {
-            return ReplicaLag::Duration(Duration::ZERO);
-        }
+    // collect results concurrently
+    let (r0, r1, r2) = join!(f0, f1, f2);
 
-        if let Some(delay) = self.estimate_delay(primary_lsn, replay_lsn) {
-            return ReplicaLag::Duration(delay);
-        };
+    let lsn_initial = r0.ok()?;
+    let lsn_half = r1.ok()?;
+    let lsn_full = r2.ok()?;
 
-        ReplicaLag::Bytes(bytes_behind)
-    }
+    let rate1 = (lsn_half.saturating_sub(lsn_initial)) as f64 / half_window_in_seconds;
+    let rate2 = (lsn_full.saturating_sub(lsn_half)) as f64 / half_window_in_seconds;
+    let average_rate = (rate1 + rate2) / 2.0;
 
-    pub fn estimate_delay(&self, primary_lsn: u64, replay_lsn: u64) -> Option<Duration> {
-        let bytes_behind = primary_lsn.saturating_sub(replay_lsn);
-        if bytes_behind == 0 {
-            return Some(Duration::ZERO);
-        }
+    let max_lsn = lsn_initial.max(lsn_half).max(lsn_full);
 
-        let bytes_per_second = self.wal_throughput()?;
-        if bytes_per_second <= 0.0 {
-            return None;
-        }
+    let metrics = LsnMetrics {
+        average_bytes_per_sec: average_rate,
+        max_lsn,
+    };
 
-        let seconds_behind = bytes_behind as f64 / bytes_per_second;
-
-        Some(Duration::from_secs_f64(seconds_behind))
-    }
-
-    fn wal_throughput(&self) -> Option<f64> {
-        if self.entries.len() < 2 {
-            return None;
-        }
-
-        let oldest = self.entries.front().unwrap();
-        let newest = self.entries.back().unwrap();
-
-        let elapsed = newest.captured_at.duration_since(oldest.captured_at);
-        let lsn_delta = newest.lsn.checked_sub(oldest.lsn)?;
-
-        if elapsed.is_zero() {
-            return None;
-        }
-
-        Some(lsn_delta as f64 / elapsed.as_secs_f64())
-    }
-}
-
-impl Default for RecentLsnHistory {
-    fn default() -> Self {
-        Self::new()
-    }
+    Some(metrics)
 }
 
 // -------------------------------------------------------------------------------------------------

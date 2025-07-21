@@ -432,7 +432,7 @@ impl Pool {
             .map(|r| r.get::<String>(0, Format::Text).unwrap_or_default())
             .unwrap_or_default();
 
-        parse_pg_lsn(&lsn).ok_or(Error::PrimaryLsnQueryFailed)
+        parse_pg_lsn(&lsn).map_err(|_| Error::ReplicaLsnQueryFailed)
     }
 
     /// `pg_last_wal_replay_lsn()` on a replica.
@@ -449,7 +449,7 @@ impl Pool {
             .map(|r| r.get::<String>(0, Format::Text).unwrap_or_default())
             .unwrap_or_default();
 
-        parse_pg_lsn(&lsn).ok_or(Error::ReplicaLsnQueryFailed)
+        parse_pg_lsn(&lsn).map_err(|_| Error::ReplicaLsnQueryFailed)
     }
 
     pub fn set_replica_lag(&self, replica_lag: ReplicaLag) {
@@ -457,9 +457,28 @@ impl Pool {
     }
 }
 
-fn parse_pg_lsn(s: &str) -> Option<u64> {
-    let mut parts = s.split('/');
-    let hi = u64::from_str_radix(parts.next()?, 16).ok()?;
-    let lo = u64::from_str_radix(parts.next()?, 16).ok()?;
-    Some((hi << 32) | lo)
+// -------------------------------------------------------------------------------------------------
+// ----- Utils :: Parse LSN ------------------------------------------------------------------------
+
+#[derive(Debug)]
+enum ParseLsnError {
+    MissingSlash,
+    InvalidHex,
 }
+
+/// Parse PostgreSQL LSN string to u64 bytes.
+/// See spec: https://www.postgresql.org/docs/current/datatype-pg-lsn.html
+fn parse_pg_lsn(s: &str) -> Result<u64, ParseLsnError> {
+    let (hi_str, lo_str) = s.split_once('/').ok_or(ParseLsnError::MissingSlash)?;
+
+    let hi = u32::from_str_radix(hi_str, 16).map_err(|_| ParseLsnError::InvalidHex)? as u64;
+    let lo = u32::from_str_radix(lo_str, 16).map_err(|_| ParseLsnError::InvalidHex)? as u64;
+
+    let shifted_hi = hi << 32;
+    let lsn_value = shifted_hi | lo;
+
+    Ok(lsn_value)
+}
+
+// -------------------------------------------------------------------------------------------------
+// -------------------------------------------------------------------------------------------------
