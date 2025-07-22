@@ -42,3 +42,6 @@ toxi.log
 *.sqlite3
 perf.data
 perf.data.old
+
+pgdog.toml
+users.toml
