@@ -3,6 +3,7 @@ use bytes::BytesMut;
 use crate::net::replication::KeepAlive;
 use crate::net::replication::ReplicationMeta;
 use crate::net::CopyData;
+use crate::util::postgres_now;
 
 use super::super::code;
 use super::super::prelude::*;
@@ -30,7 +31,7 @@ impl From<KeepAlive> for StatusUpdate {
             last_written: value.wal_end,
             last_flushed: value.wal_end,
             last_applied: value.wal_end,
-            system_clock: value.system_clock + 1,
+            system_clock: postgres_now(),
             reply: 0,
         }
     }

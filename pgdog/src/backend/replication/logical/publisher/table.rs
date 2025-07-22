@@ -72,7 +72,7 @@ impl Table {
                 self.columns
                     .iter()
                     .enumerate()
-                    .filter(|(_, c)| c.identity)
+                    .filter(|(_, c)| !c.identity)
                     .map(|(i, c)| format!("SET \"{}\" = ${}", c.name, i + 1))
                     .collect::<Vec<_>>()
                     .join(", ")

@@ -1,7 +1,10 @@
 use super::super::Error;
 use crate::{
     backend::{pool::Address, Server, ServerOptions},
-    net::{CopyData, DataRow, ErrorResponse, Format, FromBytes, Protocol, Query, ToBytes},
+    net::{
+        replication::StatusUpdate, CopyData, DataRow, ErrorResponse, Format, FromBytes, Protocol,
+        Query, ToBytes,
+    },
     util::random_string,
 };
 use std::{fmt::Display, str::FromStr};
@@ -18,8 +21,14 @@ impl FromStr for Lsn {
     type Err = Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
+        // This is not the right formula to get the LSN number but
+        // it survives (de)serialization which is all we care about.
+        //
+        // TODO: maybe just save it as a string?
         let mut parts = s.split("/");
-        let timeline = parts.next().ok_or(Error::LsnDecode)?.parse()?;
+        let timeline = parts.next().ok_or(Error::LsnDecode)?;
+        let timeline = i64::from_str_radix(timeline, 16)?;
+
         let offset = parts.next().ok_or(Error::LsnDecode)?;
         let offset = i64::from_str_radix(offset, 16)?;
 
@@ -29,7 +38,7 @@ impl FromStr for Lsn {
 
 impl Display for Lsn {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}/{:X}", self.timeline, self.offset)
+        write!(f, "{:X}/{:X}", self.timeline, self.offset)
     }
 }
 
@@ -114,6 +123,10 @@ impl ReplicationSlot {
 
     /// Create the slot.
     pub async fn create_slot(&mut self) -> Result<Lsn, Error> {
+        if self.server.is_none() {
+            self.connect().await?;
+        }
+
         if self.kind == SlotKind::DataSync {
             self.server()?
                 .execute("BEGIN READ ONLY ISOLATION LEVEL REPEATABLE READ")
@@ -216,6 +229,22 @@ impl ReplicationSlot {
             }
         }
     }
+
+    /// Update origin on last flushed LSN.
+    pub async fn status_update(&mut self, status_update: StatusUpdate) -> Result<(), Error> {
+        debug!(
+            "confirmed {} flushed [{}]",
+            status_update.last_flushed,
+            self.server()?.addr()
+        );
+
+        self.server()?
+            .send_one(&status_update.wrapped()?.into())
+            .await?;
+        self.server()?.flush().await?;
+
+        Ok(())
+    }
 }
 
 impl Drop for ReplicationSlot {
@@ -223,6 +252,8 @@ impl Drop for ReplicationSlot {
         let server = self.server.take();
 
         if let Some(mut server) = server {
+            // _Try_ not to leave data slots hanging around
+            // accumulating WAL for no reason.
             if !self.dropped && self.kind == SlotKind::DataSync {
                 let name = self.name.clone();
                 let address = self.address.clone();
@@ -241,4 +272,18 @@ impl Drop for ReplicationSlot {
 pub enum ReplicationData {
     CopyData(CopyData),
     CopyDone,
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_lsn() {
+        let original = "1/12A4C"; // It's fine.
+        let lsn = Lsn::from_str(original).unwrap();
+        assert_eq!(lsn.timeline, 1);
+        let lsn = lsn.to_string();
+        assert_eq!(lsn, original);
+    }
 }

@@ -1,6 +1,6 @@
 //! What's a project without a util module.
 
-use chrono::{DateTime, Local};
+use chrono::{DateTime, Local, Utc};
 use rand::{distributions::Alphanumeric, Rng};
 use std::time::Duration; // 0.8
 
@@ -50,6 +50,15 @@ pub fn human_duration(duration: Duration) -> String {
     }
 }
 
+/// Number of microseconds since Postgres epoch.
+pub fn postgres_now() -> i64 {
+    let start = DateTime::parse_from_rfc3339("2000-01-01T00:00:00Z")
+        .unwrap()
+        .fixed_offset();
+    let now = Utc::now().fixed_offset();
+    (now - start).num_microseconds().unwrap()
+}
+
 /// Generate a random string of length n.
 pub fn random_string(n: usize) -> String {
     rand::thread_rng()
@@ -70,5 +79,11 @@ mod test {
         assert_eq!(human_duration(Duration::from_millis(2000)), "2s");
         assert_eq!(human_duration(Duration::from_millis(1000 * 60 * 2)), "2m");
         assert_eq!(human_duration(Duration::from_millis(1000 * 3600)), "1h");
+    }
+
+    #[test]
+    fn test_postgres_now() {
+        let now = postgres_now();
+        println!("{}", now);
     }
 }

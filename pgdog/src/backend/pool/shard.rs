@@ -7,7 +7,6 @@ use tokio::time::{interval, sleep};
 use tokio::{join, select, spawn, sync::Notify};
 use tracing::{debug, error};
 
-use crate::backend::Server;
 use crate::config::{config, LoadBalancingStrategy, ReadWriteSplit, Role};
 use crate::net::messages::BackendKeyData;
 

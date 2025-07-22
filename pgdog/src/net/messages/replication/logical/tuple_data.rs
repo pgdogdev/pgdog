@@ -73,7 +73,13 @@ impl TupleData {
         let params = self
             .columns
             .iter()
-            .map(|c| Parameter::new(&c.data))
+            .map(|c| {
+                if c.data.is_empty() {
+                    Parameter::new_null()
+                } else {
+                    Parameter::new(&c.data)
+                }
+            })
             .collect::<Vec<_>>();
 
         Bind::new_params(name, &params)
