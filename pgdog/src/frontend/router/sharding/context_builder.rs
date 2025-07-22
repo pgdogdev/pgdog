@@ -150,7 +150,7 @@ mod test_from_str {
 
     fn build_global_hash_schema() -> ShardingSchema {
         let sharded_table = ShardedTable {
-            database: "main".to_string(),
+            database: "hash_db".to_string(),
             name: None,
             column: "tenant_id".to_string(),
             primary: true,
@@ -276,12 +276,7 @@ mod test_from_str {
                 .apply()
                 .unwrap();
 
-            assert_eq!(
-                shard,
-                Shard::Direct(expected_shard),
-                "tenant_id = {}",
-                tenant_id
-            );
+            assert_eq!(shard, Shard::Direct(expected_shard));
         }
     }
 
