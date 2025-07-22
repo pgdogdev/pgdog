@@ -47,6 +47,9 @@ pub struct Cluster {
     rw_split: ReadWriteSplit,
 }
 
+// -------------------------------------------------------------------------------------------------
+// ----- ShardingSchema ----------------------------------------------------------------------------
+
 /// Sharding configuration from the cluster.
 #[derive(Debug, Clone, Default)]
 pub struct ShardingSchema {
@@ -60,7 +63,25 @@ impl ShardingSchema {
     pub fn tables(&self) -> &ShardedTables {
         &self.tables
     }
+
+    pub fn has_global_sharding_key_with_mappings(&self) -> bool {
+        let mut global_sharding_rules_with_mappings = 0;
+        let mut other_rules = 0;
+
+        for table in self.tables.tables() {
+            if table.name.is_none() && table.mapping.is_some() {
+                global_sharding_rules_with_mappings += 1;
+            } else {
+                other_rules += 1;
+            }
+        }
+
+        global_sharding_rules_with_mappings == 1 && other_rules == 0
+    }
 }
+
+// -------------------------------------------------------------------------------------------------
+// ----- ClusterShardConfig ------------------------------------------------------------------------
 
 pub struct ClusterShardConfig {
     pub primary: Option<PoolConfig>,
