@@ -325,6 +325,17 @@ mod test_from_str {
 
             assert_eq!(shard, Shard::Direct(2));
         }
+
+        let negative_elo_str = "-1000";
+        let shard = ContextBuilder::from_str(&negative_elo_str, &schema)
+            .unwrap()
+            .shards(schema.shards)
+            .build()
+            .unwrap()
+            .apply()
+            .unwrap();
+
+        assert_eq!(shard, Shard::All);
     }
 
     #[test]
@@ -345,6 +356,17 @@ mod test_from_str {
 
             assert_eq!(shard, Shard::Direct(index));
         }
+
+        let unknown_house = "hello kitty island adventure";
+        let shard = ContextBuilder::from_str(&unknown_house, &schema)
+            .unwrap()
+            .shards(schema.shards)
+            .build()
+            .unwrap()
+            .apply()
+            .unwrap();
+
+        assert_eq!(shard, Shard::All);
     }
 }
 
