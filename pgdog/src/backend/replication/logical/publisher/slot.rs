@@ -8,8 +8,8 @@ use crate::{
     util::random_string,
 };
 use std::{fmt::Display, str::FromStr, time::Duration};
-use tokio::{spawn, time::timeout};
-use tracing::{debug, error, trace};
+use tokio::time::timeout;
+use tracing::{debug, trace};
 
 #[derive(Debug, Clone, Default, Copy)]
 pub struct Lsn {
@@ -116,7 +116,7 @@ impl ReplicationSlot {
             snapshot: Snapshot::Use,
             lsn: Lsn::default(),
             publication: publication.to_string(),
-            dropped: false,
+            dropped: true, // Temporary.
             server: None,
             kind: SlotKind::DataSync,
         }
@@ -146,8 +146,14 @@ impl ReplicationSlot {
         }
 
         let start_replication = format!(
-            r#"CREATE_REPLICATION_SLOT "{}" LOGICAL "pgoutput" (SNAPSHOT '{}')"#,
-            self.name, self.snapshot
+            r#"CREATE_REPLICATION_SLOT "{}" {} LOGICAL "pgoutput" (SNAPSHOT '{}')"#,
+            self.name,
+            if self.kind == SlotKind::DataSync {
+                "TEMPORARY"
+            } else {
+                ""
+            },
+            self.snapshot
         );
 
         let result = self
@@ -276,39 +282,6 @@ impl ReplicationSlot {
     /// Current slot LSN.
     pub fn lsn(&self) -> Lsn {
         self.lsn
-    }
-}
-
-impl Drop for ReplicationSlot {
-    fn drop(&mut self) {
-        let server = self.server.take();
-
-        if let Some(server) = server {
-            drop(server);
-
-            // _Try_ not to leave data slots hanging around
-            // accumulating WAL for no reason.
-            if !self.dropped && self.kind == SlotKind::DataSync {
-                let name = self.name.clone();
-                let drop_query = self.drop_slot_query(false);
-                let address = self.address.clone();
-                spawn(async move {
-                    match Server::connect(&address, ServerOptions::new_replication()).await {
-                        Ok(mut server) => {
-                            if let Err(err) = server.execute(&drop_query).await {
-                                error!("failed to drop slot \"{}\": {} [{}]", name, err, address);
-                            }
-                        }
-                        Err(err) => {
-                            error!(
-                                "failed to create connection to drop slot: {} [{}]",
-                                err, address
-                            );
-                        }
-                    }
-                });
-            }
-        }
     }
 }
 

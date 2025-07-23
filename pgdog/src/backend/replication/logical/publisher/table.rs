@@ -138,7 +138,7 @@ impl Table {
 
         while let Some(data_row) = copy.data(slot.server()?).await? {
             copy_sub.copy_data(data_row).await?;
-            progress.update(copy_sub.bytes_sharded());
+            progress.update(copy_sub.bytes_sharded(), slot.lsn().lsn);
         }
 
         copy_sub.copy_done().await?;
@@ -156,78 +156,12 @@ impl Table {
         // Drain slot
         while let Some(_) = slot.replicate(Duration::MAX).await? {}
 
-        slot.drop_slot().await?;
+        // Slot is temporary and will be dropped when the connection closes.
 
         debug!(
             "data sync for \"{}\".\"{}\" finished at lsn {} [{}]",
             self.table.schema, self.table.name, self.lsn, source
         );
-
-        // // We'll ingest updates for this table only.
-        // let mut stream = StreamSubscriber::new(dest, &[self.clone()]);
-        // let progress = Progress::new_replication(&self.table);
-
-        // // Track LSN from upstream.
-        // let mut lsn = 0;
-
-        // loop {
-        //     match slot.replicate(Duration::from_secs(5)).await {
-        //         // Haven't received any data in a little while.
-        //         // Probably means we caught up with changes made since
-        //         // we started the copy.
-        //         Err(Error::ReplicationTimeout) => {
-        //             slot.server()?
-        //                 .send_one(&StatusUpdate::new_reply(lsn).wrapped()?.into())
-        //                 .await?;
-        //             slot.server()?.flush().await?;
-        //         }
-        //         Err(err) => return Err(err),
-        //         Ok(Some(data)) => {
-        //             match data {
-        //                 ReplicationData::CopyData(data) => {
-        //                     if let Some(meta) = data.replication_meta() {
-        //                         match meta {
-        //                             ReplicationMeta::KeepAlive(ka) => {
-        //                                 // Our replication is sync, so whatever
-        //                                 // we received prior to this has been flushed.
-        //                                 slot.server()?
-        //                                     .send_one(
-        //                                         &StatusUpdate::from(ka.clone()).wrapped()?.into(),
-        //                                     )
-        //                                     .await?;
-        //                                 slot.server()?.flush().await?;
-
-        //                                 // Received two keep-alives with the same LSN, we're done.
-        //                                 if lsn == ka.wal_end {
-        //                                     slot.server()?.send_one(&CopyDone.into()).await?;
-        //                                     slot.server()?.flush().await?;
-        //                                 } else {
-        //                                     lsn = ka.wal_end;
-        //                                 }
-        //                             }
-
-        //                             _ => (),
-        //                         }
-        //                     } else {
-        //                         let done = stream.handle(data).await?;
-        //                         progress.update(stream.bytes_sharded());
-
-        //                         if done {
-        //                             break;
-        //                         }
-        //                     }
-        //                 }
-        //                 ReplicationData::CopyDone => {
-        //                     // TODO: Verify we flushed everything.
-        //                     // server.send_one(&CopyDone.into()).await?;
-        //                     // server.flush().await?;
-        //                 }
-        //             }
-        //         }
-        //         Ok(None) => break,
-        //     }
-        // }
-        // progress.done();
 
         Ok(self.lsn)
     }
