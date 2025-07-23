@@ -46,4 +46,9 @@ impl CopyRow {
             row: CopyData::new(headers.as_bytes()),
         }
     }
+
+    /// Length of the message.
+    pub fn len(&self) -> usize {
+        self.row.len()
+    }
 }

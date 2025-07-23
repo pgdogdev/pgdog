@@ -1,4 +1,4 @@
-use std::io::Read;
+use std::{io::Read, ops::Deref};
 
 use bytes::{Buf, BufMut, BytesMut};
 use once_cell::sync::Lazy;
@@ -17,7 +17,12 @@ static SIGNATURE: Lazy<Vec<u8>> = Lazy::new(|| {
     expected
 });
 
-#[derive(Debug, Clone)]
+/// Get binary COPY signature.
+pub fn binary_signature() -> &'static Vec<u8> {
+    SIGNATURE.deref()
+}
+
+#[derive(Debug, Clone, Default)]
 #[allow(dead_code)]
 pub struct Header {
     pub(super) flags: i32,
@@ -51,6 +56,14 @@ impl Header {
 
     pub(super) fn bytes_read(&self) -> usize {
         SIGNATURE.len() + std::mem::size_of::<i32>() * 2
+    }
+
+    pub fn new() -> Self {
+        Self {
+            flags: 0,
+            has_oid: false,
+            header_extension: 0,
+        }
     }
 }
 

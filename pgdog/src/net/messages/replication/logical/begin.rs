@@ -5,9 +5,9 @@ use super::super::super::prelude::*;
 
 #[derive(Debug, Clone)]
 pub struct Begin {
-    final_transaction_lsn: i64,
-    commit_timestamp: i64,
-    xid: i32,
+    pub final_transaction_lsn: i64,
+    pub commit_timestamp: i64,
+    pub xid: i32,
 }
 
 impl FromBytes for Begin {

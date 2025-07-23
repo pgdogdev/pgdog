@@ -230,7 +230,7 @@ mod test {
                 let shard = insert.shard(&schema, None).unwrap();
                 assert!(matches!(shard, Shard::Direct(2)));
 
-                let bind = Bind::test_params(
+                let bind = Bind::new_params(
                     "",
                     &[Parameter {
                         len: 1,
@@ -241,7 +241,7 @@ mod test {
                 let shard = insert.shard(&schema, Some(&bind)).unwrap();
                 assert!(matches!(shard, Shard::Direct(1)));
 
-                let bind = Bind::test_params_codes(
+                let bind = Bind::new_params_codes(
                     "",
                     &[Parameter {
                         len: 8,

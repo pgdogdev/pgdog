@@ -6,6 +6,7 @@ use bytes::Bytes;
 
 pub mod array;
 pub mod bigint;
+pub mod boolean;
 pub mod integer;
 pub mod interval;
 pub mod numeric;
@@ -52,6 +53,8 @@ pub enum Datum {
     Unknown(Bytes),
     /// NULL.
     Null,
+    /// Boolean
+    Boolean(bool),
 }
 
 impl ToDataRowColumn for Datum {
@@ -71,6 +74,7 @@ impl ToDataRowColumn for Datum {
             Vector(vector) => vector.to_data_row_column(),
             Unknown(bytes) => bytes.clone().into(),
             Null => Data::null(),
+            Boolean(val) => val.to_data_row_column(),
         }
     }
 }
@@ -112,6 +116,7 @@ impl Datum {
             DataType::Timestamp => Ok(Datum::Timestamp(Timestamp::decode(bytes, encoding)?)),
             DataType::TimestampTz => Ok(Datum::TimestampTz(TimestampTz::decode(bytes, encoding)?)),
             DataType::Vector => Ok(Datum::Vector(Vector::decode(bytes, encoding)?)),
+            DataType::Bool => Ok(Datum::Boolean(bool::decode(bytes, encoding)?)),
             _ => Ok(Datum::Unknown(Bytes::copy_from_slice(bytes))),
         }
     }
@@ -126,6 +131,7 @@ impl Datum {
             Datum::Integer(i) => i.encode(format),
             Datum::Uuid(uuid) => uuid.encode(format),
             Datum::Text(s) => s.encode(format),
+            Datum::Boolean(b) => b.encode(format),
             _ => Err(Error::UnexpectedPayload),
         }
     }

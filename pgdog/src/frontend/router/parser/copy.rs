@@ -178,7 +178,7 @@ impl CopyParser {
 
     /// Split CopyData (F) messages into multiple CopyData (F) messages
     /// with shard numbers.
-    pub fn shard(&mut self, data: Vec<CopyData>) -> Result<Vec<CopyRow>, Error> {
+    pub fn shard(&mut self, data: &[CopyData]) -> Result<Vec<CopyRow>, Error> {
         let mut rows = vec![];
 
         for row in data {
@@ -287,7 +287,7 @@ mod test {
 
         let one = CopyData::new("5\thello world\n".as_bytes());
         let two = CopyData::new("10\thowdy mate\n".as_bytes());
-        let sharded = copy.shard(vec![one, two]).unwrap();
+        let sharded = copy.shard(&[one, two]).unwrap();
         assert_eq!(sharded[0].message().data(), b"5\thello world\n");
         assert_eq!(sharded[1].message().data(), b"10\thowdy mate\n");
     }
@@ -313,7 +313,7 @@ mod test {
         let header = CopyData::new("id,value\n".as_bytes());
         let one = CopyData::new("5,hello world\n".as_bytes());
         let two = CopyData::new("10,howdy mate\n".as_bytes());
-        let sharded = copy.shard(vec![header, one, two]).unwrap();
+        let sharded = copy.shard(&[header, one, two]).unwrap();
 
         assert_eq!(sharded[0].message().data(), b"\"id\",\"value\"\n");
         assert_eq!(sharded[1].message().data(), b"\"5\",\"hello world\"\n");
@@ -323,11 +323,11 @@ mod test {
         let partial_two = CopyData::new("\n1,2".as_bytes());
         let partial_three = CopyData::new("\n".as_bytes());
 
-        let sharded = copy.shard(vec![partial_one]).unwrap();
+        let sharded = copy.shard(&[partial_one]).unwrap();
         assert!(sharded.is_empty());
-        let sharded = copy.shard(vec![partial_two]).unwrap();
+        let sharded = copy.shard(&[partial_two]).unwrap();
         assert_eq!(sharded[0].message().data(), b"\"11\",\"howdy partner\"\n");
-        let sharded = copy.shard(vec![partial_three]).unwrap();
+        let sharded = copy.shard(&[partial_three]).unwrap();
         assert_eq!(sharded[0].message().data(), b"\"1\",\"2\"\n");
     }
 
@@ -347,7 +347,7 @@ mod test {
             .unwrap()
             .unwrap();
 
-        let rows = copy.shard(vec![copy_data]).unwrap();
+        let rows = copy.shard(&[copy_data]).unwrap();
         assert_eq!(rows.len(), 3);
         assert_eq!(rows[0].message(), CopyData::new(b"\"id\",\"value\"\n"));
         assert_eq!(rows[0].shard(), &Shard::All);
@@ -387,7 +387,7 @@ mod test {
         data.extend(b"yes");
         data.extend((-1_i16).to_be_bytes());
         let header = CopyData::new(data.as_slice());
-        let sharded = copy.shard(vec![header]).unwrap();
+        let sharded = copy.shard(&[header]).unwrap();
         assert_eq!(sharded.len(), 3);
         assert_eq!(sharded[0].message().data(), &data[..19]); // Header is 19 bytes long.
         assert_eq!(sharded[1].message().data().len(), 2 + 4 + 8 + 4 + 3);

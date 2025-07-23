@@ -11,6 +11,7 @@ pub use logical::commit::Commit;
 pub use logical::delete::Delete;
 pub use logical::insert::Insert;
 pub use logical::relation::Relation;
+pub use logical::stream_start::StreamStart;
 pub use logical::truncate::Truncate;
 pub use logical::tuple_data::TupleData;
 pub use logical::update::Update;
@@ -34,5 +35,15 @@ impl FromBytes for ReplicationMeta {
             'k' => Self::KeepAlive(KeepAlive::from_bytes(bytes)?),
             _ => return Err(Error::UnexpectedPayload),
         })
+    }
+}
+
+impl ToBytes for ReplicationMeta {
+    fn to_bytes(&self) -> Result<Bytes, Error> {
+        match self {
+            Self::HotStandbyFeedback(hot) => hot.to_bytes(),
+            Self::StatusUpdate(status) => status.to_bytes(),
+            Self::KeepAlive(ka) => ka.to_bytes(),
+        }
     }
 }

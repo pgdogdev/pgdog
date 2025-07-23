@@ -34,8 +34,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             exit(0);
         }
 
-        Some(Commands::Schema) => (),
-
         Some(Commands::Run {
             pool_size,
             min_pool_size,
@@ -48,7 +46,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
         }
 
-        None => (),
+        _ => (),
     }
 
     info!("🐕 PgDog v{}", env!("GIT_HASH"));
@@ -80,12 +78,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     .build()?;
 
-    runtime.block_on(async move { pgdog().await })?;
+    runtime.block_on(async move { pgdog(args.command).await })?;
 
     Ok(())
 }
 
-async fn pgdog() -> Result<(), Box<dyn std::error::Error>> {
+async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Error>> {
     // Preload TLS. Resulting primitives
     // are async, so doing this after Tokio launched seems prudent.
     net::tls::load()?;
@@ -114,10 +112,21 @@ async fn pgdog() -> Result<(), Box<dyn std::error::Error>> {
         stats_logger.spawn();
     }
 
-    let mut listener = Listener::new(format!("{}:{}", general.host, general.port));
-    listener.listen().await?;
+    match command {
+        None | Some(Commands::Run { .. }) => {
+            let mut listener = Listener::new(format!("{}:{}", general.host, general.port));
+            listener.listen().await?;
+        }
 
-    info!("🐕 pgDog is shutting down");
+        Some(ref command) => {
+            if let Commands::DataSync { .. } = command {
+                info!("🔄 entering data sync mode");
+                cli::data_sync(command.clone()).await?;
+            }
+        }
+    }
+
+    info!("🐕 PgDog is shutting down");
     stats_logger.shutdown();
 
     // Any shutdown routines go below.

@@ -42,6 +42,22 @@ pub struct Tuple {
 }
 
 impl Tuple {
+    pub fn new(row: &[Data]) -> Self {
+        Self {
+            row: row.to_vec(),
+            oid: None,
+            end: false,
+        }
+    }
+
+    pub fn new_end() -> Self {
+        Self {
+            row: vec![],
+            oid: None,
+            end: true,
+        }
+    }
+
     pub(super) fn read(header: &Header, buf: &mut impl Buf) -> Result<Option<Self>, Error> {
         if !buf.has_remaining() {
             return Ok(None);
@@ -98,14 +114,18 @@ impl Tuple {
 impl ToBytes for Tuple {
     fn to_bytes(&self) -> Result<Bytes, crate::net::Error> {
         let mut result = BytesMut::new();
-        result.put_i16(self.row.len() as i16);
-        if let Some(oid) = self.oid {
-            result.put_i32(oid);
-        }
-        for col in &self.row {
-            result.put_i32(col.encoded_len());
-            if let Data::Column(col) = col {
-                result.extend(col);
+        if self.end {
+            result.put_i16(-1);
+        } else {
+            result.put_i16(self.row.len() as i16);
+            if let Some(oid) = self.oid {
+                result.put_i32(oid);
+            }
+            for col in &self.row {
+                result.put_i32(col.encoded_len());
+                if let Data::Column(col) = col {
+                    result.extend(col);
+                }
             }
         }
 

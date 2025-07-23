@@ -131,7 +131,6 @@ name = "sharded_varchar"
 column = "id_varchar"
 data_type = "varchar"
 
-
 #
 # ActiveRecord sends these queries
 # at startup to figure out the schema.

@@ -1,0 +1,32 @@
+[[databases]]
+name = "pgdog"
+host = "127.0.0.1"
+
+[[databases]]
+name = "source"
+host = "127.0.0.1"
+port = 5432
+database_name = "pgdog"
+min_pool_size = 0
+
+[[databases]]
+name = "destination"
+host = "127.0.0.1"
+port = 5433
+database_name = "pgdog"
+min_pool_size = 0
+shard = 0
+
+[[databases]]
+name = "destination"
+host = "127.0.0.1"
+port = 5434
+database_name = "pgdog"
+min_pool_size = 0
+shard = 1
+
+[[sharded_tables]]
+database = "destination"
+name = "books"
+column = "id"
+data_type = "bigint"

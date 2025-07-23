@@ -320,6 +320,12 @@ impl Inner {
             return result;
         }
 
+        // Close connections in replication mode,
+        // they are generally not re-usable.
+        if server.replication_mode() {
+            return result;
+        }
+
         if server.re_synced() {
             self.re_synced += 1;
             server.reset_re_synced();

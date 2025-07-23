@@ -49,7 +49,12 @@ impl Execute {
 
     pub fn portal(&self) -> &str {
         let start = 5;
-        let end = start + self.portal_len - 1; // -1 for terminating NULL.
+        let end = start
+            + if self.portal_len > 0 {
+                self.portal_len - 1
+            } else {
+                0
+            }; // -1 for terminating NULL.
         let buf = &self.payload[start..end];
         from_utf8(buf).unwrap_or("")
     }

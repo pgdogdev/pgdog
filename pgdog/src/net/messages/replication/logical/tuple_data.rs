@@ -1,5 +1,8 @@
 use std::str::from_utf8;
 
+use crate::net::bind::Parameter;
+use crate::net::Bind;
+
 use super::super::super::bind::Format;
 use super::super::super::prelude::*;
 use super::string::unescape;
@@ -63,6 +66,23 @@ impl TupleData {
             .collect::<Result<Vec<_>, Error>>()?
             .join(", ");
         Ok(format!("({})", columns))
+    }
+
+    /// Create Bind message from this Tuple.
+    pub fn to_bind(&self, name: &str) -> Bind {
+        let params = self
+            .columns
+            .iter()
+            .map(|c| {
+                if c.data.is_empty() {
+                    Parameter::new_null()
+                } else {
+                    Parameter::new(&c.data)
+                }
+            })
+            .collect::<Vec<_>>();
+
+        Bind::new_params(name, &params)
     }
 }
 
