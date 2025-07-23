@@ -1075,7 +1075,7 @@ pub struct ManualQuery {
     pub fingerprint: String,
 }
 
-#[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Copy)]
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 #[serde(rename_all = "snake_case")]
 pub struct Tcp {
     #[serde(default = "Tcp::default_keepalive")]
@@ -1084,13 +1084,14 @@ pub struct Tcp {
     time: Option<u64>,
     interval: Option<u64>,
     retries: Option<u32>,
+    congestion_control: Option<String>,
 }
 
 impl std::fmt::Display for Tcp {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "keepalive={} user_timeout={} time={} interval={}, retries={}",
+            "keepalive={} user_timeout={} time={} interval={}, retries={}, congestion_control={}",
             self.keepalive(),
             human_duration_optional(self.user_timeout()),
             human_duration_optional(self.time()),
@@ -1099,7 +1100,12 @@ impl std::fmt::Display for Tcp {
                 retries.to_string()
             } else {
                 "default".into()
-            }
+            },
+            if let Some(ref c) = self.congestion_control {
+                c.as_str()
+            } else {
+                ""
+            },
         )
     }
 }
@@ -1112,6 +1118,7 @@ impl Default for Tcp {
             time: None,
             interval: None,
             retries: None,
+            congestion_control: None,
         }
     }
 }
@@ -1139,6 +1146,10 @@ impl Tcp {
 
     pub fn retries(&self) -> Option<u32> {
         self.retries
+    }
+
+    pub fn congestion_control(&self) -> &Option<String> {
+        &self.congestion_control
     }
 }
 

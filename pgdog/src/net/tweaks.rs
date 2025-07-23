@@ -6,7 +6,8 @@ use tokio::net::TcpStream;
 use crate::config::config;
 
 pub fn tweak(socket: &TcpStream) -> Result<()> {
-    let config = config().config.tcp;
+    let config = config();
+    let config = &config.config.tcp;
 
     // Disable the Nagle algorithm.
     socket.set_nodelay(true)?;
@@ -24,6 +25,11 @@ pub fn tweak(socket: &TcpStream) -> Result<()> {
         params = params.with_retries(retries);
     }
     sock_ref.set_tcp_keepalive(&params)?;
+
+    #[cfg(target_os = "linux")]
+    if let Some(congestion_control) = config.congestion_control() {
+        sock_ref.set_tcp_congestion(congestion_control.as_bytes())?;
+    }
 
     #[cfg(target_os = "linux")]
     sock_ref.set_tcp_user_timeout(config.user_timeout())?;
