@@ -59,6 +59,9 @@ pub enum Error {
 
     #[error("shard {0} has no replication slot")]
     NoReplicationSlot(usize),
+
+    #[error("parallel connection error")]
+    ParallelConnection,
 }
 
 impl From<ErrorResponse> for Error {

@@ -4,7 +4,7 @@
 use pg_query::NodeEnum;
 
 use crate::{
-    backend::{Cluster, Server},
+    backend::{replication::subscriber::ParallelConnection, Cluster},
     config::Role,
     frontend::router::parser::{CopyParser, Shard},
     net::{CopyData, CopyDone, ErrorResponse, FromBytes, Protocol, Query, ToBytes},
@@ -22,7 +22,7 @@ pub struct CopySubscriber {
     copy: CopyParser,
     cluster: Cluster,
     buffer: Vec<CopyData>,
-    connections: Vec<Server>,
+    connections: Vec<ParallelConnection>,
     stmt: CopyStatement,
     bytes_sharded: usize,
 }
@@ -77,7 +77,7 @@ impl CopySubscriber {
                 .1
                 .standalone()
                 .await?;
-            servers.push(primary);
+            servers.push(ParallelConnection::new(primary)?);
         }
 
         self.connections = servers;
