@@ -65,18 +65,22 @@ impl ShardingSchema {
     }
 
     pub fn has_global_sharding_key_with_mappings(&self) -> bool {
-        let mut global_sharding_rules_with_mappings = 0;
-        let mut other_rules = 0;
+        // We can only consistently predict a database-wide mapped sharding_key if:
+        // 1) The sharding_key mapping applies to the entire logical database (ie. table = None)
+        // 2) There are no other rules that might override condition (1).
+
+        let mut global_sharding_keys_with_mappings = 0;
+        let mut rules_count = 0;
 
         for table in self.tables.tables() {
             if table.name.is_none() && table.mapping.is_some() {
-                global_sharding_rules_with_mappings += 1;
-            } else {
-                other_rules += 1;
+                global_sharding_keys_with_mappings += 1;
             }
+
+            rules_count += 1;
         }
 
-        global_sharding_rules_with_mappings == 1 && other_rules == 0
+        global_sharding_keys_with_mappings == 1 && rules_count == 1
     }
 }
 
