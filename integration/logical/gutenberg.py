@@ -1,3 +1,13 @@
+#
+# Download <https://www.kaggle.com/datasets/lokeshparab/gutenberg-books-and-metadata-2025?resource=download>
+#
+# Untar it and pass the path of the "archive" folder to this script
+# as the first argument and the number of books you want to ingest as the second argument.
+#
+# e.g.: python3 gutenberg.py /Users/lev/Downloads/archive 80000
+#
+# Dataset is 16GB in Postgres.
+#
 import csv
 import psycopg
 import sys
