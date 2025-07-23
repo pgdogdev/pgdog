@@ -86,8 +86,12 @@ impl CopySubscriber {
     }
 
     /// Disconnect from all shards.
-    pub fn disconnect(&mut self) {
-        self.connections.clear();
+    pub async fn disconnect(&mut self) -> Result<(), Error> {
+        for conn in std::mem::take(&mut self.connections) {
+            conn.reattach().await?;
+        }
+
+        Ok(())
     }
 
     /// Start COPY on all shards.
