@@ -123,7 +123,7 @@ pub async fn data_sync(commands: Commands) -> Result<(), Box<dyn std::error::Err
         return Ok(());
     };
 
-    let publication = Publisher::new(&source, &publication);
+    let mut publication = Publisher::new(&source, &publication);
     if replicate {
         if let Err(err) = publication.replicate(&destination).await {
             error!("{}", err);

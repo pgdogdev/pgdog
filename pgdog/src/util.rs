@@ -50,12 +50,14 @@ pub fn human_duration(duration: Duration) -> String {
     }
 }
 
+// 2000-01-01T00:00:00Z
+static POSTGRES_EPOCH: i64 = 946684800000000000;
+
 /// Number of microseconds since Postgres epoch.
 pub fn postgres_now() -> i64 {
-    let start = DateTime::parse_from_rfc3339("2000-01-01T00:00:00Z")
-        .unwrap()
-        .fixed_offset();
+    let start = DateTime::from_timestamp_nanos(POSTGRES_EPOCH).fixed_offset();
     let now = Utc::now().fixed_offset();
+    // Panic if overflow.
     (now - start).num_microseconds().unwrap()
 }
 
@@ -83,7 +85,13 @@ mod test {
 
     #[test]
     fn test_postgres_now() {
-        let now = postgres_now();
-        println!("{}", now);
+        let start = DateTime::parse_from_rfc3339("2000-01-01T00:00:00Z")
+            .unwrap()
+            .fixed_offset();
+        assert_eq!(
+            DateTime::from_timestamp_nanos(POSTGRES_EPOCH).fixed_offset(),
+            start,
+        );
+        let _now = postgres_now();
     }
 }

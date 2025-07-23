@@ -123,6 +123,7 @@ pub struct StreamSubscriber {
 
     // Position in the WAL we have flushed successfully.
     lsn: i64,
+    lsn_changed: bool,
 
     // Bytes sharded
     bytes_sharded: usize,
@@ -151,6 +152,7 @@ impl StreamSubscriber {
             connections: vec![],
             lsn: 0, // Unknown,
             bytes_sharded: 0,
+            lsn_changed: true,
         }
     }
 
@@ -218,45 +220,6 @@ impl StreamSubscriber {
                 .await?;
         }
 
-        for (shard, conn) in self.connections.iter_mut().enumerate() {
-            match val {
-                Shard::Direct(direct) => {
-                    if shard != *direct {
-                        continue;
-                    }
-                }
-                Shard::Multi(multi) => {
-                    if multi.contains(&shard) {
-                        continue;
-                    }
-                }
-                _ => (),
-            }
-
-            Self::read(conn, 2, &['2', 'C']).await?;
-        }
-
-        Ok(())
-    }
-
-    // Read a set of messages from the server connection. If we receive something
-    // we didn't expect, error out.
-    async fn read(server: &mut Server, messages: usize, codes: &[char]) -> Result<(), Error> {
-        for _ in 0..messages {
-            let msg = server.read().await?;
-
-            trace!("[{}] --> {:?}", server.addr(), msg);
-
-            let code = msg.code();
-            if code == 'E' {
-                return Err(Error::PgError(ErrorResponse::from_bytes(msg.to_bytes()?)?));
-            }
-            if codes.contains(&code) {
-                continue;
-            } else {
-                return Err(Error::OutOfSync(code));
-            }
-        }
         Ok(())
     }
 
@@ -301,10 +264,21 @@ impl StreamSubscriber {
             server.flush().await?;
         }
         for server in &mut self.connections {
-            Self::read(server, 1, &['Z']).await?;
+            // Drain responses from server.
+            loop {
+                let msg = server.read().await?;
+                trace!("[{}] --> {:?}", server.addr(), msg);
+
+                match msg.code() {
+                    'E' => return Err(Error::PgError(ErrorResponse::from_bytes(msg.to_bytes()?)?)),
+                    'Z' => break,
+                    '2' | 'C' => continue,
+                    c => return Err(Error::OutOfSync(c)),
+                }
+            }
         }
 
-        self.lsn = commit.end_lsn;
+        self.set_current_lsn(commit.end_lsn);
 
         Ok(())
     }
@@ -332,7 +306,19 @@ impl StreamSubscriber {
             }
 
             for server in &mut self.connections {
-                Self::read(server, 3, &['1', 'Z']).await?;
+                loop {
+                    let msg = server.read().await?;
+                    trace!("[{}] --> {:?}", server.addr(), msg);
+
+                    match msg.code() {
+                        'E' => {
+                            return Err(Error::PgError(ErrorResponse::from_bytes(msg.to_bytes()?)?))
+                        }
+                        'Z' => break,
+                        '1' => continue,
+                        c => return Err(Error::OutOfSync(c)),
+                    }
+                }
             }
 
             self.statements.insert(
@@ -355,27 +341,33 @@ impl StreamSubscriber {
     /// Handle replication stream message.
     ///
     /// Return true if stream is done, false otherwise.
-    pub async fn handle(&mut self, data: CopyData) -> Result<bool, Error> {
+    pub async fn handle(&mut self, data: CopyData) -> Result<Option<StatusUpdate>, Error> {
         // Lazily connect to all shards.
         if self.connections.is_empty() {
             self.connect().await?;
         }
 
+        let mut status_update = None;
+
         if let Some(xlog) = data.xlog_data() {
             if let Some(payload) = xlog.payload() {
                 match payload {
                     XLogPayload::Insert(insert) => self.insert(insert).await?,
-                    XLogPayload::Commit(commit) => self.commit(commit).await?,
+                    XLogPayload::Commit(commit) => {
+                        self.commit(commit).await?;
+                        status_update = Some(self.status_update());
+                    }
                     XLogPayload::Relation(relation) => self.relation(relation).await?,
-                    XLogPayload::Begin(begin) => self.lsn = begin.final_transaction_lsn,
-                    XLogPayload::End => return Ok(true),
+                    XLogPayload::Begin(begin) => {
+                        self.set_current_lsn(begin.final_transaction_lsn);
+                    }
                     _ => (),
                 }
+                self.bytes_sharded += xlog.len();
             }
-            self.bytes_sharded += xlog.len();
         }
 
-        Ok(false)
+        Ok(status_update)
     }
 
     /// Get latest LSN we flushed to replicas.
@@ -392,5 +384,25 @@ impl StreamSubscriber {
     /// Number of bytes processed.
     pub fn bytes_sharded(&self) -> usize {
         self.bytes_sharded
+    }
+
+    /// Set stream start at this LSN.
+    ///
+    /// Return true if LSN has been updated to a new value,
+    /// i.e., the stream is moving forward.
+    pub fn set_current_lsn(&mut self, lsn: i64) -> bool {
+        self.lsn_changed = lsn != self.lsn;
+        self.lsn = lsn;
+        self.lsn_changed
+    }
+
+    /// Get current LSN.
+    pub fn lsn(&self) -> i64 {
+        self.lsn
+    }
+
+    /// Lsn changed since the last time we updated it.
+    pub fn lsn_changed(&self) -> bool {
+        self.lsn_changed
     }
 }

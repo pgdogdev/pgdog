@@ -11,7 +11,7 @@ use crate::backend::replication::publisher::PublicationTable;
 
 #[derive(Debug)]
 struct Inner {
-    table: PublicationTable,
+    table: Option<PublicationTable>,
     bytes_sharded: AtomicUsize,
     done: Notify,
 }
@@ -31,24 +31,33 @@ pub struct Progress {
 
 impl Progress {
     pub fn new_data_sync(table: &PublicationTable) -> Self {
-        Self::new(table, ProgressKind::DataSync)
+        Self::new(Some(table), ProgressKind::DataSync)
     }
 
     pub fn new_replication(table: &PublicationTable) -> Self {
-        Self::new(table, ProgressKind::Replication)
+        Self::new(Some(table), ProgressKind::Replication)
     }
 
-    fn new(table: &PublicationTable, kind: ProgressKind) -> Self {
+    pub fn new_stream() -> Self {
+        Self::new(None, ProgressKind::Replication)
+    }
+
+    fn new(table: Option<&PublicationTable>, kind: ProgressKind) -> Self {
         let inner = Arc::new(Inner {
             bytes_sharded: AtomicUsize::new(0),
             done: Notify::new(),
-            table: table.clone(),
+            table: table.cloned(),
         });
 
         let notify = inner.clone();
 
         spawn(async move {
             let mut prev = 0;
+            let table = if let Some(ref table) = notify.table {
+                format!(" for table \"{}\".\"{}\"", table.schema, table.name)
+            } else {
+                "".into()
+            };
             loop {
                 select! {
                     _ = sleep(Duration::from_secs(5)) => {
@@ -60,11 +69,10 @@ impl Progress {
                         };
 
                         info!(
-                            "{} {:.3} MB for table \"{}\".\"{}\" [{:.3} MB/sec]",
+                            "{} {:.3} MB{} [{:.3} MB/sec]",
                             name,
                             written as f64 / 1024.0 / 1024.0,
-                            notify.table.schema,
-                            notify.table.name,
+                            table,
                             (written - prev) as f64 / 5.0 / 1024.0 / 1024.0
                         );
 

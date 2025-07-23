@@ -53,6 +53,12 @@ pub enum Error {
 
     #[error("replication timeout")]
     ReplicationTimeout,
+
+    #[error("shard {0} has no replication tables")]
+    NoReplicationTables(usize),
+
+    #[error("shard {0} has no replication slot")]
+    NoReplicationSlot(usize),
 }
 
 impl From<ErrorResponse> for Error {

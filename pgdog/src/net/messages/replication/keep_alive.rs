@@ -17,6 +17,11 @@ impl KeepAlive {
     pub fn wrapped(self) -> Result<CopyData, Error> {
         Ok(CopyData::new(&ReplicationMeta::KeepAlive(self).to_bytes()?))
     }
+
+    /// Origin expects reply.
+    pub fn reply(&self) -> bool {
+        self.reply == 1
+    }
 }
 
 impl FromBytes for KeepAlive {

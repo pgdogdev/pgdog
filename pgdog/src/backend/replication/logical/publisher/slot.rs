@@ -18,6 +18,15 @@ pub struct Lsn {
     pub lsn: i64,
 }
 
+impl Lsn {
+    /// Get LSN from the 64-bit representation.
+    pub fn from_i64(lsn: i64) -> Self {
+        let high = ((lsn >> 32) as u32) as i64;
+        let low = ((lsn & 0xFFFF_FFFF) as u32) as i64;
+        Self { high, low, lsn }
+    }
+}
+
 impl FromStr for Lsn {
     type Err = Error;
 
@@ -262,6 +271,11 @@ impl ReplicationSlot {
         self.server()?.flush().await?;
 
         Ok(())
+    }
+
+    /// Current slot LSN.
+    pub fn lsn(&self) -> Lsn {
+        self.lsn
     }
 }
 
