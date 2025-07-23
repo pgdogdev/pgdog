@@ -1,3 +1,8 @@
+//! Handle logical replication stream.
+//!
+//! Encodes Insert, Update and Delete messages
+//! into idempotent prepared statements.
+//!
 use std::{
     collections::HashMap,
     sync::atomic::{AtomicUsize, Ordering},
@@ -110,11 +115,17 @@ pub struct StreamSubscriber {
     // Statements
     statements: HashMap<i32, Statements>,
 
+    // LSNs for each table
+    table_lsns: HashMap<i32, i64>,
+
     // Connections to shards.
     connections: Vec<Server>,
 
     // Position in the WAL we have flushed successfully.
     lsn: i64,
+
+    // Bytes sharded
+    bytes_sharded: usize,
 }
 
 impl StreamSubscriber {
@@ -124,6 +135,7 @@ impl StreamSubscriber {
             sharding_schema: cluster.sharding_schema(),
             relations: HashMap::new(),
             statements: HashMap::new(),
+            table_lsns: HashMap::new(),
             tables: tables
                 .into_iter()
                 .map(|table| {
@@ -138,6 +150,7 @@ impl StreamSubscriber {
                 .collect(),
             connections: vec![],
             lsn: 0, // Unknown,
+            bytes_sharded: 0,
         }
     }
 
@@ -184,7 +197,7 @@ impl StreamSubscriber {
         Ok(())
     }
 
-    // Send an upsert to one or more shards.
+    // Send a statement to one or more shards.
     async fn send(&mut self, val: &Shard, bind: &Bind) -> Result<(), Error> {
         for (shard, conn) in self.connections.iter_mut().enumerate() {
             match val {
@@ -252,18 +265,28 @@ impl StreamSubscriber {
     // Convert Insert into an idempotent "upsert" and apply it to
     // the right shard(s).
     async fn insert(&mut self, insert: XLogInsert) -> Result<(), Error> {
-        let statements = self.statements.get(&insert.oid).ok_or(Error::MissingData)?;
+        if let Some(table_lsn) = self.table_lsns.get(&insert.oid) {
+            // Don't apply change if table is ahead.
+            if self.lsn < *table_lsn {
+                return Ok(());
+            }
+        }
 
-        // Convert TupleData into a Bind message. We can now insert that tuple
-        // using a prepared statement.
-        let bind = insert.tuple_data.to_bind(&statements.upsert.name);
+        if let Some(statements) = self.statements.get(&insert.oid) {
+            // Convert TupleData into a Bind message. We can now insert that tuple
+            // using a prepared statement.
+            let bind = insert.tuple_data.to_bind(&statements.upsert.name);
 
-        // Upserts are idempotent. Even if we rewind the stream,
-        // we are able to replay changes we already applied safely.
-        if let Some(upsert) = statements.upsert.insert() {
-            let upsert = Insert::new(upsert);
-            let val = upsert.shard(&self.sharding_schema, Some(&bind))?;
-            self.send(&val, &bind).await?;
+            // Upserts are idempotent. Even if we rewind the stream,
+            // we are able to replay changes we already applied safely.
+            if let Some(upsert) = statements.upsert.insert() {
+                let upsert = Insert::new(upsert);
+                let val = upsert.shard(&self.sharding_schema, Some(&bind))?;
+                self.send(&val, &bind).await?;
+            }
+
+            // Update table LSN.
+            self.table_lsns.insert(insert.oid, self.lsn);
         }
 
         Ok(())
@@ -286,10 +309,10 @@ impl StreamSubscriber {
         Ok(())
     }
 
-    /// Handle Relation message.
-    ///
-    /// Prepare upsert statement and record table info for future use
-    /// by Insert, Update and Delete messages.
+    // Handle Relation message.
+    //
+    // Prepare upsert statement and record table info for future use
+    // by Insert, Update and Delete messages.
     async fn relation(&mut self, relation: Relation) -> Result<(), Error> {
         let table = self.tables.get(&Key {
             schema: relation.namespace.clone(),
@@ -320,15 +343,19 @@ impl StreamSubscriber {
                     update: Statement::default(),
                 },
             );
-        }
 
-        self.relations.insert(relation.oid, relation);
+            // Only record tables we expect to stream changes for.
+            self.table_lsns.insert(relation.oid, table.lsn.lsn);
+            self.relations.insert(relation.oid, relation);
+        }
 
         Ok(())
     }
 
     /// Handle replication stream message.
-    pub async fn handle(&mut self, data: CopyData) -> Result<(), Error> {
+    ///
+    /// Return true if stream is done, false otherwise.
+    pub async fn handle(&mut self, data: CopyData) -> Result<bool, Error> {
         // Lazily connect to all shards.
         if self.connections.is_empty() {
             self.connect().await?;
@@ -340,12 +367,15 @@ impl StreamSubscriber {
                     XLogPayload::Insert(insert) => self.insert(insert).await?,
                     XLogPayload::Commit(commit) => self.commit(commit).await?,
                     XLogPayload::Relation(relation) => self.relation(relation).await?,
+                    XLogPayload::Begin(begin) => self.lsn = begin.final_transaction_lsn,
+                    XLogPayload::End => return Ok(true),
                     _ => (),
                 }
             }
+            self.bytes_sharded += xlog.len();
         }
 
-        Ok(())
+        Ok(false)
     }
 
     /// Get latest LSN we flushed to replicas.
@@ -357,5 +387,10 @@ impl StreamSubscriber {
             system_clock: postgres_now(),
             reply: 0,
         }
+    }
+
+    /// Number of bytes processed.
+    pub fn bytes_sharded(&self) -> usize {
+        self.bytes_sharded
     }
 }

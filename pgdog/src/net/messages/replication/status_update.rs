@@ -1,5 +1,6 @@
 use bytes::BytesMut;
 
+use crate::backend::replication::publisher::Lsn;
 use crate::net::replication::KeepAlive;
 use crate::net::replication::ReplicationMeta;
 use crate::net::CopyData;
@@ -22,6 +23,18 @@ impl StatusUpdate {
         Ok(CopyData::new(
             &ReplicationMeta::StatusUpdate(self).to_bytes()?,
         ))
+    }
+
+    /// Generate a request from peer to update me now
+    /// with latest lsn.
+    pub fn new_reply(lsn: Lsn) -> Self {
+        Self {
+            last_applied: lsn.lsn,
+            last_flushed: lsn.lsn,
+            last_written: lsn.lsn,
+            system_clock: postgres_now(),
+            reply: 1,
+        }
     }
 }
 

@@ -1,4 +1,5 @@
 use bytes::BytesMut;
+use tracing::warn;
 
 use crate::net::messages::{CopyData, Message};
 
@@ -9,6 +10,7 @@ use super::logical::commit::Commit;
 use super::logical::delete::Delete;
 use super::logical::insert::Insert;
 use super::logical::relation::Relation;
+use super::logical::stream_start::StreamStart;
 use super::logical::truncate::Truncate;
 use super::logical::update::Update;
 
@@ -85,7 +87,14 @@ impl XLogData {
             'D' => Delete::from_bytes(self.bytes.clone())
                 .ok()
                 .map(XLogPayload::Delete),
-            _ => None,
+            'S' => StreamStart::from_bytes(self.bytes.clone())
+                .ok()
+                .map(XLogPayload::Start),
+            'E' => Some(XLogPayload::End),
+            c => {
+                warn!("unknown xlog message: {}", c);
+                None
+            }
         }
     }
 
@@ -95,6 +104,11 @@ impl XLogData {
     ///
     pub fn get<T: FromBytes>(&self) -> Option<T> {
         T::from_bytes(self.bytes.clone()).ok()
+    }
+
+    /// Length.
+    pub fn len(&self) -> usize {
+        self.bytes.len()
     }
 }
 
@@ -141,4 +155,6 @@ pub enum XLogPayload {
     Truncate(Truncate),
     Update(Update),
     Delete(Delete),
+    End,
+    Start(StreamStart),
 }

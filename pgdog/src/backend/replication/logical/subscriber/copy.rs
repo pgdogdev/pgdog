@@ -1,3 +1,6 @@
+//! Shard COPY stream from one source
+//! between N shards.
+
 use pg_query::NodeEnum;
 
 use crate::{
@@ -9,6 +12,9 @@ use crate::{
 
 use super::super::{CopyStatement, Error};
 
+// Not really needed, but we're currently
+// sharding 3 CopyData messages at a time.
+// This reduces memory allocations.
 static BUFFER_SIZE: usize = 3;
 
 #[derive(Debug)]
@@ -22,6 +28,11 @@ pub struct CopySubscriber {
 }
 
 impl CopySubscriber {
+    /// COPY statement determines:
+    ///
+    /// 1. What kind of encoding we use.
+    /// 2. Which column is used for sharding.
+    ///
     pub fn new(copy_stmt: &CopyStatement, cluster: &Cluster) -> Result<Self, Error> {
         let stmt = pg_query::parse(copy_stmt.clone().copy_in().as_str())?;
         let stmt = stmt
@@ -53,7 +64,7 @@ impl CopySubscriber {
         })
     }
 
-    /// Connect to all shards.
+    /// Connect to all shards. One connection per primary.
     pub async fn connect(&mut self) -> Result<(), Error> {
         let mut servers = vec![];
         for shard in self.cluster.shards() {
@@ -74,12 +85,12 @@ impl CopySubscriber {
         Ok(())
     }
 
-    pub fn disconnect(&mut self) -> Result<(), Error> {
+    /// Disconnect from all shards.
+    pub fn disconnect(&mut self) {
         self.connections.clear();
-        Ok(())
     }
 
-    /// Start copy on the subscriber table.
+    /// Start COPY on all shards.
     pub async fn start_copy(&mut self) -> Result<(), Error> {
         let stmt = Query::new(self.stmt.copy_in());
 
@@ -102,7 +113,7 @@ impl CopySubscriber {
         Ok(())
     }
 
-    /// Finish COPY.
+    /// Finish COPY on all shards.
     pub async fn copy_done(&mut self) -> Result<(), Error> {
         self.flush().await?;
 
@@ -167,7 +178,7 @@ impl CopySubscriber {
         Ok(())
     }
 
-    /// Bytes sharded.
+    /// Total amount of bytes shaded.
     pub fn bytes_sharded(&self) -> usize {
         self.bytes_sharded
     }
@@ -229,6 +240,8 @@ mod test {
             .fetch_all::<i64>("SELECT COUNT(*)::BIGINT FROM pgdog.sharded")
             .await
             .unwrap();
+        // Test shards point to the same database.
+        // Otherwise, it would of been 50 if this didn't work (all shard).
         assert_eq!(count.first().unwrap().clone(), 25);
 
         cluster

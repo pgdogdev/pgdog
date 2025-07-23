@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use tokio::{select, spawn};
 use tracing::error;
 
@@ -55,7 +57,7 @@ impl Publisher {
 
                 loop {
                     select! {
-                        replication_data = slot.replicate() => {
+                        replication_data = slot.replicate(Duration::MAX) => {
                             match replication_data {
                                 Ok(Some(ReplicationData::CopyData(data))) => {
                                     // We process one message at a time and either succeed or fail.

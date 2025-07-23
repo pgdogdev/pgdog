@@ -50,6 +50,9 @@ pub enum Error {
 
     #[error("not connected")]
     NotConnected,
+
+    #[error("replication timeout")]
+    ReplicationTimeout,
 }
 
 impl From<ErrorResponse> for Error {

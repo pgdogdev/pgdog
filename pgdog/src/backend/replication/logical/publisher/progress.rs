@@ -16,13 +16,29 @@ struct Inner {
     done: Notify,
 }
 
+#[derive(Debug, Copy, Clone, PartialEq)]
+enum ProgressKind {
+    DataSync,
+    Replication,
+}
+
 #[derive(Debug, Clone)]
 pub struct Progress {
     inner: Arc<Inner>,
+    #[allow(dead_code)]
+    kind: ProgressKind,
 }
 
 impl Progress {
-    pub fn new(table: &PublicationTable) -> Self {
+    pub fn new_data_sync(table: &PublicationTable) -> Self {
+        Self::new(table, ProgressKind::DataSync)
+    }
+
+    pub fn new_replication(table: &PublicationTable) -> Self {
+        Self::new(table, ProgressKind::Replication)
+    }
+
+    fn new(table: &PublicationTable, kind: ProgressKind) -> Self {
         let inner = Arc::new(Inner {
             bytes_sharded: AtomicUsize::new(0),
             done: Notify::new(),
@@ -38,8 +54,14 @@ impl Progress {
                     _ = sleep(Duration::from_secs(5)) => {
                         let written = notify.bytes_sharded.load(Ordering::Relaxed);
 
+                        let name = match kind {
+                            ProgressKind::DataSync => "synced",
+                            ProgressKind::Replication => "replicated",
+                        };
+
                         info!(
-                            "synced {:.3} MB for table \"{}\".\"{}\" [{:.3} MB/sec]",
+                            "{} {:.3} MB for table \"{}\".\"{}\" [{:.3} MB/sec]",
+                            name,
                             written as f64 / 1024.0 / 1024.0,
                             notify.table.schema,
                             notify.table.name,
@@ -56,7 +78,7 @@ impl Progress {
             }
         });
 
-        Progress { inner }
+        Progress { inner, kind }
     }
 
     pub fn update(&self, total_bytes: usize) {

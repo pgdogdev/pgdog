@@ -2,19 +2,20 @@ use super::super::Error;
 use crate::{
     backend::{pool::Address, Server, ServerOptions},
     net::{
-        replication::StatusUpdate, CopyData, DataRow, ErrorResponse, Format, FromBytes, Protocol,
-        Query, ToBytes,
+        replication::StatusUpdate, CopyData, CopyDone, DataRow, ErrorResponse, Format, FromBytes,
+        Protocol, Query, ToBytes,
     },
     util::random_string,
 };
-use std::{fmt::Display, str::FromStr};
-use tokio::spawn;
+use std::{fmt::Display, str::FromStr, time::Duration};
+use tokio::{spawn, time::timeout};
 use tracing::{debug, error, trace};
 
 #[derive(Debug, Clone, Default, Copy)]
 pub struct Lsn {
-    pub timeline: i64,
-    pub offset: i64,
+    pub high: i64,
+    pub low: i64,
+    pub lsn: i64,
 }
 
 impl FromStr for Lsn {
@@ -26,19 +27,21 @@ impl FromStr for Lsn {
         //
         // TODO: maybe just save it as a string?
         let mut parts = s.split("/");
-        let timeline = parts.next().ok_or(Error::LsnDecode)?;
-        let timeline = i64::from_str_radix(timeline, 16)?;
+        let high = parts.next().ok_or(Error::LsnDecode)?;
+        let high = i64::from_str_radix(high, 16)?;
 
-        let offset = parts.next().ok_or(Error::LsnDecode)?;
-        let offset = i64::from_str_radix(offset, 16)?;
+        let low = parts.next().ok_or(Error::LsnDecode)?;
+        let low = i64::from_str_radix(low, 16)?;
 
-        Ok(Self { timeline, offset })
+        let lsn = (high << 32) + low;
+
+        Ok(Self { lsn, high, low })
     }
 }
 
 impl Display for Lsn {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:X}/{:X}", self.timeline, self.offset)
+        write!(f, "{:X}/{:X}", self.high, self.low)
     }
 }
 
@@ -208,9 +211,16 @@ impl ReplicationSlot {
     }
 
     /// Replicate from slot until finished.
-    pub async fn replicate(&mut self) -> Result<Option<ReplicationData>, Error> {
+    pub async fn replicate(
+        &mut self,
+        max_wait: Duration,
+    ) -> Result<Option<ReplicationData>, Error> {
         loop {
-            let message = self.server()?.read().await?;
+            let message = match timeout(max_wait, self.server()?.read()).await {
+                Err(_err) => return Err(Error::ReplicationTimeout),
+                Ok(message) => message?,
+            };
+
             match message.code() {
                 'd' => {
                     let copy_data = CopyData::from_bytes(message.to_bytes()?)?;
@@ -241,6 +251,14 @@ impl ReplicationSlot {
         self.server()?
             .send_one(&status_update.wrapped()?.into())
             .await?;
+        self.server()?.flush().await?;
+
+        Ok(())
+    }
+
+    /// Ask remote to close stream.
+    pub async fn stop_replication(&mut self) -> Result<(), Error> {
+        self.server()?.send_one(&CopyDone.into()).await?;
         self.server()?.flush().await?;
 
         Ok(())
@@ -294,7 +312,7 @@ mod test {
     fn test_lsn() {
         let original = "1/12A4C"; // It's fine.
         let lsn = Lsn::from_str(original).unwrap();
-        assert_eq!(lsn.timeline, 1);
+        assert_eq!(lsn.high, 1);
         let lsn = lsn.to_string();
         assert_eq!(lsn, original);
     }
