@@ -9,7 +9,7 @@ use crate::{
 
 use super::super::{CopyStatement, Error};
 
-static BUFFER_SIZE: usize = 10;
+static BUFFER_SIZE: usize = 3;
 
 #[derive(Debug)]
 pub struct CopySubscriber {
@@ -18,6 +18,7 @@ pub struct CopySubscriber {
     buffer: Vec<CopyData>,
     connections: Vec<Server>,
     stmt: CopyStatement,
+    bytes_sharded: usize,
 }
 
 impl CopySubscriber {
@@ -48,6 +49,7 @@ impl CopySubscriber {
             buffer: vec![],
             connections: vec![],
             stmt: copy_stmt.clone(),
+            bytes_sharded: 0,
         })
     }
 
@@ -100,7 +102,7 @@ impl CopySubscriber {
         Ok(())
     }
 
-    /// Finish copy
+    /// Finish COPY.
     pub async fn copy_done(&mut self) -> Result<(), Error> {
         self.flush().await?;
 
@@ -142,7 +144,7 @@ impl CopySubscriber {
         let result = self.copy.shard(&self.buffer)?;
         self.buffer.clear();
 
-        for row in result {
+        for row in &result {
             for (shard, server) in self.connections.iter_mut().enumerate() {
                 match row.shard() {
                     Shard::All => server.send_one(&row.message().into()).await?,
@@ -160,12 +162,26 @@ impl CopySubscriber {
             }
         }
 
+        self.bytes_sharded += result.iter().map(|c| c.len()).sum::<usize>();
+
         Ok(())
+    }
+
+    /// Bytes sharded.
+    pub fn bytes_sharded(&self) -> usize {
+        self.bytes_sharded
     }
 }
 
 #[cfg(test)]
 mod test {
+    use bytes::Bytes;
+
+    use crate::{
+        backend::pool::Request,
+        frontend::router::parser::binary::{header::Header, Data, Tuple},
+    };
+
     use super::*;
 
     #[tokio::test]
@@ -189,12 +205,32 @@ mod test {
         let mut subscriber = CopySubscriber::new(&copy, &cluster).unwrap();
         subscriber.start_copy().await.unwrap();
 
-        for i in 0..25 {
-            let copy_data = CopyData::new(format!("{}\ttest@test.com\n", i).as_bytes());
-            subscriber.copy_data(copy_data).await.unwrap();
+        let header = CopyData::new(&Header::new().to_bytes().unwrap());
+        subscriber.copy_data(header).await.unwrap();
+
+        for i in 0..25_i64 {
+            let id = Data::Column(Bytes::copy_from_slice(&i.to_be_bytes()));
+            let email = Data::Column(Bytes::copy_from_slice("test@test.com".as_bytes()));
+            let tuple = Tuple::new(&[id, email]);
+            subscriber
+                .copy_data(CopyData::new(&tuple.to_bytes().unwrap()))
+                .await
+                .unwrap();
         }
 
+        subscriber
+            .copy_data(CopyData::new(&Tuple::new_end().to_bytes().unwrap()))
+            .await
+            .unwrap();
+
         subscriber.copy_done().await.unwrap();
+        let mut server = cluster.primary(0, &Request::default()).await.unwrap();
+        let count = server
+            .fetch_all::<i64>("SELECT COUNT(*)::BIGINT FROM pgdog.sharded")
+            .await
+            .unwrap();
+        assert_eq!(count.first().unwrap().clone(), 25);
+
         cluster
             .execute("TRUNCATE TABLE pgdog.sharded")
             .await

@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 use std::fs::read_to_string;
+use tokio::{select, signal::ctrl_c};
 use tracing::error;
 
 use crate::backend::{databases::databases, replication::logical::Publisher};
@@ -128,8 +129,15 @@ pub async fn data_sync(commands: Commands) -> Result<(), Box<dyn std::error::Err
             error!("{}", err);
         }
     } else {
-        if let Err(err) = publication.data_sync(&destination).await {
-            error!("{}", err);
+        select! {
+            result = publication.data_sync(&destination) => {
+                if let Err(err) = result {
+                    error!("{}", err);
+                }
+            }
+
+            _ = ctrl_c() => (),
+
         }
     }
 

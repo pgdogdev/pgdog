@@ -1,6 +1,7 @@
 //! Table.
 
 use crate::backend::pool::Address;
+use crate::backend::replication::publisher::progress::Progress;
 use crate::backend::{Cluster, Server};
 use crate::net::replication::{ReplicationMeta, StatusUpdate};
 use crate::net::CopyDone;
@@ -126,11 +127,15 @@ impl Table {
         // Copy rows over.
         copy.start(slot.server()?).await?;
         dest.start_copy().await?;
+        let progress = Progress::new(&self.table);
 
         while let Some(data_row) = copy.data(slot.server()?).await? {
             dest.copy_data(data_row).await?;
+            progress.update(dest.bytes_sharded());
         }
+
         dest.copy_done().await?;
+        progress.done();
 
         slot.server()?.execute("COMMIT").await?;
 

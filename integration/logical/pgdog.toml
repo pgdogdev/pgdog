@@ -15,3 +15,9 @@ host = "127.0.0.1"
 port = 5433
 database_name = "pgdog"
 min_pool_size = 0
+
+[[sharded_tables]]
+database = "destination"
+name = "books"
+column = "id"
+data_type = "bigint"

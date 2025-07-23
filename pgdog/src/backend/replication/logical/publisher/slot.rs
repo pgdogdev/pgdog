@@ -251,16 +251,28 @@ impl Drop for ReplicationSlot {
     fn drop(&mut self) {
         let server = self.server.take();
 
-        if let Some(mut server) = server {
+        if let Some(server) = server {
+            drop(server);
+
             // _Try_ not to leave data slots hanging around
             // accumulating WAL for no reason.
             if !self.dropped && self.kind == SlotKind::DataSync {
                 let name = self.name.clone();
-                let address = self.address.clone();
                 let drop_query = self.drop_slot_query(false);
+                let address = self.address.clone();
                 spawn(async move {
-                    if let Err(err) = server.execute(&drop_query).await {
-                        error!("failed to drop slot \"{}\": {} [{}]", name, err, address);
+                    match Server::connect(&address, ServerOptions::new_replication()).await {
+                        Ok(mut server) => {
+                            if let Err(err) = server.execute(&drop_query).await {
+                                error!("failed to drop slot \"{}\": {} [{}]", name, err, address);
+                            }
+                        }
+                        Err(err) => {
+                            error!(
+                                "failed to create connection to drop slot: {} [{}]",
+                                err, address
+                            );
+                        }
                     }
                 });
             }
