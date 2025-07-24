@@ -331,10 +331,8 @@ async fn test_timestamp_sorting_sqlx_text_protocol() {
         .await
         .unwrap();
 
-    let actual_order: Vec<(i64, String)> = rows
-        .iter()
-        .map(|row| (row.get(0), row.get(1)))
-        .collect();
+    let actual_order: Vec<(i64, String)> =
+        rows.iter().map(|row| (row.get(0), row.get(1))).collect();
 
     let expected_order = vec![
         (103i64, "Far future".to_string()),

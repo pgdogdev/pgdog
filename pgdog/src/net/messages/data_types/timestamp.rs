@@ -29,24 +29,18 @@ impl Ord for Timestamp {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         use std::cmp::Ordering;
 
-        // Handle special values first
         match (self.special, other.special) {
-            // Both are normal values, compare fields
-            (None, None) => {
-                // Compare in order: year, month, day, hour, minute, second, micros
-                self.year
-                    .cmp(&other.year)
-                    .then_with(|| self.month.cmp(&other.month))
-                    .then_with(|| self.day.cmp(&other.day))
-                    .then_with(|| self.hour.cmp(&other.hour))
-                    .then_with(|| self.minute.cmp(&other.minute))
-                    .then_with(|| self.second.cmp(&other.second))
-                    .then_with(|| self.micros.cmp(&other.micros))
-            }
-            // -infinity is less than everything
+            (None, None) => self
+                .year
+                .cmp(&other.year)
+                .then_with(|| self.month.cmp(&other.month))
+                .then_with(|| self.day.cmp(&other.day))
+                .then_with(|| self.hour.cmp(&other.hour))
+                .then_with(|| self.minute.cmp(&other.minute))
+                .then_with(|| self.second.cmp(&other.second))
+                .then_with(|| self.micros.cmp(&other.micros)),
             (Some(false), _) => Ordering::Less,
             (_, Some(false)) => Ordering::Greater,
-            // infinity is greater than everything
             (Some(true), _) => Ordering::Greater,
             (_, Some(true)) => Ordering::Less,
         }
@@ -107,24 +101,14 @@ impl Timestamp {
             Some(true) => i64::MAX,
             Some(false) => i64::MIN,
             None => {
-                // PostgreSQL epoch is 2000-01-01 00:00:00
-                // First, calculate total days since year 2000
                 let mut days: i64 = 0;
-
-                // Add days for complete years
                 for year in 2000..self.year {
                     days += if is_leap_year(year) { 366 } else { 365 };
                 }
-
-                // Add days for complete months in current year
                 for month in 1..self.month {
                     days += days_in_month(self.year, month);
                 }
-
-                // Add remaining days
                 days += (self.day - 1) as i64;
-
-                // Convert to microseconds
                 let total_micros = days * 24 * 60 * 60 * 1_000_000
                     + (self.hour as i64) * 60 * 60 * 1_000_000
                     + (self.minute as i64) * 60 * 1_000_000
@@ -138,18 +122,13 @@ impl Timestamp {
 
     /// Create timestamp from microseconds since PostgreSQL epoch (2000-01-01)
     pub fn from_pg_epoch_micros(micros: i64) -> Result<Self, Error> {
-        // Handle special values
         if micros == i64::MAX {
             return Ok(Self::infinity());
         }
         if micros == i64::MIN {
             return Ok(Self::neg_infinity());
         }
-
-        // Calculate components
         let mut remaining_micros = micros;
-
-        // Extract time components
         let micros_in_day = 24 * 60 * 60 * 1_000_000i64;
         let days = remaining_micros / micros_in_day;
         remaining_micros %= micros_in_day;
@@ -164,8 +143,6 @@ impl Timestamp {
 
         let seconds = remaining_micros / 1_000_000;
         let microseconds = remaining_micros % 1_000_000;
-
-        // Calculate date from days since 2000-01-01
         let (year, month, day) = days_to_date(2000, days);
 
         Ok(Self {
@@ -182,12 +159,10 @@ impl Timestamp {
     }
 }
 
-// Helper function to check if a year is a leap year
 fn is_leap_year(year: i64) -> bool {
     (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
 }
 
-// Helper function to get days in a month
 fn days_in_month(year: i64, month: i8) -> i64 {
     match month {
         1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
@@ -203,7 +178,6 @@ fn days_in_month(year: i64, month: i8) -> i64 {
     }
 }
 
-// Helper function to convert days since a base year to year/month/day
 fn days_to_date(base_year: i64, days: i64) -> (i64, u32, u32) {
     let mut year = base_year;
     let mut remaining_days = days;
@@ -217,8 +191,6 @@ fn days_to_date(base_year: i64, days: i64) -> (i64, u32, u32) {
         remaining_days -= days_in_year;
         year += 1;
     }
-
-    // Find the month and day
     let mut month = 1;
     while month <= 12 {
         let days_in_this_month = days_in_month(year, month);
@@ -229,7 +201,7 @@ fn days_to_date(base_year: i64, days: i64) -> (i64, u32, u32) {
         month += 1;
     }
 
-    let day = remaining_days + 1; // Days are 1-based
+    let day = remaining_days + 1;
 
     (year, month as u32, day as u32)
 }
@@ -328,12 +300,9 @@ mod test {
         assert_eq!(ts.micros, 798425);
     }
 
-    // Binary decoding tests
     #[test]
     fn test_binary_decode_pg_epoch() {
-        // PostgreSQL epoch: 2000-01-01 00:00:00.000000
-        // Should be 0 microseconds
-        let bytes: [u8; 8] = [0, 0, 0, 0, 0, 0, 0, 0]; // 0 as big-endian
+        let bytes: [u8; 8] = [0, 0, 0, 0, 0, 0, 0, 0];
         let ts = Timestamp::decode(&bytes, Format::Binary).unwrap();
 
         assert_eq!(ts.year, 2000);
@@ -347,57 +316,36 @@ mod test {
 
     #[test]
     fn test_binary_decode_specific_timestamp() {
-        // 2025-07-18 12:34:56.789012
-        // Calculate microseconds since 2000-01-01:
-        // 25.5 years ≈ 805680000 seconds ≈ 805680000000000 microseconds
-        // This is approximate - exact value would need proper calculation
-        // For now, we'll test that it can decode any valid 8-byte value
         let bytes: [u8; 8] = [0x00, 0x02, 0xDC, 0x6C, 0x0E, 0xBC, 0xBE, 0x00];
         let result = Timestamp::decode(&bytes, Format::Binary);
-        assert!(result.is_ok(), "Should decode 8-byte binary timestamp");
+        assert!(result.is_ok());
     }
 
     #[test]
     fn test_binary_decode_infinity() {
-        // i64::MAX as big-endian bytes
         let bytes: [u8; 8] = [0x7F, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
         let ts = Timestamp::decode(&bytes, Format::Binary).unwrap();
-
-        // Should decode to a special infinity timestamp
-        assert_eq!(
-            ts.special,
-            Some(true),
-            "Should have special=Some(true) for infinity"
-        );
+        assert_eq!(ts.special, Some(true));
     }
 
     #[test]
     fn test_binary_decode_neg_infinity() {
-        // i64::MIN as big-endian bytes
         let bytes: [u8; 8] = [0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
         let ts = Timestamp::decode(&bytes, Format::Binary).unwrap();
-
-        // Should decode to a special -infinity timestamp
-        assert_eq!(
-            ts.special,
-            Some(false),
-            "Should have special=Some(false) for -infinity"
-        );
+        assert_eq!(ts.special, Some(false));
     }
 
     #[test]
     fn test_binary_decode_wrong_size() {
-        // Test with wrong number of bytes
         let bytes: [u8; 4] = [0, 0, 0, 0];
         let result = Timestamp::decode(&bytes, Format::Binary);
-        assert!(result.is_err(), "Should fail with wrong byte count");
+        assert!(result.is_err());
 
         let bytes: [u8; 12] = [0; 12];
         let result = Timestamp::decode(&bytes, Format::Binary);
-        assert!(result.is_err(), "Should fail with too many bytes");
+        assert!(result.is_err());
     }
 
-    // Binary encoding tests
     #[test]
     fn test_binary_encode_pg_epoch() {
         let ts = Timestamp {
@@ -432,12 +380,11 @@ mod test {
         };
 
         let encoded = ts.encode(Format::Binary).unwrap();
-        assert_eq!(encoded.len(), 8, "Binary timestamp should be 8 bytes");
+        assert_eq!(encoded.len(), 8);
     }
 
     #[test]
     fn test_binary_round_trip() {
-        // Test that encode->decode preserves the timestamp
         let original = Timestamp {
             year: 2023,
             month: 6,
@@ -462,7 +409,6 @@ mod test {
         assert_eq!(decoded.micros, original.micros);
     }
 
-    // Ordering tests
     #[test]
     fn test_timestamp_ordering() {
         let ts1 = Timestamp {
@@ -489,8 +435,8 @@ mod test {
             special: None,
         };
 
-        assert!(ts1 < ts2, "2020 should be less than 2021");
-        assert!(ts2 > ts1, "2021 should be greater than 2020");
+        assert!(ts1 < ts2);
+        assert!(ts2 > ts1);
         assert_eq!(ts1.cmp(&ts1), std::cmp::Ordering::Equal);
     }
 
@@ -520,13 +466,11 @@ mod test {
             special: None,
         };
 
-        assert!(ts1 < ts2, "100 micros should be less than 200 micros");
+        assert!(ts1 < ts2);
     }
 
-    // Helper method tests
     #[test]
     fn test_to_pg_epoch_micros() {
-        // Test if we have this method
         let ts = Timestamp {
             year: 2000,
             month: 1,
@@ -538,16 +482,12 @@ mod test {
             offset: None,
             special: None,
         };
-
-        // This will fail to compile if method doesn't exist
         let micros = ts.to_pg_epoch_micros();
         assert_eq!(micros, 0);
     }
 
     #[test]
     fn test_from_pg_epoch_micros() {
-        // Test if we have this method
-        // This will fail to compile if method doesn't exist
         let ts = Timestamp::from_pg_epoch_micros(0).unwrap();
         assert_eq!(ts.year, 2000);
         assert_eq!(ts.month, 1);
@@ -558,20 +498,15 @@ mod test {
         assert_eq!(ts.micros, 0);
     }
 
-    // Special value tests
     #[test]
     fn test_infinity_creation() {
-        // Test if we have infinity methods
         let inf = Timestamp::infinity();
         let neg_inf = Timestamp::neg_infinity();
-
-        // These should exist and be properly ordered
         assert!(neg_inf < inf);
         assert_eq!(inf.special, Some(true));
         assert_eq!(neg_inf.special, Some(false));
     }
 
-    // Datum integration tests
     #[test]
     fn test_datum_timestamp_comparison() {
         use super::super::Datum;
@@ -603,7 +538,7 @@ mod test {
         let d1 = Datum::Timestamp(ts1);
         let d2 = Datum::Timestamp(ts2);
 
-        assert!(d1 < d2, "Datum comparison should work for timestamps");
+        assert!(d1 < d2);
         assert_eq!(d1.partial_cmp(&d2), Some(std::cmp::Ordering::Less));
     }
 }

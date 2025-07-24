@@ -58,7 +58,6 @@ sha1 = "0.10"
 indexmap = "2.9"
 lru = "0.16"
 hickory-resolver = "0.25.2"
-postgres-types = { version = "0.2", features = ["derive"] }
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 tikv-jemallocator = "0.6"
