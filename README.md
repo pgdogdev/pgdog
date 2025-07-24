@@ -37,7 +37,7 @@ docker-compose up
 It will take a few minutes to build PgDog from source and launch the containers. Once started, you can connect to PgDog with psql (or any other PostgreSQL client):
 
 ```
-PGPASSWORD=postgres psql -h 127.0.0.1 -p 6432 -U postgres
+PGPASSWORD=postgres psql -h 127.0.0.1 -p 6432 -U postgres gssencmode=disable
 ```
 
 The demo comes with 3 shards and 2 sharded tables:
@@ -188,7 +188,7 @@ cargo run --release -- -d postgres://user:pass@localhost:5432/db1 -d postgres://
 You can connect to PgDog with psql or any other PostgreSQL client:
 
 ```bash
-psql postgres://pgdog:pgdog@127.0.0.1:6432/pgdog
+psql "postgres://pgdog:pgdog@127.0.0.1:6432/pgdog?gssencmode=disable"
 ```
 
 ## &#128678; Status &#128678;
