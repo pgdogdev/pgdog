@@ -4,6 +4,10 @@ use super::*;
 
 use super::interval::bigint;
 use bytes::{Buf, Bytes};
+use chrono::{Datelike, NaiveDate, NaiveDateTime, NaiveTime, Timelike};
+
+// PostgreSQL epoch is 2000-01-01 00:00:00 UTC, which is 946684800 seconds after Unix epoch
+const POSTGRES_EPOCH_MICROS: i64 = 946684800000000; // microseconds
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Default, Hash)]
 pub struct Timestamp {
@@ -57,7 +61,7 @@ impl Display for Timestamp {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{}-{}-{} {}:{}:{}.{}",
+            "{:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:06}",
             self.year, self.month, self.day, self.hour, self.minute, self.second, self.micros
         )?;
 
@@ -101,21 +105,21 @@ impl Timestamp {
             Some(true) => i64::MAX,
             Some(false) => i64::MIN,
             None => {
-                let mut days: i64 = 0;
-                for year in 2000..self.year {
-                    days += if is_leap_year(year) { 366 } else { 365 };
-                }
-                for month in 1..self.month {
-                    days += days_in_month(self.year, month);
-                }
-                days += (self.day - 1) as i64;
-                let total_micros = days * 24 * 60 * 60 * 1_000_000
-                    + (self.hour as i64) * 60 * 60 * 1_000_000
-                    + (self.minute as i64) * 60 * 1_000_000
-                    + (self.second as i64) * 1_000_000
-                    + (self.micros as i64);
+                // Create NaiveDateTime from components
+                let date =
+                    NaiveDate::from_ymd_opt(self.year as i32, self.month as u32, self.day as u32)
+                        .expect("Invalid date components");
+                let time = NaiveTime::from_hms_micro_opt(
+                    self.hour as u32,
+                    self.minute as u32,
+                    self.second as u32,
+                    self.micros as u32,
+                )
+                .expect("Invalid time components");
+                let dt = NaiveDateTime::new(date, time);
 
-                total_micros
+                // Get Unix epoch microseconds and subtract PostgreSQL epoch offset
+                dt.and_utc().timestamp_micros() - POSTGRES_EPOCH_MICROS
             }
         }
     }
@@ -128,82 +132,31 @@ impl Timestamp {
         if micros == i64::MIN {
             return Ok(Self::neg_infinity());
         }
-        let mut remaining_micros = micros;
-        let micros_in_day = 24 * 60 * 60 * 1_000_000i64;
-        let days = remaining_micros / micros_in_day;
-        remaining_micros %= micros_in_day;
 
-        let micros_in_hour = 60 * 60 * 1_000_000i64;
-        let hours = remaining_micros / micros_in_hour;
-        remaining_micros %= micros_in_hour;
+        // Convert PostgreSQL epoch to Unix epoch
+        let unix_micros = micros + POSTGRES_EPOCH_MICROS;
 
-        let micros_in_minute = 60 * 1_000_000i64;
-        let minutes = remaining_micros / micros_in_minute;
-        remaining_micros %= micros_in_minute;
+        // Create DateTime from Unix microseconds
+        let dt = chrono::DateTime::from_timestamp_micros(unix_micros)
+            .ok_or(Error::WrongSizeBinary(8))? // Use existing error variant
+            .naive_utc();
 
-        let seconds = remaining_micros / 1_000_000;
-        let microseconds = remaining_micros % 1_000_000;
-        let (year, month, day) = days_to_date(2000, days);
+        // Extract components
+        let date = dt.date();
+        let time = dt.time();
 
         Ok(Self {
-            year,
-            month: month as i8,
-            day: day as i8,
-            hour: hours as i8,
-            minute: minutes as i8,
-            second: seconds as i8,
-            micros: microseconds as i32,
+            year: date.year() as i64,
+            month: date.month() as i8,
+            day: date.day() as i8,
+            hour: time.hour() as i8,
+            minute: time.minute() as i8,
+            second: time.second() as i8,
+            micros: (time.nanosecond() / 1000) as i32,
             offset: None,
             special: None,
         })
     }
-}
-
-fn is_leap_year(year: i64) -> bool {
-    (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
-}
-
-fn days_in_month(year: i64, month: i8) -> i64 {
-    match month {
-        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
-        4 | 6 | 9 | 11 => 30,
-        2 => {
-            if is_leap_year(year) {
-                29
-            } else {
-                28
-            }
-        }
-        _ => 0,
-    }
-}
-
-fn days_to_date(base_year: i64, days: i64) -> (i64, u32, u32) {
-    let mut year = base_year;
-    let mut remaining_days = days;
-
-    // Find the year
-    loop {
-        let days_in_year = if is_leap_year(year) { 366 } else { 365 };
-        if remaining_days < days_in_year {
-            break;
-        }
-        remaining_days -= days_in_year;
-        year += 1;
-    }
-    let mut month = 1;
-    while month <= 12 {
-        let days_in_this_month = days_in_month(year, month);
-        if remaining_days < days_in_this_month {
-            break;
-        }
-        remaining_days -= days_in_this_month;
-        month += 1;
-    }
-
-    let day = remaining_days + 1;
-
-    (year, month as u32, day as u32)
 }
 
 impl FromDataType for Timestamp {
@@ -243,7 +196,6 @@ impl FromDataType for Timestamp {
                                 result.offset = Some(offset);
                             }
                         }
-                        assign!(result, micros, parts);
                     }
                 }
 
