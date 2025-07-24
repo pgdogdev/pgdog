@@ -76,7 +76,9 @@ impl Display for Timestamp {
 macro_rules! assign {
     ($result:expr, $value:tt, $parts:expr) => {
         if let Some(val) = $parts.next() {
-            $result.$value = bigint(&val)?.try_into().unwrap();
+            $result.$value = bigint(&val)?
+                .try_into()
+                .map_err(|_| Error::InvalidTimestamp)?;
         }
     };
 }
@@ -100,26 +102,26 @@ impl Timestamp {
 
     /// Convert to microseconds since PostgreSQL epoch (2000-01-01)
     /// Returns i64::MAX for infinity, i64::MIN for -infinity
-    pub fn to_pg_epoch_micros(&self) -> i64 {
+    pub fn to_pg_epoch_micros(&self) -> Result<i64, Error> {
         match self.special {
-            Some(true) => i64::MAX,
-            Some(false) => i64::MIN,
+            Some(true) => Ok(i64::MAX),
+            Some(false) => Ok(i64::MIN),
             None => {
                 // Create NaiveDateTime from components
                 let date =
                     NaiveDate::from_ymd_opt(self.year as i32, self.month as u32, self.day as u32)
-                        .expect("Invalid date components");
+                        .ok_or(Error::InvalidTimestamp)?;
                 let time = NaiveTime::from_hms_micro_opt(
                     self.hour as u32,
                     self.minute as u32,
                     self.second as u32,
                     self.micros as u32,
                 )
-                .expect("Invalid time components");
+                .ok_or(Error::InvalidTimestamp)?;
                 let dt = NaiveDateTime::new(date, time);
 
                 // Get Unix epoch microseconds and subtract PostgreSQL epoch offset
-                dt.and_utc().timestamp_micros() - POSTGRES_EPOCH_MICROS
+                Ok(dt.and_utc().timestamp_micros() - POSTGRES_EPOCH_MICROS)
             }
         }
     }
@@ -138,7 +140,7 @@ impl Timestamp {
 
         // Create DateTime from Unix microseconds
         let dt = chrono::DateTime::from_timestamp_micros(unix_micros)
-            .ok_or(Error::WrongSizeBinary(8))? // Use existing error variant
+            .ok_or(Error::InvalidTimestamp)?
             .naive_utc();
 
         // Extract components
@@ -191,12 +193,31 @@ impl FromDataType for Timestamp {
                             let mut parts = micros.split(&['-', '+']);
                             assign!(result, micros, parts);
                             if let Some(offset) = parts.next() {
-                                let offset: i8 = bigint(offset)?.try_into().unwrap();
+                                let offset: i8 = bigint(offset)?
+                                    .try_into()
+                                    .map_err(|_| Error::InvalidTimestamp)?;
                                 let offset = if neg { -offset } else { offset };
                                 result.offset = Some(offset);
                             }
                         }
                     }
+                }
+
+                // Validate ranges
+                if result.month < 1
+                    || result.month > 12
+                    || result.day < 1
+                    || result.day > 31
+                    || result.hour < 0
+                    || result.hour > 23
+                    || result.minute < 0
+                    || result.minute > 59
+                    || result.second < 0
+                    || result.second > 59
+                    || result.micros < 0
+                    || result.micros > 999999
+                {
+                    return Err(Error::InvalidTimestamp);
                 }
 
                 Ok(result)
@@ -227,7 +248,7 @@ impl FromDataType for Timestamp {
         match encoding {
             Format::Text => Ok(Bytes::copy_from_slice(self.to_string().as_bytes())),
             Format::Binary => {
-                let micros = self.to_pg_epoch_micros();
+                let micros = self.to_pg_epoch_micros()?;
                 Ok(Bytes::copy_from_slice(&micros.to_be_bytes()))
             }
         }
@@ -434,7 +455,7 @@ mod test {
             offset: None,
             special: None,
         };
-        let micros = ts.to_pg_epoch_micros();
+        let micros = ts.to_pg_epoch_micros().unwrap();
         assert_eq!(micros, 0);
     }
 
@@ -457,6 +478,140 @@ mod test {
         assert!(neg_inf < inf);
         assert_eq!(inf.special, Some(true));
         assert_eq!(neg_inf.special, Some(false));
+    }
+
+    #[test]
+    fn test_invalid_timestamp_components() {
+        // Test invalid date components
+        let invalid_ts = Timestamp {
+            year: 2025,
+            month: 13, // Invalid month
+            day: 15,
+            hour: 12,
+            minute: 30,
+            second: 45,
+            micros: 0,
+            offset: None,
+            special: None,
+        };
+
+        // Should return error, not panic
+        assert!(invalid_ts.to_pg_epoch_micros().is_err());
+
+        // Test invalid day
+        let invalid_ts2 = Timestamp {
+            year: 2025,
+            month: 2,
+            day: 30, // February 30th doesn't exist
+            hour: 12,
+            minute: 30,
+            second: 45,
+            micros: 0,
+            offset: None,
+            special: None,
+        };
+        assert!(invalid_ts2.to_pg_epoch_micros().is_err());
+
+        // Test invalid time components
+        let invalid_ts3 = Timestamp {
+            year: 2025,
+            month: 1,
+            day: 1,
+            hour: 25, // Invalid hour
+            minute: 30,
+            second: 45,
+            micros: 0,
+            offset: None,
+            special: None,
+        };
+        assert!(invalid_ts3.to_pg_epoch_micros().is_err());
+    }
+
+    #[test]
+    fn test_text_parsing_validation() {
+        // Test parsing invalid month
+        let invalid = "2025-13-05 14:51:42.798425".as_bytes();
+        let result = Timestamp::decode(invalid, Format::Text);
+        assert!(result.is_err());
+
+        // Test parsing invalid day
+        let invalid = "2025-02-32 14:51:42.798425".as_bytes();
+        let result = Timestamp::decode(invalid, Format::Text);
+        assert!(result.is_err());
+
+        // Test parsing invalid hour
+        let invalid = "2025-03-05 25:51:42.798425".as_bytes();
+        let result = Timestamp::decode(invalid, Format::Text);
+        assert!(result.is_err());
+
+        // Test parsing invalid minute
+        let invalid = "2025-03-05 14:61:42.798425".as_bytes();
+        let result = Timestamp::decode(invalid, Format::Text);
+        assert!(result.is_err());
+
+        // Test parsing invalid second
+        let invalid = "2025-03-05 14:51:65.798425".as_bytes();
+        let result = Timestamp::decode(invalid, Format::Text);
+        assert!(result.is_err());
+
+        // Test parsing invalid microseconds
+        let invalid = "2025-03-05 14:51:42.9999999".as_bytes();
+        let result = Timestamp::decode(invalid, Format::Text);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_binary_encoding_with_invalid_components() {
+        // Test that binary encoding handles errors properly
+        let invalid_ts = Timestamp {
+            year: 2025,
+            month: 13, // Invalid
+            day: 1,
+            hour: 0,
+            minute: 0,
+            second: 0,
+            micros: 0,
+            offset: None,
+            special: None,
+        };
+
+        // encode should propagate the error from to_pg_epoch_micros
+        let result = invalid_ts.encode(Format::Binary);
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), Error::InvalidTimestamp));
+    }
+
+    #[test]
+    fn test_from_pg_epoch_micros_special_values() {
+        // Test that special values are handled correctly
+        let infinity_result = Timestamp::from_pg_epoch_micros(i64::MAX);
+        assert!(infinity_result.is_ok());
+        assert_eq!(infinity_result.unwrap().special, Some(true));
+
+        let neg_infinity_result = Timestamp::from_pg_epoch_micros(i64::MIN);
+        assert!(neg_infinity_result.is_ok());
+        assert_eq!(neg_infinity_result.unwrap().special, Some(false));
+    }
+
+    #[test]
+    fn test_microsecond_parsing_still_works() {
+        // This test confirms that microsecond parsing still works after removing
+        // the duplicate assign! on line 199
+        let ts_with_micros = "2025-03-05 14:51:42.123456".as_bytes();
+        let ts = Timestamp::decode(ts_with_micros, Format::Text).unwrap();
+        assert_eq!(ts.micros, 123456);
+
+        // Test with timezone offset too
+        let ts_with_tz = "2025-03-05 14:51:42.654321-08".as_bytes();
+        let ts = Timestamp::decode(ts_with_tz, Format::Text).unwrap();
+        assert_eq!(ts.micros, 654321);
+        assert_eq!(ts.offset, Some(-8));
+
+        // Test with positive offset
+        let ts_with_tz = "2025-03-05 14:51:42.999999+05".as_bytes();
+        let ts = Timestamp::decode(ts_with_tz, Format::Text).unwrap();
+        assert_eq!(ts.micros, 999999);
+        assert_eq!(ts.offset, Some(5));
     }
 
     #[test]
