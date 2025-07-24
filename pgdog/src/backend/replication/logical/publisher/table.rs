@@ -142,7 +142,7 @@ impl Table {
         }
 
         copy_sub.copy_done().await?;
-        copy_sub.disconnect();
+        copy_sub.disconnect().await?;
         progress.done();
 
         slot.server()?.execute("COMMIT").await?;
