@@ -2836,6 +2836,7 @@ dependencies = [
 name = "rust"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "futures-util",
  "serial_test",
  "sqlx",
@@ -3282,6 +3283,7 @@ dependencies = [
  "base64 0.22.1",
  "bigdecimal",
  "bytes",
+ "chrono",
  "crc",
  "crossbeam-queue",
  "either",
@@ -3360,6 +3362,7 @@ dependencies = [
  "bitflags 2.9.1",
  "byteorder",
  "bytes",
+ "chrono",
  "crc",
  "digest",
  "dotenvy",
@@ -3402,6 +3405,7 @@ dependencies = [
  "bigdecimal",
  "bitflags 2.9.1",
  "byteorder",
+ "chrono",
  "crc",
  "dotenvy",
  "etcetera",
@@ -3437,6 +3441,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c26083e9a520e8eb87a06b12347679b142dc2ea29e6e409f805644a7a979a5bc"
 dependencies = [
  "atoi",
+ "chrono",
  "flume",
  "futures-channel",
  "futures-core",

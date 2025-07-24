@@ -73,6 +73,9 @@ pub enum Error {
     #[error("wrong size binary ({0}) for type")]
     WrongSizeBinary(usize),
 
+    #[error("invalid timestamp components")]
+    InvalidTimestamp,
+
     #[error("only simple protocols supported for rewrites")]
     OnlySimpleForRewrites,
 

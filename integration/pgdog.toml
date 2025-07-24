@@ -115,6 +115,16 @@ column = "id_varchar"
 data_type = "varchar"
 
 # ------------------------------------------------------------------------------
+# ----- Hash Sharded :: Timestamp Test -----------------------------------------
+
+[[sharded_tables]]
+database = "pgdog_sharded"
+name = "timestamp_test"
+column = "id"
+data_type = "bigint"
+primary = true
+
+# ------------------------------------------------------------------------------
 # ----- Hash Sharded :: UUID ---------------------------------------------------
 
 [[sharded_tables]]

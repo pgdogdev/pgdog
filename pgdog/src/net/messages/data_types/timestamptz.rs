@@ -10,7 +10,7 @@ pub struct TimestampTz {
 impl FromDataType for TimestampTz {
     fn decode(bytes: &[u8], encoding: Format) -> Result<Self, Error> {
         let timestamp = Timestamp::decode(bytes, encoding)?;
-        if timestamp.offset.is_none() {
+        if encoding == Format::Text && timestamp.offset.is_none() {
             return Err(Error::NotTimestampTz);
         }
 

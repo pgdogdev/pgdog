@@ -268,3 +268,63 @@ async def test_stress():
 
 async def in_transaction(conn):
     await conn.fetch("SELECT now() != statement_timestamp()")
+
+
+@pytest.mark.asyncio
+async def test_timestamp_sorting_binary_format():
+    """Test timestamp sorting with binary format."""
+    from datetime import datetime, timedelta, timezone
+    
+    conn = await sharded_async()
+    
+    try:
+        try:
+            await conn.execute("DROP TABLE IF EXISTS timestamp_test CASCADE")
+        except asyncpg.exceptions.UndefinedTableError:
+            pass
+            
+        await conn.execute("""
+            CREATE TABLE timestamp_test (
+                id BIGINT PRIMARY KEY,
+                name TEXT,
+                ts TIMESTAMP NOT NULL
+            )
+        """)
+        
+        base_time = datetime.now(timezone.utc).replace(tzinfo=None)
+        test_data = [
+            (1, "Oldest", base_time - timedelta(days=10)),
+            (101, "Old", base_time - timedelta(days=5)),
+            (2, "Recent", base_time - timedelta(days=1)),
+            (102, "Current", base_time),
+            (3, "Future", base_time + timedelta(days=1)),
+            (103, "Far future", base_time + timedelta(days=10)),
+        ]
+        
+        for id_val, name, ts in test_data:
+            await conn.execute(
+                "INSERT INTO timestamp_test (id, name, ts) VALUES ($1, $2, $3)",
+                id_val, name, ts
+            )
+        
+        rows = await conn.fetch(
+            "SELECT id, name, ts FROM timestamp_test ORDER BY ts DESC"
+        )
+        
+        actual_order = [(row['id'], row['name']) for row in rows]
+        
+        expected_order = [
+            (103, "Far future"),
+            (3, "Future"),
+            (102, "Current"),
+            (2, "Recent"),
+            (101, "Old"),
+            (1, "Oldest"),
+        ]
+        
+        await conn.execute("DROP TABLE IF EXISTS timestamp_test CASCADE")
+        
+        assert actual_order == expected_order, "Timestamp sorting failed with asyncpg binary format"
+        
+    finally:
+        await conn.close()
