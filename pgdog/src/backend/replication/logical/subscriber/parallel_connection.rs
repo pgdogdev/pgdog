@@ -1,3 +1,8 @@
+//! Postgres server connection running in its own task.
+//!
+//! This allows to queue up messages across multiple instances
+//! of this connection without blocking and while maintaining protocol integrity.
+//!
 use tokio::select;
 use tokio::spawn;
 use tokio::sync::{
@@ -15,16 +20,24 @@ use std::sync::Arc;
 
 use super::super::Error;
 
+// What we can send.
 enum ParallelMessage {
+    // Protocol message, e.g. Bind, Execute, Sync.
     ProtocolMessage(ProtocolMessage),
+    // Flush the socket.
     Flush,
 }
 
+// What we can receive.
 enum ParallelReply {
+    // Message, e.g. RowDescription, DataRow, CommandComplete, etc.
     Message(Message),
+    // The task gives back the server connection to the owner.
+    // Preserve connections between parallel executions.
     Server(Box<Server>),
 }
 
+// Parallel Postgres server connection.
 #[derive(Debug)]
 pub struct ParallelConnection {
     tx: Sender<ParallelMessage>,
@@ -33,6 +46,7 @@ pub struct ParallelConnection {
 }
 
 impl ParallelConnection {
+    // Queue up message to server.
     pub async fn send_one(&mut self, message: &ProtocolMessage) -> Result<(), Error> {
         self.tx
             .send(ParallelMessage::ProtocolMessage(message.clone()))
@@ -42,6 +56,7 @@ impl ParallelConnection {
         Ok(())
     }
 
+    // Queue up the contents of the buffer.
     pub async fn send(&mut self, buffer: &Buffer) -> Result<(), Error> {
         for message in buffer.iter() {
             self.tx
@@ -57,6 +72,7 @@ impl ParallelConnection {
         Ok(())
     }
 
+    // Wait for a message from the server.
     pub async fn read(&mut self) -> Result<Message, Error> {
         let reply = self.rx.recv().await.ok_or(Error::ParallelConnection)?;
         match reply {
@@ -65,6 +81,7 @@ impl ParallelConnection {
         }
     }
 
+    // Request server connection performs socket flush.
     pub async fn flush(&mut self) -> Result<(), Error> {
         self.tx
             .send(ParallelMessage::Flush)
@@ -74,7 +91,10 @@ impl ParallelConnection {
         Ok(())
     }
 
+    // Move server connection into its own Tokio task.
     pub fn new(server: Server) -> Result<Self, Error> {
+        // Ideally we don't hardcode these. PgDog
+        // can use a lot of memory if this is high.
         let (tx1, rx1) = channel(4096);
         let (tx2, rx2) = channel(4096);
         let stop = Arc::new(Notify::new());
@@ -99,6 +119,8 @@ impl ParallelConnection {
         })
     }
 
+    // Get the connection back from the async task. This will
+    // only work if the connection is idle (ReadyForQuery received, no more traffic expected).
     pub async fn reattach(mut self) -> Result<Server, Error> {
         self.stop.notify_one();
         let server = self.rx.recv().await.ok_or(Error::ParallelConnection)?;
@@ -109,12 +131,15 @@ impl ParallelConnection {
     }
 }
 
+// Stop the background task and kill the connection.
+// Prevents leaks in case the connection is not "reattached".
 impl Drop for ParallelConnection {
     fn drop(&mut self) {
         self.stop.notify_one();
     }
 }
 
+// Background task performing the actual work of talking to Postgres.
 struct Listener {
     rx: Receiver<ParallelMessage>,
     tx: Sender<ParallelReply>,
@@ -123,6 +148,7 @@ struct Listener {
 }
 
 impl Listener {
+    // Send message to Postgres.
     async fn send(&mut self, message: ProtocolMessage) -> Result<(), Error> {
         if let Some(ref mut server) = self.server {
             server.send_one(&message).await?;
@@ -131,6 +157,7 @@ impl Listener {
         Ok(())
     }
 
+    // Flush socket.
     async fn flush(&mut self) -> Result<(), Error> {
         if let Some(ref mut server) = self.server {
             server.flush().await?;
@@ -139,6 +166,7 @@ impl Listener {
         Ok(())
     }
 
+    // Return server to parent task.
     async fn return_server(&mut self) -> Result<(), Error> {
         if let Some(server) = self.server.take() {
             if self.tx.is_closed() {
@@ -151,6 +179,7 @@ impl Listener {
         Ok(())
     }
 
+    // Run the background task.
     async fn run(mut self) -> Result<(), Error> {
         loop {
             select! {
