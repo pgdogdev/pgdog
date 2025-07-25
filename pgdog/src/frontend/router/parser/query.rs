@@ -465,11 +465,13 @@ impl QueryParser {
                     ..
                 }) = node
                 {
-                    let ctx = ContextBuilder::from_str(sval.as_str())?
+                    let ctx = ContextBuilder::from_str(sval.as_str(), sharding_schema)?
                         .shards(sharding_schema.shards)
                         .build()?;
+
                     let shard = ctx.apply()?;
                     self.routed = true;
+
                     return Ok(Command::Query(Route::write(shard).set_read(read_only)));
                 }
             }
