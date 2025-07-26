@@ -22,7 +22,7 @@ use crate::{
     },
 };
 
-use super::*;
+use super::{manual_routing_hint::ManualRoutingHint, *};
 
 use multi_tenant::MultiTenantCheck;
 use once_cell::sync::Lazy;
@@ -44,6 +44,9 @@ pub struct QueryParser {
     routed: bool,
     in_transaction: bool,
     write_override: Option<bool>,
+
+    #[allow(dead_code)] // silence “unused field” for now
+    manual_routing_hint: Option<ManualRoutingHint>,
 }
 
 impl Default for QueryParser {
@@ -54,6 +57,7 @@ impl Default for QueryParser {
             routed: false,
             in_transaction: false,
             write_override: None,
+            manual_routing_hint: None,
         }
     }
 }

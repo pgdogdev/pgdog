@@ -14,6 +14,7 @@ pub mod function;
 pub mod insert;
 pub mod key;
 pub mod limit;
+pub mod manual_routing_hint;
 pub mod multi_tenant;
 pub mod order_by;
 pub mod prepare;
