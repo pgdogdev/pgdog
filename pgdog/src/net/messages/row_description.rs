@@ -42,7 +42,7 @@ impl MemoryUsage for Field {
 }
 
 impl Field {
-    /// Numeric field.
+    /// Numeric field (binary format).
     pub fn numeric(name: &str) -> Self {
         Self {
             name: name.into(),
@@ -51,7 +51,20 @@ impl Field {
             type_oid: 1700,
             type_size: -1,
             type_modifier: -1,
-            format: 0, // We always use text format.
+            format: 1, // Enable binary format for NUMERIC.
+        }
+    }
+
+    /// Numeric field (text format).
+    pub fn numeric_text(name: &str) -> Self {
+        Self {
+            name: name.into(),
+            table_oid: 0,
+            column: 0,
+            type_oid: 1700,
+            type_size: -1,
+            type_modifier: -1,
+            format: 0, // Use text format for NUMERIC.
         }
     }
 
@@ -121,6 +134,7 @@ impl Field {
             1114 => DataType::Timestamp,
             1184 => DataType::TimestampTz,
             1186 => DataType::Interval,
+            1700 => DataType::Numeric,
             2950 => DataType::Uuid,
             _ => DataType::Other(self.type_oid),
         }

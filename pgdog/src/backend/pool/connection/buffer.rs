@@ -208,7 +208,8 @@ impl Buffer {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::net::{Field, Format, RowDescription};
+    use crate::net::{Datum, Field, Format, RowDescription};
+    use bytes::Bytes;
 
     #[test]
     fn test_sort_buffer() {
@@ -330,6 +331,148 @@ mod test {
             let dr = DataRow::from_bytes(message.to_bytes().unwrap()).unwrap();
             let ts = dr.get::<String>(0, Format::Text).unwrap();
             assert_eq!(ts, expected);
+        }
+    }
+
+    #[test]
+    fn test_sort_buffer_with_numeric() {
+        let mut buf = Buffer::default();
+        let rd = RowDescription::new(&[Field::numeric_text("price"), Field::text("product")]);
+        let columns = [OrderBy::Desc(1)]; // Sort by numeric column descending
+
+        // Add numeric values in random order
+        let prices = [
+            "199.99", "50.25", "1000.00", "75.50", "199.98", // Very close to first value
+            "0.99", "1000.01", // Slightly more than 1000
+        ];
+
+        for (i, price) in prices.iter().enumerate() {
+            let mut dr = DataRow::new();
+            dr.add(price.to_string()).add(format!("product_{}", i));
+            buf.add(dr.message().unwrap()).unwrap();
+        }
+
+        let decoder = Decoder::from(&rd);
+
+        buf.sort(&columns, &decoder);
+        buf.full();
+
+        // Verify numeric values are sorted in descending order
+        let expected_order = [
+            "1000.01", "1000.00", "199.99", "199.98", "75.50", "50.25", "0.99",
+        ];
+
+        for expected in expected_order {
+            let message = buf.take().expect("Should have message");
+            let dr = DataRow::from_bytes(message.to_bytes().unwrap()).unwrap();
+            let price = dr.get::<String>(0, Format::Text).unwrap();
+            assert_eq!(price, expected);
+        }
+    }
+
+    // Helper function to create PostgreSQL binary NUMERIC data
+    fn create_binary_numeric(value: &str) -> Vec<u8> {
+        use crate::net::messages::bind::Format;
+        use crate::net::messages::data_types::{FromDataType, Numeric};
+        use rust_decimal::Decimal;
+        use std::str::FromStr;
+
+        // Use our actual Numeric implementation
+        let decimal = Decimal::from_str(value).unwrap();
+        let numeric = Numeric::from(decimal);
+        numeric.encode(Format::Binary).unwrap().to_vec()
+    }
+
+    #[test]
+    fn test_sort_buffer_with_numeric_binary() {
+        let mut buf = Buffer::default();
+        let rd = RowDescription::new(&[Field::numeric("price"), Field::text("product")]);
+        let columns = [OrderBy::Desc(1)]; // Sort by numeric column descending
+
+        // Test values with their expected binary representations
+        let test_cases = [
+            ("199.99", "199.99"),
+            ("50.25", "50.25"),
+            ("1000.00", "1000.00"),
+            ("75.50", "75.50"),
+            ("199.98", "199.98"),
+            ("0.99", "0.99"),
+            ("1000.01", "1000.01"),
+        ];
+
+        for (i, (price, _)) in test_cases.iter().enumerate() {
+            let mut dr = DataRow::new();
+            let binary_data = create_binary_numeric(price);
+            dr.add(Bytes::from(binary_data))
+                .add(format!("product_{}", i));
+            buf.add(dr.message().unwrap()).unwrap();
+        }
+
+        let decoder = Decoder::from(&rd);
+        buf.sort(&columns, &decoder);
+        buf.full();
+
+        let expected_order = [
+            "1000.01", "1000.00", "199.99", "199.98", "75.50", "50.25", "0.99",
+        ];
+
+        for expected in expected_order {
+            let message = buf.take().expect("Should have message");
+            let dr = DataRow::from_bytes(message.to_bytes().unwrap()).unwrap();
+            // Get the numeric value and convert to string for comparison
+            let column = dr.get_column(0, &decoder).unwrap().unwrap();
+            if let Datum::Numeric(numeric) = column.value {
+                assert_eq!(numeric.to_string(), expected);
+            } else {
+                panic!("Expected Numeric datum, got {:?}", column.value);
+            }
+        }
+    }
+
+    #[test]
+    fn test_sort_buffer_with_numeric_edge_cases() {
+        let mut buf = Buffer::default();
+        let rd = RowDescription::new(&[Field::numeric_text("value"), Field::text("description")]);
+        let columns = [OrderBy::Asc(1)]; // Sort by numeric column ascending
+
+        // Test edge cases: negative numbers, very large numbers, very small decimals, zero
+        let values = [
+            "-999.99",
+            "0",
+            "0.001",
+            "999999999999.99",
+            "-0.001",
+            "123.4500000",
+            "123.45",
+        ];
+
+        for (i, value) in values.iter().enumerate() {
+            let mut dr = DataRow::new();
+            dr.add(value.to_string()).add(format!("case_{}", i));
+            buf.add(dr.message().unwrap()).unwrap();
+        }
+
+        let decoder = Decoder::from(&rd);
+        buf.sort(&columns, &decoder);
+        buf.full();
+
+        // Expected order: ascending numeric sort
+        // Note: equal values maintain input order (stable sort)
+        let expected_order = [
+            "-999.99",
+            "-0.001",
+            "0",
+            "0.001",
+            "123.4500000",
+            "123.45",
+            "999999999999.99",
+        ];
+
+        for expected in expected_order {
+            let message = buf.take().expect("Should have message");
+            let dr = DataRow::from_bytes(message.to_bytes().unwrap()).unwrap();
+            let value = dr.get::<String>(0, Format::Text).unwrap();
+            assert_eq!(value, expected);
         }
     }
 

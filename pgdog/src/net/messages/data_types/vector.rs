@@ -6,6 +6,7 @@ use crate::{
     },
 };
 use bytes::{Buf, BufMut, Bytes, BytesMut};
+use rust_decimal::prelude::ToPrimitive;
 use serde::{
     de::{self, Visitor},
     ser::SerializeSeq,
@@ -78,7 +79,9 @@ impl FromDataType for Vector {
             Format::Binary => {
                 let mut bytes = BytesMut::new();
                 for n in &self.values {
-                    bytes.put_f32(**n as f32); // TODO: potential loss of precision. Vectors should be f32's.
+                    // Convert Decimal to f32 for vector encoding
+                    let f_val = n.to_f64().unwrap_or(0.0) as f32;
+                    bytes.put_f32(f_val); // TODO: potential loss of precision. Vectors should be f32's.
                 }
                 Ok(bytes.freeze())
             }
