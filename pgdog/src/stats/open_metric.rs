@@ -113,12 +113,12 @@ impl std::fmt::Display for Metric {
             .openmetrics_namespace
             .as_deref()
             .unwrap_or("");
-        writeln!(f, "# TYPE {} {}", name, self.metric_type())?;
+        writeln!(f, "# TYPE {}{} {}", prefix, name, self.metric_type())?;
         if let Some(unit) = self.unit() {
-            writeln!(f, "# UNIT {} {}", name, unit)?;
+            writeln!(f, "# UNIT {}{} {}", prefix, name, unit)?;
         }
         if let Some(help) = self.help() {
-            writeln!(f, "# HELP {} {}", name, help)?;
+            writeln!(f, "# HELP {}{} {}", prefix, name, help)?;
         }
 
         for measurement in self.measurements() {
@@ -159,6 +159,7 @@ mod test {
         config::set(cfg).unwrap();
 
         let render = Metric::new(TestMetric {}).to_string();
+        assert_eq!(render.lines().next().unwrap(), "# TYPE pgdog.test gauge");
         assert_eq!(render.lines().last().unwrap(), "pgdog.test 5");
     }
 }
