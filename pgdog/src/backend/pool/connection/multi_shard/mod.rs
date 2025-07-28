@@ -19,7 +19,7 @@ mod context;
 #[cfg(test)]
 mod test;
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, PartialEq)]
 struct Counters {
     rows: usize,
     ready_for_query: usize,
@@ -225,5 +225,31 @@ impl MultiShard {
             }
             Context::RowDescription(rd) => self.decoder.row_description(rd),
         }
+    }
+
+    pub(super) fn done(&self) -> bool {
+        // All or none.
+        let ready_for_query = self.counters.ready_for_query % self.shards == 0;
+        let command_complete_count = self.counters.command_complete_count % self.shards == 0;
+        let empty_query_response = self.counters.empty_query_response % self.shards == 0;
+        let copy_in = self.counters.copy_in % self.shards == 0;
+        let parse_complete = self.counters.parse_complete % self.shards == 0;
+        let parameter_description = self.counters.parameter_description % self.shards == 0;
+        let no_data = self.counters.no_data % self.shards == 0;
+        let row_description = self.counters.row_description % self.shards == 0;
+        let close_complete = self.counters.close_complete % self.shards == 0;
+        let bind_complete = self.counters.bind_complete % self.shards == 0;
+        self.buffer.is_empty()
+            && self.counters.command_complete.is_none()
+            && ready_for_query
+            && command_complete_count
+            && empty_query_response
+            && copy_in
+            && parse_complete
+            && parameter_description
+            && no_data
+            && row_description
+            && close_complete
+            && bind_complete
     }
 }
