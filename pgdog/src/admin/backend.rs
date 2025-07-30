@@ -6,10 +6,10 @@ use std::time::Duration;
 use tokio::time::sleep;
 use tracing::debug;
 
-use crate::backend::ProtocolMessage;
 use crate::frontend::Buffer;
 use crate::net::messages::command_complete::CommandComplete;
 use crate::net::messages::{ErrorResponse, FromBytes, Protocol, Query, ReadyForQuery};
+use crate::net::ProtocolMessage;
 use crate::net::ToBytes;
 
 use super::parser::Parser;

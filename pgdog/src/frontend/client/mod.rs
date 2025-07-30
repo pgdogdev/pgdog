@@ -14,7 +14,6 @@ use crate::auth::{md5, scram::Server};
 use crate::backend::{
     databases,
     pool::{Connection, Request},
-    ProtocolMessage,
 };
 use crate::config::{self, AuthType};
 use crate::frontend::buffer::BufferedQuery;
@@ -24,6 +23,7 @@ use crate::net::messages::{
     Authentication, BackendKeyData, CommandComplete, ErrorResponse, FromBytes, Message, Password,
     Protocol, ReadyForQuery, ToBytes,
 };
+use crate::net::ProtocolMessage;
 use crate::net::{parameter::Parameters, Stream};
 use crate::net::{DataRow, EmptyQueryResponse, Field, NoticeResponse, RowDescription};
 use crate::state::State;

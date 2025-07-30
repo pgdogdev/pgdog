@@ -1,6 +1,9 @@
 //! Binding between frontend client and a connection on the backend.
 
-use crate::{backend::ProtocolMessage, net::parameter::Parameters, state::State};
+use crate::{
+    net::{parameter::Parameters, ProtocolMessage},
+    state::State,
+};
 
 use super::*;
 

@@ -104,11 +104,8 @@ impl Describe {
 mod test {
     use super::*;
     use crate::{
-        backend::{
-            pool::{test::pool, Request},
-            ProtocolMessage,
-        },
-        net::messages::ErrorResponse,
+        backend::pool::{test::pool, Request},
+        net::{messages::ErrorResponse, ProtocolMessage},
     };
 
     #[tokio::test]
