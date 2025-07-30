@@ -1,46 +1,343 @@
 #
 # PgDog configuration.
 #
+# Most settings have reasonable defaults.
+#
+
+# General settings.
+#
+# Most non-specific configuration is found here.
+#
 [general]
+
+# PgDog host.
+#
+# Example:
+#
+# "0.0.0.0" to accept connections from everywhere.
+# "127.0.0.1" to accept connections only from loopback/localhost.
+#
+# Default: 0.0.0.0
 host = "0.0.0.0"
+
+# PgDog port. Default: 6432
 port = 6432
-shutdown_timeout = 5_000
+
+# Number of Tokio threads to serve requests.
+#
+# Default: 2
+# Recommended: 2 per CPU
+workers = 2
+
+# Maximum number of Postgres connections per user/database connection pool.
+#
+# Default: 10
+default_pool_size = 10
+
+# Minimum number of Postgres connections to maintain per user/database connection pool.
+# This many connections will be created at PgDog startup and maintained.
+#
+# Default: 1
+min_pool_size = 1
+
+# Multiplexer mode. Allows to re-use Postgres connections between multiple clients.
+#
+# Transaction mode allows re-use. Session mode locks Postgres connections to a
+# client until they disconnect.
+#
+# Default: transaction
+#
+pooler_mode = "transaction"
+
+# How often to check pool connections before giving them to a client.
+#
+# Default: 30 seconds
+healthcheck_interval = 30_000
+
+# How often to check databases with a health check. This happens independently from clients
+# and runs on a separate loop. This is helpful if databases aren't frequently used.
+#
+# Default: 30 seconds
+idle_healthcheck_interval = 30_000
+
+# How long to wait after PgDog startup to start idle health checks. This gives PgDog time to
+# warm up connection pools before health checks start running.
+#
+# Default: 5 seconds
+idle_healthcheck_delay = 5_000
+
+# How long to wait for a health check to complete before banning a database.
+#
+# Default: 5 seconds
+healthcheck_timeout = 5_000
+
+# Databases are automatically unbanned after this amount of time.
+#
+# Default: 5 minutes
+ban_timeout = 300_000
+
+# How long to wait for an automatic rollback to complete on abandoned transactions.
+#
+# Default: 5 seconds
+rollback_timeout = 5_000
+
+# Which strategy to use for the load balancing of transactions. Only available if PgDog is
+# in transaction mode.
+#
+# Default: random
+#
+# Available options:
+# - random
+# - least_active_connections
+# - round_robin
+load_balancing_strategy = "random"
+
+# How to split read queries from write queries.
+#
+# Conservative strategy routes all explicit transactions to the primary.
+# Aggressive strategy will check the first query in a transaction.
+#
+# Default: conservative
+read_write_strategy = "conservative"
+
+# Path to PEM-encoded TLS certificate to use for client connections.
+tls_certificate = "relative/or/absolute/path/to/certificate.pem"
+
+# Path to PEM-encoded TLS certificate private key
+tls_certificate = "relative/or/absolute/path/to/private_key.pem"
+
+# TLS mode for Postgres server connections.
+#
+# Default: disabled
+#
+# Available options:
+# - disabled (disable TLS)
+# - prefer
+# - verify-ca
+# - verify-full
+tls_verify = "disabled"
+
+# Path to PEM-encoded certificate bundle to use for Postgres server
+# certificate validation.
+tls_server_ca_certificate = "relative/or/absolute/path/to/certificate.pem"
+
+# How long to wait for active connections to finish transactions
+# when shutting down PgDog.
+#
+# Default: 60 seconds
+shutdown_timeout = 60_000
+
+# OpenMetrics server port.
+#
+# If set, enables Prometheus-style metrics exporter.
+#
+# Default: not set
 openmetrics_port = 9090
-openmetrics_namespace = "pgdog."
-idle_healthcheck_delay = 2342343243
-read_write_strategy = "aggressive"
-prepared_statements_limit = 500
-# client_idle_timeout = 5_000
-# cross_shard_disabled = false
+
+# Namespace to use for Prometheus metrics.
+#
+# Disambiguates metric names from metrics scraped from other apps.
+#
+# Default: none
+openmetrics_namespace = "pgdog_"
+
+# Configure levels of support for prepared statements.
+#
+# Default: enabled
+#
+# Available options:
+# - disabled
+# - extended (only extended query protocol)
+# - full (prepared statements over simple protocol)
+#
+# Default: extended
+prepared_statements = "extended"
+
+# Limit on the number of prepared statements active on
+# any Postgres server connection.
+#
+# Default: unlimited
+#
+prepared_statements_limit = 1_000
+
+# Limit on the number of queries cached in the Abstract Syntax Tree
+# cache used for query routing and sharding.
+#
+# Default: unlimited
+#
+query_cache_limit = 1_000
+
+# Authentication passthrough.
+#
+# If enabled, passwords in users.toml are optional and PgDog will ask
+# Postgres servers to authenticate user connnections.
+#
+# Default: disabled
+#
+# Available options:
+# - disabled
+# - enabled (requires TLS)
+# - enabled_plain
+#
+passthrough_auth = "disabled"
+
+# How long to wait for Postgres server connections to be created by the pool before
+# returning an error and banning the database.
+#
+# Default: 5 seconds
+connect_timeout = 5_000
+
+# How many times to retry connection creation before banning the database from serving
+# more queries.
+#
+# Use on unreliable networks only.
+#
+# Default: 1
+connect_attempts = 1
+
+# How long to wait between connection attempts.
+#
+# Default: 0
+connect_attempt_delay = 1_000
+
+# How long to give a Postgres server to execute a query. Transaction will be aborted
+# automatically if this delay expires.
+#
+# This has the same effect as statement_timeout in Postgres.
+#
+# Default: unlimited
+query_timeout = 60_000
+
+# How long to wait for a connection from a pool. Pool is banned if this expires.
+#
+# Default: 5 seconds
+checkout_timeout = 5_000
+
+# Enable the query parser to detect query compatibility with sharding.
+#
+# Default: disabled
+#
+dry_run = false
+
+# Close unused pool connections above min_pool_size after this long.
+#
+# Default: 60 seconds
+idle_timeout = 60_000
+
+# Client idle timeout. How long to wait for clients to send another transaction
+# before disconnecting them.
+#
+# Default: unlimited
+client_idle_timeout = 60_000
+
+# Size of the mirror queue. Queries that don't fit are dropped.
+#
+# Default: 128
+mirror_queue = 128
+
+# Authentication type to use for client connections.
+#
+# Default: scram
+#
+# Available options:
+# - scram
+# - md5
+# - trust
+auth_type = "scram"
+
+# Disable cross-shard queries.
+#
+# Default: false
+cross_shard_disabled = false
+
+# Override default TTL on DNS records used for server connections.
+#
+# Default: disabled
+#
+dns_ttl = 5_000
 
 #
-# Admin database password.
+# Admin database used for stats and system admin.
 #
 [admin]
+# Name of the admin database.
+#
+# Default: admin
+name = "admin"
+
+# Password for the admin database.
+#
+# Default: random (disables access)
+#
 password = "pgdog"
 
+# Name of the user that can connect to the admin database.
 #
-# Simple database.
+# Default: admin
+user = "admin"
+
+
+#
+# Simple (unsharded) database.
 #
 [[databases]]
+# Name of the database. This is what your clients will need to specify in
+# their config.
 name = "pgdog"
+
+# Postgres server adddress.
 host = "127.0.0.1"
+
+# Postgres server port.
 port = 5432
+
+# Database role.
+#
+# Default: primary
+#
+# Available options:
+# - primary
+# - replica
+#
 role = "primary"
 
+#
+# Add a replica and automatically load balance queries.
+#
 [[databases]]
+# Same name as the primary database above.
 name = "pgdog"
-host = "127.0.0.1"
-port = 5432
-role = "replica"
-read_only = true
 
+# Postgres server address.
+host = "127.0.0.1"
+
+# Postgres server port.
+port = 5432
+
+# Role set to replica.
+role = "replica"
+
+#
+# TCP tweaks.
+#
 [tcp]
+# Enable keep-alives.
 retries = 3
+
+# How long to wait for keep-alive messages to start sending on idle connections.
 time = 1000
+
+# Time between keep-alive messages.
 interval = 1000
+
+# Read timeout on the socket. How long to wait for data sent to be acked.
 user_timeout = 1000
 
+# How many times to retry a keep-alive probe before closing the connection.
+retries = 3
+
+# TCP congestion control algorith.
+congestion_control = "reno"
 
 #
 # Sharded cluster with two primaries.
