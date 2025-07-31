@@ -14,10 +14,7 @@ use tokio::{
 };
 
 use super::super::Error;
-use crate::{
-    backend::{pool::Address, replication::publisher::Table, Cluster, Pool},
-    config::config,
-};
+use crate::backend::{pool::Address, replication::publisher::Table, Cluster, Pool};
 
 struct ParallelSync {
     table: Table,
@@ -69,7 +66,7 @@ impl ParallelSyncManager {
         }
 
         Ok(Self {
-            permit: Arc::new(Semaphore::new(config().config.general.workers)),
+            permit: Arc::new(Semaphore::new(replicas.len())),
             tables,
             replicas,
             dest: dest.clone(),
