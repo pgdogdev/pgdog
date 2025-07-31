@@ -12,7 +12,7 @@ use crate::net::replication::StatusUpdate;
 use super::super::{subscriber::CopySubscriber, Error};
 use super::{Copy, PublicationTable, PublicationTableColumn, ReplicaIdentity, ReplicationSlot};
 
-use tracing::debug;
+use tracing::info;
 
 #[derive(Debug, Clone)]
 pub struct Table {
@@ -108,7 +108,7 @@ impl Table {
     }
 
     pub async fn data_sync(&mut self, source: &Address, dest: &Cluster) -> Result<Lsn, Error> {
-        debug!(
+        info!(
             "data sync for \"{}\".\"{}\" started [{}]",
             self.table.schema, self.table.name, source
         );
@@ -158,7 +158,7 @@ impl Table {
 
         // Slot is temporary and will be dropped when the connection closes.
 
-        debug!(
+        info!(
             "data sync for \"{}\".\"{}\" finished at lsn {} [{}]",
             self.table.schema, self.table.name, self.lsn, source
         );

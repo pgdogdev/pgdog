@@ -2,16 +2,19 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use tokio::{select, spawn};
-use tracing::{debug, error};
+use tracing::{debug, error, info};
 
 use super::super::{publisher::Table, Error};
 use super::ReplicationSlot;
 
-use crate::backend::replication::logical::publisher::ReplicationData;
 use crate::backend::replication::logical::subscriber::stream::StreamSubscriber;
 use crate::backend::replication::publisher::progress::Progress;
 use crate::backend::replication::publisher::Lsn;
+use crate::backend::replication::{
+    logical::publisher::ReplicationData, publisher::ParallelSyncManager,
+};
 use crate::backend::{pool::Request, Cluster};
+use crate::config::Role;
 use crate::net::replication::ReplicationMeta;
 
 #[derive(Debug)]
@@ -169,13 +172,28 @@ impl Publisher {
 
         for (number, shard) in self.cluster.shards().iter().enumerate() {
             let mut primary = shard.primary(&Request::default()).await?;
-            let mut tables = Table::load(&self.publication, &mut primary).await?;
+            let tables = Table::load(&self.publication, &mut primary).await?;
 
-            // Do one table a table. Parallelizing this doesn't really help,
-            // since Postgres is bottle-necked by writes, not reads.
-            for table in &mut tables {
-                table.data_sync(primary.addr(), dest).await?;
-            }
+            let include_primary = !shard.has_replicas();
+            let replicas = shard
+                .pools_with_roles()
+                .into_iter()
+                .filter(|(r, _)| match *r {
+                    Role::Replica => true,
+                    Role::Primary => include_primary,
+                })
+                .map(|(_, p)| p)
+                .collect::<Vec<_>>();
+
+            let manager = ParallelSyncManager::new(tables, replicas, dest)?;
+            let tables = manager.run().await?;
+
+            info!(
+                "table sync for {} tables complete [{}, shard: {}]",
+                tables.len(),
+                dest.name(),
+                number,
+            );
 
             // Update table LSN positions.
             self.tables.insert(number, tables);
