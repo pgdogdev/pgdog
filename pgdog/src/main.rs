@@ -36,7 +36,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         Some(Commands::Configcheck { config, users }) => {
             if let Err(e) = pgdog::cli::config_check(config, users) {
-                eprintln!("☠️ Configuration error: {}", e);
+                eprintln!("Configuration error: {}", e);
                 exit(1);
             }
 
