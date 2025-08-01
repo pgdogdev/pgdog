@@ -34,6 +34,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             exit(0);
         }
 
+        Some(Commands::Configcheck { config, users }) => {
+            if let Err(e) = pgdog::cli::config_check(config, users) {
+                eprintln!("Configuration error: {}", e);
+                exit(1);
+            }
+
+            println!("✅ Configuration valid");
+            exit(0);
+        }
+
         Some(Commands::Run {
             pool_size,
             min_pool_size,

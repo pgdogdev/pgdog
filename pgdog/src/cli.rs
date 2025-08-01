@@ -2,10 +2,12 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 use std::fs::read_to_string;
+use thiserror::Error;
 use tokio::{select, signal::ctrl_c};
 use tracing::error;
 
 use crate::backend::{databases::databases, replication::logical::Publisher};
+use crate::config::{Config, Users};
 
 /// PgDog is a PostgreSQL pooler, proxy, load balancer and query router.
 #[derive(Parser, Debug)]
@@ -48,6 +50,16 @@ pub enum Commands {
         query: Option<String>,
         #[arg(short, long)]
         path: Option<PathBuf>,
+    },
+
+    /// Check configuration.
+    Configcheck {
+        /// Path to the configuration file.
+        #[arg(short, long)]
+        config: Option<PathBuf>,
+        /// Path to the users.toml file.
+        #[arg(short, long)]
+        users: Option<PathBuf>,
     },
 
     /// Copy data from source to destination cluster
@@ -103,6 +115,61 @@ fingerprint = "{}" #[{}]"#,
     }
 
     Ok(())
+}
+
+#[derive(Debug, Error)]
+pub enum ConfigCheckError {
+    #[error("need at least one of --config or --users")]
+    MissingInput,
+
+    #[error("I/O error on `{0}`: {1}")]
+    Io(PathBuf, #[source] std::io::Error),
+
+    #[error("TOML parse error in `{0}`: {1}")]
+    Parse(PathBuf, #[source] toml::de::Error),
+
+    #[error("{0:#?}")]
+    Multiple(Vec<ConfigCheckError>),
+}
+
+/// Confirm that the configuration and users files are valid.
+pub fn config_check(
+    config_path: Option<PathBuf>,
+    users_path: Option<PathBuf>,
+) -> Result<(), ConfigCheckError> {
+    if config_path.is_none() && users_path.is_none() {
+        return Err(ConfigCheckError::MissingInput);
+    }
+
+    let mut errors: Vec<ConfigCheckError> = Vec::new();
+
+    if let Some(path) = config_path {
+        match read_to_string(&path) {
+            Ok(s) => {
+                if let Err(e) = toml::from_str::<Config>(&s) {
+                    errors.push(ConfigCheckError::Parse(path.clone(), e));
+                }
+            }
+            Err(e) => errors.push(ConfigCheckError::Io(path.clone(), e)),
+        }
+    }
+
+    if let Some(path) = users_path {
+        match read_to_string(&path) {
+            Ok(s) => {
+                if let Err(e) = toml::from_str::<Users>(&s) {
+                    errors.push(ConfigCheckError::Parse(path.clone(), e));
+                }
+            }
+            Err(e) => errors.push(ConfigCheckError::Io(path.clone(), e)),
+        }
+    }
+
+    match errors.len() {
+        0 => Ok(()),
+        1 => Err(errors.into_iter().next().unwrap()),
+        _ => Err(ConfigCheckError::Multiple(errors)),
+    }
 }
 
 pub async fn data_sync(commands: Commands) -> Result<(), Box<dyn std::error::Error>> {
