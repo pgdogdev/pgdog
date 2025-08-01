@@ -16,7 +16,7 @@ use crate::wire_protocol::WireSerializable;
 // -----------------------------------------------------------------------------
 // ----- ProtocolMessage -------------------------------------------------------
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CopyDataFrame<'a> {
     pub data: &'a [u8],
 }
@@ -24,7 +24,7 @@ pub struct CopyDataFrame<'a> {
 // -----------------------------------------------------------------------------
 // ----- Error -----------------------------------------------------------------
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum CopyDataError {
     UnexpectedTag(u8),
     UnexpectedLength(u32),
@@ -83,7 +83,7 @@ impl<'a> WireSerializable<'a> for CopyDataFrame<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bytes::{BufMut, BytesMut};
+    use bytes::BytesMut;
 
     fn make_frame() -> CopyDataFrame<'static> {
         CopyDataFrame { data: b"hello" }
@@ -98,14 +98,24 @@ mod tests {
     }
 
     #[test]
+    fn empty_payload() {
+        // an empty chunk is valid: length = 4, no data
+        let frame = CopyDataFrame { data: &[] };
+        let bytes = frame.to_bytes().unwrap();
+        assert_eq!(bytes.as_ref(), &[b'd', 0, 0, 0, 4]);
+        let decoded = CopyDataFrame::from_bytes(bytes.as_ref()).unwrap();
+        assert_eq!(decoded.data, &[] as &[u8]);
+    }
+
+    #[test]
     fn unexpected_tag() {
         let mut buf = BytesMut::new();
-        buf.put_u8(b'x'); // wrong tag, should be b'd'
+        buf.put_u8(b'x'); // wrong tag
         buf.put_u32(4);
         buf.put_slice(b"test");
         let raw = buf.freeze().to_vec();
         let err = CopyDataFrame::from_bytes(raw.as_ref()).unwrap_err();
-        matches!(err, CopyDataError::UnexpectedTag(t) if t == b'x');
+        assert!(matches!(err, CopyDataError::UnexpectedTag(t) if t == b'x'));
     }
 
     #[test]
@@ -116,16 +126,13 @@ mod tests {
         buf.put_slice(b"short");
         let raw = buf.freeze().to_vec();
         let err = CopyDataFrame::from_bytes(raw.as_ref()).unwrap_err();
-        matches!(err, CopyDataError::UnexpectedLength(10));
+        assert!(matches!(err, CopyDataError::UnexpectedLength(10)));
     }
 
     #[test]
     fn unexpected_length_short_buffer() {
-        let raw = b"d\x00\x00"; // too short to contain length + data
+        let raw = b"d\x00\x00"; // too short
         let err = CopyDataFrame::from_bytes(raw).unwrap_err();
-        matches!(err, CopyDataError::UnexpectedLength(len) if len == raw.len() as u32);
+        assert!(matches!(err, CopyDataError::UnexpectedLength(len) if len == raw.len() as u32));
     }
 }
-
-// -----------------------------------------------------------------------------
-// -----------------------------------------------------------------------------
