@@ -243,7 +243,7 @@ mod tests {
 
     #[test]
     fn invalid_utf8() {
-        let mut data = vec![b'v', 0, 0, 0, 14, 0, 0, 0, 0, 0, 0, 0, 1, 0xFF, 0]; // invalid UTF8
+        let data = vec![b'v', 0, 0, 0, 14, 0, 0, 0, 0, 0, 0, 0, 1, 0xFF, 0]; // invalid UTF8
         let err = NegotiateProtocolVersionFrame::from_bytes(&data).unwrap_err();
         matches!(err, NegotiateProtocolVersionError::Utf8Error(_));
     }

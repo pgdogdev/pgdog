@@ -73,6 +73,7 @@ impl<'a> WireSerializable<'a> for DataRowFrame<'a> {
         if len < 6 {
             return Err(DataRowError::UnexpectedLength(len));
         }
+
         if bytes.remaining() != (len - 4) as usize {
             return Err(DataRowError::UnexpectedLength(len));
         }
@@ -81,13 +82,15 @@ impl<'a> WireSerializable<'a> for DataRowFrame<'a> {
         if num_columns < 0 {
             return Err(DataRowError::UnexpectedLength(len));
         }
-        let num = num_columns as usize;
 
+        let num = num_columns as usize;
         let mut columns = Vec::with_capacity(num);
+
         for _ in 0..num {
             if bytes.remaining() < 4 {
                 return Err(DataRowError::UnexpectedEof);
             }
+
             let col_len = bytes.get_i32();
             let col_val = if col_len == -1 {
                 ColumnValue::Null
@@ -98,9 +101,12 @@ impl<'a> WireSerializable<'a> for DataRowFrame<'a> {
                 if bytes.remaining() < col_len_usize {
                     return Err(DataRowError::UnexpectedEof);
                 }
-                let value = bytes.split_to(col_len_usize);
+
+                let value = &bytes[0..col_len_usize];
+                bytes = &bytes[col_len_usize..];
                 ColumnValue::Value(value)
             };
+
             columns.push(col_val);
         }
 
@@ -252,12 +258,15 @@ mod tests {
         let frame = DataRowFrame {
             columns: vec![ColumnValue::Value(&[])],
         };
+
         let bytes = frame.to_bytes().unwrap();
         let expected = b"D\x00\x00\x00\x0A\x00\x01\x00\x00\x00\x00";
         assert_eq!(bytes.as_ref(), expected);
+
         let decoded = DataRowFrame::from_bytes(expected).unwrap();
+
         if let [ColumnValue::Value(val)] = &decoded.columns[..] {
-            assert_eq!(*val, &[]);
+            assert_eq!(*val, &[] as &[u8]);
         } else {
             panic!("expected empty Value");
         }

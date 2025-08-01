@@ -7,7 +7,7 @@
 //!
 //! Implements `WireSerializable` for easy conversion between raw bytes and `AuthenticationGssContinueFrame`.
 
-use bytes::{Buf, Bytes, BytesMut};
+use bytes::{BufMut, Bytes, BytesMut};
 use std::{error::Error as StdError, fmt};
 
 use crate::wire_protocol::WireSerializable;
@@ -83,11 +83,12 @@ impl<'a> WireSerializable<'a> for AuthenticationGssContinueFrame<'a> {
         }
 
         let data_len = (len - 8) as usize;
-        let mut buf = &bytes[9..];
+        let buf = &bytes[9..];
         if buf.len() < data_len {
             return Err(AuthenticationGssContinueError::UnexpectedEof);
         }
-        let data = buf.split_to(data_len);
+
+        let data = &buf[0..data_len];
 
         Ok(AuthenticationGssContinueFrame { data })
     }
@@ -146,7 +147,9 @@ mod tests {
     fn deserialize_authentication_gss_continue_empty() {
         let data_bytes = b"R\x00\x00\x00\x08\x00\x00\x00\x08";
         let frame = AuthenticationGssContinueFrame::from_bytes(data_bytes).unwrap();
-        assert_eq!(frame.data, &[]);
+        let data = frame.data;
+        let expected_data: &[u8] = &[];
+        assert_eq!(data, expected_data);
     }
 
     #[test]

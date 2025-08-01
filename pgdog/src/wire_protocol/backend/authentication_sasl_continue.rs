@@ -7,7 +7,7 @@
 //!
 //! Implements `WireSerializable` for easy conversion between raw bytes and `AuthenticationSaslContinueFrame`.
 
-use bytes::{Bytes, BytesMut};
+use bytes::{BufMut, Bytes, BytesMut};
 use std::{error::Error as StdError, fmt};
 
 use crate::wire_protocol::WireSerializable;

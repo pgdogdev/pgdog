@@ -242,7 +242,7 @@ mod tests {
 
     #[test]
     fn invalid_tag() {
-        let mut data = vec![b'H', 0, 0, 0, 11, 0, 0, 2, 0, 0, 0, 0];
+        let data = vec![b'H', 0, 0, 0, 11, 0, 0, 2, 0, 0, 0, 0];
         let err = CopyInResponseFrame::from_bytes(&data).unwrap_err();
         matches!(err, CopyInResponseError::UnexpectedTag(_));
     }
@@ -256,7 +256,7 @@ mod tests {
 
     #[test]
     fn invalid_length_mismatch() {
-        let mut data = vec![b'G', 0, 0, 0, 11, 0, 0, 2, 0, 0, 0, 0, 0]; // extra byte
+        let data = vec![b'G', 0, 0, 0, 11, 0, 0, 2, 0, 0, 0, 0, 0]; // extra byte
         let err = CopyInResponseFrame::from_bytes(&data).unwrap_err();
         matches!(err, CopyInResponseError::UnexpectedLength(_));
     }
