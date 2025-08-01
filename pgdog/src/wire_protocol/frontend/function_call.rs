@@ -91,27 +91,47 @@ impl<'a> WireSerializable<'a> for FunctionCallFrame<'a> {
             return Err(FunctionCallFrameError::UnexpectedTag(tag));
         }
 
-        let _len = bytes.get_u32();
+        let len = bytes.get_u32();
+        if len < 4 || (len - 4) as usize != bytes.remaining() {
+            return Err(FunctionCallFrameError::InvalidLength);
+        }
 
+        if bytes.remaining() < 4 {
+            return Err(FunctionCallFrameError::UnexpectedEof);
+        }
         let function_oid = bytes.get_u32();
 
         // parameter format codes
         let fmt_count = bytes.get_i16();
+        if fmt_count < 0 {
+            return Err(FunctionCallFrameError::InvalidLength);
+        }
+
         let mut param_fmts = Vec::with_capacity(fmt_count as usize);
         for _ in 0..fmt_count {
+            if bytes.remaining() < 2 {
+                return Err(FunctionCallFrameError::UnexpectedEof);
+            }
             param_fmts.push(decode_format_code(bytes.get_i16())?);
         }
 
         // parameters
+        if bytes.remaining() < 2 {
+            return Err(FunctionCallFrameError::UnexpectedEof);
+        }
+
         let param_count = bytes.get_i16() as usize;
         let mut params = Vec::with_capacity(param_count);
         for idx in 0..param_count {
-            let val_len = bytes.get_i32();
+            if bytes.remaining() < 4 {
+                return Err(FunctionCallFrameError::UnexpectedEof);
+            }
 
+            let val_len = bytes.get_i32();
             let is_binary = match fmt_count {
                 0 => false,
                 1 => param_fmts[0],
-                _ => param_fmts[idx],
+                _ => param_fmts.get(idx).copied().unwrap_or(false),
             };
 
             if val_len == -1 {
@@ -141,8 +161,13 @@ impl<'a> WireSerializable<'a> for FunctionCallFrame<'a> {
         }
 
         // result format
+        if bytes.remaining() < 2 {
+            return Err(FunctionCallFrameError::UnexpectedEof);
+        }
+
         let result_code = bytes.get_i16();
         let is_bin = decode_format_code(result_code)?;
+
         let result_format = if is_bin {
             ResultFormat::Binary
         } else {
@@ -162,7 +187,6 @@ impl<'a> WireSerializable<'a> for FunctionCallFrame<'a> {
 
     fn to_bytes(&self) -> Result<Bytes, Self::Error> {
         let mut body = BytesMut::with_capacity(self.body_size());
-
         body.put_u32(self.function_oid);
 
         // param format codes (always per-param)

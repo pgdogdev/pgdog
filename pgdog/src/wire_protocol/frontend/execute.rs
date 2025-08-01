@@ -64,13 +64,13 @@ impl<'a> WireSerializable<'a> for ExecuteFrame<'a> {
         }
 
         // Tag check
-        if bytes.get_u8() != b'E' {
-            return Err(Self::Error::UnexpectedTag(bytes[0]));
+        let tag = bytes.get_u8();
+        if tag != b'E' {
+            return Err(Self::Error::UnexpectedTag(tag));
         }
 
         // Declared length (body + 4)
         let declared = bytes.get_u32();
-
         if declared as usize != bytes.len() {
             return Err(Self::Error::UnexpectedLength(declared));
         }
@@ -87,6 +87,7 @@ impl<'a> WireSerializable<'a> for ExecuteFrame<'a> {
         if bytes.len() < null_pos + 1 + 4 {
             return Err(Self::Error::UnexpectedEof);
         }
+
         let max_rows = (&bytes[null_pos + 1..null_pos + 5]).get_u32();
 
         // Extra trailing data?
@@ -99,7 +100,6 @@ impl<'a> WireSerializable<'a> for ExecuteFrame<'a> {
 
     fn to_bytes(&self) -> Result<Bytes, Self::Error> {
         let mut buf = BytesMut::with_capacity(1 + 4 + self.portal.len() + 1 + 4);
-
         buf.put_u8(b'E');
 
         let len = (self.portal.len() + 1 + 4) as u32;
@@ -107,7 +107,6 @@ impl<'a> WireSerializable<'a> for ExecuteFrame<'a> {
 
         buf.put_slice(self.portal.as_bytes());
         buf.put_u8(0); // null terminator
-
         buf.put_u32(self.max_rows);
 
         Ok(buf.freeze())

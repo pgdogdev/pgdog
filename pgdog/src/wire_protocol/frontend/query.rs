@@ -127,13 +127,13 @@ mod tests {
     fn serialize_query() {
         let frame = make_frame();
         let bytes = frame.to_bytes().unwrap();
-        let expected = b"Q\x00\x00\x00\x0ASELECT 1\x00";
+        let expected = b"Q\x00\x00\x00\x0DSELECT 1\x00";
         assert_eq!(bytes.as_ref(), expected);
     }
 
     #[test]
     fn deserialize_query() {
-        let data = b"Q\x00\x00\x00\x0ASELECT 1\x00";
+        let data = b"Q\x00\x00\x00\x0DSELECT 1\x00";
         let frame = QueryFrame::from_bytes(data).unwrap();
         assert_eq!(frame.query, "SELECT 1");
     }
