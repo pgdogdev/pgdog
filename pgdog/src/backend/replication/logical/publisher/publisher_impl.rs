@@ -191,7 +191,7 @@ impl Publisher {
             info!(
                 "table sync for {} tables complete [{}, shard: {}]",
                 tables.len(),
-                dest.name(),
+                self.cluster.name(),
                 number,
             );
 
