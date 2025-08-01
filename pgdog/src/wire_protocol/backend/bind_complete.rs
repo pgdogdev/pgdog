@@ -49,14 +49,20 @@ impl<'a> WireSerializable<'a> for BindCompleteFrame {
             return Err(BindCompleteError::UnexpectedLength(bytes.len() as u32));
         }
 
-        let tag = bytes[0];
-        if tag != b'2' {
-            return Err(BindCompleteError::UnexpectedTag(tag));
+        // tag must be '2'
+        if bytes[0] != b'2' {
+            return Err(BindCompleteError::UnexpectedTag(bytes[0]));
         }
 
+        // length field must be exactly 4 (no body)
         let len = u32::from_be_bytes([bytes[1], bytes[2], bytes[3], bytes[4]]);
         if len != 4 {
             return Err(BindCompleteError::UnexpectedLength(len));
+        }
+
+        // reject any extra or missing bytes beyond the 5-byte header
+        if bytes.len() != 1 + len as usize {
+            return Err(BindCompleteError::UnexpectedLength(bytes.len() as u32));
         }
 
         Ok(BindCompleteFrame)
@@ -89,9 +95,7 @@ mod tests {
     #[test]
     fn deserialize_bind_complete() {
         let data = b"2\x00\x00\x00\x04";
-        let frame = BindCompleteFrame::from_bytes(data).unwrap();
-        // no state; just ensure no error
-        let _ = frame;
+        let _ = BindCompleteFrame::from_bytes(data).unwrap();
     }
 
     #[test]

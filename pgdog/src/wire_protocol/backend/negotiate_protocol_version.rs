@@ -7,7 +7,7 @@
 //!
 //! Implements `WireSerializable` for easy conversion between raw bytes and `NegotiateProtocolVersionFrame`.
 
-use bytes::{Buf, BufMut, Bytes, BytesMut};
+use bytes::{BufMut, Bytes, BytesMut};
 
 use std::{error::Error as StdError, fmt, str};
 
@@ -74,39 +74,48 @@ fn read_cstr<'a>(buf: &mut &'a [u8]) -> Result<&'a str, NegotiateProtocolVersion
 impl<'a> WireSerializable<'a> for NegotiateProtocolVersionFrame<'a> {
     type Error = NegotiateProtocolVersionError;
 
-    fn from_bytes(mut bytes: &'a [u8]) -> Result<Self, Self::Error> {
-        if bytes.remaining() < 17 {
+    fn from_bytes(bytes_full: &'a [u8]) -> Result<Self, Self::Error> {
+        // need at least tag+len
+        if bytes_full.len() < 5 {
             return Err(NegotiateProtocolVersionError::UnexpectedEof);
         }
-
-        let tag = bytes.get_u8();
-        if tag != b'v' {
-            return Err(NegotiateProtocolVersionError::UnexpectedTag(tag));
+        if bytes_full[0] != b'v' {
+            return Err(NegotiateProtocolVersionError::UnexpectedTag(bytes_full[0]));
         }
 
-        let len = bytes.get_u32();
-        if len < 16 {
-            return Err(NegotiateProtocolVersionError::UnexpectedLength(len));
-        }
-        if bytes.remaining() != (len - 4) as usize {
+        let len = u32::from_be_bytes([bytes_full[1], bytes_full[2], bytes_full[3], bytes_full[4]]);
+        // body must contain at least 8 bytes (minor version + count)
+        if len < 8 {
             return Err(NegotiateProtocolVersionError::UnexpectedLength(len));
         }
 
-        let newest_minor_version = bytes.get_i32();
+        let total_len = (len as usize) + 1; // tag + length bytes
+        if bytes_full.len() < total_len {
+            return Err(NegotiateProtocolVersionError::UnexpectedEof);
+        }
+        if bytes_full.len() > total_len {
+            return Err(NegotiateProtocolVersionError::UnexpectedLength(len));
+        }
 
-        let num_options = bytes.get_i32();
+        let mut payload = &bytes_full[5..total_len];
+        // read minor version + num_options
+        if payload.len() < 8 {
+            return Err(NegotiateProtocolVersionError::UnexpectedEof);
+        }
+        let newest_minor_version = i32::from_be_bytes(payload[0..4].try_into().unwrap());
+        let num_options = i32::from_be_bytes(payload[4..8].try_into().unwrap());
         if num_options < 0 {
             return Err(NegotiateProtocolVersionError::UnexpectedLength(len));
         }
-        let num = num_options as usize;
 
-        let mut unrecognized_options = Vec::with_capacity(num);
-        for _ in 0..num {
-            let opt = read_cstr(&mut bytes)?;
+        payload = &payload[8..];
+        let mut unrecognized_options = Vec::with_capacity(num_options as usize);
+        for _ in 0..num_options {
+            let opt = read_cstr(&mut payload)?;
             unrecognized_options.push(opt);
         }
 
-        if bytes.has_remaining() {
+        if !payload.is_empty() {
             return Err(NegotiateProtocolVersionError::UnexpectedLength(len));
         }
 

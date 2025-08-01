@@ -240,13 +240,88 @@ mod tests {
     fn serialize_row_description() {
         let frame = make_frame();
         let bytes = frame.to_bytes().unwrap();
-        let expected = b"T\x00\x00\x00\x2F\x00\x02id\x00\x00\x00\x40\x00\x00\x01\x00\x00\x00\x17\x00\x04\xFF\xFF\xFF\xFF\x00\x00name\x00\x00\x00\x40\x00\x00\x02\x00\x00\x00\x19\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\x00\x00";
+
+        let mut expected = Vec::new();
+        // Tag
+        expected.push(b'T');
+        // Length (50 bytes total length including length itself)
+        expected.extend_from_slice(&50u32.to_be_bytes());
+        // Number of fields (2)
+        expected.extend_from_slice(&2i16.to_be_bytes());
+        // First field: "id"
+        expected.extend_from_slice(b"id\0");
+        // Table OID (16384)
+        expected.extend_from_slice(&16384u32.to_be_bytes());
+        // Column attribute number (1)
+        expected.extend_from_slice(&1i16.to_be_bytes());
+        // Type OID (23)
+        expected.extend_from_slice(&23u32.to_be_bytes());
+        // Type size (4)
+        expected.extend_from_slice(&4i16.to_be_bytes());
+        // Type modifier (-1)
+        expected.extend_from_slice(&(-1i32).to_be_bytes());
+        // Format (0, Text)
+        expected.extend_from_slice(&0i16.to_be_bytes());
+        // Second field: "name"
+        expected.extend_from_slice(b"name\0");
+        // Table OID (16384)
+        expected.extend_from_slice(&16384u32.to_be_bytes());
+        // Column attribute number (2)
+        expected.extend_from_slice(&2i16.to_be_bytes());
+        // Type OID (25)
+        expected.extend_from_slice(&25u32.to_be_bytes());
+        // Type size (-1)
+        expected.extend_from_slice(&(-1i16).to_be_bytes());
+        // Type modifier (-1)
+        expected.extend_from_slice(&(-1i32).to_be_bytes());
+        // Format (0, Text)
+        expected.extend_from_slice(&0i16.to_be_bytes());
+
+        let expected = expected.as_slice();
         assert_eq!(bytes.as_ref(), expected);
     }
 
     #[test]
     fn deserialize_row_description() {
-        let data = b"T\x00\x00\x00\x2F\x00\x02id\x00\x00\x00\x40\x00\x00\x01\x00\x00\x00\x17\x00\x04\xFF\xFF\xFF\xFF\x00\x00name\x00\x00\x00\x40\x00\x00\x02\x00\x00\x00\x19\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\x00\x00";
+        let mut data = Vec::new();
+
+        // Tag
+        data.push(b'T');
+        // Length (50 bytes total length including length itself)
+        data.extend_from_slice(&50u32.to_be_bytes());
+        // Number of fields (2)
+        data.extend_from_slice(&2i16.to_be_bytes());
+        // First field: "id"
+        data.extend_from_slice(b"id\0");
+        // Table OID (16384)
+        data.extend_from_slice(&16384u32.to_be_bytes());
+        // Column attribute number (1)
+        data.extend_from_slice(&1i16.to_be_bytes());
+        // Type OID (23)
+        data.extend_from_slice(&23u32.to_be_bytes());
+        // Type size (4)
+        data.extend_from_slice(&4i16.to_be_bytes());
+        // Type modifier (-1)
+        data.extend_from_slice(&(-1i32).to_be_bytes());
+        // Format (0, Text)
+        data.extend_from_slice(&0i16.to_be_bytes());
+        // Second field: "name"
+        data.extend_from_slice(b"name\0");
+        // Table OID (16384)
+        data.extend_from_slice(&16384u32.to_be_bytes());
+        // Column attribute number (2)
+        data.extend_from_slice(&2i16.to_be_bytes());
+        // Type OID (25)
+        data.extend_from_slice(&25u32.to_be_bytes());
+        // Type size (-1)
+        data.extend_from_slice(&(-1i16).to_be_bytes());
+        // Type modifier (-1)
+        data.extend_from_slice(&(-1i32).to_be_bytes());
+        // Format (0, Text)
+        data.extend_from_slice(&0i16.to_be_bytes());
+
+        let data = data.as_slice();
+
         let frame = RowDescriptionFrame::from_bytes(data).unwrap();
         assert_eq!(frame.fields.len(), 2);
         assert_eq!(frame.fields[0].name, "id");

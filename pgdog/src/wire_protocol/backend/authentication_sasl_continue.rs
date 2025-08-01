@@ -116,13 +116,14 @@ mod tests {
     fn serialize_auth_sasl_continue() {
         let frame = make_frame();
         let bytes = frame.to_bytes().unwrap();
-        let expected = b"R\x00\x00\x00\x1F\x00\x00\x00\x0Br=some_nonce,s=salt,i=4096";
+        // length = 4 (len) + 4 (code) + 26 (data) = 34 => 0x22
+        let expected = b"R\x00\x00\x00\x22\x00\x00\x00\x0Br=some_nonce,s=salt,i=4096";
         assert_eq!(bytes.as_ref(), expected);
     }
 
     #[test]
     fn deserialize_auth_sasl_continue() {
-        let data = b"R\x00\x00\x00\x1F\x00\x00\x00\x0Br=some_nonce,s=salt,i=4096";
+        let data = b"R\x00\x00\x00\x22\x00\x00\x00\x0Br=some_nonce,s=salt,i=4096";
         let frame = AuthenticationSaslContinueFrame::from_bytes(data).unwrap();
         assert_eq!(frame.sasl_data, b"r=some_nonce,s=salt,i=4096");
     }

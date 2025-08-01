@@ -142,7 +142,7 @@ mod tests {
     fn serialize_parameter_status() {
         let frame = make_frame();
         let bytes = frame.to_bytes().unwrap();
-        let expected = b"S\x00\x00\x00\x15client_encoding\x00UTF8\x00";
+        let expected = b"S\x00\x00\x00\x19client_encoding\x00UTF8\x00";
         assert_eq!(bytes.as_ref(), expected);
     }
 
@@ -156,7 +156,7 @@ mod tests {
 
     #[test]
     fn deserialize_parameter_status() {
-        let data = b"S\x00\x00\x00\x15client_encoding\x00UTF8\x00";
+        let data = b"S\x00\x00\x00\x19client_encoding\x00UTF8\x00";
         let frame = ParameterStatusFrame::from_bytes(data).unwrap();
         assert_eq!(frame.name, "client_encoding");
         assert_eq!(frame.value, "UTF8");

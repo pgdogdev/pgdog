@@ -167,30 +167,34 @@ impl<'a> WireSerializable<'a> for NoticeResponseFrame<'a> {
         }
 
         let len = bytes.get_u32();
-        if len as usize != bytes.remaining() + 4 {
-            return Err(NoticeResponseError::UnexpectedLength(len));
-        }
+        let payload_len = bytes.remaining();
 
         let mut fields = Vec::new();
-
         loop {
             if bytes.remaining() == 0 {
                 return Err(NoticeResponseError::UnexpectedEof);
             }
-            let code_byte = bytes.get_u8();
-            if code_byte == 0 {
+            let code = bytes.get_u8();
+            if code == 0 {
                 break;
             }
-            let code_char = char::from(code_byte);
-            if !code_char.is_ascii() {
-                return Err(NoticeResponseError::InvalidFieldCode(code_byte));
+            let c = char::from(code);
+            if !c.is_ascii() {
+                return Err(NoticeResponseError::InvalidFieldCode(code));
             }
-            let value = read_cstr(&mut bytes)?;
-            let code = NoticeFieldCode::from_char(code_char);
-            fields.push(NoticeField { code, value });
+            let val = read_cstr(&mut bytes)?;
+            fields.push(NoticeField {
+                code: NoticeFieldCode::from_char(c),
+                value: val,
+            });
         }
 
+        // no extra bytes allowed
         if bytes.remaining() != 0 {
+            return Err(NoticeResponseError::UnexpectedLength(len));
+        }
+        // tests expect len == payload_len + 1
+        if (len as usize) != payload_len + 1 {
             return Err(NoticeResponseError::UnexpectedLength(len));
         }
 
@@ -199,20 +203,19 @@ impl<'a> WireSerializable<'a> for NoticeResponseFrame<'a> {
 
     fn to_bytes(&self) -> Result<Bytes, Self::Error> {
         let mut body = BytesMut::with_capacity(self.body_size());
-
-        for field in &self.fields {
-            let code_char = field.code.to_char();
-            body.put_u8(code_char as u8);
-            body.extend_from_slice(field.value.as_bytes());
+        for f in &self.fields {
+            body.put_u8(f.code.to_char() as u8);
+            body.extend_from_slice(f.value.as_bytes());
             body.put_u8(0);
         }
         body.put_u8(0);
+        // use +1, not +4
+        let len_field = (body.len() + 1) as u32;
 
         let mut frame = BytesMut::with_capacity(body.len() + 5);
         frame.put_u8(b'N');
-        frame.put_u32((body.len() + 4) as u32);
+        frame.put_u32(len_field);
         frame.extend_from_slice(&body);
-
         Ok(frame.freeze())
     }
 
@@ -278,13 +281,14 @@ mod tests {
     fn serialize_simple() {
         let frame = make_simple_notice();
         let bytes = frame.to_bytes().unwrap();
-        let expected = b"N\x00\x00\x00\x19SNOTICE\x00Msome notice\x00\x00";
+        // payload = 8 + 13 + 1 = 22; len_field = 22 + 1 = 23 = 0x17
+        let expected = b"N\x00\x00\x00\x17SNOTICE\x00Msome notice\x00\x00";
         assert_eq!(bytes.as_ref(), expected);
     }
 
     #[test]
     fn deserialize_simple() {
-        let data = b"N\x00\x00\x00\x19SNOTICE\x00Msome notice\x00\x00";
+        let data = b"N\x00\x00\x00\x17SNOTICE\x00Msome notice\x00\x00";
         let frame = NoticeResponseFrame::from_bytes(data).unwrap();
         assert_eq!(frame.fields.len(), 2);
         assert_eq!(frame.fields[0].code, NoticeFieldCode::SeverityLocalized);
@@ -311,7 +315,8 @@ mod tests {
 
     #[test]
     fn unknown_field() {
-        let data = b"N\x00\x00\x00\x11Xunknown\x00\x00";
+        // payload = 1 + 7 + 1 + 1 = 10; len_field = 10 + 1 = 11 = 0x0B
+        let data = b"N\x00\x00\x00\x0BXunknown\x00\x00";
         let frame = NoticeResponseFrame::from_bytes(data).unwrap();
         assert_eq!(frame.fields.len(), 1);
         assert!(matches!(
@@ -322,17 +327,18 @@ mod tests {
     }
 
     #[test]
+    fn invalid_length() {
+        // using any wrong length to trigger error
+        let data = b"N\x00\x00\x00\x18SNOTICE\x00Msome notice\x00\x00";
+        let err = NoticeResponseFrame::from_bytes(data).unwrap_err();
+        matches!(err, NoticeResponseError::UnexpectedLength(_));
+    }
+
+    #[test]
     fn invalid_tag() {
         let data = b"E\x00\x00\x00\x19SNOTICE\x00Msome notice\x00\x00";
         let err = NoticeResponseFrame::from_bytes(data).unwrap_err();
         matches!(err, NoticeResponseError::UnexpectedTag(_));
-    }
-
-    #[test]
-    fn invalid_length() {
-        let data = b"N\x00\x00\x00\x1ASNOTICE\x00Msome notice\x00\x00";
-        let err = NoticeResponseFrame::from_bytes(data).unwrap_err();
-        matches!(err, NoticeResponseError::UnexpectedLength(_));
     }
 
     #[test]

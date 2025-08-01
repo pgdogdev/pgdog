@@ -129,7 +129,7 @@ mod tests {
     fn serialize_parameter_description() {
         let frame = make_frame();
         let bytes = frame.to_bytes().unwrap();
-        let expected = b"t\x00\x00\x00\x0E\x00\x03\x00\x00\x00\x17\x00\x00\x00\x19\x00\x00\x04\x13";
+        let expected = b"t\x00\x00\x00\x12\x00\x03\x00\x00\x00\x17\x00\x00\x00\x19\x00\x00\x04\x13";
         assert_eq!(bytes.as_ref(), expected);
     }
 
@@ -143,7 +143,7 @@ mod tests {
 
     #[test]
     fn deserialize_parameter_description() {
-        let data = b"t\x00\x00\x00\x0E\x00\x03\x00\x00\x00\x17\x00\x00\x00\x19\x00\x00\x04\x13";
+        let data = b"t\x00\x00\x00\x12\x00\x03\x00\x00\x00\x17\x00\x00\x00\x19\x00\x00\x04\x13";
         let frame = ParameterDescriptionFrame::from_bytes(data).unwrap();
         assert_eq!(frame.parameter_oids, vec![23, 25, 1043]);
     }

@@ -114,13 +114,14 @@ mod tests {
     fn serialize_auth_sasl_final() {
         let frame = make_frame();
         let bytes = frame.to_bytes().unwrap();
-        let expected = b"R\x00\x00\x00\x14\x00\x00\x00\x0Cv=some_signature";
+        // length = 24 (0x18)
+        let expected = b"R\x00\x00\x00\x18\x00\x00\x00\x0Cv=some_signature";
         assert_eq!(bytes.as_ref(), expected);
     }
 
     #[test]
     fn deserialize_auth_sasl_final() {
-        let data = b"R\x00\x00\x00\x14\x00\x00\x00\x0Cv=some_signature";
+        let data = b"R\x00\x00\x00\x18\x00\x00\x00\x0Cv=some_signature";
         let frame = AuthenticationSaslFinalFrame::from_bytes(data).unwrap();
         assert_eq!(frame.sasl_data, b"v=some_signature");
     }
