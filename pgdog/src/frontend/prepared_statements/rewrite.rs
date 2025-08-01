@@ -1,7 +1,7 @@
 //! Rerwrite messages if using prepared statements.
-use crate::{
-    backend::ProtocolMessage,
-    net::messages::{Bind, Describe, Parse},
+use crate::net::{
+    messages::{Bind, Describe, Parse},
+    ProtocolMessage,
 };
 
 use super::{Error, PreparedStatements};

@@ -1,10 +1,9 @@
 //! Message buffer.
 
 use crate::{
-    backend::ProtocolMessage,
     net::{
         messages::{parse::Parse, Bind, CopyData, Protocol, Query},
-        Error,
+        Error, ProtocolMessage,
     },
     stats::memory::MemoryUsage,
 };

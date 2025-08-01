@@ -3,6 +3,7 @@ pub mod discovery;
 pub mod error;
 pub mod messages;
 pub mod parameter;
+pub mod protocol_message;
 pub mod stream;
 pub mod tls;
 pub mod tweaks;
@@ -12,6 +13,7 @@ pub use decoder::Decoder;
 pub use error::Error;
 pub use messages::*;
 pub use parameter::{Parameter, Parameters};
+pub use protocol_message::ProtocolMessage;
 pub use stream::Stream;
 pub use tweaks::tweak;
 

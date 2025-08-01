@@ -11,9 +11,9 @@ use tokio::sync::{
 };
 
 use crate::{
-    backend::{ProtocolMessage, Server},
+    backend::Server,
     frontend::Buffer,
-    net::Message,
+    net::{Message, ProtocolMessage},
 };
 
 use std::sync::Arc;

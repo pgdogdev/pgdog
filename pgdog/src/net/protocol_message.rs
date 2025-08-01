@@ -1,8 +1,7 @@
+use bytes::Buf;
 use std::io::Cursor;
 
-use bytes::Buf;
-
-use crate::net::{
+use super::{
     Bind, Close, CopyData, CopyDone, CopyFail, Describe, Execute, Flush, FromBytes, Message, Parse,
     Protocol, Query, Sync, ToBytes,
 };

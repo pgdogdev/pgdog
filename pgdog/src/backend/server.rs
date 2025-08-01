@@ -12,8 +12,8 @@ use tokio::{
 use tracing::{debug, error, info, trace, warn};
 
 use super::{
-    pool::Address, prepared_statements::HandleResult, Error, PreparedStatements, ProtocolMessage,
-    ServerOptions, Stats,
+    pool::Address, prepared_statements::HandleResult, Error, PreparedStatements, ServerOptions,
+    Stats,
 };
 use crate::{
     auth::{md5, scram::Client},
@@ -23,7 +23,7 @@ use crate::{
             hello::SslReply, Authentication, BackendKeyData, ErrorResponse, FromBytes, Message,
             ParameterStatus, Password, Protocol, Query, ReadyForQuery, Startup, Terminate, ToBytes,
         },
-        Close, Parameter, Sync,
+        Close, Parameter, ProtocolMessage, Sync,
     },
     stats::memory::MemoryUsage,
 };

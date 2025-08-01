@@ -10,7 +10,7 @@ use tokio::task::yield_now;
 use tokio::time::{sleep, timeout};
 use tokio_util::task::TaskTracker;
 
-use crate::backend::ProtocolMessage;
+use crate::net::ProtocolMessage;
 use crate::net::{Parse, Protocol, Query, Sync};
 use crate::state::State;
 
