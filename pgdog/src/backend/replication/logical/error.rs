@@ -62,6 +62,9 @@ pub enum Error {
 
     #[error("parallel connection error")]
     ParallelConnection,
+
+    #[error("no replicas available for table sync")]
+    NoReplicas,
 }
 
 impl From<ErrorResponse> for Error {
