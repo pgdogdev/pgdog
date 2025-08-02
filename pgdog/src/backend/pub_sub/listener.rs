@@ -3,53 +3,31 @@
 //! Handles notifications from Postgres and sends them out
 //! to a broadcast channel.
 //!
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, VecDeque},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+};
 
 use parking_lot::Mutex;
 use tokio::{
     select, spawn,
     sync::{broadcast, Notify},
 };
+use tracing::{error, info};
 
 use crate::{
-    backend::{Error, Server},
+    backend::{pool::Address, Error, Server, ServerOptions},
+    config::config,
     net::{FromBytes, Message, NotificationResponse, Protocol, ToBytes},
 };
 
-struct Inner {
-    channels: Mutex<HashMap<String, broadcast::Sender<NotificationResponse>>>,
-    subscription_requests: Mutex<Vec<String>>,
-    subscription_notify: Notify,
-    shutdown: Notify,
-}
-
-impl Inner {
-    fn handle_message(&self, message: Message) -> Result<(), Error> {
-        let notification = NotificationResponse::from_bytes(message.to_bytes()?)?;
-
-        let guard = self.channels.lock();
-        if let Some(channel) = guard.get(notification.channel()) {
-            channel.send(notification).unwrap();
-        }
-
-        Ok(())
-    }
-
-    async fn subscribe(&self, server: &mut Server) -> Result<(), Error> {
-        loop {
-            let channel = self.subscription_requests.lock().pop();
-            if let Some(channel) = channel {
-                server.execute(format!("LISTEN {}", channel)).await?;
-            } else {
-                break;
-            }
-        }
-
-        Ok(())
-    }
-}
+use super::inner::Inner;
 
 /// Notification listener.
+#[derive(Debug, Clone)]
 pub struct Listener {
     inner: Arc<Inner>,
 }
@@ -59,66 +37,45 @@ impl Listener {
         &mut self,
         name: &str,
     ) -> Result<broadcast::Receiver<NotificationResponse>, Error> {
-        let mut guard = self.inner.channels.lock();
-        if let Some(channel) = guard.get(name) {
-            Ok(channel.subscribe())
-        } else {
-            let (tx, rx) = broadcast::channel(4096);
-
-            guard.insert(name.to_string(), tx);
-
-            self.inner
-                .subscription_requests
-                .lock()
-                .push(name.to_string());
-            self.inner.subscription_notify.notify_one();
-
-            Ok(rx)
-        }
+        self.inner.request_subscribe(name)
     }
 
     /// Create new listener on the server connection.
-    pub fn new(mut server: Server) -> Result<Self, Error> {
-        let inner = Arc::new(Inner {
-            channels: Mutex::new(HashMap::new()),
-            subscription_requests: Mutex::new(vec![]),
-            subscription_notify: Notify::new(),
-            shutdown: Notify::new(),
-        });
+    pub fn new(addr: &Address) -> Self {
+        let inner = Arc::new(Inner::new());
+        let addr = addr.clone();
 
         let task_inner = inner.clone();
+
         spawn(async move {
             loop {
                 select! {
-                    message = server.read() => {
-                        let message = message?;
+                    _ = task_inner.shutdown.notified() => { break; },
+                    _ = task_inner.restart.notified() => {
+                        let task_inner = task_inner.clone();
+                        let addr = addr.clone();
 
-                        if message.code() != 'A' {
-                            continue;
-                        }
-
-                        task_inner.handle_message(message)?;
-                    }
-
-                    _ = task_inner.subscription_notify.notified() => {
-                        task_inner.subscribe(&mut server).await?;
-                    }
-
-                    _ = task_inner.shutdown.notified() => {
-                        break;
+                        spawn(async move {
+                            if let Err(err) = task_inner.serve(&addr).await {
+                                error!("listener error: {} [{}]", err, addr);
+                                task_inner.restart.notify_one();
+                            }
+                        });
                     }
                 }
             }
-
-            Ok::<(), Error>(())
         });
 
-        Ok(Self { inner })
+        Self { inner }
+    }
+
+    pub fn start(&self) {
+        self.inner.restart.notify_one();
     }
 }
 
 impl Drop for Listener {
     fn drop(&mut self) {
-        self.inner.shutdown.notify_one();
+        self.inner.shutdown.notify_waiters();
     }
 }

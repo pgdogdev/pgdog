@@ -422,6 +422,9 @@ pub struct General {
     /// How often to refresh DNS entries, in ms.
     #[serde(default)]
     pub dns_ttl: Option<u64>,
+    /// LISTEN/NOTIFY channel size.
+    #[serde(default)]
+    pub pub_sub_channel_size: usize,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -527,6 +530,7 @@ impl Default for General {
             auth_type: AuthType::default(),
             cross_shard_disabled: bool::default(),
             dns_ttl: None,
+            pub_sub_channel_size: 0,
         }
     }
 }

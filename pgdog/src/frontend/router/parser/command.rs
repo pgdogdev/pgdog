@@ -15,6 +15,7 @@ pub enum Command {
     Rewrite(String),
     Shards(usize),
     Deallocate,
+    Listen(String),
 }
 
 #[derive(Debug, Clone, PartialEq)]

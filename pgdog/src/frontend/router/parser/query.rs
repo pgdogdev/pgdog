@@ -156,8 +156,13 @@ impl QueryParser {
         let dry_run = sharding_schema.tables.dry_run();
         let multi_tenant = cluster.multi_tenant();
         let router_needed = cluster.router_needed();
-        let parser_disabled =
-            !full_prepared_statements && !router_needed && !dry_run && multi_tenant.is_none();
+        let pub_sub_enabled = config().config.general.pub_sub_channel_size > 0;
+
+        let parser_disabled = !full_prepared_statements
+            && !router_needed
+            && !dry_run
+            && multi_tenant.is_none()
+            && !pub_sub_enabled;
         let rw_strategy = cluster.read_write_strategy();
         self.in_transaction = in_transaction;
 
@@ -339,6 +344,11 @@ impl QueryParser {
                 } else {
                     Ok(Command::Query(Route::write(None)))
                 }
+            }
+
+            // LISTEN <channel>;
+            Some(NodeEnum::ListenStmt(ref stmt)) => {
+                return Ok(Command::Listen(stmt.conditionname.clone()));
             }
 
             Some(NodeEnum::ExplainStmt(ref stmt)) => {
