@@ -251,7 +251,7 @@ impl Connection {
     }
 
     /// Subscribe to a channel.
-    pub async fn listen(&self, channel: &str, shard: Shard) -> Result<(), Error> {
+    pub async fn listen(&mut self, channel: &str, shard: Shard) -> Result<(), Error> {
         let num = match shard {
             Shard::Direct(shard) => shard,
             _ => return Err(Error::ProtocolOutOfSync),
@@ -259,10 +259,15 @@ impl Connection {
 
         if let Some(shard) = self.cluster()?.shards().get(num) {
             let rx = shard.listen(channel).await?;
-            self.pub_sub.listen(rx);
+            self.pub_sub.listen(channel, rx);
         }
 
         Ok(())
+    }
+
+    /// Stop listening on a channel.
+    pub fn unlisten(&mut self, channel: &str) {
+        self.pub_sub.unlisten(channel);
     }
 
     /// Notify a channel.

@@ -483,13 +483,7 @@ impl Client {
                     return Ok(false);
                 }
                 Some(Command::Deallocate) => {
-                    self.stream
-                        .send_many(&[
-                            CommandComplete::from_str("DEALLOCATE").message()?,
-                            ReadyForQuery::in_transaction(self.in_transaction).message()?,
-                        ])
-                        .await?;
-                    inner.done(self.in_transaction);
+                    self.finish_command(&mut inner, "DEALLOCATE").await?;
                     return Ok(false);
                 }
                 // TODO: Handling session variables requires a lot more work,
@@ -516,13 +510,7 @@ impl Client {
                     let shard = shard.clone();
                     inner.backend.listen(&channel, shard).await?;
 
-                    self.stream
-                        .send_many(&[
-                            CommandComplete::from_str("LISTEN").message()?,
-                            ReadyForQuery::in_transaction(self.in_transaction).message()?,
-                        ])
-                        .await?;
-                    inner.done(self.in_transaction);
+                    self.finish_command(&mut inner, "LISTEN").await?;
                     return Ok(false);
                 }
 
@@ -536,13 +524,15 @@ impl Client {
                     let payload = payload.clone();
                     inner.backend.notify(&channel, &payload, shard).await?;
 
-                    self.stream
-                        .send_many(&[
-                            CommandComplete::from_str("NOTIFY").message()?,
-                            ReadyForQuery::in_transaction(self.in_transaction).message()?,
-                        ])
-                        .await?;
-                    inner.done(self.in_transaction);
+                    self.finish_command(&mut inner, "NOTIFY").await?;
+                    return Ok(false);
+                }
+
+                Some(Command::Unlisten(channel)) => {
+                    let channel = channel.clone();
+                    inner.backend.unlisten(&channel);
+
+                    self.finish_command(&mut inner, "UNLISTEN").await?;
                     return Ok(false);
                 }
                 _ => (),
@@ -799,13 +789,24 @@ impl Client {
 
     /// Handle SET command.
     async fn set(&mut self, mut inner: InnerBorrow<'_>) -> Result<(), Error> {
-        self.stream.send(&CommandComplete::new("SET")).await?;
+        self.finish_command(&mut inner, "SET").await?;
+        inner.comms.update_params(&self.params);
+        Ok(())
+    }
+
+    async fn finish_command(
+        &mut self,
+        inner: &mut InnerBorrow<'_>,
+        command: &str,
+    ) -> Result<(), Error> {
         self.stream
-            .send_flush(&ReadyForQuery::in_transaction(self.in_transaction))
+            .send_many(&[
+                CommandComplete::from_str(command).message()?,
+                ReadyForQuery::in_transaction(self.in_transaction).message()?,
+            ])
             .await?;
         inner.done(self.in_transaction);
-        inner.comms.update_params(&self.params);
-        debug!("set");
+
         Ok(())
     }
 

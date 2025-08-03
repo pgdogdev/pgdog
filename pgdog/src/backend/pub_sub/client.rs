@@ -1,7 +1,7 @@
 use crate::config::config;
 use crate::net::NotificationResponse;
 
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 use tokio::sync::{
     broadcast::{self, error::RecvError},
     mpsc, Notify,
@@ -13,6 +13,7 @@ pub struct PubSubClient {
     shutdown: Arc<Notify>,
     tx: mpsc::Sender<NotificationResponse>,
     rx: mpsc::Receiver<NotificationResponse>,
+    unlisten: HashMap<String, Arc<Notify>>,
 }
 
 impl Default for PubSubClient {
@@ -30,17 +31,26 @@ impl PubSubClient {
             shutdown: Arc::new(Notify::new()),
             tx,
             rx,
+            unlisten: HashMap::new(),
         }
     }
 
-    pub fn listen(&self, mut rx: broadcast::Receiver<NotificationResponse>) {
+    /// Listen on a channel.
+    pub fn listen(&mut self, channel: &str, mut rx: broadcast::Receiver<NotificationResponse>) {
         let shutdown = self.shutdown.clone();
         let tx = self.tx.clone();
+
+        let unlisten = Arc::new(Notify::new());
+        self.unlisten.insert(channel.to_string(), unlisten.clone());
 
         spawn(async move {
             loop {
                 select! {
                     _ = shutdown.notified() => {
+                        return;
+                    }
+
+                    _ = unlisten.notified() => {
                         return;
                     }
 
@@ -63,6 +73,13 @@ impl PubSubClient {
     /// Wait for a message from the pub/sub channel.
     pub async fn recv(&mut self) -> Option<NotificationResponse> {
         self.rx.recv().await
+    }
+
+    /// Stop listening on a channel.
+    pub fn unlisten(&mut self, channel: &str) {
+        if let Some(notify) = self.unlisten.remove(channel) {
+            notify.notify_one();
+        }
     }
 }
 

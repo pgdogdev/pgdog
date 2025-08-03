@@ -372,6 +372,10 @@ impl QueryParser {
                 });
             }
 
+            Some(NodeEnum::UnlistenStmt(ref stmt)) => {
+                return Ok(Command::Unlisten(stmt.conditionname.clone()));
+            }
+
             Some(NodeEnum::ExplainStmt(ref stmt)) => {
                 self.explain(stmt, &ast, cluster, &shard, bind, &sharding_schema)
             }

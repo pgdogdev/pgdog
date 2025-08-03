@@ -27,6 +27,7 @@ pub enum Command {
         payload: String,
         shard: Shard,
     },
+    Unlisten(String),
 }
 
 #[derive(Debug, Clone, PartialEq)]
