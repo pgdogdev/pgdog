@@ -3,12 +3,13 @@
 //! Handles notifications from Postgres and sends them out
 //! to a broadcast channel.
 //!
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use parking_lot::Mutex;
 use tokio::{
     select, spawn,
     sync::{broadcast, mpsc, Notify},
+    time::sleep,
 };
 use tracing::{debug, error, info};
 
@@ -88,6 +89,9 @@ impl PubSubListener {
                     result = Self::run(&pool, &mut rx, channels.clone()) => {
                         if let Err(err) = result {
                             error!("pub/sub error: {} [{}]", err, pool.addr());
+                            // Don't reconnect for another connect attempt delay
+                            // to avoid connection storms during incidents.
+                            sleep(Duration::from_millis(config().config.general.connect_attempt_delay)).await;
                         }
                     }
                 }
@@ -101,14 +105,17 @@ impl PubSubListener {
         listener
     }
 
+    /// Launch the listener.
     pub fn launch(&self) {
         self.comms.start.notify_one();
     }
 
+    /// Shutdown the listener.
     pub fn shutdown(&self) {
         self.comms.shutdown.notify_one();
     }
 
+    /// Listen on a channel.
     pub async fn listen(
         &self,
         channel: &str,
@@ -128,6 +135,7 @@ impl PubSubListener {
         Ok(rx)
     }
 
+    /// Notify a channel with payload.
     pub async fn notify(&self, channel: &str, payload: &str) -> Result<(), Error> {
         self.tx
             .send(Request::Notify {
@@ -138,6 +146,7 @@ impl PubSubListener {
             .map_err(|_| Error::Offline)
     }
 
+    // Run the listener task.
     async fn run(
         pool: &Pool,
         rx: &mut mpsc::Receiver<Request>,
@@ -153,6 +162,8 @@ impl PubSubListener {
             }]))
             .await?;
 
+        // Re-listen on all channels when re-starting the task.
+        // We don't lose LISTEN commands.
         let resub = channels
             .lock()
             .keys()
