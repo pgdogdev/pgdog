@@ -42,6 +42,7 @@ impl<'a> ContextBuilder<'a> {
     pub fn from_str(value: &'a str) -> Result<Self, Error> {
         let bigint = Value::new(value, DataType::Bigint);
         let uuid = Value::new(value, DataType::Uuid);
+        let varchar = Value::new(value, DataType::Varchar);
 
         if bigint.valid() {
             Ok(Self {
@@ -59,6 +60,18 @@ impl<'a> ContextBuilder<'a> {
             Ok(Self {
                 data_type: DataType::Uuid,
                 value: Some(uuid),
+                probes: 0,
+                centroids: None,
+                operator: None,
+                hasher: Hasher::Postgres,
+                array: false,
+                ranges: None,
+                lists: None,
+            })
+        } else if varchar.valid() {
+            Ok(Self {
+                data_type: DataType::Varchar,
+                value: Some(varchar),
                 probes: 0,
                 centroids: None,
                 operator: None,

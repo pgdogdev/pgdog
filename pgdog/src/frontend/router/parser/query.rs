@@ -156,8 +156,13 @@ impl QueryParser {
         let dry_run = sharding_schema.tables.dry_run();
         let multi_tenant = cluster.multi_tenant();
         let router_needed = cluster.router_needed();
-        let parser_disabled =
-            !full_prepared_statements && !router_needed && !dry_run && multi_tenant.is_none();
+        let pub_sub_enabled = config().config.general.pub_sub_channel_size > 0;
+
+        let parser_disabled = !full_prepared_statements
+            && !router_needed
+            && !dry_run
+            && multi_tenant.is_none()
+            && !pub_sub_enabled;
         let rw_strategy = cluster.read_write_strategy();
         self.in_transaction = in_transaction;
 
@@ -222,7 +227,7 @@ impl QueryParser {
         // Cluster is read only or write only, traffic split isn't needed,
         // and prepared statements support is limited to the extended protocol,
         // don't parse the query further.
-        if !full_prepared_statements && multi_tenant.is_none() {
+        if !full_prepared_statements && multi_tenant.is_none() && !pub_sub_enabled {
             if let Shard::Direct(_) = shard {
                 if read_only {
                     return Ok(Command::Query(Route::read(shard)));
@@ -339,6 +344,36 @@ impl QueryParser {
                 } else {
                     Ok(Command::Query(Route::write(None)))
                 }
+            }
+
+            // LISTEN <channel>;
+            Some(NodeEnum::ListenStmt(ref stmt)) => {
+                let shard = ContextBuilder::from_str(&stmt.conditionname)?
+                    .shards(shards)
+                    .build()?
+                    .apply()?;
+
+                return Ok(Command::Listen {
+                    shard,
+                    channel: stmt.conditionname.clone(),
+                });
+            }
+
+            Some(NodeEnum::NotifyStmt(ref stmt)) => {
+                let shard = ContextBuilder::from_str(&stmt.conditionname)?
+                    .shards(shards)
+                    .build()?
+                    .apply()?;
+
+                return Ok(Command::Notify {
+                    shard,
+                    channel: stmt.conditionname.clone(),
+                    payload: stmt.payload.clone(),
+                });
+            }
+
+            Some(NodeEnum::UnlistenStmt(ref stmt)) => {
+                return Ok(Command::Unlisten(stmt.conditionname.clone()));
             }
 
             Some(NodeEnum::ExplainStmt(ref stmt)) => {

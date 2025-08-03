@@ -159,7 +159,7 @@ impl Pool {
             .await;
     }
 
-    /// Perform a healtcheck on the connection if one is needed.
+    /// Perform a health check on the connection if one is needed.
     async fn maybe_healthcheck(
         &self,
         mut conn: Guard,

@@ -151,6 +151,10 @@ impl ConfigAndUsers {
     pub fn prepared_statements(&self) -> bool {
         self.config.general.prepared_statements.enabled()
     }
+
+    pub fn pub_sub_enabled(&self) -> bool {
+        self.config.general.pub_sub_channel_size > 0
+    }
 }
 
 /// Configuration.
@@ -422,6 +426,9 @@ pub struct General {
     /// How often to refresh DNS entries, in ms.
     #[serde(default)]
     pub dns_ttl: Option<u64>,
+    /// LISTEN/NOTIFY channel size.
+    #[serde(default)]
+    pub pub_sub_channel_size: usize,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -527,6 +534,7 @@ impl Default for General {
             auth_type: AuthType::default(),
             cross_shard_disabled: bool::default(),
             dns_ttl: None,
+            pub_sub_channel_size: 0,
         }
     }
 }
@@ -667,6 +675,11 @@ impl General {
     pub fn passthrough_auth(&self) -> bool {
         self.tls().is_some() && self.passthrough_auth == PassthoughAuth::Enabled
             || self.passthrough_auth == PassthoughAuth::EnabledPlain
+    }
+
+    /// Support for LISTEN/NOTIFY.
+    pub fn pub_sub_enabled(&self) -> bool {
+        self.pub_sub_channel_size > 0
     }
 }
 

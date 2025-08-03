@@ -1,7 +1,7 @@
 //! Server connection requested by a frontend.
 
 use mirror::{MirrorHandler, MirrorRequest};
-use tokio::time::sleep;
+use tokio::{select, time::sleep};
 use tracing::debug;
 
 use crate::{
@@ -10,13 +10,14 @@ use crate::{
         databases::{self, databases},
         reload_notify,
         replication::{Buffer, ReplicationConfig},
+        PubSubClient,
     },
     config::{config, PoolerMode, User},
     frontend::{
         router::{parser::Shard, CopyRow, Route},
         Router,
     },
-    net::{Bind, Message, ParameterStatus, Parameters},
+    net::{Bind, Message, ParameterStatus, Parameters, Protocol},
     state::State,
 };
 
@@ -48,6 +49,7 @@ pub struct Connection {
     cluster: Option<Cluster>,
     mirrors: Vec<MirrorHandler>,
     locked: bool,
+    pub_sub: PubSubClient,
 }
 
 impl Connection {
@@ -70,6 +72,7 @@ impl Connection {
             mirrors: vec![],
             locked: false,
             passthrough_password: passthrough_password.clone(),
+            pub_sub: PubSubClient::new(),
         };
 
         if !admin {
@@ -230,13 +233,55 @@ impl Connection {
         self.binding.force_close()
     }
 
-    /// Read a message from the server connection.
+    /// Read a message from the server connection or a pub/sub channel.
     ///
     /// Only await this future inside a `select!`. One of the conditions
     /// suspends this loop indefinitely and expects another `select!` branch
     /// to cancel it.
     pub(crate) async fn read(&mut self) -> Result<Message, Error> {
-        self.binding.read().await
+        select! {
+            notification = self.pub_sub.recv() => {
+                Ok(notification.ok_or(Error::ProtocolOutOfSync)?.message()?)
+            }
+
+            message = self.binding.read() => {
+                message
+            }
+        }
+    }
+
+    /// Subscribe to a channel.
+    pub async fn listen(&mut self, channel: &str, shard: Shard) -> Result<(), Error> {
+        let num = match shard {
+            Shard::Direct(shard) => shard,
+            _ => return Err(Error::ProtocolOutOfSync),
+        };
+
+        if let Some(shard) = self.cluster()?.shards().get(num) {
+            let rx = shard.listen(channel).await?;
+            self.pub_sub.listen(channel, rx);
+        }
+
+        Ok(())
+    }
+
+    /// Stop listening on a channel.
+    pub fn unlisten(&mut self, channel: &str) {
+        self.pub_sub.unlisten(channel);
+    }
+
+    /// Notify a channel.
+    pub async fn notify(&self, channel: &str, payload: &str, shard: Shard) -> Result<(), Error> {
+        let num = match shard {
+            Shard::Direct(shard) => shard,
+            _ => return Err(Error::ProtocolOutOfSync),
+        };
+
+        if let Some(shard) = self.cluster()?.shards().get(num) {
+            shard.notify(channel, payload).await?;
+        }
+
+        Ok(())
     }
 
     /// Send messages to the server.

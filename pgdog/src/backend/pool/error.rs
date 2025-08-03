@@ -56,4 +56,7 @@ pub enum Error {
 
     #[error("router error")]
     Router,
+
+    #[error("pub/sub disabled")]
+    PubSubDisabled,
 }

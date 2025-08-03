@@ -45,6 +45,7 @@ pub struct Server {
     stream: Option<Stream>,
     id: BackendKeyData,
     params: Parameters,
+    startup_options: ServerOptions,
     changed_params: Parameters,
     client_params: Parameters,
     stats: Stats,
@@ -242,6 +243,7 @@ impl Server {
             id,
             stats: Stats::connect(id, addr, &params),
             replication_mode: options.replication_mode(),
+            startup_options: options,
             params,
             changed_params: Parameters::default(),
             client_params: Parameters::default(),
@@ -742,6 +744,10 @@ impl Server {
         Ok(())
     }
 
+    pub async fn reconnect(&self) -> Result<Server, Error> {
+        Self::connect(&self.addr, self.startup_options.clone()).await
+    }
+
     /// Reset error state caused by schema change.
     #[inline]
     pub fn reset_schema_changed(&mut self) {
@@ -900,6 +906,7 @@ pub mod test {
             Self {
                 stream: None,
                 id,
+                startup_options: ServerOptions::default(),
                 params: Parameters::default(),
                 changed_params: Parameters::default(),
                 client_params: Parameters::default(),

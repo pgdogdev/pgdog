@@ -98,6 +98,9 @@ pub enum Error {
 
     #[error("could not resolve to any address for hostname {0}")]
     DnsResolutionFailed(String),
+
+    #[error("pub/sub channel disabled")]
+    PubSubDisabled,
 }
 
 impl Error {
