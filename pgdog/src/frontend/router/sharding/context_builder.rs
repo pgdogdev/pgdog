@@ -70,8 +70,8 @@ impl<'a> ContextBuilder<'a> {
             })
         } else if varchar.valid() {
             Ok(Self {
-                data_type: DataType::Uuid,
-                value: Some(uuid),
+                data_type: DataType::Varchar,
+                value: Some(varchar),
                 probes: 0,
                 centroids: None,
                 operator: None,

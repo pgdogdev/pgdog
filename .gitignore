@@ -43,5 +43,5 @@ toxi.log
 perf.data
 perf.data.old
 
-pgdog.toml
-users.toml
+/pgdog.toml
+/users.toml

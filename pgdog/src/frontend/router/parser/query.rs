@@ -349,6 +349,7 @@ impl QueryParser {
             // LISTEN <channel>;
             Some(NodeEnum::ListenStmt(ref stmt)) => {
                 let shard = ContextBuilder::from_str(&stmt.conditionname)?
+                    .shards(shards)
                     .build()?
                     .apply()?;
 
@@ -360,6 +361,7 @@ impl QueryParser {
 
             Some(NodeEnum::NotifyStmt(ref stmt)) => {
                 let shard = ContextBuilder::from_str(&stmt.conditionname)?
+                    .shards(shards)
                     .build()?
                     .apply()?;
 

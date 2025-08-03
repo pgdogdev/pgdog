@@ -630,9 +630,10 @@ impl Client {
         let has_more_messages = inner.backend.has_more_messages();
 
         // Messages that we need to send to the client immediately.
-        // ReadyForQuery (B) | CopyInResponse (B) | ErrorResponse(B) | NoticeResponse(B)
-        let flush =
-            matches!(code, 'Z' | 'G' | 'E' | 'N') || !has_more_messages || message.streaming();
+        // ReadyForQuery (B) | CopyInResponse (B) | ErrorResponse(B) | NoticeResponse(B) | NotificationResponse (B)
+        let flush = matches!(code, 'Z' | 'G' | 'E' | 'N' | 'A')
+            || !has_more_messages
+            || message.streaming();
 
         // Server finished executing a query.
         // ReadyForQuery (B)

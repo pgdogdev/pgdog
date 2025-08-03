@@ -1,0 +1,6 @@
+[general]
+pub_sub_channel_size = 4098
+
+[[databases]]
+name = "pgdog"
+host = "127.0.0.1"
