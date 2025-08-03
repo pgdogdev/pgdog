@@ -15,7 +15,7 @@ use tracing::{debug, error, info};
 use crate::{
     backend::{self, pool::Error, Pool, ProtocolMessage},
     config::config,
-    net::{FromBytes, NotificationResponse, Protocol, Query, ToBytes},
+    net::{FromBytes, NotificationResponse, Parameter, Parameters, Protocol, Query, ToBytes},
 };
 
 #[derive(Debug, Clone)]
@@ -146,6 +146,12 @@ impl PubSubListener {
         info!("pub/sub started [{}]", pool.addr());
 
         let mut server = pool.standalone().await?;
+        server
+            .link_client(&Parameters::from(vec![Parameter {
+                name: "application_name".into(),
+                value: "PgDog Pub/Sub Listener".into(),
+            }]))
+            .await?;
 
         let resub = channels
             .lock()

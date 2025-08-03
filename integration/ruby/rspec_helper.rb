@@ -36,9 +36,13 @@ def ensure_done
     expect(client['state']).to eq('idle')
   end
   servers = conn.exec 'SHOW SERVERS'
-  servers.each do |server|
-    expect(server['state']).to eq('idle')
-  end
+  servers
+    .select do
+      |server| server["application_name"] != "PgDog Pub/Sub Listener"
+    end
+    .each do |server|
+      expect(server['state']).to eq('idle')
+    end
 
   conn = PG.connect(dbname: 'pgdog', user: 'pgdog', password: 'pgdog', port: 5432, host: '127.0.0.1')
   clients = conn.exec 'SELECT state FROM pg_stat_activity'\
