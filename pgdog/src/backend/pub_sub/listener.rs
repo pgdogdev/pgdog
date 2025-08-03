@@ -3,79 +3,195 @@
 //! Handles notifications from Postgres and sends them out
 //! to a broadcast channel.
 //!
-use std::{
-    collections::{HashMap, VecDeque},
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
-};
+use std::{collections::HashMap, sync::Arc};
 
 use parking_lot::Mutex;
 use tokio::{
     select, spawn,
-    sync::{broadcast, Notify},
+    sync::{broadcast, mpsc, Notify},
 };
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 use crate::{
-    backend::{pool::Address, Error, Server, ServerOptions},
-    config::config,
-    net::{FromBytes, Message, NotificationResponse, Protocol, ToBytes},
+    backend::{self, pool::Error, Pool, ProtocolMessage},
+    net::{FromBytes, NotificationResponse, Protocol, Query, ToBytes},
 };
 
-use super::inner::Inner;
+#[derive(Debug, Clone)]
+enum Request {
+    Unsubscribe(String),
+    Subscribe(String),
+    Notify { channel: String, payload: String },
+}
+
+impl Into<ProtocolMessage> for Request {
+    fn into(self) -> ProtocolMessage {
+        match self {
+            Self::Unsubscribe(channel) => Query::new(format!("UNLISTEN \"{}\"", channel)).into(),
+            Self::Subscribe(channel) => Query::new(format!("LISTEN \"{}\"", channel)).into(),
+            Self::Notify { channel, payload } => {
+                Query::new(format!("NOTIFY \"{}\", '{}'", channel, payload)).into()
+            }
+        }
+    }
+}
+
+type Channels = Arc<Mutex<HashMap<String, broadcast::Sender<NotificationResponse>>>>;
+
+#[derive(Debug)]
+struct Comms {
+    start: Notify,
+    shutdown: Notify,
+}
 
 /// Notification listener.
 #[derive(Debug, Clone)]
-pub struct Listener {
-    inner: Arc<Inner>,
+pub struct PubSubListener {
+    pool: Pool,
+    tx: mpsc::Sender<Request>,
+    channels: Channels,
+    comms: Arc<Comms>,
 }
 
-impl Listener {
-    pub async fn subscribe(
-        &mut self,
-        name: &str,
-    ) -> Result<broadcast::Receiver<NotificationResponse>, Error> {
-        self.inner.request_subscribe(name)
-    }
-
+impl PubSubListener {
     /// Create new listener on the server connection.
-    pub fn new(addr: &Address) -> Self {
-        let inner = Arc::new(Inner::new());
-        let addr = addr.clone();
+    pub fn new(pool: &Pool) -> Self {
+        let (tx, mut rx) = mpsc::channel(4096);
 
-        let task_inner = inner.clone();
+        let pool = pool.clone();
+        let channels = Arc::new(Mutex::new(HashMap::new()));
+
+        let listener = Self {
+            pool: pool.clone(),
+            tx,
+            channels,
+            comms: Arc::new(Comms {
+                start: Notify::new(),
+                shutdown: Notify::new(),
+            }),
+        };
+
+        let channels = listener.channels.clone();
+        let pool = listener.pool.clone();
+        let comms = listener.comms.clone();
 
         spawn(async move {
             loop {
-                select! {
-                    _ = task_inner.shutdown.notified() => { break; },
-                    _ = task_inner.restart.notified() => {
-                        let task_inner = task_inner.clone();
-                        let addr = addr.clone();
+                comms.start.notified().await;
 
-                        spawn(async move {
-                            if let Err(err) = task_inner.serve(&addr).await {
-                                error!("listener error: {} [{}]", err, addr);
-                                task_inner.restart.notify_one();
-                            }
-                        });
+                select! {
+                    _ = comms.shutdown.notified() => {
+                        break;
                     }
+
+                    result = Self::run(&pool, &mut rx, channels.clone()) => {
+                        if let Err(err) = result {
+                            error!("pub/sub error: {} [{}]", err, pool.addr());
+                        }
+                    }
+                }
+
+                if rx.is_closed() {
+                    break;
                 }
             }
         });
 
-        Self { inner }
+        listener
     }
 
-    pub fn start(&self) {
-        self.inner.restart.notify_one();
+    pub fn launch(&self) {
+        self.comms.start.notify_one();
     }
-}
 
-impl Drop for Listener {
-    fn drop(&mut self) {
-        self.inner.shutdown.notify_waiters();
+    pub fn shutdown(&self) {
+        self.comms.shutdown.notify_one();
+    }
+
+    pub async fn listen(
+        &self,
+        channel: &str,
+    ) -> Result<broadcast::Receiver<NotificationResponse>, Error> {
+        if let Some(channel) = self.channels.lock().get(channel) {
+            return Ok(channel.subscribe());
+        }
+
+        let (tx, rx) = broadcast::channel(4096);
+
+        self.channels.lock().insert(channel.to_string(), tx);
+        self.tx
+            .send(Request::Subscribe(channel.to_string()))
+            .await
+            .map_err(|_| Error::Offline)?;
+
+        Ok(rx)
+    }
+
+    pub async fn notify(&self, channel: &str, payload: &str) -> Result<(), Error> {
+        self.tx
+            .send(Request::Notify {
+                channel: channel.to_string(),
+                payload: payload.to_string(),
+            })
+            .await
+            .map_err(|_| Error::Offline)
+    }
+
+    async fn run(
+        pool: &Pool,
+        rx: &mut mpsc::Receiver<Request>,
+        channels: Channels,
+    ) -> Result<(), backend::Error> {
+        info!("pub/sub started [{}]", pool.addr());
+
+        let mut server = pool.standalone().await?;
+
+        let resub = channels
+            .lock()
+            .keys()
+            .map(|channel| Request::Subscribe(channel.to_string()).into())
+            .collect::<Vec<ProtocolMessage>>();
+        server.send(&resub.into()).await?;
+
+        loop {
+            select! {
+                message = server.read() => {
+                    let message = message?;
+
+                    // NotificationResponse (B)
+                    if message.code() == 'A' {
+                        let notification = NotificationResponse::from_bytes(message.to_bytes()?)?;
+                        let mut unsub = None;
+                        if let Some(channel) = channels.lock().get(notification.channel()) {
+                            match channel.send(notification) {
+                                Ok(_) => (),
+                                Err(err) => unsub = Some(err.0.channel().to_string()),
+                            }
+                        }
+
+                        if let Some(unsub) = unsub {
+                            channels.lock().remove(&unsub);
+                            server.send(&vec![Request::Unsubscribe(unsub).into()].into()).await?;
+                        }
+                    }
+
+                    // Terminate (B)
+                    if message.code() == 'X' {
+                        break;
+                    }
+                }
+
+                req = rx.recv() => {
+                    if let Some(req) = req {
+                        debug!("pub/sub request {:?}", req);
+                        server.send(&vec![req.into()].into()).await?;
+                    } else {
+                        break;
+                    }
+                }
+            }
+        }
+
+        Ok(())
     }
 }

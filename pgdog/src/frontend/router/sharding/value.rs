@@ -91,6 +91,11 @@ impl<'a> Value<'a> {
                 Data::Binary(data) => data.len() == 16,
                 Data::Integer(_) => false,
             },
+            DataType::Varchar => match self.data {
+                Data::Text(_) => true,
+                Data::Binary(data) => from_utf8(data).is_ok(),
+                Data::Integer(_) => false,
+            },
 
             _ => false,
         }

@@ -10,12 +10,23 @@ pub enum Command {
     RollbackTransaction,
     StartReplication,
     ReplicationMeta,
-    Set { name: String, value: ParameterValue },
+    Set {
+        name: String,
+        value: ParameterValue,
+    },
     PreparedStatement(Prepare),
     Rewrite(String),
     Shards(usize),
     Deallocate,
-    Listen(String),
+    Listen {
+        channel: String,
+        shard: Shard,
+    },
+    Notify {
+        channel: String,
+        payload: String,
+        shard: Shard,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]

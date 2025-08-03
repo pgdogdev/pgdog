@@ -9,7 +9,7 @@ use parking_lot::{lock_api::MutexGuard, Mutex, RawMutex};
 use tokio::time::Instant;
 use tracing::{error, info};
 
-use crate::backend::{Listener, Server, ServerOptions};
+use crate::backend::{Server, ServerOptions};
 use crate::config::PoolerMode;
 use crate::net::messages::{BackendKeyData, DataRow, Format};
 use crate::net::Parameter;
@@ -38,7 +38,6 @@ pub(crate) struct InnerSync {
     pub(super) inner: Mutex<Inner>,
     pub(super) id: u64,
     pub(super) config: Config,
-    pub(super) listener: Listener,
 }
 
 impl std::fmt::Debug for Pool {
@@ -60,7 +59,6 @@ impl Pool {
                 inner: Mutex::new(Inner::new(config.config, id)),
                 id,
                 config: config.config,
-                listener: Listener::new(&config.address),
             }),
         }
     }

@@ -17,7 +17,7 @@ pub use error::Error;
 pub use pool::{Cluster, ClusterShardConfig, Pool, Replicas, Shard, ShardingSchema};
 pub use prepared_statements::PreparedStatements;
 pub use protocol::*;
-pub use pub_sub::{Listener, PubSubClient};
+pub use pub_sub::{PubSubClient, PubSubListener};
 pub use replication::ShardedTables;
 pub use schema::Schema;
 pub use server::Server;

@@ -1,4 +1,3 @@
-use crate::backend::Error;
 use crate::config::config;
 use crate::net::NotificationResponse;
 
@@ -7,15 +6,19 @@ use tokio::sync::{
     broadcast::{self, error::RecvError},
     mpsc, Notify,
 };
-use tokio::{
-    select, spawn,
-    time::{sleep, Duration},
-};
+use tokio::{select, spawn};
 
+#[derive(Debug)]
 pub struct PubSubClient {
     shutdown: Arc<Notify>,
     tx: mpsc::Sender<NotificationResponse>,
     rx: mpsc::Receiver<NotificationResponse>,
+}
+
+impl Default for PubSubClient {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl PubSubClient {
@@ -69,6 +72,6 @@ mod test {
 
     #[test]
     fn test_empty_pub_sub_client() {
-        let client = PubSubClient::new();
+        let _client = PubSubClient::new();
     }
 }

@@ -3,12 +3,15 @@
 use std::ops::Deref;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::broadcast;
 use tokio::time::{interval, sleep};
 use tokio::{join, select, spawn, sync::Notify};
 use tracing::{debug, error};
 
+use crate::backend::PubSubListener;
 use crate::config::{config, LoadBalancingStrategy, ReadWriteSplit, Role};
 use crate::net::messages::BackendKeyData;
+use crate::net::NotificationResponse;
 
 use super::inner::ReplicaLag;
 use super::{Error, Guard, Pool, PoolConfig, Replicas, Request};
@@ -84,15 +87,44 @@ impl Shard {
         self.replicas.can_move_conns_to(&other.replicas)
     }
 
+    /// Listen for notifications on channel.
+    pub async fn listen(
+        &self,
+        channel: &str,
+    ) -> Result<broadcast::Receiver<NotificationResponse>, Error> {
+        if let Some(ref listener) = self.pub_sub {
+            listener.listen(channel).await
+        } else {
+            Err(Error::PubSubDisabled)
+        }
+    }
+
+    /// Notify channel with optional payload (payload can be empty string).
+    pub async fn notify(&self, channel: &str, payload: &str) -> Result<(), Error> {
+        if let Some(ref listener) = self.pub_sub {
+            listener.notify(channel, payload).await
+        } else {
+            Err(Error::PubSubDisabled)
+        }
+    }
+
     /// Clone pools but keep them independent.
     pub fn duplicate(&self) -> Self {
+        let primary = self
+            .inner
+            .primary
+            .as_ref()
+            .map(|primary| primary.duplicate());
+        let pub_sub = if self.pub_sub.is_some() {
+            primary.as_ref().map(|pool| PubSubListener::new(pool))
+        } else {
+            None
+        };
+
         Self {
             inner: Arc::new(ShardInner {
-                primary: self
-                    .inner
-                    .primary
-                    .as_ref()
-                    .map(|primary| primary.duplicate()),
+                primary,
+                pub_sub,
                 replicas: self.inner.replicas.duplicate(),
                 rw_split: self.inner.rw_split,
                 comms: ShardComms::default(), // Create new comms instead of duplicating
@@ -104,6 +136,9 @@ impl Shard {
     pub fn launch(&self) {
         self.pools().iter().for_each(|pool| pool.launch());
         ShardMonitor::run(self);
+        if let Some(ref listener) = self.pub_sub {
+            listener.launch();
+        }
     }
 
     pub fn has_primary(&self) -> bool {
@@ -146,9 +181,13 @@ impl Shard {
         pools
     }
 
+    /// Shutdown every pool.
     pub fn shutdown(&self) {
         self.comms.shutdown.notify_waiters();
         self.pools().iter().for_each(|pool| pool.shutdown());
+        if let Some(ref listener) = self.pub_sub {
+            listener.shutdown();
+        }
     }
 
     fn comms(&self) -> &ShardComms {
@@ -173,6 +212,7 @@ pub struct ShardInner {
     replicas: Replicas,
     rw_split: ReadWriteSplit,
     comms: ShardComms,
+    pub_sub: Option<PubSubListener>,
 }
 
 impl ShardInner {
@@ -187,12 +227,18 @@ impl ShardInner {
         let comms = ShardComms {
             shutdown: Notify::new(),
         };
+        let pub_sub = if config().pub_sub_enabled() {
+            primary.as_ref().map(|pool| PubSubListener::new(pool))
+        } else {
+            None
+        };
 
         Self {
             primary,
             replicas,
             rw_split,
             comms,
+            pub_sub,
         }
     }
 }

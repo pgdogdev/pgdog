@@ -62,6 +62,12 @@ impl ToBytes for NotificationResponse {
     }
 }
 
+impl Protocol for NotificationResponse {
+    fn code(&self) -> char {
+        'A'
+    }
+}
+
 #[cfg(test)]
 mod test {
 

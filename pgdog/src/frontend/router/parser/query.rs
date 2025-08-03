@@ -227,7 +227,7 @@ impl QueryParser {
         // Cluster is read only or write only, traffic split isn't needed,
         // and prepared statements support is limited to the extended protocol,
         // don't parse the query further.
-        if !full_prepared_statements && multi_tenant.is_none() {
+        if !full_prepared_statements && multi_tenant.is_none() && !pub_sub_enabled {
             if let Shard::Direct(_) = shard {
                 if read_only {
                     return Ok(Command::Query(Route::read(shard)));
@@ -348,7 +348,26 @@ impl QueryParser {
 
             // LISTEN <channel>;
             Some(NodeEnum::ListenStmt(ref stmt)) => {
-                return Ok(Command::Listen(stmt.conditionname.clone()));
+                let shard = ContextBuilder::from_str(&stmt.conditionname)?
+                    .build()?
+                    .apply()?;
+
+                return Ok(Command::Listen {
+                    shard,
+                    channel: stmt.conditionname.clone(),
+                });
+            }
+
+            Some(NodeEnum::NotifyStmt(ref stmt)) => {
+                let shard = ContextBuilder::from_str(&stmt.conditionname)?
+                    .build()?
+                    .apply()?;
+
+                return Ok(Command::Notify {
+                    shard,
+                    channel: stmt.conditionname.clone(),
+                    payload: stmt.payload.clone(),
+                });
             }
 
             Some(NodeEnum::ExplainStmt(ref stmt)) => {

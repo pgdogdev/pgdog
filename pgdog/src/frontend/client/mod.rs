@@ -510,6 +510,41 @@ impl Client {
                         return Ok(false);
                     }
                 }
+
+                Some(Command::Listen { channel, shard }) => {
+                    let channel = channel.clone();
+                    let shard = shard.clone();
+                    inner.backend.listen(&channel, shard).await?;
+
+                    self.stream
+                        .send_many(&[
+                            CommandComplete::from_str("LISTEN").message()?,
+                            ReadyForQuery::in_transaction(self.in_transaction).message()?,
+                        ])
+                        .await?;
+                    inner.done(self.in_transaction);
+                    return Ok(false);
+                }
+
+                Some(Command::Notify {
+                    channel,
+                    payload,
+                    shard,
+                }) => {
+                    let channel = channel.clone();
+                    let shard = shard.clone();
+                    let payload = payload.clone();
+                    inner.backend.notify(&channel, &payload, shard).await?;
+
+                    self.stream
+                        .send_many(&[
+                            CommandComplete::from_str("NOTIFY").message()?,
+                            ReadyForQuery::in_transaction(self.in_transaction).message()?,
+                        ])
+                        .await?;
+                    inner.done(self.in_transaction);
+                    return Ok(false);
+                }
                 _ => (),
             };
 
