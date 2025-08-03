@@ -14,6 +14,7 @@ use tracing::{debug, error, info};
 
 use crate::{
     backend::{self, pool::Error, Pool, ProtocolMessage},
+    config::config,
     net::{FromBytes, NotificationResponse, Protocol, Query, ToBytes},
 };
 
@@ -56,7 +57,7 @@ pub struct PubSubListener {
 impl PubSubListener {
     /// Create new listener on the server connection.
     pub fn new(pool: &Pool) -> Self {
-        let (tx, mut rx) = mpsc::channel(4096);
+        let (tx, mut rx) = mpsc::channel(config().config.general.pub_sub_channel_size);
 
         let pool = pool.clone();
         let channels = Arc::new(Mutex::new(HashMap::new()));
@@ -116,7 +117,7 @@ impl PubSubListener {
             return Ok(channel.subscribe());
         }
 
-        let (tx, rx) = broadcast::channel(4096);
+        let (tx, rx) = broadcast::channel(config().config.general.pub_sub_channel_size);
 
         self.channels.lock().insert(channel.to_string(), tx);
         self.tx

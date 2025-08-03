@@ -1,11 +1,8 @@
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use parking_lot::Mutex;
 use sqlx::{Connection, Executor, PgConnection, postgres::PgListener};
-use tokio::{
-    select, spawn,
-    sync::{Barrier, Notify},
-};
+use tokio::{select, spawn, sync::Barrier};
 
 #[tokio::test]
 async fn test_notify() {

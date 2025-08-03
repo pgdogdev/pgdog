@@ -25,7 +25,7 @@ impl Default for PubSubClient {
 impl PubSubClient {
     pub fn new() -> Self {
         let size = config().config.general.pub_sub_channel_size;
-        let (tx, rx) = mpsc::channel(std::cmp::min(1, size));
+        let (tx, rx) = mpsc::channel(std::cmp::max(1, size));
 
         Self {
             shutdown: Arc::new(Notify::new()),
