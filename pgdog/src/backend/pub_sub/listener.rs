@@ -5,6 +5,7 @@
 //!
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
+use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use tokio::{
     select, spawn,
@@ -40,6 +41,8 @@ impl Into<ProtocolMessage> for Request {
 
 type Channels = Arc<Mutex<HashMap<String, broadcast::Sender<NotificationResponse>>>>;
 
+static CHANNELS: Lazy<Channels> = Lazy::new(|| Arc::new(Mutex::new(HashMap::new())));
+
 #[derive(Debug)]
 struct Comms {
     start: Notify,
@@ -61,7 +64,7 @@ impl PubSubListener {
         let (tx, mut rx) = mpsc::channel(config().config.general.pub_sub_channel_size);
 
         let pool = pool.clone();
-        let channels = Arc::new(Mutex::new(HashMap::new()));
+        let channels = CHANNELS.clone();
 
         let listener = Self {
             pool: pool.clone(),
@@ -83,7 +86,7 @@ impl PubSubListener {
 
                 select! {
                     _ = comms.shutdown.notified() => {
-                        break;
+                        rx.close(); // Drain remaining messages.
                     }
 
                     result = Self::run(&pool, &mut rx, channels.clone()) => {
