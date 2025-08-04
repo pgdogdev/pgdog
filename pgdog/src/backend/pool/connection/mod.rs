@@ -271,14 +271,26 @@ impl Connection {
     }
 
     /// Notify a channel.
-    pub async fn notify(&self, channel: &str, payload: &str, shard: Shard) -> Result<(), Error> {
+    pub async fn notify(
+        &mut self,
+        channel: &str,
+        payload: &str,
+        shard: Shard,
+    ) -> Result<(), Error> {
         let num = match shard {
             Shard::Direct(shard) => shard,
             _ => return Err(Error::ProtocolOutOfSync),
         };
 
-        if let Some(shard) = self.cluster()?.shards().get(num) {
-            shard.notify(channel, payload).await?;
+        // Max two attempts.
+        for _ in 0..2 {
+            if let Some(shard) = self.cluster()?.shards().get(num) {
+                match shard.notify(channel, payload).await {
+                    Err(super::Error::Offline) => self.reload()?,
+                    Err(err) => return Err(err.into()),
+                    Ok(_) => break,
+                }
+            }
         }
 
         Ok(())
