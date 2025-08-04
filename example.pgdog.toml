@@ -103,6 +103,9 @@ read_write_strategy = "conservative"
 # Path to PEM-encoded TLS certificate to use for client connections.
 tls_certificate = "relative/or/absolute/path/to/certificate.pem"
 
+# Path to PEM-encoded TLS certificate private key
+tls_private_key = "relative/or/absolute/path/to/private_key.pem"
+
 # TLS mode for Postgres server connections.
 #
 # Default: disabled
@@ -329,6 +332,9 @@ interval = 1000
 
 # Read timeout on the socket. How long to wait for data sent to be acked.
 user_timeout = 1000
+
+# How many times to retry a keep-alive probe before closing the connection.
+connect_retries = 3
 
 # TCP congestion control algorith.
 congestion_control = "reno"
