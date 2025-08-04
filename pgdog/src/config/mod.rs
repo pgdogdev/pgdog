@@ -811,6 +811,7 @@ pub struct Plugin {
 
 /// Users and passwords.
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[serde(deny_unknown_fields)]
 pub struct Users {
     /// Users and passwords.
     #[serde(default)]
