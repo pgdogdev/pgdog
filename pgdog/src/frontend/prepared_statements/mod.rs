@@ -5,7 +5,10 @@ use std::{collections::HashMap, sync::Arc, usize};
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 
-use crate::{backend::ProtocolMessage, net::Parse, stats::memory::MemoryUsage};
+use crate::{
+    net::{Parse, ProtocolMessage},
+    stats::memory::MemoryUsage,
+};
 
 pub mod error;
 pub mod global_cache;

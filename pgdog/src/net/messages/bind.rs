@@ -334,9 +334,8 @@ mod test {
         backend::{
             pool::{test::pool, Request},
             server::test::test_server,
-            ProtocolMessage,
         },
-        net::{messages::ErrorResponse, DataRow, Execute, Parse, Sync},
+        net::{messages::ErrorResponse, DataRow, Execute, Parse, ProtocolMessage, Sync},
     };
 
     #[tokio::test]

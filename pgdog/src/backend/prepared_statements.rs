@@ -7,14 +7,15 @@ use crate::{
     frontend::{self, prepared_statements::GlobalCache},
     net::{
         messages::{parse::Parse, RowDescription},
-        Close, CloseComplete, FromBytes, Message, ParseComplete, Protocol, ToBytes,
+        Close, CloseComplete, FromBytes, Message, ParseComplete, Protocol, ProtocolMessage,
+        ToBytes,
     },
     stats::memory::MemoryUsage,
 };
 
 use super::Error;
 use super::{
-    protocol::{state::Action, ProtocolMessage, ProtocolState},
+    protocol::{state::Action, ProtocolState},
     state::ExecutionCode,
 };
 
