@@ -104,7 +104,7 @@ read_write_strategy = "conservative"
 tls_certificate = "relative/or/absolute/path/to/certificate.pem"
 
 # Path to PEM-encoded TLS certificate private key
-tls_certificate = "relative/or/absolute/path/to/private_key.pem"
+tls_private_key = "relative/or/absolute/path/to/private_key.pem"
 
 # TLS mode for Postgres server connections.
 #
@@ -334,7 +334,7 @@ interval = 1000
 user_timeout = 1000
 
 # How many times to retry a keep-alive probe before closing the connection.
-retries = 3
+connect_retries = 3
 
 # TCP congestion control algorith.
 congestion_control = "reno"
