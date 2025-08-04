@@ -15,9 +15,12 @@ use tokio::{
 use tracing::{debug, error, info};
 
 use crate::{
-    backend::{self, pool::Error, Pool, ProtocolMessage},
+    backend::{self, pool::Error, Pool},
     config::config,
-    net::{FromBytes, NotificationResponse, Parameter, Parameters, Protocol, Query, ToBytes},
+    net::{
+        FromBytes, NotificationResponse, Parameter, Parameters, Protocol, ProtocolMessage, Query,
+        ToBytes,
+    },
 };
 
 #[derive(Debug, Clone)]
