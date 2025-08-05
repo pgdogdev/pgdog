@@ -512,14 +512,20 @@ mod test {
 
         // Defaults.
         assert!(!inner.banned());
-        assert!(inner.idle() == 0);
         assert_eq!(inner.idle(), 0);
         assert!(!inner.online);
         assert!(!inner.paused);
 
-        // The ban list.
+        inner.idle_connections.push(Box::new(Server::default()));
+        inner.idle_connections.push(Box::new(Server::default()));
+        inner.idle_connections.push(Box::new(Server::default()));
+        assert_eq!(inner.idle(), 3);
+
+        // The ban list. bans clear idle connections.
         let banned = inner.maybe_ban(Instant::now(), Error::CheckoutTimeout);
         assert!(banned);
+        assert_eq!(inner.idle(), 0);
+
         let unbanned = inner.check_ban(Instant::now() + Duration::from_secs(100));
         assert!(!unbanned);
         assert!(inner.banned());
@@ -586,12 +592,9 @@ mod test {
             request: Request::default(),
             tx: channel().0,
         });
-        assert_eq!(inner.idle(), 1);
-        assert!(!inner.should_create());
-
         assert_eq!(inner.config.min, 1);
-        assert_eq!(inner.idle(), 1);
-        assert!(!inner.should_create());
+        assert_eq!(inner.idle(), 0);
+        assert!(inner.should_create());
 
         inner.config.min = 2;
         assert_eq!(inner.config.max, 5);
@@ -601,12 +604,13 @@ mod test {
         assert!(inner.should_create());
 
         inner.config.max = 1;
-        assert!(!inner.should_create());
+        assert!(inner.should_create());
 
         inner.config.max = 3;
 
         assert!(inner.should_create());
 
+        inner.idle_connections.push(Box::new(Server::default()));
         inner.idle_connections.push(Box::new(Server::default()));
         inner.idle_connections.push(Box::new(Server::default()));
         assert!(!inner.should_create());
@@ -648,19 +652,5 @@ mod test {
         assert!(!result.banned);
         // Not checked in because of max age.
         assert_eq!(inner.total(), 0);
-    }
-
-    #[test]
-    fn test_maybe_ban_clears_idle_connections() {
-        let mut inner = Inner::default();
-        // seed with two idle connections
-        inner.idle_connections.push(Box::new(Server::default()));
-        inner.idle_connections.push(Box::new(Server::default()));
-        assert_eq!(inner.idle(), 2);
-
-        // ban the pool and verify it cleared idle_connections
-        let banned = inner.maybe_ban(Instant::now(), Error::ManualBan);
-        assert!(banned);
-        assert_eq!(inner.idle(), 0);
     }
 }
