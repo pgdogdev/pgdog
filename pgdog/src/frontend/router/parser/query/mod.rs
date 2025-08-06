@@ -80,10 +80,6 @@ impl QueryParser {
         let mut command = if qp_context.query().is_ok() {
             self.in_transaction = qp_context.router_context.in_transaction;
             self.write_override = qp_context.write_override();
-            println!(
-                "in transaction: {} {}",
-                self.in_transaction, qp_context.router_context.in_transaction
-            );
 
             self.query(&mut qp_context)?
         } else {

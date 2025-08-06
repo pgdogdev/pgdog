@@ -163,6 +163,16 @@ impl Binding {
                 Ok(())
             }
 
+            Binding::Server(Some(ref mut server)) => {
+                for row in rows {
+                    server
+                        .send_one(&ProtocolMessage::from(row.message()))
+                        .await?;
+                }
+
+                Ok(())
+            }
+
             _ => Err(Error::CopyNotConnected),
         }
     }

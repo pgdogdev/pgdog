@@ -57,7 +57,7 @@ impl Router {
         }
 
         let command = self.query_parser.parse(context)?;
-        self.routed = true;
+        self.routed = !matches!(command, Command::StartTransaction(_));
         self.latest_command = command;
         Ok(&self.latest_command)
     }
@@ -66,7 +66,11 @@ impl Router {
     pub fn copy_data(&mut self, buffer: &Buffer) -> Result<Vec<CopyRow>, Error> {
         match self.latest_command {
             Command::Copy(ref mut copy) => Ok(copy.shard(&buffer.copy_data()?)?),
-            _ => Ok(vec![]),
+            _ => Ok(buffer
+                .copy_data()?
+                .into_iter()
+                .map(|c| CopyRow::omnishard(c))
+                .collect()),
         }
     }
 
