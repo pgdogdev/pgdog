@@ -202,7 +202,7 @@ async def test_delete(conns):
 
 @pytest.mark.asyncio
 async def test_copy(conns):
-    records = 200
+    records = 250
     for i in range(50):
         for conn in conns:
             rows = [[x, f"value_{x}", datetime.now()] for x in range(records)]
