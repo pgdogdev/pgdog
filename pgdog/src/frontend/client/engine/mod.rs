@@ -1,36 +1,28 @@
 use crate::{
-    frontend::{Buffer, Error, PreparedStatements},
-    net::{Close, CloseComplete, FromBytes, Message, Parameters, Protocol, ReadyForQuery, ToBytes},
+    frontend::Error,
+    net::{Close, CloseComplete, FromBytes, Message, Protocol, ReadyForQuery, ToBytes},
 };
 
 pub mod action;
-pub mod intercept;
+pub mod context;
 
 pub use action::Action;
+pub use context::EngineContext;
 
 /// Query execution engine.
 pub struct Engine<'a> {
-    prepared_statements: &'a mut PreparedStatements,
-    #[allow(dead_code)]
-    params: &'a Parameters,
-    in_transaction: bool,
+    context: EngineContext<'a>,
 }
 
 impl<'a> Engine<'a> {
-    pub(crate) fn new(
-        prepared_statements: &'a mut PreparedStatements,
-        params: &'a Parameters,
-        in_transaction: bool,
-    ) -> Self {
-        Self {
-            prepared_statements,
-            params,
-            in_transaction,
-        }
+    /// Create new query execution engine.
+    pub(crate) fn new(context: EngineContext<'a>) -> Self {
+        Self { context }
     }
 
-    pub(crate) async fn execute(&mut self, buffer: &Buffer) -> Result<Action, Error> {
-        let intercept = self.intercept(buffer)?;
+    /// Execute whatever is currently in the client's buffer.
+    pub(crate) async fn execute(&mut self) -> Result<Action, Error> {
+        let intercept = self.intercept()?;
         if !intercept.is_empty() {
             Ok(Action::Intercept(intercept))
         } else {
@@ -38,24 +30,32 @@ impl<'a> Engine<'a> {
         }
     }
 
-    fn intercept(&mut self, buffer: &Buffer) -> Result<Vec<Message>, Error> {
-        let only_sync = buffer.iter().all(|m| m.code() == 'S');
-        let only_close = buffer.iter().all(|m| ['C', 'S'].contains(&m.code())) && !only_sync;
+    /// Intercept queries without disturbing backend servers.
+    fn intercept(&mut self) -> Result<Vec<Message>, Error> {
+        let only_sync = self.context.buffer.iter().all(|m| m.code() == 'S');
+        let only_close = self
+            .context
+            .buffer
+            .iter()
+            .all(|m| ['C', 'S'].contains(&m.code()))
+            && !only_sync;
         let mut messages = vec![];
-        for msg in buffer.iter() {
+        for msg in self.context.buffer.iter() {
             match msg.code() {
                 'C' => {
                     let close = Close::from_bytes(msg.to_bytes()?)?;
                     if close.is_statement() {
-                        self.prepared_statements.close(close.name());
+                        self.context.prepared_statements.close(close.name());
                     }
                     if only_close {
                         messages.push(CloseComplete.message()?)
                     }
                 }
                 'S' => {
-                    if only_close {
-                        messages.push(ReadyForQuery::in_transaction(self.in_transaction).message()?)
+                    if only_close || only_sync && !self.context.connected {
+                        messages.push(
+                            ReadyForQuery::in_transaction(self.context.in_transaction).message()?,
+                        )
                     }
                 }
                 c => {
@@ -72,7 +72,10 @@ impl<'a> Engine<'a> {
 
 #[cfg(test)]
 mod test {
-    use crate::net::{Parse, Sync};
+    use crate::{
+        frontend::{Buffer, PreparedStatements},
+        net::{Parameters, Parse, Sync},
+    };
 
     use super::*;
 
@@ -83,17 +86,24 @@ mod test {
         let _renamed = prepared.insert(Parse::named("test", "SELECT $1"));
 
         assert_eq!(prepared.local.len(), 1);
-
         let params = Parameters::default();
-
-        let mut engine = Engine::new(&mut prepared, &params, false);
-
         let buf = Buffer::from(vec![
             Close::named("test").into(),
             Parse::named("whatever", "SELECT $2").into(),
             Sync.into(),
         ]);
-        let res = engine.execute(&buf).await.unwrap();
+
+        let context = EngineContext {
+            connected: false,
+            prepared_statements: &mut prepared,
+            params: &params,
+            in_transaction: false,
+            buffer: &buf,
+        };
+
+        let mut engine = Engine::new(context);
+
+        let res = engine.execute().await.unwrap();
 
         assert!(matches!(res, Action::Forward));
         assert!(prepared.local.is_empty());

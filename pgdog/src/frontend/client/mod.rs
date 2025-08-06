@@ -4,6 +4,7 @@ use std::net::SocketAddr;
 use std::time::Instant;
 
 use bytes::BytesMut;
+use engine::EngineContext;
 use timeouts::Timeouts;
 use tokio::time::timeout;
 use tokio::{select, spawn};
@@ -382,18 +383,17 @@ impl Client {
             QueryLogger::new(&self.request_buffer).log().await?;
         }
 
+        let context = EngineContext::new(self, &inner);
+
         // Query execution engine.
-        let mut engine = Engine::new(
-            &mut self.prepared_statements,
-            &self.params,
-            self.in_transaction,
-        );
+        let mut engine = Engine::new(context);
 
         use engine::Action;
 
-        match engine.execute(&self.request_buffer).await? {
+        match engine.execute().await? {
             Action::Intercept(msgs) => {
                 self.stream.send_many(&msgs).await?;
+                inner.done(self.in_transaction);
                 self.update_stats(&mut inner);
                 return Ok(false);
             }
@@ -752,7 +752,7 @@ impl Client {
     async fn start_transaction(&mut self) -> Result<(), Error> {
         self.stream
             .send_many(&[
-                CommandComplete::new_begin().message()?,
+                CommandComplete::new_begin().message()?.backend(),
                 ReadyForQuery::in_transaction(true).message()?,
             ])
             .await?;
@@ -775,7 +775,7 @@ impl Client {
         } else {
             vec![]
         };
-        messages.push(cmd.message()?);
+        messages.push(cmd.message()?.backend());
         messages.push(ReadyForQuery::idle().message()?);
         self.stream.send_many(&messages).await?;
         debug!("transaction ended");
@@ -796,7 +796,7 @@ impl Client {
     ) -> Result<(), Error> {
         self.stream
             .send_many(&[
-                CommandComplete::from_str(command).message()?,
+                CommandComplete::from_str(command).message()?.backend(),
                 ReadyForQuery::in_transaction(self.in_transaction).message()?,
             ])
             .await?;

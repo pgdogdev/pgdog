@@ -22,7 +22,7 @@ use super::{Client, Error};
 /// Placed into their own struct so we can easily pass them around
 /// without holding a mutable reference to self in client. This is required
 /// for the `select!` macro to work.
-pub(super) struct Inner {
+pub struct Inner {
     /// Client connection to server(s).
     pub(super) backend: Connection,
     /// Query router.
