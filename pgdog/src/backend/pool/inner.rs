@@ -15,7 +15,7 @@ use super::{Ban, Config, Error, Mapping, Oids, Pool, Request, Stats, Taken, Wait
 pub(super) struct Inner {
     /// Idle server connections.
     #[allow(clippy::vec_box)]
-    conns: Vec<Box<Server>>,
+    idle_connections: Vec<Box<Server>>,
     /// Server connections currently checked out.
     taken: Taken,
     /// Pool configuration.
@@ -53,7 +53,7 @@ impl std::fmt::Debug for Inner {
         f.debug_struct("Inner")
             .field("paused", &self.paused)
             .field("taken", &self.taken.len())
-            .field("conns", &self.conns.len())
+            .field("idle_connections", &self.idle_connections.len())
             .field("waiting", &self.waiting.len())
             .field("online", &self.online)
             .finish()
@@ -64,7 +64,7 @@ impl Inner {
     /// New inner structure.
     pub(super) fn new(config: Config, id: u64) -> Self {
         Self {
-            conns: Vec::new(),
+            idle_connections: Vec::new(),
             taken: Taken::default(),
             config,
             waiting: VecDeque::new(),
@@ -91,7 +91,7 @@ impl Inner {
     /// Number of idle connections in the pool.
     #[inline]
     pub(super) fn idle(&self) -> usize {
-        self.conns.len()
+        self.idle_connections.len()
     }
 
     /// Number of connections checked out of the pool
@@ -103,8 +103,8 @@ impl Inner {
 
     /// Find the server currently linked to this client, if any.
     #[inline]
-    pub(super) fn peer(&self, id: &BackendKeyData) -> Option<BackendKeyData> {
-        self.taken.server(id)
+    pub(super) fn peer(&self, client_id: &BackendKeyData) -> Option<BackendKeyData> {
+        self.taken.server(client_id)
     }
 
     /// How many connections can be removed from the pool
@@ -135,7 +135,8 @@ impl Inner {
         let below_min = self.total() < self.min();
         let below_max = self.total() < self.max();
         let maintain_min = below_min && below_max;
-        let client_needs = below_max && !self.waiting.is_empty() && self.conns.is_empty();
+        let client_needs =
+            below_max && !self.waiting.is_empty() && self.idle_connections.is_empty();
         let maintenance_on = self.online && !self.paused;
 
         !self.banned() && (client_needs || maintenance_on && maintain_min)
@@ -166,7 +167,7 @@ impl Inner {
         let max_age = self.config.max_age;
         let mut removed = 0;
 
-        self.conns.retain(|c| {
+        self.idle_connections.retain(|c| {
             let age = c.age(now);
             let keep = age < max_age;
             if !keep {
@@ -185,7 +186,7 @@ impl Inner {
         let (mut remove, mut removed) = (self.can_remove(), 0);
         let idle_timeout = self.config.idle_timeout;
 
-        self.conns.retain(|c| {
+        self.idle_connections.retain(|c| {
             let idle_for = c.idle_for(now);
 
             if remove > 0 && idle_for >= idle_timeout {
@@ -209,7 +210,7 @@ impl Inner {
     /// Take connection from the idle pool.
     #[inline(always)]
     pub(super) fn take(&mut self, request: &Request) -> Option<Box<Server>> {
-        if let Some(conn) = self.conns.pop() {
+        if let Some(conn) = self.idle_connections.pop() {
             self.taken.take(&Mapping {
                 client: request.id,
                 server: *(conn.id()),
@@ -229,7 +230,7 @@ impl Inner {
         let id = *conn.id();
         if let Some(waiter) = self.waiting.pop_front() {
             if let Err(conn) = waiter.tx.send(Ok(conn)) {
-                self.conns.push(conn.unwrap());
+                self.idle_connections.push(conn.unwrap());
             } else {
                 self.taken.take(&Mapping {
                     server: id,
@@ -239,7 +240,7 @@ impl Inner {
                 self.stats.counts.wait_time += now.duration_since(waiter.request.created_at);
             }
         } else {
-            self.conns.push(conn);
+            self.idle_connections.push(conn);
         }
     }
 
@@ -251,7 +252,7 @@ impl Inner {
     /// Dump all idle connections.
     #[inline]
     pub(super) fn dump_idle(&mut self) {
-        self.conns.clear();
+        self.idle_connections.clear();
     }
 
     /// Take all idle connections and tell active ones to
@@ -260,7 +261,9 @@ impl Inner {
     #[allow(clippy::vec_box)] // Server is a very large struct, reading it when moving between contains is expensive.
     pub(super) fn move_conns_to(&mut self, destination: &Pool) -> (Vec<Box<Server>>, Taken) {
         self.moved = Some(destination.clone());
-        let idle = std::mem::take(&mut self.conns).into_iter().collect();
+        let idle = std::mem::take(&mut self.idle_connections)
+            .into_iter()
+            .collect();
         let taken = std::mem::take(&mut self.taken);
 
         (idle, taken)
@@ -361,8 +364,7 @@ impl Inner {
         }
     }
 
-    /// Ban the pool from serving traffic if that's allowed
-    /// per configuration.
+    /// Ban the pool from serving traffic if that's allowed per configuration.
     #[inline]
     pub fn maybe_ban(&mut self, now: Instant, reason: Error) -> bool {
         if self.config.bannable || reason == Error::ManualBan {
@@ -375,6 +377,10 @@ impl Inner {
 
             // Tell every waiting client that this pool is busted.
             self.close_waiters(Error::Banned);
+
+            // Clear the idle connection pool.
+            self.idle_connections.clear();
+
             true
         } else {
             false
@@ -506,14 +512,20 @@ mod test {
 
         // Defaults.
         assert!(!inner.banned());
-        assert!(inner.idle() == 0);
         assert_eq!(inner.idle(), 0);
         assert!(!inner.online);
         assert!(!inner.paused);
 
-        // The ban list.
+        inner.idle_connections.push(Box::new(Server::default()));
+        inner.idle_connections.push(Box::new(Server::default()));
+        inner.idle_connections.push(Box::new(Server::default()));
+        assert_eq!(inner.idle(), 3);
+
+        // The ban list. bans clear idle connections.
         let banned = inner.maybe_ban(Instant::now(), Error::CheckoutTimeout);
         assert!(banned);
+        assert_eq!(inner.idle(), 0);
+
         let unbanned = inner.check_ban(Instant::now() + Duration::from_secs(100));
         assert!(!unbanned);
         assert!(inner.banned());
@@ -580,12 +592,9 @@ mod test {
             request: Request::default(),
             tx: channel().0,
         });
-        assert_eq!(inner.idle(), 1);
-        assert!(!inner.should_create());
-
         assert_eq!(inner.config.min, 1);
-        assert_eq!(inner.idle(), 1);
-        assert!(!inner.should_create());
+        assert_eq!(inner.idle(), 0);
+        assert!(inner.should_create());
 
         inner.config.min = 2;
         assert_eq!(inner.config.max, 5);
@@ -595,14 +604,15 @@ mod test {
         assert!(inner.should_create());
 
         inner.config.max = 1;
-        assert!(!inner.should_create());
+        assert!(inner.should_create());
 
         inner.config.max = 3;
 
         assert!(inner.should_create());
 
-        inner.conns.push(Box::new(Server::default()));
-        inner.conns.push(Box::new(Server::default()));
+        inner.idle_connections.push(Box::new(Server::default()));
+        inner.idle_connections.push(Box::new(Server::default()));
+        inner.idle_connections.push(Box::new(Server::default()));
         assert!(!inner.should_create());
 
         // Close idle connections.
