@@ -2224,6 +2224,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "indexmap",
+ "lazy_static",
  "lru 0.16.0",
  "md5",
  "once_cell",

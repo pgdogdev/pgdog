@@ -17,6 +17,7 @@ pub struct QueryCacheMetric {
 
 pub struct QueryCache {
     stats: Stats,
+    len: usize,
     prepared_statements: usize,
     prepared_statements_memory: usize,
 }
@@ -29,8 +30,11 @@ impl QueryCache {
             (guard.len(), guard.memory_usage())
         };
 
+        let (stats, len) = Cache::stats();
+
         QueryCache {
-            stats: Cache::stats(),
+            stats,
+            len,
             prepared_statements,
             prepared_statements_memory,
         }
@@ -65,7 +69,7 @@ impl QueryCache {
             Metric::new(QueryCacheMetric {
                 name: "query_cache_size".into(),
                 help: "Number of queries in the cache".into(),
-                value: self.stats.size,
+                value: self.len,
                 gauge: true,
             }),
             Metric::new(QueryCacheMetric {

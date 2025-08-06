@@ -8,9 +8,7 @@ use crate::{
     admin::backend::Backend,
     backend::{
         databases::{self, databases},
-        reload_notify,
-        replication::{Buffer, ReplicationConfig},
-        PubSubClient,
+        reload_notify, PubSubClient,
     },
     config::{config, PoolerMode, User},
     frontend::{
@@ -23,7 +21,7 @@ use crate::{
 
 use super::{
     super::{pool::Guard, Error},
-    Address, Cluster, Request, ShardingSchema,
+    Address, Cluster, Request,
 };
 
 use std::{mem::replace, time::Duration};
@@ -90,7 +88,7 @@ impl Connection {
     /// Create a server connection if one doesn't exist already.
     pub(crate) async fn connect(&mut self, request: &Request, route: &Route) -> Result<(), Error> {
         let connect = match &self.binding {
-            Binding::Server(None) | Binding::Replication(None, _) => true,
+            Binding::Server(None) => true,
             Binding::MultiShard(shards, _) => shards.is_empty(),
             _ => false,
         };
@@ -120,20 +118,6 @@ impl Connection {
         Ok(())
     }
 
-    /// Set the connection into replication mode.
-    pub(crate) fn enter_replication_mode(
-        &mut self,
-        shard: Shard,
-        replication_config: &ReplicationConfig,
-        sharding_schema: &ShardingSchema,
-    ) -> Result<(), Error> {
-        self.binding = Binding::Replication(
-            None,
-            Buffer::new(shard, replication_config, sharding_schema),
-        );
-        Ok(())
-    }
-
     /// Send traffic to mirrors.
     pub(crate) fn mirror(&self, buffer: &crate::frontend::Buffer) {
         for mirror in &self.mirrors {
@@ -158,10 +142,6 @@ impl Connection {
 
             match &mut self.binding {
                 Binding::Server(existing) => {
-                    let _ = replace(existing, Some(server));
-                }
-
-                Binding::Replication(existing, _) => {
                     let _ = replace(existing, Some(server));
                 }
 
@@ -334,7 +314,7 @@ impl Connection {
     /// Fetch the cluster from the global database store.
     pub(crate) fn reload(&mut self) -> Result<(), Error> {
         match self.binding {
-            Binding::Server(_) | Binding::MultiShard(_, _) | Binding::Replication(_, _) => {
+            Binding::Server(_) | Binding::MultiShard(_, _) => {
                 let user = (self.user.as_str(), self.database.as_str());
                 // Check passthrough auth.
                 if config().config.general.passthrough_auth() && !databases().exists(user) {

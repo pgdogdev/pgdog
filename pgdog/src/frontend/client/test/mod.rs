@@ -449,7 +449,6 @@ async fn test_transaction_state() {
 
     client.buffer(&State::Idle).await.unwrap();
     client.client_messages(inner.get()).await.unwrap();
-
     read!(conn, ['C', 'Z']);
 
     assert!(client.in_transaction);

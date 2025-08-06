@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use pg_query::{NodeEnum, ParseResult};
 
 use super::{Command, Error};
@@ -7,12 +5,12 @@ use crate::frontend::PreparedStatements;
 use crate::net::Parse;
 
 #[derive(Debug, Clone)]
-pub struct Rewrite {
-    ast: Arc<ParseResult>,
+pub struct Rewrite<'a> {
+    ast: &'a ParseResult,
 }
 
-impl Rewrite {
-    pub fn new(ast: Arc<ParseResult>) -> Self {
+impl<'a> Rewrite<'a> {
+    pub fn new(ast: &'a ParseResult) -> Self {
         Self { ast }
     }
 
@@ -72,13 +70,14 @@ impl Rewrite {
 
 #[cfg(test)]
 mod test {
+    use std::sync::Arc;
+
     use super::*;
 
     #[test]
     fn test_rewrite_prepared() {
         let ast = pg_query::parse("BEGIN; PREPARE test AS SELECT $1, $2, $3; PREPARE test2 AS SELECT * FROM my_table WHERE id = $1; COMMIT;").unwrap();
-        let ast = Arc::new(ast);
-        let rewrite = Rewrite::new(ast);
+        let rewrite = Rewrite::new(&ast);
         assert!(rewrite.needs_rewrite());
         let mut prepared_statements = PreparedStatements::new();
         let queries = rewrite.rewrite(&mut prepared_statements).unwrap();
@@ -93,7 +92,7 @@ mod test {
         for q in ["DEALLOCATE ALL", "DEALLOCATE test"] {
             let ast = pg_query::parse(q).unwrap();
             let ast = Arc::new(ast);
-            let rewrite = Rewrite::new(ast)
+            let rewrite = Rewrite::new(&ast)
                 .rewrite(&mut PreparedStatements::new())
                 .unwrap();
 

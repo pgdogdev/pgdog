@@ -13,7 +13,6 @@ pub(super) enum Binding {
     Server(Option<Guard>),
     Admin(Backend),
     MultiShard(Vec<Guard>, MultiShard),
-    Replication(Option<Guard>, Buffer),
 }
 
 impl Default for Binding {
@@ -28,7 +27,6 @@ impl Binding {
             Binding::Server(guard) => drop(guard.take()),
             Binding::Admin(_) => (),
             Binding::MultiShard(guards, _) => guards.clear(),
-            Binding::Replication(guard, _) => drop(guard.take()),
         }
     }
 
@@ -39,9 +37,6 @@ impl Binding {
                 for guard in guards {
                     guard.stats_mut().state(State::ForceClose);
                 }
-            }
-            Binding::Replication(Some(ref mut guard), _) => {
-                guard.stats_mut().state(State::ForceClose);
             }
             _ => (),
         }
@@ -54,7 +49,6 @@ impl Binding {
             Binding::Server(server) => server.is_some(),
             Binding::MultiShard(servers, _) => !servers.is_empty(),
             Binding::Admin(_) => true,
-            Binding::Replication(server, _) => server.is_some(),
         }
     }
 
@@ -111,27 +105,6 @@ impl Binding {
                     }
                 }
             }
-
-            Binding::Replication(guard, buffer) => {
-                if let Some(message) = buffer.message() {
-                    return Ok(message);
-                }
-
-                if let Some(server) = guard {
-                    loop {
-                        let message = server.read().await?;
-                        buffer.handle(message)?;
-
-                        if let Some(message) = buffer.message() {
-                            return Ok(message);
-                        }
-                    }
-                } else {
-                    loop {
-                        sleep(Duration::MAX).await
-                    }
-                }
-            }
         }
     }
 
@@ -152,13 +125,6 @@ impl Binding {
                 }
 
                 Ok(())
-            }
-            Binding::Replication(server, _) => {
-                if let Some(server) = server {
-                    server.send(messages).await
-                } else {
-                    Err(Error::NotConnected)
-                }
             }
         }
     }
@@ -197,6 +163,16 @@ impl Binding {
                 Ok(())
             }
 
+            Binding::Server(Some(ref mut server)) => {
+                for row in rows {
+                    server
+                        .send_one(&ProtocolMessage::from(row.message()))
+                        .await?;
+                }
+
+                Ok(())
+            }
+
             _ => Err(Error::CopyNotConnected),
         }
     }
@@ -206,7 +182,6 @@ impl Binding {
             Binding::Admin(admin) => admin.done(),
             Binding::Server(Some(server)) => server.done(),
             Binding::MultiShard(servers, _state) => servers.iter().all(|s| s.done()),
-            Binding::Replication(Some(server), _) => server.done(),
             _ => true,
         }
     }
@@ -216,7 +191,6 @@ impl Binding {
             Binding::Admin(admin) => !admin.done(),
             Binding::Server(Some(server)) => server.has_more_messages(),
             Binding::MultiShard(servers, _state) => servers.iter().any(|s| s.has_more_messages()),
-            Binding::Replication(Some(server), _) => server.has_more_messages(),
             _ => false,
         }
     }
@@ -252,10 +226,6 @@ impl Binding {
                 }
             }
 
-            Binding::Replication(Some(ref mut server), _) => {
-                server.execute(query).await?;
-            }
-
             _ => (),
         }
 
@@ -275,7 +245,6 @@ impl Binding {
                 }
                 Ok(max)
             }
-            Binding::Replication(Some(ref mut server), _) => server.link_client(params).await,
 
             _ => Ok(0),
         }
@@ -291,7 +260,6 @@ impl Binding {
                     Parameters::default()
                 }
             }
-            Binding::Replication(Some(ref mut server), _) => server.changed_params().clone(),
             _ => Parameters::default(),
         }
     }
@@ -302,7 +270,6 @@ impl Binding {
             Binding::MultiShard(ref mut servers, _state) => {
                 servers.iter_mut().for_each(|s| s.mark_dirty(true))
             }
-            Binding::Replication(Some(ref mut server), _) => server.mark_dirty(true),
             _ => (),
         }
     }
@@ -312,7 +279,6 @@ impl Binding {
         match self {
             Binding::Server(Some(ref server)) => server.dirty(),
             Binding::MultiShard(ref servers, _state) => servers.iter().any(|s| s.dirty()),
-            Binding::Replication(Some(ref server), _) => server.dirty(),
             _ => false,
         }
     }
@@ -322,7 +288,6 @@ impl Binding {
             Binding::Admin(_) => false,
             Binding::MultiShard(ref servers, _state) => servers.iter().all(|s| s.copy_mode()),
             Binding::Server(Some(ref server)) => server.copy_mode(),
-            Binding::Replication(Some(ref server), _) => server.copy_mode(),
             _ => false,
         }
     }

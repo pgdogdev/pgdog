@@ -4,6 +4,7 @@ use std::net::SocketAddr;
 use std::time::Instant;
 
 use bytes::BytesMut;
+use engine::EngineContext;
 use timeouts::Timeouts;
 use tokio::time::timeout;
 use tokio::{select, spawn};
@@ -49,7 +50,6 @@ pub struct Client {
     admin: bool,
     streaming: bool,
     shutdown: bool,
-    shard: Option<usize>,
     prepared_statements: PreparedStatements,
     in_transaction: bool,
     timeouts: Timeouts,
@@ -232,7 +232,6 @@ impl Client {
             comms,
             admin,
             streaming: false,
-            shard,
             params: params.clone(),
             replication_mode,
             connect_params: params,
@@ -278,7 +277,6 @@ impl Client {
             connect_params: connect_params.clone(),
             params: connect_params,
             admin: false,
-            shard: None,
             in_transaction: false,
             timeouts: Timeouts::from_config(&config().config.general),
             request_buffer: Buffer::new(),
@@ -385,18 +383,17 @@ impl Client {
             QueryLogger::new(&self.request_buffer).log().await?;
         }
 
+        let context = EngineContext::new(self, &inner);
+
         // Query execution engine.
-        let mut engine = Engine::new(
-            &mut self.prepared_statements,
-            &self.params,
-            self.in_transaction,
-        );
+        let mut engine = Engine::new(context);
 
         use engine::Action;
 
-        match engine.execute(&self.request_buffer).await? {
+        match engine.execute().await? {
             Action::Intercept(msgs) => {
                 self.stream.send_many(&msgs).await?;
+                inner.done(self.in_transaction);
                 self.update_stats(&mut inner);
                 return Ok(false);
             }
@@ -432,8 +429,6 @@ impl Client {
                 return Ok(false);
             }
         };
-
-        self.streaming = matches!(command, Some(Command::StartReplication));
 
         if !connected {
             // Simulate transaction starting
@@ -757,7 +752,7 @@ impl Client {
     async fn start_transaction(&mut self) -> Result<(), Error> {
         self.stream
             .send_many(&[
-                CommandComplete::new_begin().message()?,
+                CommandComplete::new_begin().message()?.backend(),
                 ReadyForQuery::in_transaction(true).message()?,
             ])
             .await?;
@@ -780,7 +775,7 @@ impl Client {
         } else {
             vec![]
         };
-        messages.push(cmd.message()?);
+        messages.push(cmd.message()?.backend());
         messages.push(ReadyForQuery::idle().message()?);
         self.stream.send_many(&messages).await?;
         debug!("transaction ended");
@@ -801,7 +796,7 @@ impl Client {
     ) -> Result<(), Error> {
         self.stream
             .send_many(&[
-                CommandComplete::from_str(command).message()?,
+                CommandComplete::from_str(command).message()?.backend(),
                 ReadyForQuery::in_transaction(self.in_transaction).message()?,
             ])
             .await?;

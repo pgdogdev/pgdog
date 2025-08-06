@@ -22,7 +22,7 @@ use super::{Client, Error};
 /// Placed into their own struct so we can easily pass them around
 /// without holding a mutable reference to self in client. This is required
 /// for the `select!` macro to work.
-pub(super) struct Inner {
+pub struct Inner {
     /// Client connection to server(s).
     pub(super) backend: Connection,
     /// Query router.
@@ -40,23 +40,8 @@ impl Inner {
         let user = client.params.get_required("user")?;
         let database = client.params.get_default("database", user);
 
-        let mut backend =
-            Connection::new(user, database, client.admin, &client.passthrough_password)?;
-        let mut router = Router::new();
-
-        // Configure replication mode.
-        if client.shard.is_some() {
-            let cluster = backend.cluster()?;
-            if let Some(config) = cluster.replication_sharding_config() {
-                backend.enter_replication_mode(
-                    client.shard.into(),
-                    &config,
-                    &cluster.sharding_schema(),
-                )?;
-                router.enter_replication_mode();
-                debug!("logical replication sharding [{}]", client.addr);
-            }
-        }
+        let backend = Connection::new(user, database, client.admin, &client.passthrough_password)?;
+        let router = Router::new();
 
         Ok(Self {
             backend,

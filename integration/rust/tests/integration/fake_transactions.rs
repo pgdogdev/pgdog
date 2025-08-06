@@ -19,13 +19,12 @@ async fn test_fake_transactions() {
             .unwrap();
         conn.execute("SELECT 1").await.unwrap(); // Sync application name.
         conn.execute("BEGIN").await.unwrap();
-        check_client_state("idle in transaction", admin.clone()).await;
+        assert!(check_client_state("idle in transaction", admin.clone()).await);
         assert!(check_server_state("idle", admin.clone()).await);
         conn.execute("ROLLBACK").await.unwrap();
         check_client_state("idle", admin.clone()).await;
         assert!(check_server_state("idle", admin.clone()).await);
     }
-
     admin
         .execute("SET read_write_strategy TO 'aggressive'")
         .await
@@ -37,23 +36,23 @@ async fn test_fake_transactions() {
             .unwrap();
         conn.execute("SELECT 1").await.unwrap(); // Sync application name.
         conn.execute("BEGIN").await.unwrap();
-        check_client_state("idle in transaction", admin.clone()).await;
+        assert!(check_client_state("idle in transaction", admin.clone()).await);
         assert!(check_server_state("idle", admin.clone()).await);
         conn.execute("CREATE TABLE test_fake_transactions (id BIGINT)")
             .await
             .unwrap();
         conn.execute("SELECT 1").await.unwrap();
-        check_client_state("idle in transaction", admin.clone()).await;
+        assert!(check_client_state("idle in transaction", admin.clone()).await);
         assert!(check_server_state("idle in transaction", admin.clone()).await);
         conn.execute("ROLLBACK").await.unwrap();
-        check_client_state("idle", admin.clone()).await;
+        assert!(check_client_state("idle", admin.clone()).await);
         assert!(check_server_state("idle", admin.clone()).await);
     }
 
     conn.close().await;
 }
 
-async fn check_client_state(expected: &str, admin: Pool<Postgres>) {
+async fn check_client_state(expected: &str, admin: Pool<Postgres>) -> bool {
     let clients = admin.fetch_all("SHOW CLIENTS").await.unwrap();
     let mut ok = false;
 
@@ -63,12 +62,11 @@ async fn check_client_state(expected: &str, admin: Pool<Postgres>) {
         let application_name: String = client.get("application_name");
 
         if database == "pgdog_sharded" && application_name == "test_fake_transactions" {
-            assert_eq!(state, expected);
-            ok = true;
+            ok = expected == state;
         }
     }
 
-    assert!(ok);
+    ok
 }
 
 async fn check_server_state(expected: &str, admin: Pool<Postgres>) -> bool {

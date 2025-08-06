@@ -5,14 +5,13 @@
 use lru::LruCache;
 use once_cell::sync::Lazy;
 use pg_query::*;
-use std::{collections::HashMap, time::Duration};
+use std::collections::HashMap;
 
 use parking_lot::Mutex;
 use std::sync::Arc;
 use tracing::debug;
 
-use super::{Error, Route};
-use crate::frontend::buffer::BufferedQuery;
+use super::Route;
 
 static CACHE: Lazy<Cache> = Lazy::new(Cache::new);
 
@@ -27,41 +26,55 @@ pub struct Stats {
     pub direct: usize,
     /// Multi-shard queries.
     pub multi: usize,
-    /// Size of the cache.
-    pub size: usize,
 }
 
+/// Abstract syntax tree (query) cache entry,
+/// with statistics.
 #[derive(Debug, Clone)]
 pub struct CachedAst {
+    /// pg_query-produced AST.
     pub ast: Arc<ParseResult>,
-    pub hits: usize,
-    pub direct: usize,
-    pub multi: usize,
-    /// Average duration.
-    pub avg_exec: Duration,
-    /// Max duration.
-    pub max_exec: Duration,
-    /// Min duration.
-    pub min_exec: Duration,
+    /// Statistics. Use a separate Mutex to avoid
+    /// contention when updating them.
+    pub stats: Arc<Mutex<Stats>>,
 }
 
 impl CachedAst {
+    /// Create new cache entry from pg_query's AST.
     fn new(ast: ParseResult) -> Self {
         Self {
             ast: Arc::new(ast),
-            hits: 1,
-            direct: 0,
-            multi: 0,
-            avg_exec: Duration::ZERO,
-            max_exec: Duration::ZERO,
-            min_exec: Duration::ZERO,
+            stats: Arc::new(Mutex::new(Stats {
+                hits: 1,
+                ..Default::default()
+            })),
+        }
+    }
+
+    /// Get the reference to the AST.
+    pub fn ast(&self) -> &ParseResult {
+        &self.ast
+    }
+
+    /// Update stats for this statement, given the route
+    /// calculted by the query parser.
+    pub fn update_stats(&self, route: &Route) {
+        let mut guard = self.stats.lock();
+
+        if route.is_cross_shard() {
+            guard.multi += 1;
+        } else {
+            guard.direct += 1;
         }
     }
 }
 
+/// Mutex-protected query cache.
 #[derive(Debug)]
 struct Inner {
+    /// Least-recently-used cache.
     queries: LruCache<String, CachedAst>,
+    /// Cache global stats.
     stats: Stats,
 }
 
@@ -72,6 +85,7 @@ pub struct Cache {
 }
 
 impl Cache {
+    /// Create new cache. Should only be done once at pooler startup.
     fn new() -> Self {
         Self {
             inner: Arc::new(Mutex::new(Inner {
@@ -81,7 +95,7 @@ impl Cache {
         }
     }
 
-    /// Resize to capacity.
+    /// Resize cache to capacity, evicting any statements exceeding the capacity.
     ///
     /// Minimum capacity is 1.
     pub fn resize(capacity: usize) {
@@ -102,29 +116,32 @@ impl Cache {
     /// N.B. There is a race here that allows multiple threads to
     /// parse the same query. That's better imo than locking the data structure
     /// while we parse the query.
-    pub fn parse(&self, query: &str) -> Result<Arc<ParseResult>> {
+    pub fn parse(&self, query: &str) -> Result<CachedAst> {
         {
             let mut guard = self.inner.lock();
             let ast = guard.queries.get_mut(query).map(|entry| {
-                entry.hits += 1;
-                entry.ast.clone()
+                entry.stats.lock().hits += 1; // No contention on this.
+                entry.clone()
             });
             if let Some(ast) = ast {
                 guard.stats.hits += 1;
-                guard.queries.promote(query);
                 return Ok(ast);
             }
         }
 
         // Parse query without holding lock.
         let entry = CachedAst::new(parse(query)?);
-        let ast = entry.ast.clone();
 
         let mut guard = self.inner.lock();
-        guard.queries.put(query.to_owned(), entry);
+        guard.queries.put(query.to_owned(), entry.clone());
         guard.stats.misses += 1;
 
-        Ok(ast)
+        Ok(entry)
+    }
+
+    /// Parse a statement but do not store it in the cache.
+    pub fn parse_uncached(&self, query: &str) -> Result<CachedAst> {
+        Ok(CachedAst::new(parse(query)?))
     }
 
     /// Get global cache instance.
@@ -132,74 +149,11 @@ impl Cache {
         CACHE.clone()
     }
 
-    pub fn record_command(
-        &self,
-        query: &BufferedQuery,
-        route: &Route,
-    ) -> std::result::Result<(), Error> {
-        match query {
-            BufferedQuery::Prepared(parse) => self
-                .record_command_for_normalized(parse.query(), route, false)
-                .map_err(Error::PgQuery),
-            BufferedQuery::Query(query) => {
-                let query = normalize(query.query()).map_err(Error::PgQuery)?;
-                self.record_command_for_normalized(&query, route, true)
-                    .map_err(Error::PgQuery)
-            }
-        }
-    }
-
-    fn record_command_for_normalized(
-        &self,
-        query: &str,
-        route: &Route,
-        normalized: bool,
-    ) -> Result<()> {
-        // Fast path for prepared statements.
-        {
-            let mut guard = self.inner.lock();
-            let multi = route.is_all_shards() || route.is_multi_shard();
-            if multi {
-                guard.stats.multi += 1;
-            } else {
-                guard.stats.direct += 1;
-            }
-            if let Some(ast) = guard.queries.get_mut(query) {
-                if multi {
-                    ast.multi += 1;
-                } else {
-                    ast.direct += 1;
-                }
-
-                if normalized {
-                    ast.hits += 1;
-                }
-
-                return Ok(());
-            }
-        }
-
-        // Slow path for simple queries.
-        let mut entry = CachedAst::new(parse(query)?);
-        let mut guard = self.inner.lock();
-        if route.is_all_shards() || route.is_multi_shard() {
-            entry.multi += 1;
-        } else {
-            entry.direct += 1;
-        }
-
-        guard.queries.put(query.to_string(), entry);
-
-        Ok(())
-    }
-
     /// Get cache stats.
-    pub fn stats() -> Stats {
+    pub fn stats() -> (Stats, usize) {
         let cache = Self::get();
         let guard = cache.inner.lock();
-        let mut stats = guard.stats;
-        stats.size = guard.queries.len();
-        stats
+        (guard.stats, guard.queries.len())
     }
 
     /// Get a copy of all queries stored in the cache.
@@ -213,7 +167,8 @@ impl Cache {
             .collect()
     }
 
-    /// Reset cache.
+    /// Reset cache, removing all statements
+    /// and setting stats to 0.
     pub fn reset() {
         let cache = Self::get();
         let mut guard = cache.inner.lock();

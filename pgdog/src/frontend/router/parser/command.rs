@@ -1,5 +1,6 @@
 use super::*;
 use crate::{frontend::buffer::BufferedQuery, net::parameter::ParameterValue};
+use lazy_static::lazy_static;
 
 #[derive(Debug, Clone)]
 pub enum Command {
@@ -8,7 +9,6 @@ pub enum Command {
     StartTransaction(BufferedQuery),
     CommitTransaction,
     RollbackTransaction,
-    StartReplication,
     ReplicationMeta,
     Set {
         name: String,
@@ -28,6 +28,25 @@ pub enum Command {
         shard: Shard,
     },
     Unlisten(String),
+}
+
+impl Command {
+    pub fn route(&self) -> &Route {
+        lazy_static! {
+            static ref DEFAULT_ROUTE: Route = Route::write(Shard::All);
+        }
+
+        match self {
+            Self::Query(route) => route,
+            _ => &DEFAULT_ROUTE,
+        }
+    }
+}
+
+impl Default for Command {
+    fn default() -> Self {
+        Command::Query(Route::write(Shard::All))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
