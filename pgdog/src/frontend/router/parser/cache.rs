@@ -26,17 +26,21 @@ pub struct Stats {
     pub direct: usize,
     /// Multi-shard queries.
     pub multi: usize,
-    /// Size of the cache.
-    pub size: usize,
 }
 
+/// Abstract syntax tree (query) cache entry,
+/// with statistics.
 #[derive(Debug, Clone)]
 pub struct CachedAst {
+    /// pg_query-produced AST.
     pub ast: Arc<ParseResult>,
+    /// Statistics. Use a separate Mutex to avoid
+    /// contention when updating them.
     pub stats: Arc<Mutex<Stats>>,
 }
 
 impl CachedAst {
+    /// Create new cache entry from pg_query's AST.
     fn new(ast: ParseResult) -> Self {
         Self {
             ast: Arc::new(ast),
@@ -47,11 +51,13 @@ impl CachedAst {
         }
     }
 
+    /// Get the reference to the AST.
     pub fn ast(&self) -> &ParseResult {
         &self.ast
     }
 
-    /// Update stats for this statement.
+    /// Update stats for this statement, given the route
+    /// calculted by the query parser.
     pub fn update_stats(&self, route: &Route) {
         let mut guard = self.stats.lock();
 
@@ -63,9 +69,12 @@ impl CachedAst {
     }
 }
 
+/// Mutex-protected query cache.
 #[derive(Debug)]
 struct Inner {
+    /// Least-recently-used cache.
     queries: LruCache<String, CachedAst>,
+    /// Cache global stats.
     stats: Stats,
 }
 
@@ -76,6 +85,7 @@ pub struct Cache {
 }
 
 impl Cache {
+    /// Create new cache. Should only be done once at pooler startup.
     fn new() -> Self {
         Self {
             inner: Arc::new(Mutex::new(Inner {
@@ -85,7 +95,7 @@ impl Cache {
         }
     }
 
-    /// Resize to capacity.
+    /// Resize cache to capacity, evicting any statements exceeding the capacity.
     ///
     /// Minimum capacity is 1.
     pub fn resize(capacity: usize) {
@@ -129,7 +139,7 @@ impl Cache {
         Ok(entry)
     }
 
-    /// Parse a statement and do not store it in the cache.
+    /// Parse a statement but do not store it in the cache.
     pub fn parse_uncached(&self, query: &str) -> Result<CachedAst> {
         Ok(CachedAst::new(parse(query)?))
     }
@@ -140,12 +150,10 @@ impl Cache {
     }
 
     /// Get cache stats.
-    pub fn stats() -> Stats {
+    pub fn stats() -> (Stats, usize) {
         let cache = Self::get();
         let guard = cache.inner.lock();
-        let mut stats = guard.stats;
-        stats.size = guard.queries.len();
-        stats
+        (guard.stats, guard.queries.len())
     }
 
     /// Get a copy of all queries stored in the cache.
@@ -159,7 +167,8 @@ impl Cache {
             .collect()
     }
 
-    /// Reset cache.
+    /// Reset cache, removing all statements
+    /// and setting stats to 0.
     pub fn reset() {
         let cache = Self::get();
         let mut guard = cache.inner.lock();

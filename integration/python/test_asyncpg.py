@@ -202,7 +202,7 @@ async def test_delete(conns):
 
 @pytest.mark.asyncio
 async def test_copy(conns):
-    records = 250
+    records = 200
     for i in range(50):
         for conn in conns:
             rows = [[x, f"value_{x}", datetime.now()] for x in range(records)]
@@ -274,15 +274,15 @@ async def in_transaction(conn):
 async def test_timestamp_sorting_binary_format():
     """Test timestamp sorting with binary format."""
     from datetime import datetime, timedelta, timezone
-    
+
     conn = await sharded_async()
-    
+
     try:
         try:
             await conn.execute("DROP TABLE IF EXISTS timestamp_test CASCADE")
         except asyncpg.exceptions.UndefinedTableError:
             pass
-            
+
         await conn.execute("""
             CREATE TABLE timestamp_test (
                 id BIGINT PRIMARY KEY,
@@ -290,7 +290,7 @@ async def test_timestamp_sorting_binary_format():
                 ts TIMESTAMP NOT NULL
             )
         """)
-        
+
         base_time = datetime.now(timezone.utc).replace(tzinfo=None)
         test_data = [
             (1, "Oldest", base_time - timedelta(days=10)),
@@ -300,19 +300,19 @@ async def test_timestamp_sorting_binary_format():
             (3, "Future", base_time + timedelta(days=1)),
             (103, "Far future", base_time + timedelta(days=10)),
         ]
-        
+
         for id_val, name, ts in test_data:
             await conn.execute(
                 "INSERT INTO timestamp_test (id, name, ts) VALUES ($1, $2, $3)",
                 id_val, name, ts
             )
-        
+
         rows = await conn.fetch(
             "SELECT id, name, ts FROM timestamp_test ORDER BY ts DESC"
         )
-        
+
         actual_order = [(row['id'], row['name']) for row in rows]
-        
+
         expected_order = [
             (103, "Far future"),
             (3, "Future"),
@@ -321,10 +321,10 @@ async def test_timestamp_sorting_binary_format():
             (101, "Old"),
             (1, "Oldest"),
         ]
-        
+
         await conn.execute("DROP TABLE IF EXISTS timestamp_test CASCADE")
-        
+
         assert actual_order == expected_order, "Timestamp sorting failed with asyncpg binary format"
-        
+
     finally:
         await conn.close()

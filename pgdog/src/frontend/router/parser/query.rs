@@ -88,13 +88,17 @@ impl QueryParser {
 
         Ok(command)
     }
-}
 
-// -------------------------------------------------------------------------------------------------
-// ----- QueryParser :: query() --------------------------------------------------------------------
-
-impl QueryParser {
-    // Parse a query.
+    /// Parse a query and return a command that tells us what to do with it.
+    ///
+    /// # Arguments
+    ///
+    /// * `context`: Query router context.
+    ///
+    /// # Return
+    ///
+    /// Returns a `Command` if successful, error otherwise.
+    ///
     fn query(&mut self, context: &mut QueryParserContext) -> Result<Command, Error> {
         let use_parser = context.use_parser();
 
@@ -182,18 +186,13 @@ impl QueryParser {
 
         let mut command = match root.node {
             // SET statements -> return immediately.
-            Some(NodeEnum::VariableSetStmt(ref stmt)) => {
-                return self.set(stmt, &context.sharding_schema, context.read_only)
-            }
+            Some(NodeEnum::VariableSetStmt(ref stmt)) => return self.set(stmt, context),
             // SHOW statements -> return immediately.
-            Some(NodeEnum::VariableShowStmt(ref stmt)) => {
-                return self.show(stmt, &context.sharding_schema, context.read_only)
-            }
+            Some(NodeEnum::VariableShowStmt(ref stmt)) => return self.show(stmt, context),
             // DEALLOCATE statements -> return immediately.
             Some(NodeEnum::DeallocateStmt(_)) => {
                 return Ok(Command::Deallocate);
             }
-
             // SELECT statements.
             Some(NodeEnum::SelectStmt(ref stmt)) => self.select(stmt, context),
             // COPY statements.
@@ -323,24 +322,18 @@ impl QueryParser {
             Ok(command)
         }
     }
-}
 
-// -------------------------------------------------------------------------------------------------
-// ----- QueryParser :: Command :: SET -------------------------------------------------------------
-
-impl QueryParser {
-    // Handle the SET command.
-    //
-    // We allow setting shard/sharding key manually outside
-    // the normal protocol flow. This command is not forwarded to the server.
-    //
-    // All other SETs change the params on the client and are eventually sent to the server
-    // when the client is connected to the server.
+    /// Handle the SET command.
+    ///
+    /// We allow setting shard/sharding key manually outside
+    /// the normal protocol flow. This command is not forwarded to the server.
+    ///
+    /// All other SETs change the params on the client and are eventually sent to the server
+    /// when the client is connected to the server.
     fn set(
         &mut self,
         stmt: &VariableSetStmt,
-        sharding_schema: &ShardingSchema,
-        read_only: bool,
+        context: &QueryParserContext,
     ) -> Result<Command, Error> {
         match stmt.name.as_str() {
             "pgdog.shard" => {
@@ -357,7 +350,7 @@ impl QueryParser {
                 }) = node
                 {
                     return Ok(Command::Query(
-                        Route::write(Some(*ival as usize)).set_read(read_only),
+                        Route::write(Some(*ival as usize)).set_read(context.read_only),
                     ));
                 }
             }
@@ -377,10 +370,12 @@ impl QueryParser {
                 }) = node
                 {
                     let ctx = ContextBuilder::from_str(sval.as_str())?
-                        .shards(sharding_schema.shards)
+                        .shards(context.shards)
                         .build()?;
                     let shard = ctx.apply()?;
-                    return Ok(Command::Query(Route::write(shard).set_read(read_only)));
+                    return Ok(Command::Query(
+                        Route::write(shard).set_read(context.read_only),
+                    ));
                 }
             }
 
@@ -433,31 +428,26 @@ impl QueryParser {
             }
         }
 
-        Ok(Command::Query(Route::write(Shard::All).set_read(read_only)))
+        Ok(Command::Query(
+            Route::write(Shard::All).set_read(context.read_only),
+        ))
     }
-}
 
-// -------------------------------------------------------------------------------------------------
-// ----- QueryParser :: Command :: SHOW ------------------------------------------------------------
-
-impl QueryParser {
+    /// Handle SHOW command.
     fn show(
         &mut self,
         stmt: &VariableShowStmt,
-        sharding_schema: &ShardingSchema,
-        read_only: bool,
+        context: &QueryParserContext,
     ) -> Result<Command, Error> {
         match stmt.name.as_str() {
-            "pgdog.shards" => Ok(Command::Shards(sharding_schema.shards)),
-            _ => Ok(Command::Query(Route::write(Shard::All).set_read(read_only))),
+            "pgdog.shards" => Ok(Command::Shards(context.shards)),
+            _ => Ok(Command::Query(
+                Route::write(Shard::All).set_read(context.read_only),
+            )),
         }
     }
-}
 
-// -------------------------------------------------------------------------------------------------
-// ----- QueryParser :: Command :: COPY ------------------------------------------------------------
-
-impl QueryParser {
+    /// Handle COPY command.
     fn copy(stmt: &CopyStmt, context: &QueryParserContext) -> Result<Command, Error> {
         let parser = CopyParser::new(stmt, context.router_context.cluster)?;
         if let Some(parser) = parser {
@@ -466,12 +456,14 @@ impl QueryParser {
             Ok(Command::Query(Route::write(None)))
         }
     }
-}
 
-// -------------------------------------------------------------------------------------------------
-// ----- QueryParser :: Command :: SELECT ----------------------------------------------------------
-
-impl QueryParser {
+    /// Handle SELECT statement.
+    ///
+    /// # Arguments
+    ///
+    /// * `stmt`: SELECT statement from pg_query.
+    /// * `context`: Query parser context.
+    ///
     fn select(
         &mut self,
         stmt: &SelectStmt,
@@ -555,7 +547,13 @@ impl QueryParser {
         Ok(Command::Query(query.set_write(writes)))
     }
 
-    /// Parse the `ORDER BY` clause of a `SELECT` statement.
+    /// Handle the `ORDER BY` clause of a `SELECT` statement.
+    ///
+    /// # Arguments
+    ///
+    /// * `nodes`: List of pg_query-generated nodes from the ORDER BY clause.
+    /// * `params`: Bind parameters, if any.
+    ///
     fn select_sort(nodes: &[Node], params: Option<&Bind>) -> Vec<OrderBy> {
         let mut order_by = vec![];
         for clause in nodes {
@@ -650,6 +648,12 @@ impl QueryParser {
         order_by
     }
 
+    /// Handle Postgres functions that could trigger the SELECT to go to a primary.
+    ///
+    /// # Arguments
+    ///
+    /// * `stmt`: SELECT statement from pg_query.
+    ///
     fn functions(stmt: &SelectStmt) -> Result<FunctionBehavior, Error> {
         for target in &stmt.target_list {
             if let Ok(func) = Function::try_from(target) {
@@ -663,12 +667,14 @@ impl QueryParser {
             FunctionBehavior::writes_only()
         })
     }
-}
 
-// -------------------------------------------------------------------------------------------------
-// ----- QueryParser :: Command :: INSERT ----------------------------------------------------------
-
-impl QueryParser {
+    /// Handle INSERT statement.
+    ///
+    /// # Arguments
+    ///
+    /// * `stmt`: INSERT statement from pg_query.
+    /// * `context`: Query parser context.
+    ///
     fn insert(stmt: &InsertStmt, context: &QueryParserContext) -> Result<Command, Error> {
         let insert = Insert::new(stmt);
         let shard = insert.shard(&context.sharding_schema, context.router_context.bind)?;

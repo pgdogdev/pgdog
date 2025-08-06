@@ -51,6 +51,11 @@ impl Router {
     /// doesn't supply enough information in the buffer, e.g. just issued
     /// a Describe request to a previously submitted Parse.
     pub fn query(&mut self, context: RouterContext) -> Result<&Command, Error> {
+        // Don't invoke parser in copy mode until we're done.
+        if context.copy_mode {
+            return Ok(&self.latest_command);
+        }
+
         let command = self.query_parser.parse(context)?;
         self.routed = true;
         self.latest_command = command;

@@ -36,11 +36,11 @@ impl Logger {
             loop {
                 select! {
                     _ = sleep(me.interval) => {
-                        let stats = Cache::stats();
+                        let (stats, len) = Cache::stats();
 
                         info!(
                             "[query cache stats] direct: {}, multi: {}, hits: {}, misses: {}, size: {}, direct hit rate: {:.3}%",
-                            stats.direct, stats.multi, stats.hits, stats.misses, stats.size, (stats.direct as f64 / std::cmp::max(stats.direct + stats.multi, 1) as f64 * 100.0)
+                            stats.direct, stats.multi, stats.hits, stats.misses, len, (stats.direct as f64 / std::cmp::max(stats.direct + stats.multi, 1) as f64 * 100.0)
                         );
                     }
                     _ = me.shutdown.notified() => break,

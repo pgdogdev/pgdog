@@ -19,6 +19,8 @@ pub struct RouterContext<'a> {
     pub params: &'a Parameters,
     /// Client inside transaction,
     pub in_transaction: bool,
+    /// Currently executing COPY statement.
+    pub copy_mode: bool,
 }
 
 impl<'a> RouterContext<'a> {
@@ -31,6 +33,7 @@ impl<'a> RouterContext<'a> {
     ) -> Result<Self, Error> {
         let query = buffer.query()?;
         let bind = buffer.parameters()?;
+        let copy_mode = buffer.copy();
 
         Ok(Self {
             query,
@@ -39,6 +42,7 @@ impl<'a> RouterContext<'a> {
             prepared_statements: stmt,
             cluster,
             in_transaction,
+            copy_mode,
         })
     }
 }
