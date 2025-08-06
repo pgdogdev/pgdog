@@ -387,7 +387,6 @@ mod test {
                         mapping: None,
                     }],
                     vec!["sharded_omni".into()],
-                    false,
                 ),
                 shards: vec![
                     Shard::new(

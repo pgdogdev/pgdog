@@ -14,32 +14,29 @@ struct Inner {
 #[derive(Debug, Clone)]
 pub struct ShardedTables {
     inner: Arc<Inner>,
-    dry_run: bool,
 }
 
 impl Default for ShardedTables {
     fn default() -> Self {
         Self {
             inner: Arc::new(Inner::default()),
-            dry_run: false,
         }
     }
 }
 
 impl From<&[ShardedTable]> for ShardedTables {
     fn from(value: &[ShardedTable]) -> Self {
-        Self::new(value.to_vec(), vec![], false)
+        Self::new(value.to_vec(), vec![])
     }
 }
 
 impl ShardedTables {
-    pub fn new(tables: Vec<ShardedTable>, omnisharded_tables: Vec<String>, dry_run: bool) -> Self {
+    pub fn new(tables: Vec<ShardedTable>, omnisharded_tables: Vec<String>) -> Self {
         Self {
             inner: Arc::new(Inner {
                 tables,
                 omnisharded: omnisharded_tables.into_iter().collect(),
             }),
-            dry_run,
         }
     }
 
@@ -94,10 +91,6 @@ impl ShardedTables {
         }
 
         None
-    }
-
-    pub(crate) fn dry_run(&self) -> bool {
-        self.dry_run
     }
 }
 

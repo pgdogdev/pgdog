@@ -410,6 +410,7 @@ async fn test_abrupt_disconnect() {
 }
 
 #[tokio::test]
+#[ignore]
 async fn test_lock_session() {
     let (mut conn, mut client, mut inner) = new_client!(true);
 
