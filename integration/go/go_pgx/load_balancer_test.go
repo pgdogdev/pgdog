@@ -164,6 +164,7 @@ func adminCommand(t *testing.T, command string) {
 	defer conn.Close(context.Background())
 
 	rows, err := conn.Query(context.Background(), command, pgx.QueryExecModeSimpleProtocol)
+	assert.NoError(t, err)
 	defer rows.Close()
 }
 
@@ -173,6 +174,7 @@ func getTransactionsAndQueries(t *testing.T, role string) (int64, int64) {
 	defer conn.Close(context.Background())
 
 	rows, err := conn.Query(context.Background(), "SHOW STATS", pgx.QueryExecModeSimpleProtocol)
+	assert.NoError(t, err)
 	defer rows.Close()
 
 	assert.NoError(t, err)

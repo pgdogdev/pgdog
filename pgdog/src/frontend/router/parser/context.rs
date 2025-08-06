@@ -72,7 +72,10 @@ impl<'a> QueryParserContext<'a> {
     ///
     /// Shortcut to avoid the overhead if we can.
     pub(super) fn use_parser(&self) -> bool {
-        self.full_prepared_statements || self.router_needed || self.pub_sub_enabled
+        self.full_prepared_statements
+            || self.router_needed
+            || self.pub_sub_enabled
+            || self.multi_tenant().is_some()
     }
 
     /// Get the query we're parsing, if any.

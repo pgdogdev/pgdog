@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use rust::setup::{admin_sqlx, connections_sqlx};
 use serial_test::serial;
 use sqlx::{Executor, Pool, Postgres, Row};
@@ -32,7 +30,7 @@ async fn test_fake_transactions() {
         .await
         .unwrap();
 
-    for i in 0..5 {
+    for _ in 0..5 {
         conn.execute("SET application_name TO 'test_fake_transactions'")
             .await
             .unwrap();

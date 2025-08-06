@@ -109,8 +109,6 @@ impl QueryParser {
     fn query(&mut self, context: &mut QueryParserContext) -> Result<Command, Error> {
         let use_parser = context.use_parser();
 
-        // Route transaction to primary.
-
         debug!(
             "parser is {}",
             if use_parser { "enabled" } else { "disabled" }
