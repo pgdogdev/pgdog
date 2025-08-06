@@ -1,6 +1,8 @@
 use rust::setup::connections_sqlx;
 use tokio::task::JoinSet;
 
+use crate::get_stat;
+
 #[tokio::test]
 async fn test_connect() {
     for conn in connections_sqlx().await {
@@ -21,6 +23,9 @@ async fn test_connect() {
 #[tokio::test(flavor = "multi_thread")]
 async fn test_concurrent() {
     let mut tasks = JoinSet::new();
+
+    let cache_hits_before = get_stat("pgdog_query_cache_hits").await.unwrap();
+    let direct_before = get_stat("pgdog_query_cache_direct").await.unwrap();
 
     for conn in connections_sqlx().await {
         sqlx::query("CREATE SCHEMA IF NOT EXISTS rust_test_concurrent")
@@ -88,4 +93,20 @@ async fn test_concurrent() {
             .await
             .unwrap();
     }
+
+    let cache_hits_after = get_stat("pgdog_query_cache_hits").await.unwrap();
+    let direct_after = get_stat("pgdog_query_cache_direct").await.unwrap();
+
+    assert!(
+        (direct_after - direct_before).abs() > 14_000,
+        "direct before {} should be within 14k of after {}",
+        direct_before,
+        direct_after
+    );
+    assert!(
+        (cache_hits_after - cache_hits_before).abs() > 14_000,
+        "cache hits before {} should be within 14k of hits after {}",
+        cache_hits_before,
+        cache_hits_after
+    );
 }

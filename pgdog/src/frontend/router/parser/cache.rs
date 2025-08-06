@@ -152,8 +152,24 @@ impl Cache {
     /// Get cache stats.
     pub fn stats() -> (Stats, usize) {
         let cache = Self::get();
-        let guard = cache.inner.lock();
-        (guard.stats, guard.queries.len())
+        let (len, query_stats, mut stats) = {
+            let guard = cache.inner.lock();
+            (
+                guard.queries.len(),
+                guard
+                    .queries
+                    .iter()
+                    .map(|c| c.1.stats.clone())
+                    .collect::<Vec<_>>(),
+                guard.stats.clone(),
+            )
+        };
+        for stat in query_stats {
+            let guard = stat.lock();
+            stats.direct += guard.direct;
+            stats.multi += guard.multi;
+        }
+        (stats, len)
     }
 
     /// Get a copy of all queries stored in the cache.
