@@ -11,7 +11,6 @@ read_write_strategy = "aggressive"
 openmetrics_port = 9090
 openmetrics_namespace = "pgdog_"
 prepared_statements_limit = 500
-idle_healthcheck_delay = 10000000000
 # dns_ttl = 15_000
 query_cache_limit = 500
 pub_sub_channel_size = 4098
