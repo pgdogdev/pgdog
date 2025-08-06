@@ -97,6 +97,16 @@ async fn test_concurrent() {
     let cache_hits_after = get_stat("pgdog_query_cache_hits").await.unwrap();
     let direct_after = get_stat("pgdog_query_cache_direct").await.unwrap();
 
-    assert!(direct_after - direct_before > 15_000);
-    assert!(cache_hits_after - cache_hits_before > 15_000);
+    assert!(
+        direct_after - direct_before > 15_000,
+        "direct before {} should be within 15k of after {}",
+        direct_before,
+        direct_after
+    );
+    assert!(
+        cache_hits_after - cache_hits_before > 15_000,
+        "cache hits before {} should be within 15k of hits after {}",
+        cache_hits_before,
+        cache_hits_after
+    );
 }
