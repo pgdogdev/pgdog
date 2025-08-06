@@ -120,20 +120,6 @@ impl Connection {
         Ok(())
     }
 
-    /// Set the connection into replication mode.
-    pub(crate) fn enter_replication_mode(
-        &mut self,
-        shard: Shard,
-        replication_config: &ReplicationConfig,
-        sharding_schema: &ShardingSchema,
-    ) -> Result<(), Error> {
-        self.binding = Binding::Replication(
-            None,
-            Buffer::new(shard, replication_config, sharding_schema),
-        );
-        Ok(())
-    }
-
     /// Send traffic to mirrors.
     pub(crate) fn mirror(&self, buffer: &crate::frontend::Buffer) {
         for mirror in &self.mirrors {

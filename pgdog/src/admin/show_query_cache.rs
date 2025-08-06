@@ -37,7 +37,7 @@ impl Command for ShowQueryCache {
         .message()?];
 
         let mut queries: Vec<_> = queries.into_iter().collect();
-        queries.sort_by_key(|v| v.1.hits);
+        queries.sort_by_key(|v| v.1.stats.lock().hits);
 
         for query in queries.into_iter().rev() {
             if !self.filter.is_empty() && !query.0.to_lowercase().contains(&self.filter) {
@@ -46,9 +46,9 @@ impl Command for ShowQueryCache {
             let mut data_row = DataRow::new();
             data_row
                 .add(query.0)
-                .add(query.1.hits)
-                .add(query.1.direct)
-                .add(query.1.multi);
+                .add(query.1.stats.lock().hits)
+                .add(query.1.stats.lock().direct)
+                .add(query.1.stats.lock().multi);
             messages.push(data_row.message()?);
         }
 

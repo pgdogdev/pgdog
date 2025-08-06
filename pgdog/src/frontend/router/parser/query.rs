@@ -1,5 +1,5 @@
 //! Route queries to correct shards.
-use std::{collections::HashSet, sync::Arc};
+use std::collections::HashSet;
 
 use crate::{
     backend::{databases::databases, Cluster, ShardingSchema},
@@ -11,12 +11,11 @@ use crate::{
             parser::{rewrite::Rewrite, OrderBy, Shard},
             round_robin,
             sharding::{Centroids, ContextBuilder, Value as ShardingValue},
-            CopyRow,
         },
         PreparedStatements,
     },
     net::{
-        messages::{Bind, CopyData, Vector},
+        messages::{Bind, Vector},
         parameter::ParameterValue,
         Parameters,
     },
@@ -25,13 +24,11 @@ use crate::{
 use super::*;
 
 use multi_tenant::MultiTenantCheck;
-use once_cell::sync::Lazy;
 use pg_query::{
-    fingerprint, parse,
+    fingerprint,
     protobuf::{a_const::Val, *},
     NodeEnum,
 };
-use regex::Regex;
 use tracing::{debug, trace};
 
 // -------------------------------------------------------------------------------------------------
@@ -39,19 +36,15 @@ use tracing::{debug, trace};
 
 #[derive(Debug)]
 pub struct QueryParser {
-    command: Command,
-    replication_mode: bool,
-    routed: bool,
+    // The statement is executed inside a tranasction.
     in_transaction: bool,
+    // No matter what query is executed, we'll send it to the primary.
     write_override: Option<bool>,
 }
 
 impl Default for QueryParser {
     fn default() -> Self {
         Self {
-            command: Command::Query(Route::default()),
-            replication_mode: false,
-            routed: false,
             in_transaction: false,
             write_override: None,
         }
@@ -59,73 +52,38 @@ impl Default for QueryParser {
 }
 
 impl QueryParser {
-    pub fn routed(&self) -> bool {
-        self.routed
-    }
-
+    /// Indicate we are in a transaction.
     pub fn in_transaction(&self) -> bool {
         self.in_transaction
     }
 
-    pub fn parse(&mut self, context: RouterContext) -> Result<&Command, Error> {
-        if let Some(ref query) = context.query {
-            self.command = self.query(
-                query,
-                context.cluster,
-                context.bind,
-                context.prepared_statements,
-                context.params,
-                context.in_transaction,
-            )?;
-        }
+    /// Parse a query and return a command.
+    pub fn parse(&mut self, context: RouterContext) -> Result<Command, Error> {
+        let mut command = if let Some(ref query) = context.query {
+            self.in_transaction = context.in_transaction;
+            let qp_context = QueryParserContext::new(context);
+
+            self.query(qp_context)?
+        } else {
+            Command::default()
+        };
 
         // If the cluster only has one shard, use direct-to-shard queries.
-        if let Command::Query(ref mut query) = self.command {
+        if let Command::Query(ref mut query) = command {
             if !matches!(query.shard(), Shard::Direct(_)) && context.cluster.shards().len() == 1 {
                 query.set_shard_mut(0);
             }
         }
 
-        Ok(&self.command)
-    }
-
-    pub fn enter_replication_mode(&mut self) {
-        self.replication_mode = true;
-    }
-
-    pub fn copy_data(&mut self, rows: &[CopyData]) -> Result<Vec<CopyRow>, Error> {
-        match &mut self.command {
-            Command::Copy(copy) => copy.shard(rows),
-            _ => Ok(vec![]),
-        }
-    }
-
-    pub fn route(&self) -> Route {
-        match self.command {
-            Command::Query(ref route) => route.clone(),
-            _ => Route::write(None),
-        }
-    }
-
-    pub fn reset(&mut self) {
-        self.routed = false;
-        self.in_transaction = false;
-        self.command = Command::Query(Route::default());
-        self.write_override = None;
+        Ok(command)
     }
 }
 
 // -------------------------------------------------------------------------------------------------
 // ----- QueryParser :: query() --------------------------------------------------------------------
 
-static REPLICATION_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(
-        "(CREATE_REPLICATION_SLOT|IDENTIFY_SYSTEM|DROP_REPLICATION_SLOT|READ_REPLICATION_SLOT|ALTER_REPLICATION_SLOT|TIMELINE_HISTORY).*",
-    )
-    .unwrap()
-});
-
 impl QueryParser {
+    // Parse a query.
     fn query(
         &mut self,
         query: &BufferedQuery,
@@ -133,21 +91,7 @@ impl QueryParser {
         bind: Option<&Bind>,
         prepared_statements: &mut PreparedStatements,
         params: &Parameters,
-        in_transaction: bool,
     ) -> Result<Command, Error> {
-        // Replication protocol commands
-        // don't have a node in pg_query,
-        // so we have to parse them using a regex.
-        if self.replication_mode {
-            if query.starts_with("START_REPLICATION") {
-                return Ok(Command::StartReplication);
-            }
-
-            if REPLICATION_REGEX.is_match(query) {
-                return Ok(Command::ReplicationMeta);
-            }
-        }
-
         let shards = cluster.shards().len();
         let read_only = cluster.read_only();
         let write_only = cluster.write_only();
@@ -164,10 +108,9 @@ impl QueryParser {
             && multi_tenant.is_none()
             && !pub_sub_enabled;
         let rw_strategy = cluster.read_write_strategy();
-        self.in_transaction = in_transaction;
 
         // Route transaction to primary.
-        if in_transaction && rw_strategy == &ReadWriteStrategy::Conservative {
+        if self.in_transaction && rw_strategy == &ReadWriteStrategy::Conservative {
             self.write_override = Some(true);
         }
 
@@ -195,20 +138,6 @@ impl QueryParser {
             }
         }
 
-        // We already decided where all queries for this
-        // transaction are going to go.
-        if self.routed && multi_tenant.is_none() {
-            if dry_run {
-                let cache = Cache::get();
-                let route = self.route();
-                cache.record_command(query, &route)?;
-            }
-
-            if multi_tenant.is_none() {
-                return Ok(self.command.clone());
-            }
-        }
-
         // Shortcut for non-sharded clusters.
         let mut shard = if shards > 1 {
             Shard::All
@@ -218,7 +147,7 @@ impl QueryParser {
 
         // Parse hardcoded shard from a query comment.
         // Skipped if cluster isn't sharded.
-        if router_needed && !self.routed && shards > 1 {
+        if router_needed && shards > 1 {
             if let BufferedQuery::Query(query) = query {
                 shard = super::comment::shard(query.query(), &sharding_schema)?;
             }
@@ -242,7 +171,7 @@ impl QueryParser {
         let cache = Cache::get();
 
         // Get the AST from cache or parse the statement live.
-        let ast = match query {
+        let statement = match query {
             // Only prepared statements (or just extended) are cached.
             BufferedQuery::Prepared(query) => cache.parse(query.query()).map_err(Error::PgQuery)?,
             // Don't cache simple queries.
@@ -253,13 +182,15 @@ impl QueryParser {
             // Make your clients use prepared statements
             // or at least send statements with placeholders using the
             // extended protocol.
-            BufferedQuery::Query(query) => Arc::new(parse(query.query()).map_err(Error::PgQuery)?),
+            BufferedQuery::Query(query) => cache
+                .parse_uncached(query.query())
+                .map_err(Error::PgQuery)?,
         };
 
         debug!("{}", query.query());
-        trace!("{:#?}", ast);
+        trace!("{:#?}", statement);
 
-        let rewrite = Rewrite::new(ast.clone());
+        let rewrite = Rewrite::new(statement.ast());
         if rewrite.needs_rewrite() {
             debug!("rewrite needed");
             return rewrite.rewrite(prepared_statements);
@@ -267,13 +198,14 @@ impl QueryParser {
 
         if let Some(multi_tenant) = multi_tenant {
             debug!("running multi-tenant check");
-            MultiTenantCheck::new(cluster.user(), multi_tenant, cluster.schema(), &ast, params)
-                .run()?;
-        }
-
-        if self.routed {
-            debug!("already routed");
-            return Ok(self.command.clone());
+            MultiTenantCheck::new(
+                cluster.user(),
+                multi_tenant,
+                cluster.schema(),
+                statement.ast(),
+                params,
+            )
+            .run()?;
         }
 
         //
@@ -282,7 +214,8 @@ impl QueryParser {
         // We don't expect clients to send multiple queries. If they do
         // only the first one is used for routing.
         //
-        let root = ast
+        let root = statement
+            .ast()
             .protobuf
             .stmts
             .first()
@@ -306,9 +239,14 @@ impl QueryParser {
             }
 
             // SELECT statements.
-            Some(NodeEnum::SelectStmt(ref stmt)) => {
-                self.select(stmt, &ast, cluster, &shard, bind, &sharding_schema)
-            }
+            Some(NodeEnum::SelectStmt(ref stmt)) => self.select(
+                stmt,
+                statement.ast(),
+                cluster,
+                &shard,
+                bind,
+                &sharding_schema,
+            ),
             // COPY statements.
             Some(NodeEnum::CopyStmt(ref stmt)) => Self::copy(stmt, cluster),
             // INSERT statements.
@@ -376,16 +314,19 @@ impl QueryParser {
                 return Ok(Command::Unlisten(stmt.conditionname.clone()));
             }
 
-            Some(NodeEnum::ExplainStmt(ref stmt)) => {
-                self.explain(stmt, &ast, cluster, &shard, bind, &sharding_schema)
-            }
+            Some(NodeEnum::ExplainStmt(ref stmt)) => self.explain(
+                stmt,
+                statement.ast(),
+                cluster,
+                &shard,
+                bind,
+                &sharding_schema,
+            ),
 
             // All others are not handled.
             // They are sent to all shards concurrently.
             _ => Ok(Command::Query(Route::write(None))),
         }?;
-
-        self.routed = true;
 
         // Overwrite shard using shard we got from a comment, if any.
         if let Shard::Direct(shard) = shard {
@@ -430,16 +371,17 @@ impl QueryParser {
         }
 
         debug!("query router decision: {:#?}", command);
+        statement.update_stats(command.route());
 
         if dry_run {
-            let default_route = Route::write(None);
-            cache.record_command(
-                query,
-                match &command {
-                    Command::Query(ref route) => route,
-                    _ => &default_route,
-                },
-            )?;
+            // let default_route = Route::write(None);
+            // cache.record_command(
+            //     query,
+            //     match &command {
+            //         Command::Query(ref route) => route,
+            //         _ => &default_route,
+            //     },
+            // )?;
             Ok(command.dry_run())
         } else {
             Ok(command)
@@ -479,7 +421,6 @@ impl QueryParser {
                     ..
                 }) = node
                 {
-                    self.routed = true;
                     return Ok(Command::Query(
                         Route::write(Some(*ival as usize)).set_read(read_only),
                     ));
@@ -504,7 +445,6 @@ impl QueryParser {
                         .shards(sharding_schema.shards)
                         .build()?;
                     let shard = ctx.apply()?;
-                    self.routed = true;
                     return Ok(Command::Query(Route::write(shard).set_read(read_only)));
                 }
             }
@@ -600,7 +540,7 @@ impl QueryParser {
     fn select(
         &mut self,
         stmt: &SelectStmt,
-        ast: &Arc<pg_query::ParseResult>,
+        ast: &pg_query::ParseResult,
         cluster: &Cluster,
         shard: &Shard,
         bind: Option<&Bind>,
@@ -619,13 +559,11 @@ impl QueryParser {
         }
 
         if matches!(shard, Shard::Direct(_)) {
-            self.routed = true;
             return Ok(Command::Query(Route::read(shard.clone()).set_write(writes)));
         }
 
         // `SELECT NOW()`, `SELECT 1`, etc.
         if ast.tables().is_empty() {
-            self.routed = true;
             return Ok(Command::Query(
                 Route::read(Some(round_robin::next() % cluster.shards().len())).set_write(writes),
             ));
@@ -856,7 +794,7 @@ impl QueryParser {
     fn explain(
         &mut self,
         stmt: &ExplainStmt,
-        ast: &Arc<pg_query::ParseResult>,
+        ast: &pg_query::ParseResult,
         cluster: &Cluster,
         shard: &Shard,
         bind: Option<&Bind>,
@@ -1286,60 +1224,6 @@ mod test {
     }
 
     #[test]
-    fn test_start_replication() {
-        let query = Query::new(
-            r#"START_REPLICATION SLOT "sharded" LOGICAL 0/1E2C3B0 (proto_version '4', origin 'any', publication_names '"sharded"')"#,
-        );
-        let mut buffer = Buffer::new();
-        buffer.push(query.into());
-
-        let mut query_parser = QueryParser::default();
-        query_parser.enter_replication_mode();
-
-        let cluster = Cluster::default();
-
-        let command = query_parser
-            .parse(
-                RouterContext::new(
-                    &buffer,
-                    &cluster,
-                    &mut PreparedStatements::default(),
-                    &Parameters::default(),
-                    false,
-                )
-                .unwrap(),
-            )
-            .unwrap();
-        assert!(matches!(command, &Command::StartReplication));
-    }
-
-    #[test]
-    fn test_replication_meta() {
-        let query = Query::new(r#"IDENTIFY_SYSTEM"#);
-        let mut buffer = Buffer::new();
-        buffer.push(query.into());
-
-        let mut query_parser = QueryParser::default();
-        query_parser.enter_replication_mode();
-
-        let cluster = Cluster::default();
-
-        let command = query_parser
-            .parse(
-                RouterContext::new(
-                    &buffer,
-                    &cluster,
-                    &mut PreparedStatements::default(),
-                    &Parameters::default(),
-                    false,
-                )
-                .unwrap(),
-            )
-            .unwrap();
-        assert!(matches!(command, &Command::ReplicationMeta));
-    }
-
-    #[test]
     fn test_insert() {
         let route = parse!(
             "INSERT INTO sharded (id, email) VALUES ($1, $2)",
@@ -1409,7 +1293,6 @@ mod test {
         let route = query!(q);
         assert!(matches!(route.shard(), Shard::Direct(_)));
         let (_, qp) = command!(q);
-        assert!(qp.routed);
         assert!(!qp.in_transaction);
     }
 
@@ -1418,13 +1301,11 @@ mod test {
         let route = query!(r#"SET "pgdog.shard" TO 1"#);
         assert_eq!(route.shard(), &Shard::Direct(1));
         let (_, qp) = command!(r#"SET "pgdog.shard" TO 1"#);
-        assert!(qp.routed);
         assert!(!qp.in_transaction);
 
         let route = query!(r#"SET "pgdog.sharding_key" TO '11'"#);
         assert_eq!(route.shard(), &Shard::Direct(1));
         let (_, qp) = command!(r#"SET "pgdog.sharding_key" TO '11'"#);
-        assert!(qp.routed);
         assert!(!qp.in_transaction);
 
         for (command, qp) in [
@@ -1438,7 +1319,6 @@ mod test {
                 }
                 _ => panic!("not a set"),
             };
-            assert!(!qp.routed);
             assert!(!qp.in_transaction);
         }
 
@@ -1450,7 +1330,6 @@ mod test {
             }
             _ => panic!("not a set"),
         };
-        assert!(!qp.routed);
         assert!(!qp.in_transaction);
 
         // TODO: user shouldn't be able to set these.
@@ -1463,7 +1342,6 @@ mod test {
             }
             _ => panic!("not a set"),
         };
-        assert!(!qp.routed);
         assert!(!qp.in_transaction);
 
         let (_, mut qp) = command!("BEGIN");
@@ -1497,7 +1375,7 @@ mod test {
             _ => panic!("search path"),
         }
 
-        let ast = parse("SET statement_timeout TO 1").unwrap();
+        let ast = pg_query::parse("SET statement_timeout TO 1").unwrap();
         let mut qp = QueryParser {
             in_transaction: true,
             ..Default::default()
@@ -1529,10 +1407,10 @@ mod test {
             _ => panic!("not a query"),
         };
 
-        assert!(!qp.routed);
         assert!(qp.in_transaction);
         assert_eq!(qp.write_override, Some(true));
 
+        qp.in_transaction = true;
         let route = qp
             .query(
                 &BufferedQuery::Prepared(Parse::named("test", "SELECT $1")),
@@ -1540,14 +1418,12 @@ mod test {
                 None,
                 &mut PreparedStatements::default(),
                 &Parameters::default(),
-                true,
             )
             .unwrap();
         match route {
             Command::Query(q) => assert!(q.is_write()),
             _ => panic!("not a select"),
         }
-        assert!(qp.routed);
 
         let mut cluster = Cluster::new_test();
         cluster.set_read_write_strategy(ReadWriteStrategy::Aggressive);
@@ -1560,16 +1436,15 @@ mod test {
                 None,
                 &mut PreparedStatements::default(),
                 &Parameters::default(),
-                false,
             )
             .unwrap();
         assert!(matches!(
             command,
             Command::StartTransaction(BufferedQuery::Query(_))
         ));
-        assert!(!qp.routed);
         assert!(qp.in_transaction);
 
+        qp.in_transaction = true;
         let route = qp
             .query(
                 &BufferedQuery::Query(Query::new("SET application_name TO 'test'")),
@@ -1577,7 +1452,6 @@ mod test {
                 None,
                 &mut PreparedStatements::default(),
                 &Parameters::default(),
-                true,
             )
             .unwrap();
 
@@ -1619,7 +1493,6 @@ mod test {
     fn test_show_shards() {
         let (cmd, qp) = command!("SHOW pgdog.shards");
         assert!(matches!(cmd, Command::Shards(2)));
-        assert!(!qp.routed);
         assert!(!qp.in_transaction);
     }
 
@@ -1650,8 +1523,8 @@ mod test {
     fn test_function_begin() {
         let (cmd, mut qp) = command!("BEGIN");
         assert!(matches!(cmd, Command::StartTransaction(_)));
-        assert!(!qp.routed);
         assert!(qp.in_transaction);
+        qp.in_transaction = true;
         let route = qp
             .query(
                 &BufferedQuery::Query(Query::new(
@@ -1673,14 +1546,12 @@ mod test {
                 None,
                 &mut PreparedStatements::default(),
                 &Parameters::default(),
-                true,
             )
             .unwrap();
         match route {
             Command::Query(query) => assert!(query.is_write()),
             _ => panic!("not a select"),
         }
-        assert!(qp.routed);
         assert!(qp.in_transaction);
     }
 
@@ -1707,7 +1578,6 @@ mod test {
                 )),
                 &mut PreparedStatements::new(),
                 &Parameters::default(),
-                false,
             )
             .unwrap();
 

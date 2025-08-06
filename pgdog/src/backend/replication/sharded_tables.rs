@@ -5,11 +5,25 @@ use crate::{
 };
 use std::{collections::HashSet, sync::Arc};
 
-#[derive(Debug, Clone, Default)]
+#[derive(Default, Debug)]
+struct Inner {
+    tables: Vec<ShardedTable>,
+    omnisharded: HashSet<String>,
+}
+
+#[derive(Debug, Clone)]
 pub struct ShardedTables {
-    tables: Arc<Vec<ShardedTable>>,
-    omnisharded: Arc<HashSet<String>>,
+    inner: Arc<Inner>,
     dry_run: bool,
+}
+
+impl Default for ShardedTables {
+    fn default() -> Self {
+        Self {
+            inner: Arc::new(Inner::default()),
+            dry_run: false,
+        }
+    }
 }
 
 impl From<&[ShardedTable]> for ShardedTables {
@@ -21,18 +35,20 @@ impl From<&[ShardedTable]> for ShardedTables {
 impl ShardedTables {
     pub fn new(tables: Vec<ShardedTable>, omnisharded_tables: Vec<String>, dry_run: bool) -> Self {
         Self {
-            tables: Arc::new(tables.to_vec()),
-            omnisharded: Arc::new(omnisharded_tables.into_iter().collect()),
+            inner: Arc::new(Inner {
+                tables,
+                omnisharded: omnisharded_tables.into_iter().collect(),
+            }),
             dry_run,
         }
     }
 
     pub fn tables(&self) -> &[ShardedTable] {
-        &self.tables
+        &self.inner.tables
     }
 
     pub fn omnishards(&self) -> &HashSet<String> {
-        &self.omnisharded
+        &self.inner.omnisharded
     }
 
     /// Find a specific sharded table.

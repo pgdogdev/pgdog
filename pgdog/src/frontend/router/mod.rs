@@ -11,6 +11,8 @@ pub mod sharding;
 
 pub use copy::CopyRow;
 pub use error::Error;
+use lazy_static::lazy_static;
+use parser::Shard;
 pub use parser::{Command, QueryParser, Route};
 
 use super::Buffer;
@@ -22,6 +24,7 @@ pub use sharding::{Lists, Ranges};
 #[derive(Debug)]
 pub struct Router {
     query_parser: QueryParser,
+    active_command: Option<Command>,
 }
 
 impl Default for Router {
@@ -35,12 +38,8 @@ impl Router {
     pub fn new() -> Router {
         Self {
             query_parser: QueryParser::default(),
+            active_command: None,
         }
-    }
-
-    /// Set into replication mode.
-    pub fn enter_replication_mode(&mut self) {
-        self.query_parser.enter_replication_mode();
     }
 
     /// Route a query to a shard.
@@ -50,31 +49,60 @@ impl Router {
     /// doesn't supply enough information in the buffer, e.g. just issued
     /// a Describe request to a previously submitted Parse.
     pub fn query(&mut self, context: RouterContext) -> Result<&Command, Error> {
-        Ok(self.query_parser.parse(context)?)
+        let command = self.query_parser.parse(context)?;
+        if self.active_command.is_none() {
+            self.active_command = Some(command);
+        }
+
+        Ok(self.command())
     }
 
     /// Parse CopyData messages and shard them.
     pub fn copy_data(&mut self, buffer: &Buffer) -> Result<Vec<CopyRow>, Error> {
-        Ok(self.query_parser.copy_data(&buffer.copy_data()?)?)
+        match self.active_command {
+            Some(Command::Copy(ref mut copy)) => Ok(copy.shard(&buffer.copy_data()?)?),
+            _ => Ok(vec![]),
+        }
     }
 
     /// Get current route.
-    pub fn route(&self) -> Route {
-        self.query_parser.route()
+    pub fn route(&self) -> &Route {
+        lazy_static! {
+            static ref DEFAULT_ROUTE: Route = Route::write(Shard::All);
+        }
+
+        match self.command() {
+            Command::Query(route) => route,
+            _ => &DEFAULT_ROUTE,
+        }
     }
 
-    /// Reset sharding context.
+    /// Reset query routing state.
     pub fn reset(&mut self) {
-        self.query_parser.reset()
+        self.query_parser = QueryParser::default();
+        self.active_command = None;
     }
 
     /// The router is configured.
     pub fn routed(&self) -> bool {
-        self.query_parser.routed()
+        self.active_command.is_some()
     }
 
     /// Query parser is inside a transaction.
     pub fn in_transaction(&self) -> bool {
         self.query_parser.in_transaction()
+    }
+
+    /// Get last commmand computed by the query parser.
+    pub fn command(&self) -> &Command {
+        lazy_static! {
+            static ref DEFAULT_COMMAND: Command = Command::Query(Route::write(Shard::All));
+        }
+
+        if let Some(ref command) = self.active_command {
+            command
+        } else {
+            &DEFAULT_COMMAND
+        }
     }
 }
