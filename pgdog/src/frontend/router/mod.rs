@@ -25,6 +25,7 @@ pub use sharding::{Lists, Ranges};
 pub struct Router {
     query_parser: QueryParser,
     active_command: Option<Command>,
+    latest_command: Command,
 }
 
 impl Default for Router {
@@ -39,6 +40,7 @@ impl Router {
         Self {
             query_parser: QueryParser::default(),
             active_command: None,
+            latest_command: Command::default(),
         }
     }
 
@@ -52,9 +54,11 @@ impl Router {
         let command = self.query_parser.parse(context)?;
         if self.active_command.is_none() {
             self.active_command = Some(command);
+            Ok(self.command())
+        } else {
+            self.latest_command = command;
+            Ok(&self.latest_command)
         }
-
-        Ok(self.command())
     }
 
     /// Parse CopyData messages and shard them.
@@ -81,6 +85,7 @@ impl Router {
     pub fn reset(&mut self) {
         self.query_parser = QueryParser::default();
         self.active_command = None;
+        self.latest_command = Command::default();
     }
 
     /// The router is configured.

@@ -410,7 +410,6 @@ async fn test_abrupt_disconnect() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn test_lock_session() {
     let (mut conn, mut client, mut inner) = new_client!(true);
 
@@ -450,7 +449,6 @@ async fn test_transaction_state() {
 
     client.buffer(&State::Idle).await.unwrap();
     client.client_messages(inner.get()).await.unwrap();
-
     read!(conn, ['C', 'Z']);
 
     assert!(client.in_transaction);
