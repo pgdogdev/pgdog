@@ -15,7 +15,7 @@ use crate::{
         router::{parser::Shard, CopyRow, Route},
         Router,
     },
-    net::{Bind, Message, ParameterStatus, Parameters, Protocol},
+    net::{Bind, Message, ParameterStatus, Protocol},
     state::State,
 };
 
@@ -24,7 +24,11 @@ use super::{
     Address, Cluster, Request,
 };
 
-use std::{mem::replace, time::Duration};
+use std::{
+    mem::replace,
+    ops::{Deref, DerefMut},
+    time::Duration,
+};
 
 pub mod aggregate;
 pub mod binding;
@@ -78,11 +82,6 @@ impl Connection {
         }
 
         Ok(conn)
-    }
-
-    /// Check if the connection is available.
-    pub(crate) fn connected(&self) -> bool {
-        self.binding.connected()
     }
 
     /// Create a server connection if one doesn't exist already.
@@ -203,16 +202,6 @@ impl Connection {
         }
     }
 
-    /// Disconnect from a server.
-    pub(crate) fn disconnect(&mut self) {
-        self.binding.disconnect();
-    }
-
-    /// Close the connection without banning the pool.
-    pub(crate) fn force_close(&mut self) {
-        self.binding.force_close()
-    }
-
     /// Read a message from the server connection or a pub/sub channel.
     ///
     /// Only await this future inside a `select!`. One of the conditions
@@ -274,16 +263,6 @@ impl Connection {
         }
 
         Ok(())
-    }
-
-    /// Send messages to the server.
-    pub(crate) async fn send(&mut self, messages: &crate::frontend::Buffer) -> Result<(), Error> {
-        self.binding.send(messages).await
-    }
-
-    /// Send COPY subprotocol data to the right shards.
-    pub(crate) async fn send_copy(&mut self, rows: Vec<CopyRow>) -> Result<(), Error> {
-        self.binding.send_copy(rows).await
     }
 
     /// Send buffer in a potentially sharded context.
@@ -372,19 +351,6 @@ impl Connection {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn is_dirty(&self) -> bool {
-        self.binding.is_dirty()
-    }
-
-    pub(crate) fn has_more_messages(&self) -> bool {
-        self.binding.has_more_messages()
-    }
-
-    pub(crate) fn copy_mode(&self) -> bool {
-        self.binding.copy_mode()
-    }
-
     /// Get connected servers addresses.
     pub(crate) fn addr(&mut self) -> Result<Vec<&Address>, Error> {
         Ok(match self.binding {
@@ -425,17 +391,18 @@ impl Connection {
     pub(crate) fn session_mode(&self) -> bool {
         !self.transaction_mode()
     }
+}
 
-    /// Execute a query on the binding, if it's connected.
-    pub(crate) async fn execute(&mut self, query: &str) -> Result<(), Error> {
-        self.binding.execute(query).await
+impl Deref for Connection {
+    type Target = Binding;
+
+    fn deref(&self) -> &Self::Target {
+        &self.binding
     }
+}
 
-    pub(crate) async fn link_client(&mut self, params: &Parameters) -> Result<usize, Error> {
-        self.binding.link_client(params).await
-    }
-
-    pub(crate) fn changed_params(&mut self) -> Parameters {
-        self.binding.changed_params()
+impl DerefMut for Connection {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.binding
     }
 }

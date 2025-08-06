@@ -9,7 +9,7 @@ use super::*;
 
 /// The server(s) the client is connected to.
 #[derive(Debug)]
-pub(super) enum Binding {
+pub enum Binding {
     Server(Option<Guard>),
     Admin(Backend),
     MultiShard(Vec<Guard>, MultiShard),
@@ -22,7 +22,8 @@ impl Default for Binding {
 }
 
 impl Binding {
-    pub(super) fn disconnect(&mut self) {
+    /// Close all connections to all servers.
+    pub fn disconnect(&mut self) {
         match self {
             Binding::Server(guard) => drop(guard.take()),
             Binding::Admin(_) => (),
@@ -30,7 +31,9 @@ impl Binding {
         }
     }
 
-    pub(super) fn force_close(&mut self) {
+    /// Close connections and indicate to servers that
+    /// they are probably broken and should not be re-used.
+    pub fn force_close(&mut self) {
         match self {
             Binding::Server(Some(ref mut guard)) => guard.stats_mut().state(State::ForceClose),
             Binding::MultiShard(ref mut guards, _) => {
@@ -44,7 +47,8 @@ impl Binding {
         self.disconnect();
     }
 
-    pub(super) fn connected(&self) -> bool {
+    /// Are we connnected to a backend?
+    pub fn connected(&self) -> bool {
         match self {
             Binding::Server(server) => server.is_some(),
             Binding::MultiShard(servers, _) => !servers.is_empty(),
@@ -108,7 +112,8 @@ impl Binding {
         }
     }
 
-    pub(super) async fn send(&mut self, messages: &crate::frontend::Buffer) -> Result<(), Error> {
+    /// Send an entire buffer of messages to the servers(s).
+    pub async fn send(&mut self, messages: &crate::frontend::Buffer) -> Result<(), Error> {
         match self {
             Binding::Server(server) => {
                 if let Some(server) = server {
@@ -130,7 +135,7 @@ impl Binding {
     }
 
     /// Send copy messages to shards they are destined to go.
-    pub(super) async fn send_copy(&mut self, rows: Vec<CopyRow>) -> Result<(), Error> {
+    pub async fn send_copy(&mut self, rows: Vec<CopyRow>) -> Result<(), Error> {
         match self {
             Binding::MultiShard(servers, _state) => {
                 for row in rows {
@@ -186,7 +191,7 @@ impl Binding {
         }
     }
 
-    pub(super) fn has_more_messages(&self) -> bool {
+    pub fn has_more_messages(&self) -> bool {
         match self {
             Binding::Admin(admin) => !admin.done(),
             Binding::Server(Some(server)) => server.has_more_messages(),
@@ -214,7 +219,7 @@ impl Binding {
     }
 
     /// Execute a query on all servers.
-    pub(super) async fn execute(&mut self, query: &str) -> Result<(), Error> {
+    pub async fn execute(&mut self, query: &str) -> Result<(), Error> {
         match self {
             Binding::Server(Some(ref mut server)) => {
                 server.execute(query).await?;
@@ -232,7 +237,7 @@ impl Binding {
         Ok(())
     }
 
-    pub(super) async fn link_client(&mut self, params: &Parameters) -> Result<usize, Error> {
+    pub async fn link_client(&mut self, params: &Parameters) -> Result<usize, Error> {
         match self {
             Binding::Server(Some(ref mut server)) => server.link_client(params).await,
             Binding::MultiShard(ref mut servers, _) => {
@@ -250,7 +255,7 @@ impl Binding {
         }
     }
 
-    pub(super) fn changed_params(&mut self) -> Parameters {
+    pub fn changed_params(&mut self) -> Parameters {
         match self {
             Binding::Server(Some(ref mut server)) => server.changed_params().clone(),
             Binding::MultiShard(ref mut servers, _) => {
@@ -275,7 +280,7 @@ impl Binding {
     }
 
     #[cfg(test)]
-    pub(super) fn is_dirty(&self) -> bool {
+    pub fn is_dirty(&self) -> bool {
         match self {
             Binding::Server(Some(ref server)) => server.dirty(),
             Binding::MultiShard(ref servers, _state) => servers.iter().any(|s| s.dirty()),
@@ -283,7 +288,7 @@ impl Binding {
         }
     }
 
-    pub(super) fn copy_mode(&self) -> bool {
+    pub fn copy_mode(&self) -> bool {
         match self {
             Binding::Admin(_) => false,
             Binding::MultiShard(ref servers, _state) => servers.iter().all(|s| s.copy_mode()),
