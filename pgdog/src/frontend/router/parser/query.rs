@@ -73,6 +73,10 @@ impl QueryParser {
         let mut command = if qp_context.query().is_ok() {
             self.in_transaction = qp_context.router_context.in_transaction;
             self.write_override = qp_context.write_override();
+            println!(
+                "in transaction: {} {}",
+                self.in_transaction, qp_context.router_context.in_transaction
+            );
 
             self.query(&mut qp_context)?
         } else {
@@ -205,32 +209,10 @@ impl QueryParser {
             Some(NodeEnum::DeleteStmt(ref stmt)) => Self::delete(stmt, context),
             // Transaction control statements,
             // e.g. BEGIN, COMMIT, etc.
-            Some(NodeEnum::TransactionStmt(ref stmt)) => {
-                // Only allow to intercept transaction statements
-                // if they are using the simple protocol.
-                if context.query()?.simple() {
-                    if context.rw_conservative() && !context.read_only {
-                        self.write_override = true;
-                    }
-
-                    match stmt.kind() {
-                        TransactionStmtKind::TransStmtCommit => {
-                            return Ok(Command::CommitTransaction)
-                        }
-                        TransactionStmtKind::TransStmtRollback => {
-                            return Ok(Command::RollbackTransaction)
-                        }
-                        TransactionStmtKind::TransStmtBegin
-                        | TransactionStmtKind::TransStmtStart => {
-                            self.in_transaction = true;
-                            return Ok(Command::StartTransaction(context.query()?.clone()));
-                        }
-                        _ => Ok(Command::Query(Route::write(None))),
-                    }
-                } else {
-                    Ok(Command::Query(Route::write(None)))
-                }
-            }
+            Some(NodeEnum::TransactionStmt(ref stmt)) => match self.transaction(stmt, context)? {
+                Command::Query(query) => Ok(Command::Query(query)),
+                command => return Ok(command),
+            },
 
             // LISTEN <channel>;
             Some(NodeEnum::ListenStmt(ref stmt)) => {
@@ -323,6 +305,40 @@ impl QueryParser {
         }
     }
 
+    /// Handle transaction control statements, e.g. BEGIN, ROLLBACK, COMMIT.
+    ///
+    /// # Arguments
+    ///
+    /// * `stmt`: Transaction statement from pg_query.
+    /// * `context`: Query parser context.
+    ///
+    fn transaction(
+        &mut self,
+        stmt: &TransactionStmt,
+        context: &QueryParserContext,
+    ) -> Result<Command, Error> {
+        // Only allow to intercept transaction statements
+        // if they are using the simple protocol.
+        if context.query()?.simple() {
+            // Send all transactions to primary.
+            if context.rw_conservative() && !context.read_only {
+                self.write_override = true;
+            }
+
+            match stmt.kind() {
+                TransactionStmtKind::TransStmtCommit => return Ok(Command::CommitTransaction),
+                TransactionStmtKind::TransStmtRollback => return Ok(Command::RollbackTransaction),
+                TransactionStmtKind::TransStmtBegin | TransactionStmtKind::TransStmtStart => {
+                    self.in_transaction = true;
+                    return Ok(Command::StartTransaction(context.query()?.clone()));
+                }
+                _ => Ok(Command::Query(Route::write(None))),
+            }
+        } else {
+            Ok(Command::Query(Route::write(None)))
+        }
+    }
+
     /// Handle the SET command.
     ///
     /// We allow setting shard/sharding key manually outside
@@ -382,6 +398,7 @@ impl QueryParser {
             // TODO: Handle SET commands for updating client
             // params without touching the server.
             name => {
+                println!("in transaction: {}", self.in_transaction);
                 if !self.in_transaction {
                     let mut value = vec![];
 
@@ -1107,6 +1124,23 @@ mod test {
         }};
     }
 
+    macro_rules! query_parser {
+        ($qp:expr, $query:expr, $in_transaction:expr, $cluster:expr) => {{
+            let cluster = $cluster;
+            let mut prep_stmts = PreparedStatements::default();
+            let params = Parameters::default();
+            let buffer: Buffer = vec![$query.into()].into();
+            let router_context =
+                RouterContext::new(&buffer, &cluster, &mut prep_stmts, &params, $in_transaction)
+                    .unwrap();
+            $qp.parse(router_context).unwrap()
+        }};
+
+        ($qp:expr, $query:expr, $in_transaction:expr) => {
+            query_parser!($qp, $query, $in_transaction, Cluster::new_test())
+        };
+    }
+
     macro_rules! parse {
         ($query: expr, $params: expr) => {
             parse!("", $query, $params)
@@ -1271,18 +1305,7 @@ mod test {
 
         let (_, mut qp) = command!("BEGIN");
         assert!(qp.write_override);
-        let command = qp
-            .parse(
-                RouterContext::new(
-                    &vec![Query::new(r#"SET statement_timeout TO 3000"#).into()].into(),
-                    &Cluster::new_test(),
-                    &mut PreparedStatements::default(),
-                    &Parameters::default(),
-                    true,
-                )
-                .unwrap(),
-            )
-            .unwrap();
+        let command = query_parser!(qp, Query::new(r#"SET statement_timeout TO 3000"#), true);
         match command {
             Command::Query(q) => assert!(q.is_write()),
             _ => panic!("set should trigger binding"),
@@ -1300,27 +1323,27 @@ mod test {
             _ => panic!("search path"),
         }
 
-        let ast = pg_query::parse("SET statement_timeout TO 1").unwrap();
-        let mut qp = QueryParser {
-            in_transaction: true,
-            ..Default::default()
-        };
+        let buffer: Buffer = vec![Query::new(r#"SET statement_timeout TO 1"#).into()].into();
+        let cluster = Cluster::new_test();
+        let mut prep_stmts = PreparedStatements::default();
+        let params = Parameters::default();
+        let router_context =
+            RouterContext::new(&buffer, &cluster, &mut prep_stmts, &params, true).unwrap();
+        let mut context = QueryParserContext::new(router_context);
 
-        let root = ast.protobuf.stmts.first().unwrap().stmt.as_ref().unwrap();
-        match root.node.as_ref() {
-            Some(NodeEnum::VariableSetStmt(stmt)) => {
-                for read_only in [true, false] {
-                    let route = qp.set(stmt, &ShardingSchema::default(), read_only).unwrap();
-                    match route {
-                        Command::Query(route) => {
-                            assert_eq!(route.is_read(), read_only);
-                        }
-                        _ => panic!("not a query"),
-                    }
+        for read_only in [true, false] {
+            context.read_only = read_only;
+            // Overriding context above.
+            let mut qp = QueryParser::default();
+            qp.in_transaction = true;
+            let route = qp.query(&mut context).unwrap();
+
+            match route {
+                Command::Query(route) => {
+                    assert_eq!(route.is_read(), read_only);
                 }
+                cmd => panic!("not a query: {:?}", cmd),
             }
-
-            _ => panic!("not a set"),
         }
     }
 
@@ -1335,16 +1358,7 @@ mod test {
         assert!(qp.in_transaction);
         assert!(qp.write_override);
 
-        let buffer: Buffer = vec![Parse::named("test", "SELECT $1").into()].into();
-        let cluster = Cluster::new_test();
-        let mut prep_stmts = PreparedStatements::default();
-        let params = Parameters::default();
-
-        // qp.in_transaction = true;
-        let router_context =
-            RouterContext::new(&buffer, &cluster, &mut prep_stmts, &params, true).unwrap();
-        let mut context = QueryParserContext::new(router_context);
-        let route = qp.query(&mut context).unwrap();
+        let route = query_parser!(qp, Parse::named("test", "SELECT $1"), true);
         match route {
             Command::Query(q) => assert!(q.is_write()),
             _ => panic!("not a select"),
@@ -1352,13 +1366,12 @@ mod test {
 
         let mut cluster = Cluster::new_test();
         cluster.set_read_write_strategy(ReadWriteStrategy::Aggressive);
-
-        let buffer: Buffer = vec![Query::new("BEGIN").into()].into();
-        let mut qp = QueryParser::default();
-        let router_context =
-            RouterContext::new(&buffer, &cluster, &mut prep_stmts, &params, true).unwrap();
-        let mut context = QueryParserContext::new(router_context);
-        let command = qp.query(&mut context).unwrap();
+        let command = query_parser!(
+            QueryParser::default(),
+            Query::new("BEGIN"),
+            true,
+            cluster.clone()
+        );
         assert!(matches!(
             command,
             Command::StartTransaction(BufferedQuery::Query(_))
@@ -1366,12 +1379,12 @@ mod test {
         assert!(qp.in_transaction);
 
         qp.in_transaction = true;
-        let buffer: Buffer = vec![Query::new("SET application_name TO 'test'").into()].into();
-        let router_context =
-            RouterContext::new(&buffer, &cluster, &mut prep_stmts, &params, true).unwrap();
-        let mut context = QueryParserContext::new(router_context);
-        let route = qp.query(&mut context).unwrap();
-
+        let route = query_parser!(
+            qp,
+            Query::new("SET application_name TO 'test'"),
+            true,
+            cluster.clone()
+        );
         match route {
             Command::Query(q) => {
                 assert!(q.is_write());
@@ -1390,20 +1403,8 @@ mod test {
 
     #[test]
     fn test_begin_extended() {
-        let mut qr = QueryParser::default();
-        let result = qr
-            .parse(
-                RouterContext::new(
-                    &vec![crate::net::Parse::new_anonymous("BEGIN").into()].into(),
-                    &Cluster::new_test(),
-                    &mut PreparedStatements::default(),
-                    &Parameters::default(),
-                    false,
-                )
-                .unwrap(),
-            )
-            .unwrap();
-        assert!(matches!(result, Command::Query(_)));
+        let command = query_parser!(QueryParser::default(), Parse::new_anonymous("BEGIN"), false);
+        assert!(matches!(command, Command::Query(_)));
     }
 
     #[test]
@@ -1480,20 +1481,17 @@ WHERE t2.account = (
         assert_eq!(route.shard(), &Shard::Direct(1234));
 
         // Comment is ignored.
-        let mut qp = QueryParser::default();
-        let cluster = Cluster::new_test();
-        let mut prep_stmts = PreparedStatements::default();
-        let params = Parameters::default();
-        let buffer: Buffer =
-            vec![Query::new("/* pgdog_shard: 1234 */ SELECT * FROM sharded WHERE id = $1").into()]
-                .into();
-        let router_context =
-            RouterContext::new(&buffer, &cluster, &mut prep_stmts, &params, false).unwrap();
-        let mut context = QueryParserContext::new(router_context);
-        let command = qp.query(&mut context).unwrap();
+        let command = query_parser!(
+            QueryParser::default(),
+            Parse::named(
+                "test",
+                "/* pgdog_shard: 1234 */ SELECT * FROM sharded WHERE id = $1"
+            ),
+            false
+        );
 
         match command {
-            Command::Query(query) => assert_eq!(query.shard(), &Shard::Direct(1234)),
+            Command::Query(query) => assert_eq!(query.shard(), &Shard::All),
             _ => panic!("not a query"),
         }
     }

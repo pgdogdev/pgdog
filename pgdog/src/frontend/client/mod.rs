@@ -430,8 +430,6 @@ impl Client {
             }
         };
 
-        self.streaming = matches!(command, Some(Command::StartReplication));
-
         if !connected {
             // Simulate transaction starting
             // until client sends an actual query.

@@ -9,7 +9,6 @@ pub enum Command {
     StartTransaction(BufferedQuery),
     CommitTransaction,
     RollbackTransaction,
-    StartReplication,
     ReplicationMeta,
     Set {
         name: String,
