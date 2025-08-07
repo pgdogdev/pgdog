@@ -39,7 +39,6 @@ pub struct LogicalTransaction {
     pub status: TransactionStatus,
     manual_shard: Option<Shard>,
     dirty_shard: Option<Shard>,
-    statements_executed: usize,
 }
 
 impl LogicalTransaction {
@@ -48,7 +47,6 @@ impl LogicalTransaction {
             status: TransactionStatus::Idle,
             manual_shard: None,
             dirty_shard: None,
-            statements_executed: 0,
         }
     }
 }
@@ -161,13 +159,12 @@ impl LogicalTransaction {
 
     /// Reset all transactional/session state.
     ///
-    /// Sets status to `Idle`, clears manual and dirty shard, and zeroes `statements_executed`.
+    /// Sets status to `Idle`, clears manual and dirty shard
     /// Safe to call in any state.
     pub fn reset(&mut self) {
         self.status = TransactionStatus::Idle;
         self.manual_shard = None;
         self.dirty_shard = None;
-        self.statements_executed = 0;
     }
 
     /// Pin the transaction to a specific shard.
@@ -258,7 +255,7 @@ impl fmt::Display for TransactionError {
             NoActiveTransaction => write!(f, "no active transaction"),
             AlreadyFinalized => write!(f, "transaction already finalized"),
             NoPendingBegins => write!(f, "transaction not pending"),
-            InvalidShardType => write!(f, "msharding hints must be ::Direct(n)"),
+            InvalidShardType => write!(f, "sharding hints must be ::Direct(n)"),
             ShardConflict => {
                 write!(f, "can't run a transaction on multiple shards")
             }
@@ -298,7 +295,6 @@ mod tests {
         assert_eq!(tx.status, TransactionStatus::Idle);
         assert_eq!(tx.manual_shard, None);
         assert_eq!(tx.dirty_shard, None);
-        assert_eq!(tx.statements_executed, 0);
     }
 
     #[test]
@@ -459,7 +455,6 @@ mod tests {
         assert_eq!(tx.status, TransactionStatus::Idle);
         assert_eq!(tx.manual_shard, None);
         assert_eq!(tx.dirty_shard, None);
-        assert_eq!(tx.statements_executed, 0);
     }
 
     #[test]
@@ -661,7 +656,6 @@ mod tests {
         let mut tx = LogicalTransaction::new();
         tx.soft_begin().unwrap();
         tx.execute_query(Shard::Direct(0)).unwrap();
-        assert_eq!(tx.statements_executed, 0);
     }
 }
 
