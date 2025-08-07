@@ -11,6 +11,7 @@ fi
 
 for user in pgdog pgdog1 pgdog2 pgdog3; do
     psql -c "CREATE USER ${user} LOGIN SUPERUSER PASSWORD 'pgdog'" || true
+    psql -c "CREATE DATABASE ${user}" || true
 done
 
 # GitHub fix

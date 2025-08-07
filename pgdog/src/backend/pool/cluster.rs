@@ -414,6 +414,8 @@ mod test {
                         ReadWriteSplit::default(),
                     ),
                 ],
+                user: "pgdog".into(),
+                name: "pgdog".into(),
                 ..Default::default()
             }
         }

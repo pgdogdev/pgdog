@@ -576,14 +576,17 @@ impl Client {
             }
         }
 
+        // Queue up request to mirrors, if any.
+        // Do this before sending query to actual server
+        // to have accurate timings between queries.
+        inner.backend.mirror(&self.request_buffer);
+
+        // Send request to actual server.
         inner
             .handle_buffer(&self.request_buffer, self.streaming)
             .await?;
 
         self.update_stats(&mut inner);
-
-        // Send traffic to mirrors, if any.
-        inner.backend.mirror(&self.request_buffer);
 
         #[cfg(test)]
         let handle_response = false;
@@ -628,6 +631,11 @@ impl Client {
             // or server is telling us we are.
             self.in_transaction = message.in_transaction() || inner.start_transaction.is_some();
             inner.stats.idle(self.in_transaction);
+
+            // Flush mirrors.
+            if !self.in_transaction {
+                inner.backend.mirror_flush();
+            }
         }
 
         inner.stats.sent(message.len());

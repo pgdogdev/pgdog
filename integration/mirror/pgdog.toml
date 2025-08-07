@@ -1,0 +1,15 @@
+[general]
+mirror_exposure = 1.0
+
+[[databases]]
+name = "pgdog"
+host = "127.0.0.1"
+
+[[databases]]
+name = "pgdog_mirror"
+host = "127.0.0.1"
+database_name = "pgdog1"
+mirror_of = "pgdog"
+
+[admin]
+password = "pgdog"

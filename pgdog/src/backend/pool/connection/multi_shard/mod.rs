@@ -37,7 +37,7 @@ struct Counters {
 
 /// Multi-shard state.
 #[derive(Default, Debug)]
-pub(super) struct MultiShard {
+pub struct MultiShard {
     /// Number of shards we are connected to.
     shards: usize,
     /// Route the query is taking.
