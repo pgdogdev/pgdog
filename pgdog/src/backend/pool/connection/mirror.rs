@@ -1,6 +1,8 @@
+use std::time::Duration;
+
 use rand::{thread_rng, Rng};
 use tokio::select;
-use tokio::time::timeout;
+use tokio::time::{sleep, timeout, Instant};
 use tokio::{spawn, sync::mpsc::*};
 use tracing::{debug, error};
 
@@ -18,9 +20,16 @@ use crate::{
 use super::Connection;
 use super::Error;
 
+/// Simulate original delay between requests.
+#[derive(Clone, Debug)]
+struct BufferWithDelay {
+    delay: Duration,
+    buffer: Buffer,
+}
+
 #[derive(Clone, Debug)]
 pub struct MirrorRequest {
-    buffer: Vec<Buffer>,
+    buffer: Vec<BufferWithDelay>,
 }
 
 #[derive(Debug)]
@@ -123,7 +132,7 @@ impl Mirror {
             let routing_buffer = request.buffer.first().ok_or(Error::MirrorBufferEmpty)?;
 
             if let Ok(context) = RouterContext::new(
-                &routing_buffer,
+                &routing_buffer.buffer,
                 &self.cluster,
                 &mut self.prepared_statements,
                 &self.params,
@@ -142,8 +151,11 @@ impl Mirror {
 
         // TODO: handle streaming.
         for buffer in &request.buffer {
+            // Simulate original delay between queries.
+            sleep(buffer.delay).await;
+
             self.connection
-                .handle_buffer(buffer, &mut self.router, false)
+                .handle_buffer(&buffer.buffer, &mut self.router, false)
                 .await?;
         }
 
@@ -163,7 +175,8 @@ pub(crate) struct MirrorHandler {
     tx: Sender<MirrorRequest>,
     exposure: f32,
     state: MirrorHandlerState,
-    buffer: Vec<Buffer>,
+    buffer: Vec<BufferWithDelay>,
+    timer: Instant,
 }
 
 impl MirrorHandler {
@@ -173,6 +186,7 @@ impl MirrorHandler {
             exposure,
             state: MirrorHandlerState::Idle,
             buffer: vec![],
+            timer: Instant::now(),
         }
     }
 
@@ -189,7 +203,11 @@ impl MirrorHandler {
 
                 if roll < self.exposure {
                     self.state = MirrorHandlerState::Sending;
-                    self.buffer.push(buffer.clone());
+                    self.buffer.push(BufferWithDelay {
+                        buffer: buffer.clone(),
+                        delay: Duration::ZERO,
+                    });
+                    self.timer = Instant::now();
                     true
                 } else {
                     self.state = MirrorHandlerState::Dropping;
@@ -197,7 +215,12 @@ impl MirrorHandler {
                 }
             }
             MirrorHandlerState::Sending => {
-                self.buffer.push(buffer.clone());
+                let now = Instant::now();
+                self.buffer.push(BufferWithDelay {
+                    delay: now.duration_since(self.timer),
+                    buffer: buffer.clone(),
+                });
+                self.timer = now;
                 true
             }
         }
@@ -215,5 +238,47 @@ impl MirrorHandler {
                 })
                 .is_ok()
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_mirror_exposure() {
+        let (tx, rx) = channel(25);
+        let mut handle = MirrorHandler::new(tx.clone(), 1.0);
+
+        for _ in 0..25 {
+            assert!(
+                handle.send(&vec![].into()),
+                "did not to mirror with 1.0 exposure"
+            );
+            assert!(handle.flush(), "flush didn't work with 1.0 exposure");
+        }
+
+        assert_eq!(rx.len(), 25);
+
+        let (tx, rx) = channel(25);
+
+        let mut handle = MirrorHandler::new(tx.clone(), 0.5);
+        let dropped = (0..25)
+            .into_iter()
+            .map(|_| handle.send(&vec![].into()) && handle.send(&vec![].into()) && handle.flush())
+            .filter(|s| !s)
+            .count();
+        let received = 25 - dropped;
+        assert_eq!(
+            rx.len(),
+            received,
+            "received more than should of with 50% exposure: {}",
+            received
+        );
+        assert!(
+            dropped <= 25 && dropped > 20,
+            "dropped should be somewhere near 50%, but actually is {}",
+            dropped
+        );
     }
 }

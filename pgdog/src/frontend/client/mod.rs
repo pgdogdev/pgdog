@@ -576,14 +576,17 @@ impl Client {
             }
         }
 
+        // Queue up request to mirrors, if any.
+        // Do this before sending query to actual server
+        // to have accurate timings between queries.
+        inner.backend.mirror(&self.request_buffer);
+
+        // Send request to actual server.
         inner
             .handle_buffer(&self.request_buffer, self.streaming)
             .await?;
 
         self.update_stats(&mut inner);
-
-        // Send traffic to mirrors, if any.
-        inner.backend.mirror(&self.request_buffer);
 
         #[cfg(test)]
         let handle_response = false;

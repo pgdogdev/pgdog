@@ -39,11 +39,6 @@ impl Buffer {
         }
     }
 
-    /// Client likely wants to communicate asynchronously.
-    pub fn is_async(&self) -> bool {
-        self.buffer.last().map(|m| m.code() == 'H').unwrap_or(false)
-    }
-
     /// The buffer is full and the client won't send any more messages
     /// until it gets a reply, or we don't want to buffer the data in memory.
     pub fn full(&self) -> bool {
@@ -71,11 +66,6 @@ impl Buffer {
     /// Number of bytes in the buffer.
     pub fn total_message_len(&self) -> usize {
         self.buffer.iter().map(|b| b.len()).sum()
-    }
-
-    /// Check if the buffer is empty.
-    pub fn is_empty(&self) -> bool {
-        self.total_message_len() == 0
     }
 
     /// If this buffer contains a query, retrieve it.
@@ -147,11 +137,6 @@ impl Buffer {
             .last()
             .map(|m| m.code() == 'd' || m.code() == 'c')
             .unwrap_or(false)
-    }
-
-    /// The client is expecting a reply now.
-    pub fn flush(&self) -> bool {
-        self.buffer.last().map(|m| m.code() == 'H').unwrap_or(false)
     }
 
     /// The client is setting state on the connection
