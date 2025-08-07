@@ -1,3 +1,4 @@
+use rand::{thread_rng, Rng};
 use tokio::select;
 use tokio::time::timeout;
 use tokio::{spawn, sync::mpsc::*};
@@ -18,33 +19,41 @@ use super::Connection;
 use super::Error;
 
 #[derive(Clone, Debug)]
-pub(crate) struct MirrorRequest {
-    pub(super) request: Request,
-    pub(super) buffer: Buffer,
-}
-
-impl MirrorRequest {
-    pub(crate) fn new(buffer: &Buffer) -> Self {
-        Self {
-            request: Request::default(),
-            buffer: buffer.clone(),
-        }
-    }
+pub struct MirrorRequest {
+    buffer: Vec<Buffer>,
 }
 
 #[derive(Debug)]
 pub(crate) struct Mirror {
+    /// Backend connection.
     connection: Connection,
+    /// Query router.
     router: Router,
+    /// Destination cluster for the mirrored traffic.
     cluster: Cluster,
+    /// Mirror's prepared statements. Should be similar
+    /// to client's statements, if exposure is high.
     prepared_statements: PreparedStatements,
+    /// Mirror connection parameters (empty).
     params: Parameters,
+    /// Mirror state.
     state: State,
 }
 
 impl Mirror {
-    pub(crate) fn spawn(cluster: &Cluster) -> Result<MirrorHandler, Error> {
+    /// Spawn mirror task in the background.
+    ///
+    /// # Arguments
+    ///
+    /// * `cluster`: Destination cluster for mirrored traffic.
+    ///
+    /// # Return
+    ///
+    /// Handler for sending queries to the background task.
+    ///
+    pub fn spawn(cluster: &Cluster) -> Result<MirrorHandler, Error> {
         let connection = Connection::new(cluster.user(), cluster.name(), false, &None)?;
+        let config = config();
 
         let mut mirror = Self {
             connection,
@@ -55,11 +64,9 @@ impl Mirror {
             params: Parameters::default(),
         };
 
-        let config = config();
-
         let query_timeout = Timeouts::from_config(&config.config.general);
         let (tx, mut rx) = channel(config.config.general.mirror_queue);
-        let handler = MirrorHandler { tx };
+        let handler = MirrorHandler::new(tx, config.config.general.mirror_exposure);
 
         spawn(async move {
             loop {
@@ -110,11 +117,13 @@ impl Mirror {
         Ok(handler)
     }
 
-    pub(crate) async fn handle(&mut self, request: &MirrorRequest) -> Result<(), Error> {
+    /// Handle a single mirror request.
+    pub async fn handle(&mut self, request: &MirrorRequest) -> Result<(), Error> {
         if !self.connection.connected() {
-            // TODO: handle parsing errors.
+            let routing_buffer = request.buffer.first().ok_or(Error::MirrorBufferEmpty)?;
+
             if let Ok(context) = RouterContext::new(
-                &request.buffer,
+                &routing_buffer,
                 &self.cluster,
                 &mut self.prepared_statements,
                 &self.params,
@@ -126,21 +135,85 @@ impl Mirror {
                 }
 
                 self.connection
-                    .connect(&request.request, &self.router.route())
+                    .connect(&Request::default(), &self.router.route())
                     .await?;
             }
         }
 
         // TODO: handle streaming.
-        self.connection
-            .handle_buffer(&request.buffer, &mut self.router, false)
-            .await?;
+        for buffer in &request.buffer {
+            self.connection
+                .handle_buffer(buffer, &mut self.router, false)
+                .await?;
+        }
 
         Ok(())
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Copy)]
+enum MirrorHandlerState {
+    Dropping,
+    Sending,
+    Idle,
+}
+
 #[derive(Debug)]
 pub(crate) struct MirrorHandler {
-    pub(super) tx: Sender<MirrorRequest>,
+    tx: Sender<MirrorRequest>,
+    exposure: f32,
+    state: MirrorHandlerState,
+    buffer: Vec<Buffer>,
+}
+
+impl MirrorHandler {
+    fn new(tx: Sender<MirrorRequest>, exposure: f32) -> Self {
+        Self {
+            tx,
+            exposure,
+            state: MirrorHandlerState::Idle,
+            buffer: vec![],
+        }
+    }
+
+    /// Maybe send request to handler.
+    pub fn send(&mut self, buffer: &Buffer) -> bool {
+        match self.state {
+            MirrorHandlerState::Dropping => false,
+            MirrorHandlerState::Idle => {
+                let roll = if self.exposure < 1.0 {
+                    thread_rng().gen_range(0.0..1.0)
+                } else {
+                    0.99
+                };
+
+                if roll < self.exposure {
+                    self.state = MirrorHandlerState::Sending;
+                    self.buffer.push(buffer.clone());
+                    true
+                } else {
+                    self.state = MirrorHandlerState::Dropping;
+                    false
+                }
+            }
+            MirrorHandlerState::Sending => {
+                self.buffer.push(buffer.clone());
+                true
+            }
+        }
+    }
+
+    pub fn flush(&mut self) -> bool {
+        if self.state == MirrorHandlerState::Dropping {
+            self.state = MirrorHandlerState::Idle;
+            false
+        } else {
+            self.state = MirrorHandlerState::Idle;
+            self.tx
+                .try_send(MirrorRequest {
+                    buffer: std::mem::take(&mut self.buffer),
+                })
+                .is_ok()
+        }
+    }
 }

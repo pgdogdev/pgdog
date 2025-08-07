@@ -630,6 +630,11 @@ impl Client {
             inner.stats.idle(self.in_transaction);
         }
 
+        // Flush mirrors.
+        if !self.in_transaction {
+            inner.backend.mirror_flush();
+        }
+
         inner.stats.sent(message.len());
 
         // Release the connection back into the pool

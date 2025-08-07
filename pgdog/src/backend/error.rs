@@ -101,6 +101,9 @@ pub enum Error {
 
     #[error("pub/sub channel disabled")]
     PubSubDisabled,
+
+    #[error("mirror buffer empty")]
+    MirrorBufferEmpty,
 }
 
 impl Error {

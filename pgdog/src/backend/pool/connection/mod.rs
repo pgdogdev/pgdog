@@ -1,6 +1,6 @@
 //! Server connection requested by a frontend.
 
-use mirror::{MirrorHandler, MirrorRequest};
+use mirror::MirrorHandler;
 use tokio::{select, time::sleep};
 use tracing::debug;
 
@@ -117,10 +117,17 @@ impl Connection {
         Ok(())
     }
 
-    /// Send traffic to mirrors.
-    pub(crate) fn mirror(&self, buffer: &crate::frontend::Buffer) {
-        for mirror in &self.mirrors {
-            let _ = mirror.tx.try_send(MirrorRequest::new(buffer));
+    /// Send client request to mirrors.
+    pub fn mirror(&mut self, buffer: &crate::frontend::Buffer) {
+        for mirror in &mut self.mirrors {
+            mirror.send(buffer);
+        }
+    }
+
+    /// Tell mirrors to flush buffered transaction.
+    pub fn mirror_flush(&mut self) {
+        for mirror in &mut self.mirrors {
+            mirror.flush();
         }
     }
 

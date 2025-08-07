@@ -418,6 +418,9 @@ pub struct General {
     /// Mirror queue size.
     #[serde(default = "General::mirror_queue")]
     pub mirror_queue: usize,
+    /// Mirror exposure
+    #[serde(default = "General::mirror_exposure")]
+    pub mirror_exposure: f32,
     #[serde(default)]
     pub auth_type: AuthType,
     /// Disable cross-shard queries.
@@ -531,6 +534,7 @@ impl Default for General {
             idle_timeout: Self::idle_timeout(),
             client_idle_timeout: Self::default_client_idle_timeout(),
             mirror_queue: Self::mirror_queue(),
+            mirror_exposure: Self::mirror_exposure(),
             auth_type: AuthType::default(),
             cross_shard_disabled: bool::default(),
             dns_ttl: None,
@@ -646,6 +650,10 @@ impl General {
 
     fn mirror_queue() -> usize {
         128
+    }
+
+    fn mirror_exposure() -> f32 {
+        1.0
     }
 
     fn prepared_statements_limit() -> usize {
