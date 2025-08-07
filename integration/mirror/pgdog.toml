@@ -1,3 +1,6 @@
+[general]
+mirror_exposure = 0.1
+
 [[databases]]
 name = "pgdog"
 host = "127.0.0.1"

@@ -631,11 +631,11 @@ impl Client {
             // or server is telling us we are.
             self.in_transaction = message.in_transaction() || inner.start_transaction.is_some();
             inner.stats.idle(self.in_transaction);
-        }
 
-        // Flush mirrors.
-        if !self.in_transaction {
-            inner.backend.mirror_flush();
+            // Flush mirrors.
+            if !self.in_transaction {
+                inner.backend.mirror_flush();
+            }
         }
 
         inner.stats.sent(message.len());

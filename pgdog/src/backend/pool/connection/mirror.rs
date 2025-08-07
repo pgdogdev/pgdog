@@ -193,7 +193,10 @@ impl MirrorHandler {
     /// Maybe send request to handler.
     pub fn send(&mut self, buffer: &Buffer) -> bool {
         match self.state {
-            MirrorHandlerState::Dropping => false,
+            MirrorHandlerState::Dropping => {
+                debug!("mirror dropping request");
+                false
+            }
             MirrorHandlerState::Idle => {
                 let roll = if self.exposure < 1.0 {
                     thread_rng().gen_range(0.0..1.0)
@@ -211,6 +214,7 @@ impl MirrorHandler {
                     true
                 } else {
                     self.state = MirrorHandlerState::Dropping;
+                    debug!("mirror dropping transaction [exposure: {}]", self.exposure);
                     false
                 }
             }
@@ -228,10 +232,12 @@ impl MirrorHandler {
 
     pub fn flush(&mut self) -> bool {
         if self.state == MirrorHandlerState::Dropping {
+            debug!("mirror transaction dropped");
             self.state = MirrorHandlerState::Idle;
             false
         } else {
             self.state = MirrorHandlerState::Idle;
+
             self.tx
                 .try_send(MirrorRequest {
                     buffer: std::mem::take(&mut self.buffer),
