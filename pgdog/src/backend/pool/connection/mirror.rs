@@ -243,6 +243,8 @@ impl MirrorHandler {
 
 #[cfg(test)]
 mod test {
+    use crate::{config, net::Query};
+
     use super::*;
 
     #[tokio::test]
@@ -280,5 +282,55 @@ mod test {
             "dropped should be somewhere near 50%, but actually is {}",
             dropped
         );
+    }
+
+    #[tokio::test]
+    async fn test_mirror() {
+        config::test::load_test();
+        let cluster = Cluster::new_test();
+        cluster.launch();
+        let mut mirror = Mirror::spawn(&cluster).unwrap();
+        let mut conn = cluster.primary(0, &Request::default()).await.unwrap();
+
+        for _ in 0..3 {
+            assert!(
+                mirror.send(&vec![Query::new("BEGIN").into()].into()),
+                "mirror didn't send BEGIN"
+            );
+            assert!(
+                mirror.send(
+                    &vec![
+                        Query::new("CREATE TABLE IF NOT EXISTS pgdog.test_mirror(id BIGINT)")
+                            .into()
+                    ]
+                    .into()
+                ),
+                "mirror didn't send SELECT 1"
+            );
+            assert!(
+                mirror.send(&vec![Query::new("COMMIT").into()].into()),
+                "mirror didn't send commit"
+            );
+            assert_eq!(
+                mirror.buffer.len(),
+                3,
+                "mirror buffer should have 3 requests"
+            );
+            sleep(Duration::from_millis(50)).await;
+            // Nothing happens until we flush.
+            assert!(
+                conn.execute("DROP TABLE pgdog.test_mirror").await.is_err(),
+                "table pgdog.test_mirror shouldn't exist yet"
+            );
+            assert!(mirror.flush(), "mirror didn't flush");
+            sleep(Duration::from_millis(50)).await;
+            assert!(
+                conn.execute("DROP TABLE pgdog.test_mirror").await.is_ok(),
+                "pgdog.test_mirror should exist"
+            );
+            assert!(mirror.buffer.is_empty(), "mirror buffer should be empty");
+        }
+
+        cluster.shutdown();
     }
 }
