@@ -9,7 +9,7 @@ use tracing::{debug, error};
 use crate::backend::Cluster;
 use crate::config::config;
 use crate::frontend::client::timeouts::Timeouts;
-use crate::frontend::{PreparedStatements, Router, RouterContext};
+use crate::frontend::{Command, PreparedStatements, Router, RouterContext};
 use crate::net::Parameters;
 use crate::state::State;
 use crate::{
@@ -129,23 +129,33 @@ impl Mirror {
     /// Handle a single mirror request.
     pub async fn handle(&mut self, request: &MirrorRequest) -> Result<(), Error> {
         if !self.connection.connected() {
-            let routing_buffer = request.buffer.first().ok_or(Error::MirrorBufferEmpty)?;
-
-            if let Ok(context) = RouterContext::new(
-                &routing_buffer.buffer,
-                &self.cluster,
-                &mut self.prepared_statements,
-                &self.params,
-                false,
-            ) {
-                if let Err(err) = self.router.query(context) {
-                    error!("mirror query parse error: {}", err);
-                    return Ok(()); // Drop request.
+            for buffer in request.buffer.iter() {
+                if let Ok(context) = RouterContext::new(
+                    &buffer.buffer,
+                    &self.cluster,
+                    &mut self.prepared_statements,
+                    &self.params,
+                    false,
+                ) {
+                    match self.router.query(context) {
+                        Ok(command) => {
+                            // Use next query for shard selection,
+                            // just like the client does.
+                            if matches!(command, Command::StartTransaction(_)) {
+                                continue;
+                            } else {
+                                self.connection
+                                    .connect(&Request::default(), self.router.route())
+                                    .await?;
+                                break;
+                            }
+                        }
+                        Err(err) => {
+                            error!("mirror query parse error: {}", err);
+                            return Ok(()); // Drop request.
+                        }
+                    }
                 }
-
-                self.connection
-                    .connect(&Request::default(), &self.router.route())
-                    .await?;
             }
         }
 
