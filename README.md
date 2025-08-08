@@ -99,7 +99,7 @@ to restart the process and break PostgreSQL connections. If you've used PgBounce
 will be familiar. If not, they are documented with examples.
 
 &#128216; **[Configuration](https://docs.pgdog.dev/configuration/)**
--
+
 ## Running PgDog locally
 
 Install the latest version of the Rust compiler from [rust-lang.org](https://rust-lang.org).
