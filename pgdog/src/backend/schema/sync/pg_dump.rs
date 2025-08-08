@@ -153,10 +153,16 @@ pub struct PgDumpOutput {
     pub schema: String,
 }
 
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub enum SyncState {
+    PreData,
+    PostData,
+}
+
 impl PgDumpOutput {
     /// Get schema statements to execute before data sync,
     /// e.g., CREATE TABLE, primary key.
-    pub fn pre_data_sync(&self) -> Result<Vec<&str>, Error> {
+    pub fn statements(&self, state: SyncState) -> Result<Vec<&str>, Error> {
         let mut result = vec![];
 
         for stmt in &self.stmts.stmts {
@@ -172,13 +178,17 @@ impl PgDumpOutput {
                 if let Some(ref node) = node.node {
                     match node {
                         NodeEnum::CreateStmt(_) => {
-                            // CREATE TABLE is always good.
-                            result.push(original);
+                            if state == SyncState::PreData {
+                                // CREATE TABLE is always good.
+                                result.push(original);
+                            }
                         }
 
                         NodeEnum::CreateSeqStmt(_) => {
-                            // Bring sequences over.
-                            result.push(original);
+                            if state == SyncState::PreData {
+                                // Bring sequences over.
+                                result.push(original);
+                            }
                         }
 
                         NodeEnum::AlterTableStmt(stmt) => {
@@ -191,9 +201,16 @@ impl PgDumpOutput {
                                                     if let Some(ref node) = def.node {
                                                         // Only allow primary key constraints.
                                                         if let NodeEnum::Constraint(cons) = node {
-                                                            if cons.contype()
-                                                                == ConstrType::ConstrPrimary
-                                                            {
+                                                            if matches!(
+                                                                cons.contype(),
+                                                                ConstrType::ConstrPrimary
+                                                                    | ConstrType::ConstrNotnull
+                                                                    | ConstrType::ConstrNull
+                                                            ) {
+                                                                if state == SyncState::PreData {
+                                                                    result.push(original);
+                                                                }
+                                                            } else if state == SyncState::PostData {
                                                                 result.push(original);
                                                             }
                                                         }
@@ -201,20 +218,38 @@ impl PgDumpOutput {
                                                 }
                                             }
                                             AlterTableType::AtColumnDefault => {
-                                                result.push(original)
+                                                if state == SyncState::PreData {
+                                                    result.push(original)
+                                                }
                                             }
-                                            _ => continue,
+                                            AlterTableType::AtChangeOwner => {
+                                                continue; // Don't change owners, for now.
+                                            }
+                                            _ => {
+                                                if state == SyncState::PostData {
+                                                    result.push(original);
+                                                }
+                                            }
                                         }
                                     }
                                 }
                             }
                         }
 
-                        NodeEnum::IndexStmt(_) => {
-                            continue;
+                        NodeEnum::AlterSeqStmt(_stmt) => {
+                            if state == SyncState::PreData {
+                                result.push(original);
+                            }
                         }
 
-                        _ => (),
+                        NodeEnum::VariableSetStmt(_) => continue,
+                        NodeEnum::SelectStmt(_) => continue,
+
+                        _ => {
+                            if state == SyncState::PostData {
+                                result.push(original);
+                            }
+                        }
                     }
                 }
             }
@@ -224,8 +259,13 @@ impl PgDumpOutput {
     }
 
     /// Create objects in destination cluster.
-    pub async fn restore(&self, dest: &Cluster, ignore_errors: bool) -> Result<(), Error> {
-        let stmts = self.pre_data_sync()?;
+    pub async fn restore(
+        &self,
+        dest: &Cluster,
+        ignore_errors: bool,
+        state: SyncState,
+    ) -> Result<(), Error> {
+        let stmts = self.statements(state)?;
 
         for (num, shard) in dest.shards().iter().enumerate() {
             let mut primary = shard.primary(&Request::default()).await?;
@@ -288,7 +328,7 @@ mod test {
         .await
         .unwrap();
 
-        let output = output.pre_data_sync().unwrap();
+        let output = output.statements(SyncState::PreData).unwrap();
 
         let mut dest = test_server().await;
         dest.execute("DROP SCHEMA IF EXISTS test_pg_dump_execute_dest CASCADE")
