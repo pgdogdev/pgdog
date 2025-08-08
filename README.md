@@ -21,9 +21,8 @@ PgDog is a transaction pooler and logical replication manager that can shard Pos
 Helm chart is **[here](https://github.com/pgdogdev/helm)**. To install it, run:
 
 ```bash
-git clone https://github.com/pgdogdev/helm && \
-cd helm && \
-helm install -f values.yaml pgdog ./
+helm repo add pgdogdev https://helm.pgdog.dev
+helm install pgdog pgdogdev/pgdog
 ```
 
 ### Docker
