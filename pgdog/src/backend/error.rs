@@ -48,10 +48,10 @@ pub enum Error {
     #[error("no cluster connected")]
     NoCluster,
 
-    #[error("scram auth failed")]
+    #[error("{0}")]
     ScramAuth(#[from] crate::auth::scram::Error),
 
-    #[error("config error")]
+    #[error("{0}")]
     Config(#[from] crate::config::error::Error),
 
     #[error("{0}")]
