@@ -28,10 +28,15 @@ pub fn human_duration(duration: Duration) -> String {
 
     let ms = duration.as_millis();
     let ms_fmt = |ms: u128, unit: u128, name: &str| -> String {
-        if ms % unit > 0 {
-            format!("{}ms", ms)
-        } else {
+        if ms % unit == 0 {
             format!("{}{}", ms / unit, name)
+        } else {
+            let value = ms as f64 / unit as f64;
+            let mut s = format!("{:.1}", value);
+            if s.ends_with(".0") {
+                s.truncate(s.len() - 2);
+            }
+            format!("{}{}", s, name)
         }
     };
 
@@ -46,7 +51,7 @@ pub fn human_duration(duration: Duration) -> String {
     } else if ms < week {
         ms_fmt(ms, day, "d")
     } else {
-        ms_fmt(ms, 1, "ms")
+        ms_fmt(ms, week, "w")
     }
 }
 
@@ -81,6 +86,9 @@ mod test {
         assert_eq!(human_duration(Duration::from_millis(2000)), "2s");
         assert_eq!(human_duration(Duration::from_millis(1000 * 60 * 2)), "2m");
         assert_eq!(human_duration(Duration::from_millis(1000 * 3600)), "1h");
+        assert_eq!(human_duration(Duration::from_millis(1500)), "1.5s");
+        assert_eq!(human_duration(Duration::from_millis(90_000)), "1.5m");
+        assert_eq!(human_duration(Duration::from_millis(604_800_000)), "1w");
     }
 
     #[test]
