@@ -427,13 +427,11 @@ mod tests {
     }
 
     #[test]
-    fn test_commit_from_begin_pending_errors() {
+    fn test_commit_from_begin_pending() {
         let mut tx = LogicalTransaction::new();
 
         tx.soft_begin().unwrap();
-
-        let err = tx.commit().unwrap_err();
-        assert!(matches!(err, TransactionError::ExpectedActive));
+        tx.commit().unwrap(); // no-panic
     }
 
     #[test]
@@ -469,9 +467,7 @@ mod tests {
         let mut tx = LogicalTransaction::new();
 
         tx.soft_begin().unwrap();
-
-        let err = tx.rollback().unwrap_err();
-        assert!(matches!(err, TransactionError::ExpectedActive));
+        tx.rollback().unwrap(); // no-panic
     }
 
     #[test]
