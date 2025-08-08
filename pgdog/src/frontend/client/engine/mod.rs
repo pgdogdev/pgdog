@@ -54,7 +54,8 @@ impl<'a> Engine<'a> {
                 'S' => {
                     if only_close || only_sync && !self.context.connected {
                         messages.push(
-                            ReadyForQuery::in_transaction(self.context.in_transaction).message()?,
+                            ReadyForQuery::in_transaction(self.context.in_transaction())
+                                .message()?,
                         )
                     }
                 }
@@ -67,6 +68,10 @@ impl<'a> Engine<'a> {
         }
 
         Ok(messages)
+    }
+
+    pub fn in_transaction(&self) -> bool {
+        self.context.transaction.is_some()
     }
 }
 
@@ -97,7 +102,7 @@ mod test {
             connected: false,
             prepared_statements: &mut prepared,
             params: &params,
-            in_transaction: false,
+            transaction: &None,
             buffer: &buf,
         };
 
