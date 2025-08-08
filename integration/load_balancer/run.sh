@@ -10,7 +10,7 @@ export PGHOST=127.0.0.1
 export PGDATABASE=postgres
 export PGPASSWORD=postgres
 
-docker-compose up -d
+docker compose up -d
 
 
 echo "Waiting for Postgres to be ready"
@@ -45,4 +45,4 @@ popd
 
 killall pgdog
 
-docker-compose down
+docker compose down
