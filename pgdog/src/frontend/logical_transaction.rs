@@ -86,12 +86,8 @@ impl LogicalTransaction {
                 self.status = TransactionStatus::BeginPending;
                 Ok(())
             }
-            TransactionStatus::BeginPending | TransactionStatus::InProgress => {
-                Err(TransactionError::AlreadyInTransaction)
-            }
-            TransactionStatus::Committed | TransactionStatus::RolledBack => {
-                Err(TransactionError::AlreadyFinalized)
-            }
+            TransactionStatus::BeginPending => Err(TransactionError::AlreadyInTransaction),
+            TransactionStatus::InProgress => Err(TransactionError::AlreadyInTransaction),
         }
     }
 
@@ -110,15 +106,12 @@ impl LogicalTransaction {
         self.touch_shard(shard)?;
 
         match self.status {
+            TransactionStatus::Idle => Err(TransactionError::NoPendingBegins),
             TransactionStatus::BeginPending => {
                 self.status = TransactionStatus::InProgress;
                 Ok(())
             }
-
-            TransactionStatus::Idle => Err(TransactionError::NoPendingBegins),
             TransactionStatus::InProgress => Ok(()),
-            TransactionStatus::Committed => Err(TransactionError::AlreadyFinalized),
-            TransactionStatus::RolledBack => Err(TransactionError::AlreadyFinalized),
         }
     }
 
@@ -132,15 +125,12 @@ impl LogicalTransaction {
     /// - `AlreadyFinalized` if already `Committed` or `RolledBack`.
     pub fn commit(&mut self) -> Result<(), TransactionError> {
         match self.status {
-            TransactionStatus::InProgress => {
-                self.status = TransactionStatus::Committed;
-                Ok(())
-            }
-
             TransactionStatus::Idle => Err(TransactionError::NoPendingBegins),
             TransactionStatus::BeginPending => Err(TransactionError::NoActiveTransaction),
-            TransactionStatus::Committed => Err(TransactionError::AlreadyFinalized),
-            TransactionStatus::RolledBack => Err(TransactionError::AlreadyFinalized),
+            TransactionStatus::InProgress => {
+                self.reset();
+                Ok(())
+            }
         }
     }
 
@@ -154,15 +144,12 @@ impl LogicalTransaction {
     /// - `AlreadyFinalized` if already `Committed` or `RolledBack`.
     pub fn rollback(&mut self) -> Result<(), TransactionError> {
         match self.status {
-            TransactionStatus::InProgress => {
-                self.status = TransactionStatus::RolledBack;
-                Ok(())
-            }
-
             TransactionStatus::Idle => Err(TransactionError::NoPendingBegins),
             TransactionStatus::BeginPending => Err(TransactionError::NoActiveTransaction),
-            TransactionStatus::Committed => Err(TransactionError::AlreadyFinalized),
-            TransactionStatus::RolledBack => Err(TransactionError::AlreadyFinalized),
+            TransactionStatus::InProgress => {
+                self.reset();
+                Ok(())
+            }
         }
     }
 
@@ -285,10 +272,6 @@ pub enum TransactionStatus {
     BeginPending,
     /// Transaction active.
     InProgress,
-    /// ROLLBACK issued.
-    RolledBack,
-    /// COMMIT issued.
-    Committed,
 }
 
 // -----------------------------------------------------------------------------
@@ -409,7 +392,7 @@ mod tests {
         tx.soft_begin().unwrap();
         tx.execute_query(Shard::Direct(0)).unwrap();
         tx.commit().unwrap();
-        assert_eq!(tx.status, TransactionStatus::Committed);
+        assert_eq!(tx.status, TransactionStatus::Idle);
     }
 
     #[test]
@@ -443,7 +426,7 @@ mod tests {
         tx.soft_begin().unwrap();
         tx.execute_query(Shard::Direct(0)).unwrap();
         tx.rollback().unwrap();
-        assert_eq!(tx.status, TransactionStatus::RolledBack);
+        assert_eq!(tx.status, TransactionStatus::Idle);
     }
 
     #[test]
