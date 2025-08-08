@@ -15,7 +15,7 @@ pub struct EngineContext<'a> {
     /// Client parameters.
     pub(super) params: &'a Parameters,
     /// Is the client inside a transaction?
-    pub(super) transaction: &'a LogicalTransaction,
+    pub(super) logical_transaction: &'a LogicalTransaction,
     /// Messages currently in client's buffer.
     pub(super) buffer: &'a Buffer,
 }
@@ -25,13 +25,9 @@ impl<'a> EngineContext<'a> {
         Self {
             prepared_statements: &mut client.prepared_statements,
             params: &client.params,
-            transaction: &client.logical_transaction,
+            logical_transaction: &client.logical_transaction,
             connected: inner.connected(),
             buffer: &client.request_buffer,
         }
-    }
-
-    pub fn in_transaction(&self) -> bool {
-        self.transaction.is_some()
     }
 }

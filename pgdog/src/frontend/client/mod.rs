@@ -409,7 +409,7 @@ impl Client {
             &mut self.request_buffer,
             &mut self.prepared_statements,
             &self.params,
-            self.in_transaction(),
+            &self.logical_transaction,
         ) {
             Ok(command) => command,
             Err(err) => {
@@ -454,16 +454,20 @@ impl Client {
                 }
                 Some(Command::RollbackTransaction) => {
                     inner.start_transaction = None;
+
                     self.end_transaction(true).await?;
-                    self.in_transaction = false;
-                    inner.done(self.in_transaction);
+                    self.logical_transaction.rollback()?;
+
+                    inner.done(self.logical_transaction.in_transaction());
                     return Ok(false);
                 }
                 Some(Command::CommitTransaction) => {
                     inner.start_transaction = None;
+
                     self.end_transaction(false).await?;
-                    self.in_transaction = false;
-                    inner.done(self.in_transaction);
+                    self.logical_transaction.commit()?;
+
+                    inner.done(self.logical_transaction.in_transaction());
                     return Ok(false);
                 }
                 // How many shards are configured.
@@ -472,11 +476,14 @@ impl Client {
                     let mut dr = DataRow::new();
                     dr.add(*shards as i64);
                     let cc = CommandComplete::from_str("SHOW");
-                    let rfq = ReadyForQuery::in_transaction(self.in_transaction);
+                    let rfq =
+                        ReadyForQuery::in_transaction(self.logical_transaction.in_transaction());
+
                     self.stream
                         .send_many(&[rd.message()?, dr.message()?, cc.message()?, rfq.message()?])
                         .await?;
-                    inner.done(self.in_transaction);
+
+                    inner.done(self.logical_transaction.in_transaction());
                     return Ok(false);
                 }
                 Some(Command::Deallocate) => {
@@ -494,9 +501,12 @@ impl Client {
                 Some(Command::Query(query)) => {
                     if query.is_cross_shard() && self.cross_shard_disabled {
                         self.stream
-                            .error(ErrorResponse::cross_shard_disabled(), self.in_transaction)
+                            .error(
+                                ErrorResponse::cross_shard_disabled(),
+                                self.logical_transaction.in_transaction(),
+                            )
                             .await?;
-                        inner.done(self.in_transaction);
+                        inner.done(self.logical_transaction.in_transaction());
                         inner.reset_router();
                         return Ok(false);
                     }
@@ -548,12 +558,15 @@ impl Client {
                     if err.no_server() {
                         error!("{} [{}]", err, self.addr);
                         self.stream
-                            .error(ErrorResponse::from_err(&err), self.in_transaction)
+                            .error(
+                                ErrorResponse::from_err(&err),
+                                self.logical_transaction.in_transaction(),
+                            )
                             .await?;
                         // TODO: should this be wrapped in a method?
                         inner.disconnect();
                         inner.reset_router();
-                        inner.done(self.in_transaction);
+                        inner.done(self.logical_transaction.in_transaction());
                         return Ok(false);
                     } else {
                         return Err(err.into());
@@ -629,13 +642,23 @@ impl Client {
         // ReadyForQuery (B)
         if code == 'Z' {
             inner.stats.query();
-            // In transaction if buffered BEGIN from client
-            // or server is telling us we are.
-            self.in_transaction = message.in_transaction() || inner.start_transaction.is_some();
-            inner.stats.idle(self.in_transaction);
+            // 1) Should we logically be in‐txn?
+            //    In transaction if buffered BEGIN from client or server is telling us we are.
+            let should_be_tx = message.in_transaction() || inner.start_transaction.is_some();
+            let in_transaction = self.logical_transaction.in_transaction();
+
+            // 2) Reconcile against our LogicalTransaction
+            if should_be_tx && !in_transaction {
+                self.logical_transaction.soft_begin()?;
+            }
+            if !should_be_tx && in_transaction {
+                self.logical_transaction.reset(); // COMMIT/ROLLBACK just happened?
+            }
+
+            inner.stats.idle(self.logical_transaction.in_transaction());
 
             // Flush mirrors.
-            if !self.in_transaction {
+            if !self.logical_transaction.in_transaction() {
                 inner.backend.mirror_flush();
             }
         }
@@ -780,10 +803,10 @@ impl Client {
     /// with no queries.
     async fn end_transaction(&mut self, rollback: bool) -> Result<(), Error> {
         let cmd = if rollback {
-            self.logical_transaction.rollback();
+            self.logical_transaction.rollback()?;
             CommandComplete::new_rollback()
         } else {
-            self.logical_transaction.commit();
+            self.logical_transaction.commit()?;
             CommandComplete::new_commit()
         };
         let mut messages = if !self.in_transaction() {

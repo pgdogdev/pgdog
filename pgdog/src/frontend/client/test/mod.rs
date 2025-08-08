@@ -135,13 +135,12 @@ async fn test_test_client() {
 
     assert!(inner.backend.connected());
 
-    let in_trasaction = client.in_transaction();
     let command = inner
         .command(
             &mut client.request_buffer,
             &mut client.prepared_statements,
             &client.params,
-            in_trasaction,
+            &client.logical_transaction,
         )
         .unwrap();
     assert!(matches!(command, Some(Command::Query(_))));

@@ -64,6 +64,15 @@ impl LogicalTransaction {
             .or_else(|| self.manual_shard.clone())
     }
 
+    /// Return whether a transaction is currently open or pending.
+    /// This is because we don't actually trigger the begin until the first statement is executed.
+    pub fn in_transaction(&self) -> bool {
+        matches!(
+            self.status,
+            TransactionStatus::BeginPending | TransactionStatus::InProgress
+        )
+    }
+
     /// Mark that a `BEGIN` is pending.
     ///
     /// Transitions `Idle -> BeginPending`.
