@@ -6,7 +6,7 @@ use thiserror::Error;
 use tokio::{select, signal::ctrl_c};
 use tracing::error;
 
-use crate::backend::schema::sync::pg_dump::PgDump;
+use crate::backend::schema::sync::pg_dump::{PgDump, SyncState};
 use crate::backend::{databases::databases, replication::logical::Publisher};
 use crate::config::{Config, Users};
 
@@ -114,6 +114,10 @@ pub enum Commands {
         /// Ignore errors.
         #[arg(long)]
         ignore_errors: bool,
+
+        /// Data sync has been complete.
+        #[arg(long)]
+        data_sync_complete: bool,
     },
 }
 
@@ -241,35 +245,49 @@ pub async fn data_sync(commands: Commands) -> Result<(), Box<dyn std::error::Err
 }
 
 pub async fn schema_sync(commands: Commands) -> Result<(), Box<dyn std::error::Error>> {
-    let (source, destination, publication, dry_run, ignore_errors) = if let Commands::SchemaSync {
-        from_database,
-        from_user,
-        to_database,
-        to_user,
-        publication,
-        dry_run,
-        ignore_errors,
-    } = commands
-    {
-        let source = databases().cluster((from_user.as_str(), from_database.as_str()))?;
-        let dest = databases().cluster((to_user.as_str(), to_database.as_str()))?;
+    let (source, destination, publication, dry_run, ignore_errors, data_sync_complete) =
+        if let Commands::SchemaSync {
+            from_database,
+            from_user,
+            to_database,
+            to_user,
+            publication,
+            dry_run,
+            ignore_errors,
+            data_sync_complete,
+        } = commands
+        {
+            let source = databases().cluster((from_user.as_str(), from_database.as_str()))?;
+            let dest = databases().cluster((to_user.as_str(), to_database.as_str()))?;
 
-        (source, dest, publication, dry_run, ignore_errors)
-    } else {
-        return Ok(());
-    };
+            (
+                source,
+                dest,
+                publication,
+                dry_run,
+                ignore_errors,
+                data_sync_complete,
+            )
+        } else {
+            return Ok(());
+        };
 
     let dump = PgDump::new(&source, &publication);
     let output = dump.dump().await?;
+    let state = if data_sync_complete {
+        SyncState::PostData
+    } else {
+        SyncState::PreData
+    };
 
     for output in output {
         if dry_run {
-            let queries = output.pre_data_sync()?;
+            let queries = output.statements(state)?;
             for query in queries {
                 println!("{}", query);
             }
         } else {
-            output.restore(&destination, ignore_errors).await?;
+            output.restore(&destination, ignore_errors, state).await?;
         }
     }
 
