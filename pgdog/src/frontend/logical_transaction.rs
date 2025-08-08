@@ -86,8 +86,8 @@ impl LogicalTransaction {
                 self.status = TransactionStatus::BeginPending;
                 Ok(())
             }
-            TransactionStatus::BeginPending => Err(TransactionError::AlreadyInTransaction),
-            TransactionStatus::InProgress => Err(TransactionError::AlreadyInTransaction),
+            TransactionStatus::BeginPending => Err(TransactionError::ExpectedIdle),
+            TransactionStatus::InProgress => Err(TransactionError::ExpectedIdle),
         }
     }
 
@@ -106,7 +106,7 @@ impl LogicalTransaction {
         self.touch_shard(shard)?;
 
         match self.status {
-            TransactionStatus::Idle => Err(TransactionError::NoPendingBegins),
+            TransactionStatus::Idle => Err(TransactionError::ExpectedPendingOrActive),
             TransactionStatus::BeginPending => {
                 self.status = TransactionStatus::InProgress;
                 Ok(())
@@ -125,8 +125,8 @@ impl LogicalTransaction {
     /// - `AlreadyFinalized` if already `Committed` or `RolledBack`.
     pub fn commit(&mut self) -> Result<(), TransactionError> {
         match self.status {
-            TransactionStatus::Idle => Err(TransactionError::NoPendingBegins),
-            TransactionStatus::BeginPending => Err(TransactionError::NoActiveTransaction),
+            TransactionStatus::Idle => Err(TransactionError::ExpectedActive),
+            TransactionStatus::BeginPending => Err(TransactionError::ExpectedActive),
             TransactionStatus::InProgress => {
                 self.reset();
                 Ok(())
@@ -144,8 +144,8 @@ impl LogicalTransaction {
     /// - `AlreadyFinalized` if already `Committed` or `RolledBack`.
     pub fn rollback(&mut self) -> Result<(), TransactionError> {
         match self.status {
-            TransactionStatus::Idle => Err(TransactionError::NoPendingBegins),
-            TransactionStatus::BeginPending => Err(TransactionError::NoActiveTransaction),
+            TransactionStatus::Idle => Err(TransactionError::ExpectedActive),
+            TransactionStatus::BeginPending => Err(TransactionError::ExpectedActive),
             TransactionStatus::InProgress => {
                 self.reset();
                 Ok(())
@@ -233,10 +233,10 @@ impl LogicalTransaction {
 #[derive(Debug)]
 pub enum TransactionError {
     // Transaction lifecycle
-    AlreadyInTransaction,
-    NoActiveTransaction,
-    AlreadyFinalized,
-    NoPendingBegins,
+    ExpectedIdle,
+    ExpectedPending,
+    ExpectedPendingOrActive,
+    ExpectedActive,
 
     // Sharding policy
     InvalidShardType,
@@ -247,10 +247,10 @@ impl fmt::Display for TransactionError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         use TransactionError::*;
         match self {
-            AlreadyInTransaction => write!(f, "transaction already started"),
-            NoActiveTransaction => write!(f, "no active transaction"),
-            AlreadyFinalized => write!(f, "transaction already finalized"),
-            NoPendingBegins => write!(f, "transaction not pending"),
+            ExpectedIdle => write!(f, "transaction already started"),
+            ExpectedPending => write!(f, "transaction not pending"),
+            ExpectedActive => write!(f, "no active transaction"),
+            ExpectedPendingOrActive => write!(f, "no active/pending transaction"),
             InvalidShardType => write!(f, "sharding hints must be ::Direct(n)"),
             ShardConflict => {
                 write!(f, "can't run a transaction on multiple shards")
@@ -301,43 +301,49 @@ mod tests {
         let mut tx = LogicalTransaction::new();
         tx.soft_begin().unwrap();
         let err = tx.soft_begin().unwrap_err();
-        assert!(matches!(err, TransactionError::AlreadyInTransaction));
+        assert!(matches!(err, TransactionError::ExpectedIdle));
     }
 
     #[test]
     fn test_soft_begin_in_progress_errors() {
         let mut tx = LogicalTransaction::new();
+
         tx.soft_begin().unwrap();
         tx.execute_query(Shard::Direct(0)).unwrap();
+
         let err = tx.soft_begin().unwrap_err();
-        assert!(matches!(err, TransactionError::AlreadyInTransaction));
+        assert!(matches!(err, TransactionError::ExpectedIdle));
     }
 
     #[test]
     fn test_soft_begin_after_commit_errors() {
         let mut tx = LogicalTransaction::new();
+
         tx.soft_begin().unwrap();
         tx.execute_query(Shard::Direct(0)).unwrap();
         tx.commit().unwrap();
-        let err = tx.soft_begin().unwrap_err();
-        assert!(matches!(err, TransactionError::AlreadyFinalized));
+
+        tx.soft_begin().unwrap(); // no panic
     }
 
     #[test]
     fn test_soft_begin_after_rollback_errors() {
         let mut tx = LogicalTransaction::new();
+
         tx.soft_begin().unwrap();
         tx.execute_query(Shard::Direct(0)).unwrap();
         tx.rollback().unwrap();
-        let err = tx.soft_begin().unwrap_err();
-        assert!(matches!(err, TransactionError::AlreadyFinalized));
+
+        tx.soft_begin().unwrap(); // no panic
     }
 
     #[test]
     fn test_execute_query_from_begin_pending() {
         let mut tx = LogicalTransaction::new();
+
         tx.soft_begin().unwrap();
         tx.execute_query(Shard::Direct(0)).unwrap();
+
         assert_eq!(tx.status, TransactionStatus::InProgress);
         assert_eq!(tx.dirty_shard, Some(Shard::Direct(0)));
     }
@@ -346,25 +352,31 @@ mod tests {
     fn test_execute_query_from_idle_errors() {
         let mut tx = LogicalTransaction::new();
         let err = tx.execute_query(Shard::Direct(0)).unwrap_err();
-        assert!(matches!(err, TransactionError::NoPendingBegins));
+        assert!(matches!(err, TransactionError::ExpectedPendingOrActive));
     }
 
     #[test]
     fn test_execute_query_after_commit_errors() {
-        let mut tx = LogicalTransaction::new();
-        tx.soft_begin().unwrap();
-        tx.execute_query(Shard::Direct(0)).unwrap();
-        tx.commit().unwrap();
-        let err = tx.execute_query(Shard::Direct(0)).unwrap_err();
-        assert!(matches!(err, TransactionError::AlreadyFinalized));
+        let mut ltx = LogicalTransaction::new();
+
+        ltx.soft_begin().unwrap();
+        ltx.execute_query(Shard::Direct(0)).unwrap();
+        ltx.execute_query(Shard::Direct(0)).unwrap();
+        ltx.execute_query(Shard::Direct(0)).unwrap();
+        ltx.commit().unwrap();
+
+        let err = ltx.execute_query(Shard::Direct(0)).unwrap_err();
+        assert!(matches!(err, TransactionError::ExpectedPendingOrActive));
     }
 
     #[test]
     fn test_execute_query_multiple_on_same_shard() {
         let mut tx = LogicalTransaction::new();
+
         tx.soft_begin().unwrap();
         tx.execute_query(Shard::Direct(0)).unwrap();
         tx.execute_query(Shard::Direct(0)).unwrap();
+
         assert_eq!(tx.dirty_shard, Some(Shard::Direct(0)));
         assert_eq!(tx.status, TransactionStatus::InProgress);
     }
@@ -372,8 +384,10 @@ mod tests {
     #[test]
     fn test_execute_query_cross_shard_errors() {
         let mut tx = LogicalTransaction::new();
+
         tx.soft_begin().unwrap();
         tx.execute_query(Shard::Direct(0)).unwrap();
+
         let err = tx.execute_query(Shard::Direct(1)).unwrap_err();
         assert!(matches!(err, TransactionError::ShardConflict));
     }
@@ -381,7 +395,9 @@ mod tests {
     #[test]
     fn test_execute_query_invalid_shard_type_errors() {
         let mut tx = LogicalTransaction::new();
+
         tx.soft_begin().unwrap();
+
         let err = tx.execute_query(Shard::All).unwrap_err();
         assert!(matches!(err, TransactionError::InvalidShardType));
     }
@@ -389,9 +405,11 @@ mod tests {
     #[test]
     fn test_commit_from_in_progress() {
         let mut tx = LogicalTransaction::new();
+
         tx.soft_begin().unwrap();
         tx.execute_query(Shard::Direct(0)).unwrap();
         tx.commit().unwrap();
+
         assert_eq!(tx.status, TransactionStatus::Idle);
     }
 
@@ -399,80 +417,104 @@ mod tests {
     fn test_commit_from_idle_errors() {
         let mut tx = LogicalTransaction::new();
         let err = tx.commit().unwrap_err();
-        assert!(matches!(err, TransactionError::NoPendingBegins));
+        assert!(matches!(err, TransactionError::ExpectedActive));
     }
 
     #[test]
     fn test_commit_from_begin_pending_errors() {
         let mut tx = LogicalTransaction::new();
+
         tx.soft_begin().unwrap();
+
         let err = tx.commit().unwrap_err();
-        assert!(matches!(err, TransactionError::NoActiveTransaction));
+        assert!(matches!(err, TransactionError::ExpectedActive));
     }
 
     #[test]
     fn test_commit_already_committed_errors() {
         let mut tx = LogicalTransaction::new();
+
         tx.soft_begin().unwrap();
         tx.execute_query(Shard::Direct(0)).unwrap();
+        tx.execute_query(Shard::Direct(0)).unwrap();
+        tx.execute_query(Shard::Direct(0)).unwrap();
+        tx.execute_query(Shard::Direct(0)).unwrap();
         tx.commit().unwrap();
+
         let err = tx.commit().unwrap_err();
-        assert!(matches!(err, TransactionError::AlreadyFinalized));
+        assert!(matches!(err, TransactionError::ExpectedActive));
     }
 
     #[test]
     fn test_rollback_from_in_progress() {
         let mut tx = LogicalTransaction::new();
+
         tx.soft_begin().unwrap();
         tx.execute_query(Shard::Direct(0)).unwrap();
+        tx.execute_query(Shard::Direct(0)).unwrap();
+        tx.execute_query(Shard::Direct(0)).unwrap();
         tx.rollback().unwrap();
+
         assert_eq!(tx.status, TransactionStatus::Idle);
     }
 
     #[test]
     fn test_rollback_from_begin_pending_errors() {
         let mut tx = LogicalTransaction::new();
+
         tx.soft_begin().unwrap();
+
         let err = tx.rollback().unwrap_err();
-        assert!(matches!(err, TransactionError::NoActiveTransaction));
+        assert!(matches!(err, TransactionError::ExpectedActive));
     }
 
     #[test]
     fn test_reset_clears_state() {
         let mut tx = LogicalTransaction::new();
+
         tx.soft_begin().unwrap();
         tx.execute_query(Shard::Direct(0)).unwrap();
         tx.set_manual_shard(Shard::Direct(0)).unwrap();
         tx.reset();
+
         assert_eq!(tx.status, TransactionStatus::Idle);
         assert_eq!(tx.manual_shard, None);
         assert_eq!(tx.dirty_shard, None);
     }
 
     #[test]
-    fn test_set_manual_shard_before_touch() {
+    fn test_set_matching_manual_shard_before_touch() {
         let mut tx = LogicalTransaction::new();
+
         tx.soft_begin().unwrap();
         tx.set_manual_shard(Shard::Direct(0)).unwrap();
+
         assert_eq!(tx.manual_shard, Some(Shard::Direct(0)));
+
+        tx.execute_query(Shard::Direct(0)).unwrap(); // should succeed
+        tx.execute_query(Shard::Direct(0)).unwrap(); // should succeed
         tx.execute_query(Shard::Direct(0)).unwrap(); // should succeed
     }
 
     #[test]
     fn test_set_manual_shard_after_touch_same_ok() {
         let mut tx = LogicalTransaction::new();
+
         tx.soft_begin().unwrap();
         tx.execute_query(Shard::Direct(0)).unwrap();
         tx.set_manual_shard(Shard::Direct(0)).unwrap();
+
         assert_eq!(tx.manual_shard, Some(Shard::Direct(0)));
     }
 
     #[test]
     fn test_set_manual_shard_after_touch_different_errors() {
         let mut tx = LogicalTransaction::new();
+
         // touch shard 0
         tx.soft_begin().unwrap();
         tx.execute_query(Shard::Direct(0)).unwrap();
+
         // manually set shard 1
         let err = tx.set_manual_shard(Shard::Direct(1)).unwrap_err();
         assert!(matches!(err, TransactionError::ShardConflict));
@@ -482,8 +524,10 @@ mod tests {
     fn test_manual_then_dirty_conflict() {
         let mut tx = LogicalTransaction::new();
         tx.soft_begin().unwrap();
+
         // pin to shard 0
         tx.set_manual_shard(Shard::Direct(0)).unwrap();
+
         // touching another shard must fail
         let err = tx.execute_query(Shard::Direct(1)).unwrap_err();
         assert!(matches!(err, TransactionError::ShardConflict));
@@ -499,8 +543,12 @@ mod tests {
     #[test]
     fn test_active_shard_dirty() {
         let mut tx = LogicalTransaction::new();
+
         tx.soft_begin().unwrap();
         tx.execute_query(Shard::Direct(69)).unwrap();
+        tx.execute_query(Shard::Direct(69)).unwrap();
+        tx.execute_query(Shard::Direct(69)).unwrap();
+
         assert_eq!(tx.active_shard(), Some(Shard::Direct(69)));
     }
 
@@ -515,57 +563,81 @@ mod tests {
     fn test_rollback_from_idle_errors() {
         let mut tx = LogicalTransaction::new();
         let err = tx.rollback().unwrap_err();
-        assert!(matches!(err, TransactionError::NoPendingBegins));
+        assert!(matches!(err, TransactionError::ExpectedActive));
     }
 
     #[test]
     fn test_commit_after_rollback_errors() {
         let mut tx = LogicalTransaction::new();
+
         tx.soft_begin().unwrap();
         tx.execute_query(Shard::Direct(0)).unwrap();
+        tx.execute_query(Shard::Direct(0)).unwrap();
+        tx.execute_query(Shard::Direct(0)).unwrap();
         tx.rollback().unwrap();
+
         let err = tx.commit().unwrap_err();
-        assert!(matches!(err, TransactionError::AlreadyFinalized));
+        assert!(matches!(err, TransactionError::ExpectedActive));
     }
 
     #[test]
     fn test_rollback_after_commit_errors() {
         let mut tx = LogicalTransaction::new();
+
         tx.soft_begin().unwrap();
         tx.execute_query(Shard::Direct(0)).unwrap();
+        tx.execute_query(Shard::Direct(0)).unwrap();
+        tx.execute_query(Shard::Direct(0)).unwrap();
         tx.commit().unwrap();
+
         let err = tx.rollback().unwrap_err();
-        assert!(matches!(err, TransactionError::AlreadyFinalized));
+        assert!(matches!(err, TransactionError::ExpectedActive));
     }
 
     #[test]
     fn test_rollback_already_rolledback_errors() {
         let mut tx = LogicalTransaction::new();
+
         tx.soft_begin().unwrap();
         tx.execute_query(Shard::Direct(0)).unwrap();
+        tx.execute_query(Shard::Direct(0)).unwrap();
+        tx.execute_query(Shard::Direct(0)).unwrap();
         tx.rollback().unwrap();
+
         let err = tx.rollback().unwrap_err();
-        assert!(matches!(err, TransactionError::AlreadyFinalized));
+        println!("Error: {:?}", err);
+        assert!(matches!(err, TransactionError::ExpectedActive));
     }
 
     #[test]
     fn test_execute_query_after_rollback_errors() {
         let mut tx = LogicalTransaction::new();
+
         tx.soft_begin().unwrap();
         tx.execute_query(Shard::Direct(0)).unwrap();
+        tx.execute_query(Shard::Direct(0)).unwrap();
+        tx.execute_query(Shard::Direct(0)).unwrap();
         tx.rollback().unwrap();
+
         let err = tx.execute_query(Shard::Direct(0)).unwrap_err();
-        assert!(matches!(err, TransactionError::AlreadyFinalized));
+        assert!(matches!(err, TransactionError::ExpectedPendingOrActive));
     }
 
     #[test]
     fn test_set_manual_shard_multiple_changes_before_execute() {
         let mut tx = LogicalTransaction::new();
+
         tx.soft_begin().unwrap();
         tx.set_manual_shard(Shard::Direct(1)).unwrap();
-        tx.set_manual_shard(Shard::Direct(2)).unwrap();
+        tx.set_manual_shard(Shard::Direct(2)).unwrap(); // change, no error.
+
         assert_eq!(tx.manual_shard, Some(Shard::Direct(2)));
+
         tx.execute_query(Shard::Direct(2)).unwrap();
+        tx.execute_query(Shard::Direct(2)).unwrap();
+        tx.execute_query(Shard::Direct(2)).unwrap();
+        tx.execute_query(Shard::Direct(2)).unwrap();
+
         let err = tx.execute_query(Shard::Direct(1)).unwrap_err();
         assert!(matches!(err, TransactionError::ShardConflict));
     }
@@ -573,9 +645,11 @@ mod tests {
     #[test]
     fn test_set_manual_shard_after_commit_same_ok() {
         let mut tx = LogicalTransaction::new();
+
         tx.soft_begin().unwrap();
         tx.execute_query(Shard::Direct(0)).unwrap();
         tx.commit().unwrap();
+
         tx.set_manual_shard(Shard::Direct(0)).unwrap();
         assert_eq!(tx.manual_shard, Some(Shard::Direct(0)));
     }
@@ -583,31 +657,41 @@ mod tests {
     #[test]
     fn test_set_manual_shard_after_commit_different_errors() {
         let mut tx = LogicalTransaction::new();
+
         tx.soft_begin().unwrap();
         tx.execute_query(Shard::Direct(0)).unwrap();
+        tx.execute_query(Shard::Direct(0)).unwrap();
+        tx.execute_query(Shard::Direct(0)).unwrap();
         tx.commit().unwrap();
-        let err = tx.set_manual_shard(Shard::Direct(1)).unwrap_err();
-        assert!(matches!(err, TransactionError::ShardConflict));
+
+        tx.set_manual_shard(Shard::Direct(1)).unwrap(); // should not panic
     }
 
     #[test]
     fn test_set_manual_shard_after_rollback_same_ok() {
         let mut tx = LogicalTransaction::new();
+
         tx.soft_begin().unwrap();
         tx.execute_query(Shard::Direct(0)).unwrap();
         tx.rollback().unwrap();
-        tx.set_manual_shard(Shard::Direct(0)).unwrap();
-        assert_eq!(tx.manual_shard, Some(Shard::Direct(0)));
+
+        tx.set_manual_shard(Shard::Direct(88)).unwrap();
+        assert_eq!(tx.manual_shard, Some(Shard::Direct(88))); // no panic
     }
 
     #[test]
     fn test_set_manual_shard_after_rollback_different_errors() {
         let mut tx = LogicalTransaction::new();
+
         tx.soft_begin().unwrap();
         tx.execute_query(Shard::Direct(0)).unwrap();
+        tx.execute_query(Shard::Direct(0)).unwrap();
+        tx.execute_query(Shard::Direct(0)).unwrap();
+        tx.execute_query(Shard::Direct(0)).unwrap();
+        tx.execute_query(Shard::Direct(0)).unwrap();
         tx.rollback().unwrap();
-        let err = tx.set_manual_shard(Shard::Direct(1)).unwrap_err();
-        assert!(matches!(err, TransactionError::ShardConflict));
+
+        tx.set_manual_shard(Shard::Direct(1)).unwrap(); // should not panic
     }
 
     #[test]
@@ -626,10 +710,13 @@ mod tests {
     #[test]
     fn test_soft_begin_after_reset_from_finalized() {
         let mut tx = LogicalTransaction::new();
+
         tx.soft_begin().unwrap();
         tx.execute_query(Shard::Direct(0)).unwrap();
         tx.commit().unwrap();
+
         tx.reset();
+
         tx.soft_begin().unwrap();
         assert_eq!(tx.status, TransactionStatus::BeginPending);
     }
@@ -637,17 +724,12 @@ mod tests {
     #[test]
     fn test_active_shard_both_same() {
         let mut tx = LogicalTransaction::new();
+
         tx.set_manual_shard(Shard::Direct(3)).unwrap();
         tx.soft_begin().unwrap();
         tx.execute_query(Shard::Direct(3)).unwrap();
-        assert_eq!(tx.active_shard(), Some(Shard::Direct(3)));
-    }
 
-    #[test]
-    fn test_statements_executed_remains_zero_after_execute() {
-        let mut tx = LogicalTransaction::new();
-        tx.soft_begin().unwrap();
-        tx.execute_query(Shard::Direct(0)).unwrap();
+        assert_eq!(tx.active_shard(), Some(Shard::Direct(3)));
     }
 }
 
