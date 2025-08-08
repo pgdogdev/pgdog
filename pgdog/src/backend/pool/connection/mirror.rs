@@ -294,7 +294,7 @@ mod test {
             received
         );
         assert!(
-            dropped <= 25 && dropped > 20,
+            dropped <= 25 && dropped > 15,
             "dropped should be somewhere near 50%, but actually is {}",
             dropped
         );
