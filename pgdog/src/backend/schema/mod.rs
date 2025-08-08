@@ -1,6 +1,7 @@
 //! Schema operations.
 pub mod columns;
 pub mod relation;
+pub mod sync;
 
 use std::sync::Arc;
 use std::{collections::HashMap, ops::Deref};
