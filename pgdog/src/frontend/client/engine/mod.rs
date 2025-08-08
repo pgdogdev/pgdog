@@ -54,10 +54,8 @@ impl<'a> Engine<'a> {
                 'S' => {
                     if only_close || only_sync && !self.context.connected {
                         messages.push(
-                            ReadyForQuery::in_transaction(
-                                self.context.logical_transaction.in_transaction(),
-                            )
-                            .message()?,
+                            ReadyForQuery::in_transaction(self.context.in_transaction())
+                                .message()?,
                         )
                     }
                 }

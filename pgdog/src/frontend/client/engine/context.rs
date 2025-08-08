@@ -30,4 +30,8 @@ impl<'a> EngineContext<'a> {
             buffer: &client.request_buffer,
         }
     }
+
+    pub fn in_transaction(&self) -> bool {
+        self.logical_transaction.in_transaction()
+    }
 }
