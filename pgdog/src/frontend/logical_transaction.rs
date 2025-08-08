@@ -106,7 +106,7 @@ impl LogicalTransaction {
         self.touch_shard(shard)?;
 
         match self.status {
-            TransactionStatus::Idle => Err(TransactionError::ExpectedPendingOrActive),
+            TransactionStatus::Idle => Err(TransactionError::ExpectedActive),
             TransactionStatus::BeginPending => {
                 self.status = TransactionStatus::InProgress;
                 Ok(())
@@ -240,8 +240,6 @@ impl LogicalTransaction {
 pub enum TransactionError {
     // Transaction lifecycle
     ExpectedIdle,
-    ExpectedPending,
-    ExpectedPendingOrActive,
     ExpectedActive,
 
     // Sharding policy
@@ -253,10 +251,8 @@ impl fmt::Display for TransactionError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         use TransactionError::*;
         match self {
-            ExpectedIdle => write!(f, "transaction already started"),
-            ExpectedPending => write!(f, "transaction not pending"),
-            ExpectedActive => write!(f, "no active transaction"),
-            ExpectedPendingOrActive => write!(f, "no active/pending transaction"),
+            ExpectedIdle => write!(f, "there is already a transaction in progress"),
+            ExpectedActive => write!(f, "there is no transaction in progress"),
             InvalidShardType => write!(f, "sharding hints must be ::Direct(n)"),
             ShardConflict => {
                 write!(f, "can't run a transaction on multiple shards")
@@ -358,7 +354,7 @@ mod tests {
     fn test_execute_query_from_idle_errors() {
         let mut tx = LogicalTransaction::new();
         let err = tx.execute_query(Shard::Direct(0)).unwrap_err();
-        assert!(matches!(err, TransactionError::ExpectedPendingOrActive));
+        assert!(matches!(err, TransactionError::ExpectedActive));
     }
 
     #[test]
@@ -372,7 +368,7 @@ mod tests {
         ltx.commit().unwrap();
 
         let err = ltx.execute_query(Shard::Direct(0)).unwrap_err();
-        assert!(matches!(err, TransactionError::ExpectedPendingOrActive));
+        assert!(matches!(err, TransactionError::ExpectedActive));
     }
 
     #[test]
@@ -622,7 +618,7 @@ mod tests {
         tx.rollback().unwrap();
 
         let err = tx.execute_query(Shard::Direct(0)).unwrap_err();
-        assert!(matches!(err, TransactionError::ExpectedPendingOrActive));
+        assert!(matches!(err, TransactionError::ExpectedActive));
     }
 
     #[test]

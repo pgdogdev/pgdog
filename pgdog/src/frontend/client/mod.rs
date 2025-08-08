@@ -19,6 +19,7 @@ use crate::backend::{
 };
 use crate::config::{self, AuthType};
 use crate::frontend::buffer::BufferedQuery;
+use crate::frontend::logical_transaction::TransactionError;
 #[cfg(debug_assertions)]
 use crate::frontend::QueryLogger;
 use crate::net::messages::{
@@ -804,21 +805,41 @@ impl Client {
     /// This avoids connecting to servers when clients start and commit transactions
     /// with no queries.
     async fn end_transaction(&mut self, rollback: bool) -> Result<(), Error> {
+        // attempt to commit or rollback the logical transaction
+        let logical_result = if rollback {
+            self.logical_transaction.rollback()
+        } else {
+            self.logical_transaction.commit()
+        };
+
+        match logical_result {
+            // no transaction in progress → send a NOTICE and READY
+            Err(TransactionError::ExpectedActive) => {
+                let notice = NoticeResponse::from(ErrorResponse::no_transaction())
+                    .message()?
+                    .backend();
+                let ready = ReadyForQuery::idle().message()?.backend();
+                self.stream.send_many(&[notice, ready]).await?;
+                return Ok(());
+            }
+            // any other logical‐txn error is fatal
+            Err(e) => return Err(e.into()),
+            // on Ok, fall through to send CommandComplete
+            Ok(()) => {}
+        }
+
+        // build and send COMMIT/ROLLBACK + READY
         let cmd = if rollback {
-            self.logical_transaction.rollback()?;
             CommandComplete::new_rollback()
         } else {
-            self.logical_transaction.commit()?;
             CommandComplete::new_commit()
         };
-        let mut messages = if !self.in_transaction() {
-            vec![NoticeResponse::from(ErrorResponse::no_transaction()).message()?]
-        } else {
-            vec![]
-        };
-        messages.push(cmd.message()?.backend());
-        messages.push(ReadyForQuery::idle().message()?);
-        self.stream.send_many(&messages).await?;
+
+        let complete_msg = cmd.message()?.backend();
+        let ready_msg = ReadyForQuery::idle().message()?.backend();
+
+        self.stream.send_many(&[complete_msg, ready_msg]).await?;
+
         debug!("transaction ended");
         Ok(())
     }
