@@ -136,7 +136,12 @@ impl PgDumpCommand {
         let original = from_utf8(&output.stdout)?.to_string();
         let stmts = pg_query::parse(&original)?.protobuf;
 
-        Ok(PgDumpOutput { stmts, original })
+        Ok(PgDumpOutput {
+            stmts,
+            original,
+            table: self.table.clone(),
+            schema: self.schema.clone(),
+        })
     }
 }
 
@@ -144,6 +149,8 @@ impl PgDumpCommand {
 pub struct PgDumpOutput {
     stmts: ParseResult,
     original: String,
+    pub table: String,
+    pub schema: String,
 }
 
 impl PgDumpOutput {
@@ -214,6 +221,39 @@ impl PgDumpOutput {
         }
 
         Ok(result)
+    }
+
+    /// Create objects in destination cluster.
+    pub async fn restore(&self, dest: &Cluster, ignore_errors: bool) -> Result<(), Error> {
+        let stmts = self.pre_data_sync()?;
+
+        for (num, shard) in dest.shards().iter().enumerate() {
+            let mut primary = shard.primary(&Request::default()).await?;
+
+            info!(
+                "syncing schema for \"{}\".\"{}\" into shard {} [{}, {}]",
+                self.schema,
+                self.table,
+                num,
+                primary.addr(),
+                dest.name()
+            );
+
+            for stmt in &stmts {
+                if let Err(err) = primary.execute(stmt).await {
+                    if ignore_errors {
+                        warn!(
+                            "skipping object creation for table \"{}\".\"{}\": {}",
+                            self.schema, self.table, err
+                        );
+                    } else {
+                        return Err(err.into());
+                    }
+                }
+            }
+        }
+
+        Ok(())
     }
 }
 

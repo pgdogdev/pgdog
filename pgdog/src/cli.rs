@@ -110,6 +110,10 @@ pub enum Commands {
         /// Dry run. Print schema commands, don't actually execute them.
         #[arg(long)]
         dry_run: bool,
+
+        /// Ignore errors.
+        #[arg(long)]
+        ignore_errors: bool,
     },
 }
 
@@ -237,19 +241,20 @@ pub async fn data_sync(commands: Commands) -> Result<(), Box<dyn std::error::Err
 }
 
 pub async fn schema_sync(commands: Commands) -> Result<(), Box<dyn std::error::Error>> {
-    let (source, _destination, publication, dry_run) = if let Commands::SchemaSync {
+    let (source, destination, publication, dry_run, ignore_errors) = if let Commands::SchemaSync {
         from_database,
         from_user,
         to_database,
         to_user,
         publication,
         dry_run,
+        ignore_errors,
     } = commands
     {
         let source = databases().cluster((from_user.as_str(), from_database.as_str()))?;
         let dest = databases().cluster((to_user.as_str(), to_database.as_str()))?;
 
-        (source, dest, publication, dry_run)
+        (source, dest, publication, dry_run, ignore_errors)
     } else {
         return Ok(());
     };
@@ -258,12 +263,13 @@ pub async fn schema_sync(commands: Commands) -> Result<(), Box<dyn std::error::E
     let output = dump.dump().await?;
 
     for output in output {
-        let queries = output.pre_data_sync()?;
-
         if dry_run {
+            let queries = output.pre_data_sync()?;
             for query in queries {
                 println!("{}", query);
             }
+        } else {
+            output.restore(&destination, ignore_errors).await?;
         }
     }
 
