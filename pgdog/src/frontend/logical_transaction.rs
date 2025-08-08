@@ -126,7 +126,10 @@ impl LogicalTransaction {
     pub fn commit(&mut self) -> Result<(), TransactionError> {
         match self.status {
             TransactionStatus::Idle => Err(TransactionError::ExpectedActive),
-            TransactionStatus::BeginPending => Err(TransactionError::ExpectedActive),
+            TransactionStatus::BeginPending => {
+                self.reset();
+                Ok(())
+            }
             TransactionStatus::InProgress => {
                 self.reset();
                 Ok(())
@@ -145,7 +148,10 @@ impl LogicalTransaction {
     pub fn rollback(&mut self) -> Result<(), TransactionError> {
         match self.status {
             TransactionStatus::Idle => Err(TransactionError::ExpectedActive),
-            TransactionStatus::BeginPending => Err(TransactionError::ExpectedActive),
+            TransactionStatus::BeginPending => {
+                self.reset();
+                Ok(())
+            }
             TransactionStatus::InProgress => {
                 self.reset();
                 Ok(())

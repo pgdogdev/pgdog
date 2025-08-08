@@ -449,6 +449,7 @@ impl Client {
 
                         inner.start_transaction = Some(query.clone());
                         inner.done(self.in_transaction());
+
                         return Ok(false);
                     }
                 }
@@ -459,6 +460,7 @@ impl Client {
                     self.logical_transaction.rollback()?;
 
                     inner.done(self.logical_transaction.in_transaction());
+
                     return Ok(false);
                 }
                 Some(Command::CommitTransaction) => {
