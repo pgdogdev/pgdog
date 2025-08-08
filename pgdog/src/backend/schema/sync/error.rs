@@ -28,4 +28,7 @@ pub enum Error {
 
     #[error("parse error, stmt out of bounds")]
     StmtOutOfBounds,
+
+    #[error("cluster has no databases")]
+    NoDatabases,
 }

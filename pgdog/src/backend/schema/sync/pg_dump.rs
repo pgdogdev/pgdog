@@ -1,18 +1,21 @@
 //! Wrapper around pg_dump.
 
-use std::str::{from_utf8, from_utf8_unchecked};
+use std::str::from_utf8;
 
 use pg_query::{
-    protobuf::{ConstrType, ParseResult},
+    protobuf::{AlterTableType, ConstrType, ParseResult},
     NodeEnum,
 };
-use tracing::warn;
+use tracing::{info, warn};
 
 use super::Error;
-use crate::backend::{
-    pool::{Address, Request},
-    replication::publisher::PublicationTable,
-    Cluster,
+use crate::{
+    backend::{
+        pool::{Address, Request},
+        replication::publisher::PublicationTable,
+        Cluster,
+    },
+    config::config,
 };
 
 use tokio::process::Command;
@@ -24,15 +27,33 @@ pub struct PgDump {
 }
 
 impl PgDump {
-    pub async fn new(source: &Cluster, publication: &str) -> Self {
+    pub fn new(source: &Cluster, publication: &str) -> Self {
         Self {
             source: source.clone(),
             publication: publication.to_string(),
         }
     }
 
-    pub async fn dump(&self) -> Result<(), Error> {
+    /// Dump schema from source cluster.
+    pub async fn dump(&self) -> Result<Vec<PgDumpOutput>, Error> {
         let mut comparison: Vec<PublicationTable> = vec![];
+        let addr = self
+            .source
+            .shards()
+            .get(0)
+            .ok_or(Error::NoDatabases)?
+            .primary_or_replica(&Request::default())
+            .await?
+            .addr()
+            .clone();
+
+        info!(
+            "loading tables from publication \"{}\" on {} shards [{}]",
+            self.publication,
+            self.source.shards().len(),
+            self.source.name(),
+        );
+
         for (num, shard) in self.source.shards().iter().enumerate() {
             let mut server = shard.primary_or_replica(&Request::default()).await?;
             let tables = PublicationTable::load(&self.publication, &mut server).await?;
@@ -40,12 +61,37 @@ impl PgDump {
                 comparison.extend(tables);
             } else {
                 if comparison != tables {
-                    warn!("shard {} tables are different [{}]", num, server.addr());
+                    warn!(
+                        "shard {} tables are different [{}, {}]",
+                        num,
+                        server.addr(),
+                        self.source.name()
+                    );
                     continue;
                 }
             }
         }
-        todo!()
+
+        let mut result = vec![];
+        info!(
+            "dumping schema for {} tables [{}, {}]",
+            comparison.len(),
+            addr,
+            self.source.name()
+        );
+
+        for table in comparison {
+            let cmd = PgDumpCommand {
+                table: table.name.clone(),
+                schema: table.schema.clone(),
+                address: addr.clone(),
+            };
+
+            let dump = cmd.execute().await?;
+            result.push(dump);
+        }
+
+        Ok(result)
     }
 }
 
@@ -57,7 +103,14 @@ struct PgDumpCommand {
 
 impl PgDumpCommand {
     async fn execute(&self) -> Result<PgDumpOutput, Error> {
-        let output = Command::new("pg_dump")
+        let config = config();
+        let pg_dump_path = config
+            .config
+            .replication
+            .pg_dump_path
+            .to_str()
+            .unwrap_or("pg_dump");
+        let output = Command::new(pg_dump_path)
             .arg("-t")
             .arg(&self.table)
             .arg("-n")
@@ -116,19 +169,34 @@ impl PgDumpOutput {
                             result.push(original);
                         }
 
+                        NodeEnum::CreateSeqStmt(_) => {
+                            // Bring sequences over.
+                            result.push(original);
+                        }
+
                         NodeEnum::AlterTableStmt(stmt) => {
                             for cmd in &stmt.cmds {
                                 if let Some(ref node) = cmd.node {
                                     if let NodeEnum::AlterTableCmd(cmd) = node {
-                                        if let Some(ref def) = cmd.def {
-                                            if let Some(ref node) = def.node {
-                                                // Only allow primary key constraints.
-                                                if let NodeEnum::Constraint(cons) = node {
-                                                    if cons.contype() == ConstrType::ConstrPrimary {
-                                                        result.push(original);
+                                        match cmd.subtype() {
+                                            AlterTableType::AtAddConstraint => {
+                                                if let Some(ref def) = cmd.def {
+                                                    if let Some(ref node) = def.node {
+                                                        // Only allow primary key constraints.
+                                                        if let NodeEnum::Constraint(cons) = node {
+                                                            if cons.contype()
+                                                                == ConstrType::ConstrPrimary
+                                                            {
+                                                                result.push(original);
+                                                            }
+                                                        }
                                                     }
                                                 }
                                             }
+                                            AlterTableType::AtColumnDefault => {
+                                                result.push(original)
+                                            }
+                                            _ => continue,
                                         }
                                     }
                                 }
@@ -161,7 +229,7 @@ mod test {
 
         let queries = vec![
             "DROP PUBLICATION IF EXISTS test_pg_dump_execute",
-            "CREATE TABLE IF NOT EXISTS test_pg_dump_execute(id BIGINT PRIMARY KEY, email VARCHAR UNIQUE, created_at TIMESTAMPTZ)",
+            "CREATE TABLE IF NOT EXISTS test_pg_dump_execute(id BIGSERIAL PRIMARY KEY, email VARCHAR UNIQUE, created_at TIMESTAMPTZ)",
             "CREATE INDEX ON test_pg_dump_execute USING btree(created_at)",
             "CREATE TABLE IF NOT EXISTS test_pg_dump_execute_fk(fk BIGINT NOT NULL REFERENCES test_pg_dump_execute(id), meta JSONB)",
             "CREATE PUBLICATION test_pg_dump_execute FOR TABLE test_pg_dump_execute, test_pg_dump_execute_fk"
@@ -201,9 +269,15 @@ mod test {
             dest.execute(stmt).await.unwrap();
         }
 
-        dest.execute("SELECT * FROM test_pg_dump_execute_dest.test_pg_dump_execute")
-            .await
-            .unwrap();
+        for i in 0..5 {
+            let id = dest.fetch_all::<i64>("INSERT INTO test_pg_dump_execute_dest.test_pg_dump_execute VALUES (DEFAULT, 'test@test', NOW()) RETURNING id")
+                .await
+                .unwrap();
+            assert_eq!(id[0], i + 1); // Sequence has made it over.
+
+            // Unique index has not made it over tho.
+        }
+
         dest.execute("DROP SCHEMA test_pg_dump_execute_dest CASCADE")
             .await
             .unwrap();

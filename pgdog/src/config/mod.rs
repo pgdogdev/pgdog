@@ -186,20 +186,29 @@ pub struct Config {
     #[serde(default)]
     pub admin: Admin,
 
+    /// List of sharded tables.
     #[serde(default)]
     pub sharded_tables: Vec<ShardedTable>,
 
+    /// Queries routed manually to a single shard.
     #[serde(default)]
     pub manual_queries: Vec<ManualQuery>,
 
+    /// List of omnisharded tables.
     #[serde(default)]
     pub omnisharded_tables: Vec<OmnishardedTables>,
 
+    /// Explicit sharding key mappings.
     #[serde(default)]
     pub sharded_mappings: Vec<ShardedMapping>,
 
+    /// Replica lag configuration.
     #[serde(default, deserialize_with = "ReplicaLag::deserialize_optional")]
     pub replica_lag: Option<ReplicaLag>,
+
+    /// Replication config.
+    #[serde(default)]
+    pub replication: Replication,
 }
 
 impl Config {
@@ -1277,8 +1286,28 @@ impl Default for ReplicaLag {
     }
 }
 
-//--------------------------------------------------------------------------------------------------
-//----- Testing ------------------------------------------------------------------------------------
+/// Replication configuration.
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
+#[serde(rename_all = "snake_case")]
+pub struct Replication {
+    /// Path to the pg_dump executable.
+    #[serde(default = "Replication::pg_dump_path")]
+    pub pg_dump_path: PathBuf,
+}
+
+impl Replication {
+    fn pg_dump_path() -> PathBuf {
+        PathBuf::from("pg_dump")
+    }
+}
+
+impl Default for Replication {
+    fn default() -> Self {
+        Self {
+            pg_dump_path: Self::pg_dump_path(),
+        }
+    }
+}
 
 #[cfg(test)]
 pub mod test {
