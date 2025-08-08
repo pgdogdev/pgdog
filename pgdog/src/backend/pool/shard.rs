@@ -36,6 +36,7 @@ impl Shard {
         }
     }
 
+    /// Get connection to primary database.
     pub async fn primary(&self, request: &Request) -> Result<Guard, Error> {
         self.primary
             .as_ref()
@@ -44,6 +45,8 @@ impl Shard {
             .await
     }
 
+    /// Get connection to one of the replica databases, using the configured
+    /// load balancing algorithm.
     pub async fn replica(&self, request: &Request) -> Result<Guard, Error> {
         if self.replicas.is_empty() {
             self.primary
@@ -60,6 +63,15 @@ impl Shard {
             };
 
             self.replicas.get(request, primary).await
+        }
+    }
+
+    /// Get connection to primary if configured, otherwise replica.
+    pub async fn primary_or_replica(&self, request: &Request) -> Result<Guard, Error> {
+        if self.primary.is_some() {
+            self.primary(request).await
+        } else {
+            self.replica(request).await
         }
     }
 

@@ -17,10 +17,11 @@ JOIN pg_namespace n ON n.oid = c.relnamespace
 JOIN ( SELECT (pg_get_publication_tables(VARIADIC array_agg(pubname::text))).*
        FROM pg_publication
        WHERE pubname IN ($1)) AS gpt
-    ON gpt.relid = c.oid";
+    ON gpt.relid = c.oid
+ORDER BY n.nspname, c.relname";
 
 /// Table included in a publication.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PublicationTable {
     pub schema: String,
     pub name: String,
