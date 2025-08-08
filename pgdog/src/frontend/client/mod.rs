@@ -54,7 +54,6 @@ pub struct Client {
     streaming: bool,
     shutdown: bool,
     prepared_statements: PreparedStatements,
-    // in_transaction: bool,
     logical_transaction: LogicalTransaction,
     timeouts: Timeouts,
     request_buffer: Buffer,
