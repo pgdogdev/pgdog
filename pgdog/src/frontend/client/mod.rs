@@ -461,7 +461,7 @@ impl Client {
                     self.end_transaction(true).await?;
                     self.logical_transaction.rollback()?;
 
-                    inner.done(self.logical_transaction.in_transaction());
+                    inner.done(self.in_transaction());
 
                     return Ok(false);
                 }
@@ -471,7 +471,7 @@ impl Client {
                     self.end_transaction(false).await?;
                     self.logical_transaction.commit()?;
 
-                    inner.done(self.logical_transaction.in_transaction());
+                    inner.done(self.in_transaction());
                     return Ok(false);
                 }
                 // How many shards are configured.
@@ -480,14 +480,13 @@ impl Client {
                     let mut dr = DataRow::new();
                     dr.add(*shards as i64);
                     let cc = CommandComplete::from_str("SHOW");
-                    let rfq =
-                        ReadyForQuery::in_transaction(self.logical_transaction.in_transaction());
+                    let rfq = ReadyForQuery::in_transaction(self.in_transaction());
 
                     self.stream
                         .send_many(&[rd.message()?, dr.message()?, cc.message()?, rfq.message()?])
                         .await?;
 
-                    inner.done(self.logical_transaction.in_transaction());
+                    inner.done(self.in_transaction());
                     return Ok(false);
                 }
                 Some(Command::Deallocate) => {
@@ -510,7 +509,7 @@ impl Client {
                                 self.logical_transaction.in_transaction(),
                             )
                             .await?;
-                        inner.done(self.logical_transaction.in_transaction());
+                        inner.done(self.in_transaction());
                         inner.reset_router();
                         return Ok(false);
                     }
@@ -562,15 +561,12 @@ impl Client {
                     if err.no_server() {
                         error!("{} [{}]", err, self.addr);
                         self.stream
-                            .error(
-                                ErrorResponse::from_err(&err),
-                                self.logical_transaction.in_transaction(),
-                            )
+                            .error(ErrorResponse::from_err(&err), self.in_transaction())
                             .await?;
                         // TODO: should this be wrapped in a method?
                         inner.disconnect();
                         inner.reset_router();
-                        inner.done(self.logical_transaction.in_transaction());
+                        inner.done(self.in_transaction());
                         return Ok(false);
                     } else {
                         return Err(err.into());
@@ -650,7 +646,7 @@ impl Client {
             let should_be_tx = message.in_transaction() || inner.start_transaction.is_some();
 
             // 2) Is the frontend client in a logical transaction?
-            let in_transaction = self.logical_transaction.in_transaction();
+            let in_transaction = self.in_transaction();
 
             // 3) Reconcile against our LogicalTransaction
             if should_be_tx && !in_transaction {
