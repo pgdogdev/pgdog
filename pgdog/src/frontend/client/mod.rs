@@ -5,13 +5,15 @@ use std::time::Instant;
 
 use bytes::BytesMut;
 use engine::EngineContext;
+use smallvec::SmallVec;
 use timeouts::Timeouts;
 use tokio::time::timeout;
 use tokio::{select, spawn};
 use tracing::{debug, enabled, error, info, trace, Level as LogLevel};
 
-use super::logical_transaction::{LogicalTransaction, TransactionStatus};
+use super::logical_transaction::{LogicalTransaction, TransactionError, TransactionStatus};
 use super::{Buffer, Command, Comms, Error, PreparedStatements};
+
 use crate::auth::{md5, scram::Server};
 use crate::backend::{
     databases,
@@ -19,7 +21,6 @@ use crate::backend::{
 };
 use crate::config::{self, AuthType};
 use crate::frontend::buffer::BufferedQuery;
-use crate::frontend::logical_transaction::TransactionError;
 #[cfg(debug_assertions)]
 use crate::frontend::QueryLogger;
 use crate::net::messages::{
@@ -645,17 +646,18 @@ impl Client {
         // ReadyForQuery (B)
         if code == 'Z' {
             inner.stats.query();
-            // 1) Should we logically be in‐txn?
-            //    In transaction if buffered BEGIN from client or server is telling us we are.
+            // 1) Does the backend server say we're in a transaction?
             let should_be_tx = message.in_transaction() || inner.start_transaction.is_some();
+
+            // 2) Is the frontend client in a logical transaction?
             let in_transaction = self.logical_transaction.in_transaction();
 
-            // 2) Reconcile against our LogicalTransaction
+            // 3) Reconcile against our LogicalTransaction
             if should_be_tx && !in_transaction {
                 self.logical_transaction.soft_begin()?;
             }
             if !should_be_tx && in_transaction {
-                self.logical_transaction.reset(); // COMMIT/ROLLBACK just happened?
+                self.logical_transaction.reset();
             }
 
             inner.stats.idle(self.logical_transaction.in_transaction());
@@ -786,15 +788,27 @@ impl Client {
 
     /// Tell the client we started a transaction.
     async fn start_transaction(&mut self) -> Result<(), Error> {
-        self.logical_transaction.soft_begin()?;
+        // stack‐allocate up to 3 messages: optional NOTICE + BEGIN + Ready
+        let mut messages: SmallVec<[Message; 3]> = SmallVec::new();
 
-        self.stream
-            .send_many(&[
-                CommandComplete::new_begin().message()?.backend(),
-                ReadyForQuery::in_transaction(true).message()?,
-            ])
-            .await?;
+        match self.logical_transaction.soft_begin() {
+            Err(TransactionError::ExpectedActive) => {
+                let notice = NoticeResponse::from(ErrorResponse::already_in_transaction())
+                    .message()?
+                    .backend();
 
+                messages.push(notice);
+            }
+            Err(e) => return Err(e.into()), // any other error is fatal
+            Ok(()) => {}
+        }
+
+        // push the BEGIN + in-transaction ready
+        messages.push(CommandComplete::new_begin().message()?.backend());
+        messages.push(ReadyForQuery::in_transaction(true).message()?.backend());
+
+        // send all messages
+        self.stream.send_many(&messages).await?;
         debug!("transaction started");
 
         Ok(())
@@ -805,7 +819,9 @@ impl Client {
     /// This avoids connecting to servers when clients start and commit transactions
     /// with no queries.
     async fn end_transaction(&mut self, rollback: bool) -> Result<(), Error> {
-        // attempt to commit or rollback the logical transaction
+        // stack‐allocate up to 3 messages: NOTICE + COMMIT/ROLLBACK + READY
+        let mut messages: SmallVec<[Message; 3]> = SmallVec::new();
+
         let logical_result = if rollback {
             self.logical_transaction.rollback()
         } else {
@@ -813,33 +829,26 @@ impl Client {
         };
 
         match logical_result {
-            // no transaction in progress → send a NOTICE and READY
             Err(TransactionError::ExpectedActive) => {
-                let notice = NoticeResponse::from(ErrorResponse::no_transaction())
-                    .message()?
-                    .backend();
-                let ready = ReadyForQuery::idle().message()?.backend();
-                self.stream.send_many(&[notice, ready]).await?;
-                return Ok(());
+                messages.push(
+                    NoticeResponse::from(ErrorResponse::no_transaction())
+                        .message()?
+                        .backend(),
+                );
             }
-            // any other logical‐txn error is fatal
             Err(e) => return Err(e.into()),
-            // on Ok, fall through to send CommandComplete
             Ok(()) => {}
         }
 
-        // build and send COMMIT/ROLLBACK + READY
         let cmd = if rollback {
             CommandComplete::new_rollback()
         } else {
             CommandComplete::new_commit()
         };
+        messages.push(cmd.message()?.backend());
+        messages.push(ReadyForQuery::idle().message()?.backend());
 
-        let complete_msg = cmd.message()?.backend();
-        let ready_msg = ReadyForQuery::idle().message()?.backend();
-
-        self.stream.send_many(&[complete_msg, ready_msg]).await?;
-
+        self.stream.send_many(&messages).await?;
         debug!("transaction ended");
         Ok(())
     }
