@@ -346,5 +346,3 @@ impl QueryParser {
 
 #[cfg(test)]
 mod test;
-#[cfg(test)]
-mod test_explain;
