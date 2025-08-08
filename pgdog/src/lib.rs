@@ -26,6 +26,7 @@ use std::io::IsTerminal;
 pub fn logger() {
     let format = fmt::layer()
         .with_ansi(std::io::stderr().is_terminal())
+        .with_writer(std::io::stderr)
         .with_file(false);
     #[cfg(not(debug_assertions))]
     let format = format.with_target(false);
