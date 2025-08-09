@@ -5,12 +5,15 @@ use std::time::Instant;
 
 use bytes::BytesMut;
 use engine::EngineContext;
+use smallvec::SmallVec;
 use timeouts::Timeouts;
 use tokio::time::timeout;
 use tokio::{select, spawn};
 use tracing::{debug, enabled, error, info, trace, Level as LogLevel};
 
+use super::logical_transaction::{LogicalTransaction, TransactionError, TransactionStatus};
 use super::{Buffer, Command, Comms, Error, PreparedStatements};
+
 use crate::auth::{md5, scram::Server};
 use crate::backend::{
     databases,
@@ -51,7 +54,7 @@ pub struct Client {
     streaming: bool,
     shutdown: bool,
     prepared_statements: PreparedStatements,
-    in_transaction: bool,
+    logical_transaction: LogicalTransaction,
     timeouts: Timeouts,
     request_buffer: Buffer,
     stream_buffer: BytesMut,
@@ -236,7 +239,7 @@ impl Client {
             replication_mode,
             connect_params: params,
             prepared_statements: PreparedStatements::new(),
-            in_transaction: false,
+            logical_transaction: LogicalTransaction::new(),
             timeouts: Timeouts::from_config(&config.config.general),
             request_buffer: Buffer::new(),
             stream_buffer: BytesMut::new(),
@@ -277,7 +280,7 @@ impl Client {
             connect_params: connect_params.clone(),
             params: connect_params,
             admin: false,
-            in_transaction: false,
+            logical_transaction: LogicalTransaction::new(),
             timeouts: Timeouts::from_config(&config().config.general),
             request_buffer: Buffer::new(),
             stream_buffer: BytesMut::new(),
@@ -378,7 +381,7 @@ impl Client {
                 "{} [{}] (in transaction: {})",
                 query.query(),
                 self.addr,
-                self.in_transaction
+                self.in_transaction()
             );
             QueryLogger::new(&self.request_buffer).log().await?;
         }
@@ -393,7 +396,7 @@ impl Client {
         match engine.execute().await? {
             Action::Intercept(msgs) => {
                 self.stream.send_many(&msgs).await?;
-                inner.done(self.in_transaction);
+                inner.done(self.in_transaction());
                 self.update_stats(&mut inner);
                 return Ok(false);
             }
@@ -407,25 +410,25 @@ impl Client {
             &mut self.request_buffer,
             &mut self.prepared_statements,
             &self.params,
-            self.in_transaction,
+            &self.logical_transaction,
         ) {
             Ok(command) => command,
             Err(err) => {
                 if err.empty_query() {
                     self.stream.send(&EmptyQueryResponse).await?;
                     self.stream
-                        .send_flush(&ReadyForQuery::in_transaction(self.in_transaction))
+                        .send_flush(&ReadyForQuery::in_transaction(self.in_transaction()))
                         .await?;
                 } else {
                     error!("{:?} [{}]", err, self.addr);
                     self.stream
                         .error(
                             ErrorResponse::syntax(err.to_string().as_str()),
-                            self.in_transaction,
+                            self.in_transaction(),
                         )
                         .await?;
                 }
-                inner.done(self.in_transaction);
+                inner.done(self.in_transaction());
                 return Ok(false);
             }
         };
@@ -444,24 +447,30 @@ impl Client {
                 Some(Command::StartTransaction(query)) => {
                     if let BufferedQuery::Query(_) = query {
                         self.start_transaction().await?;
+
                         inner.start_transaction = Some(query.clone());
-                        self.in_transaction = true;
-                        inner.done(self.in_transaction);
+                        inner.done(self.in_transaction());
+
                         return Ok(false);
                     }
                 }
                 Some(Command::RollbackTransaction) => {
                     inner.start_transaction = None;
+
                     self.end_transaction(true).await?;
-                    self.in_transaction = false;
-                    inner.done(self.in_transaction);
+                    self.logical_transaction.rollback()?;
+
+                    inner.done(self.in_transaction());
+
                     return Ok(false);
                 }
                 Some(Command::CommitTransaction) => {
                     inner.start_transaction = None;
+
                     self.end_transaction(false).await?;
-                    self.in_transaction = false;
-                    inner.done(self.in_transaction);
+                    self.logical_transaction.commit()?;
+
+                    inner.done(self.in_transaction());
                     return Ok(false);
                 }
                 // How many shards are configured.
@@ -470,11 +479,13 @@ impl Client {
                     let mut dr = DataRow::new();
                     dr.add(*shards as i64);
                     let cc = CommandComplete::from_str("SHOW");
-                    let rfq = ReadyForQuery::in_transaction(self.in_transaction);
+                    let rfq = ReadyForQuery::in_transaction(self.in_transaction());
+
                     self.stream
                         .send_many(&[rd.message()?, dr.message()?, cc.message()?, rfq.message()?])
                         .await?;
-                    inner.done(self.in_transaction);
+
+                    inner.done(self.in_transaction());
                     return Ok(false);
                 }
                 Some(Command::Deallocate) => {
@@ -492,9 +503,12 @@ impl Client {
                 Some(Command::Query(query)) => {
                     if query.is_cross_shard() && self.cross_shard_disabled {
                         self.stream
-                            .error(ErrorResponse::cross_shard_disabled(), self.in_transaction)
+                            .error(
+                                ErrorResponse::cross_shard_disabled(),
+                                self.logical_transaction.in_transaction(),
+                            )
                             .await?;
-                        inner.done(self.in_transaction);
+                        inner.done(self.in_transaction());
                         inner.reset_router();
                         return Ok(false);
                     }
@@ -546,12 +560,12 @@ impl Client {
                     if err.no_server() {
                         error!("{} [{}]", err, self.addr);
                         self.stream
-                            .error(ErrorResponse::from_err(&err), self.in_transaction)
+                            .error(ErrorResponse::from_err(&err), self.in_transaction())
                             .await?;
                         // TODO: should this be wrapped in a method?
                         inner.disconnect();
                         inner.reset_router();
-                        inner.done(self.in_transaction);
+                        inner.done(self.in_transaction());
                         return Ok(false);
                     } else {
                         return Err(err.into());
@@ -627,13 +641,24 @@ impl Client {
         // ReadyForQuery (B)
         if code == 'Z' {
             inner.stats.query();
-            // In transaction if buffered BEGIN from client
-            // or server is telling us we are.
-            self.in_transaction = message.in_transaction() || inner.start_transaction.is_some();
-            inner.stats.idle(self.in_transaction);
+            // 1) Does the backend server say we're in a transaction?
+            let should_be_tx = message.in_transaction() || inner.start_transaction.is_some();
+
+            // 2) Is the frontend client in a logical transaction?
+            let in_transaction = self.in_transaction();
+
+            // 3) Reconcile against our LogicalTransaction
+            if should_be_tx && !in_transaction {
+                self.logical_transaction.soft_begin()?;
+            }
+            if !should_be_tx && in_transaction {
+                self.logical_transaction.reset();
+            }
+
+            inner.stats.idle(self.logical_transaction.in_transaction());
 
             // Flush mirrors.
-            if !self.in_transaction {
+            if !self.logical_transaction.in_transaction() {
                 inner.backend.mirror_flush();
             }
         }
@@ -758,13 +783,29 @@ impl Client {
 
     /// Tell the client we started a transaction.
     async fn start_transaction(&mut self) -> Result<(), Error> {
-        self.stream
-            .send_many(&[
-                CommandComplete::new_begin().message()?.backend(),
-                ReadyForQuery::in_transaction(true).message()?,
-            ])
-            .await?;
+        // stack‐allocate up to 3 messages: optional NOTICE + BEGIN + Ready
+        let mut messages: SmallVec<[Message; 3]> = SmallVec::new();
+
+        match self.logical_transaction.soft_begin() {
+            Err(TransactionError::ExpectedActive) => {
+                let notice = NoticeResponse::from(ErrorResponse::already_in_transaction())
+                    .message()?
+                    .backend();
+
+                messages.push(notice);
+            }
+            Err(e) => return Err(e.into()), // any other error is fatal
+            Ok(()) => {}
+        }
+
+        // push the BEGIN + in-transaction ready
+        messages.push(CommandComplete::new_begin().message()?.backend());
+        messages.push(ReadyForQuery::in_transaction(true).message()?.backend());
+
+        // send all messages
+        self.stream.send_many(&messages).await?;
         debug!("transaction started");
+
         Ok(())
     }
 
@@ -773,18 +814,35 @@ impl Client {
     /// This avoids connecting to servers when clients start and commit transactions
     /// with no queries.
     async fn end_transaction(&mut self, rollback: bool) -> Result<(), Error> {
+        // stack‐allocate up to 3 messages: NOTICE + COMMIT/ROLLBACK + READY
+        let mut messages: SmallVec<[Message; 3]> = SmallVec::new();
+
+        let logical_result = if rollback {
+            self.logical_transaction.rollback()
+        } else {
+            self.logical_transaction.commit()
+        };
+
+        match logical_result {
+            Err(TransactionError::ExpectedActive) => {
+                messages.push(
+                    NoticeResponse::from(ErrorResponse::no_transaction())
+                        .message()?
+                        .backend(),
+                );
+            }
+            Err(e) => return Err(e.into()),
+            Ok(()) => {}
+        }
+
         let cmd = if rollback {
             CommandComplete::new_rollback()
         } else {
             CommandComplete::new_commit()
         };
-        let mut messages = if !self.in_transaction {
-            vec![NoticeResponse::from(ErrorResponse::no_transaction()).message()?]
-        } else {
-            vec![]
-        };
         messages.push(cmd.message()?.backend());
-        messages.push(ReadyForQuery::idle().message()?);
+        messages.push(ReadyForQuery::idle().message()?.backend());
+
         self.stream.send_many(&messages).await?;
         debug!("transaction ended");
         Ok(())
@@ -805,10 +863,10 @@ impl Client {
         self.stream
             .send_many(&[
                 CommandComplete::from_str(command).message()?.backend(),
-                ReadyForQuery::in_transaction(self.in_transaction).message()?,
+                ReadyForQuery::in_transaction(self.in_transaction()).message()?,
             ])
             .await?;
-        inner.done(self.in_transaction);
+        inner.done(self.in_transaction());
 
         Ok(())
     }
@@ -818,6 +876,11 @@ impl Client {
             .stats
             .prepared_statements(self.prepared_statements.len_local());
         inner.stats.memory_used(self.memory_usage());
+    }
+
+    fn in_transaction(&self) -> bool {
+        self.logical_transaction.status == TransactionStatus::BeginPending
+            || self.logical_transaction.status == TransactionStatus::InProgress
     }
 }
 

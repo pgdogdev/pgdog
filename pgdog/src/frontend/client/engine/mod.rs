@@ -54,7 +54,8 @@ impl<'a> Engine<'a> {
                 'S' => {
                     if only_close || only_sync && !self.context.connected {
                         messages.push(
-                            ReadyForQuery::in_transaction(self.context.in_transaction).message()?,
+                            ReadyForQuery::in_transaction(self.context.in_transaction())
+                                .message()?,
                         )
                     }
                 }
@@ -73,7 +74,7 @@ impl<'a> Engine<'a> {
 #[cfg(test)]
 mod test {
     use crate::{
-        frontend::{Buffer, PreparedStatements},
+        frontend::{logical_transaction::LogicalTransaction, Buffer, PreparedStatements},
         net::{Parameters, Parse, Sync},
     };
 
@@ -93,11 +94,13 @@ mod test {
             Sync.into(),
         ]);
 
+        let logical_transaction = LogicalTransaction::new();
+
         let context = EngineContext {
             connected: false,
             prepared_statements: &mut prepared,
             params: &params,
-            in_transaction: false,
+            logical_transaction: &logical_transaction,
             buffer: &buf,
         };
 
