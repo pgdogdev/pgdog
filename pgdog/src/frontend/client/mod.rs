@@ -454,14 +454,12 @@ impl Client {
                 }
                 Some(Command::RollbackTransaction) => {
                     self.end_transaction(true).await?;
-                    self.logical_transaction.rollback()?;
 
                     inner.done(self.in_transaction());
                     return Ok(false);
                 }
                 Some(Command::CommitTransaction) => {
                     self.end_transaction(false).await?;
-                    self.logical_transaction.commit()?;
 
                     inner.done(self.in_transaction());
                     return Ok(false);

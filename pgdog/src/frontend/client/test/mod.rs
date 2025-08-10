@@ -511,6 +511,13 @@ async fn test_transaction_state() {
 
     read!(conn, ['2', 'D', 'C', 'Z']);
 
+    println!("router.route {:?}", inner.router.route());
+    println!("router.route {:?}", inner.router.route());
+    println!("router.route {:?}", inner.router.route());
+    println!("router.route {:?}", inner.router.route());
+    println!("router.route {:?}", inner.router.route());
+    println!("router.route {:?}", inner.router.route());
+
     assert!(inner.router.routed());
     assert!(client.in_transaction());
     assert!(inner.router.route().is_write());

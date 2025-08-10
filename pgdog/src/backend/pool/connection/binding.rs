@@ -1,7 +1,7 @@
 //! Binding between frontend client and a connection on the backend.
 
 use crate::{
-    net::{parameter::Parameters, ProtocolMessage},
+    net::{parameter::Parameters, ProtocolMessage, Query},
     state::State,
 };
 
@@ -240,23 +240,8 @@ impl Binding {
     /// Execute a BEGIN on all servers
     /// TODO: Block mutli-shard BEGINs as transaction should not occur on multiple shards
     pub async fn begin(&mut self) -> Result<(), Error> {
-        let begin: &str = "BEGIN;";
-
-        match self {
-            Binding::Server(Some(ref mut server)) => {
-                server.execute(&begin).await?;
-            }
-
-            Binding::MultiShard(ref mut servers, _) => {
-                for server in servers {
-                    server.execute(&begin).await?;
-                }
-            }
-
-            _ => (),
-        }
-
-        Ok(())
+        let query = Query::new("BEGIN");
+        self.execute(query.query()).await
     }
 
     pub async fn link_client(&mut self, params: &Parameters) -> Result<usize, Error> {
