@@ -630,15 +630,14 @@ impl Client {
             // Is the frontend client in a logical transaction?
             let has_logical_tx = self.in_transaction();
 
-            // Reconcile, QueryParser might not be active and backend is the source of truth
-            if has_backend_tx && !has_logical_tx {
-                self.logical_transaction.soft_begin()?;
-            }
-            if !has_backend_tx && has_logical_tx {
-                self.logical_transaction.reset();
-            }
+            // In transaction if buffered BEGIN from client or server is telling us we are.
+            let in_transaction_for_stats = has_backend_tx || has_logical_tx;
 
-            inner.stats.idle(self.logical_transaction.in_transaction());
+            println!("has_backend: {}", has_backend_tx);
+            println!("has_logical: {}", has_logical_tx);
+            println!("global: {}", in_transaction_for_stats);
+
+            inner.stats.idle(in_transaction_for_stats);
 
             // Flush mirrors.
             if !self.logical_transaction.in_transaction() {
