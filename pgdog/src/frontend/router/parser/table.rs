@@ -9,6 +9,15 @@ pub struct Table<'a> {
     pub schema: Option<&'a str>,
 }
 
+impl Default for Table<'_> {
+    fn default() -> Self {
+        Self {
+            name: "",
+            schema: None,
+        }
+    }
+}
+
 impl<'a> TryFrom<&'a Node> for Table<'a> {
     type Error = ();
 

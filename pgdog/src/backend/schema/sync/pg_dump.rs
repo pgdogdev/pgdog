@@ -1,6 +1,6 @@
 //! Wrapper around pg_dump.
 
-use std::str::from_utf8;
+use std::{ops::Deref, str::from_utf8};
 
 use pg_query::{
     protobuf::{AlterTableType, ConstrType, ParseResult},
@@ -8,7 +8,7 @@ use pg_query::{
 };
 use tracing::{info, warn};
 
-use super::Error;
+use super::{progress::Progress, Error};
 use crate::{
     backend::{
         pool::{Address, Request},
@@ -16,6 +16,7 @@ use crate::{
         Cluster,
     },
     config::config,
+    frontend::router::parser::Table,
 };
 
 use tokio::process::Command;
@@ -159,10 +160,44 @@ pub enum SyncState {
     PostData,
 }
 
+pub enum Statement<'a> {
+    Index {
+        table: Table<'a>,
+        name: &'a str,
+        sql: &'a str,
+    },
+
+    Table {
+        table: Table<'a>,
+        sql: &'a str,
+    },
+
+    Other {
+        sql: &'a str,
+    },
+}
+
+impl<'a> Deref for Statement<'a> {
+    type Target = &'a str;
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Index { sql, .. } => sql,
+            Self::Table { sql, .. } => sql,
+            Self::Other { sql } => sql,
+        }
+    }
+}
+
+impl<'a> From<&'a str> for Statement<'a> {
+    fn from(value: &'a str) -> Self {
+        Self::Other { sql: value }
+    }
+}
+
 impl PgDumpOutput {
     /// Get schema statements to execute before data sync,
     /// e.g., CREATE TABLE, primary key.
-    pub fn statements(&self, state: SyncState) -> Result<Vec<&str>, Error> {
+    pub fn statements(&self, state: SyncState) -> Result<Vec<Statement<'_>>, Error> {
         let mut result = vec![];
 
         for stmt in &self.stmts.stmts {
@@ -177,17 +212,22 @@ impl PgDumpOutput {
             if let Some(ref node) = stmt.stmt {
                 if let Some(ref node) = node.node {
                     match node {
-                        NodeEnum::CreateStmt(_) => {
+                        NodeEnum::CreateStmt(stmt) => {
                             if state == SyncState::PreData {
                                 // CREATE TABLE is always good.
-                                result.push(original);
+                                let table =
+                                    stmt.relation.as_ref().map(Table::from).unwrap_or_default();
+                                result.push(Statement::Table {
+                                    table,
+                                    sql: original,
+                                });
                             }
                         }
 
                         NodeEnum::CreateSeqStmt(_) => {
                             if state == SyncState::PreData {
                                 // Bring sequences over.
-                                result.push(original);
+                                result.push(original.into());
                             }
                         }
 
@@ -208,10 +248,10 @@ impl PgDumpOutput {
                                                                     | ConstrType::ConstrNull
                                                             ) {
                                                                 if state == SyncState::PreData {
-                                                                    result.push(original);
+                                                                    result.push(original.into());
                                                                 }
                                                             } else if state == SyncState::PostData {
-                                                                result.push(original);
+                                                                result.push(original.into());
                                                             }
                                                         }
                                                     }
@@ -219,7 +259,7 @@ impl PgDumpOutput {
                                             }
                                             AlterTableType::AtColumnDefault => {
                                                 if state == SyncState::PreData {
-                                                    result.push(original)
+                                                    result.push(original.into())
                                                 }
                                             }
                                             AlterTableType::AtChangeOwner => {
@@ -227,7 +267,7 @@ impl PgDumpOutput {
                                             }
                                             _ => {
                                                 if state == SyncState::PostData {
-                                                    result.push(original);
+                                                    result.push(original.into());
                                                 }
                                             }
                                         }
@@ -238,7 +278,19 @@ impl PgDumpOutput {
 
                         NodeEnum::AlterSeqStmt(_stmt) => {
                             if state == SyncState::PreData {
-                                result.push(original);
+                                result.push(original.into());
+                            }
+                        }
+
+                        NodeEnum::IndexStmt(stmt) => {
+                            if state == SyncState::PostData {
+                                let table =
+                                    stmt.relation.as_ref().map(Table::from).unwrap_or_default();
+                                result.push(Statement::Index {
+                                    table,
+                                    name: stmt.idxname.as_str(),
+                                    sql: original,
+                                });
                             }
                         }
 
@@ -247,7 +299,7 @@ impl PgDumpOutput {
 
                         _ => {
                             if state == SyncState::PostData {
-                                result.push(original);
+                                result.push(original.into());
                             }
                         }
                     }
@@ -279,8 +331,11 @@ impl PgDumpOutput {
                 dest.name()
             );
 
+            let progress = Progress::new(stmts.len());
+
             for stmt in &stmts {
-                if let Err(err) = primary.execute(stmt).await {
+                progress.next(stmt);
+                if let Err(err) = primary.execute(stmt.deref()).await {
                     if ignore_errors {
                         warn!(
                             "skipping object creation for table \"{}\".\"{}\": {}",
@@ -290,6 +345,7 @@ impl PgDumpOutput {
                         return Err(err.into());
                     }
                 }
+                progress.done();
             }
         }
 

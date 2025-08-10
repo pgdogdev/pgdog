@@ -1,3 +1,4 @@
+use std::ops::Deref;
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
@@ -7,6 +8,7 @@ use tokio::{select, signal::ctrl_c};
 use tracing::error;
 
 use crate::backend::schema::sync::pg_dump::{PgDump, SyncState};
+use crate::backend::schema::sync::progress::Progress;
 use crate::backend::{databases::databases, replication::logical::Publisher};
 use crate::config::{Config, Users};
 
@@ -284,7 +286,7 @@ pub async fn schema_sync(commands: Commands) -> Result<(), Box<dyn std::error::E
         if dry_run {
             let queries = output.statements(state)?;
             for query in queries {
-                println!("{}", query);
+                println!("{}", query.deref());
             }
         } else {
             output.restore(&destination, ignore_errors, state).await?;
