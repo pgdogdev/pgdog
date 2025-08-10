@@ -320,7 +320,7 @@ impl Client {
 
             select! {
                 _ = shutdown.notified() => {
-                    if !inner.backend.connected() && inner.start_transaction.is_none() {
+                    if !inner.backend.connected() && !self.in_transaction() {
                         break;
                     }
                 }
@@ -448,25 +448,18 @@ impl Client {
                     if let BufferedQuery::Query(_) = query {
                         self.start_transaction().await?;
 
-                        inner.start_transaction = Some(query.clone());
                         inner.done(self.in_transaction());
-
                         return Ok(false);
                     }
                 }
                 Some(Command::RollbackTransaction) => {
-                    inner.start_transaction = None;
-
                     self.end_transaction(true).await?;
                     self.logical_transaction.rollback()?;
 
                     inner.done(self.in_transaction());
-
                     return Ok(false);
                 }
                 Some(Command::CommitTransaction) => {
-                    inner.start_transaction = None;
-
                     self.end_transaction(false).await?;
                     self.logical_transaction.commit()?;
 
@@ -574,16 +567,6 @@ impl Client {
             };
         }
 
-        // We don't start a transaction on the servers until
-        // a client is actually executing something.
-        //
-        // This prevents us holding open connections to multiple servers
-        if self.request_buffer.executable() {
-            if let Some(query) = inner.start_transaction.take() {
-                inner.backend.execute(&query).await?;
-            }
-        }
-
         for msg in self.request_buffer.iter() {
             if let ProtocolMessage::Bind(bind) = msg {
                 inner.backend.bind(bind)?
@@ -641,17 +624,17 @@ impl Client {
         // ReadyForQuery (B)
         if code == 'Z' {
             inner.stats.query();
-            // 1) Does the backend server say we're in a transaction?
-            let should_be_tx = message.in_transaction() || inner.start_transaction.is_some();
+            // Does the backend server say we're in a transaction?
+            let has_backend_tx = message.in_transaction();
 
-            // 2) Is the frontend client in a logical transaction?
-            let in_transaction = self.in_transaction();
+            // Is the frontend client in a logical transaction?
+            let has_logical_tx = self.in_transaction();
 
-            // 3) Reconcile against our LogicalTransaction
-            if should_be_tx && !in_transaction {
+            // Reconcile, QueryParser might not be active and backend is the source of truth
+            if has_backend_tx && !has_logical_tx {
                 self.logical_transaction.soft_begin()?;
             }
-            if !should_be_tx && in_transaction {
+            if !has_backend_tx && has_logical_tx {
                 self.logical_transaction.reset();
             }
 

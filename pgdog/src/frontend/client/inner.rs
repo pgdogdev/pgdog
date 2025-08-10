@@ -6,9 +6,8 @@ use crate::{
         Error as BackendError,
     },
     frontend::{
-        buffer::BufferedQuery, logical_transaction::LogicalTransaction,
-        router::Error as RouterError, Buffer, Command, Comms, PreparedStatements, Router,
-        RouterContext, Stats,
+        logical_transaction::LogicalTransaction, router::Error as RouterError, Buffer, Command,
+        Comms, PreparedStatements, Router, RouterContext, Stats,
     },
     net::Parameters,
     state::State,
@@ -30,8 +29,6 @@ pub struct Inner {
     pub(super) router: Router,
     /// Client stats.
     pub(super) stats: Stats,
-    /// Start transaction statement, intercepted by the router.
-    pub(super) start_transaction: Option<BufferedQuery>,
     /// Client-wide comms.
     pub(super) comms: Comms,
 }
@@ -48,7 +45,6 @@ impl Inner {
             backend,
             router,
             stats: Stats::new(),
-            start_transaction: None,
             comms: client.comms.clone(),
         })
     }
