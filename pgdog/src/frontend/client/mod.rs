@@ -630,19 +630,9 @@ impl Client {
         // ReadyForQuery (B)
         if code == 'Z' {
             inner.stats.query();
-            // Does the backend server say we're in a transaction?
-            let has_backend_tx = message.in_transaction();
-
-            // Is the frontend client in a logical transaction?
-            let has_logical_tx = self.in_transaction();
 
             // In transaction if buffered BEGIN from client or server is telling us we are.
-            let in_transaction = has_backend_tx || has_logical_tx;
-
-            println!("has_backend: {}", has_backend_tx);
-            println!("has_logical: {}", has_logical_tx);
-            println!("global: {}", in_transaction);
-
+            let in_transaction = message.in_transaction() || self.in_transaction();
             inner.stats.idle(in_transaction);
 
             // Flush mirrors.
