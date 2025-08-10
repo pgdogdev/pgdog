@@ -139,14 +139,6 @@ impl Buffer {
             .unwrap_or(false)
     }
 
-    /// The client is setting state on the connection
-    /// which we can no longer ignore.
-    pub(crate) fn executable(&self) -> bool {
-        self.buffer
-            .iter()
-            .any(|m| ['E', 'Q', 'B'].contains(&m.code()))
-    }
-
     /// Rewrite query in buffer.
     pub fn rewrite(&mut self, query: &str) -> Result<(), Error> {
         if self.buffer.iter().any(|c| c.code() != 'Q') {
