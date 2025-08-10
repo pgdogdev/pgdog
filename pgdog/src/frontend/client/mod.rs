@@ -567,6 +567,14 @@ impl Client {
             };
         }
 
+        // We don't start a transaction on the servers until
+        // a client is actually executing something.
+        //
+        // This prevents us holding open connections to multiple servers
+        if self.should_trigger_buffered_begin() {
+            inner.backend.begin().await?;
+        }
+
         for msg in self.request_buffer.iter() {
             if let ProtocolMessage::Bind(bind) = msg {
                 inner.backend.bind(bind)?
@@ -631,16 +639,16 @@ impl Client {
             let has_logical_tx = self.in_transaction();
 
             // In transaction if buffered BEGIN from client or server is telling us we are.
-            let in_transaction_for_stats = has_backend_tx || has_logical_tx;
+            let in_transaction = has_backend_tx || has_logical_tx;
 
             println!("has_backend: {}", has_backend_tx);
             println!("has_logical: {}", has_logical_tx);
-            println!("global: {}", in_transaction_for_stats);
+            println!("global: {}", in_transaction);
 
-            inner.stats.idle(in_transaction_for_stats);
+            inner.stats.idle(in_transaction);
 
             // Flush mirrors.
-            if !self.logical_transaction.in_transaction() {
+            if !in_transaction {
                 inner.backend.mirror_flush();
             }
         }
@@ -782,7 +790,7 @@ impl Client {
 
         // push the BEGIN + in-transaction ready
         messages.push(CommandComplete::new_begin().message()?.backend());
-        messages.push(ReadyForQuery::in_transaction(true).message()?.backend());
+        messages.push(ReadyForQuery::in_transaction(true).message()?);
 
         // send all messages
         self.stream.send_many(&messages).await?;
@@ -823,7 +831,7 @@ impl Client {
             CommandComplete::new_commit()
         };
         messages.push(cmd.message()?.backend());
-        messages.push(ReadyForQuery::idle().message()?.backend());
+        messages.push(ReadyForQuery::idle().message()?);
 
         self.stream.send_many(&messages).await?;
         debug!("transaction ended");
@@ -863,6 +871,10 @@ impl Client {
     fn in_transaction(&self) -> bool {
         self.logical_transaction.status == TransactionStatus::BeginPending
             || self.logical_transaction.status == TransactionStatus::InProgress
+    }
+
+    fn should_trigger_buffered_begin(&self) -> bool {
+        self.request_buffer.executable() && !self.in_transaction()
     }
 }
 

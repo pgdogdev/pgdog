@@ -237,6 +237,28 @@ impl Binding {
         Ok(())
     }
 
+    /// Execute a BEGIN on all servers
+    /// TODO: Block mutli-shard BEGINs as transaction should not occur on multiple shards
+    pub async fn begin(&mut self) -> Result<(), Error> {
+        let begin: &str = "BEGIN;";
+
+        match self {
+            Binding::Server(Some(ref mut server)) => {
+                server.execute(&begin).await?;
+            }
+
+            Binding::MultiShard(ref mut servers, _) => {
+                for server in servers {
+                    server.execute(&begin).await?;
+                }
+            }
+
+            _ => (),
+        }
+
+        Ok(())
+    }
+
     pub async fn link_client(&mut self, params: &Parameters) -> Result<usize, Error> {
         match self {
             Binding::Server(Some(ref mut server)) => server.link_client(params).await,
