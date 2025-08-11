@@ -337,10 +337,7 @@ impl PgDumpOutput {
                 progress.next(stmt);
                 if let Err(err) = primary.execute(stmt.deref()).await {
                     if ignore_errors {
-                        warn!(
-                            "skipping object creation for table \"{}\".\"{}\": {}",
-                            self.schema, self.table, err
-                        );
+                        warn!("skipping: {}", err);
                     } else {
                         return Err(err.into());
                     }

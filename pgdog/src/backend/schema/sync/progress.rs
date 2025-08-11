@@ -23,6 +23,11 @@ pub enum Item {
         sql: String,
     },
 }
+impl Default for Item {
+    fn default() -> Self {
+        Self::Other { sql: "".into() }
+    }
+}
 
 impl Display for Item {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -72,23 +77,46 @@ impl From<&Statement<'_>> for Item {
     }
 }
 
+struct ItemTracker {
+    item: Item,
+    timer: Instant,
+}
+
+impl ItemTracker {
+    fn new() -> Self {
+        Self {
+            item: Item::default(),
+            timer: Instant::now(),
+        }
+    }
+}
+
+struct Comms {
+    updated: Notify,
+    shutdown: Notify,
+}
+impl Comms {
+    fn new() -> Self {
+        Self {
+            updated: Notify::new(),
+            shutdown: Notify::new(),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct Progress {
-    item: Arc<Mutex<Item>>,
-    updated: Arc<Notify>,
-    shutdown: Arc<Notify>,
+    item: Arc<Mutex<ItemTracker>>,
+    comms: Arc<Comms>,
     total: usize,
-    timer: Arc<Mutex<Instant>>,
 }
 
 impl Progress {
     pub fn new(total: usize) -> Self {
         let me = Self {
-            item: Arc::new(Mutex::new(Item::Other { sql: "".into() })),
-            updated: Arc::new(Notify::new()),
-            shutdown: Arc::new(Notify::new()),
+            item: Arc::new(Mutex::new(ItemTracker::new())),
+            comms: Arc::new(Comms::new()),
             total,
-            timer: Arc::new(Mutex::new(Instant::now())),
         };
 
         let task = me.clone();
@@ -101,16 +129,18 @@ impl Progress {
     }
 
     pub fn done(&self) {
-        let elapsed = self.timer.lock().elapsed();
-        let item = self.item.lock().clone();
+        let elapsed = self.item.lock().timer.elapsed();
 
-        info!("{:.3}s {}", elapsed.as_secs(), item);
+        info!("finished in {:.3}s", elapsed.as_secs_f64());
     }
 
     pub fn next(&self, item: impl Into<Item>) {
-        *self.item.lock() = item.into().clone();
-        *self.timer.lock() = Instant::now();
-        self.updated.notify_one();
+        {
+            let mut guard = self.item.lock();
+            guard.item = item.into().clone();
+            guard.timer = Instant::now();
+        }
+        self.comms.updated.notify_one();
     }
 
     async fn listen(&self) {
@@ -118,13 +148,13 @@ impl Progress {
 
         loop {
             select! {
-                _ = self.updated.notified() => {
-                    let item = self.item.lock().clone();
-                    info!("{} {} [{}/{}]", item.action(), item, counter, self.total);
+                _ = self.comms.updated.notified() => {
+                    let item = self.item.lock().item.clone();
+                    info!("[{}/{}] {} {}", counter, self.total, item.action(), item);
                     counter += 1;
                 }
 
-                _ = self.shutdown.notified() => {
+                _ = self.comms.shutdown.notified() => {
                     break;
                 }
             }
@@ -134,6 +164,6 @@ impl Progress {
 
 impl Drop for Progress {
     fn drop(&mut self) {
-        self.shutdown.notify_one();
+        self.comms.shutdown.notify_one();
     }
 }
