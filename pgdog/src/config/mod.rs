@@ -149,7 +149,17 @@ impl ConfigAndUsers {
 
     /// Prepared statements are enabled.
     pub fn prepared_statements(&self) -> bool {
-        self.config.general.prepared_statements.enabled()
+        // Disable prepared statements automatically in session mode
+        if self.config.general.pooler_mode == PoolerMode::Session {
+            false
+        } else {
+            self.config.general.prepared_statements.enabled()
+        }
+    }
+
+    /// Prepared statements are in "full" mode (used for query parser decision).
+    pub fn prepared_statements_full(&self) -> bool {
+        self.config.general.prepared_statements.full()
     }
 
     pub fn pub_sub_enabled(&self) -> bool {
@@ -391,7 +401,7 @@ pub struct General {
     pub openmetrics_namespace: Option<String>,
     /// Prepared statatements support.
     #[serde(default)]
-    pub prepared_statements: PreparedStatements,
+    prepared_statements: PreparedStatements,
     /// Limit on the number of prepared statements in the server cache.
     #[serde(default = "General::prepared_statements_limit")]
     pub prepared_statements_limit: usize,
@@ -1407,6 +1417,40 @@ column = "tenant_id"
         assert_eq!(config.tcp.time().unwrap(), Duration::from_millis(1000));
         assert_eq!(config.tcp.retries().unwrap(), 5);
         assert_eq!(config.multi_tenant.unwrap().column, "tenant_id");
+    }
+
+    #[test]
+    fn test_prepared_statements_disabled_in_session_mode() {
+        let mut config = ConfigAndUsers::default();
+
+        // Test transaction mode (default) - prepared statements should be enabled
+        config.config.general.pooler_mode = PoolerMode::Transaction;
+        config.config.general.prepared_statements = PreparedStatements::Extended;
+        assert!(
+            config.prepared_statements(),
+            "Prepared statements should be enabled in transaction mode"
+        );
+
+        // Test session mode - prepared statements should be disabled
+        config.config.general.pooler_mode = PoolerMode::Session;
+        config.config.general.prepared_statements = PreparedStatements::Extended;
+        assert!(
+            !config.prepared_statements(),
+            "Prepared statements should be disabled in session mode"
+        );
+
+        // Test session mode with full prepared statements - should still be disabled
+        config.config.general.pooler_mode = PoolerMode::Session;
+        config.config.general.prepared_statements = PreparedStatements::Full;
+        assert!(
+            !config.prepared_statements(),
+            "Prepared statements should be disabled in session mode even when set to Full"
+        );
+
+        // Test transaction mode with disabled prepared statements - should remain disabled
+        config.config.general.pooler_mode = PoolerMode::Transaction;
+        config.config.general.prepared_statements = PreparedStatements::Disabled;
+        assert!(!config.prepared_statements(), "Prepared statements should remain disabled when explicitly set to Disabled in transaction mode");
     }
 }
 

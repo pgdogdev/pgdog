@@ -49,7 +49,7 @@ impl<'a> QueryParserContext<'a> {
             shards: router_context.cluster.shards().len(),
             sharding_schema: router_context.cluster.sharding_schema(),
             rw_strategy: router_context.cluster.read_write_strategy(),
-            full_prepared_statements: config.config.general.prepared_statements.full(),
+            full_prepared_statements: config.prepared_statements_full(),
             router_needed: router_context.cluster.router_needed(),
             pub_sub_enabled: config.config.general.pub_sub_enabled(),
             multi_tenant: router_context.cluster.multi_tenant(),
