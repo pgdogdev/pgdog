@@ -37,12 +37,15 @@ pub struct CachedAst {
     /// Statistics. Use a separate Mutex to avoid
     /// contention when updating them.
     pub stats: Arc<Mutex<Stats>>,
+    /// Was this entry cached?
+    pub cached: bool,
 }
 
 impl CachedAst {
     /// Create new cache entry from pg_query's AST.
     fn new(ast: ParseResult) -> Self {
         Self {
+            cached: true,
             ast: Arc::new(ast),
             stats: Arc::new(Mutex::new(Stats {
                 hits: 1,
@@ -141,7 +144,28 @@ impl Cache {
 
     /// Parse a statement but do not store it in the cache.
     pub fn parse_uncached(&self, query: &str) -> Result<CachedAst> {
-        Ok(CachedAst::new(parse(query)?))
+        let mut entry = CachedAst::new(parse(query)?);
+        entry.cached = false;
+        Ok(entry)
+    }
+
+    /// Record a query sent over the simple protocol, while removing parameters.
+    pub fn record_normalized(&self, query: &str, route: &Route) -> Result<()> {
+        let normalized = pg_query::normalize(query)?;
+
+        let mut guard = self.inner.lock();
+
+        if let Some(entry) = guard.queries.get(&normalized) {
+            entry.update_stats(route);
+            guard.stats.hits += 1;
+        } else {
+            let entry = CachedAst::new(parse(&normalized)?);
+            entry.update_stats(route);
+            guard.queries.put(normalized, entry);
+            guard.stats.misses += 1;
+        }
+
+        Ok(())
     }
 
     /// Get global cache instance.

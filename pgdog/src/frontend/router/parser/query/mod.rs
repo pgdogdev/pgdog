@@ -265,7 +265,7 @@ impl QueryParser {
         // there is no point of doing a multi-shard query with only one shard
         // in the set.
         //
-        if context.shards == 1 {
+        if context.shards == 1 && !context.dry_run {
             if let Command::Query(ref mut route) = command {
                 route.set_shard_mut(0);
             }
@@ -300,6 +300,12 @@ impl QueryParser {
         statement.update_stats(command.route());
 
         if context.dry_run {
+            // Record statement in cache with normalized parameters.
+            if !statement.cached {
+                cache
+                    .record_normalized(context.query()?.query(), command.route())
+                    .map_err(Error::PgQuery)?;
+            }
             Ok(command.dry_run())
         } else {
             Ok(command)

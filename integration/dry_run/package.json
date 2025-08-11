@@ -1,0 +1,13 @@
+{
+  "dependencies": {
+    "@sequelize/postgres": "^7.0.0-alpha.46",
+    "pg": "^8.16.3"
+  },
+  "devDependencies": {
+    "mocha": "^11.7.1",
+    "sequelize-cli": "^6.6.3"
+  },
+  "scripts": {
+    "test": "mocha"
+  }
+}

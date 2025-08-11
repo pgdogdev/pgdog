@@ -4,7 +4,7 @@ use clap::Parser;
 use pgdog::backend::databases;
 use pgdog::backend::pool::dns_cache::DnsCache;
 use pgdog::cli::{self, Commands};
-use pgdog::config;
+use pgdog::config::{self, config};
 use pgdog::frontend::listener::Listener;
 use pgdog::net;
 use pgdog::plugin;
@@ -124,6 +124,10 @@ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Erro
 
     match command {
         None | Some(Commands::Run { .. }) => {
+            if config().config.general.dry_run {
+                info!("dry run mode enabled");
+            }
+
             let mut listener = Listener::new(format!("{}:{}", general.host, general.port));
             listener.listen().await?;
         }
