@@ -23,6 +23,22 @@ pub enum Item {
         sql: String,
     },
 }
+
+// Remove pg_dump comments.
+// Only for displaying purposes! Don't use for executing queries.
+fn no_comments(sql: &str) -> String {
+    let mut output = String::new();
+    for line in sql.lines() {
+        if line.trim().starts_with("--") || line.trim().is_empty() {
+            continue;
+        }
+        output.push_str(line);
+        output.push_str("\n");
+    }
+
+    output.trim().to_string()
+}
+
 impl Default for Item {
     fn default() -> Self {
         Self::Other { sql: "".into() }
@@ -43,7 +59,7 @@ impl Display for Item {
             ),
 
             Self::Table { schema, name } => write!(f, "table \"{}\".\"{}\"", schema, name),
-            Self::Other { sql } => write!(f, "\"{}\"", sql),
+            Self::Other { sql } => write!(f, "\"{}\"", no_comments(sql)),
         }
     }
 }

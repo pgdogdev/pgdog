@@ -8,7 +8,6 @@ use tokio::{select, signal::ctrl_c};
 use tracing::error;
 
 use crate::backend::schema::sync::pg_dump::{PgDump, SyncState};
-use crate::backend::schema::sync::progress::Progress;
 use crate::backend::{databases::databases, replication::logical::Publisher};
 use crate::config::{Config, Users};
 
