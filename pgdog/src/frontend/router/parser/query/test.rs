@@ -1,14 +1,16 @@
+use super::{super::Shard, *};
+
+use crate::backend::Cluster;
+use crate::config::ReadWriteStrategy;
+use crate::frontend::{
+    logical_transaction::LogicalTransaction, Buffer, PreparedStatements, RouterContext,
+};
+use crate::net::messages::Query;
+use crate::net::Parameters;
 use crate::net::{
     messages::{parse::Parse, Parameter},
     Close, Format, Sync,
 };
-
-use super::{super::Shard, *};
-use crate::backend::Cluster;
-use crate::config::ReadWriteStrategy;
-use crate::frontend::{Buffer, PreparedStatements, RouterContext};
-use crate::net::messages::Query;
-use crate::net::Parameters;
 
 macro_rules! command {
     ($query:expr) => {{
@@ -18,7 +20,10 @@ macro_rules! command {
         let cluster = Cluster::new_test();
         let mut stmt = PreparedStatements::default();
         let params = Parameters::default();
-        let context = RouterContext::new(&buffer, &cluster, &mut stmt, &params, false).unwrap();
+        let logical_transaction = LogicalTransaction::new();
+        let context =
+            RouterContext::new(&buffer, &cluster, &mut stmt, &params, &logical_transaction)
+                .unwrap();
         let command = query_parser.parse(context).unwrap().clone();
 
         (command, query_parser)
@@ -44,9 +49,21 @@ macro_rules! query_parser {
         let mut prep_stmts = PreparedStatements::default();
         let params = Parameters::default();
         let buffer: Buffer = vec![$query.into()].into();
-        let router_context =
-            RouterContext::new(&buffer, &cluster, &mut prep_stmts, &params, $in_transaction)
-                .unwrap();
+        let mut logical_transaction = LogicalTransaction::new();
+
+        if $in_transaction {
+            logical_transaction.soft_begin().unwrap();
+        }
+
+        let router_context = RouterContext::new(
+            &buffer,
+            &cluster,
+            &mut prep_stmts,
+            &params,
+            &logical_transaction,
+        )
+        .unwrap();
+
         $qp.parse(router_context).unwrap()
     }};
 
@@ -69,6 +86,7 @@ macro_rules! parse {
                 data: p.to_vec(),
             })
             .collect::<Vec<_>>();
+        let logical_transaction = LogicalTransaction::new();
         let bind = Bind::new_params_codes($name, &params, $codes);
         let route = QueryParser::default()
             .parse(
@@ -77,7 +95,7 @@ macro_rules! parse {
                     &Cluster::new_test(),
                     &mut PreparedStatements::default(),
                     &Parameters::default(),
-                    false,
+                    &logical_transaction,
                 )
                 .unwrap(),
             )
@@ -165,23 +183,20 @@ fn test_omni() {
     let q = "SELECT sharded_omni.* FROM sharded_omni WHERE sharded_omni.id = $1";
     let route = query!(q);
     assert!(matches!(route.shard(), Shard::Direct(_)));
-    let (_, qp) = command!(q);
-    assert!(!qp.in_transaction);
+    let (_, _qp) = command!(q);
 }
 
 #[test]
 fn test_set() {
     let route = query!(r#"SET "pgdog.shard" TO 1"#);
     assert_eq!(route.shard(), &Shard::Direct(1));
-    let (_, qp) = command!(r#"SET "pgdog.shard" TO 1"#);
-    assert!(!qp.in_transaction);
+    let (_, _qp) = command!(r#"SET "pgdog.shard" TO 1"#);
 
     let route = query!(r#"SET "pgdog.sharding_key" TO '11'"#);
     assert_eq!(route.shard(), &Shard::Direct(1));
-    let (_, qp) = command!(r#"SET "pgdog.sharding_key" TO '11'"#);
-    assert!(!qp.in_transaction);
+    let (_, _qp) = command!(r#"SET "pgdog.sharding_key" TO '11'"#);
 
-    for (command, qp) in [
+    for (command, _qp) in [
         command!("SET TimeZone TO 'UTC'"),
         command!("SET TIME ZONE 'UTC'"),
     ] {
@@ -192,10 +207,9 @@ fn test_set() {
             }
             _ => panic!("not a set"),
         };
-        assert!(!qp.in_transaction);
     }
 
-    let (command, qp) = command!("SET statement_timeout TO 3000");
+    let (command, _qp) = command!("SET statement_timeout TO 3000");
     match command {
         Command::Set { name, value } => {
             assert_eq!(name, "statement_timeout");
@@ -203,11 +217,10 @@ fn test_set() {
         }
         _ => panic!("not a set"),
     };
-    assert!(!qp.in_transaction);
 
     // TODO: user shouldn't be able to set these.
     // The server will report an error on synchronization.
-    let (command, qp) = command!("SET is_superuser TO true");
+    let (command, _qp) = command!("SET is_superuser TO true");
     match command {
         Command::Set { name, value } => {
             assert_eq!(name, "is_superuser");
@@ -215,7 +228,6 @@ fn test_set() {
         }
         _ => panic!("not a set"),
     };
-    assert!(!qp.in_transaction);
 
     let (_, mut qp) = command!("BEGIN");
     assert!(qp.write_override);
@@ -241,15 +253,24 @@ fn test_set() {
     let cluster = Cluster::new_test();
     let mut prep_stmts = PreparedStatements::default();
     let params = Parameters::default();
-    let router_context =
-        RouterContext::new(&buffer, &cluster, &mut prep_stmts, &params, true).unwrap();
+
+    let mut logical_transaction = LogicalTransaction::new();
+    logical_transaction.soft_begin().unwrap();
+
+    let router_context = RouterContext::new(
+        &buffer,
+        &cluster,
+        &mut prep_stmts,
+        &params,
+        &logical_transaction,
+    )
+    .unwrap();
     let mut context = QueryParserContext::new(router_context);
 
     for read_only in [true, false] {
         context.read_only = read_only;
         // Overriding context above.
         let mut qp = QueryParser::default();
-        qp.in_transaction = true;
         let route = qp.query(&mut context).unwrap();
 
         match route {
@@ -269,7 +290,6 @@ fn test_transaction() {
         _ => panic!("not a query"),
     };
 
-    assert!(qp.in_transaction);
     assert!(qp.write_override);
 
     let route = query_parser!(qp, Parse::named("test", "SELECT $1"), true);
@@ -290,9 +310,7 @@ fn test_transaction() {
         command,
         Command::StartTransaction(BufferedQuery::Query(_))
     ));
-    assert!(qp.in_transaction);
 
-    qp.in_transaction = true;
     let route = query_parser!(
         qp,
         Query::new("SET application_name TO 'test'"),
@@ -323,9 +341,8 @@ fn test_begin_extended() {
 
 #[test]
 fn test_show_shards() {
-    let (cmd, qp) = command!("SHOW pgdog.shards");
+    let (cmd, _qp) = command!("SHOW pgdog.shards");
     assert!(matches!(cmd, Command::Shards(2)));
-    assert!(!qp.in_transaction);
 }
 
 #[test]
@@ -355,10 +372,13 @@ fn test_cte() {
 fn test_function_begin() {
     let (cmd, mut qp) = command!("BEGIN");
     assert!(matches!(cmd, Command::StartTransaction(_)));
-    assert!(qp.in_transaction);
     let cluster = Cluster::new_test();
     let mut prep_stmts = PreparedStatements::default();
     let params = Parameters::default();
+
+    let mut logical_transaction = LogicalTransaction::new();
+    logical_transaction.soft_begin().unwrap();
+
     let buffer: Buffer = vec![Query::new(
         "SELECT
 	ROW(t1.*) AS tt1,
@@ -377,15 +397,22 @@ WHERE t2.account = (
     )
     .into()]
     .into();
-    let router_context =
-        RouterContext::new(&buffer, &cluster, &mut prep_stmts, &params, true).unwrap();
+
+    let router_context = RouterContext::new(
+        &buffer,
+        &cluster,
+        &mut prep_stmts,
+        &params,
+        &logical_transaction,
+    )
+    .unwrap();
+
     let mut context = QueryParserContext::new(router_context);
     let route = qp.query(&mut context).unwrap();
     match route {
         Command::Query(query) => assert!(query.is_write()),
         _ => panic!("not a select"),
     }
-    assert!(qp.in_transaction);
 }
 
 #[test]
@@ -433,8 +460,10 @@ fn test_close_direct_one_shard() {
     let buf: Buffer = vec![Close::named("test").into(), Sync.into()].into();
     let mut pp = PreparedStatements::default();
     let params = Parameters::default();
+    let logical_transaction = LogicalTransaction::new();
 
-    let context = RouterContext::new(&buf, &cluster, &mut pp, &params, false).unwrap();
+    let context =
+        RouterContext::new(&buf, &cluster, &mut pp, &params, &logical_transaction).unwrap();
 
     let cmd = qp.parse(context).unwrap();
 

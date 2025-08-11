@@ -81,6 +81,7 @@ impl LogicalTransaction {
     /// - `AlreadyInTransaction` if already `BeginPending` or `InProgress`.
     /// - `AlreadyFinalized` if `Committed` or `RolledBack`.tx or finalized.
     pub fn soft_begin(&mut self) -> Result<(), TransactionError> {
+        println!("soft begin");
         match self.status {
             TransactionStatus::Idle => {
                 self.status = TransactionStatus::BeginPending;
@@ -103,6 +104,7 @@ impl LogicalTransaction {
     /// - `InvalidManualShardType` if `shard` is not `Shard::Direct(_)`.
     /// - `ShardConflict` if `active_shard` is set to a different shard.
     pub fn execute_query(&mut self, shard: Shard) -> Result<(), TransactionError> {
+        println!("EXECUTE QUERY");
         self.touch_shard(shard)?;
 
         match self.status {
@@ -124,6 +126,7 @@ impl LogicalTransaction {
     /// - `NoActiveTransaction` if `BeginPending` (nothing ran).
     /// - `AlreadyFinalized` if already `Committed` or `RolledBack`.
     pub fn commit(&mut self) -> Result<(), TransactionError> {
+        println!("COMMIT TRANSACTION");
         match self.status {
             TransactionStatus::Idle => Err(TransactionError::ExpectedActive),
             TransactionStatus::BeginPending => {
@@ -146,6 +149,7 @@ impl LogicalTransaction {
     /// - `NoActiveTransaction` if `BeginPending` (nothing ran).
     /// - `AlreadyFinalized` if already `Committed` or `RolledBack`.
     pub fn rollback(&mut self) -> Result<(), TransactionError> {
+        println!("ROLLBACK TRANSACTION");
         match self.status {
             TransactionStatus::Idle => Err(TransactionError::ExpectedActive),
             TransactionStatus::BeginPending => {
@@ -164,6 +168,7 @@ impl LogicalTransaction {
     /// Sets status to `Idle`, clears manual and dirty shard
     /// Safe to call in any state.
     pub fn reset(&mut self) {
+        println!("RESET");
         self.status = TransactionStatus::Idle;
         self.manual_shard = None;
         self.dirty_shard = None;

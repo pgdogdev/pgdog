@@ -371,6 +371,10 @@ impl Client {
 
     /// Handle client messages.
     async fn client_messages(&mut self, mut inner: InnerBorrow<'_>) -> Result<bool, Error> {
+        println!("");
+        println!("");
+        println!("Starting Inner.router.route: {}", inner.router.route());
+
         inner
             .stats
             .received(self.request_buffer.total_message_len());
@@ -491,8 +495,15 @@ impl Client {
                     return Ok(false);
                 }
 
-                Some(Command::Query(query)) => {
-                    if query.is_cross_shard() && self.cross_shard_disabled {
+                Some(Command::Query(route)) => {
+                    if self.in_transaction() {
+                        println!("I am in a transaction!");
+                        println!("shard: {}", route.shard().clone());
+                        let shard = route.shard().clone();
+                        self.logical_transaction.execute_query(shard)?;
+                    }
+
+                    if route.is_cross_shard() && self.cross_shard_disabled {
                         self.stream
                             .error(
                                 ErrorResponse::cross_shard_disabled(),
@@ -565,6 +576,8 @@ impl Client {
             };
         }
 
+        println!("Inner.router.route: {}", inner.router.route());
+
         // We don't start a transaction on the servers until
         // a client is actually executing something.
         //
@@ -631,9 +644,14 @@ impl Client {
         if code == 'Z' {
             inner.stats.query();
 
+            println!("message in transaction: {}", message.in_transaction());
+
             // In transaction if buffered BEGIN from client or server is telling us we are.
             let in_transaction = message.in_transaction() || self.in_transaction();
             inner.stats.idle(in_transaction);
+
+            println!("in transaction: {}", in_transaction);
+            println!("in message transaction: {}", message.in_transaction());
 
             // Flush mirrors.
             if !in_transaction {
@@ -648,6 +666,7 @@ impl Client {
         // Flushing can take a minute and we don't want to block
         // the connection from being reused.
         if inner.backend.done() {
+            println!("I AM DONE!    ");
             let changed_params = inner.backend.changed_params();
             if inner.transaction_mode() && !self.replication_mode {
                 inner.disconnect();

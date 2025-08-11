@@ -9,6 +9,7 @@ use tracing::{debug, error};
 use crate::backend::Cluster;
 use crate::config::config;
 use crate::frontend::client::timeouts::Timeouts;
+use crate::frontend::logical_transaction::LogicalTransaction;
 use crate::frontend::{Command, PreparedStatements, Router, RouterContext};
 use crate::net::Parameters;
 use crate::state::State;
@@ -47,6 +48,8 @@ pub(crate) struct Mirror {
     params: Parameters,
     /// Mirror state.
     state: State,
+    /// Logical transaction state.
+    logical_transaction: LogicalTransaction,
 }
 
 impl Mirror {
@@ -71,6 +74,7 @@ impl Mirror {
             cluster: cluster.clone(),
             state: State::Idle,
             params: Parameters::default(),
+            logical_transaction: LogicalTransaction::new(),
         };
 
         let query_timeout = Timeouts::from_config(&config.config.general);
@@ -135,7 +139,7 @@ impl Mirror {
                     &self.cluster,
                     &mut self.prepared_statements,
                     &self.params,
-                    false,
+                    &self.logical_transaction,
                 ) {
                     match self.router.query(context) {
                         Ok(command) => {

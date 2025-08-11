@@ -28,6 +28,7 @@ mod tests {
     use super::*;
 
     use crate::backend::Cluster;
+    use crate::frontend::logical_transaction::LogicalTransaction;
     use crate::frontend::{Buffer, PreparedStatements, RouterContext};
     use crate::net::messages::{Bind, Parameter, Parse, Query};
     use crate::net::Parameters;
@@ -39,8 +40,10 @@ mod tests {
         let cluster = Cluster::new_test();
         let mut stmts = PreparedStatements::default();
         let params = Parameters::default();
+        let logical_transaction = LogicalTransaction::new();
 
-        let ctx = RouterContext::new(&buffer, &cluster, &mut stmts, &params, false).unwrap();
+        let ctx = RouterContext::new(&buffer, &cluster, &mut stmts, &params, &logical_transaction)
+            .unwrap();
 
         match QueryParser::default().parse(ctx).unwrap().clone() {
             Command::Query(route) => route,
@@ -65,8 +68,10 @@ mod tests {
         let cluster = Cluster::new_test();
         let mut stmts = PreparedStatements::default();
         let params = Parameters::default();
+        let logical_transaction = LogicalTransaction::new();
 
-        let ctx = RouterContext::new(&buffer, &cluster, &mut stmts, &params, false).unwrap();
+        let ctx = RouterContext::new(&buffer, &cluster, &mut stmts, &params, &logical_transaction)
+            .unwrap();
 
         match QueryParser::default().parse(ctx).unwrap().clone() {
             Command::Query(route) => route,

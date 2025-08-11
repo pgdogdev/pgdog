@@ -60,7 +60,7 @@ impl<'a> QueryParserContext<'a> {
 
     /// Write override enabled?
     pub(super) fn write_override(&self) -> bool {
-        self.router_context.in_transaction && self.rw_conservative()
+        self.in_transaction() && self.rw_conservative()
     }
 
     /// Are we using the conservative read/write separation strategy?
@@ -91,5 +91,9 @@ impl<'a> QueryParserContext<'a> {
     /// Multi-tenant checks.
     pub(super) fn multi_tenant(&self) -> &Option<MultiTenant> {
         self.multi_tenant
+    }
+
+    pub(super) fn in_transaction(&self) -> bool {
+        self.router_context.in_transaction()
     }
 }

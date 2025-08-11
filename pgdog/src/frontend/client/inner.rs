@@ -64,11 +64,11 @@ impl Inner {
             .map(|cluster| {
                 // Build router context.
                 let context = RouterContext::new(
-                    buffer,                               // Query and parameters.
-                    cluster,                              // Cluster configuration.
-                    prepared_statements,                  // Prepared statements.
-                    params,                               // Client connection parameters.
-                    logical_transaction.in_transaction(), // Client in explcitely started transaction.
+                    buffer,              // Query and parameters.
+                    cluster,             // Cluster configuration.
+                    prepared_statements, // Prepared statements.
+                    params,              // Client connection parameters.
+                    logical_transaction, // Client in explcitely started transaction.
                 )?;
                 self.router.query(context)
             })

@@ -1,7 +1,9 @@
 use super::Error;
 use crate::{
     backend::Cluster,
-    frontend::{buffer::BufferedQuery, Buffer, PreparedStatements},
+    frontend::{
+        buffer::BufferedQuery, logical_transaction::LogicalTransaction, Buffer, PreparedStatements,
+    },
     net::{Bind, Parameters},
 };
 
@@ -17,10 +19,10 @@ pub struct RouterContext<'a> {
     pub cluster: &'a Cluster,
     /// Client parameters, e.g. search_path.
     pub params: &'a Parameters,
-    /// Client inside transaction,
-    pub in_transaction: bool,
     /// Currently executing COPY statement.
     pub copy_mode: bool,
+    /// Client's logical_transaction struct,
+    pub logical_transaction: &'a LogicalTransaction,
 }
 
 impl<'a> RouterContext<'a> {
@@ -29,7 +31,7 @@ impl<'a> RouterContext<'a> {
         cluster: &'a Cluster,
         stmt: &'a mut PreparedStatements,
         params: &'a Parameters,
-        in_transaction: bool,
+        logical_transaction: &'a LogicalTransaction,
     ) -> Result<Self, Error> {
         let query = buffer.query()?;
         let bind = buffer.parameters()?;
@@ -40,9 +42,13 @@ impl<'a> RouterContext<'a> {
             bind,
             params,
             prepared_statements: stmt,
+            logical_transaction,
             cluster,
-            in_transaction,
             copy_mode,
         })
+    }
+
+    pub fn in_transaction(&self) -> bool {
+        self.logical_transaction.in_transaction()
     }
 }
