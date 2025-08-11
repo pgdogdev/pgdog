@@ -43,8 +43,9 @@ describe("sequelize", async function () {
         found = true;
       }
     }
-
     await admin.end();
+
+    assert(found);
   });
 });
 

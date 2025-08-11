@@ -20,9 +20,10 @@ function run_pgdog() {
     # and a more reliable test of what happens
     # in prod.
     cargo build --release
+    local config_path=${1:-"integration"}
     target/release/pgdog \
-        --config integration/pgdog.toml \
-        --users integration/users.toml \
+        --config ${config_path}/pgdog.toml \
+        --users ${config_path}/users.toml \
         > ${COMMON_DIR}/log.txt &
     popd
 }
