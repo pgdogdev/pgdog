@@ -15,9 +15,9 @@ const sequelize = new Sequelize({
 });
 
 before(async function () {
-  await sequelize.query('DROP TABLE IF EXISTS "User"');
+  await sequelize.query('DROP TABLE IF EXISTS "Users"');
   await sequelize.query(
-    'CREATE TABLE IF NOT EXISTS "User" (id BIGSERIAL PRIMARY KEY, email VARCHAR, "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(), "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT NOW())',
+    'CREATE TABLE IF NOT EXISTS "Users" (id BIGSERIAL PRIMARY KEY, email VARCHAR, "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(), "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT NOW())',
   );
 });
 
@@ -50,6 +50,6 @@ describe("sequelize", async function () {
 });
 
 after(async function () {
-  await sequelize.query('DROP TABLE "User"');
+  await sequelize.query('DROP TABLE "Users"');
   await sequelize.close();
 });

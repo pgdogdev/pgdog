@@ -101,7 +101,7 @@ impl<'a> Value<'a> {
         }
     }
 
-    pub fn data(&self) -> &Data {
+    pub fn data(&self) -> &Data<'_> {
         &self.data
     }
 

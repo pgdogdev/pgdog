@@ -68,7 +68,7 @@ pub fn shutdown() {
 }
 
 /// Get plugin by name.
-pub fn plugin(name: &str) -> Option<&Plugin> {
+pub fn plugin(name: &str) -> Option<&Plugin<'_>> {
     PLUGINS
         .get()
         .unwrap()
