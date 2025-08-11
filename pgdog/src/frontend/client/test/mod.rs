@@ -273,6 +273,7 @@ async fn test_client_extended() {
 
     let _ = read!(conn, ['1', '2', 't', 'T', 'D', 'C', 'Z']);
 
+    println!("this does not print");
     handle.await.unwrap();
 }
 
@@ -529,14 +530,23 @@ async fn test_transaction_state() {
     client.buffer(&State::Idle).await.unwrap();
     client.client_messages(inner.get()).await.unwrap();
 
+    println!("\nONE");
+
     for c in ['C', 'Z'] {
+        println!("{} A", c);
         let msg = inner.backend.read().await.unwrap();
         assert_eq!(msg.code(), c);
+        println!("{} B", c);
 
         client.server_message(&mut inner.get(), msg).await.unwrap();
+        println!("{} C", c);
     }
 
+    println!("\nTWO");
+
     read!(conn, ['C', 'Z']);
+
+    println!("\nTHRE");
 
     assert!(!client.in_transaction());
     assert!(!inner.router.routed());
