@@ -157,6 +157,11 @@ impl ConfigAndUsers {
         }
     }
 
+    /// Prepared statements are in "full" mode (used for query parser decision).
+    pub fn prepared_statements_full(&self) -> bool {
+        self.config.general.prepared_statements.full()
+    }
+
     pub fn pub_sub_enabled(&self) -> bool {
         self.config.general.pub_sub_channel_size > 0
     }
@@ -396,7 +401,7 @@ pub struct General {
     pub openmetrics_namespace: Option<String>,
     /// Prepared statatements support.
     #[serde(default)]
-    pub prepared_statements: PreparedStatements,
+    prepared_statements: PreparedStatements,
     /// Limit on the number of prepared statements in the server cache.
     #[serde(default = "General::prepared_statements_limit")]
     pub prepared_statements_limit: usize,
