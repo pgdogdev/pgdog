@@ -312,10 +312,34 @@ impl Client {
         let mut inner = Inner::new(self)?;
         let shutdown = self.comms.shutting_down();
 
+        let pause_traffic = {
+            let shutdown = shutdown.clone();
+            let comms = self.comms.clone();
+            let unpausing_traffic_notif = comms.unpausing_traffic();
+            #[cold]
+            async move || {
+                let unpausing_traffic_notif = unpausing_traffic_notif.notified();
+                if !comms.is_traffic_paused() {
+                    return false;
+                }
+                select! {
+                    _ = unpausing_traffic_notif => {
+                        // Traffic is unpaused.
+                        false
+                    }
+                    // TODO: use ArcBool pattern to avoid race condition
+                    _ = shutdown.notified() => {
+                        // Shutdown requested.
+                        true
+                    }
+                }
+            }
+        };
         loop {
             let query_timeout = self.timeouts.query_timeout(&inner.stats.state);
 
             select! {
+                // TODO: use ArcBool pattern to avoid race condition
                 _ = shutdown.notified() => {
                     if !inner.backend.connected() && inner.start_transaction.is_none() {
                         break;
@@ -324,6 +348,12 @@ impl Client {
 
                 // Async messages.
                 message = timeout(query_timeout, inner.backend.read()) => {
+                    if self.comms.is_traffic_paused() {
+                        // This returns true if shutdown is requested.
+                        if pause_traffic().await {
+                            break;
+                        }
+                    }
                     let message = message??;
                     let disconnect = self.server_message(&mut inner.get(), message).await?;
                     if disconnect {
@@ -332,6 +362,12 @@ impl Client {
                 }
 
                 buffer = self.buffer(&inner.stats.state) => {
+                    if self.comms.is_traffic_paused() {
+                        // This returns true if shutdown is requested.
+                        if pause_traffic().await {
+                            break;
+                        }
+                    }
                     let event = buffer?;
                     if !self.request_buffer.is_empty() {
                         let disconnect = self.client_messages(inner.get()).await?;
