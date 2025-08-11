@@ -1,0 +1,15 @@
+[general]
+dry_run = true
+
+[[databases]]
+name = "pgdog"
+host = "127.0.0.1"
+
+[admin]
+password = "pgdog"
+
+[[sharded_tables]]
+database = "pgdog"
+name = "User"
+column = "id"
+data_type = "bigint"

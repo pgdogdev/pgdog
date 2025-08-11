@@ -115,3 +115,5 @@ jobs:
         run: bash integration/complex/run.sh
       - name: Rust
         run: bash integration/rust/run.sh
+      - name: Dry run
+        run: bash integration/dry_run/run.sh

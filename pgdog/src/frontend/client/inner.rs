@@ -167,7 +167,7 @@ impl Inner {
     /// while ensuring maintenance tasks are performed when
     /// the borrow is finished.
     #[inline(always)]
-    pub(super) fn get(&mut self) -> InnerBorrow {
+    pub(super) fn get<'a>(&'a mut self) -> InnerBorrow<'a> {
         InnerBorrow { inner: self }
     }
 }

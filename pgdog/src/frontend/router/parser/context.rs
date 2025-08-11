@@ -76,6 +76,7 @@ impl<'a> QueryParserContext<'a> {
             || self.router_needed
             || self.pub_sub_enabled
             || self.multi_tenant().is_some()
+            || self.dry_run
     }
 
     /// Get the query we're parsing, if any.

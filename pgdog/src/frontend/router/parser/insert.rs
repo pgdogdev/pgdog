@@ -36,7 +36,7 @@ impl<'a> Insert<'a> {
     }
 
     /// Get table name, if specified (should always be).
-    pub fn table(&self) -> Option<Table> {
+    pub fn table(&'a self) -> Option<Table<'a>> {
         self.stmt.relation.as_ref().map(Table::from)
     }
 
