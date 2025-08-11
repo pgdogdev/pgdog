@@ -635,15 +635,11 @@ impl Client {
         let message = message.backend();
         let has_more_messages = inner.backend.has_more_messages();
 
-        println!("\n --> ONE");
-
         // Messages that we need to send to the client immediately.
         // ReadyForQuery (B) | CopyInResponse (B) | ErrorResponse(B) | NoticeResponse(B) | NotificationResponse (B)
         let flush = matches!(code, 'Z' | 'G' | 'E' | 'N' | 'A')
             || !has_more_messages
             || message.streaming();
-
-        println!("\n --> TWO");
 
         // Server finished executing a query.
         // ReadyForQuery (B)
@@ -660,8 +656,6 @@ impl Client {
             }
         }
 
-        println!("\n --> THREE");
-
         inner.stats.sent(message.len());
 
         // Release the connection back into the pool
@@ -669,7 +663,6 @@ impl Client {
         // Flushing can take a minute and we don't want to block
         // the connection from being reused.
         if inner.backend.done() {
-            println!("\n --> FOUR");
             let changed_params = inner.backend.changed_params();
             if inner.transaction_mode() && !self.replication_mode {
                 inner.disconnect();
@@ -680,8 +673,6 @@ impl Client {
                 "transaction finished [{:.3}ms]",
                 inner.stats.last_transaction_time.as_secs_f64() * 1000.0
             );
-
-            println!("\n --> FIVE");
 
             // Update client params with values
             // sent from the server using ParameterStatus(B) messages.
@@ -694,22 +685,16 @@ impl Client {
             }
         }
 
-        println!("\n --> SIX");
-
         if flush {
             self.stream.send_flush(&message).await?;
         } else {
             self.stream.send(&message).await?;
         }
 
-        println!("\n --> SEVEN");
-
         // Pooler is offline or the client requested to disconnect and the transaction is done.
         if inner.backend.done() && (inner.comms.offline() || self.shutdown) && !self.admin {
             return Ok(true);
         }
-
-        println!("\n --> EIGHT");
 
         Ok(false)
     }

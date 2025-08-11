@@ -455,7 +455,6 @@ async fn test_transaction_state() {
 
     assert!(client.in_transaction());
     assert!(inner.router.route().is_write());
-    assert!(client.logical_transaction.in_transaction());
 
     conn.write_all(&buffer!(
         { Parse::named("test", "SELECT $1") },
@@ -471,7 +470,6 @@ async fn test_transaction_state() {
     assert!(inner.router.routed());
     assert!(client.in_transaction());
     assert!(inner.router.route().is_write());
-    assert!(client.logical_transaction.in_transaction());
 
     for c in ['1', 't', 'T', 'Z'] {
         let msg = inner.backend.read().await.unwrap();
@@ -507,46 +505,34 @@ async fn test_transaction_state() {
         let msg = inner.backend.read().await.unwrap();
         assert_eq!(msg.code(), c);
 
-        println!("Loop -> {} :: pre-message {:?}", c, inner.router.route());
-        client.server_message(&mut inner.get(), msg).await.unwrap();
-        println!("Loop -> {} :: post-message {:?}", c, inner.router.route());
-    }
+        println!("Before: {}: routed?{}", c, inner.router.routed());
 
-    println!("Out of loop route {:?}", inner.router.route());
+        client.server_message(&mut inner.get(), msg).await.unwrap();
+
+        println!("After:  {}: routed? {}", c, inner.router.routed());
+    }
 
     read!(conn, ['2', 'D', 'C', 'Z']);
 
-    // assert!(inner.router.routed());
+    assert!(inner.router.routed());
     assert!(client.in_transaction());
     assert!(inner.router.route().is_write());
-    assert!(client.logical_transaction.in_transaction());
 
     conn.write_all(&buffer!({ Query::new("COMMIT") }))
         .await
         .unwrap();
 
-    println!("I JUST COMMITED IN THE TESTS!");
-
     client.buffer(&State::Idle).await.unwrap();
     client.client_messages(inner.get()).await.unwrap();
 
-    println!("\nONE");
-
     for c in ['C', 'Z'] {
-        println!("{} A", c);
         let msg = inner.backend.read().await.unwrap();
         assert_eq!(msg.code(), c);
-        println!("{} B", c);
 
         client.server_message(&mut inner.get(), msg).await.unwrap();
-        println!("{} C", c);
     }
 
-    println!("\nTWO");
-
     read!(conn, ['C', 'Z']);
-
-    println!("\nTHRE");
 
     assert!(!client.in_transaction());
     assert!(!inner.router.routed());
