@@ -1,3 +1,4 @@
+use std::ops::Deref;
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
@@ -284,7 +285,7 @@ pub async fn schema_sync(commands: Commands) -> Result<(), Box<dyn std::error::E
         if dry_run {
             let queries = output.statements(state)?;
             for query in queries {
-                println!("{}", query);
+                println!("{}", query.deref());
             }
         } else {
             output.restore(&destination, ignore_errors, state).await?;
