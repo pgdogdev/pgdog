@@ -37,3 +37,9 @@ pub enum Error {
     #[error("address is not valid")]
     InvalidAddress,
 }
+
+impl From<crate::backend::Error> for Error {
+    fn from(err: crate::backend::Error) -> Self {
+        Error::Backend(Box::new(err))
+    }
+}
