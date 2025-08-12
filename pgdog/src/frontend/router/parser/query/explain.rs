@@ -28,13 +28,13 @@ mod tests {
     use super::*;
 
     use crate::backend::Cluster;
-    use crate::frontend::{Buffer, PreparedStatements, RouterContext};
+    use crate::frontend::{ClientRequest, PreparedStatements, RouterContext};
     use crate::net::messages::{Bind, Parameter, Parse, Query};
     use crate::net::Parameters;
 
     // Helper function to route a plain SQL statement and return its `Route`.
     fn route(sql: &str) -> Route {
-        let buffer = Buffer::from(vec![Query::new(sql).into()]);
+        let buffer = ClientRequest::from(vec![Query::new(sql).into()]);
 
         let cluster = Cluster::new_test();
         let mut stmts = PreparedStatements::default();
@@ -60,7 +60,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         let bind = Bind::new_params("", &parameters);
-        let buffer: Buffer = vec![parse_msg.into(), bind.into()].into();
+        let buffer: ClientRequest = vec![parse_msg.into(), bind.into()].into();
 
         let cluster = Cluster::new_test();
         let mut stmts = PreparedStatements::default();

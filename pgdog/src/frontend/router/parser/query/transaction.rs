@@ -28,10 +28,10 @@ impl QueryParser {
                     self.in_transaction = true;
                     return Ok(Command::StartTransaction(context.query()?.clone()));
                 }
-                _ => Ok(Command::Query(Route::write(None))),
+                _ => Ok(Command::Query(Route::write(Shard::All))),
             }
         } else {
-            Ok(Command::Query(Route::write(None)))
+            Ok(Command::Query(Route::write(Shard::All)))
         }
     }
 }

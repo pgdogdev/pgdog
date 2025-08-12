@@ -14,7 +14,7 @@ use crate::net::Parameters;
 use crate::state::State;
 use crate::{
     backend::pool::{Error as PoolError, Request},
-    frontend::Buffer,
+    frontend::ClientRequest,
 };
 
 use super::Connection;
@@ -24,7 +24,7 @@ use super::Error;
 #[derive(Clone, Debug)]
 struct BufferWithDelay {
     delay: Duration,
-    buffer: Buffer,
+    buffer: ClientRequest,
 }
 
 #[derive(Clone, Debug)]
@@ -165,7 +165,7 @@ impl Mirror {
             sleep(buffer.delay).await;
 
             self.connection
-                .handle_buffer(&buffer.buffer, &mut self.router, false)
+                .handle_request(&buffer.buffer, &mut self.router, false)
                 .await?;
         }
 
@@ -201,7 +201,7 @@ impl MirrorHandler {
     }
 
     /// Maybe send request to handler.
-    pub fn send(&mut self, buffer: &Buffer) -> bool {
+    pub fn send(&mut self, buffer: &ClientRequest) -> bool {
         match self.state {
             MirrorHandlerState::Dropping => {
                 debug!("mirror dropping request");

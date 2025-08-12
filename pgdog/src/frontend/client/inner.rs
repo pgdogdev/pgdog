@@ -6,8 +6,9 @@ use crate::{
         Error as BackendError,
     },
     frontend::{
-        buffer::BufferedQuery, router::Error as RouterError, Buffer, Command, Comms,
-        PreparedStatements, Router, RouterContext, Stats,
+        buffer::BufferedQuery,
+        router::{Error as RouterError, Route},
+        ClientRequest, Command, Comms, PreparedStatements, Router, RouterContext, Stats,
     },
     net::Parameters,
     state::State,
@@ -55,7 +56,7 @@ impl Inner {
     /// Get the query from the buffer and figure out what it wants to do.
     pub(super) fn command(
         &mut self,
-        buffer: &mut Buffer,
+        buffer: &mut ClientRequest,
         prepared_statements: &mut PreparedStatements,
         params: &Parameters,
         in_transaction: bool,
@@ -104,22 +105,26 @@ impl Inner {
         self.backend.disconnect();
     }
 
-    pub(super) async fn handle_buffer(
+    pub(super) async fn handle_request(
         &mut self,
-        buffer: &Buffer,
+        buffer: &ClientRequest,
         streaming: bool,
     ) -> Result<(), Error> {
         self.backend
-            .handle_buffer(buffer, &mut self.router, streaming)
+            .handle_request(buffer, &mut self.router, streaming)
             .await?;
 
         Ok(())
     }
 
     /// Connect to a backend (or multiple).
-    pub(super) async fn connect(&mut self, request: &Request) -> Result<(), BackendError> {
+    pub(super) async fn connect(
+        &mut self,
+        request: &Request,
+        route: &Route,
+    ) -> Result<(), BackendError> {
         // Use currently determined route.
-        let route = self.router.route();
+        // let route = self.router.route();
 
         self.stats.waiting(request.created_at);
 
@@ -212,7 +217,10 @@ mod test {
         let (_conn, client) = test_client(true).await;
         let mut inner = Inner::new(&client).unwrap();
 
-        inner.connect(&Request::default()).await.unwrap();
+        inner
+            .connect(&Request::default(), &Route::default())
+            .await
+            .unwrap();
         assert!(inner.backend.done());
         assert!(!inner.backend.is_dirty());
     }

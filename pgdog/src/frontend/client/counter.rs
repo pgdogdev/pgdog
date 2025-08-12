@@ -1,5 +1,5 @@
 use crate::{
-    frontend::Buffer,
+    frontend::ClientRequest,
     net::messages::{Message, Protocol},
 };
 
@@ -14,7 +14,7 @@ pub struct Counter {
 }
 
 impl Counter {
-    pub fn count(&mut self, buffer: &Buffer) {
+    pub fn count(&mut self, buffer: &ClientRequest) {
         for message in buffer.iter() {
             match message.code() {
                 'D' => {

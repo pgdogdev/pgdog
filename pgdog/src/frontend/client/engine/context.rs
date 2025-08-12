@@ -1,5 +1,5 @@
 use crate::{
-    frontend::{client::Inner, Buffer, Client, PreparedStatements},
+    frontend::{client::Inner, Client, ClientRequest, PreparedStatements},
     net::Parameters,
 };
 
@@ -15,7 +15,7 @@ pub struct EngineContext<'a> {
     /// Is the client inside a transaction?
     pub(super) in_transaction: bool,
     /// Messages currently in client's buffer.
-    pub(super) buffer: &'a Buffer,
+    pub(super) buffer: &'a ClientRequest,
 }
 
 impl<'a> EngineContext<'a> {
@@ -25,7 +25,7 @@ impl<'a> EngineContext<'a> {
             params: &client.params,
             in_transaction: client.in_transaction,
             connected: inner.connected(),
-            buffer: &client.request_buffer,
+            buffer: &client.request,
         }
     }
 }

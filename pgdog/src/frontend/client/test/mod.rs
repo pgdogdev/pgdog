@@ -123,20 +123,20 @@ async fn test_test_client() {
 
     conn.write_all(&query).await.unwrap();
 
-    client.buffer(&State::Idle).await.unwrap();
-    assert_eq!(client.request_buffer.total_message_len(), query.len());
+    client.buffer_request(&State::Idle).await.unwrap();
+    assert_eq!(client.request.total_message_len(), query.len());
 
     let disconnect = client.client_messages(inner.get()).await.unwrap();
     assert!(!disconnect);
     assert!(!client.in_transaction);
     assert_eq!(inner.stats.state, State::Active);
     // Buffer not cleared yet.
-    assert_eq!(client.request_buffer.total_message_len(), query.len());
+    assert_eq!(client.request.total_message_len(), query.len());
 
     assert!(inner.backend.connected());
     let command = inner
         .command(
-            &mut client.request_buffer,
+            &mut client.request,
             &mut client.prepared_statements,
             &client.params,
             client.in_transaction,
@@ -399,9 +399,9 @@ async fn test_abrupt_disconnect() {
 
     drop(conn);
 
-    let event = client.buffer(&State::Idle).await.unwrap();
+    let event = client.buffer_request(&State::Idle).await.unwrap();
     assert_eq!(event, BufferEvent::DisconnectAbrupt);
-    assert!(client.request_buffer.is_empty());
+    assert!(client.request.is_empty());
 
     // Client disconnects and returns gracefully.
     let (conn, mut client, _) = new_client!(false);
@@ -421,7 +421,7 @@ async fn test_lock_session() {
     .unwrap();
 
     for _ in 0..2 {
-        client.buffer(&State::Idle).await.unwrap();
+        client.buffer_request(&State::Idle).await.unwrap();
         client.client_messages(inner.get()).await.unwrap();
     }
 
@@ -447,7 +447,7 @@ async fn test_transaction_state() {
         .await
         .unwrap();
 
-    client.buffer(&State::Idle).await.unwrap();
+    client.buffer_request(&State::Idle).await.unwrap();
     client.client_messages(inner.get()).await.unwrap();
     read!(conn, ['C', 'Z']);
 
@@ -463,7 +463,7 @@ async fn test_transaction_state() {
     .await
     .unwrap();
 
-    client.buffer(&State::Idle).await.unwrap();
+    client.buffer_request(&State::Idle).await.unwrap();
     client.client_messages(inner.get()).await.unwrap();
 
     assert!(inner.router.routed());
@@ -497,7 +497,7 @@ async fn test_transaction_state() {
     .unwrap();
 
     assert!(!inner.router.routed());
-    client.buffer(&State::Idle).await.unwrap();
+    client.buffer_request(&State::Idle).await.unwrap();
     client.client_messages(inner.get()).await.unwrap();
     assert!(inner.router.routed());
 
@@ -519,7 +519,7 @@ async fn test_transaction_state() {
         .await
         .unwrap();
 
-    client.buffer(&State::Idle).await.unwrap();
+    client.buffer_request(&State::Idle).await.unwrap();
     client.client_messages(inner.get()).await.unwrap();
 
     for c in ['C', 'Z'] {
@@ -547,10 +547,10 @@ async fn test_close_parse() {
         .await
         .unwrap();
 
-    client.buffer(&State::Idle).await.unwrap();
+    client.buffer_request(&State::Idle).await.unwrap();
     client.client_messages(inner.get()).await.unwrap();
 
-    client.buffer(&State::Idle).await.unwrap();
+    client.buffer_request(&State::Idle).await.unwrap();
     client.client_messages(inner.get()).await.unwrap();
 
     for _ in ['T', 'D', 'C', 'Z'] {
@@ -568,7 +568,7 @@ async fn test_close_parse() {
     .await
     .unwrap();
 
-    client.buffer(&State::Idle).await.unwrap();
+    client.buffer_request(&State::Idle).await.unwrap();
     client.client_messages(inner.get()).await.unwrap();
 
     for _ in ['3', '1'] {
@@ -588,7 +588,7 @@ async fn test_client_idle_timeout() {
     set(config).unwrap();
 
     let start = Instant::now();
-    let res = client.buffer(&State::Idle).await.unwrap();
+    let res = client.buffer_request(&State::Idle).await.unwrap();
     assert_eq!(res, BufferEvent::DisconnectAbrupt);
 
     let err = read_one!(conn);
@@ -598,7 +598,7 @@ async fn test_client_idle_timeout() {
 
     assert!(timeout(
         Duration::from_millis(50),
-        client.buffer(&State::IdleInTransaction)
+        client.buffer_request(&State::IdleInTransaction)
     )
     .await
     .is_err());
@@ -612,7 +612,7 @@ async fn test_prepared_syntax_error() {
         .await
         .unwrap();
 
-    client.buffer(&State::Idle).await.unwrap();
+    client.buffer_request(&State::Idle).await.unwrap();
     client.client_messages(inner.get()).await.unwrap();
 
     for c in ['E', 'Z'] {
@@ -627,7 +627,7 @@ async fn test_prepared_syntax_error() {
     assert_eq!(stmts.lock().statements().iter().next().unwrap().1.used, 1);
 
     conn.write_all(&buffer!({ Terminate })).await.unwrap();
-    let event = client.buffer(&State::Idle).await.unwrap();
+    let event = client.buffer_request(&State::Idle).await.unwrap();
     assert_eq!(event, BufferEvent::DisconnectGraceful);
     drop(client);
 

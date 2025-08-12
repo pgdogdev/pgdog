@@ -109,6 +109,16 @@ impl QueryParser {
     fn query(&mut self, context: &mut QueryParserContext) -> Result<Command, Error> {
         let use_parser = context.use_parser();
 
+        // if shard == direct && detected_shard != direct || different_number => return err
+        //
+        // BEGIN; --> all shards (buffer)
+        // INSERT INTO users(id) VALUES($1) // --> shard 0 ; --> shard 0
+        // SELECT count(*) FROM companies; // --> shard 0; --> all shards
+        // SELECT * FROM users WHERE id = $2 // --> shard 0; --> shard 1
+        // ROLLBACK; --> all shards
+        //
+        // cross_shard_transaction_safety = "strict"
+
         debug!(
             "parser is {}",
             if use_parser { "enabled" } else { "disabled" }

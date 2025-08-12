@@ -12,7 +12,7 @@ use tokio::sync::{
 
 use crate::{
     backend::Server,
-    frontend::Buffer,
+    frontend::ClientRequest,
     net::{Message, ProtocolMessage},
 };
 
@@ -57,7 +57,7 @@ impl ParallelConnection {
     }
 
     // Queue up the contents of the buffer.
-    pub async fn send(&mut self, buffer: &Buffer) -> Result<(), Error> {
+    pub async fn send(&mut self, buffer: &ClientRequest) -> Result<(), Error> {
         for message in buffer.iter() {
             self.tx
                 .send(ParallelMessage::ProtocolMessage(message.clone()))

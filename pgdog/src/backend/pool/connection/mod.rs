@@ -118,7 +118,7 @@ impl Connection {
     }
 
     /// Send client request to mirrors.
-    pub fn mirror(&mut self, buffer: &crate::frontend::Buffer) {
+    pub fn mirror(&mut self, buffer: &crate::frontend::ClientRequest) {
         for mirror in &mut self.mirrors {
             mirror.send(buffer);
         }
@@ -273,25 +273,25 @@ impl Connection {
     }
 
     /// Send buffer in a potentially sharded context.
-    pub(crate) async fn handle_buffer(
+    pub(crate) async fn handle_request(
         &mut self,
-        messages: &crate::frontend::Buffer,
+        request: &crate::frontend::ClientRequest,
         router: &mut Router,
         streaming: bool,
     ) -> Result<(), Error> {
-        if messages.copy() && !streaming {
+        if request.copy() && !streaming {
             let rows = router
-                .copy_data(messages)
+                .copy_data(request)
                 .map_err(|e| Error::Router(e.to_string()))?;
             if !rows.is_empty() {
                 self.send_copy(rows).await?;
-                self.send(&messages.without_copy_data()).await?;
+                self.send(&request.without_copy_data()).await?;
             } else {
-                self.send(messages).await?;
+                self.send(request).await?;
             }
         } else {
             // Send query to server.
-            self.send(messages).await?;
+            self.send(request).await?;
         }
 
         Ok(())

@@ -14,7 +14,7 @@ pub mod query_logger;
 pub mod router;
 pub mod stats;
 
-pub use buffer::Buffer;
+pub use buffer::ClientRequest;
 pub use client::Client;
 pub use comms::Comms;
 pub use connected_client::ConnectedClient;

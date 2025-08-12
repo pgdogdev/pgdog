@@ -71,6 +71,13 @@ impl MultiShard {
         //  3. Decoder
     }
 
+    /// Reset the multi-shard state and set the new number of expected shard messages.
+    pub(super) fn set_state(&mut self, shards: usize, route: &Route) {
+        self.shards = shards;
+        self.route = route.clone();
+        self.reset();
+    }
+
     /// Check if the message should be sent to the client, skipped,
     /// or modified.
     pub(super) fn forward(&mut self, message: Message) -> Result<Option<Message>, super::Error> {

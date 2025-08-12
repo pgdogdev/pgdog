@@ -1,7 +1,7 @@
 use super::Error;
 use crate::{
     backend::Cluster,
-    frontend::{buffer::BufferedQuery, Buffer, PreparedStatements},
+    frontend::{buffer::BufferedQuery, ClientRequest, PreparedStatements},
     net::{Bind, Parameters},
 };
 
@@ -25,7 +25,7 @@ pub struct RouterContext<'a> {
 
 impl<'a> RouterContext<'a> {
     pub fn new(
-        buffer: &'a Buffer,
+        buffer: &'a ClientRequest,
         cluster: &'a Cluster,
         stmt: &'a mut PreparedStatements,
         params: &'a Parameters,

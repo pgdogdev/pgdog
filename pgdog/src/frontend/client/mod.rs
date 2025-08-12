@@ -5,12 +5,13 @@ use std::time::Instant;
 
 use bytes::BytesMut;
 use engine::EngineContext;
+
 use timeouts::Timeouts;
 use tokio::time::timeout;
 use tokio::{select, spawn};
 use tracing::{debug, enabled, error, info, trace, Level as LogLevel};
 
-use super::{Buffer, Command, Comms, Error, PreparedStatements};
+use super::{ClientRequest, Command, Comms, Error, PreparedStatements};
 use crate::auth::{md5, scram::Server};
 use crate::backend::{
     databases,
@@ -18,6 +19,8 @@ use crate::backend::{
 };
 use crate::config::{self, AuthType};
 use crate::frontend::buffer::BufferedQuery;
+use crate::frontend::router::parser::Shard;
+use crate::frontend::router::Route;
 #[cfg(debug_assertions)]
 use crate::frontend::QueryLogger;
 use crate::net::messages::{
@@ -53,7 +56,7 @@ pub struct Client {
     prepared_statements: PreparedStatements,
     in_transaction: bool,
     timeouts: Timeouts,
-    request_buffer: Buffer,
+    request: ClientRequest,
     stream_buffer: BytesMut,
     cross_shard_disabled: bool,
     passthrough_password: Option<String>,
@@ -73,7 +76,7 @@ impl MemoryUsage for Client {
             + self.prepared_statements.memory_used()
             + std::mem::size_of::<Timeouts>()
             + self.stream_buffer.memory_usage()
-            + self.request_buffer.memory_usage()
+            + self.request.memory_usage()
             + self
                 .passthrough_password
                 .as_ref()
@@ -238,7 +241,7 @@ impl Client {
             prepared_statements: PreparedStatements::new(),
             in_transaction: false,
             timeouts: Timeouts::from_config(&config.config.general),
-            request_buffer: Buffer::new(),
+            request: ClientRequest::new(),
             stream_buffer: BytesMut::new(),
             shutdown: false,
             cross_shard_disabled: false,
@@ -279,7 +282,7 @@ impl Client {
             admin: false,
             in_transaction: false,
             timeouts: Timeouts::from_config(&config().config.general),
-            request_buffer: Buffer::new(),
+            request: ClientRequest::new(),
             stream_buffer: BytesMut::new(),
             shutdown: false,
             cross_shard_disabled: false,
@@ -331,9 +334,9 @@ impl Client {
                     }
                 }
 
-                buffer = self.buffer(&inner.stats.state) => {
+                buffer = self.buffer_request(&inner.stats.state) => {
                     let event = buffer?;
-                    if !self.request_buffer.is_empty() {
+                    if !self.request.is_empty() {
                         let disconnect = self.client_messages(inner.get()).await?;
 
                         if disconnect {
@@ -368,19 +371,17 @@ impl Client {
 
     /// Handle client messages.
     async fn client_messages(&mut self, mut inner: InnerBorrow<'_>) -> Result<bool, Error> {
-        inner
-            .stats
-            .received(self.request_buffer.total_message_len());
+        inner.stats.received(self.request.total_message_len());
 
         #[cfg(debug_assertions)]
-        if let Some(query) = self.request_buffer.query()? {
+        if let Some(query) = self.request.query()? {
             debug!(
                 "{} [{}] (in transaction: {})",
                 query.query(),
                 self.addr,
                 self.in_transaction
             );
-            QueryLogger::new(&self.request_buffer).log().await?;
+            QueryLogger::new(&self.request).log().await?;
         }
 
         let context = EngineContext::new(self, &inner);
@@ -404,7 +405,7 @@ impl Client {
         let connected = inner.connected();
 
         let command = match inner.command(
-            &mut self.request_buffer,
+            &mut self.request,
             &mut self.prepared_statements,
             &self.params,
             self.in_transaction,
@@ -429,6 +430,13 @@ impl Client {
                 return Ok(false);
             }
         };
+
+        // Set routing information on each buffer.
+        if let Some(Command::Query(route)) = command {
+            self.request.set_route(route);
+        }
+
+        trace!("request buffered \n{:#?}", self.request);
 
         if !connected {
             // Simulate transaction starting
@@ -535,7 +543,18 @@ impl Client {
 
             // Grab a connection from the right pool.
             let request = Request::new(self.id);
-            match inner.connect(&request).await {
+
+            // A explicit transaction starts an cross-shard write query.
+            let route = if inner.start_transaction.is_some() {
+                // lazy_static! {
+                //     static ref DEFAULT_ROUTE: Route = Route::write(Shard::All);
+                // }
+                Route::write(Shard::All)
+            } else {
+                inner.router.route().clone()
+            };
+
+            match inner.connect(&request, &route).await {
                 Ok(()) => {
                     let query_timeout = self.timeouts.query_timeout(&inner.stats.state);
                     // We may need to sync params with the server
@@ -564,13 +583,13 @@ impl Client {
         // a client is actually executing something.
         //
         // This prevents us holding open connections to multiple servers
-        if self.request_buffer.executable() {
+        if self.request.executable() {
             if let Some(query) = inner.start_transaction.take() {
                 inner.backend.execute(&query).await?;
             }
         }
 
-        for msg in self.request_buffer.iter() {
+        for msg in self.request.iter() {
             if let ProtocolMessage::Bind(bind) = msg {
                 inner.backend.bind(bind)?
             }
@@ -579,12 +598,10 @@ impl Client {
         // Queue up request to mirrors, if any.
         // Do this before sending query to actual server
         // to have accurate timings between queries.
-        inner.backend.mirror(&self.request_buffer);
+        inner.backend.mirror(&self.request);
 
         // Send request to actual server.
-        inner
-            .handle_buffer(&self.request_buffer, self.streaming)
-            .await?;
+        inner.handle_request(&self.request, self.streaming).await?;
 
         self.update_stats(&mut inner);
 
@@ -685,8 +702,8 @@ impl Client {
     ///
     /// This ensures we don't check out a connection from the pool until the client
     /// sent a complete request.
-    async fn buffer(&mut self, state: &State) -> Result<BufferEvent, Error> {
-        self.request_buffer.clear();
+    async fn buffer_request(&mut self, state: &State) -> Result<BufferEvent, Error> {
+        self.request.clear();
 
         // Only start timer once we receive the first message.
         let mut timer = None;
@@ -699,10 +716,8 @@ impl Client {
         self.timeouts = Timeouts::from_config(&config.config.general);
         self.cross_shard_disabled = config.config.general.cross_shard_disabled;
 
-        while !self.request_buffer.full() {
-            let idle_timeout = self
-                .timeouts
-                .client_idle_timeout(state, &self.request_buffer);
+        while !self.request.full() {
+            let idle_timeout = self.timeouts.client_idle_timeout(state, &self.request);
 
             let message =
                 match timeout(idle_timeout, self.stream.read_buf(&mut self.stream_buffer)).await {
@@ -728,10 +743,10 @@ impl Client {
             } else {
                 let message = ProtocolMessage::from_bytes(message.to_bytes()?)?;
                 if message.extended() && self.prepared_statements.enabled {
-                    self.request_buffer
+                    self.request
                         .push(self.prepared_statements.maybe_rewrite(message)?);
                 } else {
-                    self.request_buffer.push(message);
+                    self.request.push(message);
                 }
             }
         }
@@ -740,16 +755,7 @@ impl Client {
             debug!(
                 "request buffered [{:.4}ms] {:?}",
                 timer.unwrap().elapsed().as_secs_f64() * 1000.0,
-                self.request_buffer
-                    .iter()
-                    .map(|m| m.code())
-                    .collect::<Vec<_>>(),
-            );
-        } else {
-            trace!(
-                "request buffered [{:.4}ms]\n{:#?}",
-                timer.unwrap().elapsed().as_secs_f64() * 1000.0,
-                self.request_buffer,
+                self.request.iter().map(|m| m.code()).collect::<Vec<_>>(),
             );
         }
 

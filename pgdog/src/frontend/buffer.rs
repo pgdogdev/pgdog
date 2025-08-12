@@ -1,6 +1,7 @@
 //! Message buffer.
 
 use crate::{
+    frontend::router::{parser::Shard, Route},
     net::{
         messages::{parse::Parse, Bind, CopyData, Protocol, Query},
         Error, ProtocolMessage,
@@ -13,11 +14,12 @@ use super::PreparedStatements;
 
 /// Message buffer.
 #[derive(Debug, Clone)]
-pub struct Buffer {
+pub struct ClientRequest {
     buffer: Vec<ProtocolMessage>,
+    route: Route,
 }
 
-impl MemoryUsage for Buffer {
+impl MemoryUsage for ClientRequest {
     #[inline]
     fn memory_usage(&self) -> usize {
         // ProtocolMessage uses memory allocated by BytesMut (mostly).
@@ -25,18 +27,29 @@ impl MemoryUsage for Buffer {
     }
 }
 
-impl Default for Buffer {
+impl Default for ClientRequest {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl Buffer {
+impl ClientRequest {
     /// Create new buffer.
     pub fn new() -> Self {
         Self {
             buffer: Vec::with_capacity(5),
+            route: Route::write(Shard::All),
         }
+    }
+
+    /// Set the shard on the buffer.
+    pub fn set_route(&mut self, route: &Route) {
+        self.route = route.clone();
+    }
+
+    /// Shard getter.
+    pub fn route(&self) -> &Route {
+        &self.route
     }
 
     /// The buffer is full and the client won't send any more messages
@@ -128,7 +141,10 @@ impl Buffer {
     pub fn without_copy_data(&self) -> Self {
         let mut buffer = self.buffer.clone();
         buffer.retain(|m| m.code() != 'd');
-        Self { buffer }
+        Self {
+            buffer,
+            route: Route::default(),
+        }
     }
 
     /// The buffer has COPY messages.
@@ -158,19 +174,22 @@ impl Buffer {
     }
 }
 
-impl From<Buffer> for Vec<ProtocolMessage> {
-    fn from(val: Buffer) -> Self {
+impl From<ClientRequest> for Vec<ProtocolMessage> {
+    fn from(val: ClientRequest) -> Self {
         val.buffer
     }
 }
 
-impl From<Vec<ProtocolMessage>> for Buffer {
+impl From<Vec<ProtocolMessage>> for ClientRequest {
     fn from(value: Vec<ProtocolMessage>) -> Self {
-        Buffer { buffer: value }
+        ClientRequest {
+            buffer: value,
+            route: Route::default(),
+        }
     }
 }
 
-impl Deref for Buffer {
+impl Deref for ClientRequest {
     type Target = Vec<ProtocolMessage>;
 
     fn deref(&self) -> &Self::Target {
@@ -178,7 +197,7 @@ impl Deref for Buffer {
     }
 }
 
-impl DerefMut for Buffer {
+impl DerefMut for ClientRequest {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.buffer
     }

@@ -73,7 +73,7 @@ impl<'a> Engine<'a> {
 #[cfg(test)]
 mod test {
     use crate::{
-        frontend::{Buffer, PreparedStatements},
+        frontend::{ClientRequest, PreparedStatements},
         net::{Parameters, Parse, Sync},
     };
 
@@ -87,7 +87,7 @@ mod test {
 
         assert_eq!(prepared.local.len(), 1);
         let params = Parameters::default();
-        let buf = Buffer::from(vec![
+        let buf = ClientRequest::from(vec![
             Close::named("test").into(),
             Parse::named("whatever", "SELECT $2").into(),
             Sync.into(),

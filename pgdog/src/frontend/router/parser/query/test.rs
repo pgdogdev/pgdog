@@ -6,7 +6,7 @@ use crate::net::{
 use super::{super::Shard, *};
 use crate::backend::Cluster;
 use crate::config::ReadWriteStrategy;
-use crate::frontend::{Buffer, PreparedStatements, RouterContext};
+use crate::frontend::{ClientRequest, PreparedStatements, RouterContext};
 use crate::net::messages::Query;
 use crate::net::Parameters;
 
@@ -14,7 +14,7 @@ macro_rules! command {
     ($query:expr) => {{
         let query = $query;
         let mut query_parser = QueryParser::default();
-        let buffer = Buffer::from(vec![Query::new(query).into()]);
+        let buffer = ClientRequest::from(vec![Query::new(query).into()]);
         let cluster = Cluster::new_test();
         let mut stmt = PreparedStatements::default();
         let params = Parameters::default();
@@ -43,7 +43,7 @@ macro_rules! query_parser {
         let cluster = $cluster;
         let mut prep_stmts = PreparedStatements::default();
         let params = Parameters::default();
-        let buffer: Buffer = vec![$query.into()].into();
+        let buffer: ClientRequest = vec![$query.into()].into();
         let router_context =
             RouterContext::new(&buffer, &cluster, &mut prep_stmts, &params, $in_transaction)
                 .unwrap();
@@ -73,7 +73,7 @@ macro_rules! parse {
         let route = QueryParser::default()
             .parse(
                 RouterContext::new(
-                    &Buffer::from(vec![parse.into(), bind.into()]),
+                    &ClientRequest::from(vec![parse.into(), bind.into()]),
                     &Cluster::new_test(),
                     &mut PreparedStatements::default(),
                     &Parameters::default(),
@@ -237,7 +237,7 @@ fn test_set() {
         _ => panic!("search path"),
     }
 
-    let buffer: Buffer = vec![Query::new(r#"SET statement_timeout TO 1"#).into()].into();
+    let buffer: ClientRequest = vec![Query::new(r#"SET statement_timeout TO 1"#).into()].into();
     let cluster = Cluster::new_test();
     let mut prep_stmts = PreparedStatements::default();
     let params = Parameters::default();
@@ -359,7 +359,7 @@ fn test_function_begin() {
     let cluster = Cluster::new_test();
     let mut prep_stmts = PreparedStatements::default();
     let params = Parameters::default();
-    let buffer: Buffer = vec![Query::new(
+    let buffer: ClientRequest = vec![Query::new(
         "SELECT
 	ROW(t1.*) AS tt1,
 	ROW(t2.*) AS tt2
@@ -430,7 +430,7 @@ fn test_close_direct_one_shard() {
     let cluster = Cluster::new_test_single_shard();
     let mut qp = QueryParser::default();
 
-    let buf: Buffer = vec![Close::named("test").into(), Sync.into()].into();
+    let buf: ClientRequest = vec![Close::named("test").into(), Sync.into()].into();
     let mut pp = PreparedStatements::default();
     let params = Parameters::default();
 

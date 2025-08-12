@@ -113,20 +113,46 @@ impl Binding {
     }
 
     /// Send an entire buffer of messages to the servers(s).
-    pub async fn send(&mut self, messages: &crate::frontend::Buffer) -> Result<(), Error> {
+    pub async fn send(&mut self, request: &crate::frontend::ClientRequest) -> Result<(), Error> {
         match self {
             Binding::Server(server) => {
                 if let Some(server) = server {
-                    server.send(messages).await
+                    server.send(request).await
                 } else {
                     Err(Error::NotConnected)
                 }
             }
 
-            Binding::Admin(backend) => Ok(backend.send(messages).await?),
-            Binding::MultiShard(servers, _state) => {
-                for server in servers.iter_mut() {
-                    server.send(messages).await?;
+            Binding::Admin(backend) => Ok(backend.send(request).await?),
+            Binding::MultiShard(servers, state) => {
+                let route = request.route();
+                match route.shard() {
+                    Shard::All => {
+                        state.set_state(servers.len(), route);
+
+                        for server in servers.iter_mut() {
+                            server.send(request).await?;
+                        }
+                    }
+
+                    Shard::Multi(shards) => {
+                        let mut num_shards = 0;
+                        for (number, server) in servers.iter_mut().enumerate() {
+                            if shards.contains(&number) {
+                                server.send(request).await?;
+                                num_shards += 1;
+                            }
+                        }
+                        state.set_state(num_shards, route);
+                    }
+
+                    Shard::Direct(shard) => {
+                        state.set_state(1, route);
+
+                        if let Some(server) = servers.get_mut(*shard) {
+                            server.send(request).await?;
+                        }
+                    }
                 }
 
                 Ok(())
