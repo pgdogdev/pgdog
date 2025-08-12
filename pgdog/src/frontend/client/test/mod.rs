@@ -445,6 +445,29 @@ async fn test_lock_session() {
 async fn test_transaction_state() {
     let (mut conn, mut client, mut inner) = new_client!(true);
 
+    println!("");
+    println!("");
+    println!("");
+    println!("");
+    println!("");
+    println!("");
+    println!("");
+    println!("");
+    println!("");
+    println!("");
+    println!("");
+    println!("");
+    println!("");
+    println!("");
+    println!("");
+    println!("");
+    println!("");
+    println!("");
+    println!("");
+    println!("");
+    println!("");
+    println!("");
+
     conn.write_all(&buffer!({ Query::new("BEGIN") }))
         .await
         .unwrap();
@@ -496,7 +519,6 @@ async fn test_transaction_state() {
     .await
     .unwrap();
 
-    assert!(!inner.router.routed());
     client.buffer(&State::Idle).await.unwrap();
     client.client_messages(inner.get()).await.unwrap();
     assert!(inner.router.routed());
@@ -504,26 +526,19 @@ async fn test_transaction_state() {
     for c in ['2', 'D', 'C', 'Z'] {
         let msg = inner.backend.read().await.unwrap();
         assert_eq!(msg.code(), c);
-
-        println!("Before: {}: routed?{}", c, inner.router.routed());
-
         client.server_message(&mut inner.get(), msg).await.unwrap();
-
-        println!("After:  {}: routed? {}", c, inner.router.routed());
     }
 
     read!(conn, ['2', 'D', 'C', 'Z']);
 
-    // assert!(inner.router.routed());
-    // assert!(client.in_transaction());
+    assert!(client.in_transaction());
     assert!(inner.router.route().is_write());
-    println!("1.");
 
     conn.write_all(&buffer!({ Query::new("COMMIT") }))
         .await
         .unwrap();
 
-    println!("2.");
+    assert!(client.in_transaction());
 
     client.buffer(&State::Idle).await.unwrap();
 
@@ -536,6 +551,7 @@ async fn test_transaction_state() {
     for c in ['C', 'Z'] {
         println!("3.1");
         let msg = inner.backend.read().await.unwrap();
+        println!("mssage: {:?}", &msg);
         assert_eq!(msg.code(), c);
 
         println!("3.2");

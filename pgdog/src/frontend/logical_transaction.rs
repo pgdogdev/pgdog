@@ -37,6 +37,7 @@ use super::router::parser::Shard;
 #[derive(Debug)]
 pub struct LogicalTransaction {
     pub status: TransactionStatus,
+    begin_dispatched: bool,
     manual_shard: Option<Shard>,
     dirty_shard: Option<Shard>,
 }
@@ -45,6 +46,7 @@ impl LogicalTransaction {
     pub fn new() -> Self {
         Self {
             status: TransactionStatus::Idle,
+            begin_dispatched: false,
             manual_shard: None,
             dirty_shard: None,
         }
@@ -164,10 +166,19 @@ impl LogicalTransaction {
     /// Sets status to `Idle`, clears manual and dirty shard
     /// Safe to call in any state.
     pub fn reset(&mut self) {
-        println!("RESET");
         self.status = TransactionStatus::Idle;
         self.manual_shard = None;
         self.dirty_shard = None;
+        self.begin_dispatched = false;
+    }
+
+    /// TODO
+    pub fn record_begin(&mut self) {
+        self.begin_dispatched = true;
+    }
+
+    pub fn should_trigger_begin(&self) -> bool {
+        self.in_transaction() && !self.begin_dispatched
     }
 
     /// Pin the transaction to a specific shard.

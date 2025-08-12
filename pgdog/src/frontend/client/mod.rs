@@ -5,6 +5,7 @@ use std::time::Instant;
 
 use bytes::BytesMut;
 use engine::EngineContext;
+use pg_query::protobuf::PartitionElem;
 use smallvec::SmallVec;
 use timeouts::Timeouts;
 use tokio::time::timeout;
@@ -373,9 +374,19 @@ impl Client {
 
     /// Handle client messages.
     async fn client_messages(&mut self, mut inner: InnerBorrow<'_>) -> Result<bool, Error> {
-        println!("");
-        println!("");
-        println!("Starting Inner.router.route: {}", inner.router.route());
+        // We don't start a transaction on the servers until a client is actually executing something.
+        // This prevents us holding open connections to multiple servers
+        if self.should_trigger_buffered_begin() {
+            println!("");
+            println!("****************************************");
+            println!("****************************************");
+            println!("****************************************");
+            println!("****************************************");
+            println!("****************************************");
+            println!("");
+            inner.backend.begin().await?;
+            self.logical_transaction.record_begin();
+        }
 
         inner
             .stats
@@ -439,6 +450,14 @@ impl Client {
             }
         };
 
+        println!("");
+        println!("COMMAND: {:?}", command);
+        println!("-- connected? {}", connected);
+
+        // AAAAAAA
+        // I decided that transactions keep the connection open. which makes total sense.
+        // how can we release a transaction to the connection pool and have it be reused by another client?
+
         if !connected {
             // Simulate transaction starting
             // until client sends an actual query.
@@ -450,6 +469,13 @@ impl Client {
             //    to a shard.
             //
             match command {
+                Some(Command::CommitTransaction) => {
+                    println!("HELLOOOOOOOO?");
+                    self.end_transaction(false).await?;
+
+                    inner.done(self.in_transaction());
+                    return Ok(false);
+                }
                 Some(Command::StartTransaction(query)) => {
                     if let BufferedQuery::Query(_) = query {
                         self.start_transaction().await?;
@@ -460,12 +486,6 @@ impl Client {
                 }
                 Some(Command::RollbackTransaction) => {
                     self.end_transaction(true).await?;
-
-                    inner.done(self.in_transaction());
-                    return Ok(false);
-                }
-                Some(Command::CommitTransaction) => {
-                    self.end_transaction(false).await?;
 
                     inner.done(self.in_transaction());
                     return Ok(false);
@@ -499,8 +519,6 @@ impl Client {
 
                 Some(Command::Query(route)) => {
                     if self.in_transaction() {
-                        println!("I am in a transaction!");
-                        println!("shard: {}", route.shard().clone());
                         let shard = route.shard().clone();
                         self.logical_transaction.execute_query(shard)?;
                     }
@@ -580,14 +598,6 @@ impl Client {
 
         println!("Inner.router.route: {}", inner.router.route());
 
-        // We don't start a transaction on the servers until
-        // a client is actually executing something.
-        //
-        // This prevents us holding open connections to multiple servers
-        if self.should_trigger_buffered_begin() {
-            inner.backend.begin().await?;
-        }
-
         for msg in self.request_buffer.iter() {
             if let ProtocolMessage::Bind(bind) = msg {
                 inner.backend.bind(bind)?
@@ -635,6 +645,11 @@ impl Client {
         let message = message.backend();
         let has_more_messages = inner.backend.has_more_messages();
 
+        println!("");
+        println!("");
+        println!("");
+        println!("BACKKEND: \n{:?}", message);
+
         // Messages that we need to send to the client immediately.
         // ReadyForQuery (B) | CopyInResponse (B) | ErrorResponse(B) | NoticeResponse(B) | NotificationResponse (B)
         let flush = matches!(code, 'Z' | 'G' | 'E' | 'N' | 'A')
@@ -658,19 +673,20 @@ impl Client {
 
         inner.stats.sent(message.len());
 
-        println!("server_message: 1");
-
         // Release the connection back into the pool
         // before flushing data to client.
         // Flushing can take a minute and we don't want to block
         // the connection from being reused.
         if inner.backend.done() {
-            let changed_params = inner.backend.changed_params();
-            if inner.transaction_mode() && !self.replication_mode {
+            if inner.transaction_mode() && !self.replication_mode && !self.in_transaction() {
                 inner.disconnect();
             }
+
+            let changed_params = inner.backend.changed_params();
+
             inner.stats.transaction();
             inner.reset_router();
+
             debug!(
                 "transaction finished [{:.3}ms]",
                 inner.stats.last_transaction_time.as_secs_f64() * 1000.0
@@ -695,11 +711,8 @@ impl Client {
 
         // Pooler is offline or the client requested to disconnect and the transaction is done.
         if inner.backend.done() && (inner.comms.offline() || self.shutdown) && !self.admin {
-            println!("i am exiting");
             return Ok(true);
         }
-
-        println!("i am exiting");
 
         Ok(false)
     }
@@ -812,6 +825,7 @@ impl Client {
     /// This avoids connecting to servers when clients start and commit transactions
     /// with no queries.
     async fn end_transaction(&mut self, rollback: bool) -> Result<(), Error> {
+        println!("ENDING??? ---");
         // stack‐allocate up to 3 messages: NOTICE + COMMIT/ROLLBACK + READY
         let mut messages: SmallVec<[Message; 3]> = SmallVec::new();
 
@@ -820,6 +834,8 @@ impl Client {
         } else {
             self.logical_transaction.commit()
         };
+
+        println!("ENDING --- {:?}", logical_result);
 
         match logical_result {
             Err(TransactionError::ExpectedActive) => {
@@ -882,7 +898,23 @@ impl Client {
     }
 
     fn should_trigger_buffered_begin(&self) -> bool {
-        self.request_buffer.executable() && !self.in_transaction()
+        let executable = self.request_buffer.executable();
+        let should_trigger_begin = self.logical_transaction.should_trigger_begin();
+
+        println!("");
+        println!("");
+        println!("");
+        println!("");
+        println!("");
+        println!("");
+        println!("buffer: {:?}", self.request_buffer);
+        println!("");
+        println!(
+            "Executable: {}, should_trigger_begin: {}",
+            executable, should_trigger_begin
+        );
+
+        executable && should_trigger_begin
     }
 }
 

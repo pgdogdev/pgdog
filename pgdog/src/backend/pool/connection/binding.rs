@@ -71,6 +71,7 @@ impl Binding {
 
             Binding::Admin(backend) => Ok(backend.read().await?),
             Binding::MultiShard(shards, state) => {
+                println!("2.1");
                 if shards.is_empty() {
                     loop {
                         debug!("multi-shard binding suspended");
