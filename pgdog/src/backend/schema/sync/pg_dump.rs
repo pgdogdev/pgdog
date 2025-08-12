@@ -181,16 +181,22 @@ pub enum Statement<'a> {
         sequence: Table<'a>,
         sql: &'a str,
     },
+
+    SequenceSetMax {
+        sequence: Table<'a>,
+        sql: String,
+    },
 }
 
 impl<'a> Deref for Statement<'a> {
-    type Target = &'a str;
+    type Target = str;
     fn deref(&self) -> &Self::Target {
         match self {
-            Self::Index { sql, .. } => sql,
-            Self::Table { sql, .. } => sql,
-            Self::SequenceOwner { sql, .. } => sql,
-            Self::Other { sql } => sql,
+            Self::Index { sql, .. } => *sql,
+            Self::Table { sql, .. } => *sql,
+            Self::SequenceOwner { sql, .. } => *sql,
+            Self::Other { sql } => *sql,
+            Self::SequenceSetMax { sql, .. } => sql.as_str(),
         }
     }
 }
@@ -293,6 +299,15 @@ impl PgDumpOutput {
                                 let column = stmt.options.first().ok_or(Error::MissingEntity)?;
                                 let column =
                                     Column::try_from(column).map_err(|_| Error::MissingEntity)?;
+
+                                let table = column.table().ok_or(Error::MissingEntity)?;
+
+                                let max = format!(
+                                    "SELECT setval('{}', SELECT MAX({}) FROM {}, true)",
+                                    sequence.to_string(),
+                                    column.to_string(),
+                                    table.to_string()
+                                );
 
                                 result.push(Statement::SequenceOwner {
                                     column,

@@ -21,6 +21,7 @@ pub mod prepare;
 pub mod query;
 pub mod rewrite;
 pub mod route;
+pub mod sequence;
 pub mod table;
 pub mod tuple;
 pub mod value;

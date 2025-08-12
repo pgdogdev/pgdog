@@ -96,6 +96,9 @@ impl From<&Statement<'_>> for Item {
             Statement::SequenceOwner { sql, .. } => Item::Other {
                 sql: sql.to_string(),
             },
+            Statement::SequenceSetMax { sql, .. } => Item::Other {
+                sql: sql.to_string(),
+            },
         }
     }
 }

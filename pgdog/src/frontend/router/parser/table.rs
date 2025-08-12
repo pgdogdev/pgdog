@@ -1,6 +1,8 @@
 use std::fmt::Display;
 
-use pg_query::{protobuf::*, NodeEnum};
+use pg_query::{protobuf::RangeVar, Node, NodeEnum};
+
+use crate::util::escape_identifier;
 
 /// Table name in a query.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -14,9 +16,14 @@ pub struct Table<'a> {
 impl Display for Table<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if let Some(schema) = self.schema {
-            write!(f, "\"{}\".\"{}\"", schema, self.name)
+            write!(
+                f,
+                "\"{}\".\"{}\"",
+                escape_identifier(schema),
+                escape_identifier(self.name)
+            )
         } else {
-            write!(f, "\"{}\"", self.name)
+            write!(f, "\"{}\"", escape_identifier(self.name))
         }
     }
 }

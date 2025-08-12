@@ -70,6 +70,11 @@ pub fn random_string(n: usize) -> String {
         .collect()
 }
 
+/// Escape PostgreSQL identifiers by doubling any embedded quotes.
+pub fn escape_identifier(s: &str) -> String {
+    s.replace("\"", "\"\"")
+}
+
 #[cfg(test)]
 mod test {
 
@@ -93,5 +98,17 @@ mod test {
             start,
         );
         let _now = postgres_now();
+    }
+
+    #[test]
+    fn test_escape_identifier() {
+        assert_eq!(escape_identifier("simple"), "simple");
+        assert_eq!(escape_identifier("has\"quote"), "has\"\"quote");
+        assert_eq!(escape_identifier("\"starts_with"), "\"\"starts_with");
+        assert_eq!(escape_identifier("ends_with\""), "ends_with\"\"");
+        assert_eq!(
+            escape_identifier("\"multiple\"quotes\""),
+            "\"\"multiple\"\"quotes\"\""
+        );
     }
 }

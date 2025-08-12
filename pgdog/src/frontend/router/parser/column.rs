@@ -4,6 +4,10 @@ use pg_query::{
     protobuf::{self, String as PgQueryString},
     Node, NodeEnum,
 };
+use std::fmt::{Display, Formatter, Result as FmtResult};
+
+use super::Table;
+use crate::util::escape_identifier;
 
 /// Column name extracted from a query.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -17,6 +21,19 @@ pub struct Column<'a> {
 }
 
 impl<'a> Column<'a> {
+    pub fn table(&self) -> Option<Table<'a>> {
+        if let Some(table) = self.table {
+            Some(Table {
+                name: table,
+                schema: self.schema.clone(),
+            })
+        } else {
+            None
+        }
+    }
+}
+
+impl<'a> Column<'a> {
     pub fn from_string(string: &'a Node) -> Result<Self, ()> {
         match &string.node {
             Some(NodeEnum::String(protobuf::String { sval })) => Ok(Self {
@@ -25,6 +42,33 @@ impl<'a> Column<'a> {
             }),
 
             _ => Err(()),
+        }
+    }
+}
+
+impl<'a> Display for Column<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        match (self.schema, self.table) {
+            (Some(schema), Some(table)) => {
+                write!(
+                    f,
+                    "\"{}\".\"{}\".\"{}\"",
+                    escape_identifier(schema),
+                    escape_identifier(table),
+                    escape_identifier(self.name)
+                )
+            }
+            (None, Some(table)) => {
+                write!(
+                    f,
+                    "\"{}\".\"{}\"",
+                    escape_identifier(table),
+                    escape_identifier(self.name)
+                )
+            }
+            _ => {
+                write!(f, "\"{}\"", escape_identifier(self.name))
+            }
         }
     }
 }
