@@ -25,7 +25,6 @@ impl QueryParser {
                 TransactionStmtKind::TransStmtCommit => return Ok(Command::CommitTransaction),
                 TransactionStmtKind::TransStmtRollback => return Ok(Command::RollbackTransaction),
                 TransactionStmtKind::TransStmtBegin | TransactionStmtKind::TransStmtStart => {
-                    self.in_transaction = true;
                     return Ok(Command::StartTransaction(context.query()?.clone()));
                 }
                 _ => Ok(Command::Query(Route::write(None))),

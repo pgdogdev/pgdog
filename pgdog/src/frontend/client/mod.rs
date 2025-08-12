@@ -5,12 +5,16 @@ use std::time::Instant;
 
 use bytes::BytesMut;
 use engine::EngineContext;
+use pg_query::protobuf::PartitionElem;
+use smallvec::SmallVec;
 use timeouts::Timeouts;
 use tokio::time::timeout;
 use tokio::{select, spawn};
 use tracing::{debug, enabled, error, info, trace, Level as LogLevel};
 
+use super::logical_transaction::{LogicalTransaction, TransactionError, TransactionStatus};
 use super::{Buffer, Command, Comms, Error, PreparedStatements};
+
 use crate::auth::{md5, scram::Server};
 use crate::backend::{
     databases,
@@ -51,7 +55,7 @@ pub struct Client {
     streaming: bool,
     shutdown: bool,
     prepared_statements: PreparedStatements,
-    in_transaction: bool,
+    logical_transaction: LogicalTransaction,
     timeouts: Timeouts,
     request_buffer: Buffer,
     stream_buffer: BytesMut,
@@ -236,7 +240,7 @@ impl Client {
             replication_mode,
             connect_params: params,
             prepared_statements: PreparedStatements::new(),
-            in_transaction: false,
+            logical_transaction: LogicalTransaction::new(),
             timeouts: Timeouts::from_config(&config.config.general),
             request_buffer: Buffer::new(),
             stream_buffer: BytesMut::new(),
@@ -277,7 +281,7 @@ impl Client {
             connect_params: connect_params.clone(),
             params: connect_params,
             admin: false,
-            in_transaction: false,
+            logical_transaction: LogicalTransaction::new(),
             timeouts: Timeouts::from_config(&config().config.general),
             request_buffer: Buffer::new(),
             stream_buffer: BytesMut::new(),
@@ -309,15 +313,17 @@ impl Client {
 
     /// Run the client.
     async fn run(&mut self) -> Result<(), Error> {
+        println!("1");
         let mut inner = Inner::new(self)?;
         let shutdown = self.comms.shutting_down();
+        println!("2");
 
         loop {
             let query_timeout = self.timeouts.query_timeout(&inner.stats.state);
 
             select! {
                 _ = shutdown.notified() => {
-                    if !inner.backend.connected() && inner.start_transaction.is_none() {
+                    if !inner.backend.connected() && !self.in_transaction() {
                         break;
                     }
                 }
@@ -368,6 +374,20 @@ impl Client {
 
     /// Handle client messages.
     async fn client_messages(&mut self, mut inner: InnerBorrow<'_>) -> Result<bool, Error> {
+        // We don't start a transaction on the servers until a client is actually executing something.
+        // This prevents us holding open connections to multiple servers
+        if self.should_trigger_buffered_begin() {
+            println!("");
+            println!("****************************************");
+            println!("****************************************");
+            println!("****************************************");
+            println!("****************************************");
+            println!("****************************************");
+            println!("");
+            inner.backend.begin().await?;
+            self.logical_transaction.record_begin();
+        }
+
         inner
             .stats
             .received(self.request_buffer.total_message_len());
@@ -378,7 +398,7 @@ impl Client {
                 "{} [{}] (in transaction: {})",
                 query.query(),
                 self.addr,
-                self.in_transaction
+                self.in_transaction()
             );
             QueryLogger::new(&self.request_buffer).log().await?;
         }
@@ -393,7 +413,7 @@ impl Client {
         match engine.execute().await? {
             Action::Intercept(msgs) => {
                 self.stream.send_many(&msgs).await?;
-                inner.done(self.in_transaction);
+                inner.done(self.in_transaction());
                 self.update_stats(&mut inner);
                 return Ok(false);
             }
@@ -407,28 +427,36 @@ impl Client {
             &mut self.request_buffer,
             &mut self.prepared_statements,
             &self.params,
-            self.in_transaction,
+            &self.logical_transaction,
         ) {
             Ok(command) => command,
             Err(err) => {
                 if err.empty_query() {
                     self.stream.send(&EmptyQueryResponse).await?;
                     self.stream
-                        .send_flush(&ReadyForQuery::in_transaction(self.in_transaction))
+                        .send_flush(&ReadyForQuery::in_transaction(self.in_transaction()))
                         .await?;
                 } else {
                     error!("{:?} [{}]", err, self.addr);
                     self.stream
                         .error(
                             ErrorResponse::syntax(err.to_string().as_str()),
-                            self.in_transaction,
+                            self.in_transaction(),
                         )
                         .await?;
                 }
-                inner.done(self.in_transaction);
+                inner.done(self.in_transaction());
                 return Ok(false);
             }
         };
+
+        println!("");
+        println!("COMMAND: {:?}", command);
+        println!("-- connected? {}", connected);
+
+        // AAAAAAA
+        // I decided that transactions keep the connection open. which makes total sense.
+        // how can we release a transaction to the connection pool and have it be reused by another client?
 
         if !connected {
             // Simulate transaction starting
@@ -441,27 +469,25 @@ impl Client {
             //    to a shard.
             //
             match command {
+                Some(Command::CommitTransaction) => {
+                    println!("HELLOOOOOOOO?");
+                    self.end_transaction(false).await?;
+
+                    inner.done(self.in_transaction());
+                    return Ok(false);
+                }
                 Some(Command::StartTransaction(query)) => {
                     if let BufferedQuery::Query(_) = query {
                         self.start_transaction().await?;
-                        inner.start_transaction = Some(query.clone());
-                        self.in_transaction = true;
-                        inner.done(self.in_transaction);
+
+                        inner.done(self.in_transaction());
                         return Ok(false);
                     }
                 }
                 Some(Command::RollbackTransaction) => {
-                    inner.start_transaction = None;
                     self.end_transaction(true).await?;
-                    self.in_transaction = false;
-                    inner.done(self.in_transaction);
-                    return Ok(false);
-                }
-                Some(Command::CommitTransaction) => {
-                    inner.start_transaction = None;
-                    self.end_transaction(false).await?;
-                    self.in_transaction = false;
-                    inner.done(self.in_transaction);
+
+                    inner.done(self.in_transaction());
                     return Ok(false);
                 }
                 // How many shards are configured.
@@ -470,11 +496,13 @@ impl Client {
                     let mut dr = DataRow::new();
                     dr.add(*shards as i64);
                     let cc = CommandComplete::from_str("SHOW");
-                    let rfq = ReadyForQuery::in_transaction(self.in_transaction);
+                    let rfq = ReadyForQuery::in_transaction(self.in_transaction());
+
                     self.stream
                         .send_many(&[rd.message()?, dr.message()?, cc.message()?, rfq.message()?])
                         .await?;
-                    inner.done(self.in_transaction);
+
+                    inner.done(self.in_transaction());
                     return Ok(false);
                 }
                 Some(Command::Deallocate) => {
@@ -489,12 +517,20 @@ impl Client {
                     return Ok(false);
                 }
 
-                Some(Command::Query(query)) => {
-                    if query.is_cross_shard() && self.cross_shard_disabled {
+                Some(Command::Query(route)) => {
+                    if self.in_transaction() {
+                        let shard = route.shard().clone();
+                        self.logical_transaction.execute_query(shard)?;
+                    }
+
+                    if route.is_cross_shard() && self.cross_shard_disabled {
                         self.stream
-                            .error(ErrorResponse::cross_shard_disabled(), self.in_transaction)
+                            .error(
+                                ErrorResponse::cross_shard_disabled(),
+                                self.logical_transaction.in_transaction(),
+                            )
                             .await?;
-                        inner.done(self.in_transaction);
+                        inner.done(self.in_transaction());
                         inner.reset_router();
                         return Ok(false);
                     }
@@ -546,12 +582,12 @@ impl Client {
                     if err.no_server() {
                         error!("{} [{}]", err, self.addr);
                         self.stream
-                            .error(ErrorResponse::from_err(&err), self.in_transaction)
+                            .error(ErrorResponse::from_err(&err), self.in_transaction())
                             .await?;
                         // TODO: should this be wrapped in a method?
                         inner.disconnect();
                         inner.reset_router();
-                        inner.done(self.in_transaction);
+                        inner.done(self.in_transaction());
                         return Ok(false);
                     } else {
                         return Err(err.into());
@@ -560,15 +596,7 @@ impl Client {
             };
         }
 
-        // We don't start a transaction on the servers until
-        // a client is actually executing something.
-        //
-        // This prevents us holding open connections to multiple servers
-        if self.request_buffer.executable() {
-            if let Some(query) = inner.start_transaction.take() {
-                inner.backend.execute(&query).await?;
-            }
-        }
+        println!("Inner.router.route: {}", inner.router.route());
 
         for msg in self.request_buffer.iter() {
             if let ProtocolMessage::Bind(bind) = msg {
@@ -617,6 +645,11 @@ impl Client {
         let message = message.backend();
         let has_more_messages = inner.backend.has_more_messages();
 
+        println!("");
+        println!("");
+        println!("");
+        println!("BACKKEND: \n{:?}", message);
+
         // Messages that we need to send to the client immediately.
         // ReadyForQuery (B) | CopyInResponse (B) | ErrorResponse(B) | NoticeResponse(B) | NotificationResponse (B)
         let flush = matches!(code, 'Z' | 'G' | 'E' | 'N' | 'A')
@@ -627,13 +660,13 @@ impl Client {
         // ReadyForQuery (B)
         if code == 'Z' {
             inner.stats.query();
-            // In transaction if buffered BEGIN from client
-            // or server is telling us we are.
-            self.in_transaction = message.in_transaction() || inner.start_transaction.is_some();
-            inner.stats.idle(self.in_transaction);
+
+            // In transaction if buffered BEGIN from client or server is telling us we are.
+            let in_transaction = message.in_transaction() || self.in_transaction();
+            inner.stats.idle(in_transaction);
 
             // Flush mirrors.
-            if !self.in_transaction {
+            if !in_transaction {
                 inner.backend.mirror_flush();
             }
         }
@@ -645,12 +678,15 @@ impl Client {
         // Flushing can take a minute and we don't want to block
         // the connection from being reused.
         if inner.backend.done() {
-            let changed_params = inner.backend.changed_params();
-            if inner.transaction_mode() && !self.replication_mode {
+            if inner.transaction_mode() && !self.replication_mode && !self.in_transaction() {
                 inner.disconnect();
             }
+
+            let changed_params = inner.backend.changed_params();
+
             inner.stats.transaction();
             inner.reset_router();
+
             debug!(
                 "transaction finished [{:.3}ms]",
                 inner.stats.last_transaction_time.as_secs_f64() * 1000.0
@@ -758,13 +794,29 @@ impl Client {
 
     /// Tell the client we started a transaction.
     async fn start_transaction(&mut self) -> Result<(), Error> {
-        self.stream
-            .send_many(&[
-                CommandComplete::new_begin().message()?.backend(),
-                ReadyForQuery::in_transaction(true).message()?,
-            ])
-            .await?;
+        // stack‐allocate up to 3 messages: optional NOTICE + BEGIN + Ready
+        let mut messages: SmallVec<[Message; 3]> = SmallVec::new();
+
+        match self.logical_transaction.soft_begin() {
+            Err(TransactionError::ExpectedActive) => {
+                let notice = NoticeResponse::from(ErrorResponse::already_in_transaction())
+                    .message()?
+                    .backend();
+
+                messages.push(notice);
+            }
+            Err(e) => return Err(e.into()), // any other error is fatal
+            Ok(()) => {}
+        }
+
+        // push the BEGIN + in-transaction ready
+        messages.push(CommandComplete::new_begin().message()?.backend());
+        messages.push(ReadyForQuery::in_transaction(true).message()?);
+
+        // send all messages
+        self.stream.send_many(&messages).await?;
         debug!("transaction started");
+
         Ok(())
     }
 
@@ -773,18 +825,38 @@ impl Client {
     /// This avoids connecting to servers when clients start and commit transactions
     /// with no queries.
     async fn end_transaction(&mut self, rollback: bool) -> Result<(), Error> {
+        println!("ENDING??? ---");
+        // stack‐allocate up to 3 messages: NOTICE + COMMIT/ROLLBACK + READY
+        let mut messages: SmallVec<[Message; 3]> = SmallVec::new();
+
+        let logical_result = if rollback {
+            self.logical_transaction.rollback()
+        } else {
+            self.logical_transaction.commit()
+        };
+
+        println!("ENDING --- {:?}", logical_result);
+
+        match logical_result {
+            Err(TransactionError::ExpectedActive) => {
+                messages.push(
+                    NoticeResponse::from(ErrorResponse::no_transaction())
+                        .message()?
+                        .backend(),
+                );
+            }
+            Err(e) => return Err(e.into()),
+            Ok(()) => {}
+        }
+
         let cmd = if rollback {
             CommandComplete::new_rollback()
         } else {
             CommandComplete::new_commit()
         };
-        let mut messages = if !self.in_transaction {
-            vec![NoticeResponse::from(ErrorResponse::no_transaction()).message()?]
-        } else {
-            vec![]
-        };
         messages.push(cmd.message()?.backend());
         messages.push(ReadyForQuery::idle().message()?);
+
         self.stream.send_many(&messages).await?;
         debug!("transaction ended");
         Ok(())
@@ -805,10 +877,10 @@ impl Client {
         self.stream
             .send_many(&[
                 CommandComplete::from_str(command).message()?.backend(),
-                ReadyForQuery::in_transaction(self.in_transaction).message()?,
+                ReadyForQuery::in_transaction(self.in_transaction()).message()?,
             ])
             .await?;
-        inner.done(self.in_transaction);
+        inner.done(self.in_transaction());
 
         Ok(())
     }
@@ -818,6 +890,31 @@ impl Client {
             .stats
             .prepared_statements(self.prepared_statements.len_local());
         inner.stats.memory_used(self.memory_usage());
+    }
+
+    fn in_transaction(&self) -> bool {
+        self.logical_transaction.status == TransactionStatus::BeginPending
+            || self.logical_transaction.status == TransactionStatus::InProgress
+    }
+
+    fn should_trigger_buffered_begin(&self) -> bool {
+        let executable = self.request_buffer.executable();
+        let should_trigger_begin = self.logical_transaction.should_trigger_begin();
+
+        println!("");
+        println!("");
+        println!("");
+        println!("");
+        println!("");
+        println!("");
+        println!("buffer: {:?}", self.request_buffer);
+        println!("");
+        println!(
+            "Executable: {}, should_trigger_begin: {}",
+            executable, should_trigger_begin
+        );
+
+        executable && should_trigger_begin
     }
 }
 

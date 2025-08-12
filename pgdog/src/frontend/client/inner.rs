@@ -6,8 +6,8 @@ use crate::{
         Error as BackendError,
     },
     frontend::{
-        buffer::BufferedQuery, router::Error as RouterError, Buffer, Command, Comms,
-        PreparedStatements, Router, RouterContext, Stats,
+        logical_transaction::LogicalTransaction, router::Error as RouterError, Buffer, Command,
+        Comms, PreparedStatements, Router, RouterContext, Stats,
     },
     net::Parameters,
     state::State,
@@ -29,8 +29,6 @@ pub struct Inner {
     pub(super) router: Router,
     /// Client stats.
     pub(super) stats: Stats,
-    /// Start transaction statement, intercepted by the router.
-    pub(super) start_transaction: Option<BufferedQuery>,
     /// Client-wide comms.
     pub(super) comms: Comms,
 }
@@ -47,7 +45,6 @@ impl Inner {
             backend,
             router,
             stats: Stats::new(),
-            start_transaction: None,
             comms: client.comms.clone(),
         })
     }
@@ -58,7 +55,7 @@ impl Inner {
         buffer: &mut Buffer,
         prepared_statements: &mut PreparedStatements,
         params: &Parameters,
-        in_transaction: bool,
+        logical_transaction: &LogicalTransaction,
     ) -> Result<Option<&Command>, RouterError> {
         let command = self
             .backend
@@ -71,7 +68,7 @@ impl Inner {
                     cluster,             // Cluster configuration.
                     prepared_statements, // Prepared statements.
                     params,              // Client connection parameters.
-                    in_transaction,      // Client in explcitely started transaction.
+                    logical_transaction, // Client in explcitely started transaction.
                 )?;
                 self.router.query(context)
             })

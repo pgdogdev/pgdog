@@ -60,7 +60,7 @@ impl QueryParser {
             // TODO: Handle SET commands for updating client
             // params without touching the server.
             name => {
-                if !self.in_transaction {
+                if !context.in_transaction() {
                     let mut value = vec![];
 
                     for node in &stmt.args {

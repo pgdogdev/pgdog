@@ -138,6 +138,16 @@ impl ErrorResponse {
             ..Default::default()
         }
     }
+
+    /// Warning for issuing BEGIN inside an existing transaction.
+    pub fn already_in_transaction() -> ErrorResponse {
+        ErrorResponse {
+            severity: "WARNING".into(),
+            code: "25001".into(),
+            message: "there is already a transaction in progress".into(),
+            ..Default::default()
+        }
+    }
 }
 
 impl Display for ErrorResponse {

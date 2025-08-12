@@ -231,10 +231,18 @@ outer:
 }
 
 func prewarm(t *testing.T, pool *pgxpool.Pool) {
+	ctx := context.Background()
 	for range 25 {
-		for _, q := range []string{"BEGIN", "SELECT 1", "COMMIT", "SELECT 1"} {
-			_, err := pool.Exec(context.Background(), q)
-			assert.NoError(t, err)
-		}
+		// transaction `BEGIN; SELECT 1; COMMIT;`
+		tx, err := pool.Begin(ctx)
+		assert.NoError(t, err)
+		_, err = tx.Exec(ctx, "SELECT 1")
+		assert.NoError(t, err)
+		err = tx.Commit(ctx)
+		assert.NoError(t, err)
+
+		// no-transaction `SELECT 1;`
+		_, err = pool.Exec(ctx, "SELECT 1")
+		assert.NoError(t, err)
 	}
 }
