@@ -84,7 +84,7 @@ impl<'a> Sequence<'a> {
         let column_name = format!("\"{}\"", escape_identifier(column.name));
 
         Ok(format!(
-            "SELECT setval('{}', COALESCE((SELECT MAX({}) FROM {}), 1));",
+            "SELECT setval('{}', COALESCE((SELECT MAX({}) FROM {}), 1), true);",
             sequence_name, column_name, table_name
         ))
     }
@@ -124,7 +124,7 @@ mod test {
 
                     assert_eq!(
                         setval_sql,
-                        "SELECT setval('\"public\".\"user_profiles_id_seq\"', COALESCE((SELECT MAX(\"id\") FROM \"public\".\"user_profiles\"), 1));"
+                        "SELECT setval('\"public\".\"user_profiles_id_seq\"', COALESCE((SELECT MAX(\"id\") FROM \"public\".\"user_profiles\"), 1), true);"
                     );
 
                     // Verify the individual components
