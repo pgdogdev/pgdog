@@ -545,11 +545,12 @@ impl Client {
             let request = Request::new(self.id);
 
             // A explicit transaction starts an cross-shard write query.
-            let route = if inner.start_transaction.is_some() {
-                // lazy_static! {
-                //     static ref DEFAULT_ROUTE: Route = Route::write(Shard::All);
-                // }
-                Route::write(Shard::All)
+            let route = if inner.start_transaction.is_some() && inner.is_sharded_cluster()? {
+                if inner.rw_conservative()? && inner.router.route().is_read() {
+                    Route::read(Shard::All)
+                } else {
+                    Route::write(Shard::All)
+                }
             } else {
                 inner.router.route().clone()
             };

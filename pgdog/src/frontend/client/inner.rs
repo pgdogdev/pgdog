@@ -5,6 +5,7 @@ use crate::{
         pool::{Connection, Request},
         Error as BackendError,
     },
+    config::ReadWriteStrategy,
     frontend::{
         buffer::BufferedQuery,
         router::{Error as RouterError, Route},
@@ -166,6 +167,16 @@ impl Inner {
         } else {
             self.stats.state = State::Idle;
         }
+    }
+
+    /// Is the cluster sharded?
+    pub fn is_sharded_cluster(&self) -> Result<bool, Error> {
+        Ok(self.backend.cluster()?.shards().len() > 1)
+    }
+
+    /// Read/write conservative split.
+    pub fn rw_conservative(&self) -> Result<bool, Error> {
+        Ok(self.backend.cluster()?.read_write_strategy() == &ReadWriteStrategy::Conservative)
     }
 
     /// Mutably borrow this,
