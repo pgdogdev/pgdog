@@ -13,6 +13,15 @@ pub struct Table<'a> {
     pub schema: Option<&'a str>,
 }
 
+/// Owned version of Table that owns its string data.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OwnedTable {
+    /// Table name.
+    pub name: String,
+    /// Schema name, if specified.
+    pub schema: Option<String>,
+}
+
 impl Display for Table<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if let Some(schema) = self.schema {
@@ -33,6 +42,47 @@ impl Default for Table<'_> {
         Self {
             name: "",
             schema: None,
+        }
+    }
+}
+
+impl<'a> Table<'a> {
+    /// Convert this borrowed Table to an owned OwnedTable
+    pub fn to_owned(&self) -> OwnedTable {
+        OwnedTable::from(*self)
+    }
+}
+
+impl Display for OwnedTable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let borrowed = Table::from(self);
+        borrowed.fmt(f)
+    }
+}
+
+impl Default for OwnedTable {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            schema: None,
+        }
+    }
+}
+
+impl<'a> From<Table<'a>> for OwnedTable {
+    fn from(table: Table<'a>) -> Self {
+        Self {
+            name: table.name.to_owned(),
+            schema: table.schema.map(|s| s.to_owned()),
+        }
+    }
+}
+
+impl<'a> From<&'a OwnedTable> for Table<'a> {
+    fn from(owned: &'a OwnedTable) -> Self {
+        Self {
+            name: &owned.name,
+            schema: owned.schema.as_deref(),
         }
     }
 }

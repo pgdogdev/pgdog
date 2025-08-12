@@ -16,7 +16,7 @@ use crate::{
         Cluster,
     },
     config::config,
-    frontend::router::parser::{Column, Table},
+    frontend::router::parser::{sequence::Sequence, Column, Table},
 };
 
 use tokio::process::Command;
@@ -160,6 +160,7 @@ pub enum SyncState {
     PostData,
 }
 
+#[derive(Debug)]
 pub enum Statement<'a> {
     Index {
         table: Table<'a>,
@@ -178,7 +179,7 @@ pub enum Statement<'a> {
 
     SequenceOwner {
         column: Column<'a>,
-        sequence: Table<'a>,
+        sequence: Sequence<'a>,
         sql: &'a str,
     },
 
@@ -238,7 +239,7 @@ impl PgDumpOutput {
                         }
 
                         NodeEnum::CreateSeqStmt(_) => {
-                            if state == SyncState::PostData {
+                            if state == SyncState::PreData {
                                 // Bring sequences over.
                                 result.push(original.into());
                             }
@@ -296,18 +297,10 @@ impl PgDumpOutput {
                                     .as_ref()
                                     .map(Table::from)
                                     .ok_or(Error::MissingEntity)?;
+                                let sequence = Sequence::from(sequence);
                                 let column = stmt.options.first().ok_or(Error::MissingEntity)?;
                                 let column =
                                     Column::try_from(column).map_err(|_| Error::MissingEntity)?;
-
-                                let table = column.table().ok_or(Error::MissingEntity)?;
-
-                                let max = format!(
-                                    "SELECT setval('{}', SELECT MAX({}) FROM {}, true)",
-                                    sequence.to_string(),
-                                    column.to_string(),
-                                    table.to_string()
-                                );
 
                                 result.push(Statement::SequenceOwner {
                                     column,
@@ -416,7 +409,8 @@ mod test {
         .await
         .unwrap();
 
-        let output = output.statements(SyncState::PreData).unwrap();
+        let output_pre = output.statements(SyncState::PreData).unwrap();
+        let output_post = output.statements(SyncState::PostData).unwrap();
 
         let mut dest = test_server().await;
         dest.execute("DROP SCHEMA IF EXISTS test_pg_dump_execute_dest CASCADE")
@@ -430,7 +424,7 @@ mod test {
             .await
             .unwrap();
 
-        for stmt in output {
+        for stmt in output_pre {
             // Hack around us using the same database as destination.
             // I know, not very elegant.
             let stmt = stmt.replace("pgdog.", "test_pg_dump_execute_dest.");
@@ -443,8 +437,24 @@ mod test {
                 .unwrap();
             assert_eq!(id[0], i + 1); // Sequence has made it over.
 
-            // Unique index has not made it over tho.
+            // Unique index didn't make it over.
         }
+
+        dest.execute("DELETE FROM test_pg_dump_execute_dest.test_pg_dump_execute")
+            .await
+            .unwrap();
+
+        for stmt in output_post {
+            let stmt = stmt.replace("pgdog.", "test_pg_dump_execute_dest.");
+            dest.execute(stmt).await.unwrap();
+        }
+
+        let q = "INSERT INTO test_pg_dump_execute_dest.test_pg_dump_execute VALUES (DEFAULT, 'test@test', NOW()) RETURNING id";
+        assert!(dest.execute(q).await.is_ok());
+        let err = dest.execute(q).await.err().unwrap();
+        assert!(err.to_string().contains(
+            r#"duplicate key value violates unique constraint "test_pg_dump_execute_email_key""#
+        )); // Unique index made it over.
 
         dest.execute("DROP SCHEMA test_pg_dump_execute_dest CASCADE")
             .await

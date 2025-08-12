@@ -20,6 +20,17 @@ pub struct Column<'a> {
     pub schema: Option<&'a str>,
 }
 
+/// Owned version of Column that owns its string data.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct OwnedColumn {
+    /// Column name.
+    pub name: String,
+    /// Table name.
+    pub table: Option<String>,
+    /// Schema name.
+    pub schema: Option<String>,
+}
+
 impl<'a> Column<'a> {
     pub fn table(&self) -> Option<Table<'a>> {
         if let Some(table) = self.table {
@@ -30,6 +41,11 @@ impl<'a> Column<'a> {
         } else {
             None
         }
+    }
+
+    /// Convert this borrowed Column to an owned OwnedColumn
+    pub fn to_owned(&self) -> OwnedColumn {
+        OwnedColumn::from(*self)
     }
 }
 
@@ -69,6 +85,33 @@ impl<'a> Display for Column<'a> {
             _ => {
                 write!(f, "\"{}\"", escape_identifier(self.name))
             }
+        }
+    }
+}
+
+impl Display for OwnedColumn {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        let borrowed = Column::from(self);
+        borrowed.fmt(f)
+    }
+}
+
+impl<'a> From<Column<'a>> for OwnedColumn {
+    fn from(column: Column<'a>) -> Self {
+        Self {
+            name: column.name.to_owned(),
+            table: column.table.map(|s| s.to_owned()),
+            schema: column.schema.map(|s| s.to_owned()),
+        }
+    }
+}
+
+impl<'a> From<&'a OwnedColumn> for Column<'a> {
+    fn from(owned: &'a OwnedColumn) -> Self {
+        Self {
+            name: &owned.name,
+            table: owned.table.as_deref(),
+            schema: owned.schema.as_deref(),
         }
     }
 }
