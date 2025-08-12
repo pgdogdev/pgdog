@@ -658,6 +658,8 @@ impl Client {
 
         inner.stats.sent(message.len());
 
+        println!("server_message: 1");
+
         // Release the connection back into the pool
         // before flushing data to client.
         // Flushing can take a minute and we don't want to block
@@ -693,8 +695,11 @@ impl Client {
 
         // Pooler is offline or the client requested to disconnect and the transaction is done.
         if inner.backend.done() && (inner.comms.offline() || self.shutdown) && !self.admin {
+            println!("i am exiting");
             return Ok(true);
         }
+
+        println!("i am exiting");
 
         Ok(false)
     }
