@@ -25,6 +25,7 @@ use super::{
 };
 
 use std::{
+    collections::HashMap,
     mem::replace,
     ops::{Deref, DerefMut},
     time::Duration,
@@ -88,7 +89,15 @@ impl Connection {
     pub(crate) async fn connect(&mut self, request: &Request, route: &Route) -> Result<(), Error> {
         let connect = match &self.binding {
             Binding::Server(None) => true,
-            Binding::MultiShard(shards, _) => shards.is_empty(),
+            Binding::Server(Some(shard)) => match route.shard() {
+                Shard::Direct(new_shard) => shard.0 != *new_shard,
+                _ => true,
+            },
+            Binding::MultiShard(shards, _) => match route.shard() {
+                Shard::Direct(shard) => shards.contains_key(shard),
+                Shard::All => shards.len() == self.cluster()?.shards().len(),
+                Shard::Multi(multi) => multi.iter().all(|s| shards.contains_key(s)),
+            },
             _ => false,
         };
 
@@ -148,23 +157,46 @@ impl Connection {
 
             match &mut self.binding {
                 Binding::Server(existing) => {
-                    let _ = replace(existing, Some(server));
+                    if let Some(current_conn) = existing.take() {
+                        let shards =
+                            HashMap::from([(current_conn.0, current_conn.1), (*shard, server)]);
+                        self.binding = Binding::MultiShard(shards, MultiShard::new(2, route));
+                    } else {
+                        let _ = replace(existing, Some((*shard, server)));
+                    }
                 }
 
-                Binding::MultiShard(_, _) => {
-                    self.binding = Binding::Server(Some(server));
+                Binding::MultiShard(shards, state) => {
+                    shards.insert(*shard, server);
+                    state.set_state(shards.len(), route);
                 }
 
                 _ => (),
             };
         } else {
-            let mut shards = vec![];
+            let mut shards = match &mut self.binding {
+                Binding::Server(server) => {
+                    if let Some(server) = server.take() {
+                        HashMap::from([(server.0, server.1)])
+                    } else {
+                        HashMap::new()
+                    }
+                }
+
+                Binding::MultiShard(shards, _) => shards.drain().into_iter().collect(),
+                _ => return Ok(()),
+            };
             for (i, shard) in self.cluster()?.shards().iter().enumerate() {
                 if let Shard::Multi(numbers) = route.shard() {
                     if !numbers.contains(&i) {
                         continue;
                     }
-                };
+                }
+
+                if shards.contains_key(&i) {
+                    continue;
+                }
+
                 let mut server = if route.is_read() {
                     shard.replica(request).await?
                 } else {
@@ -175,10 +207,10 @@ impl Connection {
                     server.reset = true;
                 }
 
-                shards.push(server);
+                shards.insert(i, server);
             }
-            let num_shards = shards.len();
 
+            let num_shards = shards.len();
             self.binding = Binding::MultiShard(shards, MultiShard::new(num_shards, route));
         }
 
@@ -361,8 +393,8 @@ impl Connection {
     /// Get connected servers addresses.
     pub(crate) fn addr(&mut self) -> Result<Vec<&Address>, Error> {
         Ok(match self.binding {
-            Binding::Server(Some(ref server)) => vec![server.addr()],
-            Binding::MultiShard(ref servers, _) => servers.iter().map(|s| s.addr()).collect(),
+            Binding::Server(Some(ref server)) => vec![server.1.addr()],
+            Binding::MultiShard(ref servers, _) => servers.values().map(|s| s.addr()).collect(),
             _ => return Err(Error::NotConnected),
         })
     }
@@ -371,9 +403,9 @@ impl Connection {
     #[inline]
     fn server(&mut self) -> Result<&mut Guard, Error> {
         Ok(match self.binding {
-            Binding::Server(ref mut server) => server.as_mut().ok_or(Error::NotConnected)?,
+            Binding::Server(ref mut server) => &mut server.as_mut().ok_or(Error::NotConnected)?.1,
             Binding::MultiShard(ref mut servers, _) => {
-                servers.first_mut().ok_or(Error::NotConnected)?
+                servers.values_mut().next().ok_or(Error::NotConnected)?
             }
             _ => return Err(Error::NotConnected),
         })

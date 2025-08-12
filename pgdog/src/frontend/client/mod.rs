@@ -10,6 +10,7 @@ use timeouts::Timeouts;
 use tokio::time::timeout;
 use tokio::{select, spawn};
 use tracing::{debug, enabled, error, info, trace, Level as LogLevel};
+use transaction::Transaction;
 
 use super::{ClientRequest, Command, Comms, Error, PreparedStatements};
 use crate::auth::{md5, scram::Server};
@@ -19,8 +20,6 @@ use crate::backend::{
 };
 use crate::config::{self, AuthType};
 use crate::frontend::buffer::BufferedQuery;
-use crate::frontend::router::parser::Shard;
-use crate::frontend::router::Route;
 #[cfg(debug_assertions)]
 use crate::frontend::QueryLogger;
 use crate::net::messages::{
@@ -37,6 +36,7 @@ pub mod counter;
 pub mod engine;
 pub mod inner;
 pub mod timeouts;
+pub mod transaction;
 
 pub use engine::Engine;
 use inner::{Inner, InnerBorrow};
@@ -61,6 +61,7 @@ pub struct Client {
     cross_shard_disabled: bool,
     passthrough_password: Option<String>,
     replication_mode: bool,
+    transaction: Transaction,
 }
 
 impl MemoryUsage for Client {
@@ -246,6 +247,7 @@ impl Client {
             shutdown: false,
             cross_shard_disabled: false,
             passthrough_password,
+            transaction: Transaction::default(),
         };
 
         drop(conn);
@@ -288,6 +290,7 @@ impl Client {
             cross_shard_disabled: false,
             passthrough_password: None,
             replication_mode: false,
+            transaction: Transaction::default(),
         }
     }
 
@@ -431,143 +434,114 @@ impl Client {
             }
         };
 
-        // Set routing information on each buffer.
         match command {
             Some(Command::Query(route)) => {
                 self.request.set_route(route);
+                self.transaction.set_route(route);
+
+                // Check if cross-shard transactions are disabled.
+                if route.is_cross_shard() && self.cross_shard_disabled {
+                    self.stream
+                        .error(ErrorResponse::cross_shard_disabled(), self.in_transaction)
+                        .await?;
+                    inner.done(self.transaction.started());
+                    inner.reset_router();
+                    return Ok(false);
+                }
             }
 
             Some(Command::CommitTransaction) => {
-                self.request.set_route(&Route::write(Shard::All));
+                self.request.set_route(self.transaction.transaction_route());
+            }
+
+            Some(Command::Deallocate) => {
+                self.finish_command(&mut inner, "DEALLOCATE").await?;
+                inner.done(self.transaction.started());
+                return Ok(false);
+            }
+
+            Some(Command::StartTransaction(query)) => {
+                if let BufferedQuery::Query(_) = query {
+                    self.start_transaction(query).await?;
+                    inner.done(true);
+                    return Ok(false);
+                }
+            }
+
+            // TODO: Handling session variables requires a lot more work,
+            // e.g. we need to track RESET as well.
+            Some(Command::Set { name, value }) => {
+                if self.transaction.started() {
+                    self.params.insert(name, value.clone());
+                    self.set(inner).await?;
+                    return Ok(false);
+                }
+            }
+
+            Some(Command::RollbackTransaction) => {
+                if self.transaction.started() && connected {
+                    inner.backend.execute("ROLLBACK").await?;
+                }
+                self.end_transaction(true).await?;
+                inner.done(false);
+                return Ok(false);
+            }
+
+            Some(Command::Listen { channel, shard }) => {
+                let channel = channel.clone();
+                let shard = shard.clone();
+                inner.backend.listen(&channel, shard).await?;
+
+                self.finish_command(&mut inner, "LISTEN").await?;
+                return Ok(false);
+            }
+
+            Some(Command::Notify {
+                channel,
+                payload,
+                shard,
+            }) => {
+                let channel = channel.clone();
+                let shard = shard.clone();
+                let payload = payload.clone();
+                inner.backend.notify(&channel, &payload, shard).await?;
+
+                self.finish_command(&mut inner, "NOTIFY").await?;
+                return Ok(false);
+            }
+
+            Some(Command::Unlisten(channel)) => {
+                let channel = channel.clone();
+                inner.backend.unlisten(&channel);
+
+                self.finish_command(&mut inner, "UNLISTEN").await?;
+                return Ok(false);
+            }
+
+            Some(Command::Shards(shards)) => {
+                let rd = RowDescription::new(&[Field::bigint("shards")]);
+                let mut dr = DataRow::new();
+                dr.add(*shards as i64);
+                let cc = CommandComplete::from_str("SHOW");
+                let rfq = ReadyForQuery::in_transaction(self.in_transaction);
+                self.stream
+                    .send_many(&[rd.message()?, dr.message()?, cc.message()?, rfq.message()?])
+                    .await?;
+                inner.done(self.in_transaction);
+                return Ok(false);
             }
 
             _ => (),
         }
 
-        if let Some(Command::Query(route)) = command {
-            self.request.set_route(route);
-        }
-
         trace!("request buffered \n{:#?}", self.request);
 
         if !connected {
-            // Simulate transaction starting
-            // until client sends an actual query.
-            //
-            // This ensures we:
-            //
-            // 1. Don't connect to servers unnecessarily.
-            // 2. Can use the first query sent by the client to route the transaction
-            //    to a shard.
-            //
-            match command {
-                Some(Command::StartTransaction(query)) => {
-                    if let BufferedQuery::Query(_) = query {
-                        self.start_transaction().await?;
-                        inner.start_transaction = Some(query.clone());
-                        self.in_transaction = true;
-                        inner.done(self.in_transaction);
-                        return Ok(false);
-                    }
-                }
-                Some(Command::RollbackTransaction) => {
-                    inner.start_transaction = None;
-                    self.end_transaction(true).await?;
-                    self.in_transaction = false;
-                    inner.done(self.in_transaction);
-                    return Ok(false);
-                }
-                Some(Command::CommitTransaction) => {
-                    inner.start_transaction = None;
-                    self.end_transaction(false).await?;
-                    self.in_transaction = false;
-                    inner.done(self.in_transaction);
-                    return Ok(false);
-                }
-                // How many shards are configured.
-                Some(Command::Shards(shards)) => {
-                    let rd = RowDescription::new(&[Field::bigint("shards")]);
-                    let mut dr = DataRow::new();
-                    dr.add(*shards as i64);
-                    let cc = CommandComplete::from_str("SHOW");
-                    let rfq = ReadyForQuery::in_transaction(self.in_transaction);
-                    self.stream
-                        .send_many(&[rd.message()?, dr.message()?, cc.message()?, rfq.message()?])
-                        .await?;
-                    inner.done(self.in_transaction);
-                    return Ok(false);
-                }
-                Some(Command::Deallocate) => {
-                    self.finish_command(&mut inner, "DEALLOCATE").await?;
-                    return Ok(false);
-                }
-                // TODO: Handling session variables requires a lot more work,
-                // e.g. we need to track RESET as well.
-                Some(Command::Set { name, value }) => {
-                    self.params.insert(name, value.clone());
-                    self.set(inner).await?;
-                    return Ok(false);
-                }
-
-                Some(Command::Query(query)) => {
-                    if query.is_cross_shard() && self.cross_shard_disabled {
-                        self.stream
-                            .error(ErrorResponse::cross_shard_disabled(), self.in_transaction)
-                            .await?;
-                        inner.done(self.in_transaction);
-                        inner.reset_router();
-                        return Ok(false);
-                    }
-                }
-
-                Some(Command::Listen { channel, shard }) => {
-                    let channel = channel.clone();
-                    let shard = shard.clone();
-                    inner.backend.listen(&channel, shard).await?;
-
-                    self.finish_command(&mut inner, "LISTEN").await?;
-                    return Ok(false);
-                }
-
-                Some(Command::Notify {
-                    channel,
-                    payload,
-                    shard,
-                }) => {
-                    let channel = channel.clone();
-                    let shard = shard.clone();
-                    let payload = payload.clone();
-                    inner.backend.notify(&channel, &payload, shard).await?;
-
-                    self.finish_command(&mut inner, "NOTIFY").await?;
-                    return Ok(false);
-                }
-
-                Some(Command::Unlisten(channel)) => {
-                    let channel = channel.clone();
-                    inner.backend.unlisten(&channel);
-
-                    self.finish_command(&mut inner, "UNLISTEN").await?;
-                    return Ok(false);
-                }
-                _ => (),
-            };
-
             // Grab a connection from the right pool.
             let request = Request::new(self.id);
+            let route = self.transaction.route();
 
-            // A explicit transaction starts an cross-shard write query.
-            let route = if inner.start_transaction.is_some() && inner.is_sharded_cluster()? {
-                if inner.rw_conservative()? && inner.router.route().is_read() {
-                    Route::read(Shard::All)
-                } else {
-                    Route::write(Shard::All)
-                }
-            } else {
-                inner.router.route().clone()
-            };
-
-            match inner.connect(&request, &route).await {
+            match inner.connect(&request, route).await {
                 Ok(()) => {
                     let query_timeout = self.timeouts.query_timeout(&inner.stats.state);
                     // We may need to sync params with the server
@@ -597,7 +571,7 @@ impl Client {
         //
         // This prevents us holding open connections to multiple servers
         if self.request.executable() {
-            if let Some(query) = inner.start_transaction.take() {
+            if let Some(query) = self.transaction.execute_start() {
                 inner.backend.execute(&query).await?;
             }
         }
@@ -776,13 +750,15 @@ impl Client {
     }
 
     /// Tell the client we started a transaction.
-    async fn start_transaction(&mut self) -> Result<(), Error> {
+    async fn start_transaction(&mut self, query: &BufferedQuery) -> Result<(), Error> {
+        self.transaction.buffer_start(query);
         self.stream
             .send_many(&[
                 CommandComplete::new_begin().message()?.backend(),
                 ReadyForQuery::in_transaction(true).message()?,
             ])
             .await?;
+        self.in_transaction = true;
         debug!("transaction started");
         Ok(())
     }
@@ -797,11 +773,13 @@ impl Client {
         } else {
             CommandComplete::new_commit()
         };
-        let mut messages = if !self.in_transaction {
+        let mut messages = if !self.transaction.started() {
             vec![NoticeResponse::from(ErrorResponse::no_transaction()).message()?]
         } else {
+            self.transaction.done();
             vec![]
         };
+
         messages.push(cmd.message()?.backend());
         messages.push(ReadyForQuery::idle().message()?);
         self.stream.send_many(&messages).await?;
@@ -813,6 +791,7 @@ impl Client {
     async fn set(&mut self, mut inner: InnerBorrow<'_>) -> Result<(), Error> {
         self.finish_command(&mut inner, "SET").await?;
         inner.comms.update_params(&self.params);
+        inner.done(self.transaction.started());
         Ok(())
     }
 

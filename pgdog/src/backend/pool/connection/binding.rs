@@ -1,5 +1,7 @@
 //! Binding between frontend client and a connection on the backend.
 
+use std::collections::HashMap;
+
 use crate::{
     net::{parameter::Parameters, ProtocolMessage},
     state::State,
@@ -10,9 +12,9 @@ use super::*;
 /// The server(s) the client is connected to.
 #[derive(Debug)]
 pub enum Binding {
-    Server(Option<Guard>),
+    Server(Option<(usize, Guard)>),
     Admin(Backend),
-    MultiShard(Vec<Guard>, MultiShard),
+    MultiShard(HashMap<usize, Guard>, MultiShard),
 }
 
 impl Default for Binding {
@@ -35,9 +37,9 @@ impl Binding {
     /// they are probably broken and should not be re-used.
     pub fn force_close(&mut self) {
         match self {
-            Binding::Server(Some(ref mut guard)) => guard.stats_mut().state(State::ForceClose),
+            Binding::Server(Some(ref mut guard)) => guard.1.stats_mut().state(State::ForceClose),
             Binding::MultiShard(ref mut guards, _) => {
-                for guard in guards {
+                for guard in guards.values_mut() {
                     guard.stats_mut().state(State::ForceClose);
                 }
             }
@@ -60,7 +62,7 @@ impl Binding {
         match self {
             Binding::Server(guard) => {
                 if let Some(guard) = guard.as_mut() {
-                    guard.read().await
+                    guard.1.read().await
                 } else {
                     loop {
                         debug!("binding suspended");
@@ -85,7 +87,7 @@ impl Binding {
                             return Ok(message);
                         }
                         let mut read = false;
-                        for server in shards.iter_mut() {
+                        for server in shards.values_mut() {
                             if !server.has_more_messages() {
                                 continue;
                             }
@@ -117,7 +119,7 @@ impl Binding {
         match self {
             Binding::Server(server) => {
                 if let Some(server) = server {
-                    server.send(request).await
+                    server.1.send(request).await
                 } else {
                     Err(Error::NotConnected)
                 }
@@ -130,14 +132,14 @@ impl Binding {
                     Shard::All => {
                         state.set_state(servers.len(), route);
 
-                        for server in servers.iter_mut() {
+                        for server in servers.values_mut() {
                             server.send(request).await?;
                         }
                     }
 
                     Shard::Multi(shards) => {
                         let mut num_shards = 0;
-                        for (number, server) in servers.iter_mut().enumerate() {
+                        for (number, server) in servers.values_mut().enumerate() {
                             if shards.contains(&number) {
                                 server.send(request).await?;
                                 num_shards += 1;
@@ -149,7 +151,7 @@ impl Binding {
                     Shard::Direct(shard) => {
                         state.set_state(1, route);
 
-                        if let Some(server) = servers.get_mut(*shard) {
+                        if let Some(server) = servers.get_mut(shard) {
                             server.send(request).await?;
                         }
                     }
@@ -165,7 +167,7 @@ impl Binding {
         match self {
             Binding::MultiShard(servers, _state) => {
                 for row in rows {
-                    for (shard, server) in servers.iter_mut().enumerate() {
+                    for (shard, server) in servers.values_mut().enumerate() {
                         match row.shard() {
                             Shard::Direct(row_shard) => {
                                 if shard == *row_shard {
@@ -197,6 +199,7 @@ impl Binding {
             Binding::Server(Some(ref mut server)) => {
                 for row in rows {
                     server
+                        .1
                         .send_one(&ProtocolMessage::from(row.message()))
                         .await?;
                 }
@@ -211,8 +214,8 @@ impl Binding {
     pub(super) fn done(&self) -> bool {
         match self {
             Binding::Admin(admin) => admin.done(),
-            Binding::Server(Some(server)) => server.done(),
-            Binding::MultiShard(servers, _state) => servers.iter().all(|s| s.done()),
+            Binding::Server(Some(server)) => server.1.done(),
+            Binding::MultiShard(servers, _state) => servers.values().all(|s| s.done()),
             _ => true,
         }
     }
@@ -220,8 +223,8 @@ impl Binding {
     pub fn has_more_messages(&self) -> bool {
         match self {
             Binding::Admin(admin) => !admin.done(),
-            Binding::Server(Some(server)) => server.has_more_messages(),
-            Binding::MultiShard(servers, _state) => servers.iter().any(|s| s.has_more_messages()),
+            Binding::Server(Some(server)) => server.1.has_more_messages(),
+            Binding::MultiShard(servers, _state) => servers.values().any(|s| s.has_more_messages()),
             _ => false,
         }
     }
@@ -231,12 +234,12 @@ impl Binding {
             Binding::Server(Some(server)) => {
                 debug!(
                     "server is in \"{}\" state [{}]",
-                    server.stats().state,
-                    server.addr()
+                    server.1.stats().state,
+                    server.1.addr()
                 );
-                server.stats().state == state
+                server.1.stats().state == state
             }
-            Binding::MultiShard(servers, _) => servers.iter().all(|s| {
+            Binding::MultiShard(servers, _) => servers.values().all(|s| {
                 debug!("server is in \"{}\" state [{}]", s.stats().state, s.addr());
                 s.stats().state == state
             }),
@@ -248,11 +251,11 @@ impl Binding {
     pub async fn execute(&mut self, query: &str) -> Result<(), Error> {
         match self {
             Binding::Server(Some(ref mut server)) => {
-                server.execute(query).await?;
+                server.1.execute(query).await?;
             }
 
             Binding::MultiShard(ref mut servers, _) => {
-                for server in servers {
+                for server in servers.values_mut() {
                     server.execute(query).await?;
                 }
             }
@@ -265,10 +268,10 @@ impl Binding {
 
     pub async fn link_client(&mut self, params: &Parameters) -> Result<usize, Error> {
         match self {
-            Binding::Server(Some(ref mut server)) => server.link_client(params).await,
+            Binding::Server(Some(ref mut server)) => server.1.link_client(params).await,
             Binding::MultiShard(ref mut servers, _) => {
                 let mut max = 0;
-                for server in servers {
+                for server in servers.values_mut() {
                     let synced = server.link_client(params).await?;
                     if max < synced {
                         max = synced;
@@ -283,9 +286,9 @@ impl Binding {
 
     pub fn changed_params(&mut self) -> Parameters {
         match self {
-            Binding::Server(Some(ref mut server)) => server.changed_params().clone(),
+            Binding::Server(Some(ref mut server)) => server.1.changed_params().clone(),
             Binding::MultiShard(ref mut servers, _) => {
-                if let Some(first) = servers.first() {
+                if let Some(first) = servers.values().next() {
                     first.changed_params().clone()
                 } else {
                     Parameters::default()
@@ -297,9 +300,9 @@ impl Binding {
 
     pub(super) fn dirty(&mut self) {
         match self {
-            Binding::Server(Some(ref mut server)) => server.mark_dirty(true),
+            Binding::Server(Some(ref mut server)) => server.1.mark_dirty(true),
             Binding::MultiShard(ref mut servers, _state) => {
-                servers.iter_mut().for_each(|s| s.mark_dirty(true))
+                servers.values_mut().for_each(|s| s.mark_dirty(true))
             }
             _ => (),
         }
@@ -308,8 +311,8 @@ impl Binding {
     #[cfg(test)]
     pub fn is_dirty(&self) -> bool {
         match self {
-            Binding::Server(Some(ref server)) => server.dirty(),
-            Binding::MultiShard(ref servers, _state) => servers.iter().any(|s| s.dirty()),
+            Binding::Server(Some(ref server)) => server.1.dirty(),
+            Binding::MultiShard(ref servers, _state) => servers.values().any(|s| s.dirty()),
             _ => false,
         }
     }
@@ -317,8 +320,8 @@ impl Binding {
     pub fn copy_mode(&self) -> bool {
         match self {
             Binding::Admin(_) => false,
-            Binding::MultiShard(ref servers, _state) => servers.iter().all(|s| s.copy_mode()),
-            Binding::Server(Some(ref server)) => server.copy_mode(),
+            Binding::MultiShard(ref servers, _state) => servers.values().all(|s| s.copy_mode()),
+            Binding::Server(Some(ref server)) => server.1.copy_mode(),
             _ => false,
         }
     }
