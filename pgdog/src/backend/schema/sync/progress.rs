@@ -19,6 +19,10 @@ pub enum Item {
         schema: String,
         name: String,
     },
+    // SequenceOwner {
+    //     sequence: String,
+    //     owner: String,
+    // },
     Other {
         sql: String,
     },
