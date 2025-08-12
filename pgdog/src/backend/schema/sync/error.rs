@@ -31,4 +31,7 @@ pub enum Error {
 
     #[error("cluster has no databases")]
     NoDatabases,
+
+    #[error("missing entity in dump")]
+    MissingEntity,
 }

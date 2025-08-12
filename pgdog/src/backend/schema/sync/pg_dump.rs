@@ -16,7 +16,7 @@ use crate::{
         Cluster,
     },
     config::config,
-    frontend::router::parser::Table,
+    frontend::router::parser::{Column, Table},
 };
 
 use tokio::process::Command;
@@ -175,6 +175,12 @@ pub enum Statement<'a> {
     Other {
         sql: &'a str,
     },
+
+    SequenceOwner {
+        column: Column<'a>,
+        sequence: Table<'a>,
+        sql: &'a str,
+    },
 }
 
 impl<'a> Deref for Statement<'a> {
@@ -183,6 +189,7 @@ impl<'a> Deref for Statement<'a> {
         match self {
             Self::Index { sql, .. } => sql,
             Self::Table { sql, .. } => sql,
+            Self::SequenceOwner { sql, .. } => sql,
             Self::Other { sql } => sql,
         }
     }
@@ -225,7 +232,7 @@ impl PgDumpOutput {
                         }
 
                         NodeEnum::CreateSeqStmt(_) => {
-                            if state == SyncState::PreData {
+                            if state == SyncState::PostData {
                                 // Bring sequences over.
                                 result.push(original.into());
                             }
@@ -276,9 +283,22 @@ impl PgDumpOutput {
                             }
                         }
 
-                        NodeEnum::AlterSeqStmt(_stmt) => {
+                        NodeEnum::AlterSeqStmt(stmt) => {
                             if state == SyncState::PreData {
-                                result.push(original.into());
+                                let sequence = stmt
+                                    .sequence
+                                    .as_ref()
+                                    .map(Table::from)
+                                    .ok_or(Error::MissingEntity)?;
+                                let column = stmt.options.first().ok_or(Error::MissingEntity)?;
+                                let column =
+                                    Column::try_from(column).map_err(|_| Error::MissingEntity)?;
+
+                                result.push(Statement::SequenceOwner {
+                                    column,
+                                    sequence,
+                                    sql: original,
+                                });
                             }
                         }
 

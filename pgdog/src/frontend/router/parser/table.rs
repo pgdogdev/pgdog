@@ -1,3 +1,5 @@
+use std::fmt::Display;
+
 use pg_query::{protobuf::*, NodeEnum};
 
 /// Table name in a query.
@@ -7,6 +9,16 @@ pub struct Table<'a> {
     pub name: &'a str,
     /// Schema name, if specified.
     pub schema: Option<&'a str>,
+}
+
+impl Display for Table<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(schema) = self.schema {
+            write!(f, "\"{}\".\"{}\"", schema, self.name)
+        } else {
+            write!(f, "\"{}\"", self.name)
+        }
+    }
 }
 
 impl Default for Table<'_> {

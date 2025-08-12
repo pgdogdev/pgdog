@@ -89,6 +89,9 @@ impl From<&Statement<'_>> for Item {
             Statement::Other { sql } => Item::Other {
                 sql: sql.to_string(),
             },
+            Statement::SequenceOwner { sql, .. } => Item::Other {
+                sql: sql.to_string(),
+            },
         }
     }
 }
