@@ -432,6 +432,18 @@ impl Client {
         };
 
         // Set routing information on each buffer.
+        match command {
+            Some(Command::Query(route)) => {
+                self.request.set_route(route);
+            }
+
+            Some(Command::CommitTransaction) => {
+                self.request.set_route(&Route::write(Shard::All));
+            }
+
+            _ => (),
+        }
+
         if let Some(Command::Query(route)) = command {
             self.request.set_route(route);
         }
