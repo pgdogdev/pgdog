@@ -35,6 +35,7 @@ use crate::stats::memory::MemoryUsage;
 pub mod counter;
 pub mod engine;
 pub mod inner;
+pub mod query_engine;
 pub mod timeouts;
 pub mod transaction;
 

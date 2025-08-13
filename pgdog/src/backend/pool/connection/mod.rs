@@ -85,21 +85,17 @@ impl Connection {
         Ok(conn)
     }
 
+    pub fn needs_connect(&self) -> bool {
+        match &self.binding {
+            Binding::Server(None) => true,
+            Binding::MultiShard(shards, _) => shards.is_empty(),
+            _ => false,
+        }
+    }
+
     /// Create a server connection if one doesn't exist already.
     pub(crate) async fn connect(&mut self, request: &Request, route: &Route) -> Result<(), Error> {
-        let connect = match &self.binding {
-            Binding::Server(None) => true,
-            Binding::Server(Some(shard)) => match route.shard() {
-                Shard::Direct(new_shard) => shard.0 != *new_shard,
-                _ => true,
-            },
-            Binding::MultiShard(shards, _) => match route.shard() {
-                Shard::Direct(shard) => shards.contains_key(shard),
-                Shard::All => shards.len() == self.cluster()?.shards().len(),
-                Shard::Multi(multi) => multi.iter().all(|s| shards.contains_key(s)),
-            },
-            _ => false,
-        };
+        let connect = self.needs_connect();
 
         if connect {
             debug!("connecting {}", route);
@@ -155,46 +151,16 @@ impl Connection {
                 server.reset = true;
             }
 
-            match &mut self.binding {
-                Binding::Server(existing) => {
-                    if let Some(current_conn) = existing.take() {
-                        let shards =
-                            HashMap::from([(current_conn.0, current_conn.1), (*shard, server)]);
-                        self.binding = Binding::MultiShard(shards, MultiShard::new(2, route));
-                    } else {
-                        let _ = replace(existing, Some((*shard, server)));
-                    }
-                }
-
-                Binding::MultiShard(shards, state) => {
-                    shards.insert(*shard, server);
-                    state.set_state(shards.len(), route);
-                }
-
-                _ => (),
-            };
+            if let Binding::Server(existing) = &mut self.binding {
+                let _ = replace(existing, Some((*shard, server)));
+            }
         } else {
-            let mut shards = match &mut self.binding {
-                Binding::Server(server) => {
-                    if let Some(server) = server.take() {
-                        HashMap::from([(server.0, server.1)])
-                    } else {
-                        HashMap::new()
-                    }
-                }
-
-                Binding::MultiShard(shards, _) => shards.drain().into_iter().collect(),
-                _ => return Ok(()),
-            };
+            let mut shards = HashMap::new();
             for (i, shard) in self.cluster()?.shards().iter().enumerate() {
-                if let Shard::Multi(numbers) = route.shard() {
-                    if !numbers.contains(&i) {
+                if let Shard::Multi(shards) = route.shard() {
+                    if !shards.contains(&i) {
                         continue;
                     }
-                }
-
-                if shards.contains_key(&i) {
-                    continue;
                 }
 
                 let mut server = if route.is_read() {

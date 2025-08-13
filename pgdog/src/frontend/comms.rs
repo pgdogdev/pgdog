@@ -25,6 +25,7 @@ pub fn comms() -> Comms {
 }
 
 /// Sync primitives shared between all clients.
+#[derive(Debug)]
 struct Global {
     shutdown: Arc<Notify>,
     offline: AtomicBool,
@@ -36,7 +37,7 @@ struct Global {
 }
 
 /// Bi-directional communications between client and internals.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Comms {
     global: Arc<Global>,
     id: Option<BackendKeyData>,
@@ -105,6 +106,10 @@ impl Comms {
         self.clone()
     }
 
+    pub fn client_id(&self) -> BackendKeyData {
+        self.id.unwrap_or_default()
+    }
+
     /// Update client parameters.
     pub fn update_params(&self, params: &Parameters) {
         if let Some(id) = self.id {
@@ -123,7 +128,7 @@ impl Comms {
     }
 
     /// Update stats.
-    pub fn stats(&self, stats: Stats) {
+    pub fn update_stats(&self, stats: Stats) {
         if let Some(ref id) = self.id {
             let mut guard = self.global.clients.lock();
             if let Some(entry) = guard.get_mut(id) {

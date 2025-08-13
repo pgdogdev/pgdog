@@ -253,6 +253,7 @@ impl Stream {
 
 /// Wrapper around SocketAddr
 /// to make it easier to debug.
+#[derive(Default)]
 pub struct PeerAddr {
     addr: Option<SocketAddr>,
 }

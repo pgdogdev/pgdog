@@ -1344,6 +1344,66 @@ pub mod test {
         init();
     }
 
+    pub fn load_test_sharded() {
+        let mut config = ConfigAndUsers::default();
+        config.config.databases = vec![
+            Database {
+                name: "pgdog_sharded".into(),
+                host: "127.0.0.1".into(),
+                port: 5432,
+                shard: 0,
+                database_name: Some("shard_0".into()),
+                ..Default::default()
+            },
+            {
+                Database {
+                    name: "pgdog_sharded".into(),
+                    host: "127.0.0.1".into(),
+                    port: 5432,
+                    shard: 1,
+                    database_name: Some("shard_1".into()),
+                    ..Default::default()
+                }
+            },
+            Database {
+                name: "pgdog_sharded".into(),
+                host: "127.0.0.1".into(),
+                port: 5432,
+                shard: 0,
+                role: Role::Replica,
+                database_name: Some("shard_0".into()),
+                ..Default::default()
+            },
+            {
+                Database {
+                    name: "pgdog_sharded".into(),
+                    host: "127.0.0.1".into(),
+                    port: 5432,
+                    shard: 1,
+                    role: Role::Replica,
+                    database_name: Some("shard_1".into()),
+                    ..Default::default()
+                }
+            },
+        ];
+        config.users.users = vec![User {
+            name: "pgdog".into(),
+            database: "pgdog_sharded".into(),
+            password: Some("pgdog".into()),
+            ..Default::default()
+        }];
+        config.config.sharded_tables = vec![ShardedTable {
+            database: "pgdog_sharded".into(),
+            column: "id".into(),
+            name: Some("sharded".into()),
+            data_type: DataType::Bigint,
+            ..Default::default()
+        }];
+
+        set(config).unwrap();
+        init();
+    }
+
     pub fn load_test_replicas() {
         let mut config = ConfigAndUsers::default();
         config.config.databases = vec![

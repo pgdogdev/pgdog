@@ -156,7 +156,7 @@ impl Inner {
             self.stats.error();
         }
 
-        self.comms.stats(self.stats);
+        self.comms.update_stats(self.stats);
 
         result
     }
@@ -213,7 +213,7 @@ impl DerefMut for InnerBorrow<'_> {
 
 impl Drop for InnerBorrow<'_> {
     fn drop(&mut self) {
-        self.comms.stats(self.inner.stats);
+        self.comms.update_stats(self.inner.stats);
     }
 }
 

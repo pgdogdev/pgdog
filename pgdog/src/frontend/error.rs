@@ -45,6 +45,9 @@ pub enum Error {
 
     #[error("join error")]
     Join(#[from] tokio::task::JoinError),
+
+    #[error("unexpected command")]
+    UnexpectedCommand,
 }
 
 impl Error {
