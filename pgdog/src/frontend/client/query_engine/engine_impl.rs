@@ -138,6 +138,8 @@ impl QueryEngine {
                     .await?;
                     self.streaming = streaming;
 
+                    println!("done: {}", done);
+
                     if done {
                         Cleanup::new(
                             &mut self.backend,

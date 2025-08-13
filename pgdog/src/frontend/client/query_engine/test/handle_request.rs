@@ -61,6 +61,7 @@ async fn test_sharded() {
             .unwrap();
         assert!(engine.transaction.started());
         assert!(engine.transaction.buffered());
+        assert!(!engine.backend.connected());
 
         let request = ClientRequest::from(vec![ProtocolMessage::Query(Query::new(
             "SELECT * FROM sharded WHERE id = 1",
@@ -75,6 +76,7 @@ async fn test_sharded() {
         assert!(!engine.transaction.buffered());
         assert!(router.routed());
         assert_eq!(router.route().shard(), &Shard::Direct(0));
+        assert!(engine.backend.connected());
 
         let request = ClientRequest::from(vec![ProtocolMessage::Query(Query::new(
             "SELECT * FROM sharded",
@@ -94,6 +96,7 @@ async fn test_sharded() {
             .handle_request(&request, &mut router, &mut stream)
             .await
             .unwrap();
+        assert!(!engine.backend.connected());
 
         assert!(!engine.transaction.started());
     }

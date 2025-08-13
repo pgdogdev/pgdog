@@ -49,7 +49,7 @@ impl Binding {
         self.disconnect();
     }
 
-    /// Are we connnected to a backend?
+    /// Are we connected to a backend?
     pub fn connected(&self) -> bool {
         match self {
             Binding::Server(server) => server.is_some(),
