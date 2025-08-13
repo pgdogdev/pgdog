@@ -12,16 +12,17 @@ use crate::{
                 error_response::ErrorHandler,
                 rollback::Rollback,
                 server_response::{ServerResponse, ServerResponseResult},
+                set::Set,
             },
             timeouts::Timeouts,
             transaction::Transaction,
         },
-        router::Route,
         ClientRequest, Command, Comms, Error, PreparedStatements, Router, RouterContext, Stats,
     },
     net::{BackendKeyData, Message, Parameters},
 };
 
+use pg_query::protobuf::Param;
 use tracing::error;
 
 use super::{deallocate::Deallocate, pub_sub::PubSub};
@@ -32,11 +33,11 @@ pub(super) type Stream = crate::net::Stream;
 pub(super) type Stream = super::test::Stream;
 
 #[derive(Debug)]
-pub struct QueryEngine<'a> {
+pub struct QueryEngine {
     /// Client's prepared statements cache.
-    pub(super) prepared_statements: &'a mut PreparedStatements,
+    pub(super) prepared_statements: PreparedStatements,
     /// Client parameters.
-    pub(super) params: &'a mut Parameters,
+    pub(super) params: Parameters,
     /// Transaction state.
     pub(super) transaction: Transaction,
     /// Connection the the backend.
@@ -63,12 +64,11 @@ pub enum EngineState<'a> {
     Run { command: &'a Command },
 }
 
-impl<'a> QueryEngine<'a> {
+impl QueryEngine {
     /// Create the query engine.
     pub fn new(
+        params: Parameters,
         comms: Comms,
-        params: &'a mut Parameters,
-        prepared_statements: &'a mut PreparedStatements,
         admin: bool,
         passthrough_password: &Option<String>,
     ) -> Result<Self, Error> {
@@ -80,12 +80,12 @@ impl<'a> QueryEngine<'a> {
         Ok(Self {
             client_id: comms.client_id(),
             comms,
+            params,
+            prepared_statements: PreparedStatements::new(),
             timeouts: Timeouts::default(),
             stats: Stats::new(),
             backend,
             transaction: Transaction::default(),
-            params,
-            prepared_statements,
             cross_shard_disabled: false,
             streaming: false,
         })
@@ -120,6 +120,8 @@ impl<'a> QueryEngine<'a> {
         let in_transaction = match state {
             EngineState::Done { in_transaction } => in_transaction,
             EngineState::Run { command } => {
+                self.transaction.set_route(command.route());
+
                 if let Err(err) = self.connect().await {
                     ErrorHandler::new(self.transaction.started(), &mut self.stats)
                         .handle(&err, client_socket)
@@ -162,6 +164,7 @@ impl<'a> QueryEngine<'a> {
                                 &mut self.stats,
                                 &mut self.params,
                                 &mut self.comms,
+                                &mut self.transaction,
                             )
                             .handle()?;
                         }
@@ -228,12 +231,12 @@ impl<'a> QueryEngine<'a> {
         }
     }
 
-    async fn route_request<'b>(
+    async fn route_request<'router>(
         &mut self,
         request: &ClientRequest,
-        router: &'b mut Router,
+        router: &'router mut Router,
         client_socket: &mut Stream,
-    ) -> Result<EngineState<'b>, Error> {
+    ) -> Result<EngineState<'router>, Error> {
         let context = RouterContext::new(
             request,                       // Query and parameters.
             self.backend.cluster()?,       // Cluster configuration.
@@ -277,7 +280,15 @@ impl<'a> QueryEngine<'a> {
                             in_transaction: self.transaction.started(),
                         })
                     }
-                    Command::Set { name, value } => todo!(),
+                    Command::Set { name, value } => {
+                        Set::new(&mut self.params, &mut self.stats, &mut self.transaction)
+                            .handle(name, value, client_socket)
+                            .await?;
+
+                        Ok(EngineState::Done {
+                            in_transaction: self.transaction.started(),
+                        })
+                    }
                     Command::Shards(shards) => todo!(),
                     Command::Query(route) => {
                         let blocked = CrossShardCheck::new(
@@ -357,6 +368,7 @@ impl<'a> QueryEngine<'a> {
                     &mut self.stats,
                     &mut self.params,
                     &mut self.comms,
+                    &mut self.transaction,
                 )
                 .handle()?;
 

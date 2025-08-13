@@ -2,7 +2,7 @@
 
 use crate::{
     backend::pool::Connection,
-    frontend::{Comms, Error, Stats},
+    frontend::{client::transaction::Transaction, Comms, Error, Stats},
     net::Parameters,
 };
 use tracing::debug;
@@ -12,6 +12,7 @@ pub struct Cleanup<'a> {
     stats: &'a mut Stats,
     params: &'a mut Parameters,
     comms: &'a Comms,
+    transaction: &'a mut Transaction,
 }
 
 impl<'a> Cleanup<'a> {
@@ -20,12 +21,14 @@ impl<'a> Cleanup<'a> {
         stats: &'a mut Stats,
         params: &'a mut Parameters,
         comms: &'a mut Comms,
+        transaction: &'a mut Transaction,
     ) -> Self {
         Self {
             backend,
             stats,
             params,
             comms,
+            transaction,
         }
     }
 
@@ -40,6 +43,11 @@ impl<'a> Cleanup<'a> {
                 self.params.insert(name.clone(), value.clone());
             }
             self.comms.update_params(&self.params);
+        }
+
+        // Cleanup any transaction-level SETs.
+        for key in self.transaction.params().keys() {
+            self.params.remove(key);
         }
 
         // Release servers.

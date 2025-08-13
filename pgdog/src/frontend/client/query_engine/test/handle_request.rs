@@ -2,7 +2,7 @@ use crate::config::test::{load_test, load_test_replicas, load_test_sharded};
 use crate::frontend::client::query_engine::test::Stream;
 use crate::frontend::comms::comms;
 use crate::frontend::router::parser::Shard;
-use crate::frontend::{ClientRequest, PreparedStatements, Router};
+use crate::frontend::{ClientRequest, Router};
 use crate::net::{Parameter, Parameters, ProtocolMessage, Query};
 
 use super::super::engine_impl::*;
@@ -11,19 +11,21 @@ use super::super::engine_impl::*;
 async fn test_basic() {
     load_test();
 
-    let mut params = Parameters::from(vec![Parameter {
+    let params = Parameters::from(vec![Parameter {
         name: "user".into(),
         value: "pgdog".into(),
     }]);
-    let mut prepard = PreparedStatements::new();
     let mut router = Router::new();
     let mut stream = Stream::default();
-    let mut engine = QueryEngine::new(comms(), &mut params, &mut prepard, false, &None).unwrap();
+    let mut engine = QueryEngine::new(params, comms(), false, &None).unwrap();
 
-    for _ in 0.. 5 {
+    for _ in 0..5 {
         for (query, in_transaction) in [("BEGIN", true), ("SELECT 1", true), ("COMMIT", false)] {
             let request = ClientRequest::from(vec![ProtocolMessage::Query(Query::new(query))]);
-            engine.handle_request(&request, &mut router, &mut stream).await.unwrap();
+            engine
+                .handle_request(&request, &mut router, &mut stream)
+                .await
+                .unwrap();
             assert_eq!(engine.transaction.started(), in_transaction);
         }
     }
@@ -33,13 +35,12 @@ async fn test_basic() {
 async fn test_basic_with_replicas() {
     load_test_replicas();
 
-    let mut params = Parameters::from(vec![Parameter {
+    let params = Parameters::from(vec![Parameter {
         name: "user".into(),
         value: "pgdog".into(),
     }]);
-    let mut prepard = PreparedStatements::new();
 
-    let mut engine = QueryEngine::new(comms(), &mut params, &mut prepard, false, &None).unwrap();
+    let mut engine = QueryEngine::new(params, comms(), false, &None).unwrap();
     let request = ClientRequest::from(vec![ProtocolMessage::Query(Query::new("SELECT 1"))]);
     let mut router = Router::new();
     let mut stream = Stream::default();
@@ -56,10 +57,13 @@ async fn test_basic_with_replicas() {
 
     assert_eq!(stream.messages.len(), 5 * 4);
 
-    for _ in 0.. 5 {
+    for _ in 0..5 {
         for (query, in_transaction) in [("BEGIN", true), ("SELECT 1", true), ("COMMIT", false)] {
             let request = ClientRequest::from(vec![ProtocolMessage::Query(Query::new(query))]);
-            engine.handle_request(&request, &mut router, &mut stream).await.unwrap();
+            engine
+                .handle_request(&request, &mut router, &mut stream)
+                .await
+                .unwrap();
             assert_eq!(engine.transaction.started(), in_transaction);
         }
     }
@@ -70,7 +74,7 @@ async fn test_sharded() {
     load_test_sharded();
     crate::logger();
 
-    let mut params = Parameters::from(vec![
+    let params = Parameters::from(vec![
         Parameter {
             name: "user".into(),
             value: "pgdog".into(),
@@ -80,9 +84,8 @@ async fn test_sharded() {
             value: "pgdog_sharded".into(),
         },
     ]);
-    let mut prepard = PreparedStatements::new();
 
-    let mut engine = QueryEngine::new(comms(), &mut params, &mut prepard, false, &None).unwrap();
+    let mut engine = QueryEngine::new(params, comms(), false, &None).unwrap();
 
     let mut router = Router::new();
     let mut stream = Stream::default();

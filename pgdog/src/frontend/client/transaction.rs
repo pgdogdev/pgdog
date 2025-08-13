@@ -7,6 +7,7 @@ use crate::{
         buffer::BufferedQuery,
         router::{parser::Shard, Route},
     },
+    net::Parameters,
 };
 
 lazy_static! {
@@ -24,6 +25,8 @@ pub struct Transaction {
     rw_strategy: ReadWriteStrategy,
     /// Transaction started
     started: bool,
+    /// Parameters
+    params: Parameters,
 }
 
 impl Transaction {
@@ -34,6 +37,7 @@ impl Transaction {
             last_route: None,
             rw_strategy: *cluster.read_write_strategy(),
             started: false,
+            params: Parameters::default(),
         }
     }
 
@@ -52,6 +56,7 @@ impl Transaction {
         self.started = false;
         self.begin = None;
         self.last_route = None;
+        self.params.clear();
     }
 
     pub fn started(&self) -> bool {
@@ -95,5 +100,9 @@ impl Transaction {
     /// Get transaction route.
     fn route(&self) -> &Route {
         self.last_route.as_ref().unwrap_or(&DEFAULT_ROUTE)
+    }
+
+    pub fn params(&mut self) -> &mut Parameters {
+        &mut self.params
     }
 }

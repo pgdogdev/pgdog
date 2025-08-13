@@ -11,6 +11,7 @@ pub mod pub_sub;
 pub mod rollback;
 pub mod server_message;
 pub mod server_response;
+pub mod set;
 
 #[cfg(test)]
 mod test;
