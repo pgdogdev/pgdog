@@ -472,7 +472,7 @@ impl Client {
             // TODO: Handling session variables requires a lot more work,
             // e.g. we need to track RESET as well.
             Some(Command::Set { name, value }) => {
-                if self.transaction.started() {
+                if !self.transaction.started() {
                     self.params.insert(name, value.clone());
                     self.set(inner).await?;
                     return Ok(false);
@@ -540,7 +540,7 @@ impl Client {
         if !connected {
             // Grab a connection from the right pool.
             let request = Request::new(self.id);
-            let route = self.transaction.route();
+            let route = self.transaction.transaction_route();
 
             match inner.connect(&request, route).await {
                 Ok(()) => {

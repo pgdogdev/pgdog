@@ -20,12 +20,8 @@ pub struct Transaction {
     begin: Option<BufferedQuery>,
     /// Last route
     last_route: Option<Route>,
-    /// Route for the BEGIN statement.
-    begin_route: Option<Route>,
     /// Read/write strategy
     rw_strategy: ReadWriteStrategy,
-    /// How many shards in the cluster?
-    shards: usize,
     /// Transaction started
     started: bool,
 }
@@ -36,9 +32,7 @@ impl Transaction {
         Self {
             begin: Some(stmt),
             last_route: None,
-            begin_route: None,
             rw_strategy: *cluster.read_write_strategy(),
-            shards: cluster.shards().len(),
             started: false,
         }
     }
@@ -57,6 +51,7 @@ impl Transaction {
     pub fn finish(&mut self) {
         self.started = false;
         self.begin = None;
+        self.last_route = None;
     }
 
     pub fn started(&self) -> bool {
@@ -72,7 +67,7 @@ impl Transaction {
         self.begin.is_some()
     }
 
-    /// Set latest route infomation.
+    /// Set latest route information.
     pub fn set_route(&mut self, route: &Route) {
         if let Some(ref last_route) = self.last_route {
             // Make sure we don't flip from primary to replica and vice versa.
@@ -80,8 +75,6 @@ impl Transaction {
         } else {
             self.last_route = Some(route.clone());
         }
-
-        if self.begin_route.is_none() {}
     }
 
     /// Which route to use to send the begin statement.
@@ -90,21 +83,17 @@ impl Transaction {
     /// by last statement. Otherwise, go to the primary.
     pub fn transaction_route(&mut self) -> &Route {
         if self.buffered() {
-            self.begin_route = Some(if self.shards > 1 {
-                match self.rw_strategy {
-                    ReadWriteStrategy::Aggressive => self.route().clone(),
-                    ReadWriteStrategy::Conservative => Route::write(Shard::All),
-                }
-            } else {
-                self.route().clone()
-            });
+            match self.rw_strategy {
+                ReadWriteStrategy::Aggressive => self.route(),
+                ReadWriteStrategy::Conservative => &DEFAULT_ROUTE,
+            }
+        } else {
+            self.route()
         }
-
-        self.begin_route.as_ref().unwrap_or(self.route())
     }
 
     /// Get transaction route.
-    pub fn route(&self) -> &Route {
+    fn route(&self) -> &Route {
         self.last_route.as_ref().unwrap_or(&DEFAULT_ROUTE)
     }
 }

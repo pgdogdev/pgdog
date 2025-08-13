@@ -21,7 +21,7 @@ impl<'a> ErrorHandler<'a> {
 
     pub async fn handle(
         &mut self,
-        err: impl std::error::Error,
+        err: &impl std::error::Error,
         stream: &mut Stream,
     ) -> Result<(), Error> {
         let err = err.to_string();

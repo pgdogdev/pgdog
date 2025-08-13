@@ -1,4 +1,4 @@
-use crate::config::test::{load_test_replicas, load_test_sharded};
+use crate::config::test::{load_test, load_test_replicas, load_test_sharded};
 use crate::frontend::client::query_engine::test::Stream;
 use crate::frontend::comms::comms;
 use crate::frontend::router::parser::Shard;
@@ -9,6 +9,28 @@ use super::super::engine_impl::*;
 
 #[tokio::test]
 async fn test_basic() {
+    load_test();
+
+    let mut params = Parameters::from(vec![Parameter {
+        name: "user".into(),
+        value: "pgdog".into(),
+    }]);
+    let mut prepard = PreparedStatements::new();
+    let mut router = Router::new();
+    let mut stream = Stream::default();
+    let mut engine = QueryEngine::new(comms(), &mut params, &mut prepard, false, &None).unwrap();
+
+    for _ in 0.. 5 {
+        for (query, in_transaction) in [("BEGIN", true), ("SELECT 1", true), ("COMMIT", false)] {
+            let request = ClientRequest::from(vec![ProtocolMessage::Query(Query::new(query))]);
+            engine.handle_request(&request, &mut router, &mut stream).await.unwrap();
+            assert_eq!(engine.transaction.started(), in_transaction);
+        }
+    }
+}
+
+#[tokio::test]
+async fn test_basic_with_replicas() {
     load_test_replicas();
 
     let mut params = Parameters::from(vec![Parameter {
@@ -33,6 +55,14 @@ async fn test_basic() {
     }
 
     assert_eq!(stream.messages.len(), 5 * 4);
+
+    for _ in 0.. 5 {
+        for (query, in_transaction) in [("BEGIN", true), ("SELECT 1", true), ("COMMIT", false)] {
+            let request = ClientRequest::from(vec![ProtocolMessage::Query(Query::new(query))]);
+            engine.handle_request(&request, &mut router, &mut stream).await.unwrap();
+            assert_eq!(engine.transaction.started(), in_transaction);
+        }
+    }
 }
 
 #[tokio::test]
