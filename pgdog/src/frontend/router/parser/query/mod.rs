@@ -24,6 +24,7 @@ mod explain;
 mod select;
 mod set;
 mod shared;
+mod show;
 mod transaction;
 mod update;
 
@@ -309,20 +310,6 @@ impl QueryParser {
             Ok(command.dry_run())
         } else {
             Ok(command)
-        }
-    }
-
-    /// Handle SHOW command.
-    fn show(
-        &mut self,
-        stmt: &VariableShowStmt,
-        context: &QueryParserContext,
-    ) -> Result<Command, Error> {
-        match stmt.name.as_str() {
-            "pgdog.shards" => Ok(Command::Shards(context.shards)),
-            _ => Ok(Command::Query(
-                Route::write(Shard::All).set_read(context.read_only),
-            )),
         }
     }
 
