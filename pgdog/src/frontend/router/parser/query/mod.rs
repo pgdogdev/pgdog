@@ -323,8 +323,7 @@ impl QueryParser {
             _ => {
                 let shard = Shard::Direct(round_robin::next() % context.shards);
                 let route = Route::write(shard).set_read(context.read_only);
-                let command = Command::Query(route);
-                Ok(command)
+                Ok(Command::Query(route))
             }
         }
     }
