@@ -23,7 +23,7 @@ impl<'a> EngineContext<'a> {
         Self {
             prepared_statements: &mut client.prepared_statements,
             params: &client.params,
-            in_transaction: client.in_transaction,
+            in_transaction: client.transaction.started(),
             connected: inner.connected(),
             buffer: &client.request,
         }

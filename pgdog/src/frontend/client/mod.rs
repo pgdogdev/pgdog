@@ -54,7 +54,6 @@ pub struct Client {
     streaming: bool,
     shutdown: bool,
     prepared_statements: PreparedStatements,
-    in_transaction: bool,
     timeouts: Timeouts,
     request: ClientRequest,
     stream_buffer: BytesMut,
@@ -73,7 +72,7 @@ impl MemoryUsage for Client {
             + self.connect_params.memory_usage()
             + self.params.memory_usage()
             + std::mem::size_of::<Comms>()
-            + std::mem::size_of::<bool>() * 6
+            + std::mem::size_of::<bool>() * 5
             + self.prepared_statements.memory_used()
             + std::mem::size_of::<Timeouts>()
             + self.stream_buffer.memory_usage()
@@ -240,7 +239,6 @@ impl Client {
             replication_mode,
             connect_params: params,
             prepared_statements: PreparedStatements::new(),
-            in_transaction: false,
             timeouts: Timeouts::from_config(&config.config.general),
             request: ClientRequest::new(),
             stream_buffer: BytesMut::new(),
@@ -282,7 +280,6 @@ impl Client {
             connect_params: connect_params.clone(),
             params: connect_params,
             admin: false,
-            in_transaction: false,
             timeouts: Timeouts::from_config(&config().config.general),
             request: ClientRequest::new(),
             stream_buffer: BytesMut::new(),
@@ -382,7 +379,7 @@ impl Client {
                 "{} [{}] (in transaction: {})",
                 query.query(),
                 self.addr,
-                self.in_transaction
+                self.transaction.started()
             );
             QueryLogger::new(&self.request).log().await?;
         }
@@ -397,7 +394,7 @@ impl Client {
         match engine.execute().await? {
             Action::Intercept(msgs) => {
                 self.stream.send_many(&msgs).await?;
-                inner.done(self.in_transaction);
+                inner.done(self.transaction.started());
                 self.update_stats(&mut inner);
                 return Ok(false);
             }
@@ -411,25 +408,25 @@ impl Client {
             &mut self.request,
             &mut self.prepared_statements,
             &self.params,
-            self.in_transaction,
+            self.transaction.started(),
         ) {
             Ok(command) => command,
             Err(err) => {
                 if err.empty_query() {
                     self.stream.send(&EmptyQueryResponse).await?;
                     self.stream
-                        .send_flush(&ReadyForQuery::in_transaction(self.in_transaction))
+                        .send_flush(&ReadyForQuery::in_transaction(self.transaction.started()))
                         .await?;
                 } else {
                     error!("{:?} [{}]", err, self.addr);
                     self.stream
                         .error(
                             ErrorResponse::syntax(err.to_string().as_str()),
-                            self.in_transaction,
+                            self.transaction.started(),
                         )
                         .await?;
                 }
-                inner.done(self.in_transaction);
+                inner.done(self.transaction.started());
                 return Ok(false);
             }
         };
@@ -442,7 +439,10 @@ impl Client {
                 // Check if cross-shard transactions are disabled.
                 if route.is_cross_shard() && self.cross_shard_disabled {
                     self.stream
-                        .error(ErrorResponse::cross_shard_disabled(), self.in_transaction)
+                        .error(
+                            ErrorResponse::cross_shard_disabled(),
+                            self.transaction.started(),
+                        )
                         .await?;
                     inner.done(self.transaction.started());
                     inner.reset_router();
@@ -523,11 +523,11 @@ impl Client {
                 let mut dr = DataRow::new();
                 dr.add(*shards as i64);
                 let cc = CommandComplete::from_str("SHOW");
-                let rfq = ReadyForQuery::in_transaction(self.in_transaction);
+                let rfq = ReadyForQuery::in_transaction(self.transaction.started());
                 self.stream
                     .send_many(&[rd.message()?, dr.message()?, cc.message()?, rfq.message()?])
                     .await?;
-                inner.done(self.in_transaction);
+                inner.done(self.transaction.started());
                 return Ok(false);
             }
 
@@ -552,12 +552,12 @@ impl Client {
                     if err.no_server() {
                         error!("{} [{}]", err, self.addr);
                         self.stream
-                            .error(ErrorResponse::from_err(&err), self.in_transaction)
+                            .error(ErrorResponse::from_err(&err), self.transaction.started())
                             .await?;
                         // TODO: should this be wrapped in a method?
                         inner.disconnect();
                         inner.reset_router();
-                        inner.done(self.in_transaction);
+                        inner.done(self.transaction.started());
                         return Ok(false);
                     } else {
                         return Err(err.into());
@@ -566,12 +566,17 @@ impl Client {
             };
         }
 
+        // Start transaction if we haven't already.
+        if !self.transaction.started() {
+            self.transaction.start();
+        }
+
         // We don't start a transaction on the servers until
         // a client is actually executing something.
         //
         // This prevents us holding open connections to multiple servers
         if self.request.executable() {
-            if let Some(query) = self.transaction.execute_start() {
+            if let Some(query) = self.transaction.take_begin() {
                 inner.backend.execute(&query).await?;
             }
         }
@@ -631,15 +636,11 @@ impl Client {
         // ReadyForQuery (B)
         if code == 'Z' {
             inner.stats.query();
-            // In transaction if buffered BEGIN from client
-            // or server is telling us we are.
-            self.in_transaction = message.in_transaction() || inner.start_transaction.is_some();
-            inner.stats.idle(self.in_transaction);
-
-            // Flush mirrors.
-            if !self.in_transaction {
+            if !message.in_transaction() {
+                self.transaction.finish();
                 inner.backend.mirror_flush();
             }
+            inner.stats.idle(self.transaction.started());
         }
 
         inner.stats.sent(message.len());
@@ -751,14 +752,13 @@ impl Client {
 
     /// Tell the client we started a transaction.
     async fn start_transaction(&mut self, query: &BufferedQuery) -> Result<(), Error> {
-        self.transaction.buffer_start(query);
+        self.transaction.buffer(query);
         self.stream
             .send_many(&[
                 CommandComplete::new_begin().message()?.backend(),
                 ReadyForQuery::in_transaction(true).message()?,
             ])
             .await?;
-        self.in_transaction = true;
         debug!("transaction started");
         Ok(())
     }
@@ -776,7 +776,7 @@ impl Client {
         let mut messages = if !self.transaction.started() {
             vec![NoticeResponse::from(ErrorResponse::no_transaction()).message()?]
         } else {
-            self.transaction.done();
+            self.transaction.finish();
             vec![]
         };
 
@@ -803,10 +803,10 @@ impl Client {
         self.stream
             .send_many(&[
                 CommandComplete::from_str(command).message()?.backend(),
-                ReadyForQuery::in_transaction(self.in_transaction).message()?,
+                ReadyForQuery::in_transaction(self.transaction.started()).message()?,
             ])
             .await?;
-        inner.done(self.in_transaction);
+        inner.done(self.transaction.started());
 
         Ok(())
     }

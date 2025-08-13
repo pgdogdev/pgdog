@@ -128,7 +128,7 @@ async fn test_test_client() {
 
     let disconnect = client.client_messages(inner.get()).await.unwrap();
     assert!(!disconnect);
-    assert!(!client.in_transaction);
+    assert!(!client.transaction.started());
     assert_eq!(inner.stats.state, State::Active);
     // Buffer not cleared yet.
     assert_eq!(client.request.total_message_len(), query.len());
@@ -139,7 +139,7 @@ async fn test_test_client() {
             &mut client.request,
             &mut client.prepared_statements,
             &client.params,
-            client.in_transaction,
+            client.transaction.started(),
         )
         .unwrap();
     assert!(matches!(command, Some(Command::Query(_))));
@@ -451,7 +451,7 @@ async fn test_transaction_state() {
     client.client_messages(inner.get()).await.unwrap();
     read!(conn, ['C', 'Z']);
 
-    assert!(client.in_transaction);
+    assert!(client.transaction.started());
     assert!(inner.router.route().is_write());
     assert!(inner.router.in_transaction());
 
@@ -467,7 +467,7 @@ async fn test_transaction_state() {
     client.client_messages(inner.get()).await.unwrap();
 
     assert!(inner.router.routed());
-    assert!(client.in_transaction);
+    assert!(client.transaction.started());
     assert!(inner.router.route().is_write());
     assert!(inner.router.in_transaction());
 
@@ -511,7 +511,7 @@ async fn test_transaction_state() {
     read!(conn, ['2', 'D', 'C', 'Z']);
 
     assert!(inner.router.routed());
-    assert!(client.in_transaction);
+    assert!(client.transaction.started());
     assert!(inner.router.route().is_write());
     assert!(inner.router.in_transaction());
 
@@ -531,7 +531,7 @@ async fn test_transaction_state() {
 
     read!(conn, ['C', 'Z']);
 
-    assert!(!client.in_transaction);
+    assert!(!client.transaction.started());
     assert!(!inner.router.routed());
 }
 
