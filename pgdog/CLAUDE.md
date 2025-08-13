@@ -7,7 +7,8 @@
 
 # Code style
 
-Use standard Rust code style. Use `cargo fmt` to reformat code automatically after every edit.
+Use standard Rust code style. Use `cargo fmt` to reformat code automatically after every edit. Use lowercase words for assert debug statements. Try to make variable names
+and function names shorter.
 
 # Workflow
 

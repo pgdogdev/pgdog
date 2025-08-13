@@ -3,6 +3,7 @@ pub mod cleanup;
 pub mod command;
 pub mod commit;
 pub mod cross_shard_check;
+pub mod deallocate;
 pub mod empty_query;
 pub mod engine_impl;
 pub mod error_response;

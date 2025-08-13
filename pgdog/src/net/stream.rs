@@ -217,11 +217,11 @@ impl Stream {
     }
 
     /// Send an error to the client and disconnect gracefully.
-    pub async fn fatal(&mut self, error: ErrorResponse) -> Result<(), crate::net::Error> {
-        self.send(&error).await?;
-        self.send_flush(&Terminate).await?;
+    pub async fn fatal(&mut self, error: ErrorResponse) -> Result<usize, crate::net::Error> {
+        let mut sent = self.send(&error).await?;
+        sent += self.send_flush(&Terminate).await?;
 
-        Ok(())
+        Ok(sent)
     }
 
     /// Send an error to the client and let them know we are ready
@@ -230,16 +230,17 @@ impl Stream {
         &mut self,
         error: ErrorResponse,
         in_transaction: bool,
-    ) -> Result<(), crate::net::Error> {
-        self.send(&error).await?;
-        self.send_flush(&if in_transaction {
-            ReadyForQuery::error()
-        } else {
-            ReadyForQuery::idle()
-        })
-        .await?;
+    ) -> Result<usize, crate::net::Error> {
+        let mut sent = self.send(&error).await?;
+        sent += self
+            .send_flush(&if in_transaction {
+                ReadyForQuery::error()
+            } else {
+                ReadyForQuery::idle()
+            })
+            .await?;
 
-        Ok(())
+        Ok(sent)
     }
 
     /// Get the wrapped TCP stream back.

@@ -43,16 +43,21 @@ impl Stream {
     }
 
     /// Send error.
-    pub async fn error(&mut self, error: ErrorResponse, in_transaction: bool) -> Result<(), Error> {
-        self.send(&error).await?;
-        self.send_flush(&if in_transaction {
-            ReadyForQuery::error()
-        } else {
-            ReadyForQuery::idle()
-        })
-        .await?;
+    pub async fn error(
+        &mut self,
+        error: ErrorResponse,
+        in_transaction: bool,
+    ) -> Result<usize, Error> {
+        let mut sent = self.send(&error).await?;
+        sent += self
+            .send_flush(&if in_transaction {
+                ReadyForQuery::error()
+            } else {
+                ReadyForQuery::idle()
+            })
+            .await?;
 
-        Ok(())
+        Ok(sent)
     }
 
     /// Get peer address.

@@ -30,17 +30,7 @@ impl<'a> Cleanup<'a> {
     }
 
     pub fn handle(&mut self) -> Result<(), Error> {
-        // Release servers.
-        if self.backend.transaction_mode() {
-            self.backend.disconnect();
-        }
-
         let changed_params = self.backend.changed_params();
-
-        debug!(
-            "transaction finished [{:.3}ms]",
-            self.stats.last_transaction_time.as_secs_f64() * 1000.0
-        );
 
         // Update client params with values
         // sent from the server using ParameterStatus(B) messages.
@@ -51,6 +41,17 @@ impl<'a> Cleanup<'a> {
             }
             self.comms.update_params(&self.params);
         }
+
+        // Release servers.
+        if self.backend.transaction_mode() {
+            self.backend.disconnect();
+        }
+
+        debug!(
+            "transaction finished [{:.3}ms]",
+            self.stats.last_transaction_time.as_secs_f64() * 1000.0
+        );
+
         Ok(())
     }
 }

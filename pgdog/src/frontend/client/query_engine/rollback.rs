@@ -1,6 +1,6 @@
 use crate::{
     backend::pool::Connection,
-    frontend::Error,
+    frontend::{Error, Stats},
     net::{CommandComplete, ErrorResponse, NoticeResponse, Protocol, ReadyForQuery},
 };
 
@@ -9,13 +9,15 @@ use super::engine_impl::Stream;
 pub struct Rollback<'a> {
     in_transaction: bool,
     backend: &'a mut Connection,
+    stats: &'a mut Stats,
 }
 
 impl<'a> Rollback<'a> {
-    pub fn new(in_transaction: bool, backend: &'a mut Connection) -> Self {
+    pub fn new(in_transaction: bool, backend: &'a mut Connection, stats: &'a mut Stats) -> Self {
         Self {
             in_transaction,
             backend,
+            stats,
         }
     }
 
@@ -24,13 +26,13 @@ impl<'a> Rollback<'a> {
             self.backend.execute("ROLLBACK").await?;
         }
 
-        if self.in_transaction {
+        let bytes_sent = if self.in_transaction {
             client_socket
                 .send_many(&[
                     CommandComplete::new_rollback().message()?.backend(),
                     ReadyForQuery::in_transaction(false).message()?.backend(),
                 ])
-                .await?;
+                .await?
         } else {
             client_socket
                 .send_many(&[
@@ -40,8 +42,10 @@ impl<'a> Rollback<'a> {
                     CommandComplete::new_rollback().message()?.backend(),
                     ReadyForQuery::in_transaction(false).message()?.backend(),
                 ])
-                .await?;
-        }
+                .await?
+        };
+
+        self.stats.sent(bytes_sent);
 
         Ok(())
     }

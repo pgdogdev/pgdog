@@ -24,17 +24,19 @@ use crate::{
 
 use tracing::error;
 
+use super::deallocate::Deallocate;
+
 #[cfg(not(test))]
 pub(super) type Stream = crate::net::Stream;
 #[cfg(test)]
 pub(super) type Stream = super::test::Stream;
 
 #[derive(Debug)]
-pub struct QueryEngine {
+pub struct QueryEngine<'a> {
     /// Client's prepared statements cache.
-    pub(super) prepared_statements: PreparedStatements,
+    pub(super) prepared_statements: &'a mut PreparedStatements,
     /// Client parameters.
-    pub(super) params: Parameters,
+    pub(super) params: &'a mut Parameters,
     /// Transaction state.
     pub(super) transaction: Transaction,
     /// Connection the the backend.
@@ -61,11 +63,12 @@ pub enum EngineState<'a> {
     Run { command: &'a Command },
 }
 
-impl QueryEngine {
+impl<'a> QueryEngine<'a> {
     /// Create the query engine.
     pub fn new(
         comms: Comms,
-        params: Parameters,
+        params: &'a mut Parameters,
+        prepared_statements: &'a mut PreparedStatements,
         admin: bool,
         passthrough_password: &Option<String>,
     ) -> Result<Self, Error> {
@@ -82,7 +85,7 @@ impl QueryEngine {
             backend,
             transaction: Transaction::default(),
             params,
-            prepared_statements: PreparedStatements::new(),
+            prepared_statements,
             cross_shard_disabled: false,
             streaming: false,
         })
@@ -106,8 +109,8 @@ impl QueryEngine {
 
         let state = self.route_request(request, router, client_socket).await?;
 
-        match state {
-            EngineState::Done { in_transaction } => return Ok(in_transaction),
+        let in_transaction = match state {
+            EngineState::Done { in_transaction } => in_transaction,
             EngineState::Run { command } => {
                 self.connect(command.route()).await?;
 
@@ -128,17 +131,14 @@ impl QueryEngine {
                 let handle_response = !self.backend.copy_mode() && !self.streaming;
 
                 if handle_response {
-                    let ServerResponseResult { done, streaming } = ServerResponse::new(
-                        &mut self.backend,
-                        &mut self.stats,
-                        &mut self.transaction,
-                        &mut self.timeouts,
-                    )
-                    .handle(client_socket)
-                    .await?;
+                    let ServerResponseResult {
+                        done,
+                        streaming,
+                        in_transaction,
+                    } = ServerResponse::new(&mut self.backend, &mut self.stats, &mut self.timeouts)
+                        .handle(client_socket)
+                        .await?;
                     self.streaming = streaming;
-
-                    println!("done: {}", done);
 
                     if done {
                         Cleanup::new(
@@ -148,16 +148,27 @@ impl QueryEngine {
                             &mut self.comms,
                         )
                         .handle()?;
+                    }
 
-                        router.reset();
+                    // Server told us transaction is over. This happens when the
+                    // query parser is disabled (we didn't intercept `COMMIT` from the client).
+                    if !in_transaction {
+                        self.transaction.finish();
                     }
                 }
 
-                self.comms.update_stats(self.stats);
-
-                Ok(self.transaction.started())
+                self.transaction.started()
             }
+        };
+
+        // Update stats globally on client <-> server request.
+        self.comms.update_stats(self.stats);
+
+        if !in_transaction {
+            router.reset();
         }
+
+        Ok(in_transaction)
     }
 
     /// Read async message from backend, if any.
@@ -197,12 +208,12 @@ impl QueryEngine {
         }
     }
 
-    async fn route_request<'a>(
+    async fn route_request<'b>(
         &mut self,
         request: &ClientRequest,
-        router: &'a mut Router,
+        router: &'b mut Router,
         client_socket: &mut Stream,
-    ) -> Result<EngineState<'a>, Error> {
+    ) -> Result<EngineState<'b>, Error> {
         let context = RouterContext::new(
             request,                       // Query and parameters.
             self.backend.cluster()?,       // Cluster configuration.
@@ -221,7 +232,18 @@ impl QueryEngine {
                         return self.transaction_control(command, client_socket).await;
                     }
 
-                    Command::Deallocate => todo!(),
+                    Command::Deallocate => {
+                        Deallocate::new(
+                            &mut self.prepared_statements,
+                            self.transaction.started(),
+                            &mut self.stats,
+                        )
+                        .handle(client_socket)
+                        .await?;
+                        Ok(EngineState::Done {
+                            in_transaction: self.transaction.started(),
+                        })
+                    }
                     Command::Listen { channel, shard } => todo!(),
                     Command::Notify {
                         channel,
@@ -236,6 +258,7 @@ impl QueryEngine {
                             self.cross_shard_disabled,
                             route,
                             self.transaction.started(),
+                            &mut self.stats,
                         )
                         .handle(client_socket)
                         .await?;
@@ -257,11 +280,11 @@ impl QueryEngine {
             }
             Err(err) => {
                 if err.empty_query() {
-                    EmptyQuery::new(self.transaction.started())
+                    EmptyQuery::new(self.transaction.started(), &mut self.stats)
                         .handle(client_socket)
                         .await?;
                 } else {
-                    ErrorHandler::new(self.transaction.started())
+                    ErrorHandler::new(self.transaction.started(), &mut self.stats)
                         .handle(err, client_socket)
                         .await?;
                 }
@@ -273,14 +296,14 @@ impl QueryEngine {
     }
 
     /// Handle transaction control command.
-    async fn transaction_control<'a>(
+    async fn transaction_control<'b>(
         &mut self,
-        command: &'a Command,
+        command: &'b Command,
         client_socket: &mut Stream,
-    ) -> Result<EngineState<'a>, Error> {
+    ) -> Result<EngineState<'b>, Error> {
         match command {
             Command::StartTransaction(begin) => {
-                Begin::new(self.transaction.started())
+                Begin::new(self.transaction.started(), &mut self.stats)
                     .handle(client_socket)
                     .await?;
 
@@ -290,14 +313,27 @@ impl QueryEngine {
             }
 
             Command::RollbackTransaction => {
-                Rollback::new(self.transaction.started(), &mut self.backend)
-                    .handle(client_socket)
-                    .await?;
+                Rollback::new(
+                    self.transaction.started(),
+                    &mut self.backend,
+                    &mut self.stats,
+                )
+                .handle(client_socket)
+                .await?;
                 self.transaction.finish();
             }
 
             Command::CommitTransaction => {
                 Commit::new(&mut self.backend).handle(client_socket).await?;
+
+                Cleanup::new(
+                    &mut self.backend,
+                    &mut self.stats,
+                    &mut self.params,
+                    &mut self.comms,
+                )
+                .handle()?;
+
                 self.transaction.finish();
             }
 

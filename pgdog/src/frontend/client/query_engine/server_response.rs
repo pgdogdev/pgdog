@@ -19,6 +19,7 @@ use super::engine_impl::Stream;
 pub struct ServerResponseResult {
     pub(super) done: bool,
     pub(super) streaming: bool,
+    pub(super) in_transaction: bool,
 }
 
 pub struct ServerResponse<'a> {
@@ -26,8 +27,6 @@ pub struct ServerResponse<'a> {
     backend: &'a mut Connection,
     // Statistics.
     stats: &'a mut Stats,
-    // Transaction state.
-    transaction: &'a mut Transaction,
     // Timeouts
     timeouts: &'a mut Timeouts,
 }
@@ -44,13 +43,11 @@ impl<'a> ServerResponse<'a> {
     pub fn new(
         backend: &'a mut Connection,
         stats: &'a mut Stats,
-        transaction: &'a mut Transaction,
         timeouts: &'a mut Timeouts,
     ) -> Self {
         Self {
             backend,
             stats,
-            transaction,
             timeouts,
         }
     }
@@ -61,19 +58,21 @@ impl<'a> ServerResponse<'a> {
     ) -> Result<ServerResponseResult, Error> {
         let query_timeout = self.timeouts.query_timeout(&self.stats.state);
         let mut streaming = false;
+        let mut in_transaction = false;
 
         while self.backend.has_more_messages() {
             let message = timeout(query_timeout, self.backend.read()).await??;
             streaming = message.streaming();
 
-            ServerMessage::new(self.backend, self.transaction, self.stats)
+            in_transaction = ServerMessage::new(self.backend, self.stats)
                 .handle(message, client_socket)
                 .await?;
         }
 
         Ok(ServerResponseResult {
             done: self.backend.done(),
-            streaming: streaming,
+            streaming,
+            in_transaction,
         })
     }
 }

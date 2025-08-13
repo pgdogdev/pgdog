@@ -16,6 +16,7 @@ impl<'a> Commit<'a> {
     }
 
     pub async fn handle(&mut self, client_socket: &mut Stream) -> Result<(), Error> {
+        // TODO: Handle 2pc.
         if self.backend.connected() {
             self.backend.execute("COMMIT").await?;
         }

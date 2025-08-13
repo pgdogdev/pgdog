@@ -1,19 +1,26 @@
-use crate::{frontend::Error, net::ErrorResponse};
+use crate::{
+    frontend::{Error, Stats},
+    net::ErrorResponse,
+};
 use tracing::error;
 
 use super::engine_impl::Stream;
 
-pub struct ErrorHandler {
+pub struct ErrorHandler<'a> {
     in_transaction: bool,
+    stats: &'a mut Stats,
 }
 
-impl ErrorHandler {
-    pub fn new(in_transaction: bool) -> Self {
-        Self { in_transaction }
+impl<'a> ErrorHandler<'a> {
+    pub fn new(in_transaction: bool, stats: &'a mut Stats) -> Self {
+        Self {
+            in_transaction,
+            stats,
+        }
     }
 
     pub async fn handle(
-        &self,
+        &mut self,
         err: impl std::error::Error,
         stream: &mut Stream,
     ) -> Result<(), Error> {
@@ -21,12 +28,14 @@ impl ErrorHandler {
 
         error!("{} [{:?}]", err, stream.peer_addr());
 
-        stream
+        let bytes_sent = stream
             .error(
                 ErrorResponse::syntax(err.to_string().as_str()),
                 self.in_transaction,
             )
             .await?;
+
+        self.stats.sent(bytes_sent);
 
         Ok(())
     }
