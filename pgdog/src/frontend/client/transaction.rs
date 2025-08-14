@@ -3,10 +3,7 @@ use lazy_static::lazy_static;
 use crate::{
     backend::Cluster,
     config::ReadWriteStrategy,
-    frontend::{
-        buffer::BufferedQuery,
-        router::{parser::Shard, Route},
-    },
+    frontend::{buffer::BufferedQuery, router::Route},
     net::Parameters,
 };
 
@@ -48,7 +45,7 @@ impl Transaction {
     }
 
     /// Start transaction.
-    pub fn start(&mut self) {
+    pub fn server_start(&mut self) {
         self.started = true;
     }
 

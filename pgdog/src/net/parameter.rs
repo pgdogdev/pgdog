@@ -42,12 +42,6 @@ impl<T: ToString> From<(T, T)> for Parameter {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct MergeResult {
-    pub queries: Vec<Query>,
-    pub changed_params: usize,
-}
-
 #[derive(Debug, Clone, Hash, PartialEq)]
 pub enum ParameterValue {
     String(String),
@@ -67,12 +61,12 @@ impl MemoryUsage for ParameterValue {
 impl Display for ParameterValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::String(s) => write!(f, "'{}'", s),
+            Self::String(s) => write!(f, "'{}'", s.replace("'", "''")),
             Self::Tuple(t) => write!(
                 f,
                 "{}",
                 t.iter()
-                    .map(|s| format!("'{}'", s))
+                    .map(|s| format!("'{}'", s.replace("'", "''")))
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
@@ -179,7 +173,7 @@ impl Parameters {
     pub fn set_queries(&self) -> Vec<Query> {
         self.params
             .iter()
-            .map(|(name, value)| Query::new(format!(r#"SET "{}" TO {}"#, name, value)))
+            .map(|(name, value)| Query::new(set_statement(name, value)))
             .collect()
     }
 
@@ -218,6 +212,10 @@ impl Parameters {
         self.get(name)
             .map_or(default_value, |p| p.as_str().unwrap_or(default_value))
     }
+}
+
+pub fn set_statement(name: &str, value: &ParameterValue) -> String {
+    format!("SET \"{}\" TO {}", name, value)
 }
 
 impl Deref for Parameters {

@@ -12,6 +12,7 @@ pub mod rollback;
 pub mod server_message;
 pub mod server_response;
 pub mod set;
+pub mod show_shards;
 
 #[cfg(test)]
 mod test;

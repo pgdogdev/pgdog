@@ -143,6 +143,12 @@ impl DataRow {
         Self { columns: vec![] }
     }
 
+    pub fn from_columns(columns: &[impl ToDataRowColumn]) -> Self {
+        Self {
+            columns: columns.iter().map(|c| c.to_data_row_column()).collect(),
+        }
+    }
+
     /// Add a column to the data row.
     pub fn add(&mut self, value: impl ToDataRowColumn) -> &mut Self {
         self.columns.push(value.to_data_row_column());
@@ -160,13 +166,13 @@ impl DataRow {
     }
 
     /// Create data row from columns.
-    pub fn from_columns(columns: Vec<impl ToDataRowColumn>) -> Self {
-        let mut dr = Self::new();
-        for column in columns {
-            dr.add(column);
-        }
-        dr
-    }
+    // pub fn from_columns(columns: Vec<impl ToDataRowColumn>) -> Self {
+    //     let mut dr = Self::new();
+    //     for column in columns {
+    //         dr.add(column);
+    //     }
+    //     dr
+    // }
 
     /// Get data for column at index.
     #[inline]

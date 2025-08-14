@@ -47,6 +47,7 @@ impl<'a> Cleanup<'a> {
 
         // Cleanup any transaction-level SETs.
         for key in self.transaction.params().keys() {
+            debug!("removing transaction-level \"{}\" parameter", key);
             self.params.remove(key);
         }
 
@@ -54,6 +55,8 @@ impl<'a> Cleanup<'a> {
         if self.backend.transaction_mode() {
             self.backend.disconnect();
         }
+
+        self.stats.transaction();
 
         debug!(
             "transaction finished [{:.3}ms]",

@@ -31,7 +31,7 @@ fn test_route_management() {
     assert_eq!(route.shard(), &Shard::All); // Default route targets all shards
 
     // Test after starting transaction (still buffered until take_begin())
-    transaction.start();
+    transaction.server_start();
     assert!(transaction.started());
     assert!(transaction.buffered()); // Still buffered until take_begin() called
 
@@ -64,7 +64,7 @@ fn test_route_read_write_preservation() {
     transaction.set_route(&write_route);
 
     // Start transaction and consume buffered query to get the actual route (not default)
-    transaction.start();
+    transaction.server_start();
     transaction.take_begin(); // Consume buffered query
     let route = transaction.transaction_route();
     assert!(route.is_read()); // Should preserve read from first route
@@ -82,7 +82,7 @@ fn test_route_read_write_preservation() {
     transaction2.set_route(&read_route);
 
     // Start transaction and consume buffered query to get the actual route (not default)
-    transaction2.start();
+    transaction2.server_start();
     transaction2.take_begin(); // Consume buffered query
     let route = transaction2.transaction_route();
     assert!(route.is_write()); // Should preserve write from first route

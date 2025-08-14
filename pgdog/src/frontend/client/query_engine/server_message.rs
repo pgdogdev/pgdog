@@ -2,7 +2,7 @@
 
 use crate::{
     backend::pool::Connection,
-    frontend::{client::transaction::Transaction, Error, Stats},
+    frontend::{Error, Stats},
     net::{Message, Protocol},
 };
 
@@ -34,7 +34,6 @@ impl<'a> ServerMessage<'a> {
 
             if message.transaction_finished() {
                 self.backend.mirror_flush();
-                self.stats.transaction();
                 in_transaction = false;
             }
 

@@ -13,16 +13,16 @@ use crate::{
                 rollback::Rollback,
                 server_response::{ServerResponse, ServerResponseResult},
                 set::Set,
+                show_shards::ShowShards,
             },
             timeouts::Timeouts,
             transaction::Transaction,
         },
         ClientRequest, Command, Comms, Error, PreparedStatements, Router, RouterContext, Stats,
     },
-    net::{BackendKeyData, Message, Parameters},
+    net::{parameter::set_statement, BackendKeyData, Message, Parameters},
 };
 
-use pg_query::protobuf::Param;
 use tracing::error;
 
 use super::{deallocate::Deallocate, pub_sub::PubSub};
@@ -56,7 +56,7 @@ pub struct QueryEngine {
     pub(super) streaming: bool,
 }
 
-pub enum EngineState<'a> {
+enum EngineState<'a> {
     /// Engine finished.
     Done { in_transaction: bool },
 
@@ -122,10 +122,7 @@ impl QueryEngine {
             EngineState::Run { command } => {
                 self.transaction.set_route(command.route());
 
-                if let Err(err) = self.connect().await {
-                    ErrorHandler::new(self.transaction.started(), &mut self.stats)
-                        .handle(&err, client_socket)
-                        .await?;
+                if !self.connect(client_socket).await? {
                     self.transaction.started()
                 } else {
                     if request.executable() {
@@ -173,6 +170,9 @@ impl QueryEngine {
                         // query parser is disabled (we didn't intercept `COMMIT` from the client).
                         if !in_transaction {
                             self.transaction.finish();
+                        } else {
+                            // Server told us we started a transaction.
+                            self.transaction.server_start();
                         }
                     }
                     self.transaction.started()
@@ -198,9 +198,9 @@ impl QueryEngine {
     }
 
     /// Connect to one or many servers.
-    async fn connect(&mut self) -> Result<(), Error> {
+    async fn connect(&mut self, client_socket: &mut Stream) -> Result<bool, Error> {
         if !self.backend.needs_connect() {
-            return Ok(());
+            return Ok(true);
         }
 
         let request = Request::new(self.client_id);
@@ -220,13 +220,17 @@ impl QueryEngine {
                 // or another leaky transaction mode abstraction.
                 self.backend.lock(route.lock_session());
                 self.comms.update_stats(self.stats);
-                self.transaction.start();
 
-                Ok(())
+                Ok(true)
             }
             Err(err) => {
                 self.stats.error();
-                Err(err.into())
+                // Notify client of error.
+                ErrorHandler::new(self.transaction.started(), &mut self.stats)
+                    .handle(&err, client_socket)
+                    .await?;
+
+                Ok(false)
             }
         }
     }
@@ -254,7 +258,7 @@ impl QueryEngine {
                     | Command::RollbackTransaction => {
                         return self.transaction_control(command, client_socket).await;
                     }
-
+                    // DEALLOCATE <stmt>;
                     Command::Deallocate => {
                         Deallocate::new(
                             &mut self.prepared_statements,
@@ -267,6 +271,7 @@ impl QueryEngine {
                             in_transaction: self.transaction.started(),
                         })
                     }
+                    // LISTEN, NOTIFY, UNLISTEN
                     Command::Listen { .. } | Command::Notify { .. } | Command::Unlisten(_) => {
                         PubSub::new(
                             &mut self.backend,
@@ -280,16 +285,32 @@ impl QueryEngine {
                             in_transaction: self.transaction.started(),
                         })
                     }
+                    // SET
                     Command::Set { name, value } => {
-                        Set::new(&mut self.params, &mut self.stats, &mut self.transaction)
-                            .handle(name, value, client_socket)
+                        // SET inside transaction aren't persisted on the session.
+                        if self.transaction.started() && self.connect(client_socket).await? {
+                            self.backend.execute(&set_statement(name, value)).await?;
+                        } else {
+                            Set::new(&mut self.params, &mut self.stats)
+                                .handle(name, value, client_socket)
+                                .await?;
+                        }
+
+                        Ok(EngineState::Done {
+                            in_transaction: self.transaction.started(),
+                        })
+                    }
+                    // SHOW pgdog.shards
+                    Command::Shards(shards) => {
+                        ShowShards::new(*shards, &mut self.stats, self.transaction.started())
+                            .handle(client_socket)
                             .await?;
 
                         Ok(EngineState::Done {
                             in_transaction: self.transaction.started(),
                         })
                     }
-                    Command::Shards(shards) => todo!(),
+                    // Simple query or prepared statement
                     Command::Query(route) => {
                         let blocked = CrossShardCheck::new(
                             self.cross_shard_disabled,
@@ -308,6 +329,7 @@ impl QueryEngine {
                             Ok(EngineState::Run { command })
                         }
                     }
+                    // COPY
                     Command::Copy(_) => Ok(EngineState::Run { command }),
                     cmd => {
                         error!("unexpected command: {:?}", cmd);

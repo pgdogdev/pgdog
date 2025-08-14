@@ -5,10 +5,7 @@ use tokio::time::timeout;
 use crate::{
     backend::pool::Connection,
     frontend::{
-        client::{
-            query_engine::server_message::ServerMessage, timeouts::Timeouts,
-            transaction::Transaction,
-        },
+        client::{query_engine::server_message::ServerMessage, timeouts::Timeouts},
         Error, Stats,
     },
     net::Protocol,

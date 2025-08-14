@@ -569,7 +569,7 @@ impl Client {
 
         // Start transaction if we haven't already.
         if !self.transaction.started() {
-            self.transaction.start();
+            self.transaction.server_start();
         }
 
         // We don't start a transaction on the servers until
