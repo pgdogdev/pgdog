@@ -151,7 +151,16 @@ mod test {
                 );
                 assert_eq!(
                     insert.columns(),
-                    vec![Column { name: "id" }, Column { name: "email" }]
+                    vec![
+                        Column {
+                            name: "id",
+                            ..Default::default()
+                        },
+                        Column {
+                            name: "email",
+                            ..Default::default()
+                        }
+                    ]
                 );
             }
 

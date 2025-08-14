@@ -16,7 +16,7 @@ use crate::{
         Cluster,
     },
     config::config,
-    frontend::router::parser::Table,
+    frontend::router::parser::{sequence::Sequence, Column, Table},
 };
 
 use tokio::process::Command;
@@ -158,8 +158,10 @@ pub struct PgDumpOutput {
 pub enum SyncState {
     PreData,
     PostData,
+    Cutover,
 }
 
+#[derive(Debug)]
 pub enum Statement<'a> {
     Index {
         table: Table<'a>,
@@ -175,15 +177,28 @@ pub enum Statement<'a> {
     Other {
         sql: &'a str,
     },
+
+    SequenceOwner {
+        column: Column<'a>,
+        sequence: Sequence<'a>,
+        sql: &'a str,
+    },
+
+    SequenceSetMax {
+        sequence: Sequence<'a>,
+        sql: String,
+    },
 }
 
 impl<'a> Deref for Statement<'a> {
-    type Target = &'a str;
+    type Target = str;
     fn deref(&self) -> &Self::Target {
         match self {
-            Self::Index { sql, .. } => sql,
-            Self::Table { sql, .. } => sql,
-            Self::Other { sql } => sql,
+            Self::Index { sql, .. } => *sql,
+            Self::Table { sql, .. } => *sql,
+            Self::SequenceOwner { sql, .. } => *sql,
+            Self::Other { sql } => *sql,
+            Self::SequenceSetMax { sql, .. } => sql.as_str(),
         }
     }
 }
@@ -276,9 +291,30 @@ impl PgDumpOutput {
                             }
                         }
 
-                        NodeEnum::AlterSeqStmt(_stmt) => {
-                            if state == SyncState::PreData {
-                                result.push(original.into());
+                        NodeEnum::AlterSeqStmt(stmt) => {
+                            if matches!(state, SyncState::PreData | SyncState::Cutover) {
+                                let sequence = stmt
+                                    .sequence
+                                    .as_ref()
+                                    .map(Table::from)
+                                    .ok_or(Error::MissingEntity)?;
+                                let sequence = Sequence::from(sequence);
+                                let column = stmt.options.first().ok_or(Error::MissingEntity)?;
+                                let column =
+                                    Column::try_from(column).map_err(|_| Error::MissingEntity)?;
+
+                                if state == SyncState::PreData {
+                                    result.push(Statement::SequenceOwner {
+                                        column,
+                                        sequence,
+                                        sql: original,
+                                    });
+                                } else {
+                                    let sql = sequence
+                                        .setval_from_column(&column)
+                                        .map_err(|_| Error::MissingEntity)?;
+                                    result.push(Statement::SequenceSetMax { sequence, sql })
+                                }
                             }
                         }
 
@@ -381,7 +417,9 @@ mod test {
         .await
         .unwrap();
 
-        let output = output.statements(SyncState::PreData).unwrap();
+        let output_pre = output.statements(SyncState::PreData).unwrap();
+        let output_post = output.statements(SyncState::PostData).unwrap();
+        let output_cutover = output.statements(SyncState::Cutover).unwrap();
 
         let mut dest = test_server().await;
         dest.execute("DROP SCHEMA IF EXISTS test_pg_dump_execute_dest CASCADE")
@@ -395,7 +433,7 @@ mod test {
             .await
             .unwrap();
 
-        for stmt in output {
+        for stmt in output_pre {
             // Hack around us using the same database as destination.
             // I know, not very elegant.
             let stmt = stmt.replace("pgdog.", "test_pg_dump_execute_dest.");
@@ -408,7 +446,30 @@ mod test {
                 .unwrap();
             assert_eq!(id[0], i + 1); // Sequence has made it over.
 
-            // Unique index has not made it over tho.
+            // Unique index didn't make it over.
+        }
+
+        dest.execute("DELETE FROM test_pg_dump_execute_dest.test_pg_dump_execute")
+            .await
+            .unwrap();
+
+        for stmt in output_post {
+            let stmt = stmt.replace("pgdog.", "test_pg_dump_execute_dest.");
+            dest.execute(stmt).await.unwrap();
+        }
+
+        let q = "INSERT INTO test_pg_dump_execute_dest.test_pg_dump_execute VALUES (DEFAULT, 'test@test', NOW()) RETURNING id";
+        assert!(dest.execute(q).await.is_ok());
+        let err = dest.execute(q).await.err().unwrap();
+        assert!(err.to_string().contains(
+            r#"duplicate key value violates unique constraint "test_pg_dump_execute_email_key""#
+        )); // Unique index made it over.
+
+        assert_eq!(output_cutover.len(), 1);
+        for stmt in output_cutover {
+            let stmt = stmt.replace("pgdog.", "test_pg_dump_execute_dest.");
+            assert!(stmt.starts_with("SELECT setval('"));
+            dest.execute(stmt).await.unwrap();
         }
 
         dest.execute("DROP SCHEMA test_pg_dump_execute_dest CASCADE")

@@ -50,7 +50,7 @@ use tracing::{debug, trace};
 ///
 #[derive(Debug)]
 pub struct QueryParser {
-    // The statement is executed inside a tranasction.
+    // The statement is executed inside a transaction.
     in_transaction: bool,
     // No matter what query is executed, we'll send it to the primary.
     write_override: bool,

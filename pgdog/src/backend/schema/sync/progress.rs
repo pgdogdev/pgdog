@@ -19,6 +19,10 @@ pub enum Item {
         schema: String,
         name: String,
     },
+    // SequenceOwner {
+    //     sequence: String,
+    //     owner: String,
+    // },
     Other {
         sql: String,
     },
@@ -87,6 +91,12 @@ impl From<&Statement<'_>> for Item {
                 name: table.name.to_string(),
             },
             Statement::Other { sql } => Item::Other {
+                sql: sql.to_string(),
+            },
+            Statement::SequenceOwner { sql, .. } => Item::Other {
+                sql: sql.to_string(),
+            },
+            Statement::SequenceSetMax { sql, .. } => Item::Other {
                 sql: sql.to_string(),
             },
         }

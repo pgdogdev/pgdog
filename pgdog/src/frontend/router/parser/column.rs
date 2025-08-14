@@ -4,12 +4,49 @@ use pg_query::{
     protobuf::{self, String as PgQueryString},
     Node, NodeEnum,
 };
+use std::fmt::{Display, Formatter, Result as FmtResult};
+
+use super::Table;
+use crate::util::escape_identifier;
 
 /// Column name extracted from a query.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Column<'a> {
     /// Column name.
     pub name: &'a str,
+    /// Table name.
+    pub table: Option<&'a str>,
+    /// Schema name.
+    pub schema: Option<&'a str>,
+}
+
+/// Owned version of Column that owns its string data.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct OwnedColumn {
+    /// Column name.
+    pub name: String,
+    /// Table name.
+    pub table: Option<String>,
+    /// Schema name.
+    pub schema: Option<String>,
+}
+
+impl<'a> Column<'a> {
+    pub fn table(&self) -> Option<Table<'a>> {
+        if let Some(table) = self.table {
+            Some(Table {
+                name: table,
+                schema: self.schema.clone(),
+            })
+        } else {
+            None
+        }
+    }
+
+    /// Convert this borrowed Column to an owned OwnedColumn
+    pub fn to_owned(&self) -> OwnedColumn {
+        OwnedColumn::from(*self)
+    }
 }
 
 impl<'a> Column<'a> {
@@ -17,9 +54,64 @@ impl<'a> Column<'a> {
         match &string.node {
             Some(NodeEnum::String(protobuf::String { sval })) => Ok(Self {
                 name: sval.as_str(),
+                ..Default::default()
             }),
 
             _ => Err(()),
+        }
+    }
+}
+
+impl<'a> Display for Column<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        match (self.schema, self.table) {
+            (Some(schema), Some(table)) => {
+                write!(
+                    f,
+                    "\"{}\".\"{}\".\"{}\"",
+                    escape_identifier(schema),
+                    escape_identifier(table),
+                    escape_identifier(self.name)
+                )
+            }
+            (None, Some(table)) => {
+                write!(
+                    f,
+                    "\"{}\".\"{}\"",
+                    escape_identifier(table),
+                    escape_identifier(self.name)
+                )
+            }
+            _ => {
+                write!(f, "\"{}\"", escape_identifier(self.name))
+            }
+        }
+    }
+}
+
+impl Display for OwnedColumn {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        let borrowed = Column::from(self);
+        borrowed.fmt(f)
+    }
+}
+
+impl<'a> From<Column<'a>> for OwnedColumn {
+    fn from(column: Column<'a>) -> Self {
+        Self {
+            name: column.name.to_owned(),
+            table: column.table.map(|s| s.to_owned()),
+            schema: column.schema.map(|s| s.to_owned()),
+        }
+    }
+}
+
+impl<'a> From<&'a OwnedColumn> for Column<'a> {
+    fn from(owned: &'a OwnedColumn) -> Self {
+        Self {
+            name: &owned.name,
+            table: owned.table.as_deref(),
+            schema: owned.schema.as_deref(),
         }
     }
 }
@@ -36,27 +128,78 @@ impl<'a> TryFrom<&'a Option<NodeEnum>> for Column<'a> {
     type Error = ();
 
     fn try_from(value: &'a Option<NodeEnum>) -> Result<Self, Self::Error> {
+        fn from_node(node: &Node) -> Option<&str> {
+            if let Some(NodeEnum::String(PgQueryString { sval })) = &node.node {
+                Some(sval.as_str())
+            } else {
+                None
+            }
+        }
+
+        fn from_slice<'a>(nodes: &'a [Node]) -> Result<Column<'a>, ()> {
+            match nodes.len() {
+                3 => {
+                    let schema = nodes.iter().nth(0).map(from_node).flatten();
+                    let table = nodes.iter().nth(1).map(from_node).flatten();
+                    let name = nodes.iter().nth(2).map(from_node).flatten().ok_or(())?;
+
+                    return Ok(Column {
+                        schema,
+                        table,
+                        name,
+                    });
+                }
+
+                2 => {
+                    let table = nodes.iter().nth(0).map(from_node).flatten();
+                    let name = nodes.iter().nth(1).map(from_node).flatten().ok_or(())?;
+
+                    return Ok(Column {
+                        schema: None,
+                        table,
+                        name,
+                    });
+                }
+
+                1 => {
+                    let name = nodes.iter().nth(0).map(from_node).flatten().ok_or(())?;
+
+                    return Ok(Column {
+                        name,
+                        ..Default::default()
+                    });
+                }
+
+                _ => return Err(()),
+            }
+        }
+
         match value {
             Some(NodeEnum::ResTarget(res_target)) => {
                 return Ok(Self {
                     name: res_target.name.as_str(),
+                    ..Default::default()
                 });
             }
 
-            Some(NodeEnum::ColumnRef(column_ref)) => {
-                if let Some(node) = column_ref.fields.last() {
-                    if let Some(NodeEnum::String(PgQueryString { sval })) = &node.node {
-                        return Ok(Self {
-                            name: sval.as_str(),
-                        });
+            Some(NodeEnum::List(list)) => from_slice(&list.items),
+
+            Some(NodeEnum::ColumnRef(column_ref)) => from_slice(&column_ref.fields),
+
+            Some(NodeEnum::DefElem(list)) => {
+                if list.defname == "owned_by" {
+                    if let Some(ref node) = list.arg {
+                        Ok(Column::try_from(&node.node)?)
+                    } else {
+                        Err(())
                     }
+                } else {
+                    Err(())
                 }
             }
 
             _ => return Err(()),
         }
-
-        Err(())
     }
 }
 
@@ -92,11 +235,41 @@ mod test {
                     .unwrap();
                 assert_eq!(
                     columns,
-                    vec![Column { name: "id" }, Column { name: "email" }]
+                    vec![
+                        Column {
+                            name: "id",
+                            ..Default::default()
+                        },
+                        Column {
+                            name: "email",
+                            ..Default::default()
+                        }
+                    ]
                 );
             }
 
             _ => panic!("not a select"),
+        }
+    }
+
+    #[test]
+    fn test_column_sequence() {
+        let query =
+            parse("ALTER SEQUENCE public.user_profiles_id_seq OWNED BY public.user_profiles.id")
+                .unwrap();
+        let alter = query.protobuf.stmts.first().unwrap().stmt.as_ref().unwrap();
+        match alter.node {
+            Some(NodeEnum::AlterSeqStmt(ref stmt)) => {
+                if let Some(node) = stmt.options.first() {
+                    let column = Column::try_from(node).unwrap();
+                    assert_eq!(column.name, "id");
+                    assert_eq!(column.schema, Some("public"));
+                    assert_eq!(column.table, Some("user_profiles"));
+                } else {
+                    panic!("no owned by clause");
+                }
+            }
+            _ => panic!("not an alter sequence"),
         }
     }
 }
