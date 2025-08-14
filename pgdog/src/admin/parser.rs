@@ -1,5 +1,7 @@
 //! Admin command parser.
 
+use crate::admin::pause_traffic::PauseTraffic;
+
 use super::{
     ban::Ban, pause::Pause, prelude::Message, probe::Probe, reconnect::Reconnect, reload::Reload,
     reset_query_cache::ResetQueryCache, set::Set, setup_schema::SetupSchema,
@@ -14,6 +16,7 @@ use tracing::debug;
 /// Parser result.
 pub enum ParseResult {
     Pause(Pause),
+    PauseTraffic(PauseTraffic),
     Reconnect(Reconnect),
     ShowClients(ShowClients),
     Reload(Reload),
@@ -41,6 +44,7 @@ impl ParseResult {
 
         match self {
             Pause(pause) => pause.execute().await,
+            PauseTraffic(pause_traffic) => pause_traffic.execute().await,
             Reconnect(reconnect) => reconnect.execute().await,
             ShowClients(show_clients) => show_clients.execute().await,
             Reload(reload) => reload.execute().await,
@@ -68,6 +72,7 @@ impl ParseResult {
 
         match self {
             Pause(pause) => pause.name(),
+            PauseTraffic(pause_traffic) => pause_traffic.name(),
             Reconnect(reconnect) => reconnect.name(),
             ShowClients(show_clients) => show_clients.name(),
             Reload(reload) => reload.name(),
@@ -101,6 +106,9 @@ impl Parser {
 
         Ok(match iter.next().ok_or(Error::Syntax)?.trim() {
             "pause" | "resume" => ParseResult::Pause(Pause::parse(&sql)?),
+            "pause_traffic" | "resume_traffic" => {
+                ParseResult::PauseTraffic(PauseTraffic::parse(&sql)?)
+            }
             "shutdown" => ParseResult::Shutdown(Shutdown::parse(&sql)?),
             "reconnect" => ParseResult::Reconnect(Reconnect::parse(&sql)?),
             "reload" => ParseResult::Reload(Reload::parse(&sql)?),

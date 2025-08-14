@@ -28,6 +28,7 @@ pub mod show_servers;
 pub mod show_stats;
 pub mod show_version;
 pub mod shutdown;
+pub mod pause_traffic;
 
 pub use error::Error;
 
