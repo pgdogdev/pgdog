@@ -11,6 +11,7 @@ def test_prepared_full():
         cur.execute("PREPARE test_stmt AS SELECT 2")
 
     conn = normal_sync()
+    conn.autocommit = True
     for _ in range(5):
         cur = conn.cursor()
 

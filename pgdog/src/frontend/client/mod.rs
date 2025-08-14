@@ -18,21 +18,23 @@ use crate::backend::{
 };
 use crate::config::{self, AuthType};
 use crate::frontend::buffer::BufferedQuery;
+use crate::frontend::client::query_engine::{QueryEngine, QueryEngineContext};
 #[cfg(debug_assertions)]
 use crate::frontend::QueryLogger;
 use crate::net::messages::{
     Authentication, BackendKeyData, CommandComplete, ErrorResponse, FromBytes, Message, Password,
     Protocol, ReadyForQuery, ToBytes,
 };
-use crate::net::ProtocolMessage;
 use crate::net::{parameter::Parameters, Stream};
 use crate::net::{DataRow, EmptyQueryResponse, Field, NoticeResponse, RowDescription};
+use crate::net::{ProtocolMessage, Query};
 use crate::state::State;
 use crate::stats::memory::MemoryUsage;
 
 pub mod counter;
 pub mod engine;
 pub mod inner;
+pub mod query_engine;
 pub mod timeouts;
 
 pub use engine::Engine;
@@ -58,6 +60,7 @@ pub struct Client {
     cross_shard_disabled: bool,
     passthrough_password: Option<String>,
     replication_mode: bool,
+    query_engine: QueryEngine,
 }
 
 impl MemoryUsage for Client {
@@ -243,6 +246,7 @@ impl Client {
             shutdown: false,
             cross_shard_disabled: false,
             passthrough_password,
+            query_engine: QueryEngine::default(),
         };
 
         drop(conn);
@@ -285,6 +289,7 @@ impl Client {
             cross_shard_disabled: false,
             passthrough_password: None,
             replication_mode: false,
+            query_engine: QueryEngine::default(),
         }
     }
 
@@ -311,6 +316,7 @@ impl Client {
     async fn run(&mut self) -> Result<(), Error> {
         let mut inner = Inner::new(self)?;
         let shutdown = self.comms.shutting_down();
+        let mut query_engine = QueryEngine::default();
 
         loop {
             let query_timeout = self.timeouts.query_timeout(&inner.stats.state);
@@ -334,7 +340,7 @@ impl Client {
                 buffer = self.buffer(&inner.stats.state) => {
                     let event = buffer?;
                     if !self.request_buffer.is_empty() {
-                        let disconnect = self.client_messages(inner.get()).await?;
+                        let disconnect = self.client_messages(inner.get(), &mut query_engine).await?;
 
                         if disconnect {
                             break;
@@ -367,7 +373,16 @@ impl Client {
     }
 
     /// Handle client messages.
-    async fn client_messages(&mut self, mut inner: InnerBorrow<'_>) -> Result<bool, Error> {
+    async fn client_messages(
+        &mut self,
+        mut inner: InnerBorrow<'_>,
+        query_engine: &mut QueryEngine,
+    ) -> Result<bool, Error> {
+        let mut context = QueryEngineContext::new(self, &mut inner);
+        query_engine.handle(&mut context).await?;
+        self.in_transaction = context.in_transaction();
+        return Ok(false);
+
         inner
             .stats
             .received(self.request_buffer.total_message_len());
