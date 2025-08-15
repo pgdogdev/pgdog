@@ -10,7 +10,7 @@ impl QueryEngine {
         value: ParameterValue,
     ) -> Result<(), Error> {
         context.params.insert(name, value);
-        context.comms.update_params(&context.params);
+        self.comms.update_params(&context.params);
 
         let bytes_sent = context
             .stream
@@ -20,7 +20,7 @@ impl QueryEngine {
             ])
             .await?;
 
-        context.stats.sent(bytes_sent);
+        self.stats.sent(bytes_sent);
         self.router.reset();
 
         Ok(())

@@ -1,11 +1,11 @@
 use crate::{
-    backend::pool::Request,
+    backend::pool::{Connection, Request},
     frontend::{
         buffer::BufferedQuery,
         router::{parser::Shard, Route},
-        Command, Error, Router, RouterContext,
+        Client, Command, Comms, Error, Router, RouterContext, Stats,
     },
-    net::ErrorResponse,
+    net::{ErrorResponse, Message, Parameters},
     state::State,
 };
 
@@ -30,23 +30,69 @@ pub use context::QueryEngineContext;
 pub struct QueryEngine {
     begin_stmt: Option<BufferedQuery>,
     router: Router,
+    comms: Comms,
+    stats: Stats,
+    backend: Connection,
     streaming: bool,
 }
 
 impl<'a> QueryEngine {
+    /// Create new query engine.
+    pub fn new(
+        params: &Parameters,
+        comms: &Comms,
+        admin: bool,
+        passthrough_password: &Option<String>,
+    ) -> Result<Self, Error> {
+        let user = params.get_required("user")?;
+        let database = params.get_default("database", user);
+
+        let backend = Connection::new(user, database, admin, passthrough_password)?;
+
+        Ok(Self {
+            backend,
+            comms: comms.clone(),
+            ..Default::default()
+        })
+    }
+
+    pub fn from_client(client: &Client) -> Result<Self, Error> {
+        Self::new(
+            &client.params,
+            &client.comms,
+            client.admin,
+            &client.passthrough_password,
+        )
+    }
+
+    /// Wait for an async message from the backend.
+    pub async fn read_backend(&mut self) -> Result<Message, Error> {
+        Ok(self.backend.read().await?)
+    }
+
+    /// Query engine finished executing.
+    pub fn done(&self) -> bool {
+        !self.backend.connected() && self.begin_stmt.is_none()
+    }
+
+    /// Current state.
+    pub fn client_state(&self) -> State {
+        self.stats.state
+    }
+
     /// Handle client request.
     pub async fn handle(&mut self, context: &mut QueryEngineContext<'_>) -> Result<(), Error> {
-        context.stats.received(context.buffer.total_message_len());
+        self.stats.received(context.buffer.total_message_len());
 
         // Intercept commands we don't have to forward to a server.
-        if self.check_for_incomplete(context).await? {
-            Self::update_stats(context);
+        if self.intercept_incomplete(context).await? {
+            self.update_stats(context);
             return Ok(());
         }
 
         // Route transaction to the right servers.
         if !self.route_transaction(context).await? {
-            Self::update_stats(context);
+            self.update_stats(context);
             debug!("transaction has nowhere to go");
             return Ok(());
         }
@@ -54,7 +100,7 @@ impl<'a> QueryEngine {
         // Queue up request to mirrors, if any.
         // Do this before sending query to actual server
         // to have accurate timings between queries.
-        context.backend.mirror(&context.buffer);
+        self.backend.mirror(&context.buffer);
 
         let command = self.router.command();
         let route = command.route().clone();
@@ -87,34 +133,33 @@ impl<'a> QueryEngine {
                 self.query(context, &route).await?;
             }
             Command::Deallocate => self.deallocate(context).await?,
-            command => self.unknown_command(context, command).await?,
+            command => self.unknown_command(context, command.clone()).await?,
         }
 
         if !context.in_transaction {
-            if !context.backend.copy_mode() {
+            if !self.backend.copy_mode() {
                 self.router.reset();
             }
 
-            context.backend.mirror_flush();
+            self.backend.mirror_flush();
         }
 
-        Self::update_stats(context);
+        self.update_stats(context);
 
         Ok(())
     }
 
-    fn update_stats(context: &mut QueryEngineContext<'_>) {
+    fn update_stats(&mut self, context: &mut QueryEngineContext<'_>) {
         let state = match context.in_transaction {
             true => State::IdleInTransaction,
             false => State::Idle,
         };
 
-        context.stats.state = state;
+        self.stats.state = state;
 
-        context
-            .stats
+        self.stats
             .prepared_statements(context.prepared_statements.len_local());
 
-        context.comms.stats(*context.stats);
+        self.comms.stats(self.stats);
     }
 }

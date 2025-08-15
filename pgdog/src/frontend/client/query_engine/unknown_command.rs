@@ -2,9 +2,9 @@ use super::*;
 
 impl QueryEngine {
     pub(super) async fn unknown_command(
-        &self,
+        &mut self,
         context: &mut QueryEngineContext<'_>,
-        command: &Command,
+        command: Command,
     ) -> Result<(), Error> {
         let bytes_sent = context
             .stream
@@ -14,7 +14,7 @@ impl QueryEngine {
             )
             .await?;
 
-        context.stats.sent(bytes_sent);
+        self.stats.sent(bytes_sent);
 
         Ok(())
     }

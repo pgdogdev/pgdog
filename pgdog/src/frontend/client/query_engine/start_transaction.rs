@@ -19,7 +19,7 @@ impl QueryEngine {
             ])
             .await?;
 
-        context.stats.sent(bytes_sent);
+        self.stats.sent(bytes_sent);
         self.begin_stmt = Some(begin);
 
         Ok(())

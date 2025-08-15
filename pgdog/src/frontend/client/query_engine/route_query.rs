@@ -14,13 +14,13 @@ impl QueryEngine {
         }
 
         // Admin doesn't have a cluster.
-        if context.backend.cluster().is_err() {
+        if self.backend.cluster().is_err() {
             return Ok(true);
         }
 
         let router_context = RouterContext::new(
             context.buffer,
-            context.backend.cluster()?,
+            self.backend.cluster()?,
             context.prepared_statements,
             context.params,
             context.in_transaction,
@@ -34,7 +34,7 @@ impl QueryEngine {
                         .stream
                         .send_flush(&ReadyForQuery::in_transaction(context.in_transaction))
                         .await?;
-                    context.stats.sent(bytes_sent);
+                    self.stats.sent(bytes_sent);
                 } else {
                     error!("{:?} [{:?}]", err, context.stream.peer_addr());
                     let bytes_sent = context
@@ -44,7 +44,7 @@ impl QueryEngine {
                             context.in_transaction,
                         )
                         .await?;
-                    context.stats.sent(bytes_sent);
+                    self.stats.sent(bytes_sent);
                 }
                 return Ok(false);
             }

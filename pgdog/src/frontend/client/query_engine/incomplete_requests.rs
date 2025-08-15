@@ -7,8 +7,8 @@ use super::*;
 impl QueryEngine {
     /// Check for incomplete requests that don't need to be
     /// sent to a server.
-    pub(super) async fn check_for_incomplete(
-        &self,
+    pub(super) async fn intercept_incomplete(
+        &mut self,
         context: &mut QueryEngineContext<'_>,
     ) -> Result<bool, Error> {
         // Client sent Sync only
@@ -33,7 +33,7 @@ impl QueryEngine {
                     }
                 }
                 'S' => {
-                    if only_close || only_sync && !context.backend.connected() {
+                    if only_close || only_sync && !self.backend.connected() {
                         bytes_sent += context
                             .stream
                             .send(&ReadyForQuery::in_transaction(context.in_transaction))
@@ -48,7 +48,7 @@ impl QueryEngine {
             }
         }
 
-        context.stats.sent(bytes_sent);
+        self.stats.sent(bytes_sent);
 
         if bytes_sent > 0 {
             debug!("incomplete request intercepted");

@@ -6,8 +6,10 @@ use crate::{
         Error as BackendError,
     },
     frontend::{
-        buffer::BufferedQuery, router::Error as RouterError, Buffer, Command, Comms,
-        PreparedStatements, Router, RouterContext, Stats,
+        buffer::BufferedQuery,
+        client::query_engine::{QueryEngine, QueryEngineContext},
+        router::Error as RouterError,
+        Buffer, Command, Comms, PreparedStatements, Router, RouterContext, Stats,
     },
     net::Parameters,
     state::State,

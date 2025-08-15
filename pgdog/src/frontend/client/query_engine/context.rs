@@ -1,9 +1,5 @@
 use crate::{
-    backend::pool::Connection,
-    frontend::{
-        client::{inner::Inner, timeouts::Timeouts},
-        Buffer, Client, Comms, PreparedStatements, Stats,
-    },
+    frontend::{client::timeouts::Timeouts, Buffer, Client, PreparedStatements},
     net::{BackendKeyData, Parameters, Stream},
 };
 
@@ -19,31 +15,22 @@ pub struct QueryEngineContext<'a> {
     pub(super) stream: &'a mut Stream,
     /// Client in transaction?
     pub(super) in_transaction: bool,
-    /// Client stats.
-    pub(super) stats: &'a mut Stats,
-    /// Backend connection.
-    pub(super) backend: &'a mut Connection,
     /// Client ID.
     pub(super) client_id: BackendKeyData,
     /// Timeouts
     pub(super) timeouts: Timeouts,
-    /// Client comms
-    pub(super) comms: &'a mut Comms,
 }
 
 impl<'a> QueryEngineContext<'a> {
-    pub fn new(client: &'a mut Client, inner: &'a mut Inner) -> Self {
+    pub fn new(client: &'a mut Client) -> Self {
         Self {
             prepared_statements: &mut client.prepared_statements,
             params: &mut client.params,
             buffer: &mut client.request_buffer,
             stream: &mut client.stream,
             in_transaction: client.in_transaction,
-            backend: &mut inner.backend,
-            stats: &mut inner.stats,
             client_id: client.id,
             timeouts: client.timeouts,
-            comms: &mut client.comms,
         }
     }
 

@@ -21,6 +21,8 @@ pub struct RouterContext<'a> {
     pub in_transaction: bool,
     /// Currently executing COPY statement.
     pub copy_mode: bool,
+    /// Do we have an executable buffer?
+    pub executable: bool,
 }
 
 impl<'a> RouterContext<'a> {
@@ -43,6 +45,7 @@ impl<'a> RouterContext<'a> {
             cluster,
             in_transaction,
             copy_mode,
+            executable: buffer.executable(),
         })
     }
 }

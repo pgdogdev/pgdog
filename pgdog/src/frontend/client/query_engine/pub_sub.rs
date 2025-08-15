@@ -9,8 +9,8 @@ impl QueryEngine {
         channel: &str,
         shard: Shard,
     ) -> Result<(), Error> {
-        context.backend.listen(channel, shard).await?;
-        Self::command_complete(context, "LISTEN").await?;
+        self.backend.listen(channel, shard).await?;
+        self.command_complete(context, "LISTEN").await?;
 
         Ok(())
     }
@@ -22,11 +22,8 @@ impl QueryEngine {
         payload: &str,
         shard: &Shard,
     ) -> Result<(), Error> {
-        context
-            .backend
-            .notify(channel, payload, shard.clone())
-            .await?;
-        Self::command_complete(context, "NOTIFY").await?;
+        self.backend.notify(channel, payload, shard.clone()).await?;
+        self.command_complete(context, "NOTIFY").await?;
         Ok(())
     }
 
@@ -35,12 +32,13 @@ impl QueryEngine {
         context: &mut QueryEngineContext<'_>,
         channel: &str,
     ) -> Result<(), Error> {
-        context.backend.unlisten(channel);
-        Self::command_complete(context, "UNLISTEN").await?;
+        self.backend.unlisten(channel);
+        self.command_complete(context, "UNLISTEN").await?;
         Ok(())
     }
 
     async fn command_complete(
+        &mut self,
         context: &mut QueryEngineContext<'_>,
         command: &str,
     ) -> Result<(), Error> {
@@ -52,7 +50,7 @@ impl QueryEngine {
             ])
             .await?;
 
-        context.stats.sent(bytes_sent);
+        self.stats.sent(bytes_sent);
 
         Ok(())
     }

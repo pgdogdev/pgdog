@@ -1,0 +1,197 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="AutoImportSettings">
+    <option name="autoReloadType" value="ALL" />
+  </component>
+  <component name="CargoProjects">
+    <cargoProject FILE="$PROJECT_DIR$/Cargo.toml">
+      <package file="$PROJECT_DIR$/examples/demo">
+        <enabledFeature name="default" />
+      </package>
+      <package file="$PROJECT_DIR$/pgdog">
+        <enabledFeature name="default" />
+      </package>
+      <package file="$PROJECT_DIR$/pgdog-plugin">
+        <enabledFeature name="default" />
+      </package>
+      <package file="$PROJECT_DIR$/plugins/pgdog-routing">
+        <enabledFeature name="default" />
+      </package>
+      <package file="$PROJECT_DIR$/examples/routing-plugin">
+        <enabledFeature name="default" />
+      </package>
+      <package file="$PROJECT_DIR$/integration/rust">
+        <enabledFeature name="default" />
+      </package>
+    </cargoProject>
+  </component>
+  <component name="ChangeListManager">
+    <list default="true" id="3ad1ee9c-6809-4ff7-b9e1-c528631a1a43" name="Changes" comment="">
+      <change afterPath="$PROJECT_DIR$/.idea/.gitignore" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/.idea/modules.xml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/.idea/pgdog.iml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/.idea/vcs.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/pgdog/src/frontend/client/mod.rs" beforeDir="false" afterPath="$PROJECT_DIR$/pgdog/src/frontend/client/mod.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/pgdog/src/frontend/client/query_engine/engine_impl.rs" beforeDir="false" afterPath="$PROJECT_DIR$/pgdog/src/frontend/client/query_engine/engine_impl.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/pgdog/src/frontend/client/query_engine/error_response.rs" beforeDir="false" afterPath="$PROJECT_DIR$/pgdog/src/frontend/client/query_engine/error_response.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/pgdog/src/frontend/client/query_engine/mod.rs" beforeDir="false" afterPath="$PROJECT_DIR$/pgdog/src/frontend/client/query_engine/mod.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/pgdog/src/frontend/client/query_engine/test/handle_request.rs" beforeDir="false" afterPath="$PROJECT_DIR$/pgdog/src/frontend/client/query_engine/test/handle_request.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/pgdog/src/frontend/client/test/mod.rs" beforeDir="false" afterPath="$PROJECT_DIR$/pgdog/src/frontend/client/test/mod.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/pgdog/src/frontend/client/transaction.rs" beforeDir="false" afterPath="$PROJECT_DIR$/pgdog/src/frontend/client/transaction.rs" afterDir="false" />
+    </list>
+    <option name="SHOW_DIALOG" value="false" />
+    <option name="HIGHLIGHT_CONFLICTS" value="true" />
+    <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
+    <option name="LAST_RESOLUTION" value="IGNORE" />
+  </component>
+  <component name="ExecutionTargetManager" SELECTED_TARGET="RsBuildProfile:test" />
+  <component name="Git.Settings">
+    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
+  </component>
+  <component name="MacroExpansionManager">
+    <option name="directoryName" value="o9isUZs5" />
+  </component>
+  <component name="ProjectColorInfo"><![CDATA[{
+  "associatedIndex": 8
+}]]></component>
+  <component name="ProjectId" id="31FVvuTRfFBoCo7q84EminonPbO" />
+  <component name="ProjectViewState">
+    <option name="hideEmptyMiddlePackages" value="true" />
+    <option name="showLibraryContents" value="true" />
+  </component>
+  <component name="PropertiesComponent"><![CDATA[{
+  "keyToString": {
+    "ASKED_SHARE_PROJECT_CONFIGURATION_FILES": "true",
+    "Cargo.Test frontend::client::query_engine::test::handle_request::test_basic.executor": "Run",
+    "Cargo.Test frontend::client::query_engine::test::handle_request::test_basic_with_replicas.executor": "Run",
+    "ModuleVcsDetector.initialDetectionPerformed": "true",
+    "RunOnceActivity.ShowReadmeOnStart": "true",
+    "RunOnceActivity.git.unshallow": "true",
+    "RunOnceActivity.rust.reset.selective.auto.import": "true",
+    "SHARE_PROJECT_CONFIGURATION_FILES": "true",
+    "git-widget-placeholder": "levkk-transactions-are-lit",
+    "junie.onboarding.icon.badge.shown": "true",
+    "last_opened_file_path": "/home/lev/code/pgdog",
+    "node.js.detected.package.eslint": "true",
+    "node.js.detected.package.tslint": "true",
+    "node.js.selected.package.eslint": "(autodetect)",
+    "node.js.selected.package.tslint": "(autodetect)",
+    "nodejs_package_manager_path": "npm",
+    "org.rust.cargo.project.model.PROJECT_DISCOVERY": "true",
+    "org.rust.first.attach.projects": "true",
+    "to.speed.mode.migration.done": "true",
+    "vue.rearranger.settings.migration": "true"
+  }
+}]]></component>
+  <component name="RunManager" selected="Cargo.Test frontend::client::query_engine::test::handle_request::test_basic">
+    <configuration name="Run demo" type="CargoCommandRunConfiguration" factoryName="Cargo Command">
+      <option name="command" value="run --package demo --bin demo" />
+      <option name="workingDirectory" value="file://$PROJECT_DIR$" />
+      <envs />
+      <option name="emulateTerminal" value="true" />
+      <option name="channel" value="DEFAULT" />
+      <option name="requiredFeatures" value="true" />
+      <option name="allFeatures" value="false" />
+      <option name="withSudo" value="false" />
+      <option name="buildTarget" value="REMOTE" />
+      <option name="backtrace" value="SHORT" />
+      <option name="isRedirectInput" value="false" />
+      <option name="redirectInputPath" value="" />
+      <method v="2">
+        <option name="CARGO.BUILD_TASK_PROVIDER" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="Run pgdog" type="CargoCommandRunConfiguration" factoryName="Cargo Command">
+      <option name="command" value="run --package pgdog --bin pgdog" />
+      <option name="workingDirectory" value="file://$PROJECT_DIR$" />
+      <envs />
+      <option name="emulateTerminal" value="true" />
+      <option name="channel" value="DEFAULT" />
+      <option name="requiredFeatures" value="true" />
+      <option name="allFeatures" value="false" />
+      <option name="withSudo" value="false" />
+      <option name="buildTarget" value="REMOTE" />
+      <option name="backtrace" value="SHORT" />
+      <option name="isRedirectInput" value="false" />
+      <option name="redirectInputPath" value="" />
+      <method v="2">
+        <option name="CARGO.BUILD_TASK_PROVIDER" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="Test frontend::client::query_engine::test::handle_request::test_basic" type="CargoCommandRunConfiguration" factoryName="Cargo Command" temporary="true">
+      <option name="command" value="test --package pgdog --lib frontend::client::query_engine::test::handle_request::test_basic -- --exact" />
+      <option name="workingDirectory" value="file://$PROJECT_DIR$" />
+      <envs />
+      <option name="emulateTerminal" value="true" />
+      <option name="channel" value="DEFAULT" />
+      <option name="requiredFeatures" value="true" />
+      <option name="allFeatures" value="false" />
+      <option name="withSudo" value="false" />
+      <option name="buildTarget" value="REMOTE" />
+      <option name="backtrace" value="SHORT" />
+      <option name="isRedirectInput" value="false" />
+      <option name="redirectInputPath" value="" />
+      <method v="2">
+        <option name="CARGO.BUILD_TASK_PROVIDER" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="Test frontend::client::query_engine::test::handle_request::test_basic_with_replicas" type="CargoCommandRunConfiguration" factoryName="Cargo Command" temporary="true">
+      <option name="command" value="test --package pgdog --lib frontend::client::query_engine::test::handle_request::test_basic_with_replicas -- --exact" />
+      <option name="workingDirectory" value="file://$PROJECT_DIR$" />
+      <envs />
+      <option name="emulateTerminal" value="true" />
+      <option name="channel" value="DEFAULT" />
+      <option name="requiredFeatures" value="true" />
+      <option name="allFeatures" value="false" />
+      <option name="withSudo" value="false" />
+      <option name="buildTarget" value="REMOTE" />
+      <option name="backtrace" value="SHORT" />
+      <option name="isRedirectInput" value="false" />
+      <option name="redirectInputPath" value="" />
+      <method v="2">
+        <option name="CARGO.BUILD_TASK_PROVIDER" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="Test pgdog" type="CargoCommandRunConfiguration" factoryName="Cargo Command">
+      <option name="buildProfileId" value="test" />
+      <option name="command" value="test --workspace" />
+      <option name="workingDirectory" value="file://$PROJECT_DIR$" />
+      <envs />
+      <option name="emulateTerminal" value="true" />
+      <option name="channel" value="DEFAULT" />
+      <option name="requiredFeatures" value="true" />
+      <option name="allFeatures" value="false" />
+      <option name="withSudo" value="false" />
+      <option name="buildTarget" value="REMOTE" />
+      <option name="backtrace" value="SHORT" />
+      <option name="isRedirectInput" value="false" />
+      <option name="redirectInputPath" value="" />
+      <method v="2">
+        <option name="CARGO.BUILD_TASK_PROVIDER" enabled="true" />
+      </method>
+    </configuration>
+    <recent_temporary>
+      <list>
+        <item itemvalue="Cargo.Test frontend::client::query_engine::test::handle_request::test_basic" />
+        <item itemvalue="Cargo.Test frontend::client::query_engine::test::handle_request::test_basic_with_replicas" />
+      </list>
+    </recent_temporary>
+  </component>
+  <component name="RustProjectSettings">
+    <option name="toolchainHomeDirectory" value="$USER_HOME$/.cargo/bin" />
+  </component>
+  <component name="TaskManager">
+    <task active="true" id="Default" summary="Default task">
+      <changelist id="3ad1ee9c-6809-4ff7-b9e1-c528631a1a43" name="Changes" comment="" />
+      <created>1755120042067</created>
+      <option name="number" value="Default" />
+      <option name="presentableId" value="Default" />
+      <updated>1755120042067</updated>
+      <workItem from="1755120043484" duration="1690000" />
+    </task>
+    <servers />
+  </component>
+  <component name="TypeScriptGeneratedFilesManager">
+    <option name="version" value="3" />
+  </component>
+</project>

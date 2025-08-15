@@ -15,7 +15,7 @@ impl QueryEngine {
             ])
             .await?;
 
-        context.stats.sent(bytes_sent);
+        self.stats.sent(bytes_sent);
 
         Ok(())
     }
