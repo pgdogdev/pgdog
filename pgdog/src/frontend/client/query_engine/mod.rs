@@ -37,8 +37,8 @@ pub struct QueryEngine {
     stats: Stats,
     backend: Connection,
     streaming: bool,
-    admin: bool,
     client_id: BackendKeyData,
+    test_mode: bool,
 }
 
 impl<'a> QueryEngine {
@@ -58,7 +58,10 @@ impl<'a> QueryEngine {
             backend,
             client_id: comms.client_id(),
             comms: comms.clone(),
-            admin,
+            #[cfg(test)]
+            test_mode: true,
+            #[cfg(not(test))]
+            test_mode: false,
             ..Default::default()
         })
     }

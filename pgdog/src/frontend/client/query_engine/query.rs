@@ -51,10 +51,11 @@ impl QueryEngine {
             .handle_buffer(context.buffer, &mut self.router, self.streaming)
             .await?;
 
-        // println!("sent buffer");
-
-        #[cfg(not(test))]
-        while self.backend.has_more_messages() && !self.backend.copy_mode() && !self.streaming {
+        while self.backend.has_more_messages()
+            && !self.backend.copy_mode()
+            && !self.streaming
+            && !self.test_mode
+        {
             let message = timeout(
                 context.timeouts.query_timeout(&State::Active),
                 self.backend.read(),
@@ -91,7 +92,7 @@ impl QueryEngine {
             self.stats.idle(context.in_transaction);
 
             if !context.in_transaction {
-                self.router.reset();
+                self.stats.transaction();
             }
         }
 
@@ -106,7 +107,6 @@ impl QueryEngine {
                 self.backend.disconnect();
             }
 
-            self.stats.transaction();
             self.router.reset();
 
             debug!(

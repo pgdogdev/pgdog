@@ -10,6 +10,8 @@ fi
 
 
 for user in pgdog pgdog1 pgdog2 pgdog3; do
+    psql -c "DROP DATABASE ${user}" || true
+    psql -c "DROP USER ${user}" || true
     psql -c "CREATE USER ${user} LOGIN SUPERUSER PASSWORD 'pgdog'" || true
     psql -c "CREATE DATABASE ${user}" || true
 done
@@ -25,6 +27,7 @@ export PGPORT=5432
 #export PGUSER='pgdog'
 
 for db in pgdog shard_0 shard_1; do
+    psql -c "DROP DATABASE $db" || true
     psql -c "CREATE DATABASE $db" || true
     for user in pgdog pgdog1 pgdog2 pgdog3; do
         psql -c "GRANT ALL ON DATABASE $db TO ${user}"

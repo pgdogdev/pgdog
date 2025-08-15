@@ -70,8 +70,7 @@ macro_rules! new_client {
     ($replicas:expr) => {{
         crate::logger();
         let (conn, client) = test_client($replicas).await;
-        let mut engine = QueryEngine::from_client(&client).unwrap();
-        engine.test_mode();
+        let engine = QueryEngine::from_client(&client).unwrap();
 
         (conn, client, engine)
     }};
@@ -467,7 +466,7 @@ async fn test_transaction_state() {
 
     assert!(engine.router().routed());
     assert!(client.in_transaction);
-    // assert!(engine.router().route().is_write());
+    assert!(engine.router().route().is_write());
     assert!(engine.router().in_transaction());
 
     for c in ['1', 't', 'T', 'Z'] {
@@ -511,8 +510,8 @@ async fn test_transaction_state() {
 
     assert!(engine.router().routed());
     assert!(client.in_transaction);
-    // assert!(engine.router().route().is_write());
-    // assert!(engine.router().in_transaction());
+    assert!(engine.router().route().is_write());
+    assert!(engine.router().in_transaction());
 
     conn.write_all(&buffer!({ Query::new("COMMIT") }))
         .await

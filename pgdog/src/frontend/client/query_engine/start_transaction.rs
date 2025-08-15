@@ -14,13 +14,14 @@ impl QueryEngine {
         let bytes_sent = context
             .stream
             .send_many(&[
-                CommandComplete::new_begin().message()?,
+                CommandComplete::new_begin().message()?.backend(),
                 ReadyForQuery::in_transaction(context.in_transaction).message()?,
             ])
             .await?;
 
         self.stats.sent(bytes_sent);
         self.begin_stmt = Some(begin);
+        debug!("transaction started");
 
         Ok(())
     }

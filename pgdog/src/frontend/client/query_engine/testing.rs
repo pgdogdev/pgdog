@@ -12,8 +12,4 @@ impl QueryEngine {
     pub fn stats(&mut self) -> &mut Stats {
         &mut self.stats
     }
-
-    pub fn test_mode(&mut self) {
-        self.streaming = true;
-    }
 }

@@ -1,5 +1,5 @@
 use crate::net::{EmptyQueryResponse, ReadyForQuery};
-use tracing::error;
+use tracing::{error, trace};
 
 use super::*;
 
@@ -9,9 +9,9 @@ impl QueryEngine {
         context: &mut QueryEngineContext<'_>,
     ) -> Result<bool, Error> {
         // Route request if we haven't already.
-        if self.router.routed() {
-            return Ok(true);
-        }
+        // if self.router.routed() {
+        //     return Ok(true);
+        // }
 
         // Admin doesn't have a cluster.
         let cluster = if let Ok(cluster) = self.backend.cluster() {
@@ -28,7 +28,9 @@ impl QueryEngine {
             context.in_transaction,
         )?;
         match self.router.query(router_context) {
-            Ok(_) => (),
+            Ok(cmd) => {
+                trace!("routing {:#?} to {:#?}", context.buffer, cmd);
+            }
             Err(err) => {
                 if err.empty_query() {
                     let mut bytes_sent = context.stream.send(&EmptyQueryResponse).await?;
