@@ -326,7 +326,7 @@ impl Client {
             }
         }
 
-        if offline {
+        if offline && !self.shutdown {
             self.stream
                 .send_flush(&ErrorResponse::shutting_down())
                 .await?;
