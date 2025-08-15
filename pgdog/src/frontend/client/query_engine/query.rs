@@ -88,7 +88,13 @@ impl QueryEngine {
         // ReadyForQuery (B)
         if code == 'Z' {
             self.stats.query();
-            context.in_transaction = message.in_transaction();
+            // TODO: This is messed up.
+            //
+            // 1. We're ignoring server-set transaction state. Client gets a ReadyForQuery with transaction state set to Idle even
+            // if they sent a BEGIN statement to us already.
+            // 2. We're sending non-data fetching statements to the server without starting a transacation, e.g. Parse, Describe, Sync.
+            // 3. We're confusing the hell out of pretty much anyone reading this. I wrote the damn thing and I'm still confused.
+            context.in_transaction = message.in_transaction() || self.begin_stmt.is_some();
             self.stats.idle(context.in_transaction);
 
             if !context.in_transaction {

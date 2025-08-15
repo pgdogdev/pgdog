@@ -20,8 +20,6 @@ pub use context::RouterContext;
 pub use search_path::SearchPath;
 pub use sharding::{Lists, Ranges};
 
-use tracing::debug;
-
 /// Query router.
 #[derive(Debug)]
 pub struct Router {
@@ -93,7 +91,6 @@ impl Router {
         self.query_parser = QueryParser::default();
         self.latest_command = Command::default();
         self.routed = false;
-        debug!("\n\n\n\nrouter reset\n\n\n\n");
     }
 
     /// The router is configured.

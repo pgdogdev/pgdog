@@ -21,7 +21,6 @@ impl QueryEngine {
             .await?;
 
         self.stats.sent(bytes_sent);
-        self.router.reset();
 
         Ok(())
     }

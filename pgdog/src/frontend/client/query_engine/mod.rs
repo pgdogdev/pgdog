@@ -120,8 +120,20 @@ impl<'a> QueryEngine {
             Command::StartTransaction(begin) => {
                 self.start_transaction(context, begin.clone()).await?
             }
-            Command::CommitTransaction => self.end_transaction(context, false).await?,
-            Command::RollbackTransaction => self.end_transaction(context, true).await?,
+            Command::CommitTransaction => {
+                if self.backend.connected() {
+                    self.query(context, &route).await?
+                } else {
+                    self.end_transaction(context, false).await?
+                }
+            }
+            Command::RollbackTransaction => {
+                if self.backend.connected() {
+                    self.query(context, &route).await?
+                } else {
+                    self.end_transaction(context, true).await?
+                }
+            }
             Command::Query(_) => self.query(context, &route).await?,
             Command::Listen { channel, shard } => {
                 self.listen(context, &channel.clone(), shard.clone())
@@ -136,7 +148,13 @@ impl<'a> QueryEngine {
                     .await?
             }
             Command::Unlisten(channel) => self.unlisten(context, &channel.clone()).await?,
-            Command::Set { name, value } => self.set(context, name.clone(), value.clone()).await?,
+            Command::Set { name, value } => {
+                if self.backend.connected() {
+                    self.query(context, &route).await?
+                } else {
+                    self.set(context, name.clone(), value.clone()).await?
+                }
+            }
             Command::Copy(_) => self.query(context, &route).await?,
             Command::Rewrite(query) => {
                 context.buffer.rewrite(query)?;

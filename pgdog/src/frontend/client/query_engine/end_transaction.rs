@@ -20,7 +20,11 @@ impl QueryEngine {
         };
         messages.push(cmd.message()?.backend());
         messages.push(ReadyForQuery::idle().message()?);
-        context.stream.send_many(&messages).await?;
+
+        let bytes_sent = context.stream.send_many(&messages).await?;
+        self.stats.sent(bytes_sent);
+        self.begin_stmt = None;
+
         debug!("transaction ended");
         Ok(())
     }
