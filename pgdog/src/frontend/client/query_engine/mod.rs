@@ -187,6 +187,7 @@ impl<'a> QueryEngine {
 
         self.stats
             .prepared_statements(context.prepared_statements.len_local());
+        self.stats.memory_used(context.memory_usage);
 
         self.comms.stats(self.stats);
     }
