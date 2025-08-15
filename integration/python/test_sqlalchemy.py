@@ -119,7 +119,7 @@ async def test_reads_writes(engines):
     for i in range(50):
         email = f"test-{i}@test.com"
         async with normal() as session:
-            await session.execute(text("DROP TABLE IF EXISTS users"))
+            await session.execute(text("DROP TABLE IF EXISTS users CASCADE"))
             await session.execute(
                 text("CREATE TABLE users (id BIGSERIAL PRIMARY KEY, email VARCHAR)")
             )

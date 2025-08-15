@@ -42,6 +42,12 @@ pub struct Stats {
     pub locked: bool,
 }
 
+impl Default for Stats {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Stats {
     pub(super) fn new() -> Self {
         let now = Instant::now();

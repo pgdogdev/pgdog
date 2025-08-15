@@ -93,7 +93,6 @@ impl Connection {
         };
 
         if connect {
-            debug!("connecting {}", route);
             match self.try_conn(request, route).await {
                 Ok(()) => (),
                 Err(Error::Pool(super::Error::Offline | super::Error::AllReplicasDown)) => {
@@ -363,7 +362,9 @@ impl Connection {
         Ok(match self.binding {
             Binding::Server(Some(ref server)) => vec![server.addr()],
             Binding::MultiShard(ref servers, _) => servers.iter().map(|s| s.addr()).collect(),
-            _ => return Err(Error::NotConnected),
+            _ => {
+                return Err(Error::NotConnected);
+            }
         })
     }
 

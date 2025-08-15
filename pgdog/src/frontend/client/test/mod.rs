@@ -16,8 +16,8 @@ use crate::{
         Role,
     },
     frontend::{
-        client::{BufferEvent, Inner},
-        Client, Command,
+        client::{BufferEvent, QueryEngine},
+        Client,
     },
     net::{
         bind::Parameter, Bind, Close, CommandComplete, DataRow, Describe, ErrorResponse, Execute,
@@ -70,9 +70,9 @@ macro_rules! new_client {
     ($replicas:expr) => {{
         crate::logger();
         let (conn, client) = test_client($replicas).await;
-        let inner = Inner::new(&client).unwrap();
+        let engine = QueryEngine::from_client(&client).unwrap();
 
-        (conn, client, inner)
+        (conn, client, engine)
     }};
 }
 
@@ -117,41 +117,39 @@ macro_rules! read {
 
 #[tokio::test]
 async fn test_test_client() {
-    let (mut conn, mut client, mut inner) = new_client!(false);
+    let (mut conn, mut client, mut engine) = new_client!(false);
 
     let query = Query::new("SELECT 1").to_bytes().unwrap();
 
     conn.write_all(&query).await.unwrap();
 
-    client.buffer(&State::Idle).await.unwrap();
+    client.buffer(State::Idle).await.unwrap();
     assert_eq!(client.request_buffer.total_message_len(), query.len());
 
-    let disconnect = client.client_messages(inner.get()).await.unwrap();
-    assert!(!disconnect);
+    client.client_messages(&mut engine).await.unwrap();
     assert!(!client.in_transaction);
-    assert_eq!(inner.stats.state, State::Active);
+    assert_eq!(engine.stats().state, State::Active);
     // Buffer not cleared yet.
     assert_eq!(client.request_buffer.total_message_len(), query.len());
 
-    assert!(inner.backend.connected());
-    let command = inner
-        .command(
-            &mut client.request_buffer,
-            &mut client.prepared_statements,
-            &client.params,
-            client.in_transaction,
-        )
-        .unwrap();
-    assert!(matches!(command, Some(Command::Query(_))));
+    assert!(engine.backend().connected());
+    // let command = engine
+    //     .command(
+    //         &mut client.request_buffer,
+    //         &mut client.prepared_statements,
+    //         &client.params,
+    //         client.in_transaction,
+    //     )
+    //     .unwrap();
+    // assert!(matches!(command, Some(Command::Query(_))));
 
     let mut len = 0;
 
     for c in ['T', 'D', 'C', 'Z'] {
-        let msg = inner.backend.read().await.unwrap();
+        let msg = engine.backend().read().await.unwrap();
         len += msg.len();
         assert_eq!(msg.code(), c);
-        let disconnect = client.server_message(&mut inner.get(), msg).await.unwrap();
-        assert!(!disconnect);
+        client.server_message(&mut engine, msg).await.unwrap();
     }
 
     let mut bytes = BytesMut::zeroed(len);
@@ -399,7 +397,7 @@ async fn test_abrupt_disconnect() {
 
     drop(conn);
 
-    let event = client.buffer(&State::Idle).await.unwrap();
+    let event = client.buffer(State::Idle).await.unwrap();
     assert_eq!(event, BufferEvent::DisconnectAbrupt);
     assert!(client.request_buffer.is_empty());
 
@@ -411,7 +409,7 @@ async fn test_abrupt_disconnect() {
 
 #[tokio::test]
 async fn test_lock_session() {
-    let (mut conn, mut client, mut inner) = new_client!(true);
+    let (mut conn, mut client, mut engine) = new_client!(true);
 
     conn.write_all(&buffer!(
         { Query::new("SET application_name TO 'blah'") },
@@ -421,39 +419,39 @@ async fn test_lock_session() {
     .unwrap();
 
     for _ in 0..2 {
-        client.buffer(&State::Idle).await.unwrap();
-        client.client_messages(inner.get()).await.unwrap();
+        client.buffer(State::Idle).await.unwrap();
+        client.client_messages(&mut engine).await.unwrap();
     }
 
     for c in ['T', 'D', 'C', 'Z'] {
-        let msg = inner.backend.read().await.unwrap();
+        let msg = engine.read_backend().await.unwrap();
         assert_eq!(msg.code(), c);
-        client.server_message(&mut inner.get(), msg).await.unwrap();
+        client.server_message(&mut engine, msg).await.unwrap();
     }
 
     // Session locked.
-    assert!(inner.backend.is_dirty());
-    assert!(!inner.backend.done());
+    assert!(engine.backend().is_dirty());
+    assert!(!engine.backend().done());
     assert!(client.params.contains_key("application_name"));
 
-    inner.disconnect();
+    engine.backend().disconnect();
 }
 
 #[tokio::test]
 async fn test_transaction_state() {
-    let (mut conn, mut client, mut inner) = new_client!(true);
+    let (mut conn, mut client, mut engine) = new_client!(true);
 
     conn.write_all(&buffer!({ Query::new("BEGIN") }))
         .await
         .unwrap();
 
-    client.buffer(&State::Idle).await.unwrap();
-    client.client_messages(inner.get()).await.unwrap();
+    client.buffer(State::Idle).await.unwrap();
+    client.client_messages(&mut engine).await.unwrap();
     read!(conn, ['C', 'Z']);
 
     assert!(client.in_transaction);
-    assert!(inner.router.route().is_write());
-    assert!(inner.router.in_transaction());
+    assert!(engine.router().route().is_write());
+    assert!(engine.router().in_transaction());
 
     conn.write_all(&buffer!(
         { Parse::named("test", "SELECT $1") },
@@ -463,19 +461,19 @@ async fn test_transaction_state() {
     .await
     .unwrap();
 
-    client.buffer(&State::Idle).await.unwrap();
-    client.client_messages(inner.get()).await.unwrap();
+    client.buffer(State::Idle).await.unwrap();
+    client.client_messages(&mut engine).await.unwrap();
 
-    assert!(inner.router.routed());
+    assert!(engine.router().routed());
     assert!(client.in_transaction);
-    assert!(inner.router.route().is_write());
-    assert!(inner.router.in_transaction());
+    assert!(engine.router().route().is_write());
+    assert!(engine.router().in_transaction());
 
     for c in ['1', 't', 'T', 'Z'] {
-        let msg = inner.backend.read().await.unwrap();
+        let msg = engine.backend().read().await.unwrap();
         assert_eq!(msg.code(), c);
 
-        client.server_message(&mut inner.get(), msg).await.unwrap();
+        client.server_message(&mut engine, msg).await.unwrap();
     }
 
     read!(conn, ['1', 't', 'T', 'Z']);
@@ -496,48 +494,48 @@ async fn test_transaction_state() {
     .await
     .unwrap();
 
-    assert!(!inner.router.routed());
-    client.buffer(&State::Idle).await.unwrap();
-    client.client_messages(inner.get()).await.unwrap();
-    assert!(inner.router.routed());
+    assert!(!engine.router().routed());
+    client.buffer(State::Idle).await.unwrap();
+    client.client_messages(&mut engine).await.unwrap();
+    assert!(engine.router().routed());
 
     for c in ['2', 'D', 'C', 'Z'] {
-        let msg = inner.backend.read().await.unwrap();
+        let msg = engine.backend().read().await.unwrap();
         assert_eq!(msg.code(), c);
 
-        client.server_message(&mut inner.get(), msg).await.unwrap();
+        client.server_message(&mut engine, msg).await.unwrap();
     }
 
     read!(conn, ['2', 'D', 'C', 'Z']);
 
-    assert!(inner.router.routed());
+    assert!(engine.router().routed());
     assert!(client.in_transaction);
-    assert!(inner.router.route().is_write());
-    assert!(inner.router.in_transaction());
+    assert!(engine.router().route().is_write());
+    assert!(engine.router().in_transaction());
 
     conn.write_all(&buffer!({ Query::new("COMMIT") }))
         .await
         .unwrap();
 
-    client.buffer(&State::Idle).await.unwrap();
-    client.client_messages(inner.get()).await.unwrap();
+    client.buffer(State::Idle).await.unwrap();
+    client.client_messages(&mut engine).await.unwrap();
 
     for c in ['C', 'Z'] {
-        let msg = inner.backend.read().await.unwrap();
+        let msg = engine.backend().read().await.unwrap();
         assert_eq!(msg.code(), c);
 
-        client.server_message(&mut inner.get(), msg).await.unwrap();
+        client.server_message(&mut engine, msg).await.unwrap();
     }
 
     read!(conn, ['C', 'Z']);
 
     assert!(!client.in_transaction);
-    assert!(!inner.router.routed());
+    assert!(!engine.router().routed());
 }
 
 #[tokio::test]
 async fn test_close_parse() {
-    let (mut conn, mut client, mut inner) = new_client!(true);
+    let (mut conn, mut client, mut engine) = new_client!(true);
 
     conn.write_all(&buffer!({ Close::named("test") }, { Sync }))
         .await
@@ -547,15 +545,15 @@ async fn test_close_parse() {
         .await
         .unwrap();
 
-    client.buffer(&State::Idle).await.unwrap();
-    client.client_messages(inner.get()).await.unwrap();
+    client.buffer(State::Idle).await.unwrap();
+    client.client_messages(&mut engine).await.unwrap();
 
-    client.buffer(&State::Idle).await.unwrap();
-    client.client_messages(inner.get()).await.unwrap();
+    client.buffer(State::Idle).await.unwrap();
+    client.client_messages(&mut engine).await.unwrap();
 
     for _ in ['T', 'D', 'C', 'Z'] {
-        let msg = inner.backend.read().await.unwrap();
-        client.server_message(&mut inner.get(), msg).await.unwrap();
+        let msg = engine.backend().read().await.unwrap();
+        client.server_message(&mut engine, msg).await.unwrap();
     }
 
     read!(conn, ['3', 'Z', 'T', 'D', 'C', 'Z']);
@@ -568,12 +566,12 @@ async fn test_close_parse() {
     .await
     .unwrap();
 
-    client.buffer(&State::Idle).await.unwrap();
-    client.client_messages(inner.get()).await.unwrap();
+    client.buffer(State::Idle).await.unwrap();
+    client.client_messages(&mut engine).await.unwrap();
 
     for _ in ['3', '1'] {
-        let msg = inner.backend.read().await.unwrap();
-        client.server_message(&mut inner.get(), msg).await.unwrap();
+        let msg = engine.backend().read().await.unwrap();
+        client.server_message(&mut engine, msg).await.unwrap();
     }
 
     read!(conn, ['3', '1']);
@@ -588,7 +586,7 @@ async fn test_client_idle_timeout() {
     set(config).unwrap();
 
     let start = Instant::now();
-    let res = client.buffer(&State::Idle).await.unwrap();
+    let res = client.buffer(State::Idle).await.unwrap();
     assert_eq!(res, BufferEvent::DisconnectAbrupt);
 
     let err = read_one!(conn);
@@ -598,7 +596,7 @@ async fn test_client_idle_timeout() {
 
     assert!(timeout(
         Duration::from_millis(50),
-        client.buffer(&State::IdleInTransaction)
+        client.buffer(State::IdleInTransaction)
     )
     .await
     .is_err());
@@ -606,19 +604,19 @@ async fn test_client_idle_timeout() {
 
 #[tokio::test]
 async fn test_prepared_syntax_error() {
-    let (mut conn, mut client, mut inner) = new_client!(false);
+    let (mut conn, mut client, mut engine) = new_client!(false);
 
     conn.write_all(&buffer!({ Parse::named("test", "SELECT sdfsf") }, { Sync }))
         .await
         .unwrap();
 
-    client.buffer(&State::Idle).await.unwrap();
-    client.client_messages(inner.get()).await.unwrap();
+    client.buffer(State::Idle).await.unwrap();
+    client.client_messages(&mut engine).await.unwrap();
 
     for c in ['E', 'Z'] {
-        let msg = inner.backend.read().await.unwrap();
+        let msg = engine.backend().read().await.unwrap();
         assert_eq!(msg.code(), c);
-        client.server_message(&mut inner.get(), msg).await.unwrap();
+        client.server_message(&mut engine, msg).await.unwrap();
     }
     read!(conn, ['E', 'Z']);
 
@@ -627,7 +625,7 @@ async fn test_prepared_syntax_error() {
     assert_eq!(stmts.lock().statements().iter().next().unwrap().1.used, 1);
 
     conn.write_all(&buffer!({ Terminate })).await.unwrap();
-    let event = client.buffer(&State::Idle).await.unwrap();
+    let event = client.buffer(State::Idle).await.unwrap();
     assert_eq!(event, BufferEvent::DisconnectGraceful);
     drop(client);
 

@@ -2,13 +2,14 @@
 
 use crate::{
     net::{
-        messages::{parse::Parse, Bind, CopyData, Protocol, Query},
+        messages::{Bind, CopyData, Protocol, Query},
         Error, ProtocolMessage,
     },
     stats::memory::MemoryUsage,
 };
 use std::ops::{Deref, DerefMut};
 
+pub use super::BufferedQuery;
 use super::PreparedStatements;
 
 /// Message buffer.
@@ -181,36 +182,5 @@ impl Deref for Buffer {
 impl DerefMut for Buffer {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.buffer
-    }
-}
-
-#[derive(Debug, Clone)]
-pub enum BufferedQuery {
-    Query(Query),
-    Prepared(Parse),
-}
-
-impl BufferedQuery {
-    pub fn query(&self) -> &str {
-        match self {
-            Self::Query(query) => query.query(),
-            Self::Prepared(parse) => parse.query(),
-        }
-    }
-
-    pub fn extended(&self) -> bool {
-        matches!(self, Self::Prepared(_))
-    }
-
-    pub fn simple(&self) -> bool {
-        matches!(self, Self::Query(_))
-    }
-}
-
-impl Deref for BufferedQuery {
-    type Target = str;
-
-    fn deref(&self) -> &Self::Target {
-        self.query()
     }
 }

@@ -148,4 +148,8 @@ impl Comms {
     pub fn offline(&self) -> bool {
         self.global.offline.load(Ordering::Relaxed)
     }
+
+    pub fn client_id(&self) -> BackendKeyData {
+        self.id.unwrap_or_default()
+    }
 }

@@ -4,39 +4,31 @@ use std::net::SocketAddr;
 use std::time::Instant;
 
 use bytes::BytesMut;
-use engine::EngineContext;
 use timeouts::Timeouts;
 use tokio::time::timeout;
 use tokio::{select, spawn};
 use tracing::{debug, enabled, error, info, trace, Level as LogLevel};
 
-use super::{Buffer, Command, Comms, Error, PreparedStatements};
+use super::{Buffer, Comms, Error, PreparedStatements};
 use crate::auth::{md5, scram::Server};
 use crate::backend::{
     databases,
     pool::{Connection, Request},
 };
 use crate::config::{self, AuthType};
-use crate::frontend::buffer::BufferedQuery;
-#[cfg(debug_assertions)]
-use crate::frontend::QueryLogger;
+use crate::frontend::client::query_engine::{QueryEngine, QueryEngineContext};
 use crate::net::messages::{
-    Authentication, BackendKeyData, CommandComplete, ErrorResponse, FromBytes, Message, Password,
-    Protocol, ReadyForQuery, ToBytes,
+    Authentication, BackendKeyData, ErrorResponse, FromBytes, Message, Password, Protocol,
+    ReadyForQuery, ToBytes,
 };
 use crate::net::ProtocolMessage;
 use crate::net::{parameter::Parameters, Stream};
-use crate::net::{DataRow, EmptyQueryResponse, Field, NoticeResponse, RowDescription};
 use crate::state::State;
 use crate::stats::memory::MemoryUsage;
 
-pub mod counter;
-pub mod engine;
-pub mod inner;
+// pub mod counter;
+pub mod query_engine;
 pub mod timeouts;
-
-pub use engine::Engine;
-use inner::{Inner, InnerBorrow};
 
 /// Frontend client.
 pub struct Client {
@@ -57,7 +49,6 @@ pub struct Client {
     stream_buffer: BytesMut,
     cross_shard_disabled: bool,
     passthrough_password: Option<String>,
-    replication_mode: bool,
 }
 
 impl MemoryUsage for Client {
@@ -69,7 +60,7 @@ impl MemoryUsage for Client {
             + self.connect_params.memory_usage()
             + self.params.memory_usage()
             + std::mem::size_of::<Comms>()
-            + std::mem::size_of::<bool>() * 6
+            + std::mem::size_of::<bool>() * 5
             + self.prepared_statements.memory_used()
             + std::mem::size_of::<Timeouts>()
             + self.stream_buffer.memory_usage()
@@ -92,10 +83,6 @@ impl Client {
     ) -> Result<(), Error> {
         let user = params.get_default("user", "postgres");
         let database = params.get_default("database", user);
-        let replication_mode = params
-            .get("replication")
-            .map(|v| v.as_str() == Some("database"))
-            .unwrap_or(false);
         let config = config::config();
 
         let admin = database == config.config.admin.name && config.config.admin.user == user;
@@ -207,23 +194,8 @@ impl Client {
         stream.send(&id).await?;
         stream.send_flush(&ReadyForQuery::idle()).await?;
         comms.connect(&id, addr, &params);
-        let shard = params.shard();
 
-        info!(
-            "client connected [{}]{}",
-            addr,
-            if let Some(ref shard) = shard {
-                format!(" (replication, shard {})", shard)
-            } else {
-                "".into()
-            }
-        );
-        if replication_mode {
-            debug!("replication mode [{}]", addr);
-        }
-
-        let mut prepared_statements = PreparedStatements::new();
-        prepared_statements.enabled = config.prepared_statements();
+        info!("client connected [{}]", addr,);
 
         let mut client = Self {
             addr,
@@ -233,7 +205,6 @@ impl Client {
             admin,
             streaming: false,
             params: params.clone(),
-            replication_mode,
             connect_params: params,
             prepared_statements: PreparedStatements::new(),
             in_transaction: false,
@@ -284,7 +255,6 @@ impl Client {
             shutdown: false,
             cross_shard_disabled: false,
             passthrough_password: None,
-            replication_mode: false,
         }
     }
 
@@ -309,44 +279,43 @@ impl Client {
 
     /// Run the client.
     async fn run(&mut self) -> Result<(), Error> {
-        let mut inner = Inner::new(self)?;
         let shutdown = self.comms.shutting_down();
+        let mut offline;
+        let mut query_engine = QueryEngine::from_client(self)?;
 
         loop {
-            let query_timeout = self.timeouts.query_timeout(&inner.stats.state);
+            offline = (self.comms.offline() && !self.admin || self.shutdown) && query_engine.done();
+            if offline {
+                break;
+            }
+
+            let client_state = query_engine.client_state();
 
             select! {
                 _ = shutdown.notified() => {
-                    if !inner.backend.connected() && inner.start_transaction.is_none() {
-                        break;
+                    if query_engine.done() {
+                        continue; // Wake up task.
                     }
                 }
 
                 // Async messages.
-                message = timeout(query_timeout, inner.backend.read()) => {
-                    let message = message??;
-                    let disconnect = self.server_message(&mut inner.get(), message).await?;
-                    if disconnect {
-                        break;
-                    }
+                message = query_engine.read_backend() => {
+                    let message = message?;
+                    self.server_message(&mut query_engine, message).await?;
                 }
 
-                buffer = self.buffer(&inner.stats.state) => {
+                buffer = self.buffer(client_state) => {
                     let event = buffer?;
                     if !self.request_buffer.is_empty() {
-                        let disconnect = self.client_messages(inner.get()).await?;
-
-                        if disconnect {
-                            break;
-                        }
+                        self.client_messages(&mut query_engine).await?;
                     }
 
                     match event {
                         BufferEvent::DisconnectAbrupt => break,
                         BufferEvent::DisconnectGraceful => {
-                            let connected = inner.get().backend.connected();
+                            let done = query_engine.done();
 
-                            if !connected {
+                            if done {
                                 break;
                             }
                         }
@@ -357,7 +326,7 @@ impl Client {
             }
         }
 
-        if inner.comms.offline() && !self.admin {
+        if offline && !self.shutdown {
             self.stream
                 .send_flush(&ErrorResponse::shutting_down())
                 .await?;
@@ -366,326 +335,31 @@ impl Client {
         Ok(())
     }
 
-    /// Handle client messages.
-    async fn client_messages(&mut self, mut inner: InnerBorrow<'_>) -> Result<bool, Error> {
-        inner
-            .stats
-            .received(self.request_buffer.total_message_len());
-
-        #[cfg(debug_assertions)]
-        if let Some(query) = self.request_buffer.query()? {
-            debug!(
-                "{} [{}] (in transaction: {})",
-                query.query(),
-                self.addr,
-                self.in_transaction
-            );
-            QueryLogger::new(&self.request_buffer).log().await?;
-        }
-
-        let context = EngineContext::new(self, &inner);
-
-        // Query execution engine.
-        let mut engine = Engine::new(context);
-
-        use engine::Action;
-
-        match engine.execute().await? {
-            Action::Intercept(msgs) => {
-                self.stream.send_many(&msgs).await?;
-                inner.done(self.in_transaction);
-                self.update_stats(&mut inner);
-                return Ok(false);
-            }
-
-            Action::Forward => (),
-        };
-
-        let connected = inner.connected();
-
-        let command = match inner.command(
-            &mut self.request_buffer,
-            &mut self.prepared_statements,
-            &self.params,
-            self.in_transaction,
-        ) {
-            Ok(command) => command,
-            Err(err) => {
-                if err.empty_query() {
-                    self.stream.send(&EmptyQueryResponse).await?;
-                    self.stream
-                        .send_flush(&ReadyForQuery::in_transaction(self.in_transaction))
-                        .await?;
-                } else {
-                    error!("{:?} [{}]", err, self.addr);
-                    self.stream
-                        .error(
-                            ErrorResponse::syntax(err.to_string().as_str()),
-                            self.in_transaction,
-                        )
-                        .await?;
-                }
-                inner.done(self.in_transaction);
-                return Ok(false);
-            }
-        };
-
-        if !connected {
-            // Simulate transaction starting
-            // until client sends an actual query.
-            //
-            // This ensures we:
-            //
-            // 1. Don't connect to servers unnecessarily.
-            // 2. Can use the first query sent by the client to route the transaction
-            //    to a shard.
-            //
-            match command {
-                Some(Command::StartTransaction(query)) => {
-                    if let BufferedQuery::Query(_) = query {
-                        self.start_transaction().await?;
-                        inner.start_transaction = Some(query.clone());
-                        self.in_transaction = true;
-                        inner.done(self.in_transaction);
-                        return Ok(false);
-                    }
-                }
-                Some(Command::RollbackTransaction) => {
-                    inner.start_transaction = None;
-                    self.end_transaction(true).await?;
-                    self.in_transaction = false;
-                    inner.done(self.in_transaction);
-                    return Ok(false);
-                }
-                Some(Command::CommitTransaction) => {
-                    inner.start_transaction = None;
-                    self.end_transaction(false).await?;
-                    self.in_transaction = false;
-                    inner.done(self.in_transaction);
-                    return Ok(false);
-                }
-                // How many shards are configured.
-                Some(Command::Shards(shards)) => {
-                    let rd = RowDescription::new(&[Field::bigint("shards")]);
-                    let mut dr = DataRow::new();
-                    dr.add(*shards as i64);
-                    let cc = CommandComplete::from_str("SHOW");
-                    let rfq = ReadyForQuery::in_transaction(self.in_transaction);
-                    self.stream
-                        .send_many(&[rd.message()?, dr.message()?, cc.message()?, rfq.message()?])
-                        .await?;
-                    inner.done(self.in_transaction);
-                    return Ok(false);
-                }
-                Some(Command::Deallocate) => {
-                    self.finish_command(&mut inner, "DEALLOCATE").await?;
-                    return Ok(false);
-                }
-                // TODO: Handling session variables requires a lot more work,
-                // e.g. we need to track RESET as well.
-                Some(Command::Set { name, value }) => {
-                    self.params.insert(name, value.clone());
-                    self.set(inner).await?;
-                    return Ok(false);
-                }
-
-                Some(Command::Query(query)) => {
-                    if query.is_cross_shard() && self.cross_shard_disabled {
-                        self.stream
-                            .error(ErrorResponse::cross_shard_disabled(), self.in_transaction)
-                            .await?;
-                        inner.done(self.in_transaction);
-                        inner.reset_router();
-                        return Ok(false);
-                    }
-                }
-
-                Some(Command::Listen { channel, shard }) => {
-                    let channel = channel.clone();
-                    let shard = shard.clone();
-                    inner.backend.listen(&channel, shard).await?;
-
-                    self.finish_command(&mut inner, "LISTEN").await?;
-                    return Ok(false);
-                }
-
-                Some(Command::Notify {
-                    channel,
-                    payload,
-                    shard,
-                }) => {
-                    let channel = channel.clone();
-                    let shard = shard.clone();
-                    let payload = payload.clone();
-                    inner.backend.notify(&channel, &payload, shard).await?;
-
-                    self.finish_command(&mut inner, "NOTIFY").await?;
-                    return Ok(false);
-                }
-
-                Some(Command::Unlisten(channel)) => {
-                    let channel = channel.clone();
-                    inner.backend.unlisten(&channel);
-
-                    self.finish_command(&mut inner, "UNLISTEN").await?;
-                    return Ok(false);
-                }
-                _ => (),
-            };
-
-            // Grab a connection from the right pool.
-            let request = Request::new(self.id);
-            match inner.connect(&request).await {
-                Ok(()) => {
-                    let query_timeout = self.timeouts.query_timeout(&inner.stats.state);
-                    // We may need to sync params with the server
-                    // and that reads from the socket.
-                    timeout(query_timeout, inner.backend.link_client(&self.params)).await??;
-                }
-                Err(err) => {
-                    if err.no_server() {
-                        error!("{} [{}]", err, self.addr);
-                        self.stream
-                            .error(ErrorResponse::from_err(&err), self.in_transaction)
-                            .await?;
-                        // TODO: should this be wrapped in a method?
-                        inner.disconnect();
-                        inner.reset_router();
-                        inner.done(self.in_transaction);
-                        return Ok(false);
-                    } else {
-                        return Err(err.into());
-                    }
-                }
-            };
-        }
-
-        // We don't start a transaction on the servers until
-        // a client is actually executing something.
-        //
-        // This prevents us holding open connections to multiple servers
-        if self.request_buffer.executable() {
-            if let Some(query) = inner.start_transaction.take() {
-                inner.backend.execute(&query).await?;
-            }
-        }
-
-        for msg in self.request_buffer.iter() {
-            if let ProtocolMessage::Bind(bind) = msg {
-                inner.backend.bind(bind)?
-            }
-        }
-
-        // Queue up request to mirrors, if any.
-        // Do this before sending query to actual server
-        // to have accurate timings between queries.
-        inner.backend.mirror(&self.request_buffer);
-
-        // Send request to actual server.
-        inner
-            .handle_buffer(&self.request_buffer, self.streaming)
-            .await?;
-
-        self.update_stats(&mut inner);
-
-        #[cfg(test)]
-        let handle_response = false;
-        #[cfg(not(test))]
-        let handle_response = !self.streaming && !self.replication_mode;
-
-        if handle_response {
-            let query_timeout = self.timeouts.query_timeout(&inner.stats.state);
-
-            while inner.backend.has_more_messages() && !inner.backend.copy_mode() {
-                let message = timeout(query_timeout, inner.backend.read()).await??;
-                if self.server_message(&mut inner, message).await? {
-                    return Ok(true);
-                }
-            }
-        }
-
-        Ok(false)
-    }
-
-    /// Handle message from server(s).
     async fn server_message(
         &mut self,
-        inner: &mut InnerBorrow<'_>,
+        query_engine: &mut QueryEngine,
         message: Message,
-    ) -> Result<bool, Error> {
-        let code = message.code();
-        let message = message.backend();
-        let has_more_messages = inner.backend.has_more_messages();
+    ) -> Result<(), Error> {
+        let mut context = QueryEngineContext::new(self);
+        query_engine.server_message(&mut context, message).await?;
+        self.in_transaction = context.in_transaction();
 
-        // Messages that we need to send to the client immediately.
-        // ReadyForQuery (B) | CopyInResponse (B) | ErrorResponse(B) | NoticeResponse(B) | NotificationResponse (B)
-        let flush = matches!(code, 'Z' | 'G' | 'E' | 'N' | 'A')
-            || !has_more_messages
-            || message.streaming();
+        Ok(())
+    }
 
-        // Server finished executing a query.
-        // ReadyForQuery (B)
-        if code == 'Z' {
-            inner.stats.query();
-            // In transaction if buffered BEGIN from client
-            // or server is telling us we are.
-            self.in_transaction = message.in_transaction() || inner.start_transaction.is_some();
-            inner.stats.idle(self.in_transaction);
-
-            // Flush mirrors.
-            if !self.in_transaction {
-                inner.backend.mirror_flush();
-            }
-        }
-
-        inner.stats.sent(message.len());
-
-        // Release the connection back into the pool
-        // before flushing data to client.
-        // Flushing can take a minute and we don't want to block
-        // the connection from being reused.
-        if inner.backend.done() {
-            let changed_params = inner.backend.changed_params();
-            if inner.transaction_mode() && !self.replication_mode {
-                inner.disconnect();
-            }
-            inner.stats.transaction();
-            inner.reset_router();
-            debug!(
-                "transaction finished [{:.3}ms]",
-                inner.stats.last_transaction_time.as_secs_f64() * 1000.0
-            );
-
-            // Update client params with values
-            // sent from the server using ParameterStatus(B) messages.
-            if !changed_params.is_empty() {
-                for (name, value) in changed_params.iter() {
-                    debug!("setting client's \"{}\" to {}", name, value);
-                    self.params.insert(name.clone(), value.clone());
-                }
-                inner.comms.update_params(&self.params);
-            }
-        }
-
-        if flush {
-            self.stream.send_flush(&message).await?;
-        } else {
-            self.stream.send(&message).await?;
-        }
-
-        // Pooler is offline or the client requested to disconnect and the transaction is done.
-        if inner.backend.done() && (inner.comms.offline() || self.shutdown) && !self.admin {
-            return Ok(true);
-        }
-
-        Ok(false)
+    /// Handle client messages.
+    async fn client_messages(&mut self, query_engine: &mut QueryEngine) -> Result<(), Error> {
+        let mut context = QueryEngineContext::new(self);
+        query_engine.handle(&mut context).await?;
+        self.in_transaction = context.in_transaction();
+        return Ok(());
     }
 
     /// Buffer extended protocol messages until client requests a sync.
     ///
     /// This ensures we don't check out a connection from the pool until the client
     /// sent a complete request.
-    async fn buffer(&mut self, state: &State) -> Result<BufferEvent, Error> {
+    async fn buffer(&mut self, state: State) -> Result<BufferEvent, Error> {
         self.request_buffer.clear();
 
         // Only start timer once we receive the first message.
@@ -702,7 +376,7 @@ impl Client {
         while !self.request_buffer.full() {
             let idle_timeout = self
                 .timeouts
-                .client_idle_timeout(state, &self.request_buffer);
+                .client_idle_timeout(&state, &self.request_buffer);
 
             let message =
                 match timeout(idle_timeout, self.stream.read_buf(&mut self.stream_buffer)).await {
@@ -754,70 +428,6 @@ impl Client {
         }
 
         Ok(BufferEvent::HaveRequest)
-    }
-
-    /// Tell the client we started a transaction.
-    async fn start_transaction(&mut self) -> Result<(), Error> {
-        self.stream
-            .send_many(&[
-                CommandComplete::new_begin().message()?.backend(),
-                ReadyForQuery::in_transaction(true).message()?,
-            ])
-            .await?;
-        debug!("transaction started");
-        Ok(())
-    }
-
-    /// Tell the client we finished a transaction (without doing any work).
-    ///
-    /// This avoids connecting to servers when clients start and commit transactions
-    /// with no queries.
-    async fn end_transaction(&mut self, rollback: bool) -> Result<(), Error> {
-        let cmd = if rollback {
-            CommandComplete::new_rollback()
-        } else {
-            CommandComplete::new_commit()
-        };
-        let mut messages = if !self.in_transaction {
-            vec![NoticeResponse::from(ErrorResponse::no_transaction()).message()?]
-        } else {
-            vec![]
-        };
-        messages.push(cmd.message()?.backend());
-        messages.push(ReadyForQuery::idle().message()?);
-        self.stream.send_many(&messages).await?;
-        debug!("transaction ended");
-        Ok(())
-    }
-
-    /// Handle SET command.
-    async fn set(&mut self, mut inner: InnerBorrow<'_>) -> Result<(), Error> {
-        self.finish_command(&mut inner, "SET").await?;
-        inner.comms.update_params(&self.params);
-        Ok(())
-    }
-
-    async fn finish_command(
-        &mut self,
-        inner: &mut InnerBorrow<'_>,
-        command: &str,
-    ) -> Result<(), Error> {
-        self.stream
-            .send_many(&[
-                CommandComplete::from_str(command).message()?.backend(),
-                ReadyForQuery::in_transaction(self.in_transaction).message()?,
-            ])
-            .await?;
-        inner.done(self.in_transaction);
-
-        Ok(())
-    }
-
-    fn update_stats(&self, inner: &mut InnerBorrow<'_>) {
-        inner
-            .stats
-            .prepared_statements(self.prepared_statements.len_local());
-        inner.stats.memory_used(self.memory_usage());
     }
 }
 

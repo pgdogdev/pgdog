@@ -230,16 +230,17 @@ impl Stream {
         &mut self,
         error: ErrorResponse,
         in_transaction: bool,
-    ) -> Result<(), crate::net::Error> {
-        self.send(&error).await?;
-        self.send_flush(&if in_transaction {
-            ReadyForQuery::error()
-        } else {
-            ReadyForQuery::idle()
-        })
-        .await?;
+    ) -> Result<usize, crate::net::Error> {
+        let mut bytes_sent = self.send(&error).await?;
+        bytes_sent += self
+            .send_flush(&if in_transaction {
+                ReadyForQuery::error()
+            } else {
+                ReadyForQuery::idle()
+            })
+            .await?;
 
-        Ok(())
+        Ok(bytes_sent)
     }
 
     /// Get the wrapped TCP stream back.
