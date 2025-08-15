@@ -11,7 +11,7 @@ use super::*;
 
 impl QueryEngine {
     /// Handle query from client.
-    pub(super) async fn query(
+    pub(super) async fn execute(
         &mut self,
         context: &mut QueryEngineContext<'_>,
         route: &Route,
