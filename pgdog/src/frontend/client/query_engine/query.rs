@@ -16,6 +16,19 @@ impl QueryEngine {
         context: &mut QueryEngineContext<'_>,
         route: &Route,
     ) -> Result<(), Error> {
+        // Check for cross-shard quries.
+        if context.cross_shard_disabled && route.is_cross_shard() {
+            let bytes_sent = context
+                .stream
+                .error(
+                    ErrorResponse::cross_shard_disabled(),
+                    context.in_transaction(),
+                )
+                .await?;
+            self.stats.sent(bytes_sent);
+            return Ok(());
+        }
+
         if !self.connect(context, route).await? {
             return Ok(());
         }
@@ -38,6 +51,9 @@ impl QueryEngine {
             .handle_buffer(context.buffer, &mut self.router, self.streaming)
             .await?;
 
+        // println!("sent buffer");
+
+        #[cfg(not(test))]
         while self.backend.has_more_messages() && !self.backend.copy_mode() && !self.streaming {
             let message = timeout(
                 context.timeouts.query_timeout(&State::Active),
@@ -74,9 +90,8 @@ impl QueryEngine {
             context.in_transaction = message.in_transaction();
             self.stats.idle(context.in_transaction);
 
-            // Flush mirrors.
             if !context.in_transaction {
-                self.backend.mirror_flush();
+                self.router.reset();
             }
         }
 

@@ -4,41 +4,31 @@ use std::net::SocketAddr;
 use std::time::Instant;
 
 use bytes::BytesMut;
-use engine::EngineContext;
 use timeouts::Timeouts;
 use tokio::time::timeout;
 use tokio::{select, spawn};
 use tracing::{debug, enabled, error, info, trace, Level as LogLevel};
 
-use super::{Buffer, Command, Comms, Error, PreparedStatements};
+use super::{Buffer, Comms, Error, PreparedStatements};
 use crate::auth::{md5, scram::Server};
 use crate::backend::{
     databases,
     pool::{Connection, Request},
 };
 use crate::config::{self, AuthType};
-use crate::frontend::buffer::BufferedQuery;
 use crate::frontend::client::query_engine::{QueryEngine, QueryEngineContext};
-#[cfg(debug_assertions)]
-use crate::frontend::QueryLogger;
 use crate::net::messages::{
-    Authentication, BackendKeyData, CommandComplete, ErrorResponse, FromBytes, Message, Password,
-    Protocol, ReadyForQuery, ToBytes,
+    Authentication, BackendKeyData, ErrorResponse, FromBytes, Message, Password, Protocol,
+    ReadyForQuery, ToBytes,
 };
+use crate::net::ProtocolMessage;
 use crate::net::{parameter::Parameters, Stream};
-use crate::net::{DataRow, EmptyQueryResponse, Field, NoticeResponse, RowDescription};
-use crate::net::{ProtocolMessage, Query};
 use crate::state::State;
 use crate::stats::memory::MemoryUsage;
 
-pub mod counter;
-pub mod engine;
-pub mod inner;
+// pub mod counter;
 pub mod query_engine;
 pub mod timeouts;
-
-pub use engine::Engine;
-use inner::{Inner, InnerBorrow};
 
 /// Frontend client.
 pub struct Client {
@@ -93,10 +83,6 @@ impl Client {
     ) -> Result<(), Error> {
         let user = params.get_default("user", "postgres");
         let database = params.get_default("database", user);
-        let replication_mode = params
-            .get("replication")
-            .map(|v| v.as_str() == Some("database"))
-            .unwrap_or(false);
         let config = config::config();
 
         let admin = database == config.config.admin.name && config.config.admin.user == user;
@@ -208,23 +194,8 @@ impl Client {
         stream.send(&id).await?;
         stream.send_flush(&ReadyForQuery::idle()).await?;
         comms.connect(&id, addr, &params);
-        let shard = params.shard();
 
-        info!(
-            "client connected [{}]{}",
-            addr,
-            if let Some(ref shard) = shard {
-                format!(" (replication, shard {})", shard)
-            } else {
-                "".into()
-            }
-        );
-        if replication_mode {
-            debug!("replication mode [{}]", addr);
-        }
-
-        let mut prepared_statements = PreparedStatements::new();
-        prepared_statements.enabled = config.prepared_statements();
+        info!("client connected [{}]", addr,);
 
         let mut client = Self {
             addr,
@@ -309,12 +280,12 @@ impl Client {
     /// Run the client.
     async fn run(&mut self) -> Result<(), Error> {
         let shutdown = self.comms.shutting_down();
-        let mut offline = false;
+        let mut offline;
         let mut query_engine = QueryEngine::from_client(self)?;
 
         loop {
-            if self.comms.offline() && !self.admin && query_engine.done() {
-                offline = true;
+            offline = (self.comms.offline() && !self.admin || self.shutdown) && query_engine.done();
+            if offline {
                 break;
             }
 
@@ -371,6 +342,7 @@ impl Client {
     ) -> Result<(), Error> {
         let mut context = QueryEngineContext::new(self);
         query_engine.server_message(&mut context, message).await?;
+        self.in_transaction = context.in_transaction();
 
         Ok(())
     }

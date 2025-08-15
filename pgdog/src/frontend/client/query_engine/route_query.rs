@@ -14,13 +14,15 @@ impl QueryEngine {
         }
 
         // Admin doesn't have a cluster.
-        if self.backend.cluster().is_err() {
+        let cluster = if let Ok(cluster) = self.backend.cluster() {
+            cluster
+        } else {
             return Ok(true);
-        }
+        };
 
         let router_context = RouterContext::new(
             context.buffer,
-            self.backend.cluster()?,
+            cluster,
             context.prepared_statements,
             context.params,
             context.in_transaction,

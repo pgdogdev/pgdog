@@ -405,7 +405,7 @@ fn test_comment() {
     );
 
     match command {
-        Command::Query(query) => assert_eq!(query.shard(), &Shard::All),
+        Command::Query(query) => assert_eq!(query.shard(), &Shard::Direct(0)), // Round-robin because it's only a parse
         _ => panic!("not a query"),
     }
 }

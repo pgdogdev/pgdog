@@ -93,7 +93,6 @@ impl Connection {
         };
 
         if connect {
-            debug!("connecting {}", route);
             match self.try_conn(request, route).await {
                 Ok(()) => (),
                 Err(Error::Pool(super::Error::Offline | super::Error::AllReplicasDown)) => {

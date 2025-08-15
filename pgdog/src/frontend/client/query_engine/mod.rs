@@ -5,7 +5,7 @@ use crate::{
         router::{parser::Shard, Route},
         Client, Command, Comms, Error, Router, RouterContext, Stats,
     },
-    net::{ErrorResponse, Message, Parameters},
+    net::{BackendKeyData, ErrorResponse, Message, Parameters},
     state::State,
 };
 
@@ -24,6 +24,9 @@ pub mod show_shards;
 pub mod start_transaction;
 pub mod unknown_command;
 
+#[cfg(test)]
+mod testing;
+
 pub use context::QueryEngineContext;
 
 #[derive(Default)]
@@ -34,6 +37,8 @@ pub struct QueryEngine {
     stats: Stats,
     backend: Connection,
     streaming: bool,
+    admin: bool,
+    client_id: BackendKeyData,
 }
 
 impl<'a> QueryEngine {
@@ -51,7 +56,9 @@ impl<'a> QueryEngine {
 
         Ok(Self {
             backend,
+            client_id: comms.client_id(),
             comms: comms.clone(),
+            admin,
             ..Default::default()
         })
     }
@@ -137,10 +144,6 @@ impl<'a> QueryEngine {
         }
 
         if !context.in_transaction {
-            if !self.backend.copy_mode() {
-                self.router.reset();
-            }
-
             self.backend.mirror_flush();
         }
 
@@ -150,9 +153,13 @@ impl<'a> QueryEngine {
     }
 
     fn update_stats(&mut self, context: &mut QueryEngineContext<'_>) {
-        let state = match context.in_transaction {
-            true => State::IdleInTransaction,
-            false => State::Idle,
+        let state = if self.backend.has_more_messages() {
+            State::Active
+        } else {
+            match context.in_transaction {
+                true => State::IdleInTransaction,
+                false => State::Idle,
+            }
         };
 
         self.stats.state = state;

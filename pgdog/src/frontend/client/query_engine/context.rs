@@ -1,6 +1,6 @@
 use crate::{
     frontend::{client::timeouts::Timeouts, Buffer, Client, PreparedStatements},
-    net::{BackendKeyData, Parameters, Stream},
+    net::{Parameters, Stream},
 };
 
 /// Context passed to the query engine to execute a query.
@@ -15,10 +15,10 @@ pub struct QueryEngineContext<'a> {
     pub(super) stream: &'a mut Stream,
     /// Client in transaction?
     pub(super) in_transaction: bool,
-    /// Client ID.
-    pub(super) client_id: BackendKeyData,
     /// Timeouts
     pub(super) timeouts: Timeouts,
+    /// Cross shard  queries are disabled.
+    pub(super) cross_shard_disabled: bool,
 }
 
 impl<'a> QueryEngineContext<'a> {
@@ -29,8 +29,8 @@ impl<'a> QueryEngineContext<'a> {
             buffer: &mut client.request_buffer,
             stream: &mut client.stream,
             in_transaction: client.in_transaction,
-            client_id: client.id,
             timeouts: client.timeouts,
+            cross_shard_disabled: client.cross_shard_disabled,
         }
     }
 

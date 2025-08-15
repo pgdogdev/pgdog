@@ -17,7 +17,7 @@ impl QueryEngine {
             return Ok(true);
         }
 
-        let request = Request::new(context.client_id);
+        let request = Request::new(self.client_id);
 
         self.stats.waiting(request.created_at);
         self.comms.stats(self.stats);
