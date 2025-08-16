@@ -1,5 +1,8 @@
 //! Shortcut the parser given the cluster config.
 
+use pg_query::protobuf::ParseResult;
+use pgdog_plugin::{PdQuery, PdRouterContext};
+
 use crate::{
     backend::ShardingSchema,
     config::{config, MultiTenant, ReadWriteStrategy},
@@ -92,5 +95,22 @@ impl<'a> QueryParserContext<'a> {
     /// Multi-tenant checks.
     pub(super) fn multi_tenant(&self) -> &Option<MultiTenant> {
         self.multi_tenant
+    }
+
+    /// Create plugin context.
+    pub(super) fn plugin_context(&self, ast: &ParseResult) -> PdRouterContext {
+        PdRouterContext {
+            shards: self.shards as u64,
+            has_replicas: if self.read_only { 0 } else { 1 },
+            has_primary: if self.write_only { 0 } else { 1 },
+            in_transaction: if self.router_context.in_transaction {
+                1
+            } else {
+                0
+            },
+            // SAFETY: ParseResult lives for the entire time the plugin is executed.
+            // We could use lifetimes to guarantee this, but bindgen doesn't generate them.
+            query: unsafe { PdQuery::from_proto(ast) },
+        }
     }
 }

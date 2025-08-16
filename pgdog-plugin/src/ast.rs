@@ -4,8 +4,8 @@ use pg_query::protobuf::{ParseResult, RawStmt};
 
 use crate::bindings::PdQuery;
 
-impl From<&ParseResult> for PdQuery {
-    fn from(value: &ParseResult) -> Self {
+impl PdQuery {
+    pub unsafe fn from_proto(value: &ParseResult) -> Self {
         Self {
             data: value.stmts.as_ptr() as *mut c_void,
             version: value.version,
@@ -78,7 +78,7 @@ mod test {
     #[test]
     fn test_ast() {
         let ast = pg_query::parse("SELECT * FROM users WHERE id = $1").unwrap();
-        let ffi = PdQuery::from(&ast.protobuf);
+        let ffi = unsafe { PdQuery::from_proto(&ast.protobuf) };
         match ffi
             .protobuf()
             .stmts

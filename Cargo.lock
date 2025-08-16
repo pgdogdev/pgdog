@@ -653,18 +653,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "csv"
-version = "1.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "acdc4883a9c96732e4733212c01447ebd805833b7275a73ca3ee080fd77afdaf"
-dependencies = [
- "csv-core",
- "itoa",
- "ryu",
- "serde",
-]
-
-[[package]]
 name = "csv-core"
 version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2303,6 +2291,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "pgdog-example-plugin"
+version = "0.1.0"
+dependencies = [
+ "once_cell",
+ "parking_lot",
+ "pg_query",
+ "pgdog-plugin",
+ "thiserror 2.0.12",
+]
+
+[[package]]
 name = "pgdog-plugin"
 version = "0.1.1"
 dependencies = [
@@ -2311,23 +2310,6 @@ dependencies = [
  "libloading",
  "pg_query",
  "tracing",
-]
-
-[[package]]
-name = "pgdog-routing"
-version = "0.1.0"
-dependencies = [
- "cc",
- "csv",
- "once_cell",
- "pg_query",
- "pgdog-plugin",
- "postgres",
- "rand 0.8.5",
- "regex",
- "tracing",
- "tracing-subscriber",
- "uuid",
 ]
 
 [[package]]
@@ -2446,20 +2428,6 @@ name = "portable-atomic"
 version = "1.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f84267b20a16ea918e43c6a88433c2d54fa145c92a811b5b047ccbe153674483"
-
-[[package]]
-name = "postgres"
-version = "0.19.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "363e6dfbdd780d3aa3597b6eb430db76bb315fa9bad7fae595bb8def808b8470"
-dependencies = [
- "bytes",
- "fallible-iterator",
- "futures-util",
- "log",
- "tokio",
- "tokio-postgres",
-]
 
 [[package]]
 name = "postgres-protocol"
@@ -2896,13 +2864,6 @@ dependencies = [
  "byteorder",
  "rmp",
  "serde",
-]
-
-[[package]]
-name = "routing-plugin"
-version = "0.1.0"
-dependencies = [
- "pgdog-plugin",
 ]
 
 [[package]]

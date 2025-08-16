@@ -1,10 +1,10 @@
 [workspace]
 
-members = [ "examples/demo",
-    "examples/routing-plugin", "integration/rust",
+members = [
+    "examples/demo",
+    "integration/rust",
     "pgdog",
-    "pgdog-plugin",
-    "plugins/pgdog-routing",
+    "pgdog-plugin", "plugins/pgdog-example-plugin",
 ]
 resolver = "2"
 
