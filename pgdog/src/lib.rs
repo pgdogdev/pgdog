@@ -12,6 +12,7 @@ pub mod stats;
 #[cfg(feature = "tui")]
 pub mod tui;
 pub mod util;
+pub mod wire_protocol;
 
 use tracing::level_filters::LevelFilter;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
