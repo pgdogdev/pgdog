@@ -6,7 +6,7 @@ use std::{
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use pg_query::{NodeEnum, protobuf::RangeVar};
-use pgdog_plugin::{PdRoute, PdRouterContext, ReadWrite, Shard};
+use pgdog_plugin::{PdRoute, PdRouterContext, PdStr, ReadWrite, Shard};
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -30,13 +30,29 @@ pub extern "C" fn pgdog_init() {}
 #[unsafe(no_mangle)]
 pub extern "C" fn pgdog_route(context: PdRouterContext) -> PdRoute {
     // This function can't return errors or panic.
-
+    // It also runs sync so make sure it's fast.
     route_query(context).unwrap_or(PdRoute::unknown())
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn pgdog_rustc_version() -> PdStr {
+    pgdog_plugin::comp::rustc_version()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn pgdog_pg_query_version() -> PdStr {
+    "6.1.0".into()
 }
 
 /// Route query to a replica or a primary, depending on when was the last time
 /// we wrote to the table.
 fn route_query(context: PdRouterContext) -> Result<PdRoute, PluginError> {
+    // PgDog really thinks this should be a write.
+    // This could be because there is an INSERT statement in a CTE,
+    // or something else. You could override its decision here, but make
+    // sure you checked the AST first.
+    let write_override = context.write_override();
+
     let proto = context.statement().protobuf();
     let root = proto
         .stmts
@@ -48,6 +64,10 @@ fn route_query(context: PdRouterContext) -> Result<PdRoute, PluginError> {
 
     match root.node.as_ref() {
         Some(NodeEnum::SelectStmt(stmt)) => {
+            if write_override {
+                return Ok(PdRoute::unknown());
+            }
+
             let table_name = stmt
                 .from_clause
                 .first()
@@ -63,11 +83,6 @@ fn route_query(context: PdRouterContext) -> Result<PdRoute, PluginError> {
                             if context.has_replicas() {
                                 return Ok(PdRoute::new(Shard::Unknown, ReadWrite::Read));
                             }
-                        }
-                    } else {
-                        if context.has_replicas() {
-                            // Don't have it, assume we're good.
-                            return Ok(PdRoute::new(Shard::Unknown, ReadWrite::Read));
                         }
                     }
                 }
@@ -99,7 +114,8 @@ fn route_query(context: PdRouterContext) -> Result<PdRoute, PluginError> {
         _ => {}
     }
 
-    Ok(PdRoute::new(Shard::Unknown, ReadWrite::Write))
+    // Let PgDog decide.
+    Ok(PdRoute::unknown())
 }
 
 #[cfg(test)]
@@ -118,6 +134,7 @@ mod test {
             has_replicas: 1,
             has_primary: 1,
             in_transaction: 0,
+            write_override: 0,
             query,
         };
         let route = route_query(context).unwrap();

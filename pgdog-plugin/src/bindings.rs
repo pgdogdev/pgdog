@@ -369,6 +369,7 @@ pub struct PdRouterContext {
     pub has_replicas: u8,
     pub has_primary: u8,
     pub in_transaction: u8,
+    pub write_override: u8,
     pub query: PdQuery,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
@@ -383,6 +384,8 @@ const _: () = {
         [::std::mem::offset_of!(PdRouterContext, has_primary) - 9usize];
     ["Offset of field: PdRouterContext::in_transaction"]
         [::std::mem::offset_of!(PdRouterContext, in_transaction) - 10usize];
+    ["Offset of field: PdRouterContext::write_override"]
+        [::std::mem::offset_of!(PdRouterContext, write_override) - 11usize];
     ["Offset of field: PdRouterContext::query"]
         [::std::mem::offset_of!(PdRouterContext, query) - 16usize];
 };

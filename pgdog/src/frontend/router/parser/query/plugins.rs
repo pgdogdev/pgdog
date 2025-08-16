@@ -22,6 +22,7 @@ impl QueryParser {
         &mut self,
         context: &QueryParserContext,
         statement: &CachedAst,
+        read: bool,
     ) -> Result<(), Error> {
         // Don't run plugins on Parse only.
         if context.router_context.bind.is_none() && statement.cached {
@@ -38,8 +39,11 @@ impl QueryParser {
         // The first plugin to returns something, wins.
         debug!("executing {} router plugins", plugins.len());
 
+        let mut context = context.plugin_context(&statement.ast().protobuf);
+        context.write_override = if self.write_override || !read { 1 } else { 0 };
+
         for plugin in plugins {
-            if let Some(route) = plugin.route(context.plugin_context(&statement.ast().protobuf)) {
+            if let Some(route) = plugin.route(context) {
                 match route.shard.try_into() {
                     Ok(shard) => match shard {
                         PdShard::All => self.plugin_output.shard = Some(Shard::All),
@@ -59,14 +63,15 @@ impl QueryParser {
 
                 if self.plugin_output.provided() {
                     debug!(
-                        "plugin \"{}\" {} {}",
+                        "plugin \"{}\" returned route [{}, {}]",
                         plugin.name(),
                         match self.plugin_output.shard.as_ref() {
                             Some(shard) => format!("shard={}", shard),
                             None => format!("shard=unknown"),
                         },
                         match self.plugin_output.read {
-                            Some(read) => format!("read={}", read),
+                            Some(read) =>
+                                format!("role={}", if read { "replica" } else { "primary" }),
                             None => format!("read=unknown"),
                         }
                     );

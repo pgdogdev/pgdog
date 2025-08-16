@@ -30,6 +30,12 @@ impl Deref for PdStr {
     }
 }
 
+impl PartialEq for PdStr {
+    fn eq(&self, other: &Self) -> bool {
+        **self == **other
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;

@@ -1,35 +1,50 @@
+//! Context passed to and from the plugins.
+
 use crate::{bindings::PdRouterContext, PdQuery, PdRoute};
 
 impl PdRouterContext {
+    /// Get reference to the AST parsed by `pg_query`.
     pub fn statement(&self) -> PdQuery {
         self.query
     }
 
+    /// Is the database cluster read-only, i.e., no primary?
     pub fn read_only(&self) -> bool {
         self.has_primary == 0
     }
 
+    /// Is the database cluster write-only, i.e., no replicas?
     pub fn write_only(&self) -> bool {
         self.has_replicas == 0
     }
 
+    /// Does the database cluster have replicas?
     pub fn has_replicas(&self) -> bool {
         !self.write_only()
     }
 
+    /// Does the database cluster have a primary?
     pub fn has_primary(&self) -> bool {
         !self.read_only()
     }
 
+    /// How many shards are in the database cluster.
     pub fn shards(&self) -> usize {
         self.shards as usize
     }
 
+    /// Is the cluster sharded?
     pub fn sharded(&self) -> bool {
         self.shards() > 1
     }
+
+    /// PgDog thinks you really should send this to the primary.
+    pub fn write_override(&self) -> bool {
+        self.write_override == 1
+    }
 }
 
+/// What shard, if any, the statement should be routed to.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum Shard {
     Direct(usize),
@@ -78,6 +93,7 @@ impl TryFrom<u8> for ReadWrite {
     }
 }
 
+/// Should the statement be routed to a replica or a primary?
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum ReadWrite {
     Read,
@@ -95,7 +111,14 @@ impl From<ReadWrite> for u8 {
     }
 }
 
+impl Default for PdRoute {
+    fn default() -> Self {
+        Self::unknown()
+    }
+}
+
 impl PdRoute {
+    /// Don't use this plugin's output for routing.
     pub fn unknown() -> PdRoute {
         PdRoute {
             shard: Shard::Unknown.into(),
@@ -103,6 +126,13 @@ impl PdRoute {
         }
     }
 
+    /// Assign this route to the statement.
+    ///
+    /// # Arguments
+    ///
+    /// * `shard`: Which shard, if any, the statement should go to.
+    /// * `read_write`: Should the statement go to a replica or the primary?
+    ///
     pub fn new(shard: Shard, read_write: ReadWrite) -> PdRoute {
         PdRoute {
             shard: shard.into(),

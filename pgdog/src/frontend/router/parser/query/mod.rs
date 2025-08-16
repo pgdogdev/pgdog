@@ -269,7 +269,14 @@ impl QueryParser {
         }?;
 
         // Run plugins, if any.
-        self.plugins(context, &statement)?;
+        self.plugins(
+            context,
+            &statement,
+            match &command {
+                Command::Query(query) => query.is_read(),
+                _ => false,
+            },
+        )?;
 
         // Overwrite shard using shard we got from a comment, if any.
         if let Shard::Direct(shard) = self.shard {

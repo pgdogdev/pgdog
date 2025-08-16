@@ -1,3 +1,5 @@
+//! Compatibility checks.
+
 use crate::PdStr;
 
 /// Rust compiler version used to build this library.

@@ -111,6 +111,7 @@ impl<'a> QueryParserContext<'a> {
             // SAFETY: ParseResult lives for the entire time the plugin is executed.
             // We could use lifetimes to guarantee this, but bindgen doesn't generate them.
             query: unsafe { PdQuery::from_proto(ast) },
+            write_override: 0,
         }
     }
 }

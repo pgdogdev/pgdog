@@ -2,7 +2,7 @@
 
 use libloading::{library_filename, Library, Symbol};
 
-use crate::{PdRoute, PdRouterContext};
+use crate::{PdRoute, PdRouterContext, PdStr};
 
 /// Plugin interface.
 #[derive(Debug)]
@@ -12,8 +12,13 @@ pub struct Plugin<'a> {
     init: Option<Symbol<'a, unsafe extern "C" fn()>>,
     /// Shutdown routine.
     fini: Option<Symbol<'a, unsafe extern "C" fn()>>,
-    // Route query.
+    /// Route query.
     route: Option<Symbol<'a, unsafe extern "C" fn(PdRouterContext) -> PdRoute>>,
+    /// Compiler version.
+    rustc_version: Option<Symbol<'a, unsafe extern "C" fn() -> PdStr>>,
+    /// PgQuery version.
+    #[allow(dead_code)]
+    pg_query_version: Option<Symbol<'a, unsafe extern "C" fn() -> PdStr>>,
 }
 
 impl<'a> Plugin<'a> {
@@ -28,12 +33,16 @@ impl<'a> Plugin<'a> {
         let init = unsafe { library.get(b"pgdog_init\0") }.ok();
         let fini = unsafe { library.get(b"pgdog_fini\0") }.ok();
         let route = unsafe { library.get(b"pgdog_route\0") }.ok();
+        let rustc_version = unsafe { library.get(b"pgdog_rustc_version\0") }.ok();
+        let pg_query_version = unsafe { library.get(b"pgdog_pg_query_version\0") }.ok();
 
         Self {
             name: name.to_owned(),
             init,
             fini,
             route,
+            rustc_version,
+            pg_query_version,
         }
     }
 
@@ -68,7 +77,10 @@ impl<'a> Plugin<'a> {
         &self.name
     }
 
-    pub fn valid(&self) -> bool {
-        true
+    /// Get Rust compiler version used to build the plugin.
+    pub fn rustc_version(&self) -> Option<PdStr> {
+        self.rustc_version
+            .as_ref()
+            .map(|rustc_version| unsafe { rustc_version() })
     }
 }

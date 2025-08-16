@@ -30,6 +30,8 @@ typedef struct PdRouterContext {
     uint8_t has_primary;
     /* Are we inside a transaction? */
     uint8_t in_transaction;
+    /* Write override */
+    uint8_t write_override;
     /* Query */
     PdQuery query;
 } PdConfig;
