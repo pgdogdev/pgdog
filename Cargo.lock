@@ -2309,6 +2309,7 @@ dependencies = [
  "bindgen 0.71.1",
  "libc",
  "libloading",
+ "pg_query",
  "tracing",
 ]
 

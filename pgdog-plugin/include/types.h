@@ -1,3 +1,5 @@
+#include <stddef.h>
+#include <stdint.h>
 
 /**
  * Query parameter value.
@@ -278,3 +280,46 @@ typedef struct Input {
     InputType input_type;
     RoutingInput input;
 } Input;
+
+
+/*
+ * Rust string.
+ */
+typedef struct PdStr {
+    size_t len;
+    void *data;
+} RustString;
+
+/*
+ * Database entry in the config.
+ */
+typedef struct PdDatabase {
+    uint64_t shard;
+    uint8_t role; // 0 = primary, 1 = replica
+} PdDatabase;
+
+/*
+ * Databases in the cluster.
+ */
+ typedef struct PdDatabases {
+     uint64_t len;
+     PdDatabase *databases;
+ } PdDatabases;
+
+/*
+ * Routing decision.
+ */
+ typedef struct PdRoute {
+     uint64_t shard;
+     uint8_t role;
+     uint8_t cross_shard;
+ } PdRoute;
+
+ /*
+  * PdQuery
+  */
+ typedef struct PdQuery {
+     int32_t version;
+     uint64_t len;
+     void *data;
+ } PdQuery;
