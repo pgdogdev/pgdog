@@ -29,7 +29,11 @@ impl QueryParser {
             return Ok(());
         }
 
-        let plugins = plugins();
+        let plugins = if let Some(plugins) = plugins() {
+            plugins
+        } else {
+            return Ok(());
+        };
 
         if plugins.is_empty() {
             return Ok(());

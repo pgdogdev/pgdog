@@ -82,8 +82,10 @@ pub fn load(names: &[&str]) -> Result<(), libloading::Error> {
 
 /// Shutdown plugins.
 pub fn shutdown() {
-    for plugin in plugins() {
-        plugin.fini();
+    if let Some(plugins) = plugins() {
+        for plugin in plugins {
+            plugin.fini();
+        }
     }
 }
 
@@ -97,8 +99,8 @@ pub fn plugin(name: &str) -> Option<&Plugin<'_>> {
 }
 
 /// Get all loaded plugins.
-pub fn plugins() -> &'static Vec<Plugin<'static>> {
-    PLUGINS.get().unwrap()
+pub fn plugins() -> Option<&'static Vec<Plugin<'static>>> {
+    PLUGINS.get()
 }
 
 /// Load plugins from config.
