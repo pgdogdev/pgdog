@@ -53,19 +53,13 @@ pub(crate) fn route_query(context: Context) -> Result<Route, PluginError> {
                 .as_ref()
                 .ok_or(PluginError::EmptyQuery)?;
 
-            match table_name {
-                NodeEnum::RangeVar(RangeVar { relname, .. }) => {
-                    // Got info on last write.
-                    if let Some(last_write) = { WRITE_TIMES.lock().get(relname).cloned() } {
-                        if last_write.elapsed() > Duration::from_secs(5) {
-                            if context.has_replicas() {
-                                return Ok(Route::new(Shard::Unknown, ReadWrite::Read));
-                            }
+            if let NodeEnum::RangeVar(RangeVar { relname, .. }) = table_name {
+                // Got info on last write.
+                if let Some(last_write) = { WRITE_TIMES.lock().get(relname).cloned() }
+                    && last_write.elapsed() > Duration::from_secs(5)
+                        && context.has_replicas() {
+                            return Ok(Route::new(Shard::Unknown, ReadWrite::Read));
                         }
-                    }
-                }
-
-                _ => (),
             }
         }
         Some(NodeEnum::InsertStmt(stmt)) => {

@@ -18,7 +18,7 @@ use syn::{ItemFn, parse_macro_input};
 pub fn plugin(_input: TokenStream) -> TokenStream {
     let expanded = quote! {
         #[unsafe(no_mangle)]
-        pub extern "C" fn pgdog_rustc_version(output: *mut pgdog_plugin::PdStr) {
+        pub unsafe extern "C" fn pgdog_rustc_version(output: *mut pgdog_plugin::PdStr) {
             let version = pgdog_plugin::comp::rustc_version();
             unsafe {
                 *output = version;
@@ -26,7 +26,7 @@ pub fn plugin(_input: TokenStream) -> TokenStream {
         }
 
         #[unsafe(no_mangle)]
-        pub extern "C" fn pgdog_pg_query_version(output: *mut pgdog_plugin::PdStr) {
+        pub unsafe extern "C" fn pgdog_pg_query_version(output: *mut pgdog_plugin::PdStr) {
             let version: pgdog_plugin::PdStr = option_env!("PGDOG_PGQUERY_VERSION")
                 .unwrap_or_default()
                 .into();
@@ -36,7 +36,7 @@ pub fn plugin(_input: TokenStream) -> TokenStream {
         }
 
         #[unsafe(no_mangle)]
-        pub extern "C" fn pgdog_plugin_version(output: *mut pgdog_plugin::PdStr) {
+        pub unsafe extern "C" fn pgdog_plugin_version(output: *mut pgdog_plugin::PdStr) {
             let version: pgdog_plugin::PdStr = env!("CARGO_PKG_VERSION").into();
             unsafe {
                 *output = version;
@@ -109,7 +109,7 @@ pub fn route(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
     let expanded = quote! {
         #[unsafe(no_mangle)]
-        pub extern "C" fn pgdog_route(#first_param_name: pgdog_plugin::PdRouterContext, output: *mut pgdog_plugin::PdRoute) {
+        pub unsafe extern "C" fn pgdog_route(#first_param_name: pgdog_plugin::PdRouterContext, output: *mut pgdog_plugin::PdRoute) {
             #input_fn
 
             let pgdog_context: pgdog_plugin::Context = #first_param_name.into();
