@@ -7,11 +7,11 @@ edition = "2024"
 crate-type = ["rlib", "cdylib"]
 
 [dependencies]
-pgdog-plugin = { path = "../../pgdog-plugin" }
+pgdog-plugin = "0.1.2"
 once_cell = "1"
 parking_lot = "0.12"
 thiserror = "2"
 pg_query = "6.1.0"
 
 [build-dependencies]
-pgdog-plugin-build = { path = "../../pgdog-plugin-build" }
+pgdog-plugin-build = "0.1.0"
