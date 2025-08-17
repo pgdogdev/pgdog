@@ -1,6 +1,6 @@
 //! Context passed to and from the plugins.
 
-use crate::{bindings::PdRouterContext, PdQuery, PdRoute};
+use crate::{PdQuery, PdRoute, bindings::PdRouterContext};
 
 impl PdRouterContext {
     /// Get reference to the AST parsed by `pg_query`.
@@ -121,8 +121,8 @@ impl PdRoute {
     /// Don't use this plugin's output for routing.
     pub fn unknown() -> PdRoute {
         PdRoute {
-            shard: Shard::Unknown.into(),
-            read_write: ReadWrite::Unknown.into(),
+            shard: -2,
+            read_write: 2,
         }
     }
 

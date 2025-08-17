@@ -1,6 +1,6 @@
 //! Plugin interface.
 
-use libloading::{library_filename, Library, Symbol};
+use libloading::{Library, Symbol, library_filename};
 
 use crate::{PdRoute, PdRouterContext, PdStr};
 
@@ -13,12 +13,13 @@ pub struct Plugin<'a> {
     /// Shutdown routine.
     fini: Option<Symbol<'a, unsafe extern "C" fn()>>,
     /// Route query.
-    route: Option<Symbol<'a, unsafe extern "C" fn(PdRouterContext) -> PdRoute>>,
+    route: Option<Symbol<'a, unsafe extern "C" fn(PdRouterContext, *mut PdRoute)>>,
     /// Compiler version.
-    rustc_version: Option<Symbol<'a, unsafe extern "C" fn() -> PdStr>>,
+    rustc_version: Option<Symbol<'a, unsafe extern "C" fn(*mut PdStr)>>,
     /// PgQuery version.
-    #[allow(dead_code)]
-    pg_query_version: Option<Symbol<'a, unsafe extern "C" fn() -> PdStr>>,
+    pg_query_version: Option<Symbol<'a, unsafe extern "C" fn(*mut PdStr)>>,
+    /// Plugin version.
+    plugin_version: Option<Symbol<'a, unsafe extern "C" fn(*mut PdStr)>>,
 }
 
 impl<'a> Plugin<'a> {
@@ -35,6 +36,7 @@ impl<'a> Plugin<'a> {
         let route = unsafe { library.get(b"pgdog_route\0") }.ok();
         let rustc_version = unsafe { library.get(b"pgdog_rustc_version\0") }.ok();
         let pg_query_version = unsafe { library.get(b"pgdog_pg_query_version\0") }.ok();
+        let plugin_version = unsafe { library.get(b"pgdog_plugin_version\0") }.ok();
 
         Self {
             name: name.to_owned(),
@@ -43,6 +45,7 @@ impl<'a> Plugin<'a> {
             route,
             rustc_version,
             pg_query_version,
+            plugin_version,
         }
     }
 
@@ -66,7 +69,11 @@ impl<'a> Plugin<'a> {
 
     pub fn route(&self, context: PdRouterContext) -> Option<PdRoute> {
         if let Some(ref route) = &self.route {
-            Some(unsafe { route(context) })
+            let mut output = PdRoute::default();
+            unsafe {
+                route(context, &mut output as *mut PdRoute);
+            }
+            Some(output)
         } else {
             None
         }
@@ -79,8 +86,30 @@ impl<'a> Plugin<'a> {
 
     /// Get Rust compiler version used to build the plugin.
     pub fn rustc_version(&self) -> Option<PdStr> {
-        self.rustc_version
-            .as_ref()
-            .map(|rustc_version| unsafe { rustc_version() })
+        let mut output = PdStr::default();
+        self.rustc_version.as_ref().map(|rustc_version| unsafe {
+            println!("before: {:?}", output);
+            rustc_version(&mut output);
+            println!("after: {:?}", output);
+            output
+        })
+    }
+
+    /// Get plugin version, if any.
+    pub fn version(&self) -> Option<PdStr> {
+        let mut output = PdStr::default();
+        self.plugin_version.as_ref().map(|func| unsafe {
+            func(&mut output as *mut PdStr);
+            output
+        })
+    }
+
+    pub fn pg_query_version(&self) -> Option<PdStr> {
+        let mut output = PdStr::default();
+
+        self.pg_query_version.as_ref().map(|func| unsafe {
+            func(&mut output as *mut PdStr);
+            output
+        })
     }
 }

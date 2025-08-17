@@ -18,6 +18,8 @@ libloading = "0.8"
 libc = "0.2"
 tracing = "0.1"
 pg_query = "6.1.0"
+pgdog-macros = { path = "../pgdog-macros" }
+toml = "0.9"
 
 [build-dependencies]
 bindgen = "0.71.0"

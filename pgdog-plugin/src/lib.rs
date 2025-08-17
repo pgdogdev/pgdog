@@ -16,3 +16,5 @@ pub use context::*;
 pub use plugin::*;
 
 pub use libloading;
+
+pub use pgdog_macros as macros;

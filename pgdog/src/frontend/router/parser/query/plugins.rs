@@ -48,6 +48,7 @@ impl QueryParser {
 
         for plugin in plugins {
             if let Some(route) = plugin.route(context) {
+                println!("output: {:?}", route);
                 match route.shard.try_into() {
                     Ok(shard) => match shard {
                         PdShard::All => self.plugin_output.shard = Some(Shard::All),

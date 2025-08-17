@@ -36,6 +36,15 @@ impl PartialEq for PdStr {
     }
 }
 
+impl Default for PdStr {
+    fn default() -> Self {
+        Self {
+            len: 0,
+            data: "".as_ptr() as *mut c_void,
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;

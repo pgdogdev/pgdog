@@ -65,13 +65,15 @@ pub fn load(names: &[&str]) -> Result<(), libloading::Error> {
                 debug!("plugin \"{}\" initialized", name);
             }
 
-            plugins.push(plugin);
-
             info!(
-                "loaded \"{}\" plugin [{:.4}ms]",
+                "loaded \"{}\" plugin (v{}, pg_query: v{}) [{:.4}ms]",
                 name,
+                plugin.version().unwrap_or_default().deref(),
+                plugin.pg_query_version().unwrap_or_default().deref(),
                 now.elapsed().as_secs_f64() * 1000.0
             );
+
+            plugins.push(plugin);
         }
     }
 
