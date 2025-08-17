@@ -349,28 +349,36 @@ const _: () = {
 pub type RustString = PdStr;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
-pub struct PdQuery {
+pub struct PdStatement {
     pub version: i32,
     pub len: u64,
     pub data: *mut ::std::os::raw::c_void,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
-    ["Size of PdQuery"][::std::mem::size_of::<PdQuery>() - 24usize];
-    ["Alignment of PdQuery"][::std::mem::align_of::<PdQuery>() - 8usize];
-    ["Offset of field: PdQuery::version"][::std::mem::offset_of!(PdQuery, version) - 0usize];
-    ["Offset of field: PdQuery::len"][::std::mem::offset_of!(PdQuery, len) - 8usize];
-    ["Offset of field: PdQuery::data"][::std::mem::offset_of!(PdQuery, data) - 16usize];
+    ["Size of PdStatement"][::std::mem::size_of::<PdStatement>() - 24usize];
+    ["Alignment of PdStatement"][::std::mem::align_of::<PdStatement>() - 8usize];
+    ["Offset of field: PdStatement::version"]
+        [::std::mem::offset_of!(PdStatement, version) - 0usize];
+    ["Offset of field: PdStatement::len"][::std::mem::offset_of!(PdStatement, len) - 8usize];
+    ["Offset of field: PdStatement::data"][::std::mem::offset_of!(PdStatement, data) - 16usize];
 };
+#[doc = " Context on the database cluster configuration and the currently processed\n PostgreSQL statement.\n\n This struct is C FFI-safe and therefore uses C types. Use public methods to interact with it instead\n of reading the data directly."]
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct PdRouterContext {
+    #[doc = " How many shards are configured."]
     pub shards: u64,
+    #[doc = " Does the database cluster have replicas? `1` = `true`, `0` = `false`."]
     pub has_replicas: u8,
+    #[doc = " Does the database cluster have a primary? `1` = `true`, `0` = `false`."]
     pub has_primary: u8,
+    #[doc = " Is the query being executed inside a transaction? `1` = `true`, `0` = `false`."]
     pub in_transaction: u8,
+    #[doc = " PgDog strongly believes this statement should go to a primary. `1` = `true`, `0` = `false`."]
     pub write_override: u8,
-    pub query: PdQuery,
+    #[doc = " pg_query generated Abstract Syntax Tree of the statement."]
+    pub query: PdStatement,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
@@ -389,11 +397,13 @@ const _: () = {
     ["Offset of field: PdRouterContext::query"]
         [::std::mem::offset_of!(PdRouterContext, query) - 16usize];
 };
-pub type PdConfig = PdRouterContext;
+#[doc = " Routing decision returned by the plugin."]
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct PdRoute {
+    #[doc = " Which shard the query should go to.\n\n `-1` for all shards, `-2` for unknown, this setting is ignored."]
     pub shard: i64,
+    #[doc = " Is the query a read and should go to a replica?\n\n `1` for `true`, `0` for `false`, `2` for unknown, this setting is ignored."]
     pub read_write: u8,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]

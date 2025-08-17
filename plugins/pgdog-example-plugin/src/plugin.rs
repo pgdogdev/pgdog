@@ -6,7 +6,7 @@ use std::{
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use pg_query::{NodeEnum, protobuf::RangeVar};
-use pgdog_plugin::{PdRoute, PdRouterContext, ReadWrite, Shard};
+use pgdog_plugin::{Context, ReadWrite, Route, Shard};
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -23,7 +23,7 @@ static WRITE_TIMES: Lazy<Mutex<HashMap<String, Instant>>> =
 
 /// Route query to a replica or a primary, depending on when was the last time
 /// we wrote to the table.
-pub(crate) fn route_query(context: PdRouterContext) -> Result<PdRoute, PluginError> {
+pub(crate) fn route_query(context: Context) -> Result<Route, PluginError> {
     // PgDog really thinks this should be a write.
     // This could be because there is an INSERT statement in a CTE,
     // or something else. You could override its decision here, but make
@@ -42,7 +42,7 @@ pub(crate) fn route_query(context: PdRouterContext) -> Result<PdRoute, PluginErr
     match root.node.as_ref() {
         Some(NodeEnum::SelectStmt(stmt)) => {
             if write_override {
-                return Ok(PdRoute::unknown());
+                return Ok(Route::unknown());
             }
 
             let table_name = stmt
@@ -59,7 +59,7 @@ pub(crate) fn route_query(context: PdRouterContext) -> Result<PdRoute, PluginErr
                     if let Some(last_write) = { WRITE_TIMES.lock().get(relname).cloned() } {
                         if last_write.elapsed() > Duration::from_secs(5) {
                             if context.has_replicas() {
-                                return Ok(PdRoute::new(Shard::Unknown, ReadWrite::Read));
+                                return Ok(Route::new(Shard::Unknown, ReadWrite::Read));
                             }
                         }
                     }
@@ -93,12 +93,12 @@ pub(crate) fn route_query(context: PdRouterContext) -> Result<PdRoute, PluginErr
     }
 
     // Let PgDog decide.
-    Ok(PdRoute::unknown())
+    Ok(Route::unknown())
 }
 
 #[cfg(test)]
 mod test {
-    use pgdog_plugin::PdQuery;
+    use pgdog_plugin::PdStatement;
 
     use super::*;
 
@@ -106,8 +106,8 @@ mod test {
     fn test_routing_plugin() {
         // Keep protobuf in memory.
         let proto = pg_query::parse("SELECT * FROM users").unwrap().protobuf;
-        let query = unsafe { PdQuery::from_proto(&proto) };
-        let context = PdRouterContext {
+        let query = unsafe { PdStatement::from_proto(&proto) };
+        let context = pgdog_plugin::PdRouterContext {
             shards: 1,
             has_replicas: 1,
             has_primary: 1,
@@ -115,7 +115,7 @@ mod test {
             write_override: 0,
             query,
         };
-        let route = route_query(context).unwrap();
+        let route = route_query(context.into()).unwrap();
         let read_write: ReadWrite = route.read_write.try_into().unwrap();
         let shard: Shard = route.shard.try_into().unwrap();
 

@@ -8,18 +8,16 @@
 
 pub mod plugin;
 
-use pgdog_plugin::{PdRoute, PdRouterContext, macros};
+use pgdog_plugin::{Context, Route, macros};
 
 // This identifies this library is a PgDog plugin and adds some
 // required methods automatically.
 macros::plugin!();
 
 /// Perform any plugin initialization routines here.
-/// These are running sync on boot, so make these fast.
+/// These are running sync on boot, and will block startup util they are finished.
 #[macros::init]
-fn init() {
-    println!("hello plugin");
-}
+fn init() {}
 
 /// If defined, this function is called on every query going through PgDog.
 ///
@@ -29,8 +27,8 @@ fn init() {
 /// N.B. Like all functions called via the FFI interface, it cannot return an error or panic.
 ///
 #[macros::route]
-fn route(context: PdRouterContext) -> PdRoute {
-    crate::plugin::route_query(context).unwrap_or(PdRoute::unknown())
+fn route(context: Context) -> Route {
+    crate::plugin::route_query(context).unwrap_or(Route::unknown())
 }
 
 /// Run any code before PgDog is shut down.
@@ -38,7 +36,7 @@ fn route(context: PdRouterContext) -> PdRoute {
 /// This allows for plugins to upload stats to some external service
 /// or perform some cleanup routines.
 ///
-/// N.B. This is sync and will prevent from PgDog from exiting if it gets stuck.
+/// N.B. This is sync and will prevent PgDog from exiting if it gets stuck.
 ///
 #[macros::fini]
 fn shutdown() {}
