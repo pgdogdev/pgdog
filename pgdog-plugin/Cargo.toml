@@ -1,6 +1,6 @@
 [package]
 name = "pgdog-plugin"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2021"
 license = "MIT"
 authors = ["Lev Kokotov <lev.kokotov@gmail.com>"]

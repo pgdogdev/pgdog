@@ -1,5 +1,6 @@
 use std::{path::PathBuf, process::Command};
 
+#[cfg(not(docsrs))]
 fn main() {
     println!("cargo:rerun-if-changed=include/types.h");
 
