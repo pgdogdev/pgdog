@@ -205,7 +205,7 @@ impl Context {
 
         Context {
             ffi: PdRouterContext {
-                shards: 0,
+                shards: 1,
                 has_replicas: 1,
                 has_primary: 1,
                 in_transaction: 0,
@@ -303,7 +303,7 @@ impl TryFrom<u8> for ReadWrite {
 /// let write = ReadWrite::Write;
 ///
 /// // Skip and let PgDog decide.
-/// let unknown = ReadWrite::Unknown.
+/// let unknown = ReadWrite::Unknown;
 /// ```
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum ReadWrite {
