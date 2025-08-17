@@ -57,9 +57,10 @@ pub(crate) fn route_query(context: Context) -> Result<Route, PluginError> {
                 // Got info on last write.
                 if let Some(last_write) = { WRITE_TIMES.lock().get(relname).cloned() }
                     && last_write.elapsed() > Duration::from_secs(5)
-                        && context.has_replicas() {
-                            return Ok(Route::new(Shard::Unknown, ReadWrite::Read));
-                        }
+                    && context.has_replicas()
+                {
+                    return Ok(Route::new(Shard::Unknown, ReadWrite::Read));
+                }
             }
         }
         Some(NodeEnum::InsertStmt(stmt)) => {
