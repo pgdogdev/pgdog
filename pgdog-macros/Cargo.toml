@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 authors = ["Lev Kokotov <lev@pgdog.dev>"]
 license = "MIT"
+description = "Macros used by the pgdog-plugin crate to generate safe FFI functions"
 
 [lib]
 proc-macro = true
