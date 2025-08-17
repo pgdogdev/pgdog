@@ -29,6 +29,7 @@ impl PdStatement {
 
 /// Wrapper around [`pg_query::protobuf::ParseResult`], which allows
 /// the caller to use `pg_query` types and methods to inspect the statement.
+#[derive(Debug)]
 pub struct PdParseResult {
     parse_result: Option<ParseResult>,
     borrowed: bool,

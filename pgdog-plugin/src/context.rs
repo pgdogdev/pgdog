@@ -13,7 +13,7 @@ use crate::{bindings::PdRouterContext, PdRoute, PdStatement};
 ///
 /// ### Example
 ///
-/// ```no_run
+/// ```ignore
 /// let ast = statement.protobuf();
 /// println!("{:#?}", ast);
 /// ```
@@ -29,6 +29,37 @@ impl Deref for Statement {
     }
 }
 
+/// Context information provided by PgDog to the plugin at statement execution. It contains the actual statement and several metadata about
+/// the state of the database cluster:
+///
+/// - Number of shards
+/// - Does it have replicas
+/// - Does it have a primary
+///
+/// ### Example
+///
+/// ```
+/// use pgdog_plugin::{Context, Route, macros, Shard, ReadWrite};
+///
+/// #[macros::route]
+/// fn route(context: Context) -> Route {
+///     let shards = context.shards();
+///     let read_only = context.read_only();
+///     let ast = context.statement().protobuf();
+///
+///     println!("shards: {} (read_only: {})", shards, read_only);
+///     println!("ast: {:#?}", ast);
+///
+///     let read_write = if read_only {
+///         ReadWrite::Read
+///     } else {
+///         ReadWrite::Write
+///     };
+///
+///     Route::new(Shard::Direct(0), read_write)
+/// }
+/// ```
+///
 pub struct Context {
     ffi: PdRouterContext,
 }
@@ -40,11 +71,11 @@ impl From<PdRouterContext> for Context {
 }
 
 impl Context {
-    /// Get reference to the AST parsed by [`pg_query`].
+    /// Returns a reference to the Abstract Syntax Tree (AST) created by [`pg_query`].
     ///
     /// # Example
     ///
-    /// ```no_run
+    /// ```ignore
     /// let ast = context.statement().protobuf();
     /// let nodes = ast.nodes();
     /// ```
@@ -54,11 +85,14 @@ impl Context {
         }
     }
 
-    /// Is the database cluster read-only, i.e., has no primary database.
+    /// Returns true if the database cluster doesn't have a primary database and can only serve
+    /// read queries.
     ///
     /// # Example
     ///
-    /// ```no_run
+    /// ```
+    /// # use pgdog_plugin::Context;
+    /// # let context = unsafe { Context::doc_test() };
     /// let read_only = context.read_only();
     ///
     /// if read_only {
@@ -69,36 +103,47 @@ impl Context {
         self.ffi.has_primary == 0
     }
 
-    /// Is the database cluster write-only, i.e., no replicas and only has a primary.
+    /// Returns true if the database cluster has replica databases.
     ///
     /// # Example
     ///
-    /// ```no_run
-    /// let write_only = context.write_only();
+    /// ```
+    /// # use pgdog_plugin::Context;
+    /// # let context = unsafe { Context::doc_test() };
+    /// let has_replicas = context.has_replicas();
     ///
-    /// if write_only {
-    ///     println!("Database cluster doesn't have replicas.")
+    /// if has_replicas {
+    ///     println!("Database cluster can load balance read queries.")
     /// }
     /// ```
-    pub fn write_only(&self) -> bool {
-        self.ffi.has_replicas == 0
-    }
-
-    /// The database cluster has replicas. Opposite of [`Self::read_only`].
     pub fn has_replicas(&self) -> bool {
-        !self.write_only()
+        self.ffi.has_replicas == 1
     }
 
-    /// Does the database cluster has a primary. Opposite of [`Self::write_only`].
+    /// Returns true if the database cluster has a primary database and can serve write queries.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use pgdog_plugin::Context;
+    /// # let context = unsafe { Context::doc_test() };
+    /// let has_primary = context.has_primary();
+    ///
+    /// if has_primary {
+    ///     println!("Database cluster can serve write queries.");
+    /// }
+    /// ```
     pub fn has_primary(&self) -> bool {
         !self.read_only()
     }
 
-    /// How many shards are in the database cluster.
+    /// Returns the number of shards in the database cluster.
     ///
     /// # Example
     ///
-    /// ```no_run
+    /// ```
+    /// # use pgdog_plugin::Context;
+    /// # let context = unsafe { Context::doc_test() };
     /// let shards = context.shards();
     ///
     /// if shards > 1 {
@@ -109,11 +154,13 @@ impl Context {
         self.ffi.shards as usize
     }
 
-    /// Is the cluster sharded, i.e., has more than 1 shard.
+    /// Returns true if the database cluster has more than one shard.
     ///
     /// # Example
     ///
-    /// ```no_run
+    /// ```
+    /// # use pgdog_plugin::Context;
+    /// # let context = unsafe { Context::doc_test() };
     /// let sharded = context.sharded();
     /// let shards = context.shards();
     ///
@@ -127,12 +174,21 @@ impl Context {
         self.shards() > 1
     }
 
-    /// PgDog strongly believes this statement should go to a primary. This happens if the statement is not a `SELECT`
-    /// or the `SELECT` statement contains components that could trigger a write to the database.
+    /// Returns true if PgDog strongly believes the statement should be sent to a primary. This indicates
+    /// that the statement is **not** a `SELECT` (e.g. `UPDATE`, `DELETE`, etc.), or a `SELECT` that is very likely to write data to the database, e.g.:
+    ///
+    /// ```sql
+    /// WITH users AS (
+    ///     INSERT INTO users VALUES (1, 'test@acme.com') RETURNING *
+    /// )
+    /// SELECT * FROM users;
+    /// ```
     ///
     /// # Example
     ///
-    /// ```no_run
+    /// ```
+    /// # use pgdog_plugin::Context;
+    /// # let context = unsafe { Context::doc_test() };
     /// if context.write_override() {
     ///     println!("We should really send this query to the primary.");
     /// }
@@ -142,14 +198,51 @@ impl Context {
     }
 }
 
-/// What shard, if any, the statement should be routed to.
+impl Context {
+    /// Used for doc tests only. **Do not use**.
+    pub unsafe fn doc_test() -> Context {
+        use std::{os::raw::c_void, ptr::null};
+
+        Context {
+            ffi: PdRouterContext {
+                shards: 0,
+                has_replicas: 1,
+                has_primary: 1,
+                in_transaction: 0,
+                write_override: 0,
+                query: PdStatement {
+                    version: 1,
+                    len: 0,
+                    data: null::<c_void>() as *mut c_void,
+                },
+            },
+        }
+    }
+}
+
+/// What shard, if any, the statement should be sent to.
+///
+/// ### Example
+///
+/// ```
+/// use pgdog_plugin::Shard;
+///
+/// // Send query to shard 2.
+/// let direct = Shard::Direct(2);
+///
+/// // Send query to all shards.
+/// let cross_shard = Shard::All;
+///
+/// // Let PgDog handle sharding.
+/// let unknown = Shard::Unknown;
+/// ```
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum Shard {
-    /// Direct-to-shard with the shard number.
+    /// Direct-to-shard statement, sent to the specified shard only.
     Direct(usize),
-    /// Route statement to all shards.
+    /// Send statement to all shards and let PgDog collect and transform the results.
     All,
-    /// Not clear which shard it should go to, let PgDog decide.
+    /// Not clear which shard it should go to, so let PgDog decide.
     /// Use this if you don't want to handle sharding inside the plugin.
     Unknown,
 }
@@ -195,14 +288,30 @@ impl TryFrom<u8> for ReadWrite {
     }
 }
 
-/// Should the statement be routed to a replica or a primary?
+/// Indicates if the statement is a read or a write. Read statements are sent to a replica, if one is configured.
+/// Write statements are sent to the primary.
+///
+/// ### Example
+///
+/// ```
+/// use pgdog_plugin::ReadWrite;
+///
+/// // The statement should go to a replica.
+/// let read = ReadWrite::Read;
+///
+/// // The statement should go the primary.
+/// let write = ReadWrite::Write;
+///
+/// // Skip and let PgDog decide.
+/// let unknown = ReadWrite::Unknown.
+/// ```
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum ReadWrite {
-    /// Route the statement to a replica.
+    /// Send the statement to a replica, if any are configured.
     Read,
-    /// Route the statement to a primary.
+    /// Send the statement to the primary.
     Write,
-    /// Plugin doesn't know if the statement is a read or write. Let's PgDog decide.
+    /// Plugin doesn't know if the statement is a read or write. This let's PgDog decide.
     /// Use this if you don't want to make this decision in the plugin.
     Unknown,
 }
@@ -223,8 +332,35 @@ impl Default for PdRoute {
     }
 }
 
+/// Statement route.
+///
+/// PgDog uses this to decide where a query should be sent to. Read statements are sent to a replica,
+/// while write ones are sent the primary. If the cluster has more than one shard, the statement can be
+/// sent to a specific database, or all of them.
+///
+/// ### Example
+///
+/// ```
+/// use pgdog_plugin::{Shard, ReadWrite, Route};
+///
+/// // This sends the query to the primary database of shard 0.
+/// let route = Route::new(Shard::Direct(0), ReadWrite::Write);
+///
+/// // This sends the query to all shards, routing them to a replica
+/// // of each shard, if any are configured.
+/// let route = Route::new(Shard::All, ReadWrite::Read);
+///
+/// // No routing information is available. PgDog will ignore it
+/// // and make its own decision.
+/// let route = Route::unknown();
 pub struct Route {
     ffi: PdRoute,
+}
+
+impl Default for Route {
+    fn default() -> Self {
+        Self::unknown()
+    }
 }
 
 impl Deref for Route {
@@ -248,28 +384,31 @@ impl From<Route> for PdRoute {
 }
 
 impl Route {
-    /// Don't use this plugin's output for routing.
-    pub fn unknown() -> Route {
-        Self {
-            ffi: PdRoute {
-                shard: -2,
-                read_write: 2,
-            },
-        }
-    }
-
-    /// Assign this route to the statement.
+    /// Create new route.
     ///
     /// # Arguments
     ///
-    /// * `shard`: Which shard, if any, the statement should go to.
-    /// * `read_write`: Should the statement go to a replica or the primary?
+    /// * `shard`: Which shard the statement should be sent to.
+    /// * `read_write`: Does the statement read or write data. Read statements are sent to a replica. Write statements are sent to the primary.
     ///
     pub fn new(shard: Shard, read_write: ReadWrite) -> Route {
         Self {
             ffi: PdRoute {
                 shard: shard.into(),
                 read_write: read_write.into(),
+            },
+        }
+    }
+
+    /// Create new route with no sharding or read/write information.
+    /// Use this if you don't want your plugin to do query routing.
+    /// Plugins that do something else with queries, e.g., logging, metrics,
+    /// can return this route.
+    pub fn unknown() -> Route {
+        Self {
+            ffi: PdRoute {
+                shard: -2,
+                read_write: 2,
             },
         }
     }
