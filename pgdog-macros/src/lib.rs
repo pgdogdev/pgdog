@@ -1,3 +1,7 @@
+//! Macros used by PgDog plugins.
+//!
+//! Required and exported by the `pgdog-plugin` crate. You don't have to add this crate separately.
+//!
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{ItemFn, parse_macro_input};

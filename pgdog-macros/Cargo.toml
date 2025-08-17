@@ -2,6 +2,8 @@
 name = "pgdog-macros"
 version = "0.1.0"
 edition = "2024"
+authors = ["Lev Kokotov <lev@pgdog.dev>"]
+license = "MIT"
 
 [lib]
 proc-macro = true

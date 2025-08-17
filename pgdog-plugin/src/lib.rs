@@ -89,6 +89,23 @@
 //! Plugin functions cannot return errors or panic. To handle errors, you can log them to `stderr` and return a default route,
 //! which PgDog will ignore. Plugins currently cannot be used to block queries.
 //!
+//! # Enabling plugins
+//!
+//! Plugins are shared libraries, loaded by PgDog at runtime using `dlopen(3)`. Make sure to place your plugin
+//! into one of the following locations:
+//!
+//! - PgDog's working directory (`$PWD`)
+//! - Any of the system default paths, e.g.: `/lib`, `/usr/lib`, `/lib64`, `/usr/lib64`, etc.
+//! - Path specified by the `LD_LIBRARY_PATH` (on Linux) or `DYLD_LIBRARY_PATH` (Mac OS).
+//!
+//! PgDog doesn't load plugins automatically. For each plugin you'd like to use, add it to `pgdog.toml`:
+//!
+//! ```toml
+//! [[plugins]]
+//! name = "my_plugin"
+//! ```
+//!
+//! Just like with compilers, omit the `lib` prefix and the platform-specific extension (e.g.: `.so` or `.dylib`).
 
 /// Bindgen-generated FFI bindings.
 #[allow(non_upper_case_globals)]

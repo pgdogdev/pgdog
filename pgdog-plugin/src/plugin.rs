@@ -1,6 +1,6 @@
 //! Plugin interface.
 
-use libloading::{Library, Symbol, library_filename};
+use libloading::{library_filename, Library, Symbol};
 
 use crate::{PdRoute, PdRouterContext, PdStr};
 
@@ -88,9 +88,7 @@ impl<'a> Plugin<'a> {
     pub fn rustc_version(&self) -> Option<PdStr> {
         let mut output = PdStr::default();
         self.rustc_version.as_ref().map(|rustc_version| unsafe {
-            println!("before: {:?}", output);
             rustc_version(&mut output);
-            println!("after: {:?}", output);
             output
         })
     }
