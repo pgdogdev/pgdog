@@ -200,6 +200,11 @@ impl Context {
 
 impl Context {
     /// Used for doc tests only. **Do not use**.
+    ///
+    /// # Safety
+    ///
+    /// Not safe, don't use. We use it for doc tests only.
+    ///
     pub unsafe fn doc_test() -> Context {
         use std::{os::raw::c_void, ptr::null};
 

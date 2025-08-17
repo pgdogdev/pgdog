@@ -25,10 +25,8 @@
 //! The AST is computed by PgDog at runtime. It then passes it down to plugins, using a FFI interface. To make this safe, plugins must follow the
 //! following 2 requirements:
 //!
-//! 1. Plugins must be compiled with the **same version of the Rust compiler** as PgDog. This is automatically checked at runtime
-//! and plugins that don't do this are not loaded.
-//! 2. Plugins must use the **same version of [`pg_query`] crate** as PgDog. This is checked at runtime but requires a build-time script
-//! executed by the plugin.
+//! 1. Plugins must be compiled with the **same version of the Rust compiler** as PgDog. This is automatically checked at runtime and plugins that don't do this are not loaded.
+//! 2. Plugins must use the **same version of [`pg_query`] crate** as PgDog. This is checked at runtime but requires a build-time script executed by the plugin.
 //!
 //! #### Configure dependencies
 //!

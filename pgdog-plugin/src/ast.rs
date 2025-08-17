@@ -14,7 +14,9 @@ use crate::bindings::PdStatement;
 impl PdStatement {
     /// Create FFI binding from `pg_query` output.
     ///
-    /// SAFETY: The reference must live for the entire time
+    /// # Safety
+    ///
+    /// The reference must live for the entire time
     /// this struct is used. This is _not_ checked by the compiler,
     /// and is the responsibility of the caller.
     ///
