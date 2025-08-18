@@ -21,7 +21,7 @@ use std::{fs::File, io::Read};
 ///
 /// If the version in your plugin doesn't match what PgDog is using, your plugin won't be loaded.
 ///
-pub fn pg_query_version() -> Option<String> {
+pub fn pg_query_version() {
     let mut contents = String::new();
     if let Ok(mut file) = File::open("Cargo.toml") {
         file.read_to_string(&mut contents).ok();
@@ -39,6 +39,4 @@ pub fn pg_query_version() -> Option<String> {
             }
         }
     }
-
-    None
 }

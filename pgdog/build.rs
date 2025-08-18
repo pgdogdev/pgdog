@@ -18,4 +18,6 @@ fn main() {
     } else {
         println!("cargo:rustc-env=GIT_HASH={}", env!("CARGO_PKG_VERSION"));
     }
+
+    pgdog_plugin_build::pg_query_version();
 }
