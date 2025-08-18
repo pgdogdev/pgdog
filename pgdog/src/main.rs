@@ -12,6 +12,7 @@ use pgdog::stats;
 use tokio::runtime::Builder;
 use tracing::info;
 
+use std::ops::Deref;
 use std::process::exit;
 
 #[cfg(not(target_env = "msvc"))]
@@ -59,7 +60,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         _ => (),
     }
 
-    info!("🐕 PgDog v{}", env!("GIT_HASH"));
+    info!(
+        "🐕 PgDog v{} ({})",
+        env!("GIT_HASH"),
+        pgdog_plugin::comp::rustc_version().deref()
+    );
     let config = config::load(&args.config, &args.users)?;
 
     // Set database from --database-url arg.
