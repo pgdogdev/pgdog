@@ -13,9 +13,27 @@ use crate::{bindings::PdRouterContext, PdRoute, PdStatement};
 ///
 /// ### Example
 ///
-/// ```ignore
+/// ```no_run
+/// # use pgdog_plugin::Context;
+/// # let context = unsafe { Context::doc_test() };
+/// # let statement = context.statement();
+/// use pgdog_plugin::pg_query::NodeEnum;
+///
 /// let ast = statement.protobuf();
-/// println!("{:#?}", ast);
+/// let root = ast
+///     .stmts
+///     .first()
+///     .unwrap()
+///     .stmt
+///     .as_ref()
+///     .unwrap()
+///     .node
+///     .as_ref();
+///
+/// if let Some(NodeEnum::SelectStmt(stmt)) = root {
+///     println!("SELECT statement: {:#?}", stmt);
+/// }
+///
 /// ```
 pub struct Statement {
     ffi: PdStatement,
@@ -75,7 +93,10 @@ impl Context {
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```no_run
+    /// # use pgdog_plugin::Context;
+    /// # let context = unsafe { Context::doc_test() };
+    /// # let statement = context.statement();
     /// let ast = context.statement().protobuf();
     /// let nodes = ast.nodes();
     /// ```
@@ -93,6 +114,7 @@ impl Context {
     /// ```
     /// # use pgdog_plugin::Context;
     /// # let context = unsafe { Context::doc_test() };
+    ///
     /// let read_only = context.read_only();
     ///
     /// if read_only {

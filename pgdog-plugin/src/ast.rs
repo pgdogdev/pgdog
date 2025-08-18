@@ -101,7 +101,7 @@ impl PdStatement {
 
 #[cfg(test)]
 mod test {
-    use pg_query::NodeEnum;
+    use crate::pg_query::NodeEnum;
 
     use super::*;
 

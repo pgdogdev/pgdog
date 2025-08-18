@@ -26,7 +26,8 @@
 //! following 2 requirements:
 //!
 //! 1. Plugins must be compiled with the **same version of the Rust compiler** as PgDog. This is automatically checked at runtime and plugins that don't do this are not loaded.
-//! 2. Plugins must use the **same version of [`pg_query`] crate** as PgDog. This is checked at runtime but requires a build-time script executed by the plugin.
+//! 2. Plugins must use the **same version of [`pg_query`] crate** as PgDog. This happens automatically when using `pg_query` structs re-exported by this crate.
+//!
 //!
 //! #### Configure dependencies
 //!
@@ -34,23 +35,8 @@
 //!
 //! ```toml
 //! [dependencies]
-//! pg_query = "6.1.0"
-//! pgdog-plugin = "0.1.4"
-//!
-//! [build-dependencies]
-//! pgdog-plugin-build = "0.1"
+//! pgdog-plugin = "0.1.5"
 //! ```
-//!
-//! #### Build script
-//!
-//! In the same directory as `Cargo.toml`, add the `build.rs` file and with the following code:
-//!
-//! ```ignore
-//! fn main() {
-//!     pgdog_plugin_build::pg_query_version();
-//! }
-//! ```
-//!
 //!
 //! # Required methods
 //!
@@ -71,12 +57,27 @@
 //!
 //! ### Example
 //!
-//! ```
-//! use pgdog_plugin::{macros, Context, Route};
+//! ```no_run
+//! use pgdog_plugin::prelude::*;
+//! use pg_query::{protobuf::{Node, RawStmt}, NodeEnum};
 //!
-//! #[macros::route]
+//! #[route]
 //! fn route(context: Context) -> Route {
-//!     Route::default()
+//!     let proto = context
+//!         .statement()
+//!         .protobuf();
+//!     let root = proto.stmts.first();
+//!     if let Some(root) = root {
+//!         if let Some(ref stmt) = root.stmt {
+//!             if let Some(ref node) = stmt.node {
+//!                 if let NodeEnum::SelectStmt(_) = node {
+//!                     return Route::new(Shard::Unknown, ReadWrite::Read);
+//!                 }
+//!             }
+//!         }
+//!     }
+//!
+//!     Route::new(Shard::Unknown, ReadWrite::Write)
 //! }
 //! ```
 //!
@@ -95,23 +96,22 @@
 //! - Any of the system default paths, e.g.: `/lib`, `/usr/lib`, `/lib64`, `/usr/lib64`, etc.
 //! - Path specified by the `LD_LIBRARY_PATH` (on Linux) or `DYLD_LIBRARY_PATH` (Mac OS) environment variables.
 //!
-//! PgDog doesn't load plugins automatically. For each plugin you'd like to use, add it to `pgdog.toml`:
+//! Alternatively, specify the relative or absolute path to the shared library as the plugin name. Plugins aren't loaded automatically. For each plugin you want to enable, add it to `pgdog.toml`:
 //!
 //! ```toml
-//! # Plugin should be in /usr/lib or in LD_LIBRARY_PATH.
 //! [[plugins]]
+//! # Plugin should be in /usr/lib or in LD_LIBRARY_PATH.
 //! name = "my_plugin"
 //!
-//! # Plugin should be in $PWD/libmy_plugin.so
 //! [[plugins]]
+//! # Plugin should be in $PWD/libmy_plugin.so
 //! name = "libmy_plugin.so"
 //!
-//! # Absolute path to the plugin.
 //! [[plugins]]
+//! # Absolute path to the plugin.
 //! name = "/usr/local/lib/libmy_plugin.so"
 //! ```
 //!
-//! If only specifying the name of the plugin, just like with compilers, omit the `lib` prefix and the platform-specific extension (e.g.: `.so` or `.dylib`).
 
 /// Bindgen-generated FFI bindings.
 #[allow(non_upper_case_globals)]
@@ -123,6 +123,7 @@ pub mod ast;
 pub mod comp;
 pub mod context;
 pub mod plugin;
+pub mod prelude;
 pub mod string;
 
 pub use bindings::*;
@@ -131,4 +132,5 @@ pub use plugin::*;
 
 pub use libloading;
 
+pub use pg_query;
 pub use pgdog_macros as macros;

@@ -285,6 +285,18 @@ impl QueryParser {
             }
         }
 
+        // Set plugin-specified route, if available.
+        // Plugins override what we calculated above.
+        if let Command::Query(ref mut route) = command {
+            if let Some(read) = self.plugin_output.read {
+                route.set_read_mut(read);
+            }
+
+            if let Some(ref shard) = self.plugin_output.shard {
+                route.set_shard_raw_mut(shard);
+            }
+        }
+
         // If we only have one shard, set it.
         //
         // If the query parser couldn't figure it out,
@@ -298,15 +310,6 @@ impl QueryParser {
         }
 
         if let Command::Query(ref mut route) = command {
-            // Plugins output override everything we do.
-            if let Some(read) = self.plugin_output.read {
-                route.set_read_mut(read);
-            }
-
-            if let Some(ref shard) = self.plugin_output.shard {
-                route.set_shard_raw_mut(shard);
-            }
-
             // Last ditch attempt to route a query to a specific shard.
             //
             // Looking through manual queries to see if we have any
