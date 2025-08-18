@@ -1,5 +1,6 @@
-use std::path::PathBuf;
+use std::{path::PathBuf, process::Command};
 
+#[cfg(not(docsrs))]
 fn main() {
     println!("cargo:rerun-if-changed=include/types.h");
 
@@ -16,4 +17,10 @@ fn main() {
 
     let out_path = PathBuf::from("src");
     let _ = bindings.write_to_file(out_path.join("bindings.rs"));
+
+    let rustc = std::env::var("RUSTC").unwrap();
+    let version = Command::new(rustc).arg("--version").output().unwrap();
+    let version_str = String::from_utf8(version.stdout).unwrap();
+
+    println!("cargo:rustc-env=RUSTC_VERSION={}", version_str.trim());
 }

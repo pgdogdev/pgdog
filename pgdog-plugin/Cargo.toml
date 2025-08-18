@@ -1,13 +1,13 @@
 [package]
 name = "pgdog-plugin"
-version = "0.1.1"
+version = "0.1.6"
 edition = "2021"
 license = "MIT"
 authors = ["Lev Kokotov <lev.kokotov@gmail.com>"]
 readme = "README.md"
-repository = "https://github.com/levkk/pgdog"
+repository = "https://github.com/pgdogdev/pgdog"
 homepage = "https://pgdog.dev"
-description = "pgDog plugin interface and helpers"
+description = "PgDog plugin interface and helpers"
 include = ["src/", "include/", "build.rs", "LICENSE", "README.md"]
 
 [lib]
@@ -17,6 +17,9 @@ crate-type = ["rlib", "cdylib"]
 libloading = "0.8"
 libc = "0.2"
 tracing = "0.1"
+pg_query = "6.1.0"
+pgdog-macros = { path = "../pgdog-macros", version = "0.1.1" }
+toml = "0.9"
 
 [build-dependencies]
 bindgen = "0.71.0"

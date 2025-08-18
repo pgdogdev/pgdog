@@ -148,6 +148,10 @@ impl Route {
         self
     }
 
+    pub fn set_shard_raw_mut(&mut self, shard: &Shard) {
+        self.shard = shard.clone();
+    }
+
     pub fn should_buffer(&self) -> bool {
         !self.order_by().is_empty() || !self.aggregate().is_empty() || self.distinct().is_some()
     }

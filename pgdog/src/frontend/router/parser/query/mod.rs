@@ -16,11 +16,13 @@ use crate::{
         messages::{Bind, Vector},
         parameter::ParameterValue,
     },
+    plugin::plugins,
 };
 
 use super::*;
 mod delete;
 mod explain;
+mod plugins;
 mod select;
 mod set;
 mod shared;
@@ -29,11 +31,13 @@ mod transaction;
 mod update;
 
 use multi_tenant::MultiTenantCheck;
-use pg_query::{
+use pgdog_plugin::pg_query::{
     fingerprint,
     protobuf::{a_const::Val, *},
     NodeEnum,
 };
+use plugins::PluginOutput;
+
 use tracing::{debug, trace};
 
 /// Query parser.
@@ -56,6 +60,8 @@ pub struct QueryParser {
     write_override: bool,
     // Currently calculated shard.
     shard: Shard,
+    // Plugin read override.
+    plugin_output: PluginOutput,
 }
 
 impl Default for QueryParser {
@@ -64,6 +70,7 @@ impl Default for QueryParser {
             in_transaction: false,
             write_override: false,
             shard: Shard::All,
+            plugin_output: PluginOutput::default(),
         }
     }
 }
@@ -261,10 +268,32 @@ impl QueryParser {
             _ => Ok(Command::Query(Route::write(None))),
         }?;
 
+        // Run plugins, if any.
+        self.plugins(
+            context,
+            &statement,
+            match &command {
+                Command::Query(query) => query.is_read(),
+                _ => false,
+            },
+        )?;
+
         // Overwrite shard using shard we got from a comment, if any.
         if let Shard::Direct(shard) = self.shard {
             if let Command::Query(ref mut route) = command {
                 route.set_shard_mut(shard);
+            }
+        }
+
+        // Set plugin-specified route, if available.
+        // Plugins override what we calculated above.
+        if let Command::Query(ref mut route) = command {
+            if let Some(read) = self.plugin_output.read {
+                route.set_read_mut(read);
+            }
+
+            if let Some(ref shard) = self.plugin_output.shard {
+                route.set_shard_raw_mut(shard);
             }
         }
 
@@ -280,12 +309,12 @@ impl QueryParser {
             }
         }
 
-        // Last ditch attempt to route a query to a specific shard.
-        //
-        // Looking through manual queries to see if we have any
-        // with the fingerprint.
-        //
         if let Command::Query(ref mut route) = command {
+            // Last ditch attempt to route a query to a specific shard.
+            //
+            // Looking through manual queries to see if we have any
+            // with the fingerprint.
+            //
             if route.shard().all() {
                 let databases = databases();
                 // Only fingerprint the query if some manual queries are configured.

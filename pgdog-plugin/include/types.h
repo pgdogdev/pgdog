@@ -1,280 +1,59 @@
 
+#include <stddef.h>
+#include <stdint.h>
+
 /**
- * Query parameter value.
+ * Wrapper around Rust's [`&str`], without allocating memory, unlike [`std::ffi::CString`].
+ * The caller must use it as a Rust string. This is not a C-string.
  */
-typedef struct Parameter {
-    int len;
-    const char *data;
-    int format;
-} Parameter;
+typedef struct PdStr {
+    size_t len;
+    void *data;
+} RustString;
 
-/* Query and parameters received by pgDog.
- *
- * The plugin is expected to parse the query and based on its
- * contents and the parameters, make a routing decision.
+/*
+ * Wrapper around output by pg_query.
  */
-typedef struct Query {
-    /* Length of the query */
-    int len;
-
-    /* The query text. */
-    const char *query;
-
-    /* Number of parameters. */
-    int num_parameters;
-
-    /* List of parameters. */
-    const Parameter *parameters;
-} Query;
+typedef struct PdStatement {
+    int32_t version;
+    uint64_t len;
+    void *data;
+} PdStatement;
 
 /**
- * The query is a read or a write.
- * In case the plugin isn't able to figure it out, it can return UNKNOWN and
- * pgDog will ignore the plugin's decision.
-*/
-typedef enum Affinity {
-    READ = 1,
-    WRITE = 2,
-    TRANSACTION_START = 3,
-    TRANSACTION_END = 4,
-    UNKNOWN = -1,
-} Affinity;
-
-/**
- * In case the plugin doesn't know which shard to route the
- * the query, it can decide to route it to any shard or to all
- * shards. All shard queries return a result assembled by pgDog.
+ * Context on the database cluster configuration and the currently processed
+ * PostgreSQL statement.
  *
-*/
-typedef enum Shard {
-    ANY = -1,
-    ALL = -2,
-} Shard;
-
-/*
- * Column sort direction.
-*/
-typedef enum OrderByDirection {
-    ASCENDING,
-    DESCENDING,
-} OrderByDirection;
-
-/*
- * Column sorting.
-*/
-typedef struct OrderBy {
-    char *column_name;
-    int column_index;
-    OrderByDirection direction;
-} OrderBy;
-
-/**
- * Route the query should take.
- *
-*/
-typedef struct Route {
-    Affinity affinity;
-    int shard;
-    int num_order_by;
-    OrderBy *order_by;
-} Route;
-
-/**
- * The routing decision the plugin makes based on the query contents.
- *
- * FORWARD: The query is forwarded to a shard. Which shard (and whether it's a replica
- *           or a primary) is decided by the plugin output.
- * REWRITE: The query text is rewritten. The plugin outputs new query text.
- * ERROR: The query is denied and the plugin returns an error instead. This error is sent
- *        to the client.
- * INTERCEPT: The query is intercepted and the plugin returns rows instead. These rows
-              are sent to the client and the original query is never sent to a backend server.
- * NO_DECISION: The plugin doesn't care about this query. The output is ignored by pgDog and the next
-                plugin in the chain is attempted.
- * COPY: Client is sending over a COPY statement.
- *
-*/
-typedef enum RoutingDecision {
-    FORWARD = 1,
-    REWRITE = 2,
-    ERROR = 3,
-    INTERCEPT = 4,
-    NO_DECISION = 5, /* The plugin doesn't want to make a decision. We'll try
-                 the next plugin in the chain. */
-    COPY = 6, /* COPY */
-    COPY_ROWS = 7, /* Copy rows. */
-} RoutingDecision;
-
-/*
- * Error returned by the router plugin.
- * This will be sent to the client and the transaction will be aborted.
-*/
-typedef struct Error {
-    char *severity;
-    char *code;
-    char *message;
-    char *detail;
-} Error;
-
-typedef struct RowColumn {
-    int length;
-    char *data;
-} RowColumn;
-
-typedef struct Row {
-    int num_columns;
-    RowColumn *columns;
-} Row;
-
-typedef struct RowDescriptionColumn {
-    int len;
-    char *name;
-    int oid;
-} RowDescriptionColumn;
-
-typedef struct RowDescription {
-    int num_columns;
-    RowDescriptionColumn *columns;
-} RowDescription;
-
-typedef struct Intercept {
-    RowDescription row_description;
-    int num_rows;
-    Row *rows;
-} Intercept;
-
-/**
- * Copy format. Currently supported:
- *  - CSV
-*/
-typedef enum CopyFormat {
-    INVALID,
-    CSV,
-} CopyFormat;
-
-/**
- * Client requesting a COPY.
-*/
-typedef struct Copy {
-    CopyFormat copy_format;
-    char *table_name;
-    int has_headers;
-    char delimiter;
-    int num_columns;
-    char **columns;
-} Copy;
-
-/**
- * A copy row extracted from input,
- * with the shard it should go to.
- *
- * <div rustbindgen nodebug></div>
-*/
-typedef struct CopyRow {
-    int len;
-    char *data;
-    int shard;
-} CopyRow;
-
-/**
- * Copy output.
- *
- * <div rustbindgen nodebug></div>
-*/
-typedef struct CopyOutput {
-    int num_rows;
-    CopyRow *rows;
-    char *header;
-} CopyOutput;
-
-/*
- * Union of results a plugin can return.
- *
- * Route: FORWARD
- * Error: ERROR
- * Intercept: INTERCEPT
- *
+ * This struct is C FFI-safe and therefore uses C types. Use public methods to interact with it instead
+ * of reading the data directly.
  */
-typedef union RoutingOutput {
-    Route route;
-    Error error;
-    Intercept intercept;
-    Copy copy;
-    CopyOutput copy_rows;
-} RoutingOutput;
+typedef struct PdRouterContext {
+    /** How many shards are configured. */
+    uint64_t shards;
+    /** Does the database cluster have replicas? `1` = `true`, `0` = `false`. */
+    uint8_t has_replicas;
+    /** Does the database cluster have a primary? `1` = `true`, `0` = `false`. */
+    uint8_t has_primary;
+    /** Is the query being executed inside a transaction? `1` = `true`, `0` = `false`. */
+    uint8_t in_transaction;
+    /** PgDog strongly believes this statement should go to a primary. `1` = `true`, `0` = `false`. */
+    uint8_t write_override;
+    /** pg_query generated Abstract Syntax Tree of the statement. */
+    PdStatement query;
+} PdRouterContext;
 
-/*
- * Plugin output.
- *
- * This is returned by a plugin to communicate its routing decision.
+/**
+ * Routing decision returned by the plugin.
  */
-typedef struct Output {
-    RoutingDecision decision;
-    RoutingOutput output;
-} Output;
-
-/**
- * Database role, e.g. primary or replica.
-*/
-typedef enum Role {
-    PRIMARY = 1,
-    REPLICA = 2,
-} Role;
-
-/**
- * Database configuration entry.
-*/
-typedef struct DatabaseConfig {
-    int shard;
-    Role role;
-    char *host;
-    int port;
-} DatabaseConfig;
-
-/**
- * Configuration for a database cluster
- * used to the serve a query passed to the plugin.
-*/
-typedef struct Config {
-    int num_databases;
-    DatabaseConfig *databases;
-    /* Database name from pgdog.toml. */
-    char *name;
-    int shards;
-} Config;
-
-/**
- * Copy input.
-*/
-typedef struct CopyInput {
-    int len;
-    const char* data;
-    char delimiter;
-    int has_headers;
-    int sharding_column;
-} CopyInput;
-
-/**
-* Routing input union passed to the plugin.
-*/
-typedef union RoutingInput {
-    Query query;
-    CopyInput copy;
-} RoutingInput;
-
-/**
- * Input type.
-*/
-typedef enum InputType {
-    ROUTING_INPUT = 1,
-    COPY_INPUT = 2,
-} InputType;
-
-/**
- * Plugin input.
-*/
-typedef struct Input {
-    Config config;
-    InputType input_type;
-    RoutingInput input;
-} Input;
+ typedef struct PdRoute {
+     /** Which shard the query should go to.
+      *
+      * `-1` for all shards, `-2` for unknown, this setting is ignored.
+      */
+     int64_t shard;
+     /** Is the query a read and should go to a replica?
+      *
+      * `1` for `true`, `0` for `false`, `2` for unknown, this setting is ignored.
+      */
+     uint8_t read_write;
+ } PdRoute;

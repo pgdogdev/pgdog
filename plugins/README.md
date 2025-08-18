@@ -1,12 +1,13 @@
 # PgDog plugins
 
-This directory contains (now and in the future) plugins that ship with PgDog and are built by original author(s)
-or the community. You can use these as-is or modify them to your needs.
+This directory contains plugins that ship with PgDog and are built by original author(s) or by the community. You can use these as-is or modify them to your needs.
 
 ## Plugins
 
-### `pgdog-routing`
+### `pgdog-example-plugin`
 
-The only plugin in here right now and the catch-all for routing traffic through PgDog. This plugin uses `pg_query.rs` (Rust bindings to `pg_query`)
-to parse queries using the PostgreSQL parser, and splits traffic between primary and replicas. This allows users of this plugin to deploy
-primaries and replicas in one PgDog configuration.
+Example plugin that can be used as reference by the community. It currently records
+when a write was made to a table and, for the next 5 seconds after the write, redirects
+all `SELECT` queries that touch table to the primary.
+
+It's a simple workaround for Postgres replica lag, if you're using batch writes.
