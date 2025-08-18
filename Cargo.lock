@@ -2297,7 +2297,7 @@ dependencies = [
  "once_cell",
  "parking_lot",
  "pg_query",
- "pgdog-plugin 0.1.4",
+ "pgdog-plugin 0.1.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "pgdog-plugin-build 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "thiserror 2.0.12",
 ]
@@ -2324,21 +2324,6 @@ dependencies = [
 
 [[package]]
 name = "pgdog-plugin"
-version = "0.1.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "575b9ba2562261ed27e39c09a12e9a48a091c7ca0651ae8d95c8907bddd8b4fc"
-dependencies = [
- "bindgen 0.71.1",
- "libc",
- "libloading",
- "pg_query",
- "pgdog-macros 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "toml 0.9.5",
- "tracing",
-]
-
-[[package]]
-name = "pgdog-plugin"
 version = "0.1.6"
 dependencies = [
  "bindgen 0.71.1",
@@ -2346,6 +2331,21 @@ dependencies = [
  "libloading",
  "pg_query",
  "pgdog-macros 0.1.1",
+ "toml 0.9.5",
+ "tracing",
+]
+
+[[package]]
+name = "pgdog-plugin"
+version = "0.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9ef8d3679b846c077c274fbbd36f1e11f66d4984488e7201c0ac4b8d4a86d999"
+dependencies = [
+ "bindgen 0.71.1",
+ "libc",
+ "libloading",
+ "pg_query",
+ "pgdog-macros 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "toml 0.9.5",
  "tracing",
 ]
