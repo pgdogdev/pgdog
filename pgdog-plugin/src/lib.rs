@@ -35,7 +35,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! pgdog-plugin = "0.1.5"
+//! pgdog-plugin = "0.1.6"
 //! ```
 //!
 //! # Required methods

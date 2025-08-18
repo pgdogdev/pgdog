@@ -2265,8 +2265,7 @@ dependencies = [
  "once_cell",
  "parking_lot",
  "pg_query",
- "pgdog-plugin 0.1.5",
- "pgdog-plugin-build 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "pgdog-plugin 0.1.6",
  "pin-project",
  "rand 0.8.5",
  "ratatui",
@@ -2340,7 +2339,7 @@ dependencies = [
 
 [[package]]
 name = "pgdog-plugin"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "bindgen 0.71.1",
  "libc",

@@ -31,7 +31,7 @@ mod transaction;
 mod update;
 
 use multi_tenant::MultiTenantCheck;
-use pg_query::{
+use pgdog_plugin::pg_query::{
     fingerprint,
     protobuf::{a_const::Val, *},
     NodeEnum,

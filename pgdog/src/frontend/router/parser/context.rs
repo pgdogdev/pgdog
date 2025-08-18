@@ -1,6 +1,6 @@
 //! Shortcut the parser given the cluster config.
 
-use pg_query::protobuf::ParseResult;
+use pgdog_plugin::pg_query::protobuf::ParseResult;
 use pgdog_plugin::{PdRouterContext, PdStatement};
 
 use crate::{

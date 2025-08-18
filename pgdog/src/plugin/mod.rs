@@ -36,7 +36,6 @@ pub fn load(names: &[&str]) -> Result<(), libloading::Error> {
     let _ = LIBS.set(libs);
 
     let rustc_version = comp::rustc_version();
-    let pg_query_version = env!("PGDOG_PGQUERY_VERSION");
 
     let mut plugins = vec![];
     for (i, name) in names.iter().enumerate() {
@@ -61,33 +60,14 @@ pub fn load(names: &[&str]) -> Result<(), libloading::Error> {
                 continue;
             }
 
-            // Check pg_query version.
-            if let Some(plugin_pgquery) = plugin.pg_query_version() {
-                if pg_query_version != plugin_pgquery.deref() {
-                    warn!(
-                        "skipping plugin \"{}\" because it has a different pg_query version ({})",
-                        plugin.name(),
-                        plugin_pgquery.deref()
-                    );
-                    continue;
-                }
-            } else {
-                warn!(
-                    "skipping plugin \"{}\"  because it doesn't expose its pg_query version",
-                    plugin.name()
-                );
-                continue;
-            }
-
             if plugin.init() {
                 debug!("plugin \"{}\" initialized", name);
             }
 
             info!(
-                "loaded \"{}\" plugin (v{}, pg_query: v{}) [{:.4}ms]",
+                "loaded \"{}\" plugin (v{}) [{:.4}ms]",
                 name,
                 plugin.version().unwrap_or_default().deref(),
-                plugin.pg_query_version().unwrap_or_default().deref(),
                 now.elapsed().as_secs_f64() * 1000.0
             );
 

@@ -30,8 +30,6 @@ pub struct Plugin<'a> {
     route: Option<Symbol<'a, unsafe extern "C" fn(PdRouterContext, *mut PdRoute)>>,
     /// Compiler version.
     rustc_version: Option<Symbol<'a, unsafe extern "C" fn(*mut PdStr)>>,
-    /// pg_query version.
-    pg_query_version: Option<Symbol<'a, unsafe extern "C" fn(*mut PdStr)>>,
     /// Plugin version.
     plugin_version: Option<Symbol<'a, unsafe extern "C" fn(*mut PdStr)>>,
 }
@@ -74,7 +72,6 @@ impl<'a> Plugin<'a> {
         let fini = unsafe { library.get(b"pgdog_fini\0") }.ok();
         let route = unsafe { library.get(b"pgdog_route\0") }.ok();
         let rustc_version = unsafe { library.get(b"pgdog_rustc_version\0") }.ok();
-        let pg_query_version = unsafe { library.get(b"pgdog_pg_query_version\0") }.ok();
         let plugin_version = unsafe { library.get(b"pgdog_plugin_version\0") }.ok();
 
         Self {
@@ -83,7 +80,6 @@ impl<'a> Plugin<'a> {
             fini,
             route,
             rustc_version,
-            pg_query_version,
             plugin_version,
         }
     }
@@ -149,17 +145,6 @@ impl<'a> Plugin<'a> {
     pub fn version(&self) -> Option<PdStr> {
         let mut output = PdStr::default();
         self.plugin_version.as_ref().map(|func| unsafe {
-            func(&mut output as *mut PdStr);
-            output
-        })
-    }
-
-    /// Returns plugin's `pg_query` version. It must match
-    /// the version used by PgDog, or the plugin won't be loaded.
-    pub fn pg_query_version(&self) -> Option<PdStr> {
-        let mut output = PdStr::default();
-
-        self.pg_query_version.as_ref().map(|func| unsafe {
             func(&mut output as *mut PdStr);
             output
         })
