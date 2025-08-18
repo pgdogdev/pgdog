@@ -10,7 +10,7 @@ impl QueryEngine {
             .stream
             .error(
                 ErrorResponse::syntax(&format!("unknown command: {:?}", command)),
-                context.in_transaction,
+                context.in_transaction(),
             )
             .await?;
 

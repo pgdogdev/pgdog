@@ -164,7 +164,7 @@ impl<'a> QueryEngine {
             command => self.unknown_command(context, command.clone()).await?,
         }
 
-        if !context.in_transaction {
+        if !context.in_transaction() {
             self.backend.mirror_flush();
         }
 
@@ -177,7 +177,7 @@ impl<'a> QueryEngine {
         let state = if self.backend.has_more_messages() {
             State::Active
         } else {
-            match context.in_transaction {
+            match context.in_transaction() {
                 true => State::IdleInTransaction,
                 false => State::Idle,
             }

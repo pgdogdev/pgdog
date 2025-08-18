@@ -36,7 +36,7 @@ impl QueryEngine {
                     if only_close || only_sync && !self.backend.connected() {
                         bytes_sent += context
                             .stream
-                            .send(&ReadyForQuery::in_transaction(context.in_transaction))
+                            .send(&ReadyForQuery::in_transaction(context.in_transaction()))
                             .await?;
                     }
                 }

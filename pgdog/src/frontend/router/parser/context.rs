@@ -63,7 +63,7 @@ impl<'a> QueryParserContext<'a> {
 
     /// Write override enabled?
     pub(super) fn write_override(&self) -> bool {
-        self.router_context.in_transaction && self.rw_conservative()
+        self.router_context.in_transaction() && self.rw_conservative()
     }
 
     /// Are we using the conservative read/write separation strategy?
@@ -103,7 +103,7 @@ impl<'a> QueryParserContext<'a> {
             shards: self.shards as u64,
             has_replicas: if self.read_only { 0 } else { 1 },
             has_primary: if self.write_only { 0 } else { 1 },
-            in_transaction: if self.router_context.in_transaction {
+            in_transaction: if self.router_context.in_transaction() {
                 1
             } else {
                 0

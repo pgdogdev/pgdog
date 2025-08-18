@@ -16,7 +16,7 @@ impl QueryEngine {
             .stream
             .send_many(&vec![
                 CommandComplete::from_str("SET").message()?,
-                ReadyForQuery::in_transaction(context.in_transaction).message()?,
+                ReadyForQuery::in_transaction(context.in_transaction()).message()?,
             ])
             .await?;
 

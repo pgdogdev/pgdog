@@ -59,7 +59,7 @@ impl QueryEngine {
                     error!("{} [{:?}]", err, context.stream.peer_addr());
                     let bytes_sent = context
                         .stream
-                        .error(ErrorResponse::from_err(&err), context.in_transaction)
+                        .error(ErrorResponse::from_err(&err), context.in_transaction())
                         .await?;
                     self.stats.sent(bytes_sent);
                     self.backend.disconnect();

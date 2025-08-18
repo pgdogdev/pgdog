@@ -25,7 +25,7 @@ impl QueryEngine {
             cluster,
             context.prepared_statements,
             context.params,
-            context.in_transaction,
+            context.transaction,
         )?;
         match self.router.query(router_context) {
             Ok(cmd) => {
@@ -36,7 +36,7 @@ impl QueryEngine {
                     let mut bytes_sent = context.stream.send(&EmptyQueryResponse).await?;
                     bytes_sent += context
                         .stream
-                        .send_flush(&ReadyForQuery::in_transaction(context.in_transaction))
+                        .send_flush(&ReadyForQuery::in_transaction(context.in_transaction()))
                         .await?;
                     self.stats.sent(bytes_sent);
                 } else {
@@ -45,7 +45,7 @@ impl QueryEngine {
                         .stream
                         .error(
                             ErrorResponse::syntax(err.to_string().as_str()),
-                            context.in_transaction,
+                            context.in_transaction(),
                         )
                         .await?;
                     self.stats.sent(bytes_sent);

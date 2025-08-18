@@ -135,7 +135,7 @@ impl Mirror {
                     &self.cluster,
                     &mut self.prepared_statements,
                     &self.params,
-                    false,
+                    None,
                 ) {
                     match self.router.query(context) {
                         Ok(command) => {
