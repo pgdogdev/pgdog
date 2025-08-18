@@ -35,7 +35,7 @@
 //! ```toml
 //! [dependencies]
 //! pg_query = "6.1.0"
-//! pgdog-plugin = "0.1.2"
+//! pgdog-plugin = "0.1.4"
 //!
 //! [build-dependencies]
 //! pgdog-plugin-build = "0.1"

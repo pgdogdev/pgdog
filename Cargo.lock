@@ -2265,7 +2265,7 @@ dependencies = [
  "once_cell",
  "parking_lot",
  "pg_query",
- "pgdog-plugin 0.1.3",
+ "pgdog-plugin 0.1.4",
  "pin-project",
  "rand 0.8.5",
  "ratatui",
@@ -2339,7 +2339,7 @@ dependencies = [
 
 [[package]]
 name = "pgdog-plugin"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "bindgen 0.71.1",
  "libc",

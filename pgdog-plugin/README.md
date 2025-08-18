@@ -1,8 +1,7 @@
 # PgDog plugins
 
-[![Documentation](https://img.shields.io/badge/documentation-blue?style=flat)](https://pgdog.dev)
+[![Documentation](https://img.shields.io/badge/documentation-blue?style=flat)](https://docsrs.pgdog.dev/pgdog_plugin/index.html)
 [![Latest crate](https://img.shields.io/crates/v/pgdog-plugin.svg)](https://crates.io/crates/pgdog-plugin)
-[![Reference docs](https://img.shields.io/docsrs/pgdog-plugin)](https://docs.rs/pgdog-plugin/)
 
 PgDog plugin system is based around shared libraries loaded at runtime. The plugins currently can only be
 written in Rust. This is because PgDog passes Rust-specific data types to plugin functions, and those cannot
@@ -19,7 +18,7 @@ This crate should be linked at compile time against your plugins.
 
 ## Writing plugins
 
-See [documentation](https://docs.rs/pgdog-plugin/latest/pgdog_plugin/) for examples. Example plugins are [available in GitHub](https://github.com/pgdogdev/pgdog/tree/main/plugins) as well.
+See [documentation](https://docsrs.pgdog.dev/pgdog_plugin/index.html) for examples. Example plugins are [available in GitHub](https://github.com/pgdogdev/pgdog/tree/main/plugins) as well.
 
 ## License
 
