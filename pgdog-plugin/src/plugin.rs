@@ -51,7 +51,7 @@ impl<'a> Plugin<'a> {
     /// ```
     ///
     pub fn library<P: AsRef<Path>>(name: P) -> Result<Library, libloading::Error> {
-        if name.as_ref().exists() {
+        if name.as_ref().extension().is_some() {
             let name = name.as_ref().display().to_string();
             unsafe { Library::new(&name) }
         } else {
