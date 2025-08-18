@@ -372,9 +372,6 @@ pub struct General {
     /// How aggressive should the query parser be in determining reads.
     #[serde(default)]
     pub read_write_strategy: ReadWriteStrategy,
-    /// Read write split.
-    #[serde(default)]
-    pub read_write_split: ReadWriteSplit,
     /// TLS certificate.
     pub tls_certificate: Option<PathBuf>,
     /// TLS private key.
@@ -529,7 +526,6 @@ impl Default for General {
             rollback_timeout: Self::rollback_timeout(),
             load_balancing_strategy: Self::load_balancing_strategy(),
             read_write_strategy: ReadWriteStrategy::default(),
-            read_write_split: ReadWriteSplit::default(),
             tls_certificate: None,
             tls_private_key: None,
             tls_verify: Self::default_tls_verify(),
@@ -747,14 +743,6 @@ pub enum TlsVerifyMode {
     Prefer,
     VerifyCa,
     VerifyFull,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Copy)]
-#[serde(rename_all = "snake_case")]
-pub enum ReadWriteSplit {
-    #[default]
-    IncludePrimary,
-    ExcludePrimary,
 }
 
 /// Database server proxied by pgDog.

@@ -9,7 +9,7 @@ use tokio::{join, select, spawn, sync::Notify};
 use tracing::{debug, error};
 
 use crate::backend::PubSubListener;
-use crate::config::{config, LoadBalancingStrategy, ReadWriteSplit, Role};
+use crate::config::{config, LoadBalancingStrategy, Role};
 use crate::net::messages::BackendKeyData;
 use crate::net::NotificationResponse;
 
@@ -29,10 +29,9 @@ impl Shard {
         primary: &Option<PoolConfig>,
         replicas: &[PoolConfig],
         lb_strategy: LoadBalancingStrategy,
-        rw_split: ReadWriteSplit,
     ) -> Self {
         Self {
-            inner: Arc::new(ShardInner::new(primary, replicas, lb_strategy, rw_split)),
+            inner: Arc::new(ShardInner::new(primary, replicas, lb_strategy)),
         }
     }
 
@@ -55,14 +54,7 @@ impl Shard {
                 .get(request)
                 .await
         } else {
-            use ReadWriteSplit::*;
-
-            let primary = match self.rw_split {
-                IncludePrimary => &self.primary,
-                ExcludePrimary => &None,
-            };
-
-            self.replicas.get(request, primary).await
+            self.replicas.get(request, &None).await
         }
     }
 
@@ -138,7 +130,6 @@ impl Shard {
                 primary,
                 pub_sub,
                 replicas: self.inner.replicas.duplicate(),
-                rw_split: self.inner.rw_split,
                 comms: ShardComms::default(), // Create new comms instead of duplicating
             }),
         }
@@ -222,7 +213,6 @@ impl Deref for Shard {
 pub struct ShardInner {
     primary: Option<Pool>,
     replicas: Replicas,
-    rw_split: ReadWriteSplit,
     comms: ShardComms,
     pub_sub: Option<PubSubListener>,
 }
@@ -232,7 +222,6 @@ impl ShardInner {
         primary: &Option<PoolConfig>,
         replicas: &[PoolConfig],
         lb_strategy: LoadBalancingStrategy,
-        rw_split: ReadWriteSplit,
     ) -> Self {
         let primary = primary.as_ref().map(Pool::new);
         let replicas = Replicas::new(replicas, lb_strategy);
@@ -248,7 +237,6 @@ impl ShardInner {
         Self {
             primary,
             replicas,
-            rw_split,
             comms,
             pub_sub,
         }
@@ -451,12 +439,7 @@ mod test {
             config: Config::default(),
         }];
 
-        let shard = Shard::new(
-            primary,
-            replicas,
-            LoadBalancingStrategy::Random,
-            ReadWriteSplit::ExcludePrimary,
-        );
+        let shard = Shard::new(primary, replicas, LoadBalancingStrategy::Random);
         shard.launch();
 
         for _ in 0..25 {
@@ -483,12 +466,7 @@ mod test {
             config: Config::default(),
         }];
 
-        let shard = Shard::new(
-            primary,
-            replicas,
-            LoadBalancingStrategy::Random,
-            ReadWriteSplit::IncludePrimary,
-        );
+        let shard = Shard::new(primary, replicas, LoadBalancingStrategy::Random);
         shard.launch();
         let mut ids = BTreeSet::new();
 

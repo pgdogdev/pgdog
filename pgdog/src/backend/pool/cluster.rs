@@ -11,9 +11,7 @@ use crate::{
         replication::{ReplicationConfig, ShardedColumn},
         Schema, ShardedTables,
     },
-    config::{
-        General, MultiTenant, PoolerMode, ReadWriteSplit, ReadWriteStrategy, ShardedTable, User,
-    },
+    config::{General, MultiTenant, PoolerMode, ReadWriteStrategy, ShardedTable, User},
     net::{messages::BackendKeyData, Query},
 };
 
@@ -44,7 +42,6 @@ pub struct Cluster {
     schema: Arc<RwLock<Schema>>,
     multi_tenant: Option<MultiTenant>,
     rw_strategy: ReadWriteStrategy,
-    rw_split: ReadWriteSplit,
 }
 
 /// Sharding configuration from the cluster.
@@ -80,7 +77,6 @@ pub struct ClusterConfig<'a> {
     pub mirror_of: Option<&'a str>,
     pub multi_tenant: &'a Option<MultiTenant>,
     pub rw_strategy: ReadWriteStrategy,
-    pub rw_split: ReadWriteSplit,
 }
 
 impl<'a> ClusterConfig<'a> {
@@ -104,7 +100,6 @@ impl<'a> ClusterConfig<'a> {
             mirror_of,
             multi_tenant,
             rw_strategy: general.read_write_strategy,
-            rw_split: general.read_write_split,
         }
     }
 }
@@ -124,13 +119,12 @@ impl Cluster {
             mirror_of,
             multi_tenant,
             rw_strategy,
-            rw_split,
         } = config;
 
         Self {
             shards: shards
                 .iter()
-                .map(|config| Shard::new(&config.primary, &config.replicas, lb_strategy, rw_split))
+                .map(|config| Shard::new(&config.primary, &config.replicas, lb_strategy))
                 .collect(),
             name: name.to_owned(),
             password: password.to_owned(),
@@ -142,7 +136,6 @@ impl Cluster {
             schema: Arc::new(RwLock::new(Schema::default())),
             multi_tenant: multi_tenant.clone(),
             rw_strategy,
-            rw_split,
         }
     }
 
@@ -192,7 +185,6 @@ impl Cluster {
             schema: self.schema.clone(),
             multi_tenant: self.multi_tenant.clone(),
             rw_strategy: self.rw_strategy,
-            rw_split: self.rw_split,
         }
     }
 
@@ -362,10 +354,7 @@ mod test {
     use crate::{
         backend::pool::{Address, Config, PoolConfig},
         backend::{Shard, ShardedTables},
-        config::{
-            DataType, Hasher, LoadBalancingStrategy, ReadWriteSplit, ReadWriteStrategy,
-            ShardedTable,
-        },
+        config::{DataType, Hasher, LoadBalancingStrategy, ReadWriteStrategy, ShardedTable},
     };
 
     use super::Cluster;
@@ -399,7 +388,6 @@ mod test {
                             config: Config::default(),
                         }],
                         LoadBalancingStrategy::Random,
-                        ReadWriteSplit::default(),
                     ),
                     Shard::new(
                         &Some(PoolConfig {
@@ -411,7 +399,6 @@ mod test {
                             config: Config::default(),
                         }],
                         LoadBalancingStrategy::Random,
-                        ReadWriteSplit::default(),
                     ),
                 ],
                 user: "pgdog".into(),
