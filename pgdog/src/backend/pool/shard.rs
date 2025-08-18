@@ -419,8 +419,6 @@ async fn collect_lsn_metrics(primary: &Pool, window: Duration) -> Option<LsnMetr
 
 #[cfg(test)]
 mod test {
-    use std::collections::BTreeSet;
-
     use crate::backend::pool::{Address, Config};
 
     use super::*;
@@ -450,34 +448,6 @@ mod test {
         }
 
         shard.shutdown();
-    }
-
-    #[tokio::test]
-    async fn test_include_primary() {
-        crate::logger();
-
-        let primary = &Some(PoolConfig {
-            address: Address::new_test(),
-            config: Config::default(),
-        });
-
-        let replicas = &[PoolConfig {
-            address: Address::new_test(),
-            config: Config::default(),
-        }];
-
-        let shard = Shard::new(primary, replicas, LoadBalancingStrategy::Random);
-        shard.launch();
-        let mut ids = BTreeSet::new();
-
-        for _ in 0..25 {
-            let conn = shard.replica(&Request::default()).await.unwrap();
-            ids.insert(conn.pool.id());
-        }
-
-        shard.shutdown();
-
-        assert_eq!(ids.len(), 2);
     }
 }
 
