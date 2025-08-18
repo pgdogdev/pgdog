@@ -6,7 +6,7 @@ use std::{
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use pg_query::{NodeEnum, protobuf::RangeVar};
-use pgdog_plugin::{Context, ReadWrite, Route, Shard};
+use pgdog_plugin::prelude::*;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
