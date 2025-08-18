@@ -54,7 +54,7 @@ impl Shard {
                 .get(request)
                 .await
         } else {
-            self.replicas.get(request, &None).await
+            self.replicas.get(request, &self.primary).await
         }
     }
 
