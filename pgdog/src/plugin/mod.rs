@@ -9,8 +9,6 @@ use pgdog_plugin::{comp, libloading};
 use tokio::time::Instant;
 use tracing::{debug, error, info, warn};
 
-pub mod methods;
-
 static LIBS: OnceCell<Vec<Library>> = OnceCell::new();
 pub static PLUGINS: OnceCell<Vec<Plugin>> = OnceCell::new();
 
@@ -38,6 +36,7 @@ pub fn load(names: &[&str]) -> Result<(), libloading::Error> {
     let _ = LIBS.set(libs);
 
     let rustc_version = comp::rustc_version();
+    let pg_query_version = env!("PGDOG_PGQUERY_VERSION");
 
     let mut plugins = vec![];
     for (i, name) in names.iter().enumerate() {
@@ -45,6 +44,7 @@ pub fn load(names: &[&str]) -> Result<(), libloading::Error> {
             let now = Instant::now();
             let plugin = Plugin::load(name, lib);
 
+            // Check Rust compiler version.
             if let Some(plugin_rustc) = plugin.rustc_version() {
                 if rustc_version != plugin_rustc {
                     warn!("skipping plugin \"{}\" because it was compiled with different compiler version ({})",
@@ -55,7 +55,25 @@ pub fn load(names: &[&str]) -> Result<(), libloading::Error> {
                 }
             } else {
                 warn!(
-                    "skipping plugin \"{}\" because it doesn't expose its compiler version",
+                    "skipping plugin \"{}\" because it doesn't expose its Rust compiler version",
+                    plugin.name()
+                );
+                continue;
+            }
+
+            // Check pg_query version.
+            if let Some(plugin_pgquery) = plugin.pg_query_version() {
+                if pg_query_version != plugin_pgquery.deref() {
+                    warn!(
+                        "skipping plugin \"{}\" because it has a different pg_query version ({})",
+                        plugin.name(),
+                        plugin_pgquery.deref()
+                    );
+                    continue;
+                }
+            } else {
+                warn!(
+                    "skipping plugin \"{}\"  because it doesn't expose its pg_query version",
                     plugin.name()
                 );
                 continue;

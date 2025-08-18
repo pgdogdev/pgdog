@@ -2266,7 +2266,7 @@ dependencies = [
  "parking_lot",
  "pg_query",
  "pgdog-plugin 0.1.4",
- "pgdog-plugin-build 0.1.0",
+ "pgdog-plugin-build 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "pin-project",
  "rand 0.8.5",
  "ratatui",
@@ -2299,7 +2299,7 @@ dependencies = [
  "parking_lot",
  "pg_query",
  "pgdog-plugin 0.1.4 (registry+https://github.com/rust-lang/crates.io-index)",
- "pgdog-plugin-build 0.1.0",
+ "pgdog-plugin-build 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "thiserror 2.0.12",
 ]
 
@@ -2353,9 +2353,7 @@ dependencies = [
 
 [[package]]
 name = "pgdog-plugin-build"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f6f12ede0185cb335948f7a9ca2b015262712550a684d3ce44863fdc07065258"
+version = "0.1.1"
 dependencies = [
  "toml 0.9.5",
 ]
@@ -2363,6 +2361,8 @@ dependencies = [
 [[package]]
 name = "pgdog-plugin-build"
 version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "311f4d606b5f7aff0aba95b95e5b6058a7b1195c051c8b545dedcdb51f992af5"
 dependencies = [
  "toml 0.9.5",
 ]

@@ -1,3 +1,20 @@
+//! Wrapper around Rust's [`str`], a UTF-8 encoded slice.
+//!
+//! This is used to pass strings back and forth between the plugin and
+//! PgDog, without allocating memory as required by [`std::ffi::CString`].
+//!
+//! ### Example
+//!
+//! ```
+//! use pgdog_plugin::PdStr;
+//! use std::ops::Deref;
+//!
+//! let string = PdStr::from("hello world");
+//! assert_eq!(string.deref(), "hello world");
+//!
+//! let string = string.to_string(); // Owned version.
+//! ```
+//!
 use crate::bindings::PdStr;
 use std::{ops::Deref, os::raw::c_void, slice::from_raw_parts, str::from_utf8_unchecked};
 

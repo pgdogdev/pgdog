@@ -206,6 +206,7 @@ pub type uint_fast32_t = ::std::os::raw::c_ulong;
 pub type uint_fast64_t = ::std::os::raw::c_ulong;
 pub type intmax_t = __intmax_t;
 pub type uintmax_t = __uintmax_t;
+#[doc = " Wrapper around Rust's [`&str`], without allocating memory, unlike [`std::ffi::CString`].\n The caller must use it as a Rust string. This is not a C-string."]
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct PdStr {
@@ -219,6 +220,7 @@ const _: () = {
     ["Offset of field: PdStr::len"][::std::mem::offset_of!(PdStr, len) - 0usize];
     ["Offset of field: PdStr::data"][::std::mem::offset_of!(PdStr, data) - 8usize];
 };
+#[doc = " Wrapper around Rust's [`&str`], without allocating memory, unlike [`std::ffi::CString`].\n The caller must use it as a Rust string. This is not a C-string."]
 pub type RustString = PdStr;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]

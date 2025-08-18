@@ -14,4 +14,4 @@ thiserror = "2"
 pg_query = "6.1.0"
 
 [build-dependencies]
-pgdog-plugin-build = "0.1.0"
+pgdog-plugin-build = "0.1.1"

@@ -2,8 +2,9 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/*
- * Rust string.
+/**
+ * Wrapper around Rust's [`&str`], without allocating memory, unlike [`std::ffi::CString`].
+ * The caller must use it as a Rust string. This is not a C-string.
  */
 typedef struct PdStr {
     size_t len;
