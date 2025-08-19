@@ -15,8 +15,13 @@ typedef struct PdStr {
  * Wrapper around output by pg_query.
  */
 typedef struct PdStatement {
+    /** Version from pg_query. */
     int32_t version;
+    /** Length of the original Vec. */
     uint64_t len;
+    /** Capacity of the original Vec. */
+    uint64_t capacity;
+    /** Pointer to the original Vec. */
     void *data;
 } PdStatement;
 

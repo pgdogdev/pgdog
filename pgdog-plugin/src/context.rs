@@ -241,6 +241,7 @@ impl Context {
                     version: 1,
                     len: 0,
                     data: null::<c_void>() as *mut c_void,
+                    capacity: 0,
                 },
             },
         }

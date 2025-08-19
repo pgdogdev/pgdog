@@ -25,6 +25,7 @@ impl PdStatement {
             data: value.stmts.as_ptr() as *mut c_void,
             version: value.version,
             len: value.stmts.len() as u64,
+            capacity: value.stmts.capacity() as u64,
         }
     }
 }
@@ -62,7 +63,7 @@ impl From<PdStatement> for PdParseResult {
                     Vec::from_raw_parts(
                         value.data as *mut RawStmt,
                         value.len as usize,
-                        value.len as usize,
+                        value.capacity as usize,
                     )
                 },
             }),

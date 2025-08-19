@@ -225,18 +225,25 @@ pub type RustString = PdStr;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct PdStatement {
+    #[doc = " Version from pg_query."]
     pub version: i32,
+    #[doc = " Length of the original Vec."]
     pub len: u64,
+    #[doc = " Capacity of the original Vec."]
+    pub capacity: u64,
+    #[doc = " Pointer to the original Vec."]
     pub data: *mut ::std::os::raw::c_void,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
-    ["Size of PdStatement"][::std::mem::size_of::<PdStatement>() - 24usize];
+    ["Size of PdStatement"][::std::mem::size_of::<PdStatement>() - 32usize];
     ["Alignment of PdStatement"][::std::mem::align_of::<PdStatement>() - 8usize];
     ["Offset of field: PdStatement::version"]
         [::std::mem::offset_of!(PdStatement, version) - 0usize];
     ["Offset of field: PdStatement::len"][::std::mem::offset_of!(PdStatement, len) - 8usize];
-    ["Offset of field: PdStatement::data"][::std::mem::offset_of!(PdStatement, data) - 16usize];
+    ["Offset of field: PdStatement::capacity"]
+        [::std::mem::offset_of!(PdStatement, capacity) - 16usize];
+    ["Offset of field: PdStatement::data"][::std::mem::offset_of!(PdStatement, data) - 24usize];
 };
 #[doc = " Context on the database cluster configuration and the currently processed\n PostgreSQL statement.\n\n This struct is C FFI-safe and therefore uses C types. Use public methods to interact with it instead\n of reading the data directly."]
 #[repr(C)]
@@ -257,7 +264,7 @@ pub struct PdRouterContext {
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
-    ["Size of PdRouterContext"][::std::mem::size_of::<PdRouterContext>() - 40usize];
+    ["Size of PdRouterContext"][::std::mem::size_of::<PdRouterContext>() - 48usize];
     ["Alignment of PdRouterContext"][::std::mem::align_of::<PdRouterContext>() - 8usize];
     ["Offset of field: PdRouterContext::shards"]
         [::std::mem::offset_of!(PdRouterContext, shards) - 0usize];
