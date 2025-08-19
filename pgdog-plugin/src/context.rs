@@ -1,8 +1,10 @@
 //! Context passed to and from the plugins.
 
-use std::ops::Deref;
+use std::{io::Cursor, ops::Deref, os::raw::c_void, ptr::null, slice::from_raw_parts};
 
-use crate::{bindings::PdRouterContext, PdRoute, PdStatement};
+use bytes::{Buf, Bytes};
+
+use crate::{bindings::PdRouterContext, PdParameters, PdRoute, PdStatement};
 
 /// PostgreSQL statement, parsed by [`pg_query`].
 ///
@@ -242,6 +244,7 @@ impl Context {
                     len: 0,
                     data: null::<c_void>() as *mut c_void,
                 },
+                parameters: Parameters::docs_test().ffi,
             },
         }
     }
@@ -438,5 +441,151 @@ impl Route {
                 read_write: 2,
             },
         }
+    }
+}
+
+/// Parameters passed by the client when executing a prepared statement.
+/// They are encoded in their original format. You need to decode them accordingly,
+/// depending on the data type & format code.
+///
+/// # Example
+///
+/// ```no_run
+/// # use pgdog_plugin::Parameters;
+/// # let parameters = Parameters::default();
+/// use std::str::from_utf8;
+///
+/// // Format code for parameter $1.
+/// let format_code = parameters.format_code(0);
+///
+/// // Text encoding, likely UTF-8.
+/// if format_code == 0 {
+///     let parameter = parameters
+///         .get(0)
+///         .map(|p| from_utf8(p).ok()).flatten();
+/// } else {
+///     // Binary encoding, data type specific.
+///     let parameter = parameters.get(0);
+/// }
+/// ```
+pub struct Parameters {
+    ffi: PdParameters,
+}
+
+impl Default for Parameters {
+    fn default() -> Self {
+        Self {
+            ffi: PdParameters {
+                num_format_codes: 0,
+                format_codes: null::<c_void>() as *mut c_void,
+                num_params: 0,
+                params: null::<c_void>() as *mut c_void,
+            },
+        }
+    }
+}
+
+impl Parameters {
+    /// Returns a list of parameter format codes, encoded in network-byte order.
+    pub fn format_codes(&self) -> &[Bytes] {
+        unsafe {
+            from_raw_parts(
+                self.ffi.format_codes as *const Bytes,
+                self.ffi.num_format_codes,
+            )
+        }
+    }
+
+    /// Returns the format code (1 for binary, 0 for text) for the
+    /// given parameter number.
+    ///
+    /// # Note
+    ///
+    /// Postgres statements encode parameters starting at 1, e.g., `$1`. We use zero offsets,
+    /// so the parameter number for the first parameter accepted by this function is **`0`**, not `1`.
+    ///
+    pub fn format_code(&self, parameter: usize) -> i16 {
+        let format_codes = self.format_codes();
+
+        match format_codes.len() {
+            0 => 0, // Text is default.
+            1 => {
+                let mut cursor = Cursor::new(&format_codes[0]);
+                cursor.get_i16()
+            }
+            _ => {
+                if let Some(code) = format_codes.get(parameter) {
+                    let mut cursor = Cursor::new(code);
+                    cursor.get_i16()
+                } else {
+                    0 // Text is default
+                }
+            }
+        }
+    }
+
+    /// Returns a list of parameters. Depending on format code and data type,
+    /// they are encoded in text (UTF-8, likely), or in network-byte order.
+    pub fn parameters(&self) -> &[Bytes] {
+        unsafe { from_raw_parts(self.ffi.params as *const Bytes, self.ffi.num_params) }
+    }
+
+    /// Returns parameter value, as binary data. Depending on the format code,
+    /// it can be decoded as text (using [`std::str::from_utf8`] for example) or as binary encoding,
+    /// depending on the data type.
+    ///
+    /// # Note
+    ///
+    /// Postgres statements encode parameters starting at 1, e.g., `$1`. We use zero offsets,
+    /// so the parameter number for the first parameter accepted by this function is **`0`**, not `1`.
+    ///
+    pub fn get(&self, parameter: usize) -> Option<&[u8]> {
+        if let Some(bytes) = self.parameters().get(parameter) {
+            Some(&bytes[..])
+        } else {
+            None
+        }
+    }
+
+    /// # Safety
+    ///
+    /// **Do not use.** Only for doc tests.
+    ///
+    pub unsafe fn docs_test() -> Self {
+        Self {
+            ffi: PdParameters {
+                num_format_codes: 0,
+                format_codes: null::<c_void>() as *mut c_void,
+                num_params: 0,
+                params: null::<c_void>() as *mut c_void,
+            },
+        }
+    }
+
+    /// Create new parameters.
+    ///
+    /// # Safety
+    ///
+    /// Caller is responsible for ensuring the parameter reference live long enough.
+    /// This is not checked by the compiler.
+    pub unsafe fn new(format_codes: &[Bytes], params: &[Bytes]) -> Self {
+        Self {
+            ffi: PdParameters {
+                num_format_codes: format_codes.len(),
+                format_codes: format_codes.as_ptr() as *mut c_void,
+                num_params: params.len(),
+                params: params.as_ptr() as *mut c_void,
+            },
+        }
+    }
+
+    /// Return the raw data.
+    ///
+    /// # Safety
+    ///
+    /// Caller is responsible for ensuring `self` lives long enough.
+    ///
+    pub unsafe fn ffi(&self) -> PdParameters {
+        self.ffi
     }
 }

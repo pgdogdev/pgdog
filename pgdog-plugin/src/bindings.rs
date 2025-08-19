@@ -349,6 +349,7 @@ const _: () = {
 };
 #[doc = " Wrapper around Rust's [`&str`], without allocating memory, unlike [`std::ffi::CString`].\n The caller must use it as a Rust string. This is not a C-string."]
 pub type RustString = PdStr;
+#[doc = " Wrapper around output by pg_query."]
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct PdStatement {
@@ -364,6 +365,32 @@ const _: () = {
         [::std::mem::offset_of!(PdStatement, version) - 0usize];
     ["Offset of field: PdStatement::len"][::std::mem::offset_of!(PdStatement, len) - 8usize];
     ["Offset of field: PdStatement::data"][::std::mem::offset_of!(PdStatement, data) - 16usize];
+};
+#[doc = " Wrapper around prepared statement parameters."]
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct PdParameters {
+    #[doc = " Number of format codes."]
+    pub num_format_codes: usize,
+    #[doc = " Format codes encoded as `Vec<Bytes>`."]
+    pub format_codes: *mut ::std::os::raw::c_void,
+    #[doc = " Number of parameters."]
+    pub num_params: usize,
+    #[doc = " Parameters encoded as `Vec<Bytes>`."]
+    pub params: *mut ::std::os::raw::c_void,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of PdParameters"][::std::mem::size_of::<PdParameters>() - 32usize];
+    ["Alignment of PdParameters"][::std::mem::align_of::<PdParameters>() - 8usize];
+    ["Offset of field: PdParameters::num_format_codes"]
+        [::std::mem::offset_of!(PdParameters, num_format_codes) - 0usize];
+    ["Offset of field: PdParameters::format_codes"]
+        [::std::mem::offset_of!(PdParameters, format_codes) - 8usize];
+    ["Offset of field: PdParameters::num_params"]
+        [::std::mem::offset_of!(PdParameters, num_params) - 16usize];
+    ["Offset of field: PdParameters::params"]
+        [::std::mem::offset_of!(PdParameters, params) - 24usize];
 };
 #[doc = " Context on the database cluster configuration and the currently processed\n PostgreSQL statement.\n\n This struct is C FFI-safe and therefore uses C types. Use public methods to interact with it instead\n of reading the data directly."]
 #[repr(C)]
@@ -381,10 +408,12 @@ pub struct PdRouterContext {
     pub write_override: u8,
     #[doc = " pg_query generated Abstract Syntax Tree of the statement."]
     pub query: PdStatement,
+    #[doc = " Statement parameters, if any."]
+    pub parameters: PdParameters,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
-    ["Size of PdRouterContext"][::std::mem::size_of::<PdRouterContext>() - 40usize];
+    ["Size of PdRouterContext"][::std::mem::size_of::<PdRouterContext>() - 72usize];
     ["Alignment of PdRouterContext"][::std::mem::align_of::<PdRouterContext>() - 8usize];
     ["Offset of field: PdRouterContext::shards"]
         [::std::mem::offset_of!(PdRouterContext, shards) - 0usize];
@@ -398,6 +427,8 @@ const _: () = {
         [::std::mem::offset_of!(PdRouterContext, write_override) - 11usize];
     ["Offset of field: PdRouterContext::query"]
         [::std::mem::offset_of!(PdRouterContext, query) - 16usize];
+    ["Offset of field: PdRouterContext::parameters"]
+        [::std::mem::offset_of!(PdRouterContext, parameters) - 40usize];
 };
 #[doc = " Routing decision returned by the plugin."]
 #[repr(C)]

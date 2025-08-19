@@ -13,9 +13,10 @@ use std::str::from_utf8;
 use std::str::from_utf8_unchecked;
 
 #[derive(PartialEq, Debug, Copy, Clone, PartialOrd, Ord, Eq)]
+#[repr(C)]
 pub enum Format {
-    Text,
-    Binary,
+    Text = 0,
+    Binary = 1,
 }
 
 impl From<Format> for i16 {
@@ -173,6 +174,14 @@ impl Bind {
             .params
             .get(index)
             .map(|parameter| ParameterWithFormat { parameter, format }))
+    }
+
+    pub(crate) fn params_raw(&self) -> &[Bytes] {
+        self.params.as_slice()
+    }
+
+    pub(crate) fn formats_raw(&self) -> &[Format] {
+        self.codes.as_slice()
     }
 
     /// Rename this Bind message to a different prepared statement.

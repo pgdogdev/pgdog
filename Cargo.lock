@@ -2325,6 +2325,7 @@ name = "pgdog-plugin"
 version = "0.1.6"
 dependencies = [
  "bindgen 0.71.1",
+ "bytes",
  "libc",
  "libloading",
  "pg_query",
