@@ -165,6 +165,27 @@ impl From<PdParameters> for Parameters {
             };
         }
 
+        // SAFETY: The parameters have the same data type, size and alignment because it's created
+        // by `Vec::new`.
+        //
+        // This is enforced by the Rust compiler and plugins are required to use the same version
+        // as PgDog.
+        //
+        // Why not use a slice instead? This vec (and others in this crate) typically contain
+        // other heap-allocated data types, like other vecs
+        //
+        // We don't implement `DerefMut`, so this vec is read-only. The `*mut Parameter`
+        // cast doesn't do anything.
+        //
+        // We use `std::mem::forget` below so this vec doesn't actually own this
+        // data.
+        //
+        // Cloning the vec is safe: the `Clone::clone` method uses `len` only and
+        // creates a new vec with that as its capacity. It then iterates over each
+        // element and calls its `Clone::clone` function.
+        //
+        // Since this data is immutable and we are not actually taking ownership, this
+        // call is safe.
         let params = unsafe {
             Vec::from_raw_parts(
                 value.params as *mut Parameter,
@@ -173,6 +194,7 @@ impl From<PdParameters> for Parameters {
             )
         };
 
+        // SAFETY: Same note as above.
         let format_codes = unsafe {
             Vec::from_raw_parts(
                 value.format_codes as *mut ParameterFormat,
@@ -217,6 +239,7 @@ mod test {
     fn test_empty_params() {
         let params = PdParameters::default();
         let params: Parameters = params.into();
+
         println!("{:?}", params);
     }
 }
