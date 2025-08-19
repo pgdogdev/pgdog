@@ -368,6 +368,32 @@ mod test {
     }
 
     #[test]
+    fn test_copy_csv_custom_null() {
+        let copy = "COPY sharded (id, value) FROM STDIN CSV NULL 'NULL'";
+        let stmt = parse(copy).unwrap();
+        let stmt = stmt.protobuf.stmts.first().unwrap();
+        let copy = match stmt.stmt.clone().unwrap().node.unwrap() {
+            NodeEnum::CopyStmt(copy) => copy,
+            _ => panic!("not a copy"),
+        };
+
+        let mut copy = CopyParser::new(&copy, &Cluster::default())
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(copy.delimiter(), ',');
+        assert!(!copy.headers);
+
+        let data = CopyData::new("5,hello\n10,NULL\n15,world\n".as_bytes());
+        let sharded = copy.shard(&[data]).unwrap();
+
+        assert_eq!(sharded.len(), 3);
+        assert_eq!(sharded[0].message().data(), b"\"5\",\"hello\"\n");
+        assert_eq!(sharded[1].message().data(), b"\"10\",NULL\n");
+        assert_eq!(sharded[2].message().data(), b"\"15\",\"world\"\n");
+    }
+
+    #[test]
     fn test_copy_binary() {
         let copy = "COPY sharded (id, value) FROM STDIN (FORMAT 'binary')";
         let stmt = parse(copy).unwrap();
