@@ -79,7 +79,7 @@ impl Default for CopyParser {
             delimiter: None,
             columns: 0,
             is_from: false,
-            stream: CopyStream::Text(Box::new(CsvStream::new(',', false, CopyFormat::Csv))),
+            stream: CopyStream::Text(Box::new(CsvStream::new(',', false, CopyFormat::Csv, "\\N"))),
             sharding_schema: ShardingSchema::default(),
             sharded_table: None,
             sharded_column: 0,
@@ -96,6 +96,7 @@ impl CopyParser {
         };
 
         let mut format = CopyFormat::Text;
+        let mut null_string = "\\N".to_owned();
 
         if let Some(ref rel) = stmt.relation {
             let mut columns = vec![];
@@ -151,6 +152,14 @@ impl CopyParser {
                             parser.headers = true;
                         }
 
+                        "null" => {
+                            if let Some(ref arg) = elem.arg {
+                                if let Some(NodeEnum::String(ref string)) = arg.node {
+                                    null_string = string.sval.clone();
+                                }
+                            }
+                        }
+
                         _ => (),
                     }
                 }
@@ -164,6 +173,7 @@ impl CopyParser {
                 parser.delimiter(),
                 parser.headers,
                 format,
+                &null_string,
             )))
         };
         parser.sharding_schema = cluster.sharding_schema();
@@ -355,6 +365,32 @@ mod test {
         assert_eq!(rows[2].message(), CopyData::new(b"\"6\",\"test6\"\n"));
         assert_eq!(rows[1].shard(), &Shard::Direct(0));
         assert_eq!(rows[2].shard(), &Shard::Direct(1));
+    }
+
+    #[test]
+    fn test_copy_csv_custom_null() {
+        let copy = "COPY sharded (id, value) FROM STDIN CSV NULL 'NULL'";
+        let stmt = parse(copy).unwrap();
+        let stmt = stmt.protobuf.stmts.first().unwrap();
+        let copy = match stmt.stmt.clone().unwrap().node.unwrap() {
+            NodeEnum::CopyStmt(copy) => copy,
+            _ => panic!("not a copy"),
+        };
+
+        let mut copy = CopyParser::new(&copy, &Cluster::default())
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(copy.delimiter(), ',');
+        assert!(!copy.headers);
+
+        let data = CopyData::new("5,hello\n10,NULL\n15,world\n".as_bytes());
+        let sharded = copy.shard(&[data]).unwrap();
+
+        assert_eq!(sharded.len(), 3);
+        assert_eq!(sharded[0].message().data(), b"\"5\",\"hello\"\n");
+        assert_eq!(sharded[1].message().data(), b"\"10\",NULL\n");
+        assert_eq!(sharded[2].message().data(), b"\"15\",\"world\"\n");
     }
 
     #[test]
