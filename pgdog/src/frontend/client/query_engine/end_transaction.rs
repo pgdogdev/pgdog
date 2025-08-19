@@ -13,7 +13,7 @@ impl QueryEngine {
         } else {
             CommandComplete::new_commit()
         };
-        let mut messages = if !context.in_transaction {
+        let mut messages = if !context.in_transaction() {
             vec![NoticeResponse::from(ErrorResponse::no_transaction()).message()?]
         } else {
             vec![]

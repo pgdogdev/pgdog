@@ -86,7 +86,7 @@ impl QueryParser {
         let mut qp_context = QueryParserContext::new(context);
 
         let mut command = if qp_context.query().is_ok() {
-            self.in_transaction = qp_context.router_context.in_transaction;
+            self.in_transaction = qp_context.router_context.in_transaction();
             self.write_override = qp_context.write_override();
 
             self.query(&mut qp_context)?

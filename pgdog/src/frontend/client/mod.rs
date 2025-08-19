@@ -43,12 +43,18 @@ pub struct Client {
     streaming: bool,
     shutdown: bool,
     prepared_statements: PreparedStatements,
-    in_transaction: bool,
+    transaction: Option<TransactionType>,
     timeouts: Timeouts,
     request_buffer: Buffer,
     stream_buffer: BytesMut,
     cross_shard_disabled: bool,
     passthrough_password: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransactionType {
+    ReadOnly,
+    ReadWrite,
 }
 
 impl MemoryUsage for Client {
@@ -207,7 +213,7 @@ impl Client {
             params: params.clone(),
             connect_params: params,
             prepared_statements: PreparedStatements::new(),
-            in_transaction: false,
+            transaction: None,
             timeouts: Timeouts::from_config(&config.config.general),
             request_buffer: Buffer::new(),
             stream_buffer: BytesMut::new(),
@@ -248,7 +254,7 @@ impl Client {
             connect_params: connect_params.clone(),
             params: connect_params,
             admin: false,
-            in_transaction: false,
+            transaction: None,
             timeouts: Timeouts::from_config(&config().config.general),
             request_buffer: Buffer::new(),
             stream_buffer: BytesMut::new(),
@@ -342,7 +348,7 @@ impl Client {
     ) -> Result<(), Error> {
         let mut context = QueryEngineContext::new(self);
         query_engine.server_message(&mut context, message).await?;
-        self.in_transaction = context.in_transaction();
+        self.transaction = context.transaction();
 
         Ok(())
     }
@@ -351,7 +357,7 @@ impl Client {
     async fn client_messages(&mut self, query_engine: &mut QueryEngine) -> Result<(), Error> {
         let mut context = QueryEngineContext::new(self);
         query_engine.handle(&mut context).await?;
-        self.in_transaction = context.in_transaction();
+        self.transaction = context.transaction();
         return Ok(());
     }
 

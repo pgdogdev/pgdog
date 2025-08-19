@@ -1,6 +1,9 @@
-use crate::net::{
-    messages::{parse::Parse, Parameter},
-    Close, Format, Sync,
+use crate::{
+    frontend::client::TransactionType,
+    net::{
+        messages::{parse::Parse, Parameter},
+        Close, Format, Sync,
+    },
 };
 
 use super::{super::Shard, *};
@@ -18,7 +21,7 @@ macro_rules! command {
         let cluster = Cluster::new_test();
         let mut stmt = PreparedStatements::default();
         let params = Parameters::default();
-        let context = RouterContext::new(&buffer, &cluster, &mut stmt, &params, false).unwrap();
+        let context = RouterContext::new(&buffer, &cluster, &mut stmt, &params, None).unwrap();
         let command = query_parser.parse(context).unwrap().clone();
 
         (command, query_parser)
@@ -44,9 +47,22 @@ macro_rules! query_parser {
         let mut prep_stmts = PreparedStatements::default();
         let params = Parameters::default();
         let buffer: Buffer = vec![$query.into()].into();
-        let router_context =
-            RouterContext::new(&buffer, &cluster, &mut prep_stmts, &params, $in_transaction)
-                .unwrap();
+
+        let maybe_transaction = if $in_transaction {
+            Some(TransactionType::ReadWrite)
+        } else {
+            None
+        };
+
+        let router_context = RouterContext::new(
+            &buffer,
+            &cluster,
+            &mut prep_stmts,
+            &params,
+            maybe_transaction,
+        )
+        .unwrap();
+
         $qp.parse(router_context).unwrap()
     }};
 
@@ -77,7 +93,7 @@ macro_rules! parse {
                     &Cluster::new_test(),
                     &mut PreparedStatements::default(),
                     &Parameters::default(),
-                    false,
+                    None,
                 )
                 .unwrap(),
             )
@@ -241,8 +257,9 @@ fn test_set() {
     let cluster = Cluster::new_test();
     let mut prep_stmts = PreparedStatements::default();
     let params = Parameters::default();
+    let transaction = Some(TransactionType::ReadWrite);
     let router_context =
-        RouterContext::new(&buffer, &cluster, &mut prep_stmts, &params, true).unwrap();
+        RouterContext::new(&buffer, &cluster, &mut prep_stmts, &params, transaction).unwrap();
     let mut context = QueryParserContext::new(router_context);
 
     for read_only in [true, false] {
@@ -377,8 +394,9 @@ WHERE t2.account = (
     )
     .into()]
     .into();
+    let transaction = Some(TransactionType::ReadWrite);
     let router_context =
-        RouterContext::new(&buffer, &cluster, &mut prep_stmts, &params, true).unwrap();
+        RouterContext::new(&buffer, &cluster, &mut prep_stmts, &params, transaction).unwrap();
     let mut context = QueryParserContext::new(router_context);
     let route = qp.query(&mut context).unwrap();
     match route {
@@ -433,8 +451,9 @@ fn test_close_direct_one_shard() {
     let buf: Buffer = vec![Close::named("test").into(), Sync.into()].into();
     let mut pp = PreparedStatements::default();
     let params = Parameters::default();
+    let transaction = None;
 
-    let context = RouterContext::new(&buf, &cluster, &mut pp, &params, false).unwrap();
+    let context = RouterContext::new(&buf, &cluster, &mut pp, &params, transaction).unwrap();
 
     let cmd = qp.parse(context).unwrap();
 

@@ -1,7 +1,7 @@
 use super::Error;
 use crate::{
     backend::Cluster,
-    frontend::{buffer::BufferedQuery, Buffer, PreparedStatements},
+    frontend::{buffer::BufferedQuery, client::TransactionType, Buffer, PreparedStatements},
     net::{Bind, Parameters},
 };
 
@@ -18,7 +18,7 @@ pub struct RouterContext<'a> {
     /// Client parameters, e.g. search_path.
     pub params: &'a Parameters,
     /// Client inside transaction,
-    pub in_transaction: bool,
+    pub transaction: Option<TransactionType>,
     /// Currently executing COPY statement.
     pub copy_mode: bool,
     /// Do we have an executable buffer?
@@ -31,7 +31,7 @@ impl<'a> RouterContext<'a> {
         cluster: &'a Cluster,
         stmt: &'a mut PreparedStatements,
         params: &'a Parameters,
-        in_transaction: bool,
+        transaction: Option<TransactionType>,
     ) -> Result<Self, Error> {
         let query = buffer.query()?;
         let bind = buffer.parameters()?;
@@ -43,9 +43,13 @@ impl<'a> RouterContext<'a> {
             params,
             prepared_statements: stmt,
             cluster,
-            in_transaction,
+            transaction,
             copy_mode,
             executable: buffer.executable(),
         })
+    }
+
+    pub fn in_transaction(&self) -> bool {
+        self.transaction.is_some()
     }
 }

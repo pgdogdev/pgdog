@@ -1,5 +1,8 @@
 use crate::{
-    frontend::{client::timeouts::Timeouts, Buffer, Client, PreparedStatements},
+    frontend::{
+        client::{timeouts::Timeouts, TransactionType},
+        Buffer, Client, PreparedStatements,
+    },
     net::{Parameters, Stream},
     stats::memory::MemoryUsage,
 };
@@ -15,7 +18,7 @@ pub struct QueryEngineContext<'a> {
     /// Client's socket to send responses to.
     pub(super) stream: &'a mut Stream,
     /// Client in transaction?
-    pub(super) in_transaction: bool,
+    pub(super) transaction: Option<TransactionType>,
     /// Timeouts
     pub(super) timeouts: Timeouts,
     /// Cross shard  queries are disabled.
@@ -33,14 +36,18 @@ impl<'a> QueryEngineContext<'a> {
             params: &mut client.params,
             buffer: &mut client.request_buffer,
             stream: &mut client.stream,
-            in_transaction: client.in_transaction,
+            transaction: client.transaction,
             timeouts: client.timeouts,
             cross_shard_disabled: client.cross_shard_disabled,
             memory_usage,
         }
     }
 
+    pub fn transaction(&self) -> Option<TransactionType> {
+        self.transaction
+    }
+
     pub fn in_transaction(&self) -> bool {
-        self.in_transaction
+        self.transaction.is_some()
     }
 }

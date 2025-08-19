@@ -15,7 +15,7 @@ impl QueryEngine {
                 RowDescription::new(&[Field::bigint("shards")]).message()?,
                 DataRow::from_columns(vec![shards]).message()?,
                 CommandComplete::from_str("SHOW").message()?,
-                ReadyForQuery::in_transaction(context.in_transaction).message()?,
+                ReadyForQuery::in_transaction(context.in_transaction()).message()?,
             ])
             .await?;
 
