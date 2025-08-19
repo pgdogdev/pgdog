@@ -91,7 +91,7 @@
 //! ```
 //! # use pgdog_plugin::prelude::*;
 //! # let context = unsafe { Context::doc_test() };
-//! let params = context.params();
+//! let params = context.parameters();
 //! if let Some(param) = params
 //!     .get(0)
 //!     .map(|p| p.decode(params.parameter_format(0)))
@@ -118,7 +118,7 @@
 //!
 //! #[route]
 //! fn route(context: Context) -> Route {
-//!     let params = context.params();
+//!     let params = context.parameters();
 //!     let password = params
 //!         .get(3)
 //!         .map(|param| param.decode(ParameterFormat::Text))

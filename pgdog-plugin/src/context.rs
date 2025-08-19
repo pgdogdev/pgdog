@@ -221,7 +221,21 @@ impl Context {
         self.ffi.write_override == 1
     }
 
-    pub fn params(&self) -> Parameters {
+    /// Returns a list of parameters bound on the statement. If using the simple protocol,
+    /// this is going to be empty and parameters will be in the actual query text.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use pgdog_plugin::prelude::*;
+    /// # let context = unsafe { Context::doc_test() };
+    /// let params = context.parameters();
+    /// if let Some(param) = params.get(0) {
+    ///     let value = param.decode(params.parameter_format(0));
+    ///     println!("{:?}", value);
+    /// }
+    /// ```
+    pub fn parameters(&self) -> Parameters {
         self.ffi.params.into()
     }
 }

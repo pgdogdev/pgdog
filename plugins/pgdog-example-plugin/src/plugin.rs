@@ -88,7 +88,7 @@ pub(crate) fn route_query(context: Context) -> Result<Route, PluginError> {
     }
 
     // Get prepared statement parameters.
-    let params = context.params();
+    let params = context.parameters();
     if params.is_empty() {
         // No params bound.
     } else {
