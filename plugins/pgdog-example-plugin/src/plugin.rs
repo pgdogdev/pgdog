@@ -87,13 +87,27 @@ pub(crate) fn route_query(context: Context) -> Result<Route, PluginError> {
         _ => {}
     }
 
+    // Get prepared statement parameters.
+    let params = context.params();
+    if params.is_empty() {
+        // No params bound.
+    } else {
+        let param = params
+            .get(0)
+            .map(|p| p.decode(params.parameter_format(0)))
+            .flatten();
+        if let Some(param) = param {
+            println!("Decoded parameter 0 ($1): {:?}", param);
+        }
+    }
+
     // Let PgDog decide.
     Ok(Route::unknown())
 }
 
 #[cfg(test)]
 mod test {
-    use pgdog_plugin::PdStatement;
+    use pgdog_plugin::{PdParameters, PdStatement};
 
     use super::*;
 
@@ -109,6 +123,7 @@ mod test {
             in_transaction: 0,
             write_override: 0,
             query,
+            params: PdParameters::default(),
         };
         let route = route_query(context.into()).unwrap();
         let read_write: ReadWrite = route.read_write.try_into().unwrap();

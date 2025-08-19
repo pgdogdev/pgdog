@@ -2,7 +2,9 @@
 
 use std::ops::Deref;
 
-use crate::{bindings::PdRouterContext, PdRoute, PdStatement};
+use crate::{
+    bindings::PdRouterContext, parameters::Parameters, PdParameters, PdRoute, PdStatement,
+};
 
 /// PostgreSQL statement, parsed by [`pg_query`].
 ///
@@ -218,6 +220,10 @@ impl Context {
     pub fn write_override(&self) -> bool {
         self.ffi.write_override == 1
     }
+
+    pub fn params(&self) -> Parameters {
+        self.ffi.params.into()
+    }
 }
 
 impl Context {
@@ -242,6 +248,7 @@ impl Context {
                     len: 0,
                     data: null::<c_void>() as *mut c_void,
                 },
+                params: PdParameters::default(),
             },
         }
     }
@@ -272,6 +279,8 @@ pub enum Shard {
     /// Not clear which shard it should go to, so let PgDog decide.
     /// Use this if you don't want to handle sharding inside the plugin.
     Unknown,
+    /// The statement is blocked from executing.
+    Blocked,
 }
 
 impl From<Shard> for i64 {
@@ -280,6 +289,7 @@ impl From<Shard> for i64 {
             Shard::Direct(value) => value as i64,
             Shard::All => -1,
             Shard::Unknown => -2,
+            Shard::Blocked => -3,
         }
     }
 }
@@ -291,6 +301,8 @@ impl TryFrom<i64> for Shard {
             Shard::All
         } else if value == -2 {
             Shard::Unknown
+        } else if value == -3 {
+            Shard::Blocked
         } else if value >= 0 {
             Shard::Direct(value as usize)
         } else {
@@ -435,6 +447,17 @@ impl Route {
         Self {
             ffi: PdRoute {
                 shard: -2,
+                read_write: 2,
+            },
+        }
+    }
+
+    /// Block the query from being sent to a database. PgDog will abort the query
+    /// and return an error to the client, telling them which plugin blocked it.
+    pub fn block() -> Route {
+        Self {
+            ffi: PdRoute {
+                shard: -3,
                 read_write: 2,
             },
         }
