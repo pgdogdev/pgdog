@@ -79,7 +79,7 @@ impl Default for CopyParser {
             delimiter: None,
             columns: 0,
             is_from: false,
-            stream: CopyStream::Text(Box::new(CsvStream::new(',', false, CopyFormat::Csv))),
+            stream: CopyStream::Text(Box::new(CsvStream::new(',', false, CopyFormat::Csv, "\\N"))),
             sharding_schema: ShardingSchema::default(),
             sharded_table: None,
             sharded_column: 0,
@@ -96,6 +96,7 @@ impl CopyParser {
         };
 
         let mut format = CopyFormat::Text;
+        let mut null_string = "\\N".to_owned();
 
         if let Some(ref rel) = stmt.relation {
             let mut columns = vec![];
@@ -151,6 +152,14 @@ impl CopyParser {
                             parser.headers = true;
                         }
 
+                        "null" => {
+                            if let Some(ref arg) = elem.arg {
+                                if let Some(NodeEnum::String(ref string)) = arg.node {
+                                    null_string = string.sval.clone();
+                                }
+                            }
+                        }
+
                         _ => (),
                     }
                 }
@@ -164,6 +173,7 @@ impl CopyParser {
                 parser.delimiter(),
                 parser.headers,
                 format,
+                &null_string,
             )))
         };
         parser.sharding_schema = cluster.sharding_schema();

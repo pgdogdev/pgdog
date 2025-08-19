@@ -28,6 +28,8 @@ pub struct CsvStream {
     read: usize,
     /// CSV deliminter.
     delimiter: char,
+    /// Null string.
+    null_string: String,
     /// First record are headers.
     headers: bool,
     /// Read headers.
@@ -49,13 +51,14 @@ impl std::fmt::Debug for CsvStream {
 
 impl CsvStream {
     /// Create new CSV stream reader.
-    pub fn new(delimiter: char, headers: bool, format: CopyFormat) -> Self {
+    pub fn new(delimiter: char, headers: bool, format: CopyFormat, null_string: &str) -> Self {
         Self {
             buffer: Vec::new(),
             record: vec![0u8; RECORD_BUFFER],
             ends: vec![0usize; ENDS_BUFFER],
             reader: Self::reader(delimiter),
             read: 0,
+            null_string: null_string.to_owned(),
             delimiter,
             headers,
             headers_record: None,
@@ -108,6 +111,7 @@ impl CsvStream {
                         &self.ends[..ends],
                         self.delimiter,
                         self.format,
+                        &self.null_string,
                     );
                     self.read += read;
                     self.record.fill(0u8);
@@ -156,7 +160,7 @@ mod test {
     #[test]
     fn test_csv_stream() {
         let csv = "one,two,three\nfour,five,six\nseven,eight";
-        let mut reader = CsvStream::new(',', false, CopyFormat::Csv);
+        let mut reader = CsvStream::new(',', false, CopyFormat::Csv, "\\N");
         reader.write(csv.as_bytes());
 
         let record = reader.record().unwrap().unwrap();
@@ -177,6 +181,7 @@ mod test {
         assert_eq!(record.get(0), Some("seven"));
         assert_eq!(record.get(1), Some("eight"));
         assert_eq!(record.get(2), Some("nine"));
+        assert_eq!(record.to_string(), "\"seven\",\"eight\",\"nine\"\n");
 
         assert!(reader.record().unwrap().is_none());
     }
@@ -184,10 +189,30 @@ mod test {
     #[test]
     fn test_csv_stream_with_headers() {
         let csv = "column_a,column_b,column_c\n1,2,3\n";
-        let mut reader = CsvStream::new(',', true, CopyFormat::Csv);
+        let mut reader = CsvStream::new(',', true, CopyFormat::Csv, "\\N");
         reader.write(csv.as_bytes());
         assert_eq!(reader.headers().unwrap().unwrap().get(0), Some("column_a"));
         let record = reader.record().unwrap().unwrap();
         assert_eq!(record.get(0), Some("1"));
+    }
+
+    #[test]
+    fn test_csv_null_string_handling() {
+        let csv = "one,\\N,three\nfour,\\N,\\N\n";
+        let mut reader = CsvStream::new(',', false, CopyFormat::Csv, "\\N");
+        reader.write(csv.as_bytes());
+
+        let record = reader.record().unwrap().unwrap();
+        assert_eq!(record.get(0), Some("one"));
+        assert_eq!(record.get(1), Some("\\N"));
+        assert_eq!(record.get(2), Some("three"));
+
+        let record = reader.record().unwrap().unwrap();
+        assert_eq!(record.get(0), Some("four"));
+        assert_eq!(record.get(1), Some("\\N"));
+        assert_eq!(record.get(2), Some("\\N"));
+
+        let output = record.to_string();
+        assert_eq!(output, "\"four\",\\N,\\N\n");
     }
 }
