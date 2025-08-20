@@ -15,7 +15,7 @@ pub struct QueryEngineContext<'a> {
     /// Client session parameters.
     pub(super) params: &'a mut Parameters,
     /// Request
-    pub(super) buffer: &'a mut ClientRequest,
+    pub(super) client_request: &'a mut ClientRequest,
     /// Client's socket to send responses to.
     pub(super) stream: &'a mut Stream,
     /// Client in transaction?
@@ -35,7 +35,7 @@ impl<'a> QueryEngineContext<'a> {
         Self {
             prepared_statements: &mut client.prepared_statements,
             params: &mut client.params,
-            buffer: &mut client.client_request,
+            client_request: &mut client.client_request,
             stream: &mut client.stream,
             transaction: client.transaction,
             timeouts: client.timeouts,
@@ -49,7 +49,7 @@ impl<'a> QueryEngineContext<'a> {
         Self {
             prepared_statements: &mut mirror.prepared_statements,
             params: &mut mirror.params,
-            buffer,
+            client_request: buffer,
             stream: &mut mirror.stream,
             transaction: mirror.transaction,
             timeouts: mirror.timeouts,

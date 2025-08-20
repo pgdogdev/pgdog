@@ -91,7 +91,8 @@ impl<'a> QueryEngine {
 
     /// Handle client request.
     pub async fn handle(&mut self, context: &mut QueryEngineContext<'_>) -> Result<(), Error> {
-        self.stats.received(context.buffer.total_message_len());
+        self.stats
+            .received(context.client_request.total_message_len());
 
         // Intercept commands we don't have to forward to a server.
         if self.intercept_incomplete(context).await? {
@@ -109,7 +110,7 @@ impl<'a> QueryEngine {
         // Queue up request to mirrors, if any.
         // Do this before sending query to actual server
         // to have accurate timings between queries.
-        self.backend.mirror(&context.buffer);
+        self.backend.mirror(&context.client_request);
 
         let command = self.router.command();
         let route = command.route().clone();
@@ -156,7 +157,7 @@ impl<'a> QueryEngine {
             }
             Command::Copy(_) => self.execute(context, &route).await?,
             Command::Rewrite(query) => {
-                context.buffer.rewrite(query)?;
+                context.client_request.rewrite(query)?;
                 self.execute(context, &route).await?;
             }
             Command::Deallocate => self.deallocate(context).await?,

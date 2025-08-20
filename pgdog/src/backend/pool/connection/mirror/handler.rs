@@ -33,7 +33,7 @@ impl MirrorHandler {
     }
 
     /// Maybe send request to handler.
-    pub fn send(&mut self, buffer: &Buffer) -> bool {
+    pub fn send(&mut self, buffer: &ClientRequest) -> bool {
         match self.state {
             MirrorHandlerState::Dropping => {
                 debug!("mirror dropping request");
