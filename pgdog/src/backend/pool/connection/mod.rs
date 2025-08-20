@@ -117,7 +117,7 @@ impl Connection {
     }
 
     /// Send client request to mirrors.
-    pub fn mirror(&mut self, buffer: &crate::frontend::Buffer) {
+    pub fn mirror(&mut self, buffer: &crate::frontend::ClientRequest) {
         for mirror in &mut self.mirrors {
             mirror.send(buffer);
         }
@@ -274,7 +274,7 @@ impl Connection {
     /// Send buffer in a potentially sharded context.
     pub(crate) async fn handle_buffer(
         &mut self,
-        messages: &crate::frontend::Buffer,
+        messages: &crate::frontend::ClientRequest,
         router: &mut Router,
         streaming: bool,
     ) -> Result<(), Error> {

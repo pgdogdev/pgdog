@@ -17,7 +17,7 @@ use super::{
 };
 use crate::{
     auth::{md5, scram::Client},
-    frontend::Buffer,
+    frontend::ClientRequest,
     net::{
         messages::{
             hello::SslReply, Authentication, BackendKeyData, ErrorResponse, FromBytes, Message,
@@ -282,7 +282,7 @@ impl Server {
     }
 
     /// Send messages to the server and flush the buffer.
-    pub async fn send(&mut self, messages: &Buffer) -> Result<(), Error> {
+    pub async fn send(&mut self, messages: &ClientRequest) -> Result<(), Error> {
         self.stats.state(State::Active);
 
         for message in messages.iter() {

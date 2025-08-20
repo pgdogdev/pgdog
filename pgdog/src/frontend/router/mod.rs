@@ -14,7 +14,7 @@ use lazy_static::lazy_static;
 use parser::Shard;
 pub use parser::{Command, QueryParser, Route};
 
-use super::Buffer;
+use super::ClientRequest;
 pub use context::RouterContext;
 pub use search_path::SearchPath;
 pub use sharding::{Lists, Ranges};
@@ -62,7 +62,7 @@ impl Router {
     }
 
     /// Parse CopyData messages and shard them.
-    pub fn copy_data(&mut self, buffer: &Buffer) -> Result<Vec<CopyRow>, Error> {
+    pub fn copy_data(&mut self, buffer: &ClientRequest) -> Result<Vec<CopyRow>, Error> {
         match self.latest_command {
             Command::Copy(ref mut copy) => Ok(copy.shard(&buffer.copy_data()?)?),
             _ => Ok(buffer

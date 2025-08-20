@@ -124,13 +124,13 @@ async fn test_test_client() {
     conn.write_all(&query).await.unwrap();
 
     client.buffer(State::Idle).await.unwrap();
-    assert_eq!(client.request_buffer.total_message_len(), query.len());
+    assert_eq!(client.client_request.total_message_len(), query.len());
 
     client.client_messages(&mut engine).await.unwrap();
     assert!(client.transaction.is_none());
     assert_eq!(engine.stats().state, State::Active);
     // Buffer not cleared yet.
-    assert_eq!(client.request_buffer.total_message_len(), query.len());
+    assert_eq!(client.client_request.total_message_len(), query.len());
 
     assert!(engine.backend().connected());
     // let command = engine
@@ -399,7 +399,7 @@ async fn test_abrupt_disconnect() {
 
     let event = client.buffer(State::Idle).await.unwrap();
     assert_eq!(event, BufferEvent::DisconnectAbrupt);
-    assert!(client.request_buffer.is_empty());
+    assert!(client.client_request.is_empty());
 
     // Client disconnects and returns gracefully.
     let (conn, mut client, _) = new_client!(false);

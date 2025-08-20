@@ -6,7 +6,7 @@ use std::time::Duration;
 use tokio::time::sleep;
 use tracing::debug;
 
-use crate::frontend::Buffer;
+use crate::frontend::ClientRequest;
 use crate::net::messages::command_complete::CommandComplete;
 use crate::net::messages::{ErrorResponse, FromBytes, Protocol, Query, ReadyForQuery};
 use crate::net::ProtocolMessage;
@@ -37,7 +37,7 @@ impl Backend {
     }
 
     /// Handle command.
-    pub async fn send(&mut self, messages: &Buffer) -> Result<(), Error> {
+    pub async fn send(&mut self, messages: &ClientRequest) -> Result<(), Error> {
         let message = messages.first().ok_or(Error::Empty)?;
         let message: ProtocolMessage = message.clone();
 

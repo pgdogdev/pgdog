@@ -6,7 +6,7 @@ use pgdog_plugin::{PdRouterContext, PdStatement};
 use crate::{
     backend::ShardingSchema,
     config::{config, MultiTenant, ReadWriteStrategy},
-    frontend::{buffer::BufferedQuery, PreparedStatements, RouterContext},
+    frontend::{BufferedQuery, PreparedStatements, RouterContext},
 };
 
 use super::Error;

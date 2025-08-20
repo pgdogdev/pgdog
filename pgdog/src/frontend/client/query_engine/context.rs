@@ -2,7 +2,7 @@ use crate::{
     backend::pool::connection::mirror::Mirror,
     frontend::{
         client::{timeouts::Timeouts, TransactionType},
-        Buffer, Client, PreparedStatements,
+        Client, ClientRequest, PreparedStatements,
     },
     net::{Parameters, Stream},
     stats::memory::MemoryUsage,
@@ -15,7 +15,7 @@ pub struct QueryEngineContext<'a> {
     /// Client session parameters.
     pub(super) params: &'a mut Parameters,
     /// Request
-    pub(super) buffer: &'a mut Buffer,
+    pub(super) buffer: &'a mut ClientRequest,
     /// Client's socket to send responses to.
     pub(super) stream: &'a mut Stream,
     /// Client in transaction?
@@ -35,7 +35,7 @@ impl<'a> QueryEngineContext<'a> {
         Self {
             prepared_statements: &mut client.prepared_statements,
             params: &mut client.params,
-            buffer: &mut client.request_buffer,
+            buffer: &mut client.client_request,
             stream: &mut client.stream,
             transaction: client.transaction,
             timeouts: client.timeouts,
@@ -45,7 +45,7 @@ impl<'a> QueryEngineContext<'a> {
     }
 
     /// Create context from mirror.
-    pub fn new_mirror(mirror: &'a mut Mirror, buffer: &'a mut Buffer) -> Self {
+    pub fn new_mirror(mirror: &'a mut Mirror, buffer: &'a mut ClientRequest) -> Self {
         Self {
             prepared_statements: &mut mirror.prepared_statements,
             params: &mut mirror.params,

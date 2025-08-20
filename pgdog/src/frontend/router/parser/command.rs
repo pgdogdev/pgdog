@@ -1,5 +1,5 @@
 use super::*;
-use crate::{frontend::buffer::BufferedQuery, net::parameter::ParameterValue};
+use crate::{frontend::BufferedQuery, net::parameter::ParameterValue};
 use lazy_static::lazy_static;
 
 #[derive(Debug, Clone)]

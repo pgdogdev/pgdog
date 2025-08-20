@@ -16,7 +16,7 @@ use crate::frontend::comms::comms;
 use crate::frontend::PreparedStatements;
 use crate::net::{Parameter, Parameters, Stream};
 
-use crate::frontend::Buffer;
+use crate::frontend::ClientRequest;
 
 use super::Error;
 
@@ -27,7 +27,7 @@ pub use handler::*;
 #[derive(Clone, Debug)]
 pub struct BufferWithDelay {
     delay: Duration,
-    buffer: Buffer,
+    buffer: ClientRequest,
 }
 
 #[derive(Clone, Debug)]

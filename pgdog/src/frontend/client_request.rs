@@ -14,11 +14,11 @@ use super::PreparedStatements;
 
 /// Message buffer.
 #[derive(Debug, Clone)]
-pub struct Buffer {
+pub struct ClientRequest {
     buffer: Vec<ProtocolMessage>,
 }
 
-impl MemoryUsage for Buffer {
+impl MemoryUsage for ClientRequest {
     #[inline]
     fn memory_usage(&self) -> usize {
         // ProtocolMessage uses memory allocated by BytesMut (mostly).
@@ -26,13 +26,13 @@ impl MemoryUsage for Buffer {
     }
 }
 
-impl Default for Buffer {
+impl Default for ClientRequest {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl Buffer {
+impl ClientRequest {
     /// Create new buffer.
     pub fn new() -> Self {
         Self {
@@ -159,19 +159,19 @@ impl Buffer {
     }
 }
 
-impl From<Buffer> for Vec<ProtocolMessage> {
-    fn from(val: Buffer) -> Self {
+impl From<ClientRequest> for Vec<ProtocolMessage> {
+    fn from(val: ClientRequest) -> Self {
         val.buffer
     }
 }
 
-impl From<Vec<ProtocolMessage>> for Buffer {
+impl From<Vec<ProtocolMessage>> for ClientRequest {
     fn from(value: Vec<ProtocolMessage>) -> Self {
-        Buffer { buffer: value }
+        ClientRequest { buffer: value }
     }
 }
 
-impl Deref for Buffer {
+impl Deref for ClientRequest {
     type Target = Vec<ProtocolMessage>;
 
     fn deref(&self) -> &Self::Target {
@@ -179,7 +179,7 @@ impl Deref for Buffer {
     }
 }
 
-impl DerefMut for Buffer {
+impl DerefMut for ClientRequest {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.buffer
     }

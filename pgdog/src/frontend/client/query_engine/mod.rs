@@ -1,9 +1,8 @@
 use crate::{
     backend::pool::{Connection, Request},
     frontend::{
-        buffer::BufferedQuery,
         router::{parser::Shard, Route},
-        Client, Command, Comms, Error, Router, RouterContext, Stats,
+        BufferedQuery, Client, Command, Comms, Error, Router, RouterContext, Stats,
     },
     net::{BackendKeyData, ErrorResponse, Message, Parameters},
     state::State,

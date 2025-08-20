@@ -24,7 +24,7 @@ mod test_show {
     use crate::backend::Cluster;
     use crate::frontend::router::parser::Shard;
     use crate::frontend::router::QueryParser;
-    use crate::frontend::{Buffer, PreparedStatements, RouterContext};
+    use crate::frontend::{ClientRequest, PreparedStatements, RouterContext};
     use crate::net::messages::Query;
     use crate::net::Parameters;
 
@@ -37,7 +37,7 @@ mod test_show {
 
         // First call
         let query = "SHOW TRANSACTION ISOLATION LEVEL";
-        let buffer = Buffer::from(vec![Query::new(query).into()]);
+        let buffer = ClientRequest::from(vec![Query::new(query).into()]);
         let context = RouterContext::new(&buffer, &c, &mut ps, &p, None).unwrap();
 
         let first = parser.parse(context).unwrap().clone();
@@ -46,7 +46,7 @@ mod test_show {
 
         // Second call
         let query = "SHOW TRANSACTION ISOLATION LEVEL";
-        let buffer = Buffer::from(vec![Query::new(query).into()]);
+        let buffer = ClientRequest::from(vec![Query::new(query).into()]);
         let context = RouterContext::new(&buffer, &c, &mut ps, &p, None).unwrap();
 
         let second = parser.parse(context).unwrap().clone();

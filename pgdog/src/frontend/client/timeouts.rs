@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use crate::{config::General, frontend::Buffer, state::State};
+use crate::{config::General, frontend::ClientRequest, state::State};
 
 #[derive(Debug, Clone, Copy)]
 pub struct Timeouts {
@@ -35,7 +35,7 @@ impl Timeouts {
     }
 
     #[inline]
-    pub(crate) fn client_idle_timeout(&self, state: &State, buffer: &Buffer) -> Duration {
+    pub(crate) fn client_idle_timeout(&self, state: &State, buffer: &ClientRequest) -> Duration {
         match state {
             State::Idle => {
                 if buffer.is_empty() {
