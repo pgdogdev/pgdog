@@ -57,8 +57,8 @@ impl ParallelConnection {
     }
 
     // Queue up the contents of the buffer.
-    pub async fn send(&mut self, buffer: &ClientRequest) -> Result<(), Error> {
-        for message in buffer.iter() {
+    pub async fn send(&mut self, client_request: &ClientRequest) -> Result<(), Error> {
+        for message in client_request.messages.iter() {
             self.tx
                 .send(ParallelMessage::ProtocolMessage(message.clone()))
                 .await

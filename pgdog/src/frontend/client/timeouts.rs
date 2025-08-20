@@ -35,10 +35,14 @@ impl Timeouts {
     }
 
     #[inline]
-    pub(crate) fn client_idle_timeout(&self, state: &State, buffer: &ClientRequest) -> Duration {
+    pub(crate) fn client_idle_timeout(
+        &self,
+        state: &State,
+        client_request: &ClientRequest,
+    ) -> Duration {
         match state {
             State::Idle => {
-                if buffer.is_empty() {
+                if client_request.messages.is_empty() {
                     self.client_idle_timeout
                 } else {
                     Duration::MAX

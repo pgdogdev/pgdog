@@ -30,7 +30,7 @@ impl QueryEngine {
             return Ok(());
         }
 
-        if !self.connect(context, route).await? {
+        if !self.connect(context, &route).await? {
             return Ok(());
         }
 
@@ -42,7 +42,7 @@ impl QueryEngine {
         }
 
         // Set response format.
-        for msg in context.client_request.iter() {
+        for msg in context.client_request.messages.iter() {
             if let ProtocolMessage::Bind(bind) = msg {
                 self.backend.bind(bind)?
             }

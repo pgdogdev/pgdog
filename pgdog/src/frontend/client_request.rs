@@ -1,5 +1,4 @@
-//! Message buffer.
-
+//! ClientRequest (messages buffer).
 use crate::{
     net::{
         messages::{Bind, CopyData, Protocol, Query},
@@ -7,15 +6,19 @@ use crate::{
     },
     stats::memory::MemoryUsage,
 };
-use std::ops::{Deref, DerefMut};
+
+use super::{
+    router::{parser::Shard, Route},
+    PreparedStatements,
+};
 
 pub use super::BufferedQuery;
-use super::PreparedStatements;
 
 /// Message buffer.
 #[derive(Debug, Clone)]
 pub struct ClientRequest {
-    messages: Vec<ProtocolMessage>,
+    pub messages: Vec<ProtocolMessage>,
+    pub route: Route,
 }
 
 impl MemoryUsage for ClientRequest {
@@ -37,6 +40,7 @@ impl ClientRequest {
     pub fn new() -> Self {
         Self {
             messages: Vec::with_capacity(5),
+            route: Route::write(Shard::All),
         }
     }
 
@@ -127,9 +131,13 @@ impl ClientRequest {
 
     /// Remove all CopyData messages and return the rest.
     pub fn without_copy_data(&self) -> Self {
-        let mut buffer = self.messages.clone();
-        buffer.retain(|m| m.code() != 'd');
-        Self { messages: buffer }
+        let mut messages = self.messages.clone();
+        messages.retain(|m| m.code() != 'd');
+
+        Self {
+            messages,
+            route: self.route.clone(),
+        }
     }
 
     /// The buffer has COPY messages.
@@ -166,21 +174,24 @@ impl From<ClientRequest> for Vec<ProtocolMessage> {
 }
 
 impl From<Vec<ProtocolMessage>> for ClientRequest {
-    fn from(value: Vec<ProtocolMessage>) -> Self {
-        ClientRequest { messages: value }
+    fn from(messages: Vec<ProtocolMessage>) -> Self {
+        ClientRequest {
+            messages,
+            route: Route::write(Shard::All),
+        }
     }
 }
 
-impl Deref for ClientRequest {
-    type Target = Vec<ProtocolMessage>;
+// impl Deref for ClientRequest {
+//     type Target = Vec<ProtocolMessage>;
 
-    fn deref(&self) -> &Self::Target {
-        &self.messages
-    }
-}
+//     fn deref(&self) -> &Self::Target {
+//         &self.messages
+//     }
+// }
 
-impl DerefMut for ClientRequest {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.messages
-    }
-}
+// impl DerefMut for ClientRequest {
+//     fn deref_mut(&mut self) -> &mut Self::Target {
+//         &mut self.messages
+//     }
+// }

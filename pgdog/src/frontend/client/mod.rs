@@ -312,7 +312,7 @@ impl Client {
 
                 buffer = self.buffer(client_state) => {
                     let event = buffer?;
-                    if !self.client_request.is_empty() {
+                    if !self.client_request.messages.is_empty() {
                         self.client_messages(&mut query_engine).await?;
                     }
 
@@ -366,7 +366,7 @@ impl Client {
     /// This ensures we don't check out a connection from the pool until the client
     /// sent a complete request.
     async fn buffer(&mut self, state: State) -> Result<BufferEvent, Error> {
-        self.client_request.clear();
+        self.client_request.messages.clear();
 
         // Only start timer once we receive the first message.
         let mut timer = None;
@@ -409,9 +409,10 @@ impl Client {
                 let message = ProtocolMessage::from_bytes(message.to_bytes()?)?;
                 if message.extended() && self.prepared_statements.enabled {
                     self.client_request
+                        .messages
                         .push(self.prepared_statements.maybe_rewrite(message)?);
                 } else {
-                    self.client_request.push(message);
+                    self.client_request.messages.push(message);
                 }
             }
         }
@@ -421,6 +422,7 @@ impl Client {
                 "request buffered [{:.4}ms] {:?}",
                 timer.unwrap().elapsed().as_secs_f64() * 1000.0,
                 self.client_request
+                    .messages
                     .iter()
                     .map(|m| m.code())
                     .collect::<Vec<_>>(),

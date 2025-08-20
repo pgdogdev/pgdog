@@ -115,6 +115,9 @@ impl<'a> QueryEngine {
         let command = self.router.command();
         let route = command.route().clone();
 
+        // FIXME, we should not to copy route twice.
+        context.client_request.route = route.clone();
+
         match command {
             Command::Shards(shards) => self.show_shards(context, *shards).await?,
             Command::StartTransaction(begin) => {

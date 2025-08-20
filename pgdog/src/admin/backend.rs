@@ -37,8 +37,8 @@ impl Backend {
     }
 
     /// Handle command.
-    pub async fn send(&mut self, messages: &ClientRequest) -> Result<(), Error> {
-        let message = messages.first().ok_or(Error::Empty)?;
+    pub async fn send(&mut self, client_request: &ClientRequest) -> Result<(), Error> {
+        let message = client_request.messages.first().ok_or(Error::Empty)?;
         let message: ProtocolMessage = message.clone();
 
         if message.code() != 'Q' {

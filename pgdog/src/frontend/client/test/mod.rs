@@ -399,7 +399,7 @@ async fn test_abrupt_disconnect() {
 
     let event = client.buffer(State::Idle).await.unwrap();
     assert_eq!(event, BufferEvent::DisconnectAbrupt);
-    assert!(client.client_request.is_empty());
+    assert!(client.client_request.messages.is_empty());
 
     // Client disconnects and returns gracefully.
     let (conn, mut client, _) = new_client!(false);
