@@ -104,6 +104,15 @@ pub enum Error {
 
     #[error("mirror buffer empty")]
     MirrorBufferEmpty,
+
+    #[error("{0}")]
+    FrontendError(Box<crate::frontend::Error>),
+}
+
+impl From<crate::frontend::Error> for Error {
+    fn from(value: crate::frontend::Error) -> Self {
+        Self::FrontendError(Box::new(value))
+    }
 }
 
 impl Error {

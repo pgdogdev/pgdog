@@ -1,4 +1,5 @@
 use crate::{
+    backend::pool::connection::mirror::Mirror,
     frontend::{
         client::{timeouts::Timeouts, TransactionType},
         Buffer, Client, PreparedStatements,
@@ -40,6 +41,20 @@ impl<'a> QueryEngineContext<'a> {
             timeouts: client.timeouts,
             cross_shard_disabled: client.cross_shard_disabled,
             memory_usage,
+        }
+    }
+
+    /// Create context from mirror.
+    pub fn new_mirror(mirror: &'a mut Mirror, buffer: &'a mut Buffer) -> Self {
+        Self {
+            prepared_statements: &mut mirror.prepared_statements,
+            params: &mut mirror.params,
+            buffer,
+            stream: &mut mirror.stream,
+            transaction: mirror.transaction,
+            timeouts: mirror.timeouts,
+            cross_shard_disabled: mirror.cross_shard_disabled,
+            memory_usage: 0,
         }
     }
 

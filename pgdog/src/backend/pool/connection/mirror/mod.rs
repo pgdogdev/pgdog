@@ -1,0 +1,243 @@
+use std::ops::Deref;
+use std::time::Duration;
+
+use rand::{thread_rng, Rng};
+use tokio::select;
+use tokio::time::{sleep, Instant};
+use tokio::{spawn, sync::mpsc::*};
+use tracing::{debug, error};
+
+use crate::backend::Cluster;
+use crate::config::{config, ConfigAndUsers};
+use crate::frontend::client::query_engine::{QueryEngine, QueryEngineContext};
+use crate::frontend::client::timeouts::Timeouts;
+use crate::frontend::client::TransactionType;
+use crate::frontend::comms::comms;
+use crate::frontend::PreparedStatements;
+use crate::net::{Parameter, Parameters, Stream};
+
+use crate::frontend::Buffer;
+
+use super::Error;
+
+pub mod handler;
+pub use handler::*;
+
+/// Simulate original delay between requests.
+#[derive(Clone, Debug)]
+pub struct BufferWithDelay {
+    delay: Duration,
+    buffer: Buffer,
+}
+
+#[derive(Clone, Debug)]
+pub struct MirrorRequest {
+    buffer: Vec<BufferWithDelay>,
+}
+
+impl Deref for MirrorRequest {
+    type Target = Vec<BufferWithDelay>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.buffer
+    }
+}
+
+#[derive(Debug)]
+pub struct Mirror {
+    /// Mirror's prepared statements. Should be similar
+    /// to client's statements, if exposure is high.
+    pub prepared_statements: PreparedStatements,
+    /// Mirror connection parameters.
+    pub params: Parameters,
+    /// Timeouts.
+    pub timeouts: Timeouts,
+    /// Stream that absorbs all data.
+    pub stream: Stream,
+    /// Transaction state.
+    pub transaction: Option<TransactionType>,
+    /// Cross-shard queries.
+    pub cross_shard_disabled: bool,
+}
+
+impl Mirror {
+    fn new(params: &Parameters, config: &ConfigAndUsers) -> Self {
+        Self {
+            prepared_statements: PreparedStatements::new(),
+            params: params.clone(),
+            timeouts: Timeouts::from_config(&config.config.general),
+            stream: Stream::DevNull,
+            transaction: None,
+            cross_shard_disabled: config.config.general.cross_shard_disabled,
+        }
+    }
+
+    /// Spawn mirror task in the background.
+    ///
+    /// # Arguments
+    ///
+    /// * `cluster`: Destination cluster for mirrored traffic.
+    ///
+    /// # Return
+    ///
+    /// Handler for sending queries to the background task.
+    ///
+    pub fn spawn(cluster: &Cluster) -> Result<MirrorHandler, Error> {
+        let config = config();
+        let params = Parameters::from(vec![
+            Parameter {
+                name: "user".into(),
+                value: cluster.user().into(),
+            },
+            Parameter {
+                name: "database".into(),
+                value: cluster.name().into(),
+            },
+        ]);
+
+        // Same query engine as the client, except with a potentially different database config.
+        let mut query_engine = QueryEngine::new(&params, &comms(), false, &None)?;
+
+        // Mirror traffic handler.
+        let mut mirror = Self::new(&params, &config);
+
+        // Mirror queue.
+        let (tx, mut rx) = channel(config.config.general.mirror_queue);
+        let handler = MirrorHandler::new(tx, config.config.general.mirror_exposure);
+
+        spawn(async move {
+            loop {
+                select! {
+                    req = rx.recv() => {
+                        if let Some(mut req) = req {
+                            // TODO: timeout these.
+                            if let Err(err) = mirror.handle(&mut req, &mut query_engine).await {
+                                error!("mirror error: {}", err);
+                            }
+                        } else {
+                            debug!("mirror connection shutting down");
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+
+        Ok(handler)
+    }
+
+    /// Handle a single mirror request.
+    pub async fn handle(
+        &mut self,
+        request: &mut MirrorRequest,
+        query_engine: &mut QueryEngine,
+    ) -> Result<(), Error> {
+        debug!("mirroring {} client requests", request.buffer.len());
+
+        for req in &mut request.buffer {
+            if req.delay > Duration::ZERO {
+                sleep(req.delay).await;
+            }
+
+            let mut context = QueryEngineContext::new_mirror(self, &mut req.buffer);
+            query_engine.handle(&mut context).await?;
+            self.transaction = context.transaction();
+        }
+
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::{backend::pool::Request, config, net::Query};
+
+    use super::*;
+
+    #[tokio::test]
+    async fn test_mirror_exposure() {
+        let (tx, rx) = channel(25);
+        let mut handle = MirrorHandler::new(tx.clone(), 1.0);
+
+        for _ in 0..25 {
+            assert!(
+                handle.send(&vec![].into()),
+                "did not to mirror with 1.0 exposure"
+            );
+            assert!(handle.flush(), "flush didn't work with 1.0 exposure");
+        }
+
+        assert_eq!(rx.len(), 25);
+
+        let (tx, rx) = channel(25);
+
+        let mut handle = MirrorHandler::new(tx.clone(), 0.5);
+        let dropped = (0..25)
+            .into_iter()
+            .map(|_| handle.send(&vec![].into()) && handle.send(&vec![].into()) && handle.flush())
+            .filter(|s| !s)
+            .count();
+        let received = 25 - dropped;
+        assert_eq!(
+            rx.len(),
+            received,
+            "received more than should of with 50% exposure: {}",
+            received
+        );
+        assert!(
+            dropped <= 25 && dropped > 15,
+            "dropped should be somewhere near 50%, but actually is {}",
+            dropped
+        );
+    }
+
+    #[tokio::test]
+    async fn test_mirror() {
+        config::test::load_test();
+        let cluster = Cluster::new_test();
+        cluster.launch();
+        let mut mirror = Mirror::spawn(&cluster).unwrap();
+        let mut conn = cluster.primary(0, &Request::default()).await.unwrap();
+
+        for _ in 0..3 {
+            assert!(
+                mirror.send(&vec![Query::new("BEGIN").into()].into()),
+                "mirror didn't send BEGIN"
+            );
+            assert!(
+                mirror.send(
+                    &vec![
+                        Query::new("CREATE TABLE IF NOT EXISTS pgdog.test_mirror(id BIGINT)")
+                            .into()
+                    ]
+                    .into()
+                ),
+                "mirror didn't send SELECT 1"
+            );
+            assert!(
+                mirror.send(&vec![Query::new("COMMIT").into()].into()),
+                "mirror didn't send commit"
+            );
+            assert_eq!(
+                mirror.buffer().len(),
+                3,
+                "mirror buffer should have 3 requests"
+            );
+            sleep(Duration::from_millis(50)).await;
+            // Nothing happens until we flush.
+            assert!(
+                conn.execute("DROP TABLE pgdog.test_mirror").await.is_err(),
+                "table pgdog.test_mirror shouldn't exist yet"
+            );
+            assert!(mirror.flush(), "mirror didn't flush");
+            sleep(Duration::from_millis(50)).await;
+            assert!(
+                conn.execute("DROP TABLE pgdog.test_mirror").await.is_ok(),
+                "pgdog.test_mirror should exist"
+            );
+            assert!(mirror.buffer().is_empty(), "mirror buffer should be empty");
+        }
+
+        cluster.shutdown();
+    }
+}

@@ -20,6 +20,7 @@ use super::messages::{ErrorResponse, Message, Protocol, ReadyForQuery, Terminate
 pub enum Stream {
     Plain(#[pin] BufStream<TcpStream>),
     Tls(#[pin] BufStream<tokio_rustls::TlsStream<TcpStream>>),
+    DevNull,
 }
 
 impl AsyncRead for Stream {
@@ -32,6 +33,7 @@ impl AsyncRead for Stream {
         match project {
             StreamProjection::Plain(stream) => stream.poll_read(cx, buf),
             StreamProjection::Tls(stream) => stream.poll_read(cx, buf),
+            StreamProjection::DevNull => std::task::Poll::Ready(Ok(())),
         }
     }
 }
@@ -46,6 +48,7 @@ impl AsyncWrite for Stream {
         match project {
             StreamProjection::Plain(stream) => stream.poll_write(cx, buf),
             StreamProjection::Tls(stream) => stream.poll_write(cx, buf),
+            StreamProjection::DevNull => std::task::Poll::Ready(Ok(buf.len())),
         }
     }
 
@@ -57,6 +60,7 @@ impl AsyncWrite for Stream {
         match project {
             StreamProjection::Plain(stream) => stream.poll_flush(cx),
             StreamProjection::Tls(stream) => stream.poll_flush(cx),
+            StreamProjection::DevNull => std::task::Poll::Ready(Ok(())),
         }
     }
 
@@ -68,6 +72,7 @@ impl AsyncWrite for Stream {
         match project {
             StreamProjection::Plain(stream) => stream.poll_shutdown(cx),
             StreamProjection::Tls(stream) => stream.poll_shutdown(cx),
+            StreamProjection::DevNull => std::task::Poll::Ready(Ok(())),
         }
     }
 }
@@ -94,6 +99,7 @@ impl Stream {
         match self {
             Self::Plain(stream) => stream.get_ref().peer_addr().ok().into(),
             Self::Tls(stream) => stream.get_ref().get_ref().0.peer_addr().ok().into(),
+            Self::DevNull => PeerAddr { addr: None },
         }
     }
 
@@ -103,6 +109,7 @@ impl Stream {
         match self {
             Self::Plain(plain) => plain.get_mut().peek(&mut buf).await?,
             Self::Tls(tls) => tls.get_mut().get_mut().0.peek(&mut buf).await?,
+            Self::DevNull => 0,
         };
 
         Ok(())
@@ -120,6 +127,7 @@ impl Stream {
         match self {
             Stream::Plain(ref mut stream) => stream.write_all(&bytes).await?,
             Stream::Tls(ref mut stream) => stream.write_all(&bytes).await?,
+            Self::DevNull => (),
         }
 
         if !enabled!(Level::TRACE) {

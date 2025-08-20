@@ -29,7 +29,7 @@ mod testing;
 
 pub use context::QueryEngineContext;
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct QueryEngine {
     begin_stmt: Option<BufferedQuery>,
     router: Router,
