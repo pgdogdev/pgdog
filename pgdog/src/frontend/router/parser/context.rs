@@ -1,8 +1,11 @@
 //! Shortcut the parser given the cluster config.
 
-use pgdog_plugin::pg_query::protobuf::ParseResult;
-use pgdog_plugin::{PdRouterContext, PdStatement};
+use std::os::raw::c_void;
 
+use pgdog_plugin::pg_query::protobuf::ParseResult;
+use pgdog_plugin::{PdParameters, PdRouterContext, PdStatement};
+
+use crate::net::Bind;
 use crate::{
     backend::ShardingSchema,
     config::{config, MultiTenant, ReadWriteStrategy},
@@ -98,7 +101,21 @@ impl<'a> QueryParserContext<'a> {
     }
 
     /// Create plugin context.
-    pub(super) fn plugin_context(&self, ast: &ParseResult) -> PdRouterContext {
+    pub(super) fn plugin_context(
+        &self,
+        ast: &ParseResult,
+        bind: &Option<&Bind>,
+    ) -> PdRouterContext {
+        let params = if let Some(bind) = bind {
+            PdParameters {
+                params: bind.params_raw().as_ptr() as *mut c_void,
+                num_params: bind.params_raw().len() as u64,
+                format_codes: bind.format_codes_raw().as_ptr() as *mut c_void,
+                num_format_codes: bind.format_codes_raw().len() as u64,
+            }
+        } else {
+            PdParameters::default()
+        };
         PdRouterContext {
             shards: self.shards as u64,
             has_replicas: if self.read_only { 0 } else { 1 },
@@ -112,6 +129,7 @@ impl<'a> QueryParserContext<'a> {
             // We could use lifetimes to guarantee this, but bindgen doesn't generate them.
             query: unsafe { PdStatement::from_proto(ast) },
             write_override: 0, // This is set inside `QueryParser::plugins`.
+            params,
         }
     }
 }

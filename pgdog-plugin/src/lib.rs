@@ -83,10 +83,55 @@
 //!
 //! The [`macros::route`] macro wraps the function into a safe FFI interface which PgDog calls at runtime.
 //!
+//! ### Parsing parameters
+//!
+//! If your clients are using prepared statements (or the extended protocol), query parameters will be sent separately
+//! from query text. They are stored in the [`crate::parameters::Parameters`] struct, passed down from PgDog's query parser:
+//!
+//! ```
+//! # use pgdog_plugin::prelude::*;
+//! # let context = unsafe { Context::doc_test() };
+//! let params = context.parameters();
+//! if let Some(param) = params
+//!     .get(0)
+//!     .map(|p| p.decode(params.parameter_format(0)))
+//!     .flatten() {
+//!         println!("param $1 = {:?}", param);
+//! }
+//! ```
+//!
 //! ### Errors
 //!
 //! Plugin functions cannot return errors or panic. To handle errors, you can log them to `stderr` and return a default route,
-//! which PgDog will ignore. Plugins currently cannot be used to block queries.
+//! which PgDog will ignore.
+//!
+//! ### Blocking queries
+//!
+//! Plugins can block queries from executing. This is useful if you'd like to enforce specific requirements,
+//! like a mandatory `tenant_id` column, for example, or want to block your apps from saving sensitive information,
+//! like credit card numbers or plain text passwords.
+//!
+//! #### Example
+//!
+//! ```
+//! use pgdog_plugin::prelude::*;
+//!
+//! #[route]
+//! fn route(context: Context) -> Route {
+//!     let params = context.parameters();
+//!     let password = params
+//!         .get(3)
+//!         .map(|param| param.decode(ParameterFormat::Text))
+//!         .flatten();
+//!     if let Some(ParameterValue::Text(password)) = password {
+//!         if !password.starts_with("$bcrypt") {
+//!             return Route::block();
+//!         }
+//!     }
+//!
+//!     Route::unknown()
+//! }
+//! ```
 //!
 //! # Enabling plugins
 //!
@@ -122,6 +167,7 @@ pub mod bindings;
 pub mod ast;
 pub mod comp;
 pub mod context;
+pub mod parameters;
 pub mod plugin;
 pub mod prelude;
 pub mod string;

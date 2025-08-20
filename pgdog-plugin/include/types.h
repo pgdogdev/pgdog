@@ -11,14 +11,31 @@ typedef struct PdStr {
     void *data;
 } RustString;
 
-/*
+/**
  * Wrapper around output by pg_query.
  */
 typedef struct PdStatement {
+    /** Parser version. */
     int32_t version;
+    /** Size of the statement pointer. */
     uint64_t len;
+    /** The statement pointer. */
     void *data;
 } PdStatement;
+
+/**
+ * Wrapper around bound prepared statement parameters.
+ */
+typedef struct PdParameters {
+    /** Number of parameters. */
+    uint64_t num_params;
+    /** Pointer to a `Vec` of parameters. */
+    void *params;
+    /** Number of parameter format codes. */
+    uint64_t num_format_codes;
+    /** Pointer to a `Vec` of parameter format codes. */
+    void *format_codes;
+} PdParameters;
 
 /**
  * Context on the database cluster configuration and the currently processed
@@ -40,6 +57,8 @@ typedef struct PdRouterContext {
     uint8_t write_override;
     /** pg_query generated Abstract Syntax Tree of the statement. */
     PdStatement query;
+    /** Bound parameters. */
+    PdParameters params;
 } PdRouterContext;
 
 /**

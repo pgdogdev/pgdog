@@ -60,7 +60,7 @@ impl CachedAst {
     }
 
     /// Update stats for this statement, given the route
-    /// calculted by the query parser.
+    /// calculated by the query parser.
     pub fn update_stats(&self, route: &Route) {
         let mut guard = self.stats.lock();
 
