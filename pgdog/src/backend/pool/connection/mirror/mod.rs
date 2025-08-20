@@ -1,4 +1,5 @@
-use std::ops::Deref;
+//! Client request mirroring.
+
 use std::time::Duration;
 
 use rand::{thread_rng, Rng};
@@ -20,29 +21,16 @@ use crate::frontend::Buffer;
 
 use super::Error;
 
+pub mod buffer_with_delay;
 pub mod handler;
+pub mod request;
+
+pub use buffer_with_delay::*;
 pub use handler::*;
+pub use request::*;
 
-/// Simulate original delay between requests.
-#[derive(Clone, Debug)]
-pub struct BufferWithDelay {
-    delay: Duration,
-    buffer: Buffer,
-}
-
-#[derive(Clone, Debug)]
-pub struct MirrorRequest {
-    buffer: Vec<BufferWithDelay>,
-}
-
-impl Deref for MirrorRequest {
-    type Target = Vec<BufferWithDelay>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.buffer
-    }
-}
-
+/// Mirror handler. One is created for each client connected
+/// to PgDog.
 #[derive(Debug)]
 pub struct Mirror {
     /// Mirror's prepared statements. Should be similar
@@ -115,7 +103,7 @@ impl Mirror {
                                 error!("mirror error: {}", err);
                             }
                         } else {
-                            debug!("mirror connection shutting down");
+                            debug!("mirror client shutting down");
                             break;
                         }
                     }
