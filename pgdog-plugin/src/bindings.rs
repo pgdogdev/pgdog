@@ -373,9 +373,13 @@ const _: () = {
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct PdParameters {
+    #[doc = " Number of parameters."]
     pub num_params: u64,
+    #[doc = " Pointer to a `Vec` of parameters."]
     pub params: *mut ::std::os::raw::c_void,
+    #[doc = " Number of parameter format codes."]
     pub num_format_codes: u64,
+    #[doc = " Pointer to a `Vec` of parameter format codes."]
     pub format_codes: *mut ::std::os::raw::c_void,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
