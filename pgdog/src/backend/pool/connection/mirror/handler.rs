@@ -1,18 +1,35 @@
+//! Mirror client's handler.
+//!
+//! Buffers requests and simulates delay between queries.
+//!
+
 use super::*;
 
+/// Mirror handle state.
 #[derive(Debug, Clone, PartialEq, Copy)]
 enum MirrorHandlerState {
+    /// Subsequent requests will be dropped until
+    /// mirror handle is flushed.
     Dropping,
+    /// Requests are being buffered and will be forwarded
+    /// to the mirror when flushed.
     Sending,
+    /// Mirror handle is idle.
     Idle,
 }
 
+/// Mirror handle.
 #[derive(Debug)]
 pub struct MirrorHandler {
+    /// Sender.
     tx: Sender<MirrorRequest>,
+    /// Percentage of requests being mirrored. 0 = 0%, 1.0 = 100%.
     exposure: f32,
+    /// Mirror handle state.
     state: MirrorHandlerState,
+    /// Request buffer.
     buffer: Vec<BufferWithDelay>,
+    /// Request timer, to simulate delays between queries.
     timer: Instant,
 }
 
@@ -22,6 +39,7 @@ impl MirrorHandler {
         &self.buffer
     }
 
+    /// Create new mirror handle with exposure.
     pub fn new(tx: Sender<MirrorRequest>, exposure: f32) -> Self {
         Self {
             tx,
@@ -32,7 +50,10 @@ impl MirrorHandler {
         }
     }
 
-    /// Maybe send request to handler.
+    /// Request the buffer to be sent to the mirror.
+    ///
+    /// Returns true if request will be sent, false otherwise.
+    ///
     pub fn send(&mut self, buffer: &Buffer) -> bool {
         match self.state {
             MirrorHandlerState::Dropping => {
@@ -72,6 +93,7 @@ impl MirrorHandler {
         }
     }
 
+    /// Flush buffered requests to mirror.
     pub fn flush(&mut self) -> bool {
         if self.state == MirrorHandlerState::Dropping {
             debug!("mirror transaction dropped");
