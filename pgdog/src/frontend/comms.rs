@@ -25,6 +25,7 @@ pub fn comms() -> Comms {
 }
 
 /// Sync primitives shared between all clients.
+#[derive(Debug)]
 struct Global {
     shutdown: Arc<Notify>,
     offline: AtomicBool,
@@ -36,7 +37,7 @@ struct Global {
 }
 
 /// Bi-directional communications between client and internals.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Comms {
     global: Arc<Global>,
     id: Option<BackendKeyData>,

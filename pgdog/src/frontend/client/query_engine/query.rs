@@ -1,6 +1,7 @@
 use tokio::time::timeout;
 
 use crate::{
+    frontend::client::TransactionType,
     net::{Message, Protocol, ProtocolMessage},
     state::State,
 };
@@ -97,6 +98,10 @@ impl QueryEngine {
             let in_transaction = message.in_transaction() || self.begin_stmt.is_some();
             if !in_transaction {
                 context.transaction = None;
+            } else if context.transaction.is_none() {
+                // Query parser is disabled, so the server is responsible for telling us
+                // we started a transaction.
+                context.transaction = Some(TransactionType::ReadWrite);
             }
 
             self.stats.idle(context.in_transaction());
