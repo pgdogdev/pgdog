@@ -27,9 +27,13 @@ typedef struct PdStatement {
  * Wrapper around bound prepared statement parameters.
  */
 typedef struct PdParameters {
+    /** Number of parameters. */
     uint64_t num_params;
+    /** Pointer to a `Vec` of parameters. */
     void *params;
+    /** Number of parameter format codes. */
     uint64_t num_format_codes;
+    /** Pointer to a `Vec` of parameter format codes. */
     void *format_codes;
 } PdParameters;
 
