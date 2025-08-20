@@ -117,3 +117,5 @@ jobs:
         run: bash integration/rust/run.sh
       - name: Dry run
         run: bash integration/dry_run/run.sh
+      - name: Plugins
+        run: bash integration/plugins/run.sh
