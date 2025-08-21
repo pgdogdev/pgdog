@@ -115,14 +115,6 @@ impl Binding {
 
     /// Send an entire buffer of messages to the servers(s).
     pub async fn send(&mut self, client_request: &ClientRequest) -> Result<(), Error> {
-        println!();
-        println!();
-        println!();
-        println!("ClientRequesto {:#?}", client_request);
-        println!();
-        println!();
-        println!();
-
         match self {
             Binding::Admin(backend) => Ok(backend.send(client_request).await?),
 

@@ -98,9 +98,11 @@ impl QueryEngine {
             let in_transaction = message.in_transaction() || self.begin_stmt.is_some();
             if !in_transaction {
                 context.transaction = None;
-            } else if context.transaction.is_none() {
-                // Query parser is disabled, so the server is responsible for telling us
-                // we started a transaction.
+            }
+
+            // Query parser is disabled, so the server is responsible for telling
+            // us we started a transaction. Do not override an existing transaction state.
+            if in_transaction && context.transaction.is_none() {
                 context.transaction = Some(TransactionType::ReadWrite);
             }
 
