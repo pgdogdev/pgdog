@@ -181,17 +181,3 @@ impl From<Vec<ProtocolMessage>> for ClientRequest {
         }
     }
 }
-
-// impl Deref for ClientRequest {
-//     type Target = Vec<ProtocolMessage>;
-
-//     fn deref(&self) -> &Self::Target {
-//         &self.messages
-//     }
-// }
-
-// impl DerefMut for ClientRequest {
-//     fn deref_mut(&mut self) -> &mut Self::Target {
-//         &mut self.messages
-//     }
-// }
