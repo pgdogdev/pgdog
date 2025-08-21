@@ -15,8 +15,9 @@ impl QueryEngine {
     pub(super) async fn execute(
         &mut self,
         context: &mut QueryEngineContext<'_>,
-        route: &Route,
     ) -> Result<(), Error> {
+        let route = &context.client_request.route;
+
         // Check for cross-shard quries.
         if context.cross_shard_disabled && route.is_cross_shard() {
             let bytes_sent = context
@@ -30,11 +31,11 @@ impl QueryEngine {
             return Ok(());
         }
 
-        if !self.connect(context, &route).await? {
+        if !self.connect(context).await? {
             return Ok(());
         }
 
-        // We need to run a query now.
+        // We need to run a query now, execute any buffered/queued `BEGIN` statements
         if context.client_request.executable() {
             if let Some(begin_stmt) = self.begin_stmt.take() {
                 self.backend.execute(begin_stmt.query()).await?;

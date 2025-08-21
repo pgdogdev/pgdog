@@ -11,13 +11,13 @@ impl QueryEngine {
     pub(super) async fn connect(
         &mut self,
         context: &mut QueryEngineContext<'_>,
-        route: &Route,
     ) -> Result<bool, Error> {
         if self.backend.connected() {
             return Ok(true);
         }
 
         let request = Request::new(self.client_id);
+        let route = &context.client_request.route;
 
         self.stats.waiting(request.created_at);
         self.comms.stats(self.stats);

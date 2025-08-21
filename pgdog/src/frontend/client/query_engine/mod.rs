@@ -1,8 +1,8 @@
 use crate::{
     backend::pool::{Connection, Request},
     frontend::{
-        router::{parser::Shard, Route},
-        BufferedQuery, Client, Command, Comms, Error, Router, RouterContext, Stats,
+        router::parser::Shard, BufferedQuery, Client, Command, Comms, Error, Router, RouterContext,
+        Stats,
     },
     net::{BackendKeyData, ErrorResponse, Message, Parameters},
     state::State,
@@ -113,10 +113,6 @@ impl<'a> QueryEngine {
         self.backend.mirror(&context.client_request);
 
         let command = self.router.command();
-        let route = command.route().clone();
-
-        // FIXME, we should not to copy route twice.
-        context.client_request.route = route.clone();
 
         match command {
             Command::Shards(shards) => self.show_shards(context, *shards).await?,
@@ -125,19 +121,19 @@ impl<'a> QueryEngine {
             }
             Command::CommitTransaction => {
                 if self.backend.connected() {
-                    self.execute(context, &route).await?
+                    self.execute(context).await?
                 } else {
                     self.end_transaction(context, false).await?
                 }
             }
             Command::RollbackTransaction => {
                 if self.backend.connected() {
-                    self.execute(context, &route).await?
+                    self.execute(context).await?
                 } else {
                     self.end_transaction(context, true).await?
                 }
             }
-            Command::Query(_) => self.execute(context, &route).await?,
+            Command::Query(_) => self.execute(context).await?,
             Command::Listen { channel, shard } => {
                 self.listen(context, &channel.clone(), shard.clone())
                     .await?
@@ -153,15 +149,15 @@ impl<'a> QueryEngine {
             Command::Unlisten(channel) => self.unlisten(context, &channel.clone()).await?,
             Command::Set { name, value } => {
                 if self.backend.connected() {
-                    self.execute(context, &route).await?
+                    self.execute(context).await?
                 } else {
                     self.set(context, name.clone(), value.clone()).await?
                 }
             }
-            Command::Copy(_) => self.execute(context, &route).await?,
+            Command::Copy(_) => self.execute(context).await?,
             Command::Rewrite(query) => {
                 context.client_request.rewrite(query)?;
-                self.execute(context, &route).await?;
+                self.execute(context).await?;
             }
             Command::Deallocate => self.deallocate(context).await?,
             command => self.unknown_command(context, command.clone()).await?,
