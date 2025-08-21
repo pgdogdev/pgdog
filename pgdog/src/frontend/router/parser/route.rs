@@ -170,6 +170,7 @@ impl Route {
     }
 
     pub fn set_write(mut self, write: FunctionBehavior) -> Self {
+        println!("i am setting writes");
         self.set_write_mut(write);
         self
     }
@@ -179,8 +180,14 @@ impl Route {
             writes,
             locking_behavior,
         } = write;
+
+        println!("locking behavior: {:?}", &locking_behavior);
+        println!("write: {:?}", &write);
+
         self.read = !writes;
         self.lock_session = matches!(locking_behavior, LockingBehavior::Lock);
+
+        println!("1.1 self {:#?}", self);
     }
 
     pub fn set_lock_session(mut self) -> Self {

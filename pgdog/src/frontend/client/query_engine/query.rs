@@ -16,7 +16,7 @@ impl QueryEngine {
         &mut self,
         context: &mut QueryEngineContext<'_>,
     ) -> Result<(), Error> {
-        let route = &context.client_request.route;
+        let route = context.client_request.route.clone();
 
         // Check for cross-shard quries.
         if context.cross_shard_disabled && route.is_cross_shard() {

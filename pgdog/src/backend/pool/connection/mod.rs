@@ -353,7 +353,7 @@ impl Connection {
     pub(crate) fn lock(&mut self, lock: bool) {
         self.locked = lock;
         if lock {
-            self.binding.dirty();
+            self.binding.mark_dirty();
         }
     }
 

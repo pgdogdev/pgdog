@@ -338,6 +338,7 @@ impl Server {
             if let Some(message) = self.prepared_statements.state_mut().get_simulated() {
                 return Ok(message.backend());
             }
+
             match self
                 .stream
                 .as_mut()
@@ -823,7 +824,7 @@ impl Server {
 
     /// Server has been cleaned.
     #[inline]
-    pub(super) fn cleaned(&mut self) {
+    pub(super) fn mark_clean(&mut self) {
         self.dirty = false;
     }
 

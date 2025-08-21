@@ -26,6 +26,7 @@ impl QueryParser {
         }
 
         if matches!(self.shard, Shard::Direct(_)) {
+            println!("2");
             return Ok(Command::Query(
                 Route::read(self.shard.clone()).set_write(writes),
             ));
@@ -33,6 +34,7 @@ impl QueryParser {
 
         // `SELECT NOW()`, `SELECT 1`, etc.
         if stmt.from_clause.is_empty() {
+            println!("1");
             return Ok(Command::Query(
                 Route::read(Some(round_robin::next() % context.shards)).set_write(writes),
             ));

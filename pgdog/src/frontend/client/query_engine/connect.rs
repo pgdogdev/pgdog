@@ -1,8 +1,7 @@
 use tokio::time::timeout;
+use tracing::error;
 
 use super::*;
-
-use tracing::error;
 
 impl QueryEngine {
     /// Connect to backend, if necessary.
@@ -17,7 +16,7 @@ impl QueryEngine {
         }
 
         let request = Request::new(self.client_id);
-        let route = &context.client_request.route;
+        let route = context.client_request.route.clone();
 
         self.stats.waiting(request.created_at);
         self.comms.stats(self.stats);
@@ -26,12 +25,23 @@ impl QueryEngine {
             Ok(_) => {
                 self.stats.connected();
                 self.stats.locked(route.lock_session());
+
+                println!("scuba :: lock_session {:#?}", route.lock_session());
+
                 // This connection will be locked to this client
                 // until they disconnect.
                 //
                 // Used in case the client runs an advisory lock
                 // or another leaky transaction mode abstraction.
                 self.backend.lock(route.lock_session());
+                println!("lock_session {:#?}", route.lock_session());
+
+                println!("");
+                println!("");
+                println!("");
+                println!("backend: {:#?}", self.backend);
+                println!("");
+                println!("");
 
                 if let Ok(addr) = self.backend.addr() {
                     debug!(

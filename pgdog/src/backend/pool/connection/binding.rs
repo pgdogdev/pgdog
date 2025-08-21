@@ -59,6 +59,8 @@ impl Binding {
 
     pub(super) async fn read(&mut self) -> Result<Message, Error> {
         match self {
+            Binding::Admin(backend) => Ok(backend.read().await?),
+
             Binding::Server(guard) => {
                 if let Some(guard) = guard.as_mut() {
                     guard.read().await
@@ -70,7 +72,6 @@ impl Binding {
                 }
             }
 
-            Binding::Admin(backend) => Ok(backend.read().await?),
             Binding::MultiShard(shards, state) => {
                 if shards.is_empty() {
                     loop {
@@ -271,7 +272,7 @@ impl Binding {
         }
     }
 
-    pub(super) fn dirty(&mut self) {
+    pub(super) fn mark_dirty(&mut self) {
         match self {
             Binding::Server(Some(ref mut server)) => server.mark_dirty(true),
             Binding::MultiShard(ref mut servers, _state) => {

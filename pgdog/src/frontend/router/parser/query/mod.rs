@@ -288,6 +288,8 @@ impl QueryParser {
         // Set plugin-specified route, if available.
         // Plugins override what we calculated above.
         if let Command::Query(ref mut route) = command {
+            println!("fuuuuu");
+
             if let Some(read) = self.plugin_output.read {
                 route.set_read_mut(read);
             }
