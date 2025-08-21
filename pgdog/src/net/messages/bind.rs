@@ -13,9 +13,10 @@ use std::str::from_utf8;
 use std::str::from_utf8_unchecked;
 
 #[derive(PartialEq, Debug, Copy, Clone, PartialOrd, Ord, Eq)]
+#[repr(C)]
 pub enum Format {
-    Text,
-    Binary,
+    Text = 0,
+    Binary = 1,
 }
 
 impl From<Format> for i16 {
@@ -240,6 +241,14 @@ impl Bind {
         me.results = results.to_vec();
 
         me
+    }
+
+    pub fn params_raw(&self) -> &Vec<Parameter> {
+        &self.params
+    }
+
+    pub fn format_codes_raw(&self) -> &Vec<Format> {
+        &self.codes
     }
 }
 

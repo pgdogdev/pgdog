@@ -56,4 +56,7 @@ pub enum Error {
 
     #[error("column has no associated table")]
     ColumnNoTable,
+
+    #[error("query is blocked by plugin \"{0}\"")]
+    BlockedByPlugin(String),
 }

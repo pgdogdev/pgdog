@@ -43,7 +43,8 @@ impl QueryParser {
         // The first plugin to returns something, wins.
         debug!("executing {} router plugins", plugins.len());
 
-        let mut context = context.plugin_context(&statement.ast().protobuf);
+        let mut context =
+            context.plugin_context(&statement.ast().protobuf, &context.router_context.bind);
         context.write_override = if self.write_override || !read { 1 } else { 0 };
 
         for plugin in plugins {
@@ -55,6 +56,9 @@ impl QueryParser {
                             self.plugin_output.shard = Some(Shard::Direct(shard))
                         }
                         PdShard::Unknown => self.plugin_output.shard = None,
+                        PdShard::Blocked => {
+                            return Err(Error::BlockedByPlugin(plugin.name().to_owned()))
+                        }
                     },
                     Err(_) => self.plugin_output.shard = None,
                 }
