@@ -3,11 +3,11 @@
 
 use std::time::Duration;
 
-use crate::frontend::Buffer;
+use crate::frontend::ClientRequest;
 
 /// Simulate original delay between requests.
 #[derive(Clone, Debug)]
 pub struct BufferWithDelay {
     pub(super) delay: Duration,
-    pub(super) buffer: Buffer,
+    pub(super) buffer: ClientRequest,
 }
