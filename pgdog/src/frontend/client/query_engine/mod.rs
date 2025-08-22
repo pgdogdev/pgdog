@@ -3,6 +3,8 @@ use crate::{
     frontend::{
         router::parser::Shard, BufferedQuery, Client, Command, Comms, Error, Router, RouterContext,
         Stats,
+        router::{parser::Shard, Route},
+        BufferedQuery, Client, Command, Comms, Error, Router, RouterContext, Stats,
     },
     net::{BackendKeyData, ErrorResponse, Message, Parameters},
     state::State,
@@ -113,6 +115,9 @@ impl<'a> QueryEngine {
         self.backend.mirror(&context.client_request);
 
         let command = self.router.command();
+
+        // FIXME, we should not to copy route twice.
+        context.client_request.route = route.clone();
 
         match command {
             Command::Shards(shards) => self.show_shards(context, *shards).await?,
