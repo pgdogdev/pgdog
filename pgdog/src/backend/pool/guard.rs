@@ -128,7 +128,7 @@ impl Guard {
                     error!("server reset error [{}]", server.addr());
                 }
                 Ok(_) => {
-                    server.cleaned();
+                    server.mark_clean();
                 }
             }
 
