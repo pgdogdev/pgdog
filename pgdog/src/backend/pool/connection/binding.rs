@@ -1,6 +1,7 @@
 //! Binding between frontend client and a connection on the backend.
 
 use crate::{
+    frontend::ClientRequest,
     net::{parameter::Parameters, ProtocolMessage},
     state::State,
 };
@@ -113,20 +114,21 @@ impl Binding {
     }
 
     /// Send an entire buffer of messages to the servers(s).
-    pub async fn send(&mut self, messages: &crate::frontend::Buffer) -> Result<(), Error> {
+    pub async fn send(&mut self, client_request: &ClientRequest) -> Result<(), Error> {
         match self {
+            Binding::Admin(backend) => Ok(backend.send(client_request).await?),
+
             Binding::Server(server) => {
                 if let Some(server) = server {
-                    server.send(messages).await
+                    server.send(client_request).await
                 } else {
                     Err(Error::NotConnected)
                 }
             }
 
-            Binding::Admin(backend) => Ok(backend.send(messages).await?),
             Binding::MultiShard(servers, _state) => {
                 for server in servers.iter_mut() {
-                    server.send(messages).await?;
+                    server.send(client_request).await?;
                 }
 
                 Ok(())

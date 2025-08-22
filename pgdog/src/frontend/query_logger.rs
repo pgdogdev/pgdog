@@ -6,16 +6,16 @@ use tokio::{fs::OpenOptions, io::AsyncWriteExt};
 
 use crate::config::config;
 
-use super::{Buffer, Error};
+use super::{ClientRequest, Error};
 
 /// Log queries.
 pub struct QueryLogger<'a> {
-    buffer: &'a Buffer,
+    buffer: &'a ClientRequest,
 }
 
 impl<'a> QueryLogger<'a> {
     /// Create new query logger.
-    pub fn new(buffer: &'a Buffer) -> Self {
+    pub fn new(buffer: &'a ClientRequest) -> Self {
         Self { buffer }
     }
 

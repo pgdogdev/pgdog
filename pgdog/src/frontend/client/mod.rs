@@ -9,7 +9,7 @@ use tokio::time::timeout;
 use tokio::{select, spawn};
 use tracing::{debug, enabled, error, info, trace, Level as LogLevel};
 
-use super::{Buffer, Comms, Error, PreparedStatements};
+use super::{ClientRequest, Comms, Error, PreparedStatements};
 use crate::auth::{md5, scram::Server};
 use crate::backend::{
     databases,
@@ -45,7 +45,7 @@ pub struct Client {
     prepared_statements: PreparedStatements,
     transaction: Option<TransactionType>,
     timeouts: Timeouts,
-    request_buffer: Buffer,
+    client_request: ClientRequest,
     stream_buffer: BytesMut,
     cross_shard_disabled: bool,
     passthrough_password: Option<String>,
@@ -70,7 +70,7 @@ impl MemoryUsage for Client {
             + self.prepared_statements.memory_used()
             + std::mem::size_of::<Timeouts>()
             + self.stream_buffer.memory_usage()
-            + self.request_buffer.memory_usage()
+            + self.client_request.memory_usage()
             + self
                 .passthrough_password
                 .as_ref()
@@ -215,7 +215,7 @@ impl Client {
             prepared_statements: PreparedStatements::new(),
             transaction: None,
             timeouts: Timeouts::from_config(&config.config.general),
-            request_buffer: Buffer::new(),
+            client_request: ClientRequest::new(),
             stream_buffer: BytesMut::new(),
             shutdown: false,
             cross_shard_disabled: false,
@@ -256,7 +256,7 @@ impl Client {
             admin: false,
             transaction: None,
             timeouts: Timeouts::from_config(&config().config.general),
-            request_buffer: Buffer::new(),
+            client_request: ClientRequest::new(),
             stream_buffer: BytesMut::new(),
             shutdown: false,
             cross_shard_disabled: false,
@@ -312,7 +312,7 @@ impl Client {
 
                 buffer = self.buffer(client_state) => {
                     let event = buffer?;
-                    if !self.request_buffer.is_empty() {
+                    if !self.client_request.messages.is_empty() {
                         self.client_messages(&mut query_engine).await?;
                     }
 
@@ -366,7 +366,7 @@ impl Client {
     /// This ensures we don't check out a connection from the pool until the client
     /// sent a complete request.
     async fn buffer(&mut self, state: State) -> Result<BufferEvent, Error> {
-        self.request_buffer.clear();
+        self.client_request.messages.clear();
 
         // Only start timer once we receive the first message.
         let mut timer = None;
@@ -379,10 +379,10 @@ impl Client {
         self.timeouts = Timeouts::from_config(&config.config.general);
         self.cross_shard_disabled = config.config.general.cross_shard_disabled;
 
-        while !self.request_buffer.full() {
+        while !self.client_request.full() {
             let idle_timeout = self
                 .timeouts
-                .client_idle_timeout(&state, &self.request_buffer);
+                .client_idle_timeout(&state, &self.client_request);
 
             let message =
                 match timeout(idle_timeout, self.stream.read_buf(&mut self.stream_buffer)).await {
@@ -408,10 +408,11 @@ impl Client {
             } else {
                 let message = ProtocolMessage::from_bytes(message.to_bytes()?)?;
                 if message.extended() && self.prepared_statements.enabled {
-                    self.request_buffer
+                    self.client_request
+                        .messages
                         .push(self.prepared_statements.maybe_rewrite(message)?);
                 } else {
-                    self.request_buffer.push(message);
+                    self.client_request.messages.push(message);
                 }
             }
         }
@@ -420,7 +421,8 @@ impl Client {
             debug!(
                 "request buffered [{:.4}ms] {:?}",
                 timer.unwrap().elapsed().as_secs_f64() * 1000.0,
-                self.request_buffer
+                self.client_request
+                    .messages
                     .iter()
                     .map(|m| m.code())
                     .collect::<Vec<_>>(),
@@ -429,7 +431,7 @@ impl Client {
             trace!(
                 "request buffered [{:.4}ms]\n{:#?}",
                 timer.unwrap().elapsed().as_secs_f64() * 1000.0,
-                self.request_buffer,
+                self.client_request,
             );
         }
 

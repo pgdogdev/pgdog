@@ -21,7 +21,7 @@ impl QueryEngine {
         };
 
         let router_context = RouterContext::new(
-            context.buffer,
+            context.client_request,
             cluster,
             context.prepared_statements,
             context.params,
@@ -29,7 +29,7 @@ impl QueryEngine {
         )?;
         match self.router.query(router_context) {
             Ok(cmd) => {
-                trace!("routing {:#?} to {:#?}", context.buffer, cmd);
+                trace!("routing {:#?} to {:#?}", context.client_request, cmd);
             }
             Err(err) => {
                 if err.empty_query() {

@@ -4,13 +4,13 @@ use std::collections::HashSet;
 use crate::{
     backend::{databases::databases, ShardingSchema},
     frontend::{
-        buffer::BufferedQuery,
         router::{
             context::RouterContext,
             parser::{rewrite::Rewrite, OrderBy, Shard},
             round_robin,
             sharding::{Centroids, ContextBuilder, Value as ShardingValue},
         },
+        BufferedQuery,
     },
     net::{
         messages::{Bind, Vector},

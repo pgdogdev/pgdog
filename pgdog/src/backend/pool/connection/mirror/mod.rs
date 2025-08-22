@@ -17,7 +17,7 @@ use crate::frontend::comms::comms;
 use crate::frontend::PreparedStatements;
 use crate::net::{Parameter, Parameters, Stream};
 
-use crate::frontend::Buffer;
+use crate::frontend::ClientRequest;
 
 use super::Error;
 

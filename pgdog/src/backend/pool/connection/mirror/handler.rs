@@ -54,7 +54,7 @@ impl MirrorHandler {
     ///
     /// Returns true if request will be sent, false otherwise.
     ///
-    pub fn send(&mut self, buffer: &Buffer) -> bool {
+    pub fn send(&mut self, buffer: &ClientRequest) -> bool {
         match self.state {
             MirrorHandlerState::Dropping => {
                 debug!("mirror dropping request");

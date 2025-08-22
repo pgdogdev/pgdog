@@ -12,16 +12,23 @@ impl QueryEngine {
         context: &mut QueryEngineContext<'_>,
     ) -> Result<bool, Error> {
         // Client sent Sync only
-        let only_sync = context.buffer.iter().all(|m| m.code() == 'S');
+        let only_sync = context
+            .client_request
+            .messages
+            .iter()
+            .all(|m| m.code() == 'S');
+
         // Client sent only Close.
         let only_close = context
-            .buffer
+            .client_request
+            .messages
             .iter()
             .all(|m| ['C', 'S'].contains(&m.code()))
             && !only_sync;
+
         let mut bytes_sent = 0;
 
-        for msg in context.buffer.iter() {
+        for msg in context.client_request.messages.iter() {
             match msg.code() {
                 'C' => {
                     let close = Close::from_bytes(msg.to_bytes()?)?;

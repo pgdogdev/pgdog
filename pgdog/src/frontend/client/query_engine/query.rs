@@ -30,26 +30,26 @@ impl QueryEngine {
             return Ok(());
         }
 
-        if !self.connect(context, route).await? {
+        if !self.connect(context, &route).await? {
             return Ok(());
         }
 
         // We need to run a query now.
-        if context.buffer.executable() {
+        if context.client_request.executable() {
             if let Some(begin_stmt) = self.begin_stmt.take() {
                 self.backend.execute(begin_stmt.query()).await?;
             }
         }
 
         // Set response format.
-        for msg in context.buffer.iter() {
+        for msg in context.client_request.messages.iter() {
             if let ProtocolMessage::Bind(bind) = msg {
                 self.backend.bind(bind)?
             }
         }
 
         self.backend
-            .handle_buffer(context.buffer, &mut self.router, self.streaming)
+            .handle_client_request(context.client_request, &mut self.router, self.streaming)
             .await?;
 
         while self.backend.has_more_messages()
