@@ -16,7 +16,7 @@ impl QueryEngine {
         }
 
         let request = Request::new(self.client_id);
-        let route = context.client_request.route.clone();
+        let route = &context.client_request.route;
 
         self.stats.waiting(request.created_at);
         self.comms.stats(self.stats);
