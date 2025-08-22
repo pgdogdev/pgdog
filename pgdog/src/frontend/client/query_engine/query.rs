@@ -18,6 +18,8 @@ impl QueryEngine {
     ) -> Result<(), Error> {
         let route = context.client_request.route.clone();
 
+        println!("-- commando.routo X: {:#?}", &route);
+
         // Check for cross-shard quries.
         if context.cross_shard_disabled && route.is_cross_shard() {
             let bytes_sent = context
@@ -30,6 +32,8 @@ impl QueryEngine {
             self.stats.sent(bytes_sent);
             return Ok(());
         }
+
+        println!("-- commando.routo 2: {:#?}", &route);
 
         if !self.connect(context).await? {
             return Ok(());

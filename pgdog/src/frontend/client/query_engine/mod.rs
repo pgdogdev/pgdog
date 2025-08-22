@@ -113,6 +113,7 @@ impl<'a> QueryEngine {
         self.backend.mirror(&context.client_request);
 
         let command = self.router.command();
+        context.client_request.route = command.route().clone();
 
         match command {
             Command::Shards(shards) => self.show_shards(context, *shards).await?,

@@ -172,6 +172,7 @@ impl Route {
     pub fn set_write(mut self, write: FunctionBehavior) -> Self {
         println!("i am setting writes");
         self.set_write_mut(write);
+        println!("yolokoko: {}", self.lock_session());
         self
     }
 
@@ -182,7 +183,7 @@ impl Route {
         } = write;
 
         println!("locking behavior: {:?}", &locking_behavior);
-        println!("write: {:?}", &write);
+        println!(">> write: {:?}", &write);
 
         self.read = !writes;
         self.lock_session = matches!(locking_behavior, LockingBehavior::Lock);
