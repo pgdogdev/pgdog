@@ -33,11 +33,9 @@ impl QueryParser {
 
         // `SELECT NOW()`, `SELECT 1`, etc.
         if stmt.from_clause.is_empty() {
-            let command = Command::Query(
+            return Ok(Command::Query(
                 Route::read(Some(round_robin::next() % context.shards)).set_write(writes),
-            );
-
-            return Ok(command);
+            ));
         }
 
         let order_by = Self::select_sort(&stmt.sort_clause, context.router_context.bind);
