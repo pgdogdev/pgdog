@@ -18,8 +18,6 @@ impl QueryEngine {
     ) -> Result<(), Error> {
         let route = context.client_request.route.clone();
 
-        println!("-- commando.routo X: {:#?}", &route);
-
         // Check for cross-shard quries.
         if context.cross_shard_disabled && route.is_cross_shard() {
             let bytes_sent = context
@@ -32,8 +30,6 @@ impl QueryEngine {
             self.stats.sent(bytes_sent);
             return Ok(());
         }
-
-        println!("-- commando.routo 2: {:#?}", &route);
 
         if !self.connect(context).await? {
             return Ok(());
@@ -103,11 +99,9 @@ impl QueryEngine {
             let in_transaction = message.in_transaction() || self.begin_stmt.is_some();
             if !in_transaction {
                 context.transaction = None;
-            }
-
-            // Query parser is disabled, so the server is responsible for telling
-            // us we started a transaction. Do not override an existing transaction state.
-            if in_transaction && context.transaction.is_none() {
+            } else if in_transaction && context.transaction.is_none() {
+                // Query parser is disabled, so the server is responsible for telling us
+                // we started a transaction.
                 context.transaction = Some(TransactionType::ReadWrite);
             }
 

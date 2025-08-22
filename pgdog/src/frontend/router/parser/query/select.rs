@@ -26,7 +26,6 @@ impl QueryParser {
         }
 
         if matches!(self.shard, Shard::Direct(_)) {
-            println!("2");
             return Ok(Command::Query(
                 Route::read(self.shard.clone()).set_write(writes),
             ));
@@ -37,13 +36,6 @@ impl QueryParser {
             let command = Command::Query(
                 Route::read(Some(round_robin::next() % context.shards)).set_write(writes),
             );
-
-            println!("");
-            println!("");
-            println!("");
-            println!("-- commando.routo 1: {:#?}", &command.route());
-            println!("");
-            println!("");
 
             return Ok(command);
         }
