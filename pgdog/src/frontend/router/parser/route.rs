@@ -182,8 +182,6 @@ impl Route {
 
         self.read = !writes;
         self.lock_session = matches!(locking_behavior, LockingBehavior::Lock);
-
-        println!("1.1 self {:#?}", self);
     }
 
     pub fn set_lock_session(mut self) -> Self {

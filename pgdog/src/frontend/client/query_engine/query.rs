@@ -99,7 +99,7 @@ impl QueryEngine {
             let in_transaction = message.in_transaction() || self.begin_stmt.is_some();
             if !in_transaction {
                 context.transaction = None;
-            } else if in_transaction && context.transaction.is_none() {
+            } else if context.transaction.is_none() {
                 // Query parser is disabled, so the server is responsible for telling us
                 // we started a transaction.
                 context.transaction = Some(TransactionType::ReadWrite);
