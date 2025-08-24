@@ -134,6 +134,15 @@ impl Replicas {
                 LeastActiveConnections => {
                     candidates.sort_by_cached_key(|pool| pool.lock().idle());
                 }
+                PrimaryOnlyWithFailover => (), // Leave the current order. Primary will be attempted first.
+                ReplicasOnlyWithFailover => {
+                    if primary.is_some() {
+                        let mut reshuffled = vec![];
+                        reshuffled.extend_from_slice(&candidates[1..]);
+                        reshuffled.push(candidates[0]);
+                        candidates = reshuffled;
+                    }
+                }
             }
 
             let mut banned = 0;
