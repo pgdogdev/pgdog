@@ -59,6 +59,8 @@ impl Binding {
 
     pub(super) async fn read(&mut self) -> Result<Message, Error> {
         match self {
+            Binding::Admin(backend) => Ok(backend.read().await?),
+
             Binding::Server(guard) => {
                 if let Some(guard) = guard.as_mut() {
                     guard.read().await
@@ -70,7 +72,6 @@ impl Binding {
                 }
             }
 
-            Binding::Admin(backend) => Ok(backend.read().await?),
             Binding::MultiShard(shards, state) => {
                 if shards.is_empty() {
                     loop {
@@ -115,6 +116,8 @@ impl Binding {
 
     /// Send an entire buffer of messages to the servers(s).
     pub async fn send(&mut self, client_request: &ClientRequest) -> Result<(), Error> {
+        println!("\n\nsending.... \n{:#?}\n\n", client_request);
+
         match self {
             Binding::Admin(backend) => Ok(backend.send(client_request).await?),
 
@@ -128,6 +131,7 @@ impl Binding {
 
             Binding::MultiShard(servers, _state) => {
                 for server in servers.iter_mut() {
+                    println!("\nserver\n${:#?}\n", server);
                     server.send(client_request).await?;
                 }
 
@@ -222,6 +226,7 @@ impl Binding {
 
     /// Execute a query on all servers.
     pub async fn execute(&mut self, query: &str) -> Result<(), Error> {
+        println!("\n\nexecuting...\n{:#?}", query);
         match self {
             Binding::Server(Some(ref mut server)) => {
                 server.execute(query).await?;
@@ -243,6 +248,8 @@ impl Binding {
         match self {
             Binding::Server(Some(ref mut server)) => server.link_client(params).await,
             Binding::MultiShard(ref mut servers, _) => {
+                println!("\nLinking... {:#?}", servers);
+
                 let mut max = 0;
                 for server in servers {
                     let synced = server.link_client(params).await?;
@@ -271,7 +278,7 @@ impl Binding {
         }
     }
 
-    pub(super) fn dirty(&mut self) {
+    pub(super) fn mark_dirty(&mut self) {
         match self {
             Binding::Server(Some(ref mut server)) => server.mark_dirty(true),
             Binding::MultiShard(ref mut servers, _state) => {

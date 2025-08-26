@@ -179,6 +179,7 @@ impl Route {
             writes,
             locking_behavior,
         } = write;
+
         self.read = !writes;
         self.lock_session = matches!(locking_behavior, LockingBehavior::Lock);
     }

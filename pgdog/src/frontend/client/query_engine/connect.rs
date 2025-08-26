@@ -1,8 +1,7 @@
 use tokio::time::timeout;
+use tracing::error;
 
 use super::*;
-
-use tracing::error;
 
 impl QueryEngine {
     /// Connect to backend, if necessary.
@@ -11,13 +10,13 @@ impl QueryEngine {
     pub(super) async fn connect(
         &mut self,
         context: &mut QueryEngineContext<'_>,
-        route: &Route,
     ) -> Result<bool, Error> {
         if self.backend.connected() {
             return Ok(true);
         }
 
         let request = Request::new(self.client_id);
+        let route = &context.client_request.route;
 
         self.stats.waiting(request.created_at);
         self.comms.stats(self.stats);
@@ -26,6 +25,7 @@ impl QueryEngine {
             Ok(_) => {
                 self.stats.connected();
                 self.stats.locked(route.lock_session());
+
                 // This connection will be locked to this client
                 // until they disconnect.
                 //
