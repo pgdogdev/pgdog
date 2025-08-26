@@ -132,8 +132,12 @@ impl<'a> QueryEngine {
 
         match command {
             Command::Shards(shards) => self.show_shards(context, *shards).await?,
-            Command::StartTransaction(begin) => {
-                self.start_transaction(context, begin.clone()).await?
+            Command::StartTransaction {
+                query,
+                transaction_type,
+            } => {
+                self.start_transaction(context, query.clone(), *transaction_type)
+                    .await?
             }
             Command::CommitTransaction => {
                 if self.backend.connected() {
