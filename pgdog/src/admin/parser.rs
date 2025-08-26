@@ -1,12 +1,13 @@
 //! Admin command parser.
 
 use super::{
-    ban::Ban, pause::Pause, prelude::Message, probe::Probe, reconnect::Reconnect, reload::Reload,
-    reset_query_cache::ResetQueryCache, set::Set, setup_schema::SetupSchema,
-    show_clients::ShowClients, show_config::ShowConfig, show_lists::ShowLists,
-    show_peers::ShowPeers, show_pools::ShowPools, show_prepared_statements::ShowPreparedStatements,
-    show_query_cache::ShowQueryCache, show_servers::ShowServers, show_stats::ShowStats,
-    show_version::ShowVersion, shutdown::Shutdown, Command, Error,
+    ban::Ban, maintenance_mode::MaintenanceMode, pause::Pause, prelude::Message, probe::Probe,
+    reconnect::Reconnect, reload::Reload, reset_query_cache::ResetQueryCache, set::Set,
+    setup_schema::SetupSchema, show_clients::ShowClients, show_config::ShowConfig,
+    show_lists::ShowLists, show_peers::ShowPeers, show_pools::ShowPools,
+    show_prepared_statements::ShowPreparedStatements, show_query_cache::ShowQueryCache,
+    show_servers::ShowServers, show_stats::ShowStats, show_version::ShowVersion,
+    shutdown::Shutdown, Command, Error,
 };
 
 use tracing::debug;
@@ -32,6 +33,7 @@ pub enum ParseResult {
     Set(Set),
     Ban(Ban),
     Probe(Probe),
+    MaintenanceMode(MaintenanceMode),
 }
 
 impl ParseResult {
@@ -59,6 +61,7 @@ impl ParseResult {
             Set(set) => set.execute().await,
             Ban(ban) => ban.execute().await,
             Probe(probe) => probe.execute().await,
+            MaintenanceMode(maintenance_mode) => maintenance_mode.execute().await,
         }
     }
 
@@ -86,6 +89,7 @@ impl ParseResult {
             Set(set) => set.name(),
             Ban(ban) => ban.name(),
             Probe(probe) => probe.name(),
+            MaintenanceMode(maintenance_mode) => maintenance_mode.name(),
         }
     }
 }
@@ -136,6 +140,7 @@ impl Parser {
                 }
             },
             "probe" => ParseResult::Probe(Probe::parse(&sql)?),
+            "maintenance" => ParseResult::MaintenanceMode(MaintenanceMode::parse(&sql)?),
             // TODO: This is not ready yet. We have a race and
             // also the changed settings need to be propagated
             // into the pools.

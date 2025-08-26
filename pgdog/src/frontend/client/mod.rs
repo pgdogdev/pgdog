@@ -437,6 +437,10 @@ impl Client {
 
         Ok(BufferEvent::HaveRequest)
     }
+
+    pub fn in_transaction(&self) -> bool {
+        self.transaction.is_some()
+    }
 }
 
 impl Drop for Client {
