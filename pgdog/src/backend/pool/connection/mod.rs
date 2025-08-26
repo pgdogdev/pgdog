@@ -278,6 +278,8 @@ impl Connection {
         router: &mut Router,
         streaming: bool,
     ) -> Result<(), Error> {
+        println!("\nhandle_client_request: \n\n{:#?}\n \n", client_request);
+
         if client_request.copy() && !streaming {
             let rows = router
                 .copy_data(client_request)

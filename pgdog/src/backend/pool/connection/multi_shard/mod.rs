@@ -40,6 +40,7 @@ struct Counters {
 pub struct MultiShard {
     /// Number of shards we are connected to.
     shards: usize,
+
     /// Route the query is taking.
     route: Route,
 
@@ -48,6 +49,7 @@ pub struct MultiShard {
 
     /// Sorting/aggregate buffer.
     buffer: Buffer,
+
     decoder: Decoder,
 }
 
