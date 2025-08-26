@@ -1,12 +1,18 @@
 use super::*;
-use crate::{frontend::BufferedQuery, net::parameter::ParameterValue};
+use crate::{
+    frontend::{client::TransactionType, BufferedQuery},
+    net::parameter::ParameterValue,
+};
 use lazy_static::lazy_static;
 
 #[derive(Debug, Clone)]
 pub enum Command {
     Query(Route),
     Copy(Box<CopyParser>),
-    StartTransaction(BufferedQuery),
+    StartTransaction {
+        query: BufferedQuery,
+        transaction_type: TransactionType,
+    },
     CommitTransaction,
     RollbackTransaction,
     ReplicationMeta,

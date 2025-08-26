@@ -56,7 +56,7 @@ impl Router {
         }
 
         let command = self.query_parser.parse(context)?;
-        self.routed = !matches!(command, Command::StartTransaction(_));
+        self.routed = !matches!(command, Command::StartTransaction { .. });
         self.latest_command = command;
         Ok(&self.latest_command)
     }

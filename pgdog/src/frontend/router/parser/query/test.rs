@@ -283,7 +283,7 @@ fn test_set() {
 fn test_transaction() {
     let (command, mut qp) = command!("BEGIN");
     match command {
-        Command::StartTransaction(q) => assert_eq!(q.query(), "BEGIN"),
+        Command::StartTransaction { query: q, .. } => assert_eq!(q.query(), "BEGIN"),
         _ => panic!("not a query"),
     };
 
@@ -304,10 +304,7 @@ fn test_transaction() {
         true,
         cluster.clone()
     );
-    assert!(matches!(
-        command,
-        Command::StartTransaction(BufferedQuery::Query(_))
-    ));
+    assert!(matches!(command, Command::StartTransaction { .. }));
     assert!(qp.in_transaction);
 
     qp.in_transaction = true;
@@ -372,7 +369,7 @@ fn test_cte() {
 #[test]
 fn test_function_begin() {
     let (cmd, mut qp) = command!("BEGIN");
-    assert!(matches!(cmd, Command::StartTransaction(_)));
+    assert!(matches!(cmd, Command::StartTransaction { .. }));
     assert!(qp.in_transaction);
     let cluster = Cluster::new_test();
     let mut prep_stmts = PreparedStatements::default();
