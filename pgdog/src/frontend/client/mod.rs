@@ -51,9 +51,10 @@ pub struct Client {
     passthrough_password: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TransactionType {
     ReadOnly,
+    #[default]
     ReadWrite,
 }
 
