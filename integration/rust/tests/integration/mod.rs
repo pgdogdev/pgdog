@@ -2,6 +2,7 @@ pub mod auth;
 pub mod ban;
 pub mod distinct;
 pub mod fake_transactions;
+pub mod maintenance_mode;
 pub mod notify;
 pub mod prepared;
 pub mod reload;
