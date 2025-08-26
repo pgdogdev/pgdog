@@ -1,5 +1,8 @@
 use crate::{
-    backend::pool::{Connection, Request},
+    backend::{
+        maintenance_mode,
+        pool::{Connection, Request},
+    },
     frontend::{
         router::{parser::Shard, Route},
         BufferedQuery, Client, Command, Comms, Error, Router, RouterContext, Stats,
@@ -93,6 +96,15 @@ impl<'a> QueryEngine {
     pub async fn handle(&mut self, context: &mut QueryEngineContext<'_>) -> Result<(), Error> {
         self.stats
             .received(context.client_request.total_message_len());
+
+        // Check maintenance mode.
+        if !context.in_transaction() && !self.backend.is_admin() {
+            if let Some(waiter) = maintenance_mode::waiter() {
+                self.set_state(State::Waiting);
+                waiter.await;
+                self.set_state(State::Active);
+            }
+        }
 
         // Intercept commands we don't have to forward to a server.
         if self.intercept_incomplete(context).await? {
@@ -192,6 +204,11 @@ impl<'a> QueryEngine {
             .prepared_statements(context.prepared_statements.len_local());
         self.stats.memory_used(context.memory_usage);
 
+        self.comms.stats(self.stats);
+    }
+
+    fn set_state(&mut self, state: State) {
+        self.stats.state = state;
         self.comms.stats(self.stats);
     }
 }

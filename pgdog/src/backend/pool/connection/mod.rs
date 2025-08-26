@@ -399,6 +399,11 @@ impl Connection {
     pub(crate) fn session_mode(&self) -> bool {
         !self.transaction_mode()
     }
+
+    /// This is an admin DB connection.
+    pub fn is_admin(&self) -> bool {
+        matches!(self.binding, Binding::Admin(_))
+    }
 }
 
 impl Deref for Connection {
