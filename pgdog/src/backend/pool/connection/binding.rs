@@ -13,7 +13,7 @@ use super::*;
 pub enum Binding {
     Server(Option<Guard>),
     Admin(Backend),
-    MultiShard(Vec<Guard>, MultiShard),
+    MultiShard(Vec<Guard>, Box<MultiShard>),
 }
 
 impl Default for Binding {

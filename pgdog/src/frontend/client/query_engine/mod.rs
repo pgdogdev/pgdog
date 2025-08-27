@@ -43,7 +43,7 @@ pub struct QueryEngine {
     test_mode: bool,
 }
 
-impl<'a> QueryEngine {
+impl QueryEngine {
     /// Create new query engine.
     pub fn new(
         params: &Parameters,

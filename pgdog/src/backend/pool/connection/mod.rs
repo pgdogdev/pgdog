@@ -177,7 +177,8 @@ impl Connection {
             }
             let num_shards = shards.len();
 
-            self.binding = Binding::MultiShard(shards, MultiShard::new(num_shards, route));
+            self.binding =
+                Binding::MultiShard(shards, Box::new(MultiShard::new(num_shards, route)));
         }
 
         Ok(())

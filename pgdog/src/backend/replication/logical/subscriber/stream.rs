@@ -76,6 +76,7 @@ impl Statement {
         })
     }
 
+    #[allow(clippy::borrowed_box)]
     fn insert(&self) -> Option<&Box<InsertStmt>> {
         self.ast
             .stmts
@@ -188,7 +189,11 @@ impl StreamSubscriber {
                 trace!("[{}] --> {:?}", server.addr(), msg);
                 match msg.code() {
                     '1' | 'C' | 'Z' => (),
-                    'E' => return Err(Error::PgError(ErrorResponse::from_bytes(msg.to_bytes()?)?)),
+                    'E' => {
+                        return Err(Error::PgError(Box::new(ErrorResponse::from_bytes(
+                            msg.to_bytes()?,
+                        )?)))
+                    }
                     c => return Err(Error::OutOfSync(c)),
                 }
             }
@@ -268,7 +273,11 @@ impl StreamSubscriber {
                 trace!("[{}] --> {:?}", server.addr(), msg);
 
                 match msg.code() {
-                    'E' => return Err(Error::PgError(ErrorResponse::from_bytes(msg.to_bytes()?)?)),
+                    'E' => {
+                        return Err(Error::PgError(Box::new(ErrorResponse::from_bytes(
+                            msg.to_bytes()?,
+                        )?)))
+                    }
                     'Z' => break,
                     '2' | 'C' => continue,
                     c => return Err(Error::OutOfSync(c)),
@@ -310,7 +319,9 @@ impl StreamSubscriber {
 
                     match msg.code() {
                         'E' => {
-                            return Err(Error::PgError(ErrorResponse::from_bytes(msg.to_bytes()?)?))
+                            return Err(Error::PgError(Box::new(ErrorResponse::from_bytes(
+                                msg.to_bytes()?,
+                            )?)))
                         }
                         'Z' => break,
                         '1' => continue,

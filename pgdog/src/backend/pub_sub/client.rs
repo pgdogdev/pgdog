@@ -57,7 +57,7 @@ impl PubSubClient {
                     message = rx.recv() => {
                         match message {
                             Ok(message) => {
-                                if let Err(_) = tx.send(message).await {
+                                if tx.send(message).await.is_err() {
                                     return;
                                 }
                             },

@@ -17,6 +17,7 @@ use super::messages::{ErrorResponse, Message, Protocol, ReadyForQuery, Terminate
 /// A network socket.
 #[pin_project(project = StreamProjection)]
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum Stream {
     Plain(#[pin] BufStream<TcpStream>),
     Tls(#[pin] BufStream<tokio_rustls::TlsStream<TcpStream>>),

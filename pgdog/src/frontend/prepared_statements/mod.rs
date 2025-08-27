@@ -1,6 +1,6 @@
 //! Prepared statements cache.
 
-use std::{collections::HashMap, sync::Arc, usize};
+use std::{collections::HashMap, sync::Arc};
 
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;

@@ -246,42 +246,40 @@ impl PgDumpOutput {
 
                         NodeEnum::AlterTableStmt(stmt) => {
                             for cmd in &stmt.cmds {
-                                if let Some(ref node) = cmd.node {
-                                    if let NodeEnum::AlterTableCmd(cmd) = node {
-                                        match cmd.subtype() {
-                                            AlterTableType::AtAddConstraint => {
-                                                if let Some(ref def) = cmd.def {
-                                                    if let Some(ref node) = def.node {
-                                                        // Only allow primary key constraints.
-                                                        if let NodeEnum::Constraint(cons) = node {
-                                                            if matches!(
-                                                                cons.contype(),
-                                                                ConstrType::ConstrPrimary
-                                                                    | ConstrType::ConstrNotnull
-                                                                    | ConstrType::ConstrNull
-                                                            ) {
-                                                                if state == SyncState::PreData {
-                                                                    result.push(original.into());
-                                                                }
-                                                            } else if state == SyncState::PostData {
-                                                                result.push(original.into());
-                                                            }
+                                if let Some(NodeEnum::AlterTableCmd(ref cmd)) = cmd.node {
+                                    match cmd.subtype() {
+                                        AlterTableType::AtAddConstraint => {
+                                            if let Some(ref def) = cmd.def {
+                                                if let Some(NodeEnum::Constraint(ref cons)) =
+                                                    def.node
+                                                {
+                                                    // Only allow primary key constraints.
+                                                    if matches!(
+                                                        cons.contype(),
+                                                        ConstrType::ConstrPrimary
+                                                            | ConstrType::ConstrNotnull
+                                                            | ConstrType::ConstrNull
+                                                    ) {
+                                                        if state == SyncState::PreData {
+                                                            result.push(original.into());
                                                         }
+                                                    } else if state == SyncState::PostData {
+                                                        result.push(original.into());
                                                     }
                                                 }
                                             }
-                                            AlterTableType::AtColumnDefault => {
-                                                if state == SyncState::PreData {
-                                                    result.push(original.into())
-                                                }
+                                        }
+                                        AlterTableType::AtColumnDefault => {
+                                            if state == SyncState::PreData {
+                                                result.push(original.into())
                                             }
-                                            AlterTableType::AtChangeOwner => {
-                                                continue; // Don't change owners, for now.
-                                            }
-                                            _ => {
-                                                if state == SyncState::PostData {
-                                                    result.push(original.into());
-                                                }
+                                        }
+                                        AlterTableType::AtChangeOwner => {
+                                            continue; // Don't change owners, for now.
+                                        }
+                                        _ => {
+                                            if state == SyncState::PostData {
+                                                result.push(original.into());
                                             }
                                         }
                                     }
