@@ -1,6 +1,7 @@
 //! Tables sharded in the database.
 use crate::{
     config::{DataType, ShardedTable},
+    frontend::router::sharding::Mapping,
     net::messages::Vector,
 };
 use std::{collections::HashSet, sync::Arc};
@@ -9,8 +10,22 @@ use std::{collections::HashSet, sync::Arc};
 struct Inner {
     tables: Vec<ShardedTable>,
     omnisharded: HashSet<String>,
+    /// This is set only if we have the same sharding scheme
+    /// across all tables, i.e., 3 tables with the same data type
+    /// and list/range/hash function.
+    common_mapping: Option<CommonMapping>,
 }
 
+#[derive(Debug)]
+pub struct CommonMapping {
+    /// The column data type.
+    pub data_type: DataType,
+    /// The list/range mapping, if any.
+    /// If none, the column is using hash sharding.
+    pub mapping: Option<Mapping>,
+}
+
+/// Sharded tables.
 #[derive(Debug, Clone)]
 pub struct ShardedTables {
     inner: Arc<Inner>,
@@ -32,10 +47,30 @@ impl From<&[ShardedTable]> for ShardedTables {
 
 impl ShardedTables {
     pub fn new(tables: Vec<ShardedTable>, omnisharded_tables: Vec<String>) -> Self {
+        let mut common_mapping = HashSet::new();
+        for table in &tables {
+            common_mapping.insert((
+                table.data_type,
+                table.mapping.clone(),
+                table.centroid_probes.clone(),
+                table.centroids.clone(),
+            ));
+        }
+
+        let common_mapping = if common_mapping.len() == 1 {
+            common_mapping.iter().next().map(|dt| CommonMapping {
+                data_type: dt.0,
+                mapping: dt.1.clone(),
+            })
+        } else {
+            None
+        };
+
         Self {
             inner: Arc::new(Inner {
                 tables,
                 omnisharded: omnisharded_tables.into_iter().collect(),
+                common_mapping,
             }),
         }
     }
@@ -46,6 +81,11 @@ impl ShardedTables {
 
     pub fn omnishards(&self) -> &HashSet<String> {
         &self.inner.omnisharded
+    }
+
+    /// The deployment has only one sharded table.
+    pub fn common_mapping(&self) -> &Option<CommonMapping> {
+        &self.inner.common_mapping
     }
 
     /// Find a specific sharded table.

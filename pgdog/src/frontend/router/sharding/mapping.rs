@@ -4,7 +4,7 @@ use crate::{
     frontend::router::Ranges,
 };
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub enum Mapping {
     Range(Vec<ShardedMapping>), // TODO: optimize with a BTreeMap.
     List(ListShards),           // Optimized.
