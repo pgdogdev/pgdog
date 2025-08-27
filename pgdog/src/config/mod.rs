@@ -14,7 +14,6 @@ use std::fs::read_to_string;
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::time::Duration;
-use std::usize;
 use std::{collections::HashMap, path::PathBuf};
 
 use crate::frontend::router::sharding::Mapping;
@@ -1232,7 +1231,8 @@ impl ReplicaLag {
         D: serde::de::Deserializer<'de>,
     {
         let maybe: Option<RawReplicaLag> = Option::deserialize(de)?;
-        let out = Ok(match maybe {
+
+        Ok(match maybe {
             None => None,
 
             Some(RawReplicaLag {
@@ -1261,9 +1261,7 @@ impl ReplicaLag {
                     "replica_lag: cannot set check_interval without max_age",
                 ))
             }
-        });
-
-        out
+        })
     }
 }
 

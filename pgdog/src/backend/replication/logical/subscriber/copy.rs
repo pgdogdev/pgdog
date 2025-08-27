@@ -71,8 +71,7 @@ impl CopySubscriber {
             let primary = shard
                 .pools_with_roles()
                 .iter()
-                .filter(|(role, _)| role == &Role::Primary)
-                .next()
+                .find(|(role, _)| role == &Role::Primary)
                 .ok_or(Error::NoPrimary)?
                 .1
                 .standalone()
@@ -109,7 +108,11 @@ impl CopySubscriber {
             let msg = server.read().await?;
             match msg.code() {
                 'G' => (),
-                'E' => return Err(Error::PgError(ErrorResponse::from_bytes(msg.to_bytes()?)?)),
+                'E' => {
+                    return Err(Error::PgError(Box::new(ErrorResponse::from_bytes(
+                        msg.to_bytes()?,
+                    )?)))
+                }
                 c => return Err(Error::OutOfSync(c)),
             }
         }
@@ -128,9 +131,9 @@ impl CopySubscriber {
             let command_complete = server.read().await?;
             match command_complete.code() {
                 'E' => {
-                    return Err(Error::PgError(ErrorResponse::from_bytes(
+                    return Err(Error::PgError(Box::new(ErrorResponse::from_bytes(
                         command_complete.to_bytes()?,
-                    )?))
+                    )?)))
                 }
                 'C' => (),
                 c => return Err(Error::OutOfSync(c)),

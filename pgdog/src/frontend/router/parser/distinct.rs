@@ -38,12 +38,10 @@ impl<'a> Distinct<'a> {
         for node in &self.stmt.distinct_clause {
             if let Node { node: Some(node) } = node {
                 match node {
-                    NodeEnum::AConst(AConst { val: Some(val), .. }) => match val {
-                        Val::Ival(Integer { ival }) => {
-                            columns.push(DistinctColumn::Index(*ival as usize - 1))
-                        }
-                        _ => (),
-                    },
+                    NodeEnum::AConst(AConst {
+                        val: Some(Val::Ival(Integer { ival })),
+                        ..
+                    }) => columns.push(DistinctColumn::Index(*ival as usize - 1)),
                     NodeEnum::ColumnRef(ColumnRef { fields, .. }) => {
                         if let Some(Node {
                             node: Some(NodeEnum::String(protobuf::String { sval })),

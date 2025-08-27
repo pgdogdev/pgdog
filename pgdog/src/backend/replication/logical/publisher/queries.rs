@@ -11,7 +11,7 @@ use crate::{
 use super::super::Error;
 
 /// Get list of tables in publication.
-static TABLES: &'static str = "SELECT DISTINCT n.nspname, c.relname, gpt.attrs
+static TABLES: &str = "SELECT DISTINCT n.nspname, c.relname, gpt.attrs
 FROM pg_class c
 JOIN pg_namespace n ON n.oid = c.relnamespace
 JOIN ( SELECT (pg_get_publication_tables(VARIADIC array_agg(pubname::text))).*
@@ -51,7 +51,7 @@ impl From<DataRow> for PublicationTable {
 
 /// Get replica identity for table. This has to be a unique index
 /// or all columns in the table.
-static REPLICA_IDENTIFY: &'static str = "SELECT
+static REPLICA_IDENTIFY: &str = "SELECT
     c.oid,
     c.relreplident,
     c.relkind
@@ -97,7 +97,7 @@ impl From<DataRow> for ReplicaIdentity {
 }
 
 /// Get columns for the table, with replica identity column(s) marked.
-static COLUMNS: &'static str = "SELECT
+static COLUMNS: &str = "SELECT
     a.attnum,
     a.attname,
     a.atttypid,

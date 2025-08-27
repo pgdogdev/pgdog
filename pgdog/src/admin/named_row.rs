@@ -13,7 +13,7 @@ impl NamedRow {
         let fields = fields
             .iter()
             .filter(|f| filter.contains(&f.name) || filter.is_empty())
-            .map(|f| f.clone())
+            .cloned()
             .collect::<Vec<_>>();
         Self {
             rd: RowDescription::new(&fields),

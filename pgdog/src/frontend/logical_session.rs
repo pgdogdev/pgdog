@@ -41,6 +41,12 @@ pub struct LogicalSession<'a> {
     swapped_values: HashMap<(&'a Shard, ConfigParameter<'a>), ConfigValue>,
 }
 
+impl<'a> Default for LogicalSession<'a> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<'a> LogicalSession<'a> {
     pub fn new() -> Self {
         Self {

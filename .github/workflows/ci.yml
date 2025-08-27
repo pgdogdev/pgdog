@@ -19,6 +19,7 @@ jobs:
       - name: Format
         run: cargo fmt --all -- --check
       - name: Clippy
+        working-directory: pgdog
         run: cargo clippy
   build:
     runs-on: blacksmith-4vcpu-ubuntu-2404

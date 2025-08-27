@@ -40,7 +40,7 @@ impl std::fmt::Display for Record {
                         if text == self.null_string {
                             text.to_owned()
                         } else {
-                            format!("\"{}\"", self.get(field).unwrap())
+                            format!("\"{}\"", self.get(field).unwrap().replace("\"", "\"\""))
                         }
                     }
                     _ => self.get(field).unwrap().to_string(),

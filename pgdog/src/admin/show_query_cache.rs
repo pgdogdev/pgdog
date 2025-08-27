@@ -43,7 +43,7 @@ impl Command for ShowQueryCache {
                 continue;
             }
             let mut data_row = DataRow::new();
-            let stats = query.1.stats.lock().clone();
+            let stats = { *query.1.stats.lock() };
             data_row
                 .add(query.0)
                 .add(stats.hits)

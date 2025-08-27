@@ -2911,6 +2911,7 @@ dependencies = [
  "futures-util",
  "parking_lot",
  "reqwest",
+ "serde_json",
  "serial_test",
  "sqlx",
  "tokio",

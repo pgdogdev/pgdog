@@ -39,7 +39,7 @@ impl<'a> ContextBuilder<'a> {
     }
 
     /// Guess the data type.
-    pub fn from_str(value: &'a str) -> Result<Self, Error> {
+    pub fn from_string(value: &'a str) -> Result<Self, Error> {
         let bigint = Value::new(value, DataType::Bigint);
         let uuid = Value::new(value, DataType::Uuid);
         let varchar = Value::new(value, DataType::Varchar);

@@ -185,7 +185,7 @@ impl Cache {
                     .iter()
                     .map(|c| c.1.stats.clone())
                     .collect::<Vec<_>>(),
-                guard.stats.clone(),
+                guard.stats,
             )
         };
         for stat in query_stats {

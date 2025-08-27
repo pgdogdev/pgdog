@@ -76,11 +76,12 @@ impl Statement {
         })
     }
 
+    #[allow(clippy::borrowed_box)]
     fn insert(&self) -> Option<&Box<InsertStmt>> {
         self.ast
             .stmts
             .first()
-            .map(|stmt| {
+            .and_then(|stmt| {
                 stmt.stmt.as_ref().map(|stmt| {
                     stmt.node.as_ref().map(|node| {
                         if let NodeEnum::InsertStmt(ref insert) = node {
@@ -91,7 +92,6 @@ impl Statement {
                     })
                 })
             })
-            .flatten()
             .flatten()
             .flatten()
     }
@@ -138,7 +138,7 @@ impl StreamSubscriber {
             statements: HashMap::new(),
             table_lsns: HashMap::new(),
             tables: tables
-                .into_iter()
+                .iter()
                 .map(|table| {
                     (
                         Key {
@@ -164,8 +164,7 @@ impl StreamSubscriber {
             let primary = shard
                 .pools_with_roles()
                 .iter()
-                .filter(|(r, _)| r == &Role::Primary)
-                .next()
+                .find(|(r, _)| r == &Role::Primary)
                 .ok_or(Error::NoPrimary)?
                 .1
                 .standalone()
@@ -190,7 +189,11 @@ impl StreamSubscriber {
                 trace!("[{}] --> {:?}", server.addr(), msg);
                 match msg.code() {
                     '1' | 'C' | 'Z' => (),
-                    'E' => return Err(Error::PgError(ErrorResponse::from_bytes(msg.to_bytes()?)?)),
+                    'E' => {
+                        return Err(Error::PgError(Box::new(ErrorResponse::from_bytes(
+                            msg.to_bytes()?,
+                        )?)))
+                    }
                     c => return Err(Error::OutOfSync(c)),
                 }
             }
@@ -270,7 +273,11 @@ impl StreamSubscriber {
                 trace!("[{}] --> {:?}", server.addr(), msg);
 
                 match msg.code() {
-                    'E' => return Err(Error::PgError(ErrorResponse::from_bytes(msg.to_bytes()?)?)),
+                    'E' => {
+                        return Err(Error::PgError(Box::new(ErrorResponse::from_bytes(
+                            msg.to_bytes()?,
+                        )?)))
+                    }
                     'Z' => break,
                     '2' | 'C' => continue,
                     c => return Err(Error::OutOfSync(c)),
@@ -312,7 +319,9 @@ impl StreamSubscriber {
 
                     match msg.code() {
                         'E' => {
-                            return Err(Error::PgError(ErrorResponse::from_bytes(msg.to_bytes()?)?))
+                            return Err(Error::PgError(Box::new(ErrorResponse::from_bytes(
+                                msg.to_bytes()?,
+                            )?)))
                         }
                         'Z' => break,
                         '1' => continue,

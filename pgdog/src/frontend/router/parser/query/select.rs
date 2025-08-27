@@ -221,20 +221,18 @@ impl QueryParser {
     fn cte_writes(stmt: &SelectStmt) -> bool {
         if let Some(ref with_clause) = stmt.with_clause {
             for cte in &with_clause.ctes {
-                if let Some(ref node) = cte.node {
-                    if let NodeEnum::CommonTableExpr(expr) = node {
-                        if let Some(ref query) = expr.ctequery {
-                            if let Some(ref node) = query.node {
-                                match node {
-                                    NodeEnum::SelectStmt(stmt) => {
-                                        if Self::cte_writes(stmt) {
-                                            return true;
-                                        }
-                                    }
-
-                                    _ => {
+                if let Some(NodeEnum::CommonTableExpr(ref expr)) = cte.node {
+                    if let Some(ref query) = expr.ctequery {
+                        if let Some(ref node) = query.node {
+                            match node {
+                                NodeEnum::SelectStmt(stmt) => {
+                                    if Self::cte_writes(stmt) {
                                         return true;
                                     }
+                                }
+
+                                _ => {
+                                    return true;
                                 }
                             }
                         }

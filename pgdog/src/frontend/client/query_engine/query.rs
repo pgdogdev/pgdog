@@ -30,7 +30,7 @@ impl QueryEngine {
             return Ok(());
         }
 
-        if !self.connect(context, &route).await? {
+        if !self.connect(context, route).await? {
             return Ok(());
         }
 
@@ -136,7 +136,7 @@ impl QueryEngine {
                     debug!("setting client's \"{}\" to {}", name, value);
                     context.params.insert(name.clone(), value.clone());
                 }
-                self.comms.update_params(&context.params);
+                self.comms.update_params(context.params);
             }
         }
 

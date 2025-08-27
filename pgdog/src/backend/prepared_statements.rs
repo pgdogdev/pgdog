@@ -1,5 +1,5 @@
 use lru::LruCache;
-use std::{collections::VecDeque, sync::Arc, usize};
+use std::{collections::VecDeque, sync::Arc};
 
 use parking_lot::Mutex;
 

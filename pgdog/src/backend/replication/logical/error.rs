@@ -31,7 +31,7 @@ pub enum Error {
     Copy,
 
     #[error("{0}")]
-    PgError(ErrorResponse),
+    PgError(Box<ErrorResponse>),
 
     #[error("table \"{0}\".\"{1}\" has no replica identity")]
     NoReplicaIdentity(String, String),
@@ -69,6 +69,6 @@ pub enum Error {
 
 impl From<ErrorResponse> for Error {
     fn from(value: ErrorResponse) -> Self {
-        Self::PgError(value)
+        Self::PgError(Box::new(value))
     }
 }

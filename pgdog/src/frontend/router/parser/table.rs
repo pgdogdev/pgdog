@@ -5,7 +5,7 @@ use pg_query::{protobuf::RangeVar, Node, NodeEnum};
 use crate::util::escape_identifier;
 
 /// Table name in a query.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Table<'a> {
     /// Table name.
     pub name: &'a str,
@@ -14,7 +14,7 @@ pub struct Table<'a> {
 }
 
 /// Owned version of Table that owns its string data.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct OwnedTable {
     /// Table name.
     pub name: String,
@@ -37,15 +37,6 @@ impl Display for Table<'_> {
     }
 }
 
-impl Default for Table<'_> {
-    fn default() -> Self {
-        Self {
-            name: "",
-            schema: None,
-        }
-    }
-}
-
 impl<'a> Table<'a> {
     /// Convert this borrowed Table to an owned OwnedTable
     pub fn to_owned(&self) -> OwnedTable {
@@ -57,15 +48,6 @@ impl Display for OwnedTable {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let borrowed = Table::from(self);
         borrowed.fmt(f)
-    }
-}
-
-impl Default for OwnedTable {
-    fn default() -> Self {
-        Self {
-            name: String::new(),
-            schema: None,
-        }
     }
 }
 

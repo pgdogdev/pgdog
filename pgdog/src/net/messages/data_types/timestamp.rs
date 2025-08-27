@@ -166,8 +166,10 @@ impl FromDataType for Timestamp {
         match encoding {
             Format::Text => {
                 let s = String::decode(bytes, Format::Text)?;
-                let mut result = Timestamp::default();
-                result.special = None; // Ensure text timestamps are normal values
+                let mut result = Timestamp {
+                    special: None,
+                    ..Default::default()
+                };
                 let mut date_time = s.split(" ");
                 let date = date_time.next();
                 let time = date_time.next();
