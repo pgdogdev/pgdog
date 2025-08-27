@@ -43,7 +43,7 @@ impl std::fmt::Display for Record {
                             format!("\"{}\"", self.get(field).unwrap())
                         }
                     }
-                    _ => self.get(field).unwrap().to_string(),
+                    _ => self.get(field).unwrap().replace("\"", "\"\""),
                 })
                 .collect::<Vec<String>>()
                 .join(&format!("{}", self.delimiter))
