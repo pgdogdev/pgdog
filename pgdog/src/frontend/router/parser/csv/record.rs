@@ -40,7 +40,6 @@ impl std::fmt::Display for Record {
                         if text == self.null_string {
                             text.to_owned()
                         } else {
-                            println!("escaping");
                             format!("\"{}\"", self.get(field).unwrap().replace("\"", "\"\""))
                         }
                     }
