@@ -47,7 +47,7 @@ impl QueryParser {
                     ..
                 }) = node
                 {
-                    let ctx = ContextBuilder::from_str(sval.as_str())?
+                    let ctx = ContextBuilder::from_string(sval.as_str())?
                         .shards(context.shards)
                         .build()?;
                     let shard = ctx.apply()?;

@@ -359,7 +359,7 @@ impl Client {
         let mut context = QueryEngineContext::new(self);
         query_engine.handle(&mut context).await?;
         self.transaction = context.transaction();
-        return Ok(());
+        Ok(())
     }
 
     /// Buffer extended protocol messages until client requests a sync.

@@ -114,7 +114,7 @@ impl<'a> Value<'a> {
                     2 => Ok(Some(i16::from_be_bytes(data.try_into()?) as i64)),
                     4 => Ok(Some(i32::from_be_bytes(data.try_into()?) as i64)),
                     8 => Ok(Some(i64::from_be_bytes(data.try_into()?))),
-                    _ => return Err(Error::IntegerSize),
+                    _ => Err(Error::IntegerSize),
                 },
             }
         } else {

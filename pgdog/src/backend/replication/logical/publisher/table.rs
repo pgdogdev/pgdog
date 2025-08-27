@@ -154,7 +154,7 @@ impl Table {
         slot.stop_replication().await?;
 
         // Drain slot
-        while let Some(_) = slot.replicate(Duration::MAX).await? {}
+        while slot.replicate(Duration::MAX).await?.is_some() {}
 
         // Slot is temporary and will be dropped when the connection closes.
 

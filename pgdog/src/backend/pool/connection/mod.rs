@@ -25,7 +25,6 @@ use super::{
 };
 
 use std::{
-    mem::replace,
     ops::{Deref, DerefMut},
     time::Duration,
 };
@@ -147,7 +146,7 @@ impl Connection {
 
             match &mut self.binding {
                 Binding::Server(existing) => {
-                    let _ = replace(existing, Some(server));
+                    let _ = existing.replace(server);
                 }
 
                 Binding::MultiShard(_, _) => {
@@ -178,7 +177,8 @@ impl Connection {
             }
             let num_shards = shards.len();
 
-            self.binding = Binding::MultiShard(shards, MultiShard::new(num_shards, route));
+            self.binding =
+                Binding::MultiShard(shards, Box::new(MultiShard::new(num_shards, route)));
         }
 
         Ok(())

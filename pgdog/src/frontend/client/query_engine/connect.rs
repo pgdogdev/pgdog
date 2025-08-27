@@ -22,7 +22,7 @@ impl QueryEngine {
         self.stats.waiting(request.created_at);
         self.comms.stats(self.stats);
 
-        let connected = match self.backend.connect(&request, &route).await {
+        let connected = match self.backend.connect(&request, route).await {
             Ok(_) => {
                 self.stats.connected();
                 self.stats.locked(route.lock_session());
@@ -47,7 +47,7 @@ impl QueryEngine {
 
                 let query_timeout = context.timeouts.query_timeout(&self.stats.state);
                 // We may need to sync params with the server and that reads from the socket.
-                timeout(query_timeout, self.backend.link_client(&context.params)).await??;
+                timeout(query_timeout, self.backend.link_client(context.params)).await??;
 
                 true
             }

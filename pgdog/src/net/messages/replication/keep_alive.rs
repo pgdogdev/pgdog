@@ -38,7 +38,7 @@ impl FromBytes for KeepAlive {
 impl ToBytes for KeepAlive {
     fn to_bytes(&self) -> Result<Bytes, Error> {
         let mut payload = BytesMut::new();
-        payload.put_u8('k' as u8);
+        payload.put_u8(b'k');
         payload.put_i64(self.wal_end);
         payload.put_i64(self.system_clock);
         payload.put_u8(self.reply);

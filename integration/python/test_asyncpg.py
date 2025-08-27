@@ -328,3 +328,49 @@ async def test_timestamp_sorting_binary_format():
 
     finally:
         await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_copy_jsonb():
+    """Test COPY with JSONB column."""
+    import json
+
+    conn = await normal_async()
+
+    try:
+        await conn.execute("DROP TABLE IF EXISTS jsonb_copy_test")
+
+        await conn.execute("""
+            CREATE TABLE jsonb_copy_test (
+                id BIGINT,
+                data JSONB
+            )
+        """)
+
+        test_data = [
+            [1, json.dumps({"name": "Alice", "age": 30, "active": True}, sort_keys=True)],
+            [2, json.dumps({"name": "Bob", "scores": [95, 87, 92], "metadata": {"region": "US"}}, sort_keys=True)],
+            [3, json.dumps({"products": [{"id": 1, "price": 29.99}, {"id": 2, "price": 15.50}]}, sort_keys=True)],
+            [4, json.dumps(None)],
+            [5, json.dumps({"empty": {}, "list": [], "string": "test"}, sort_keys=True)],
+        ]
+
+        await conn.copy_records_to_table(
+            "jsonb_copy_test",
+            records=test_data,
+            columns=["id", "data"]
+        )
+
+        result = await conn.fetch("SELECT COUNT(*) FROM jsonb_copy_test")
+        assert result[0][0] == 5
+
+        rows = await conn.fetch("SELECT id, data FROM jsonb_copy_test ORDER BY id")
+
+        for (i, row) in enumerate(rows):
+            expected = json.loads(test_data[i][1])
+            got = json.loads(row[1])
+            assert json.dumps(got, sort_keys=True) == json.dumps(expected, sort_keys=True)
+
+    finally:
+        await conn.execute("DROP TABLE IF EXISTS jsonb_copy_test")
+        await conn.close()

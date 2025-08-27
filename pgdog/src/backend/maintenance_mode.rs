@@ -9,7 +9,6 @@ static MAINTENANCE_MODE: Lazy<MaintenanceMode> = Lazy::new(|| MaintenanceMode {
 });
 
 pub(crate) fn waiter() -> Option<Notified<'static>> {
-    println!("mode: {}", MAINTENANCE_MODE.on.load(Ordering::Relaxed));
     if !MAINTENANCE_MODE.on.load(Ordering::Relaxed) {
         None
     } else {

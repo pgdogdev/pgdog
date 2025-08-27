@@ -10,11 +10,11 @@ impl QueryEngine {
         value: ParameterValue,
     ) -> Result<(), Error> {
         context.params.insert(name, value);
-        self.comms.update_params(&context.params);
+        self.comms.update_params(context.params);
 
         let bytes_sent = context
             .stream
-            .send_many(&vec![
+            .send_many(&[
                 CommandComplete::from_str("SET").message()?,
                 ReadyForQuery::in_transaction(context.in_transaction()).message()?,
             ])

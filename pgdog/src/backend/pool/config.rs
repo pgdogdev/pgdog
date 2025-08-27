@@ -1,6 +1,6 @@
 //! Pool configuration.
 
-use std::{time::Duration, usize};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 

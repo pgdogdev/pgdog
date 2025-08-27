@@ -43,7 +43,7 @@ pub struct QueryEngine {
     test_mode: bool,
 }
 
-impl<'a> QueryEngine {
+impl QueryEngine {
     /// Create new query engine.
     pub fn new(
         params: &Parameters,
@@ -122,7 +122,7 @@ impl<'a> QueryEngine {
         // Queue up request to mirrors, if any.
         // Do this before sending query to actual server
         // to have accurate timings between queries.
-        self.backend.mirror(&context.client_request);
+        self.backend.mirror(context.client_request);
 
         let command = self.router.command();
         let route = command.route().clone();

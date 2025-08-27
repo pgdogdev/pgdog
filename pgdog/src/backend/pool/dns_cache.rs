@@ -26,6 +26,12 @@ pub struct DnsCache {
     hostnames: Arc<RwLock<HashSet<String>>>,
 }
 
+impl Default for DnsCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DnsCache {
     /// Retrieve the global DNS cache instance.
     pub fn global() -> Arc<DnsCache> {

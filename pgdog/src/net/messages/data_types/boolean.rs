@@ -12,14 +12,14 @@ impl FromDataType for bool {
                 match s.as_str() {
                     "t" => Ok(true),
                     "f" => Ok(false),
-                    _ => return Err(Error::NotBoolean),
+                    _ => Err(Error::NotBoolean),
                 }
             }
 
             Format::Binary => match bytes.get_u8() {
                 1 => Ok(true),
                 0 => Ok(false),
-                _ => return Err(Error::NotBoolean),
+                _ => Err(Error::NotBoolean),
             },
         }
     }

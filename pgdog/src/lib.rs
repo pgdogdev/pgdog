@@ -1,3 +1,7 @@
+#![allow(clippy::len_without_is_empty)]
+#![allow(clippy::result_unit_err)]
+#![deny(clippy::print_stdout)]
+
 pub mod admin;
 pub mod auth;
 pub mod backend;
