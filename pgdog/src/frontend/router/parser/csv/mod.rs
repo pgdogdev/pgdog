@@ -218,9 +218,25 @@ mod test {
 
     #[test]
     fn test_json_field_quote_escaping() {
-        // Test that JSON/JSONB fields with quotes are properly escaped in non-CSV formats
+        // Test that JSON/JSONB fields with quotes are handled properly in different formats
         // Use proper CSV escaping for the input (quotes inside CSV fields must be doubled)
         let json_data = "id,\"{\"\"name\"\":\"\"John Doe\"\",\"\"age\"\":30}\"\n";
+        
+        // Test CSV format - quotes should be escaped by doubling them
+        let mut reader = CsvStream::new(',', false, CopyFormat::Csv, "\\N");
+        reader.write(json_data.as_bytes());
+
+        let record = reader.record().unwrap().unwrap();
+        assert_eq!(record.get(0), Some("id"));
+        assert_eq!(record.get(1), Some("{\"name\":\"John Doe\",\"age\":30}"));
+
+        let output = record.to_string();
+        assert_eq!(
+            output,
+            "\"id\",\"{\"\"name\"\":\"\"John Doe\"\",\"\"age\"\":30}\"\n"
+        );
+
+        // Test non-CSV format - quotes should NOT be escaped (returned as-is)
         let mut reader = CsvStream::new(',', false, CopyFormat::Text, "\\N");
         reader.write(json_data.as_bytes());
 
@@ -228,11 +244,7 @@ mod test {
         assert_eq!(record.get(0), Some("id"));
         assert_eq!(record.get(1), Some("{\"name\":\"John Doe\",\"age\":30}"));
 
-        // In non-CSV formats, quotes should be escaped by doubling them
         let output = record.to_string();
-        assert_eq!(
-            output,
-            "id,{\"\"name\"\":\"\"John Doe\"\",\"\"age\"\":30}\n"
-        );
+        assert_eq!(output, "id,{\"name\":\"John Doe\",\"age\":30}\n");
     }
 }

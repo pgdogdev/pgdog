@@ -40,10 +40,11 @@ impl std::fmt::Display for Record {
                         if text == self.null_string {
                             text.to_owned()
                         } else {
-                            format!("\"{}\"", self.get(field).unwrap())
+                            println!("escaping");
+                            format!("\"{}\"", self.get(field).unwrap().replace("\"", "\"\""))
                         }
                     }
-                    _ => self.get(field).unwrap().replace("\"", "\"\""),
+                    _ => self.get(field).unwrap().to_string(),
                 })
                 .collect::<Vec<String>>()
                 .join(&format!("{}", self.delimiter))
