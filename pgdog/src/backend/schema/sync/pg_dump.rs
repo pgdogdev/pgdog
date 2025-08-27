@@ -41,7 +41,7 @@ impl PgDump {
         let addr = self
             .source
             .shards()
-            .get(0)
+            .first()
             .ok_or(Error::NoDatabases)?
             .primary_or_replica(&Request::default())
             .await?
@@ -60,16 +60,14 @@ impl PgDump {
             let tables = PublicationTable::load(&self.publication, &mut server).await?;
             if comparison.is_empty() {
                 comparison.extend(tables);
-            } else {
-                if comparison != tables {
-                    warn!(
-                        "shard {} tables are different [{}, {}]",
-                        num,
-                        server.addr(),
-                        self.source.name()
-                    );
-                    continue;
-                }
+            } else if comparison != tables {
+                warn!(
+                    "shard {} tables are different [{}, {}]",
+                    num,
+                    server.addr(),
+                    self.source.name()
+                );
+                continue;
             }
         }
 
@@ -194,10 +192,10 @@ impl<'a> Deref for Statement<'a> {
     type Target = str;
     fn deref(&self) -> &Self::Target {
         match self {
-            Self::Index { sql, .. } => *sql,
-            Self::Table { sql, .. } => *sql,
-            Self::SequenceOwner { sql, .. } => *sql,
-            Self::Other { sql } => *sql,
+            Self::Index { sql, .. } => sql,
+            Self::Table { sql, .. } => sql,
+            Self::SequenceOwner { sql, .. } => sql,
+            Self::Other { sql } => sql,
             Self::SequenceSetMax { sql, .. } => sql.as_str(),
         }
     }

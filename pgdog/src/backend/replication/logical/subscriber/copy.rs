@@ -71,8 +71,7 @@ impl CopySubscriber {
             let primary = shard
                 .pools_with_roles()
                 .iter()
-                .filter(|(role, _)| role == &Role::Primary)
-                .next()
+                .find(|(role, _)| role == &Role::Primary)
                 .ok_or(Error::NoPrimary)?
                 .1
                 .standalone()

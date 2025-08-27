@@ -29,7 +29,7 @@ impl FromBytes for HotStandbyFeedback {
 impl ToBytes for HotStandbyFeedback {
     fn to_bytes(&self) -> Result<Bytes, Error> {
         let mut payload = BytesMut::new();
-        payload.put_u8('h' as u8);
+        payload.put_u8(b'h');
         payload.put_i64(self.system_clock);
         payload.put_i32(self.global_xmin);
         payload.put_i32(self.epoch);

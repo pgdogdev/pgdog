@@ -203,7 +203,7 @@ impl ReplicationSlot {
     /// Start replication.
     pub async fn start_replication(&mut self) -> Result<(), Error> {
         // TODO: This is definitely Postgres version-specific.
-        let query = Query::new(&format!(
+        let query = Query::new(format!(
             r#"START_REPLICATION SLOT "{}" LOGICAL {} ("proto_version" '4', origin 'any', "publication_names" '"{}"')"#,
             self.name, self.lsn, self.publication
         ));

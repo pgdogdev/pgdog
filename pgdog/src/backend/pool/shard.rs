@@ -128,7 +128,7 @@ impl Shard {
             .as_ref()
             .map(|primary| primary.duplicate());
         let pub_sub = if self.pub_sub.is_some() {
-            primary.as_ref().map(|pool| PubSubListener::new(pool))
+            primary.as_ref().map(PubSubListener::new)
         } else {
             None
         };
@@ -240,7 +240,7 @@ impl ShardInner {
             shutdown: Notify::new(),
         };
         let pub_sub = if config().pub_sub_enabled() {
-            primary.as_ref().map(|pool| PubSubListener::new(pool))
+            primary.as_ref().map(PubSubListener::new)
         } else {
             None
         };
@@ -324,7 +324,7 @@ impl ShardMonitor {
 
         for replica in shard.replicas.pools() {
             Self::process_single_replica(
-                &replica,
+                replica,
                 lsn_metrics.max_lsn,
                 lsn_metrics.average_bytes_per_sec,
                 max_age,

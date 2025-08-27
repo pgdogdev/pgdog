@@ -68,7 +68,7 @@ impl Router {
             _ => Ok(buffer
                 .copy_data()?
                 .into_iter()
-                .map(|c| CopyRow::omnishard(c))
+                .map(CopyRow::omnishard)
                 .collect()),
         }
     }

@@ -1232,7 +1232,8 @@ impl ReplicaLag {
         D: serde::de::Deserializer<'de>,
     {
         let maybe: Option<RawReplicaLag> = Option::deserialize(de)?;
-        let out = Ok(match maybe {
+
+        Ok(match maybe {
             None => None,
 
             Some(RawReplicaLag {
@@ -1261,9 +1262,7 @@ impl ReplicaLag {
                     "replica_lag: cannot set check_interval without max_age",
                 ))
             }
-        });
-
-        out
+        })
     }
 }
 

@@ -24,8 +24,8 @@ impl QueryParser {
             }
 
             match stmt.kind() {
-                TransactionStmtKind::TransStmtCommit => return Ok(Command::CommitTransaction),
-                TransactionStmtKind::TransStmtRollback => return Ok(Command::RollbackTransaction),
+                TransactionStmtKind::TransStmtCommit => Ok(Command::CommitTransaction),
+                TransactionStmtKind::TransStmtRollback => Ok(Command::RollbackTransaction),
                 TransactionStmtKind::TransStmtBegin | TransactionStmtKind::TransStmtStart => {
                     self.in_transaction = true;
                     let transaction_type =
@@ -61,7 +61,7 @@ impl QueryParser {
             }
         }
 
-        return Some(TransactionType::ReadWrite);
+        Some(TransactionType::ReadWrite)
     }
 }
 

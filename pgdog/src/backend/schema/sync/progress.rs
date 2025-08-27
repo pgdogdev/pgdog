@@ -37,7 +37,7 @@ fn no_comments(sql: &str) -> String {
             continue;
         }
         output.push_str(line);
-        output.push_str("\n");
+        output.push('\n');
     }
 
     output.trim().to_string()

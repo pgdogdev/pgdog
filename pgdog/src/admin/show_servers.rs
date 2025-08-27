@@ -25,7 +25,6 @@ impl Command for ShowServers {
     fn parse(sql: &str) -> Result<Self, Error> {
         let parts = sql
             .split(|c| [' ', ','].contains(&c))
-            .into_iter()
             .collect::<Vec<&str>>();
 
         let mut mandatory = HashSet::from([

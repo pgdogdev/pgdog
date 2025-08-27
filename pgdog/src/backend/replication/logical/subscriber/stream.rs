@@ -80,7 +80,7 @@ impl Statement {
         self.ast
             .stmts
             .first()
-            .map(|stmt| {
+            .and_then(|stmt| {
                 stmt.stmt.as_ref().map(|stmt| {
                     stmt.node.as_ref().map(|node| {
                         if let NodeEnum::InsertStmt(ref insert) = node {
@@ -91,7 +91,6 @@ impl Statement {
                     })
                 })
             })
-            .flatten()
             .flatten()
             .flatten()
     }
@@ -138,7 +137,7 @@ impl StreamSubscriber {
             statements: HashMap::new(),
             table_lsns: HashMap::new(),
             tables: tables
-                .into_iter()
+                .iter()
                 .map(|table| {
                     (
                         Key {
@@ -164,8 +163,7 @@ impl StreamSubscriber {
             let primary = shard
                 .pools_with_roles()
                 .iter()
-                .filter(|(r, _)| r == &Role::Primary)
-                .next()
+                .find(|(r, _)| r == &Role::Primary)
                 .ok_or(Error::NoPrimary)?
                 .1
                 .standalone()

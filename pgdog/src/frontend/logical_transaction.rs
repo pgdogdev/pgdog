@@ -41,6 +41,12 @@ pub struct LogicalTransaction {
     dirty_shard: Option<Shard>,
 }
 
+impl Default for LogicalTransaction {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LogicalTransaction {
     pub fn new() -> Self {
         Self {
@@ -183,7 +189,7 @@ impl LogicalTransaction {
         }
 
         // no-op if unchanged
-        if self.manual_shard.as_ref().map_or(false, |h| h == &shard) {
+        if self.manual_shard.as_ref() == Some(&shard) {
             return Ok(());
         }
 

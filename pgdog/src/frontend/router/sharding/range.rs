@@ -38,12 +38,12 @@ impl<'a> Ranges<'a> {
                 for value in &bound {
                     match value {
                         Some(FlexibleType::String(s)) => {
-                            if range.varchar(&s) {
+                            if range.varchar(s) {
                                 matches += 1;
                             }
                         }
                         Some(FlexibleType::Integer(i)) => {
-                            if range.integer(&i) {
+                            if range.integer(i) {
                                 matches += 1;
                             }
                         }

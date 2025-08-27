@@ -4,14 +4,14 @@ use super::{error::Error, Column, OwnedTable, Table};
 use crate::util::escape_identifier;
 
 /// Sequence name in a query.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Sequence<'a> {
     /// Table representing the sequence name and schema.
     pub table: Table<'a>,
 }
 
 /// Owned version of Sequence that owns its string data.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct OwnedSequence {
     /// Table representing the sequence name and schema.
     pub table: OwnedTable,
@@ -23,26 +23,10 @@ impl Display for Sequence<'_> {
     }
 }
 
-impl Default for Sequence<'_> {
-    fn default() -> Self {
-        Self {
-            table: Table::default(),
-        }
-    }
-}
-
 impl Display for OwnedSequence {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let borrowed = Sequence::from(self);
         borrowed.fmt(f)
-    }
-}
-
-impl Default for OwnedSequence {
-    fn default() -> Self {
-        Self {
-            table: OwnedTable::default(),
-        }
     }
 }
 

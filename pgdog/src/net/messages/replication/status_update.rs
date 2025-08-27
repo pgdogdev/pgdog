@@ -67,7 +67,7 @@ impl FromBytes for StatusUpdate {
 impl ToBytes for StatusUpdate {
     fn to_bytes(&self) -> Result<Bytes, Error> {
         let mut payload = BytesMut::new();
-        payload.put_u8('r' as u8);
+        payload.put_u8(b'r');
 
         payload.put_i64(self.last_written);
         payload.put_i64(self.last_flushed);

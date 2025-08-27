@@ -33,14 +33,10 @@ pub struct OwnedColumn {
 
 impl<'a> Column<'a> {
     pub fn table(&self) -> Option<Table<'a>> {
-        if let Some(table) = self.table {
-            Some(Table {
-                name: table,
-                schema: self.schema.clone(),
-            })
-        } else {
-            None
-        }
+        self.table.map(|table| Table {
+            name: table,
+            schema: self.schema,
+        })
     }
 
     /// Convert this borrowed Column to an owned OwnedColumn
@@ -139,48 +135,46 @@ impl<'a> TryFrom<&'a Option<NodeEnum>> for Column<'a> {
         fn from_slice<'a>(nodes: &'a [Node]) -> Result<Column<'a>, ()> {
             match nodes.len() {
                 3 => {
-                    let schema = nodes.iter().nth(0).map(from_node).flatten();
-                    let table = nodes.iter().nth(1).map(from_node).flatten();
-                    let name = nodes.iter().nth(2).map(from_node).flatten().ok_or(())?;
+                    let schema = nodes.first().and_then(from_node);
+                    let table = nodes.get(1).and_then(from_node);
+                    let name = nodes.get(2).and_then(from_node).ok_or(())?;
 
-                    return Ok(Column {
+                    Ok(Column {
                         schema,
                         table,
                         name,
-                    });
+                    })
                 }
 
                 2 => {
-                    let table = nodes.iter().nth(0).map(from_node).flatten();
-                    let name = nodes.iter().nth(1).map(from_node).flatten().ok_or(())?;
+                    let table = nodes.first().and_then(from_node);
+                    let name = nodes.get(1).and_then(from_node).ok_or(())?;
 
-                    return Ok(Column {
+                    Ok(Column {
                         schema: None,
                         table,
                         name,
-                    });
+                    })
                 }
 
                 1 => {
-                    let name = nodes.iter().nth(0).map(from_node).flatten().ok_or(())?;
+                    let name = nodes.first().and_then(from_node).ok_or(())?;
 
-                    return Ok(Column {
+                    Ok(Column {
                         name,
                         ..Default::default()
-                    });
+                    })
                 }
 
-                _ => return Err(()),
+                _ => Err(()),
             }
         }
 
         match value {
-            Some(NodeEnum::ResTarget(res_target)) => {
-                return Ok(Self {
-                    name: res_target.name.as_str(),
-                    ..Default::default()
-                });
-            }
+            Some(NodeEnum::ResTarget(res_target)) => Ok(Self {
+                name: res_target.name.as_str(),
+                ..Default::default()
+            }),
 
             Some(NodeEnum::List(list)) => from_slice(&list.items),
 
@@ -198,7 +192,7 @@ impl<'a> TryFrom<&'a Option<NodeEnum>> for Column<'a> {
                 }
             }
 
-            _ => return Err(()),
+            _ => Err(()),
         }
     }
 }

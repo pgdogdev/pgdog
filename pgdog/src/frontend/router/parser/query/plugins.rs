@@ -75,12 +75,12 @@ impl QueryParser {
                         plugin.name(),
                         match self.plugin_output.shard.as_ref() {
                             Some(shard) => format!("shard={}", shard),
-                            None => format!("shard=unknown"),
+                            None => "shard=unknown".to_string(),
                         },
                         match self.plugin_output.read {
                             Some(read) =>
                                 format!("role={}", if read { "replica" } else { "primary" }),
-                            None => format!("read=unknown"),
+                            None => "read=unknown".to_string(),
                         }
                     );
                     break;
