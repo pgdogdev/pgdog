@@ -27,9 +27,10 @@ pub fn shard(query: &str, schema: &ShardingSchema) -> Result<Shard, Error> {
             let comment = &query[token.start as usize..token.end as usize];
             if let Some(cap) = SHARDING_KEY.captures(comment) {
                 if let Some(sharding_key) = cap.get(1) {
-                    let ctx = ContextBuilder::from_string(sharding_key.as_str())?
-                        .shards(schema.shards)
-                        .build()?;
+                    let ctx =
+                        ContextBuilder::infer_from_from_and_config(sharding_key.as_str(), schema)?
+                            .shards(schema.shards)
+                            .build()?;
                     return Ok(ctx.apply()?);
                 }
             }

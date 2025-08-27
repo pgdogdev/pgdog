@@ -1,4 +1,8 @@
-use crate::config::{DataType, Hasher as HasherConfig, ShardedTable};
+use crate::{
+    backend::ShardingSchema,
+    config::{DataType, Hasher as HasherConfig, ShardedTable},
+    frontend::router::sharding::Mapping,
+};
 
 use super::{Centroids, Context, Data, Error, Hasher, Lists, Operator, Ranges, Value};
 
@@ -35,6 +39,58 @@ impl<'a> ContextBuilder<'a> {
             ranges: Ranges::new(&table.mapping),
             lists: Lists::new(&table.mapping),
             array: false,
+        }
+    }
+
+    /// Infer sharding function from config.
+    pub fn infer_from_from_and_config(
+        value: &'a str,
+        sharding_schema: &'a ShardingSchema,
+    ) -> Result<Self, Error> {
+        if let Some(common_mapping) = sharding_schema.tables.common_mapping() {
+            let value = Value::new(value, common_mapping.data_type);
+            if !value.valid() {
+                Err(Error::InvalidValue)
+            } else if let Some(ref mapping) = common_mapping.mapping {
+                match mapping {
+                    Mapping::List(_) => Ok(Self {
+                        data_type: common_mapping.data_type,
+                        value: Some(value),
+                        probes: 0,
+                        centroids: None,
+                        operator: None,
+                        hasher: Hasher::Postgres,
+                        array: false,
+                        ranges: None,
+                        lists: Lists::new(&common_mapping.mapping),
+                    }),
+                    Mapping::Range(_) => Ok(Self {
+                        data_type: common_mapping.data_type,
+                        value: Some(value),
+                        probes: 0,
+                        centroids: None,
+                        operator: None,
+                        hasher: Hasher::Postgres,
+                        array: false,
+                        lists: None,
+                        ranges: Ranges::new(&common_mapping.mapping),
+                    }),
+                }
+            } else {
+                Ok(Self {
+                    data_type: common_mapping.data_type,
+                    value: Some(value),
+                    probes: 0,
+                    centroids: None,
+                    operator: None,
+                    hasher: Hasher::Postgres,
+                    array: false,
+                    ranges: None,
+                    lists: None,
+                })
+            }
+        } else {
+            Err(Error::MultipleShardingFunctions)
         }
     }
 
@@ -81,7 +137,7 @@ impl<'a> ContextBuilder<'a> {
                 lists: None,
             })
         } else {
-            Err(Error::IncompleteContext)
+            Err(Error::InvalidValue)
         }
     }
 
@@ -121,5 +177,96 @@ impl<'a> ContextBuilder<'a> {
             value,
             hasher: self.hasher,
         })
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::{
+        backend::ShardedTables,
+        config::{FlexibleType, ShardedMapping, ShardedMappingKind},
+        frontend::router::{parser::Shard, sharding::ListShards},
+    };
+
+    use super::*;
+
+    #[test]
+    fn test_hash() {
+        let schema = ShardingSchema {
+            shards: 2,
+            tables: ShardedTables::new(
+                vec![ShardedTable {
+                    data_type: DataType::Varchar,
+                    mapping: None,
+                    ..Default::default()
+                }],
+                vec![],
+            ),
+        };
+
+        let ctx = ContextBuilder::infer_from_from_and_config("test_value", &schema)
+            .unwrap()
+            .shards(2)
+            .build()
+            .unwrap();
+        let shard = ctx.apply().unwrap();
+        assert_eq!(shard, Shard::Direct(1));
+    }
+
+    #[test]
+    fn test_range() {
+        let schema = ShardingSchema {
+            shards: 2,
+            tables: ShardedTables::new(
+                vec![ShardedTable {
+                    data_type: DataType::Bigint,
+                    mapping: Some(Mapping::Range(vec![ShardedMapping {
+                        start: Some(FlexibleType::Integer(1)),
+                        end: Some(FlexibleType::Integer(25)),
+                        shard: 0,
+                        kind: ShardedMappingKind::Range,
+                        ..Default::default()
+                    }])),
+                    ..Default::default()
+                }],
+                vec![],
+            ),
+        };
+
+        let ctx = ContextBuilder::infer_from_from_and_config("15", &schema)
+            .unwrap()
+            .shards(2)
+            .build()
+            .unwrap();
+        let shard = ctx.apply().unwrap();
+        assert_eq!(shard, Shard::Direct(0));
+    }
+
+    #[test]
+    fn test_list() {
+        let schema = ShardingSchema {
+            shards: 2,
+            tables: ShardedTables::new(
+                vec![ShardedTable {
+                    data_type: DataType::Bigint,
+                    mapping: Some(Mapping::List(ListShards::new(&[ShardedMapping {
+                        values: vec![FlexibleType::Integer(1), FlexibleType::Integer(2)]
+                            .into_iter()
+                            .collect(),
+                        shard: 0,
+                        kind: ShardedMappingKind::List,
+                        ..Default::default()
+                    }]))),
+                    ..Default::default()
+                }],
+                vec![],
+            ),
+        };
+
+        let builder = ContextBuilder::infer_from_from_and_config("1", &schema).unwrap();
+
+        let ctx = builder.shards(2).build().unwrap();
+        let shard = ctx.apply().unwrap();
+        assert_eq!(shard, Shard::Direct(0));
     }
 }
