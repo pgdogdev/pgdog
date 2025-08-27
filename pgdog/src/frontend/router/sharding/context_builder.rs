@@ -179,3 +179,94 @@ impl<'a> ContextBuilder<'a> {
         })
     }
 }
+
+#[cfg(test)]
+mod test {
+    use crate::{
+        backend::ShardedTables,
+        config::{FlexibleType, ShardedMapping, ShardedMappingKind},
+        frontend::router::{parser::Shard, sharding::ListShards},
+    };
+
+    use super::*;
+
+    #[test]
+    fn test_hash() {
+        let schema = ShardingSchema {
+            shards: 2,
+            tables: ShardedTables::new(
+                vec![ShardedTable {
+                    data_type: DataType::Varchar,
+                    mapping: None,
+                    ..Default::default()
+                }],
+                vec![],
+            ),
+        };
+
+        let ctx = ContextBuilder::infer_from_from_and_config("test_value", &schema)
+            .unwrap()
+            .shards(2)
+            .build()
+            .unwrap();
+        let shard = ctx.apply().unwrap();
+        assert_eq!(shard, Shard::Direct(1));
+    }
+
+    #[test]
+    fn test_range() {
+        let schema = ShardingSchema {
+            shards: 2,
+            tables: ShardedTables::new(
+                vec![ShardedTable {
+                    data_type: DataType::Bigint,
+                    mapping: Some(Mapping::Range(vec![ShardedMapping {
+                        start: Some(FlexibleType::Integer(1)),
+                        end: Some(FlexibleType::Integer(25)),
+                        shard: 0,
+                        kind: ShardedMappingKind::Range,
+                        ..Default::default()
+                    }])),
+                    ..Default::default()
+                }],
+                vec![],
+            ),
+        };
+
+        let ctx = ContextBuilder::infer_from_from_and_config("15", &schema)
+            .unwrap()
+            .shards(2)
+            .build()
+            .unwrap();
+        let shard = ctx.apply().unwrap();
+        assert_eq!(shard, Shard::Direct(0));
+    }
+
+    #[test]
+    fn test_list() {
+        let schema = ShardingSchema {
+            shards: 2,
+            tables: ShardedTables::new(
+                vec![ShardedTable {
+                    data_type: DataType::Bigint,
+                    mapping: Some(Mapping::List(ListShards::new(&[ShardedMapping {
+                        values: vec![FlexibleType::Integer(1), FlexibleType::Integer(2)]
+                            .into_iter()
+                            .collect(),
+                        shard: 0,
+                        kind: ShardedMappingKind::List,
+                        ..Default::default()
+                    }]))),
+                    ..Default::default()
+                }],
+                vec![],
+            ),
+        };
+
+        let builder = ContextBuilder::infer_from_from_and_config("1", &schema).unwrap();
+
+        let ctx = builder.shards(2).build().unwrap();
+        let shard = ctx.apply().unwrap();
+        assert_eq!(shard, Shard::Direct(0));
+    }
+}

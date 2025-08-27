@@ -52,7 +52,7 @@ impl ShardedTables {
             common_mapping.insert((
                 table.data_type,
                 table.mapping.clone(),
-                table.centroid_probes.clone(),
+                table.centroid_probes,
                 table.centroids.clone(),
             ));
         }
