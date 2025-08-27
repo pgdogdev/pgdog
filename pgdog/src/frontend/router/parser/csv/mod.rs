@@ -221,7 +221,7 @@ mod test {
         // Test that JSON/JSONB fields with quotes are handled properly in different formats
         // Use proper CSV escaping for the input (quotes inside CSV fields must be doubled)
         let json_data = "id,\"{\"\"name\"\":\"\"John Doe\"\",\"\"age\"\":30}\"\n";
-        
+
         // Test CSV format - quotes should be escaped by doubling them
         let mut reader = CsvStream::new(',', false, CopyFormat::Csv, "\\N");
         reader.write(json_data.as_bytes());
