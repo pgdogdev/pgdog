@@ -123,6 +123,7 @@ pub enum Commands {
 }
 
 /// Fingerprint some queries.
+#[allow(clippy::print_stdout)]
 pub fn fingerprint(
     query: Option<String>,
     path: Option<PathBuf>,
@@ -245,6 +246,7 @@ pub async fn data_sync(commands: Commands) -> Result<(), Box<dyn std::error::Err
     Ok(())
 }
 
+#[allow(clippy::print_stdout)]
 pub async fn schema_sync(commands: Commands) -> Result<(), Box<dyn std::error::Error>> {
     let (source, destination, publication, dry_run, ignore_errors, data_sync_complete) =
         if let Commands::SchemaSync {
