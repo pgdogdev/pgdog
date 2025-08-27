@@ -12,3 +12,8 @@ password = "pgdog"
 name = "pgdog"
 database = "failover"
 password = "pgdog"
+
+[[users]]
+name = "pgdog"
+database = "single_sharded_list"
+password = "pgdog"

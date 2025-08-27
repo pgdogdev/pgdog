@@ -1,10 +1,11 @@
-use std::collections::HashMap;
+use std::collections::{hash_map::DefaultHasher, HashMap};
+use std::hash::{Hash, Hasher};
 
 use super::{Error, Mapping, Shard, Value};
 
 use crate::config::{FlexibleType, ShardedMapping, ShardedMappingKind};
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct Lists<'a> {
     list: &'a ListShards,
 }
@@ -35,9 +36,23 @@ impl<'a> Lists<'a> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ListShards {
     mapping: HashMap<FlexibleType, usize>,
+}
+
+impl Hash for ListShards {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        // Hash the mapping in a deterministic way by XORing individual key-value hashes
+        let mut mapping_hash = 0u64;
+        for (key, value) in &self.mapping {
+            let mut hasher = DefaultHasher::new();
+            key.hash(&mut hasher);
+            value.hash(&mut hasher);
+            mapping_hash ^= hasher.finish();
+        }
+        mapping_hash.hash(state);
+    }
 }
 
 impl ListShards {

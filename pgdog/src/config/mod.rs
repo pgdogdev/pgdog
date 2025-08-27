@@ -11,10 +11,14 @@ use parking_lot::Mutex;
 
 use std::collections::HashSet;
 use std::fs::read_to_string;
+use std::hash::{Hash, Hasher as StdHasher};
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::time::Duration;
-use std::{collections::HashMap, path::PathBuf};
+use std::{
+    collections::{hash_map::DefaultHasher, HashMap},
+    path::PathBuf,
+};
 
 use crate::frontend::router::sharding::Mapping;
 use crate::net::messages::Vector;
@@ -1044,7 +1048,7 @@ pub enum Hasher {
     Sha1,
 }
 
-#[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Default, Copy)]
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Default, Copy, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum DataType {
     #[default]
@@ -1054,7 +1058,7 @@ pub enum DataType {
     Varchar,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, Eq)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct ShardedMapping {
     pub database: String,
@@ -1068,7 +1072,29 @@ pub struct ShardedMapping {
     pub shard: usize,
 }
 
-#[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Default)]
+impl Hash for ShardedMapping {
+    fn hash<H: StdHasher>(&self, state: &mut H) {
+        self.database.hash(state);
+        self.column.hash(state);
+        self.table.hash(state);
+        self.kind.hash(state);
+        self.start.hash(state);
+        self.end.hash(state);
+
+        // Hash the values in a deterministic way by XORing their individual hashes
+        let mut values_hash = 0u64;
+        for value in &self.values {
+            let mut hasher = DefaultHasher::new();
+            value.hash(&mut hasher);
+            values_hash ^= hasher.finish();
+        }
+        values_hash.hash(state);
+
+        self.shard.hash(state);
+    }
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Default, Hash, Eq)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum ShardedMappingKind {
     #[default]

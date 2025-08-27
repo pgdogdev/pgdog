@@ -59,4 +59,7 @@ pub enum Error {
 
     #[error("query is blocked by plugin \"{0}\"")]
     BlockedByPlugin(String),
+
+    #[error("this command requires a transaction")]
+    RequiresTransaction,
 }
