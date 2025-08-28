@@ -133,6 +133,7 @@ impl Mirror {
         request: &mut MirrorRequest,
         query_engine: &mut QueryEngine,
     ) -> Result<(), Error> {
+        debug!("mirroring {} client requests", request.buffer.len());
         for req in &mut request.buffer {
             if req.delay > Duration::ZERO {
                 sleep(req.delay).await;

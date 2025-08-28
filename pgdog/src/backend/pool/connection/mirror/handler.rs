@@ -82,7 +82,7 @@ impl MirrorHandler {
                     true
                 } else {
                     self.state = MirrorHandlerState::Dropping;
-                    // Not selected for mirroring due to exposure sampling
+                    debug!("mirror dropping transaction [exposure: {}]", self.exposure);
                     false
                 }
             }
@@ -117,7 +117,6 @@ impl MirrorHandler {
                     let stats = MirrorStats::instance();
                     stats.increment_dropped();
                     stats.record_error("unknown", MirrorErrorType::BufferFull);
-                    debug!("mirror buffer full, dropping request");
                     false
                 }
             }
