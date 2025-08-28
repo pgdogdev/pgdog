@@ -2,7 +2,7 @@
 
 use mirror::MirrorHandler;
 use tokio::{select, time::sleep};
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::{
     admin::backend::Backend,
@@ -313,12 +313,36 @@ impl Connection {
                 let cluster = databases.cluster(user)?;
 
                 self.cluster = Some(cluster);
-                self.mirrors = databases
-                    .mirrors(user)?
-                    .unwrap_or(&[])
-                    .iter()
-                    .map(Mirror::spawn)
-                    .collect::<Result<Vec<_>, Error>>()?;
+
+                // Create mirrors based on new configuration
+                if let Some(mirror_configs) = databases.mirrors(user)? {
+                    self.mirrors.clear();
+                    for (dest_db, exposure, queue_depth) in mirror_configs {
+                        // Find cluster for destination database with same username
+                        let source_user = user.0;
+                        if let Ok(dest_cluster) = databases.cluster((source_user, dest_db.as_str()))
+                        {
+                            match Mirror::spawn_with_config(&dest_cluster, *exposure, *queue_depth)
+                            {
+                                Ok(handler) => self.mirrors.push(handler),
+                                Err(e) => {
+                                    warn!(
+                                        "Failed to create mirror handler for {} -> {}: {}",
+                                        self.cluster()?.name(),
+                                        dest_db,
+                                        e
+                                    );
+                                }
+                            }
+                        } else {
+                            warn!(
+                                "No cluster found for mirror destination: {}/{}",
+                                source_user, dest_db
+                            );
+                        }
+                    }
+                }
+
                 debug!(
                     r#"database "{}" has {} mirrors"#,
                     self.cluster()?.name(),

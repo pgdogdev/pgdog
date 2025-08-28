@@ -222,6 +222,9 @@ pub struct Config {
     /// Replication config.
     #[serde(default)]
     pub replication: Replication,
+
+    #[serde(default)]
+    pub mirroring: Vec<Mirroring>,
 }
 
 impl Config {
@@ -837,6 +840,27 @@ impl std::fmt::Display for Role {
 pub struct Plugin {
     /// Plugin name.
     pub name: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct Mirroring {
+    pub source: String,
+    pub destination: String,
+    #[serde(default = "Mirroring::default_exposure")]
+    pub exposure: f32,
+    #[serde(default = "Mirroring::default_queue_depth")]
+    pub queue_depth: usize,
+}
+
+impl Mirroring {
+    fn default_exposure() -> f32 {
+        1.0
+    }
+
+    fn default_queue_depth() -> usize {
+        128
+    }
 }
 
 /// Users and passwords.

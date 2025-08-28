@@ -73,6 +73,19 @@ impl Mirror {
     ///
     pub fn spawn(cluster: &Cluster) -> Result<MirrorHandler, Error> {
         let config = config();
+        Self::spawn_with_config(
+            cluster,
+            config.config.general.mirror_exposure,
+            config.config.general.mirror_queue,
+        )
+    }
+
+    pub fn spawn_with_config(
+        cluster: &Cluster,
+        exposure: f32,
+        queue_depth: usize,
+    ) -> Result<MirrorHandler, Error> {
+        let config = config();
         let params = Parameters::from(vec![
             Parameter {
                 name: "user".into(),
@@ -91,8 +104,8 @@ impl Mirror {
         let mut mirror = Self::new(&params, &config);
 
         // Mirror queue.
-        let (tx, mut rx) = channel(config.config.general.mirror_queue);
-        let handler = MirrorHandler::new(tx, config.config.general.mirror_exposure);
+        let (tx, mut rx) = channel(queue_depth);
+        let handler = MirrorHandler::new(tx, exposure);
 
         // Get the database name for stats tracking
         let database_name = cluster.name().to_string();
