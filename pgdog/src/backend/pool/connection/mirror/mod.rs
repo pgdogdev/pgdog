@@ -16,6 +16,7 @@ use crate::frontend::client::TransactionType;
 use crate::frontend::comms::comms;
 use crate::frontend::PreparedStatements;
 use crate::net::{Parameter, Parameters, Stream};
+use crate::stats::mirror::{categorize_error, MirrorErrorType, MirrorStats};
 
 use crate::frontend::ClientRequest;
 
@@ -93,14 +94,27 @@ impl Mirror {
         let (tx, mut rx) = channel(config.config.general.mirror_queue);
         let handler = MirrorHandler::new(tx, config.config.general.mirror_exposure);
 
+        // Get the database name for stats tracking
+        let database_name = cluster.name().to_string();
+
         spawn(async move {
             loop {
                 select! {
                     req = rx.recv() => {
                         if let Some(mut req) = req {
                             // TODO: timeout these.
-                            if let Err(err) = mirror.handle(&mut req, &mut query_engine).await {
-                                error!("mirror error: {}", err);
+                            let start = Instant::now();
+                            match mirror.handle(&mut req, &mut query_engine).await {
+                                Ok(_) => {
+                                    let latency_ms = start.elapsed().as_millis() as u64;
+                                    MirrorStats::instance().record_success(&database_name, latency_ms);
+                                    debug!("mirror request completed in {}ms", latency_ms);
+                                }
+                                Err(err) => {
+                                    let error_type = categorize_mirror_error(&err);
+                                    MirrorStats::instance().record_error(&database_name, error_type);
+                                    error!("mirror error: {} (type: {:?})", err, error_type);
+                                }
                             }
                         } else {
                             debug!("mirror client shutting down");
@@ -133,6 +147,48 @@ impl Mirror {
         }
 
         Ok(())
+    }
+}
+
+/// Categorize a mirror error into a specific error type.
+fn categorize_mirror_error(err: &Error) -> MirrorErrorType {
+    use crate::backend::pool::Error as PoolError;
+
+    match err {
+        // Pool errors
+        Error::Pool(pool_err) => match pool_err {
+            PoolError::ConnectTimeout
+            | PoolError::CheckoutTimeout
+            | PoolError::ReplicaCheckoutTimeout
+            | PoolError::HealthcheckTimeout => MirrorErrorType::Timeout,
+            PoolError::ServerError
+            | PoolError::ManualBan
+            | PoolError::Banned
+            | PoolError::Offline
+            | PoolError::NoPrimary
+            | PoolError::AllReplicasDown
+            | PoolError::NoDatabases => MirrorErrorType::Connection,
+            _ => {
+                // Other pool errors - categorize by string
+                categorize_error(&pool_err.to_string())
+            }
+        },
+        // Direct timeout errors
+        Error::ReadTimeout => MirrorErrorType::Timeout,
+
+        // Connection-related errors
+        Error::NotConnected | Error::NotInSync | Error::ConnectionError(_) => {
+            MirrorErrorType::Connection
+        }
+
+        // IO errors are typically connection-related
+        Error::Io(_) => MirrorErrorType::Connection,
+
+        // Fall back to string categorization for other error types
+        _ => {
+            let error_str = err.to_string();
+            categorize_error(&error_str)
+        }
     }
 }
 

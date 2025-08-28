@@ -4,6 +4,7 @@
 //!
 
 use super::*;
+use crate::stats::mirror::{MirrorErrorType, MirrorStats};
 
 /// Mirror handle state.
 #[derive(Debug, Clone, PartialEq, Copy)]
@@ -55,6 +56,10 @@ impl MirrorHandler {
     /// Returns true if request will be sent, false otherwise.
     ///
     pub fn send(&mut self, buffer: &ClientRequest) -> bool {
+        // Track total requests
+        let stats = MirrorStats::instance();
+        stats.increment_total();
+
         match self.state {
             MirrorHandlerState::Dropping => {
                 debug!("mirror dropping request");
@@ -78,6 +83,7 @@ impl MirrorHandler {
                 } else {
                     self.state = MirrorHandlerState::Dropping;
                     debug!("mirror dropping transaction [exposure: {}]", self.exposure);
+                    // Not selected for mirroring due to exposure sampling
                     false
                 }
             }
@@ -103,11 +109,19 @@ impl MirrorHandler {
             debug!("mirror transaction flushed");
             self.state = MirrorHandlerState::Idle;
 
-            self.tx
-                .try_send(MirrorRequest {
-                    buffer: std::mem::take(&mut self.buffer),
-                })
-                .is_ok()
+            match self.tx.try_send(MirrorRequest {
+                buffer: std::mem::take(&mut self.buffer),
+            }) {
+                Ok(_) => true,
+                Err(_) => {
+                    // Buffer is full, count as dropped
+                    let stats = MirrorStats::instance();
+                    stats.increment_dropped();
+                    stats.record_error("unknown", MirrorErrorType::BufferFull);
+                    debug!("mirror buffer full, dropping request");
+                    false
+                }
+            }
         }
     }
 }
