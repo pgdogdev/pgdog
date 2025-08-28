@@ -10,6 +10,7 @@ pub use overrides::Overrides;
 use parking_lot::Mutex;
 
 use std::collections::HashSet;
+use std::env;
 use std::fs::read_to_string;
 use std::hash::{Hash, Hasher as StdHasher};
 use std::net::Ipv4Addr;
@@ -61,6 +62,27 @@ pub fn from_urls(urls: &[String]) -> Result<ConfigAndUsers, Error> {
     let config = config.databases_from_urls(urls)?;
     CONFIG.store(Arc::new(config.clone()));
     Ok(config)
+}
+
+/// Extract all database URLs from the environment and
+/// create the config.
+pub fn from_env() -> Result<ConfigAndUsers, Error> {
+    let mut urls = vec![];
+    let mut index = 1;
+    loop {
+        if let Ok(url) = env::var(&format!("PGDOG_DATABASE_URL_{}", index)) {
+            urls.push(url);
+            index += 1;
+        } else {
+            break;
+        }
+    }
+
+    if urls.is_empty() {
+        return Err(Error::NoDbsInEnv);
+    } else {
+        from_urls(&urls)
+    }
 }
 
 /// Override some settings.
@@ -411,7 +433,7 @@ pub struct General {
     #[serde(default = "General::query_cache_limit")]
     pub query_cache_limit: usize,
     /// Automatically add connection pools for user/database pairs we don't have.
-    #[serde(default)]
+    #[serde(default = "General::default_passthrough_auth")]
     pub passthrough_auth: PassthoughAuth,
     /// Server connect timeout.
     #[serde(default = "General::default_connect_timeout")]
@@ -546,7 +568,7 @@ impl Default for General {
             prepared_statements: PreparedStatements::default(),
             prepared_statements_limit: Self::prepared_statements_limit(),
             query_cache_limit: Self::query_cache_limit(),
-            passthrough_auth: PassthoughAuth::default(),
+            passthrough_auth: Self::default_passthrough_auth(),
             connect_timeout: Self::default_connect_timeout(),
             connect_attempt_delay: Self::default_connect_attempt_delay(),
             connect_attempts: Self::connect_attempts(),
@@ -567,11 +589,19 @@ impl Default for General {
 
 impl General {
     fn host() -> String {
-        "0.0.0.0".into()
+        if let Ok(host) = env::var("PGDOG_HOST") {
+            host
+        } else {
+            "0.0.0.0".into()
+        }
     }
 
     fn port() -> u16 {
-        6432
+        if let Ok(port) = env::var("PGDOG_PORT") {
+            port.parse().unwrap_or(6432)
+        } else {
+            6432
+        }
     }
 
     fn workers() -> usize {
@@ -684,6 +714,20 @@ impl General {
 
     fn query_cache_limit() -> usize {
         usize::MAX
+    }
+
+    fn default_passthrough_auth() -> PassthoughAuth {
+        if let Ok(auth) = env::var("PGDOG_PASSTHROUGH_AUTH") {
+            // TODO: figure out why toml::from_str doesn't work.
+            match auth.as_str() {
+                "enabled" => PassthoughAuth::Enabled,
+                "disabled" => PassthoughAuth::Disabled,
+                "enabled_plain" => PassthoughAuth::EnabledPlain,
+                _ => PassthoughAuth::default(),
+            }
+        } else {
+            PassthoughAuth::default()
+        }
     }
 
     /// Get shutdown timeout as a duration.
@@ -972,8 +1016,12 @@ impl Admin {
 }
 
 fn admin_password() -> String {
-    let pw = random_string(12);
-    format!("_pgdog_{}", pw)
+    if let Ok(password) = env::var("PGDOG_ADMIN_PASSWORD") {
+        password
+    } else {
+        let pw = random_string(12);
+        format!("_pgdog_{}", pw)
+    }
 }
 
 /// Sharded table.
