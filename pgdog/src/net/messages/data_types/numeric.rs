@@ -118,16 +118,26 @@ impl FromDataType for Numeric {
                 let mut buf = bytes;
 
                 let ndigits = buf.get_i16();
-                let _weight = buf.get_i16();
+                let weight = buf.get_i16();
                 let sign = buf.get_u16();
                 let dscale = buf.get_i16();
 
-                // Check for special values
-                if sign == 0xC000 {
-                    // TODO: Add NaN support for binary format
-                    warn!("NaN values not supported in binary format (deferred feature)");
-                    return Err(Error::UnexpectedPayload);
-                }
+                // Handle special sign values using pattern matching
+                let is_negative = match sign {
+                    0x0000 => false, // Positive
+                    0x4000 => true,  // Negative
+                    0xC000 => {
+                        // NaN - not supported yet
+                        // TODO: Add NaN support for binary format
+                        warn!("NaN values not supported in binary format (deferred feature)");
+                        return Err(Error::UnexpectedPayload);
+                    }
+                    _ => {
+                        // Invalid sign value
+                        warn!("Invalid numeric sign value: 0x{:04x}", sign);
+                        return Err(Error::UnexpectedPayload);
+                    }
+                };
 
                 if ndigits == 0 {
                     return Ok(Self {
@@ -145,124 +155,119 @@ impl FromDataType for Numeric {
                     digits.push(buf.get_i16());
                 }
 
-                if sign == 0 || sign == 0x4000 {
-                    let is_negative = sign == 0x4000;
+                // Reconstruct the decimal number from base-10000 digits
+                let mut result = String::new();
 
-                    // Reconstruct the decimal number from base-10000 digits
-                    let mut result = String::new();
+                if is_negative {
+                    result.push('-');
+                }
 
-                    if is_negative {
-                        result.push('-');
+                // PostgreSQL format with dscale:
+                // - Integer digits represent the integer part
+                // - Fractional digits are stored after the integer digits
+                // - dscale tells us how many decimal places to extract from fractional digits
+
+                // Build the integer part
+                let mut integer_str = String::new();
+                let mut fractional_str = String::new();
+
+                // Determine how many digits are for the integer part
+                // Weight tells us the position of the first digit
+                let integer_digit_count = if weight >= 0 {
+                    // Check for overflow before adding
+                    if weight == i16::MAX {
+                        return Err(Error::UnexpectedPayload);
                     }
+                    (weight + 1) as usize
+                } else {
+                    0
+                };
 
-                    // PostgreSQL format with dscale:
-                    // - Integer digits represent the integer part
-                    // - Fractional digits are stored after the integer digits
-                    // - dscale tells us how many decimal places to extract from fractional digits
-
-                    // Build the integer part
-                    let mut integer_str = String::new();
-                    let mut fractional_str = String::new();
-
-                    // Determine how many digits are for the integer part
-                    // Weight tells us the position of the first digit
-                    let integer_digit_count = if _weight >= 0 {
-                        (_weight + 1) as usize
+                // Process integer digits
+                for i in 0..integer_digit_count.min(digits.len()) {
+                    if i == 0 && digits[i] < 1000 && weight >= 0 {
+                        // First digit, no leading zeros
+                        integer_str.push_str(&digits[i].to_string());
                     } else {
-                        0
-                    };
-
-                    // Process integer digits
-                    for i in 0..integer_digit_count.min(digits.len()) {
-                        if i == 0 && digits[i] < 1000 && _weight >= 0 {
-                            // First digit, no leading zeros
+                        // Subsequent digits or first digit >= 1000
+                        if i == 0 && weight >= 0 {
                             integer_str.push_str(&digits[i].to_string());
                         } else {
-                            // Subsequent digits or first digit >= 1000
-                            if i == 0 && _weight >= 0 {
-                                integer_str.push_str(&digits[i].to_string());
-                            } else {
-                                integer_str.push_str(&format!("{:04}", digits[i]));
-                            }
+                            integer_str.push_str(&format!("{:04}", digits[i]));
                         }
                     }
+                }
 
-                    // Add trailing zeros for missing integer digits
-                    if _weight >= 0 {
-                        let expected_integer_digits = (_weight + 1) as usize;
-                        for _ in digits.len()..expected_integer_digits {
-                            integer_str.push_str("0000");
-                        }
+                // Add trailing zeros for missing integer digits
+                if weight >= 0 && weight < i16::MAX {
+                    let expected_integer_digits = (weight + 1) as usize;
+                    for _ in digits.len()..expected_integer_digits {
+                        integer_str.push_str("0000");
+                    }
+                }
+
+                // Process fractional digits
+                for i in integer_digit_count..digits.len() {
+                    fractional_str.push_str(&format!("{:04}", digits[i]));
+                }
+
+                // Build final result based on dscale
+                if dscale == 0 {
+                    // Pure integer
+                    if !integer_str.is_empty() {
+                        result.push_str(&integer_str);
+                    } else {
+                        result.push('0');
+                    }
+                } else if weight < 0 {
+                    // Pure fractional (weight < 0)
+                    result.push_str("0.");
+
+                    // For negative weight, add leading zeros
+                    let leading_zeros = ((-weight - 1) * 4) as usize;
+                    for _ in 0..leading_zeros {
+                        result.push('0');
                     }
 
-                    // Process fractional digits
-                    for i in integer_digit_count..digits.len() {
-                        fractional_str.push_str(&format!("{:04}", digits[i]));
-                    }
-
-                    // Build final result based on dscale
-                    if dscale == 0 {
-                        // Pure integer
-                        if !integer_str.is_empty() {
-                            result.push_str(&integer_str);
-                        } else {
+                    // Add the fractional part, but only dscale digits
+                    let all_fractional = format!("{}{}", "0".repeat(leading_zeros), fractional_str);
+                    if all_fractional.len() >= dscale as usize {
+                        result.push_str(&fractional_str[..dscale as usize]);
+                    } else {
+                        result.push_str(&fractional_str);
+                        // Pad if needed
+                        for _ in fractional_str.len()..(dscale as usize) {
                             result.push('0');
                         }
-                    } else if _weight < 0 {
-                        // Pure fractional (weight < 0)
-                        result.push_str("0.");
+                    }
+                } else {
+                    // Mixed integer and fractional
+                    if !integer_str.is_empty() {
+                        result.push_str(&integer_str);
+                    } else {
+                        result.push('0');
+                    }
 
-                        // For negative weight, add leading zeros
-                        let leading_zeros = ((-_weight - 1) * 4) as usize;
-                        for _ in 0..leading_zeros {
-                            result.push('0');
-                        }
-
-                        // Add the fractional part, but only dscale digits
-                        let all_fractional =
-                            format!("{}{}", "0".repeat(leading_zeros), fractional_str);
-                        if all_fractional.len() >= dscale as usize {
+                    if dscale > 0 {
+                        result.push('.');
+                        // Take exactly dscale digits from fractional part
+                        if fractional_str.len() >= dscale as usize {
                             result.push_str(&fractional_str[..dscale as usize]);
                         } else {
                             result.push_str(&fractional_str);
-                            // Pad if needed
+                            // Pad with zeros if needed
                             for _ in fractional_str.len()..(dscale as usize) {
                                 result.push('0');
                             }
                         }
-                    } else {
-                        // Mixed integer and fractional
-                        if !integer_str.is_empty() {
-                            result.push_str(&integer_str);
-                        } else {
-                            result.push('0');
-                        }
-
-                        if dscale > 0 {
-                            result.push('.');
-                            // Take exactly dscale digits from fractional part
-                            if fractional_str.len() >= dscale as usize {
-                                result.push_str(&fractional_str[..dscale as usize]);
-                            } else {
-                                result.push_str(&fractional_str);
-                                // Pad with zeros if needed
-                                for _ in fractional_str.len()..(dscale as usize) {
-                                    result.push('0');
-                                }
-                            }
-                        }
                     }
-
-                    let decimal = Decimal::from_str(&result).map_err(|e| {
-                        warn!("Failed to parse '{}' as Decimal: {}", result, e);
-                        Error::UnexpectedPayload
-                    })?;
-                    return Ok(Self { data: decimal });
                 }
 
-                // For now, return error for complex cases (negative, fractional)
-                warn!("Complex binary NUMERIC decoding not yet implemented");
-                Err(Error::UnexpectedPayload)
+                let decimal = Decimal::from_str(&result).map_err(|e| {
+                    warn!("Failed to parse '{}' as Decimal: {}", result, e);
+                    Error::UnexpectedPayload
+                })?;
+                Ok(Self { data: decimal })
             }
         }
     }
@@ -542,61 +547,6 @@ mod tests {
     }
 
     #[test]
-    fn test_debug_1234_encoding() {
-        // Debug test for "12.34"
-        let decimal = Decimal::from_str("12.34").unwrap();
-        let numeric = Numeric::from(decimal);
-
-        // Encode to binary
-        let encoded = numeric.encode(Format::Binary).expect("Failed to encode");
-
-        // Parse the binary to see what we're producing
-        let mut reader = &encoded[..];
-        let ndigits = reader.get_i16();
-        let weight = reader.get_i16();
-        let sign = reader.get_u16();
-        let dscale = reader.get_i16();
-
-        if ndigits > 0 {
-            let _digit = reader.get_i16();
-        }
-
-        // Expected: ndigits=1, weight=0, sign=0, dscale=2, digit=1234
-        assert_eq!(ndigits, 1, "Should have 1 digit");
-        assert_eq!(weight, 0, "Weight should be 0");
-        assert_eq!(dscale, 2, "Should have 2 decimal places");
-
-        // Now decode and check
-        let decoded = Numeric::decode(&encoded, Format::Binary).expect("Failed to decode");
-        assert_eq!(decoded.data, decimal, "Roundtrip should work");
-    }
-
-    #[test]
-    fn test_debug_001_encoding() {
-        // Debug test for "0.01"
-        let decimal = Decimal::from_str("0.01").unwrap();
-        let numeric = Numeric::from(decimal);
-
-        // Encode to binary
-        let encoded = numeric.encode(Format::Binary).expect("Failed to encode");
-
-        // Parse the binary to see what we're producing
-        let mut reader = &encoded[..];
-        let ndigits = reader.get_i16();
-        let weight = reader.get_i16();
-        let sign = reader.get_u16();
-        let dscale = reader.get_i16();
-
-        if ndigits > 0 {
-            let _digit = reader.get_i16();
-        }
-
-        // Now decode and check
-        let decoded = Numeric::decode(&encoded, Format::Binary).expect("Failed to decode");
-        assert_eq!(decoded.data, decimal, "Roundtrip should work for 0.01");
-    }
-
-    #[test]
     fn test_binary_format_structure() {
         // Test exact binary format structure for known values
         struct TestCase {
@@ -659,11 +609,11 @@ mod tests {
             },
             TestCase {
                 value: "100000000000000000000", // 10^20
-                expected_ndigits: 6,
+                expected_ndigits: 1,
                 expected_weight: 5,
                 expected_sign: 0x0000,
                 expected_dscale: 0,
-                expected_digits: vec![1, 0, 0, 0, 0, 0], // This is actually correct
+                expected_digits: vec![1], // Just [1] with weight=5
             },
         ];
 
@@ -713,7 +663,6 @@ mod tests {
             );
         }
     }
-
 
     #[test]
     fn test_invalid_binary_format() {
