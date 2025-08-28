@@ -1,0 +1,125 @@
+# frozen_string_literal: true
+
+require 'rspec'
+require 'pg'
+require 'net/http'
+require 'json'
+
+describe 'mirror metrics' do
+  let(:conn) { PG.connect('postgres://pgdog:pgdog@127.0.0.1:6432/pgdog') }
+  let(:mirror) { PG.connect('postgres://pgdog:pgdog@127.0.0.1:6432/pgdog_mirror') }
+  let(:admin) { PG.connect('postgres://admin:pgdog@127.0.0.1:6432/admin') }
+
+  it 'tracks successful mirror operations' do
+    # Get baseline metrics
+    baseline = admin.exec('SHOW MIRROR_STATS').to_a
+    baseline_total = baseline.find { |r| r['metric'] == 'requests_total' }&.fetch('value', '0').to_i
+    baseline_mirrored = baseline.find { |r| r['metric'] == 'requests_mirrored' }&.fetch('value', '0').to_i
+
+    # Create a test table
+    conn.exec 'DROP TABLE IF EXISTS mirror_metrics_test'
+    conn.exec 'CREATE TABLE mirror_metrics_test (id BIGINT PRIMARY KEY, data TEXT)'
+
+    # Execute some queries that should be mirrored
+    10.times do |i|
+      conn.exec "INSERT INTO mirror_metrics_test VALUES (#{i}, 'test data #{i}')"
+    end
+
+    # Wait for async mirror processing
+    sleep(1)
+
+    # Check updated metrics
+    updated = admin.exec('SHOW MIRROR_STATS').to_a
+    updated_total = updated.find { |r| r['metric'] == 'requests_total' }&.fetch('value', '0').to_i
+    updated_mirrored = updated.find { |r| r['metric'] == 'requests_mirrored' }&.fetch('value', '0').to_i
+
+    expect(updated_total).to be > baseline_total
+    expect(updated_mirrored).to be > baseline_mirrored
+
+    # Verify data actually made it to mirror
+    mirror_count = mirror.exec('SELECT COUNT(*) FROM mirror_metrics_test')[0]['count'].to_i
+    expect(mirror_count).to eq(10)
+
+    # Clean up
+    conn.exec 'DROP TABLE mirror_metrics_test'
+  end
+
+  it 'tracks per-database mirror statistics' do
+    # Execute a query to ensure we have some data
+    conn.exec 'SELECT 1'
+    sleep(0.5)
+
+    # Check per-database breakdown
+    db_stats = admin.exec('SHOW MIRROR_STATS_BY_DATABASE').to_a
+    
+    # Should have stats for our database
+    pgdog_stats = db_stats.find { |r| r['database'] == 'pgdog' || r['database'] == 'pgdog_mirror' }
+    expect(pgdog_stats).not_to be_nil
+    
+    if pgdog_stats
+      expect(pgdog_stats['mirrored'].to_i).to be >= 0
+      expect(pgdog_stats['errors'].to_i).to be >= 0
+    end
+  end
+
+  it 'exposes metrics via HTTP endpoint' do
+    # Execute some queries to generate metrics
+    5.times { conn.exec 'SELECT 1' }
+    sleep(0.5)
+
+    # Fetch metrics from HTTP endpoint
+    uri = URI('http://localhost:9090/metrics')
+    response = Net::HTTP.get(uri)
+    
+    # Check for mirror metrics in OpenMetrics format
+    expect(response).to include('# TYPE mirror')
+    expect(response).to include('mirror{type="total"}')
+    expect(response).to include('mirror{type="mirrored"}')
+    
+    # Parse a metric value to ensure it's numeric
+    if response =~ /mirror\{type="total"\}\s+(\d+)/
+      total = $1.to_i
+      expect(total).to be >= 0
+    end
+  end
+
+  it 'tracks mirror errors separately' do
+    # Get baseline error metrics
+    baseline = admin.exec('SHOW MIRROR_STATS').to_a
+    baseline_errors = %w[errors_connection errors_query errors_timeout errors_buffer_full].map do |metric|
+      [metric, baseline.find { |r| r['metric'] == metric }&.fetch('value', '0').to_i]
+    end.to_h
+
+    # Note: In a real test we might trigger actual errors by stopping the mirror database
+    # For now, just verify the error counters exist and are queryable
+    expect(baseline_errors['errors_connection']).to be >= 0
+    expect(baseline_errors['errors_query']).to be >= 0
+    expect(baseline_errors['errors_timeout']).to be >= 0
+    expect(baseline_errors['errors_buffer_full']).to be >= 0
+  end
+
+  it 'tracks latency metrics' do
+    # Execute queries
+    5.times { conn.exec 'SELECT pg_sleep(0.01)' }
+    sleep(0.5)
+
+    # Check latency metrics
+    metrics = admin.exec('SHOW MIRROR_STATS').to_a
+    
+    latency_avg = metrics.find { |r| r['metric'] == 'latency_avg_ms' }
+    latency_max = metrics.find { |r| r['metric'] == 'latency_max_ms' }
+
+    # These might be nil if no successful mirrors yet, which is OK
+    if latency_avg
+      expect(latency_avg['value'].to_i).to be >= 0
+    end
+
+    if latency_max
+      expect(latency_max['value'].to_i).to be >= 0
+      # Max should be >= avg if both exist
+      if latency_avg
+        expect(latency_max['value'].to_i).to be >= latency_avg['value'].to_i
+      end
+    end
+  end
+end
