@@ -22,6 +22,9 @@ pub enum Error {
 
     #[error("incomplete startup")]
     IncompleteStartup,
+
+    #[error("no database urls in environment")]
+    NoDbsInEnv,
 }
 
 impl Error {

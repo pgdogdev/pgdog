@@ -67,9 +67,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     let config = config::load(&args.config, &args.users)?;
 
-    // Set database from --database-url arg.
+    // Get databases from environment or from --database-url args.
     let config = if let Some(database_urls) = args.database_url {
         config::from_urls(&database_urls)?
+    } else if let Ok(config) = config::from_env() {
+        info!(
+            "loaded {} databases from environment",
+            config.config.databases.len()
+        );
+        config
     } else {
         config
     };
