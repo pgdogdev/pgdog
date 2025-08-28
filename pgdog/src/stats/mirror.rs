@@ -19,15 +19,15 @@ pub enum MirrorErrorType {
     BufferFull,
 }
 
-/// Per-database mirror statistics.
+/// Per-cluster mirror statistics.
 #[derive(Debug, Default)]
-pub struct DatabaseMirrorStats {
+pub struct ClusterMirrorStats {
     pub mirrored: AtomicU64,
     pub errors: AtomicU64,
     pub avg_latency_ms: AtomicU64,
 }
 
-impl Clone for DatabaseMirrorStats {
+impl Clone for ClusterMirrorStats {
     fn clone(&self) -> Self {
         Self {
             mirrored: AtomicU64::new(self.mirrored.load(Ordering::Relaxed)),
@@ -61,8 +61,8 @@ pub struct MirrorStats {
     pub last_error: RwLock<Option<Instant>>,
     pub consecutive_errors: AtomicU64,
 
-    // Per-database stats
-    pub database_stats: Arc<RwLock<HashMap<String, DatabaseMirrorStats>>>,
+    // Per-cluster stats (key is (database, user) tuple representing a cluster)
+    pub cluster_stats: Arc<RwLock<HashMap<(String, String), ClusterMirrorStats>>>,
 }
 
 impl Clone for MirrorStats {
@@ -81,7 +81,7 @@ impl Clone for MirrorStats {
             last_success: RwLock::new(*self.last_success.read().unwrap()),
             last_error: RwLock::new(*self.last_error.read().unwrap()),
             consecutive_errors: AtomicU64::new(self.consecutive_errors.load(Ordering::Relaxed)),
-            database_stats: Arc::new(RwLock::new(self.database_stats.read().unwrap().clone())),
+            cluster_stats: Arc::new(RwLock::new(self.cluster_stats.read().unwrap().clone())),
         }
     }
 }
@@ -102,7 +102,7 @@ impl Default for MirrorStats {
             last_success: RwLock::new(Instant::now()),
             last_error: RwLock::new(None),
             consecutive_errors: AtomicU64::new(0),
-            database_stats: Arc::new(RwLock::new(HashMap::new())),
+            cluster_stats: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 }
@@ -131,7 +131,7 @@ impl MirrorStats {
     }
 
     /// Record a successful mirror operation.
-    pub fn record_success(&self, database: &str, latency_ms: u64) {
+    pub fn record_success(&self, database: &str, user: &str, latency_ms: u64) {
         // Increment mirrored counter
         self.requests_mirrored.fetch_add(1, Ordering::Relaxed);
 
@@ -153,12 +153,12 @@ impl MirrorStats {
             }
         }
 
-        // Update database-specific stats
+        // Update cluster-specific stats
         {
-            let mut stats = self.database_stats.write().unwrap();
+            let mut stats = self.cluster_stats.write().unwrap();
             stats
-                .entry(database.to_string())
-                .or_insert_with(DatabaseMirrorStats::default)
+                .entry((database.to_string(), user.to_string()))
+                .or_insert_with(ClusterMirrorStats::default)
                 .mirrored
                 .fetch_add(1, Ordering::Relaxed);
         }
@@ -171,7 +171,7 @@ impl MirrorStats {
     }
 
     /// Record an error in mirror operation.
-    pub fn record_error(&self, database: &str, error_type: MirrorErrorType) {
+    pub fn record_error(&self, database: &str, user: &str, error_type: MirrorErrorType) {
         self.requests_total.fetch_add(1, Ordering::Relaxed);
 
         // Increment appropriate error counter
@@ -190,12 +190,12 @@ impl MirrorStats {
             }
         }
 
-        // Update database-specific error count
+        // Update cluster-specific error count
         {
-            let mut stats = self.database_stats.write().unwrap();
+            let mut stats = self.cluster_stats.write().unwrap();
             stats
-                .entry(database.to_string())
-                .or_insert_with(DatabaseMirrorStats::default)
+                .entry((database.to_string(), user.to_string()))
+                .or_insert_with(ClusterMirrorStats::default)
                 .errors
                 .fetch_add(1, Ordering::Relaxed);
         }
@@ -220,7 +220,7 @@ impl MirrorStats {
         self.latency_count.store(0, Ordering::Relaxed);
         self.latency_max_ms.store(0, Ordering::Relaxed);
         self.consecutive_errors.store(0, Ordering::Relaxed);
-        self.database_stats.write().unwrap().clear();
+        self.cluster_stats.write().unwrap().clear();
     }
 
     /// Get total error count.
@@ -378,13 +378,14 @@ impl OpenMetric for MirrorStats {
             });
         }
 
-        // Per-database metrics
+        // Per-cluster metrics (exposed as database and user labels)
         {
-            let db_stats = self.database_stats.read().unwrap();
-            for (database, stats) in db_stats.iter() {
+            let cluster_stats = self.cluster_stats.read().unwrap();
+            for ((database, user), stats) in cluster_stats.iter() {
                 measurements.push(Measurement {
                     labels: vec![
                         ("database".into(), database.clone()),
+                        ("user".into(), user.clone()),
                         ("type".into(), "mirrored".into()),
                     ],
                     measurement: MeasurementType::Integer(
@@ -394,6 +395,7 @@ impl OpenMetric for MirrorStats {
                 measurements.push(Measurement {
                     labels: vec![
                         ("database".into(), database.clone()),
+                        ("user".into(), user.clone()),
                         ("type".into(), "errors".into()),
                     ],
                     measurement: MeasurementType::Integer(
@@ -453,8 +455,8 @@ mod test {
     fn test_record_success_updates_counters() {
         let stats = MirrorStats::default();
 
-        stats.record_success("test_db", 100);
-        stats.record_success("test_db", 200);
+        stats.record_success("test_db", "test_user", 100);
+        stats.record_success("test_db", "test_user", 200);
 
         assert_eq!(stats.requests_mirrored.load(Ordering::Relaxed), 2);
         assert_eq!(stats.latency_count.load(Ordering::Relaxed), 2);
@@ -469,7 +471,7 @@ mod test {
 
         let before = Instant::now();
         std::thread::sleep(Duration::from_millis(10));
-        stats.record_success("test_db", 50);
+        stats.record_success("test_db", "test_user", 50);
         let after = Instant::now();
 
         let last_success = *stats.last_success.read().unwrap();
@@ -481,13 +483,13 @@ mod test {
     fn test_max_latency_updates_correctly() {
         let stats = MirrorStats::default();
 
-        stats.record_success("db1", 100);
+        stats.record_success("db1", "user1", 100);
         assert_eq!(stats.latency_max_ms.load(Ordering::Relaxed), 100);
 
-        stats.record_success("db2", 50);
+        stats.record_success("db2", "user2", 50);
         assert_eq!(stats.latency_max_ms.load(Ordering::Relaxed), 100); // Should not decrease
 
-        stats.record_success("db3", 200);
+        stats.record_success("db3", "user3", 200);
         assert_eq!(stats.latency_max_ms.load(Ordering::Relaxed), 200); // Should update to new max
     }
 
@@ -495,17 +497,21 @@ mod test {
     fn test_database_specific_stats() {
         let stats = MirrorStats::default();
 
-        stats.record_success("db1", 100);
-        stats.record_success("db1", 150);
-        stats.record_success("db2", 200);
+        stats.record_success("db1", "user1", 100);
+        stats.record_success("db1", "user1", 150);
+        stats.record_success("db2", "user2", 200);
 
         {
-            let db_stats = stats.database_stats.read().unwrap();
-            let db1_stats = db_stats.get("db1").unwrap();
+            let cluster_stats = stats.cluster_stats.read().unwrap();
+            let db1_stats = cluster_stats
+                .get(&("db1".to_string(), "user1".to_string()))
+                .unwrap();
             assert_eq!(db1_stats.mirrored.load(Ordering::Relaxed), 2);
             assert_eq!(db1_stats.errors.load(Ordering::Relaxed), 0);
 
-            let db2_stats = db_stats.get("db2").unwrap();
+            let db2_stats = cluster_stats
+                .get(&("db2".to_string(), "user2".to_string()))
+                .unwrap();
             assert_eq!(db2_stats.mirrored.load(Ordering::Relaxed), 1);
             assert_eq!(db2_stats.errors.load(Ordering::Relaxed), 0);
         }
@@ -534,7 +540,7 @@ mod test {
             handles.push(std::thread::spawn(move || {
                 for _ in 0..100 {
                     stats_clone.increment_total();
-                    stats_clone.record_success("test", 10);
+                    stats_clone.record_success("test", "user", 10);
                 }
             }));
         }
@@ -553,7 +559,7 @@ mod test {
 
         stats.increment_total();
         stats.increment_mirrored();
-        stats.record_success("test", 100);
+        stats.record_success("test", "user", 100);
 
         stats.reset_counters();
 
@@ -582,17 +588,17 @@ mod test {
         fn test_record_error_by_type() {
             let stats = MirrorStats::default();
 
-            stats.record_error("db1", MirrorErrorType::Connection);
+            stats.record_error("db1", "user1", MirrorErrorType::Connection);
             assert_eq!(stats.errors_connection.load(Ordering::Relaxed), 1);
             assert_eq!(stats.errors_query.load(Ordering::Relaxed), 0);
 
-            stats.record_error("db1", MirrorErrorType::Query);
+            stats.record_error("db1", "user1", MirrorErrorType::Query);
             assert_eq!(stats.errors_query.load(Ordering::Relaxed), 1);
 
-            stats.record_error("db1", MirrorErrorType::Timeout);
+            stats.record_error("db1", "user1", MirrorErrorType::Timeout);
             assert_eq!(stats.errors_timeout.load(Ordering::Relaxed), 1);
 
-            stats.record_error("db1", MirrorErrorType::BufferFull);
+            stats.record_error("db1", "user1", MirrorErrorType::BufferFull);
             assert_eq!(stats.errors_buffer_full.load(Ordering::Relaxed), 1);
         }
 
@@ -600,16 +606,16 @@ mod test {
         fn test_consecutive_errors_tracking() {
             let stats = MirrorStats::default();
 
-            stats.record_error("db1", MirrorErrorType::Connection);
+            stats.record_error("db1", "user1", MirrorErrorType::Connection);
             assert_eq!(stats.consecutive_errors.load(Ordering::Relaxed), 1);
 
-            stats.record_error("db1", MirrorErrorType::Query);
+            stats.record_error("db1", "user1", MirrorErrorType::Query);
             assert_eq!(stats.consecutive_errors.load(Ordering::Relaxed), 2);
 
-            stats.record_success("db1", 100);
+            stats.record_success("db1", "user1", 100);
             assert_eq!(stats.consecutive_errors.load(Ordering::Relaxed), 0); // Reset on success
 
-            stats.record_error("db1", MirrorErrorType::Timeout);
+            stats.record_error("db1", "user1", MirrorErrorType::Timeout);
             assert_eq!(stats.consecutive_errors.load(Ordering::Relaxed), 1);
         }
 
@@ -621,7 +627,7 @@ mod test {
 
             let before = Instant::now();
             std::thread::sleep(Duration::from_millis(10));
-            stats.record_error("db1", MirrorErrorType::Connection);
+            stats.record_error("db1", "user1", MirrorErrorType::Connection);
             let after = Instant::now();
 
             let last_error = stats.last_error.read().unwrap().unwrap();
@@ -633,16 +639,20 @@ mod test {
         fn test_database_error_stats() {
             let stats = MirrorStats::default();
 
-            stats.record_error("db1", MirrorErrorType::Connection);
-            stats.record_error("db1", MirrorErrorType::Query);
-            stats.record_error("db2", MirrorErrorType::Timeout);
+            stats.record_error("db1", "user1", MirrorErrorType::Connection);
+            stats.record_error("db1", "user1", MirrorErrorType::Query);
+            stats.record_error("db2", "user2", MirrorErrorType::Timeout);
 
             {
-                let db_stats = stats.database_stats.read().unwrap();
-                let db1_stats = db_stats.get("db1").unwrap();
+                let cluster_stats = stats.cluster_stats.read().unwrap();
+                let db1_stats = cluster_stats
+                    .get(&("db1".to_string(), "user1".to_string()))
+                    .unwrap();
                 assert_eq!(db1_stats.errors.load(Ordering::Relaxed), 2);
 
-                let db2_stats = db_stats.get("db2").unwrap();
+                let db2_stats = cluster_stats
+                    .get(&("db2".to_string(), "user2".to_string()))
+                    .unwrap();
                 assert_eq!(db2_stats.errors.load(Ordering::Relaxed), 1);
             }
         }
@@ -728,10 +738,10 @@ mod test {
         fn test_total_errors_calculation() {
             let stats = MirrorStats::default();
 
-            stats.record_error("db1", MirrorErrorType::Connection);
-            stats.record_error("db1", MirrorErrorType::Query);
-            stats.record_error("db1", MirrorErrorType::Timeout);
-            stats.record_error("db1", MirrorErrorType::BufferFull);
+            stats.record_error("db1", "user1", MirrorErrorType::Connection);
+            stats.record_error("db1", "user1", MirrorErrorType::Query);
+            stats.record_error("db1", "user1", MirrorErrorType::Timeout);
+            stats.record_error("db1", "user1", MirrorErrorType::BufferFull);
 
             assert_eq!(stats.total_errors(), 4);
         }
@@ -746,13 +756,13 @@ mod test {
             // Add some successful requests
             for _ in 0..95 {
                 stats.increment_total();
-                stats.record_success("db1", 50);
+                stats.record_success("db1", "user1", 50);
             }
 
             // Add some errors
             for _ in 0..5 {
                 // Note: record_error already increments total internally
-                stats.record_error("db1", MirrorErrorType::Query);
+                stats.record_error("db1", "user1", MirrorErrorType::Query);
             }
 
             // We have 95 + 5 = 100 total requests, 5 errors

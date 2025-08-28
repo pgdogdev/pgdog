@@ -116,7 +116,8 @@ impl MirrorHandler {
                     // Buffer is full, count as dropped
                     let stats = MirrorStats::instance();
                     stats.increment_dropped();
-                    stats.record_error("unknown", MirrorErrorType::BufferFull);
+                    // Note: we don't have user context here, using "unknown" for both
+                    stats.record_error("unknown", "unknown", MirrorErrorType::BufferFull);
                     false
                 }
             }

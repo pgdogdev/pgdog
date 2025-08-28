@@ -107,8 +107,9 @@ impl Mirror {
         let (tx, mut rx) = channel(queue_depth);
         let handler = MirrorHandler::new(tx, exposure);
 
-        // Get the database name for stats tracking
+        // Get the database and user names for stats tracking
         let database_name = cluster.name().to_string();
+        let user_name = cluster.user().to_string();
 
         spawn(async move {
             loop {
@@ -120,11 +121,11 @@ impl Mirror {
                             match mirror.handle(&mut req, &mut query_engine).await {
                                 Ok(_) => {
                                     let latency_ms = start.elapsed().as_millis() as u64;
-                                    MirrorStats::instance().record_success(&database_name, latency_ms);
+                                    MirrorStats::instance().record_success(&database_name, &user_name, latency_ms);
                                 }
                                 Err(err) => {
                                     let error_type = categorize_mirror_error(&err);
-                                    MirrorStats::instance().record_error(&database_name, error_type);
+                                    MirrorStats::instance().record_error(&database_name, &user_name, error_type);
                                     error!("mirror error: {} (type: {:?})", err, error_type);
                                 }
                             }

@@ -130,6 +130,7 @@ impl Command for ShowMirrorStatsByDatabase {
     async fn execute(&self) -> Result<Vec<Message>, Error> {
         let fields = vec![
             Field::text("database"),
+            Field::text("user"),
             Field::numeric("mirrored"),
             Field::numeric("errors"),
         ];
@@ -137,14 +138,25 @@ impl Command for ShowMirrorStatsByDatabase {
         let mut messages = vec![RowDescription::new(&fields).message()?];
         let stats = MirrorStats::instance();
 
-        // Per-database stats
+        // Per-cluster stats (shown as database and user)
         {
-            let db_stats = stats.database_stats.read().unwrap();
-            for (database, db_stat) in db_stats.iter() {
+            let cluster_stats = stats.cluster_stats.read().unwrap();
+            for ((database, user), cluster_stat) in cluster_stats.iter() {
                 let mut dr = DataRow::new();
                 dr.add(database.as_str())
-                    .add(db_stat.mirrored.load(std::sync::atomic::Ordering::Relaxed) as i64)
-                    .add(db_stat.errors.load(std::sync::atomic::Ordering::Relaxed) as i64);
+                    .add(user.as_str())
+                    .add(
+                        cluster_stat
+                            .mirrored
+                            .load(std::sync::atomic::Ordering::Relaxed)
+                            as i64,
+                    )
+                    .add(
+                        cluster_stat
+                            .errors
+                            .load(std::sync::atomic::Ordering::Relaxed)
+                            as i64,
+                    );
                 messages.push(dr.message()?);
             }
         }
@@ -165,8 +177,12 @@ mod test {
         stats.increment_total();
         stats.increment_total();
         stats.increment_mirrored();
-        stats.record_success("test_db", 100);
-        stats.record_error("test_db", crate::stats::MirrorErrorType::Connection);
+        stats.record_success("test_db", "test_user", 100);
+        stats.record_error(
+            "test_db",
+            "test_user",
+            crate::stats::MirrorErrorType::Connection,
+        );
 
         // Execute the command
         let cmd = ShowMirrorStats;
@@ -191,9 +207,9 @@ mod test {
     async fn test_show_mirror_stats_by_database() {
         // Set up some test data
         let stats = MirrorStats::instance();
-        stats.record_success("db1", 50);
-        stats.record_success("db2", 75);
-        stats.record_error("db1", crate::stats::MirrorErrorType::Query);
+        stats.record_success("db1", "user1", 50);
+        stats.record_success("db2", "user2", 75);
+        stats.record_error("db1", "user1", crate::stats::MirrorErrorType::Query);
 
         // Execute the command
         let cmd = ShowMirrorStatsByDatabase;
