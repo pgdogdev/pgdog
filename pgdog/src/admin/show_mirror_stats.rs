@@ -174,13 +174,13 @@ mod test {
 
         // Should have at least the row description and some data rows
         assert!(!messages.is_empty());
-        
+
         // First message should be row description
         assert_eq!(messages[0].code(), 'T'); // RowDescription
-        
+
         // Should have data rows for our metrics
         assert!(messages.len() > 5); // At least row description + several metric rows
-        
+
         // Verify we have data row messages
         for msg in &messages[1..] {
             assert!(msg.code() == 'D'); // DataRow
@@ -202,11 +202,14 @@ mod test {
         // Should have row description and data rows
         assert!(!messages.is_empty());
         assert_eq!(messages[0].code(), 'T'); // RowDescription
-        
+
         // Should have at least 2 database entries
         // Count data rows (excluding row description at [0])
         let data_row_count = messages[1..].iter().filter(|m| m.code() == 'D').count();
-        assert!(data_row_count >= 2, "Should have at least 2 database entries");
+        assert!(
+            data_row_count >= 2,
+            "Should have at least 2 database entries"
+        );
     }
 
     #[tokio::test]
