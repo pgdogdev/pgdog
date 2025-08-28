@@ -108,7 +108,6 @@ impl Mirror {
                                 Ok(_) => {
                                     let latency_ms = start.elapsed().as_millis() as u64;
                                     MirrorStats::instance().record_success(&database_name, latency_ms);
-                                    debug!("mirror request completed in {}ms", latency_ms);
                                 }
                                 Err(err) => {
                                     let error_type = categorize_mirror_error(&err);
@@ -134,8 +133,6 @@ impl Mirror {
         request: &mut MirrorRequest,
         query_engine: &mut QueryEngine,
     ) -> Result<(), Error> {
-        debug!("mirroring {} client requests", request.buffer.len());
-
         for req in &mut request.buffer {
             if req.delay > Duration::ZERO {
                 sleep(req.delay).await;

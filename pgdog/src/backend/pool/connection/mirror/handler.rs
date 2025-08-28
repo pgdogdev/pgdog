@@ -82,7 +82,6 @@ impl MirrorHandler {
                     true
                 } else {
                     self.state = MirrorHandlerState::Dropping;
-                    debug!("mirror dropping transaction [exposure: {}]", self.exposure);
                     // Not selected for mirroring due to exposure sampling
                     false
                 }
