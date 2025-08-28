@@ -337,7 +337,7 @@ mod test {
     #[test]
     fn test_sort_buffer_with_numeric() {
         let mut buf = Buffer::default();
-        let rd = RowDescription::new(&[Field::numeric_text("price"), Field::text("product")]);
+        let rd = RowDescription::new(&[Field::numeric("price"), Field::text("product")]);
         let columns = [OrderBy::Desc(1)]; // Sort by numeric column descending
 
         // Add numeric values in random order
@@ -386,7 +386,7 @@ mod test {
     #[test]
     fn test_sort_buffer_with_numeric_binary() {
         let mut buf = Buffer::default();
-        let rd = RowDescription::new(&[Field::numeric("price"), Field::text("product")]);
+        let rd = RowDescription::new(&[Field::numeric_binary("price"), Field::text("product")]);
         let columns = [OrderBy::Desc(1)]; // Sort by numeric column descending
 
         // Test values with their expected binary representations
@@ -432,7 +432,7 @@ mod test {
     #[test]
     fn test_sort_buffer_with_numeric_edge_cases() {
         let mut buf = Buffer::default();
-        let rd = RowDescription::new(&[Field::numeric_text("value"), Field::text("description")]);
+        let rd = RowDescription::new(&[Field::numeric("value"), Field::text("description")]);
         let columns = [OrderBy::Asc(1)]; // Sort by numeric column ascending
 
         // Test edge cases: negative numbers, very large numbers, very small decimals, zero

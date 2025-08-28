@@ -81,6 +81,7 @@ impl Add for Numeric {
     }
 }
 
+
 impl FromDataType for Numeric {
     fn decode(bytes: &[u8], encoding: Format) -> Result<Self, Error> {
         match encoding {

@@ -42,7 +42,7 @@ impl MemoryUsage for Field {
 }
 
 impl Field {
-    /// Numeric field (binary format).
+    /// Numeric field (text format).
     pub fn numeric(name: &str) -> Self {
         Self {
             name: name.into(),
@@ -51,12 +51,12 @@ impl Field {
             type_oid: 1700,
             type_size: -1,
             type_modifier: -1,
-            format: 1, // Enable binary format for NUMERIC.
+            format: 0, // Use text format for NUMERIC.
         }
     }
 
-    /// Numeric field (text format).
-    pub fn numeric_text(name: &str) -> Self {
+    /// Numeric field (binary format).
+    pub fn numeric_binary(name: &str) -> Self {
         Self {
             name: name.into(),
             table_oid: 0,
@@ -64,7 +64,7 @@ impl Field {
             type_oid: 1700,
             type_size: -1,
             type_modifier: -1,
-            format: 0, // Use text format for NUMERIC.
+            format: 1, // Enable binary format for NUMERIC.
         }
     }
 

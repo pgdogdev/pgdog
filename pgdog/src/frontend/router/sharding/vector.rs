@@ -16,11 +16,8 @@ impl Distance<'_> {
                 assert_eq!(p.len(), q.len());
                 p.iter()
                     .zip(q.iter())
-                    .map(|(p, q)| {
-                        let p_val = p.to_f64().unwrap_or(0.0);
-                        let q_val = q.to_f64().unwrap_or(0.0);
-                        (q_val - p_val).powi(2)
-                    })
+                    // TODO: vectors should use f64?
+                    .map(|(p, q)| (q.to_f64().unwrap_or(0.0) - p.to_f64().unwrap_or(0.0)).powi(2))
                     .sum::<f64>()
                     .sqrt()
             }

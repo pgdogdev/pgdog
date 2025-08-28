@@ -183,6 +183,7 @@ impl DataRow {
     // Get float at index with text/binary encoding.
     pub fn get_float(&self, index: usize, text: bool) -> Option<f64> {
         self.get::<Numeric>(index, if text { Format::Text } else { Format::Binary })
+            // TODO: unused? loses precision?
             .and_then(|numeric| numeric.deref().to_f64())
     }
 

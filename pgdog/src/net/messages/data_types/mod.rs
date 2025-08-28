@@ -1,4 +1,3 @@
-use std::cmp::Ordering;
 use std::ops::Add;
 
 use super::{bind::Format, data_row::Data, Error, ToDataRowColumn};
@@ -28,7 +27,7 @@ pub trait FromDataType: Sized + PartialOrd + Ord + PartialEq {
     fn encode(&self, encoding: Format) -> Result<Bytes, Error>;
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Datum {
     /// BIGINT.
     Bigint(i64),
@@ -138,49 +137,6 @@ impl Datum {
     }
 }
 
-impl PartialOrd for Datum {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        use Datum::*;
-
-        match (self, other) {
-            // Null handling
-            (Null, Null) => Some(Ordering::Equal),
-            (Null, _) => Some(Ordering::Less),
-            (_, Null) => Some(Ordering::Greater),
-
-            // Same type comparisons
-            (Bigint(a), Bigint(b)) => a.partial_cmp(b),
-            (Integer(a), Integer(b)) => a.partial_cmp(b),
-            (SmallInt(a), SmallInt(b)) => a.partial_cmp(b),
-            (Text(a), Text(b)) => a.partial_cmp(b),
-            (Boolean(a), Boolean(b)) => a.partial_cmp(b),
-            (Timestamp(a), Timestamp(b)) => a.partial_cmp(b),
-            (TimestampTz(a), TimestampTz(b)) => a.partial_cmp(b),
-            (Numeric(a), Numeric(b)) => a.partial_cmp(b),
-            (Interval(a), Interval(b)) => a.partial_cmp(b),
-            (Uuid(a), Uuid(b)) => a.partial_cmp(b),
-            (Vector(a), Vector(b)) => a.partial_cmp(b),
-            (Unknown(a), Unknown(b)) => a.partial_cmp(b),
-
-            // Cross-type numeric comparisons (optional, for compatibility)
-            (Integer(a), Bigint(b)) => (*a as i64).partial_cmp(b),
-            (Bigint(a), Integer(b)) => a.partial_cmp(&(*b as i64)),
-            (SmallInt(a), Integer(b)) => (*a as i32).partial_cmp(b),
-            (Integer(a), SmallInt(b)) => a.partial_cmp(&(*b as i32)),
-            (SmallInt(a), Bigint(b)) => (*a as i64).partial_cmp(b),
-            (Bigint(a), SmallInt(b)) => a.partial_cmp(&(*b as i64)),
-
-            // Different types - no natural ordering
-            _ => None,
-        }
-    }
-}
-
-impl Ord for Datum {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.partial_cmp(other).unwrap_or(Ordering::Equal)
-    }
-}
 
 /// PostgreSQL data types.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
