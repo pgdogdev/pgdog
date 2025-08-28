@@ -48,7 +48,7 @@ pub struct Connection {
     database: String,
     binding: Binding,
     cluster: Option<Cluster>,
-    mirrors: Vec<MirrorHandler>,
+    mirror_handlers: Vec<MirrorHandler>,
     locked: bool,
     pub_sub: PubSubClient,
 }
@@ -70,7 +70,7 @@ impl Connection {
             cluster: None,
             user: user.to_owned(),
             database: database.to_owned(),
-            mirrors: vec![],
+            mirror_handlers: vec![],
             locked: false,
             passthrough_password: passthrough_password.clone(),
             pub_sub: PubSubClient::new(),
@@ -117,15 +117,15 @@ impl Connection {
 
     /// Send client request to mirrors.
     pub fn mirror(&mut self, buffer: &crate::frontend::ClientRequest) {
-        for mirror in &mut self.mirrors {
-            mirror.send(buffer);
+        for handler in &mut self.mirror_handlers {
+            handler.send(buffer);
         }
     }
 
     /// Tell mirrors to flush buffered transaction.
     pub fn mirror_flush(&mut self) {
-        for mirror in &mut self.mirrors {
-            mirror.flush();
+        for handler in &mut self.mirror_handlers {
+            handler.flush();
         }
     }
 
@@ -316,29 +316,22 @@ impl Connection {
 
                 // Create mirrors based on new configuration
                 if let Some(mirror_configs) = databases.mirrors(user)? {
-                    self.mirrors.clear();
-                    for (dest_db, exposure, queue_depth) in mirror_configs {
-                        // Find cluster for destination database with same username
-                        let source_user = user.0;
-                        if let Ok(dest_cluster) = databases.cluster((source_user, dest_db.as_str()))
-                        {
-                            match Mirror::spawn_with_config(&dest_cluster, *exposure, *queue_depth)
-                            {
-                                Ok(handler) => self.mirrors.push(handler),
-                                Err(e) => {
-                                    warn!(
-                                        "Failed to create mirror handler for {} -> {}: {}",
-                                        self.cluster()?.name(),
-                                        dest_db,
-                                        e
-                                    );
-                                }
+                    self.mirror_handlers.clear();
+                    for mirror_config in mirror_configs {
+                        match Mirror::spawn_with_config(
+                            &mirror_config.destination,
+                            mirror_config.exposure,
+                            mirror_config.queue_depth,
+                        ) {
+                            Ok(handler) => self.mirror_handlers.push(handler),
+                            Err(e) => {
+                                warn!(
+                                    "Failed to create mirror handler for {} -> {}: {}",
+                                    self.cluster()?.name(),
+                                    mirror_config.destination.name(),
+                                    e
+                                );
                             }
-                        } else {
-                            warn!(
-                                "No cluster found for mirror destination: {}/{}",
-                                source_user, dest_db
-                            );
                         }
                     }
                 }
@@ -346,7 +339,7 @@ impl Connection {
                 debug!(
                     r#"database "{}" has {} mirrors"#,
                     self.cluster()?.name(),
-                    self.mirrors.len()
+                    self.mirror_handlers.len()
                 );
             }
 

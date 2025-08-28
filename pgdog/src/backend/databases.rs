@@ -139,6 +139,17 @@ pub struct User {
     pub database: String,
 }
 
+/// Mirror configuration containing the destination cluster and mirroring parameters.
+#[derive(Debug, Clone)]
+pub struct Mirror {
+    /// Destination cluster for mirroring.
+    pub destination: Cluster,
+    /// Exposure rate (0.0 to 1.0).
+    pub exposure: f32,
+    /// Queue depth for mirroring.
+    pub queue_depth: usize,
+}
+
 impl std::fmt::Display for User {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}/{}", self.user, self.database)
@@ -174,7 +185,7 @@ impl ToUser for (&str, Option<&str>) {
 pub struct Databases {
     databases: HashMap<User, Cluster>,
     manual_queries: HashMap<String, ManualQuery>,
-    mirrors: HashMap<String, Vec<(String, f32, usize)>>, // Vec<(destination, exposure, queue_depth)>
+    mirrors: HashMap<String, Vec<Mirror>>,
 }
 
 impl Databases {
@@ -215,7 +226,7 @@ impl Databases {
         }
     }
 
-    pub fn mirrors(&self, user: impl ToUser) -> Result<Option<&[(String, f32, usize)]>, Error> {
+    pub fn mirrors(&self, user: impl ToUser) -> Result<Option<&[Mirror]>, Error> {
         let user = user.to_user();
         if let Some(cluster) = self.databases.get(&user) {
             let name = cluster.name();
@@ -487,14 +498,30 @@ pub fn from_config(config: &ConfigAndUsers) -> Databases {
             mirroring.queue_depth
         );
 
-        mirrors
-            .entry(mirroring.source.clone())
-            .or_insert_with(Vec::new)
-            .push((
-                mirroring.destination.clone(),
-                mirroring.exposure,
-                mirroring.queue_depth,
-            ));
+        // Create Mirror structs for each user pair
+        for source_user in &source_users {
+            let source_key = User {
+                user: source_user.clone(),
+                database: mirroring.source.clone(),
+            };
+            let dest_key = User {
+                user: source_user.clone(),
+                database: mirroring.destination.clone(),
+            };
+
+            if let Some(source_cluster) = databases.get(&source_key) {
+                if let Some(dest_cluster) = databases.get(&dest_key) {
+                    mirrors
+                        .entry(source_cluster.name().to_string())
+                        .or_insert_with(Vec::new)
+                        .push(Mirror {
+                            destination: dest_cluster.clone(),
+                            exposure: mirroring.exposure,
+                            queue_depth: mirroring.queue_depth,
+                        });
+                }
+            }
+        }
     }
 
     Databases {
@@ -521,10 +548,7 @@ mod tests {
     }
 
     #[test]
-    fn test_mirror_with_multiple_users_creates_duplicate_handlers() {
-        // This test demonstrates the bug where multiple users for a mirror database
-        // cause duplicate mirror handlers to be created
-
+    fn test_mirror_with_mismatched_users() {
         let config_toml = r#"
             [general]
             
@@ -535,7 +559,6 @@ mod tests {
             [[databases]]
             name = "mirror"
             host = "127.0.0.1"
-            database_name = "mirror_db"
             
             [[mirroring]]
             source = "main"
@@ -548,7 +571,6 @@ mod tests {
             password = "pass"
             database = "main"
             
-            # Multiple users for the mirror database - this triggers the bug
             [[users]]
             name = "mirror_user1"
             password = "pass"
@@ -563,29 +585,15 @@ mod tests {
         let config = load_test_config(config_toml, users_toml);
         let databases = from_config(&config);
 
-        // Check how many mirror clusters are created for the main database
         // With mismatched users, no mirrors should be created
         assert!(
-            databases.mirrors.get("main").is_none()
-                || databases.mirrors.get("main").unwrap().is_empty(),
+            databases.mirrors.values().all(|v| v.is_empty()),
             "No mirrors should be created with mismatched users"
         );
-
-        // But there are actually 2 clusters for the mirror database (one per user)
-        let mirror_clusters: Vec<_> = databases
-            .databases
-            .iter()
-            .filter(|(user, _)| user.database == "mirror")
-            .collect();
-        assert_eq!(
-            mirror_clusters.len(),
-            2,
-            "There are 2 clusters for mirror database (one per user)"
-        );
     }
 
     #[test]
-    fn test_mirror_with_single_user_works_correctly() {
+    fn test_mirror_with_matching_users() {
         let config_toml = r#"
             [general]
             
@@ -596,134 +604,6 @@ mod tests {
             [[databases]]
             name = "mirror"
             host = "127.0.0.1"
-            database_name = "mirror_db"
-            
-            [[mirroring]]
-            source = "main"
-            destination = "mirror"
-        "#;
-
-        let users_toml = r#"
-            [[users]]
-            name = "user1"
-            password = "pass"
-            database = "main"
-            
-            [[users]]
-            name = "user1"
-            password = "pass"
-            database = "mirror"
-        "#;
-
-        let config = load_test_config(config_toml, users_toml);
-        let databases = from_config(&config);
-
-        // With matching users, this should work correctly
-        let mirrors = databases.mirrors.get("main").unwrap();
-        assert_eq!(mirrors.len(), 1, "Single mirror cluster created");
-
-        // Only one cluster for mirror database since user is the same
-        let mirror_clusters: Vec<_> = databases
-            .databases
-            .iter()
-            .filter(|(user, _)| user.database == "mirror")
-            .collect();
-        assert_eq!(
-            mirror_clusters.len(),
-            1,
-            "Only 1 cluster for mirror database with same user"
-        );
-    }
-
-    #[test]
-    fn test_mirror_discovery_bug_with_find() {
-        // This test now verifies the fix works correctly
-        // by using the new [[mirroring]] configuration
-
-        let config_toml = r#"
-            [general]
-            
-            [[databases]]
-            name = "main"
-            host = "127.0.0.1"
-            
-            [[databases]]
-            name = "mirror"
-            host = "127.0.0.1"
-            database_name = "mirror_db"
-            
-            [[mirroring]]
-            source = "main"
-            destination = "mirror"
-        "#;
-
-        let users_toml = r#"
-            [[users]]
-            name = "user1"
-            password = "pass"
-            database = "main"
-            
-            [[users]]
-            name = "user1"
-            password = "pass"
-            database = "mirror"
-            
-            [[users]]
-            name = "user2"
-            password = "pass"
-            database = "main"
-            
-            [[users]]
-            name = "user2"
-            password = "pass"
-            database = "mirror"
-            
-            [[users]]
-            name = "user3"
-            password = "pass"  
-            database = "main"
-            
-            [[users]]
-            name = "user3"
-            password = "pass"  
-            database = "mirror"
-        "#;
-
-        let config = load_test_config(config_toml, users_toml);
-        let databases = from_config(&config);
-
-        // With new implementation, only one mirror config should exist
-        let mirrors = databases.mirrors.get("main").unwrap();
-        assert_eq!(
-            mirrors.len(),
-            1,
-            "Only 1 mirror configuration for main->mirror"
-        );
-        assert_eq!(
-            mirrors[0].0, "mirror",
-            "Mirror destination should be 'mirror'"
-        );
-    }
-
-    // =========================================================================
-    // NEW TESTS FOR DESIRED [[mirroring]] CONFIGURATION BEHAVIOR
-    // These tests should FAIL with current implementation and PASS after fix
-    // =========================================================================
-
-    #[test]
-    fn test_new_mirroring_config_with_matching_users() {
-        // Test the new [[mirroring]] configuration with proper user validation
-        let config_toml = r#"
-            [general]
-            
-            [[databases]]
-            name = "main"
-            host = "127.0.0.1"
-            
-            [[databases]]
-            name = "mirror"
-            host = "127.0.0.1"
-            database_name = "mirror_db"
             
             [[mirroring]]
             source = "main"
@@ -747,79 +627,23 @@ mod tests {
         let config = load_test_config(config_toml, users_toml);
         let databases = from_config(&config);
 
-        // Should have exactly one mirror configuration for main->mirror
-        let mirrors = databases.mirrors.get("main");
-        assert!(
-            mirrors.is_some(),
-            "main database should have mirrors configured"
-        );
+        // Find the main cluster for user1
+        let main_key = User {
+            user: "user1".to_string(),
+            database: "main".to_string(),
+        };
 
-        // The mirror should be a tuple of (destination, exposure, queue_depth)
-        // This will fail because current implementation uses Vec<Cluster>
-        // Expected new type: Vec<(String, f32, usize)>
+        let main_cluster = databases.databases.get(&main_key).unwrap();
+        let mirrors = databases.mirrors.get(main_cluster.name()).unwrap();
 
-        // This test will fail to compile until we implement the new structure
-        // let mirrors = mirrors.unwrap();
-        // assert_eq!(mirrors.len(), 1, "Should have exactly 1 mirror configuration");
-        // assert_eq!(mirrors[0].0, "mirror", "Mirror destination should be 'mirror'");
-        // assert_eq!(mirrors[0].1, 1.0, "Mirror exposure should be 1.0");
-        // assert_eq!(mirrors[0].2, 128, "Queue depth should be 128");
+        assert_eq!(mirrors.len(), 1, "Should have exactly 1 mirror");
+        assert_eq!(mirrors[0].destination.name(), "mirror");
+        assert_eq!(mirrors[0].exposure, 1.0);
+        assert_eq!(mirrors[0].queue_depth, 128);
     }
 
     #[test]
-    fn test_new_mirroring_config_rejects_mismatched_users() {
-        // Test that mirroring is disabled when users don't match
-        let config_toml = r#"
-            [general]
-            
-            [[databases]]
-            name = "main"
-            host = "127.0.0.1"
-            
-            [[databases]]
-            name = "mirror"
-            host = "127.0.0.1"
-            database_name = "mirror_db"
-            
-            [[mirroring]]
-            source = "main"
-            destination = "mirror"
-            exposure = 0.5
-            queue_depth = 64
-        "#;
-
-        let users_toml = r#"
-            [[users]]
-            name = "user1"
-            password = "pass"
-            database = "main"
-            
-            # Different users for mirror database - should fail validation
-            [[users]]
-            name = "mirror_user1"
-            password = "pass"
-            database = "mirror"
-            
-            [[users]]
-            name = "mirror_user2"
-            password = "pass"
-            database = "mirror"
-        "#;
-
-        let config = load_test_config(config_toml, users_toml);
-        let databases = from_config(&config);
-
-        // Should have NO mirrors because users don't match
-        let mirrors = databases.mirrors.get("main");
-        assert!(
-            mirrors.is_none() || mirrors.unwrap().is_empty(),
-            "Mirroring should be disabled when users don't match"
-        );
-    }
-
-    #[test]
-    fn test_new_mirroring_config_multiple_destinations() {
-        // Test multiple mirror destinations
+    fn test_mirror_multiple_destinations() {
         let config_toml = r#"
             [general]
             
@@ -830,12 +654,10 @@ mod tests {
             [[databases]]
             name = "mirror1"
             host = "127.0.0.1"
-            database_name = "mirror_db1"
             
             [[databases]]
             name = "mirror2"
             host = "127.0.0.1"
-            database_name = "mirror_db2"
             
             [[mirroring]]
             source = "main"
@@ -870,33 +692,34 @@ mod tests {
         let config = load_test_config(config_toml, users_toml);
         let databases = from_config(&config);
 
-        // Should have 2 mirror configurations
-        let mirrors = databases.mirrors.get("main");
-        assert!(
-            mirrors.is_some(),
-            "main database should have mirrors configured"
-        );
+        let main_key = User {
+            user: "user1".to_string(),
+            database: "main".to_string(),
+        };
 
-        // This will fail with current implementation
-        // let mirrors = mirrors.unwrap();
-        // assert_eq!(mirrors.len(), 2, "Should have 2 mirror destinations");
+        let main_cluster = databases.databases.get(&main_key).unwrap();
+        let mirrors = databases.mirrors.get(main_cluster.name()).unwrap();
+
+        assert_eq!(mirrors.len(), 2, "Should have 2 mirror destinations");
 
         // Verify each mirror configuration
-        // let mirror1 = mirrors.iter().find(|(dest, _, _)| dest == "mirror1");
-        // assert!(mirror1.is_some(), "Should have mirror1 destination");
-        // assert_eq!(mirror1.unwrap().1, 1.0, "mirror1 exposure should be 1.0");
-        // assert_eq!(mirror1.unwrap().2, 256, "mirror1 queue_depth should be 256");
+        let mirror1 = mirrors
+            .iter()
+            .find(|m| m.destination.name() == "mirror1")
+            .unwrap();
+        assert_eq!(mirror1.exposure, 1.0);
+        assert_eq!(mirror1.queue_depth, 256);
 
-        // let mirror2 = mirrors.iter().find(|(dest, _, _)| dest == "mirror2");
-        // assert!(mirror2.is_some(), "Should have mirror2 destination");
-        // assert_eq!(mirror2.unwrap().1, 0.5, "mirror2 exposure should be 0.5");
-        // assert_eq!(mirror2.unwrap().2, 128, "mirror2 queue_depth should be 128");
+        let mirror2 = mirrors
+            .iter()
+            .find(|m| m.destination.name() == "mirror2")
+            .unwrap();
+        assert_eq!(mirror2.exposure, 0.5);
+        assert_eq!(mirror2.queue_depth, 128);
     }
 
     #[test]
-    fn test_new_mirroring_creates_single_handler_per_destination() {
-        // Test that only one handler is created per destination database,
-        // regardless of how many users exist for that database
+    fn test_mirror_multiple_users() {
         let config_toml = r#"
             [general]
             
@@ -907,7 +730,6 @@ mod tests {
             [[databases]]
             name = "mirror"
             host = "127.0.0.1"
-            database_name = "mirror_db"
             
             [[mirroring]]
             source = "main"
@@ -917,7 +739,6 @@ mod tests {
         "#;
 
         let users_toml = r#"
-            # Multiple users for main database
             [[users]]
             name = "user1"
             password = "pass"
@@ -933,7 +754,6 @@ mod tests {
             password = "pass"
             database = "main"
             
-            # Matching users for mirror database
             [[users]]
             name = "user1"
             password = "pass"
@@ -953,41 +773,31 @@ mod tests {
         let config = load_test_config(config_toml, users_toml);
         let databases = from_config(&config);
 
-        // Should have exactly one mirror configuration, not one per user
-        let mirrors = databases.mirrors.get("main");
-        assert!(
-            mirrors.is_some(),
-            "main database should have mirrors configured"
-        );
+        // All users share the same cluster name "main", so they share the mirrors configuration
+        let mirrors = databases.mirrors.get("main").unwrap();
+        assert_eq!(mirrors.len(), 3, "Should have 3 mirrors (one per user)");
 
-        // This will fail with current implementation
-        // let mirrors = mirrors.unwrap();
-        // assert_eq!(mirrors.len(), 1, "Should have exactly 1 mirror configuration, not per-user");
+        // Verify all mirrors point to clusters with the same destination database name
+        // but are actually different Cluster instances (one per user)
+        for mirror in mirrors {
+            assert_eq!(mirror.destination.name(), "mirror");
+            assert_eq!(mirror.exposure, 1.0);
+            assert_eq!(mirror.queue_depth, 128);
+        }
 
-        // Verify there are multiple clusters for each database (one per user)
+        // Verify we have 3 distinct clusters for each database
         let main_clusters: Vec<_> = databases
             .databases
             .iter()
             .filter(|(user, _)| user.database == "main")
             .collect();
-        assert_eq!(
-            main_clusters.len(),
-            3,
-            "Should have 3 clusters for main database"
-        );
+        assert_eq!(main_clusters.len(), 3);
 
         let mirror_clusters: Vec<_> = databases
             .databases
             .iter()
             .filter(|(user, _)| user.database == "mirror")
             .collect();
-        assert_eq!(
-            mirror_clusters.len(),
-            3,
-            "Should have 3 clusters for mirror database"
-        );
-
-        // But still only ONE mirror configuration
-        // assert_eq!(mirrors.len(), 1, "Despite multiple users, only 1 mirror configuration should exist");
+        assert_eq!(mirror_clusters.len(), 3);
     }
 }
