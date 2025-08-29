@@ -133,10 +133,8 @@ impl MirrorStats {
 
     /// Record a successful mirror operation.
     pub fn record_success(&self, database: &str, user: &str, latency_ms: u64) {
-        // Increment mirrored counter
         self.requests_mirrored.fetch_add(1, Ordering::Relaxed);
 
-        // Update latency metrics
         self.latency_sum_ms.fetch_add(latency_ms, Ordering::Relaxed);
         self.latency_count.fetch_add(1, Ordering::Relaxed);
 
@@ -154,7 +152,6 @@ impl MirrorStats {
             }
         }
 
-        // Update cluster-specific stats
         {
             let mut stats = self.cluster_stats.write();
             stats
@@ -164,10 +161,8 @@ impl MirrorStats {
                 .fetch_add(1, Ordering::Relaxed);
         }
 
-        // Reset consecutive errors
         self.consecutive_errors.store(0, Ordering::Relaxed);
 
-        // Update last success timestamp
         *self.last_success.write() = Instant::now();
     }
 
@@ -175,7 +170,6 @@ impl MirrorStats {
     pub fn record_error(&self, database: &str, user: &str, error_type: MirrorErrorType) {
         self.requests_total.fetch_add(1, Ordering::Relaxed);
 
-        // Increment appropriate error counter
         match error_type {
             MirrorErrorType::Connection => {
                 self.errors_connection.fetch_add(1, Ordering::Relaxed);
@@ -191,7 +185,6 @@ impl MirrorStats {
             }
         }
 
-        // Update cluster-specific error count
         {
             let mut stats = self.cluster_stats.write();
             stats
@@ -201,10 +194,8 @@ impl MirrorStats {
                 .fetch_add(1, Ordering::Relaxed);
         }
 
-        // Track consecutive errors
         self.consecutive_errors.fetch_add(1, Ordering::Relaxed);
 
-        // Update last error timestamp
         *self.last_error.write() = Some(Instant::now());
     }
 
@@ -428,7 +419,6 @@ impl MirrorStats {
             let max_ms = self.latency_max_ms.load(Ordering::Relaxed);
             let max_seconds = max_ms as f64 / 1000.0;
 
-            // Average latency
             metrics.push(Metric::new(MirrorMetric {
                 name: "mirror_latency_seconds_avg".into(),
                 help: "Average mirror operation latency".into(),
@@ -440,7 +430,6 @@ impl MirrorStats {
                 }],
             }));
 
-            // Max latency
             metrics.push(Metric::new(MirrorMetric {
                 name: "mirror_latency_seconds_max".into(),
                 help: "Maximum mirror operation latency".into(),

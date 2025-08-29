@@ -314,7 +314,6 @@ impl Connection {
 
                 self.cluster = Some(cluster);
 
-                // Create mirrors based on new configuration
                 if let Some(mirror_configs) = databases.mirrors(user)? {
                     self.mirror_handlers.clear();
                     for mirror_config in mirror_configs {

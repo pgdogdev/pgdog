@@ -22,7 +22,6 @@ async fn metrics(_: Request<hyper::body::Incoming>) -> Result<Response<Full<Byte
         .collect();
     let query_cache = query_cache.join("\n");
 
-    // Add mirror metrics
     let mirror_stats = MirrorStats::instance();
     let mirror_metrics: Vec<_> = mirror_stats
         .metrics()

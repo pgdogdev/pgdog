@@ -167,7 +167,6 @@ fn categorize_mirror_error(err: &Error) -> MirrorErrorType {
     use crate::backend::pool::Error as PoolError;
 
     match err {
-        // Pool errors
         Error::Pool(pool_err) => match pool_err {
             PoolError::ConnectTimeout
             | PoolError::CheckoutTimeout
@@ -185,10 +184,8 @@ fn categorize_mirror_error(err: &Error) -> MirrorErrorType {
                 categorize_error(&pool_err.to_string())
             }
         },
-        // Direct timeout errors
         Error::ReadTimeout => MirrorErrorType::Timeout,
 
-        // Connection-related errors
         Error::NotConnected | Error::NotInSync | Error::ConnectionError(_) => {
             MirrorErrorType::Connection
         }

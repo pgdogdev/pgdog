@@ -50,7 +50,6 @@ impl MirrorHandler {
     /// Returns true if request will be sent, false otherwise.
     ///
     pub fn send(&mut self, buffer: &ClientRequest) -> bool {
-        // Track total requests
         let stats = MirrorStats::instance();
         stats.increment_total();
 

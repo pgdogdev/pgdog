@@ -585,7 +585,6 @@ mod tests {
         let config = load_test_config(config_toml, users_toml);
         let databases = from_config(&config);
 
-        // With mismatched users, no mirrors should be created
         assert!(
             databases.mirrors.values().all(|v| v.is_empty()),
             "No mirrors should be created with mismatched users"
@@ -627,7 +626,6 @@ mod tests {
         let config = load_test_config(config_toml, users_toml);
         let databases = from_config(&config);
 
-        // Find the main cluster for user1
         let main_key = User {
             user: "user1".to_string(),
             database: "main".to_string(),

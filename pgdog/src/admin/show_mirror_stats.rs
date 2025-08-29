@@ -16,16 +16,11 @@ impl Command for ShowMirrorStats {
     }
 
     async fn execute(&self) -> Result<Vec<Message>, Error> {
-        let fields = vec![
-            // Overall metrics
-            Field::text("metric"),
-            Field::numeric("value"),
-        ];
+        let fields = vec![Field::text("metric"), Field::numeric("value")];
 
         let mut messages = vec![RowDescription::new(&fields).message()?];
         let stats = MirrorStats::instance();
 
-        // Add overall metrics
         let metrics = vec![
             (
                 "requests_total",
@@ -83,7 +78,6 @@ impl Command for ShowMirrorStats {
             messages.push(dr.message()?);
         }
 
-        // Add latency metrics
         let latency_count = stats
             .latency_count
             .load(std::sync::atomic::Ordering::Relaxed);
@@ -105,7 +99,6 @@ impl Command for ShowMirrorStats {
             messages.push(dr.message()?);
         }
 
-        // Add error rate
         let error_rate = stats.error_rate();
         let mut dr = DataRow::new();
         dr.add("error_rate").add(format!("{:.4}", error_rate));
@@ -138,7 +131,6 @@ impl Command for ShowMirrorStatsByDatabase {
         let mut messages = vec![RowDescription::new(&fields).message()?];
         let stats = MirrorStats::instance();
 
-        // Per-cluster stats (shown as database and user)
         {
             let cluster_stats = stats.cluster_stats.read();
             for ((database, user), cluster_stat) in cluster_stats.iter() {
@@ -172,7 +164,6 @@ mod test {
 
     #[tokio::test]
     async fn test_show_mirror_stats() {
-        // Set up some test data
         let stats = MirrorStats::instance();
         stats.increment_total();
         stats.increment_total();
@@ -184,7 +175,6 @@ mod test {
             crate::stats::MirrorErrorType::Connection,
         );
 
-        // Execute the command
         let cmd = ShowMirrorStats;
         let messages = cmd.execute().await.unwrap();
 
@@ -205,13 +195,11 @@ mod test {
 
     #[tokio::test]
     async fn test_show_mirror_stats_by_database() {
-        // Set up some test data
         let stats = MirrorStats::instance();
         stats.record_success("db1", "user1", 50);
         stats.record_success("db2", "user2", 75);
         stats.record_error("db1", "user1", crate::stats::MirrorErrorType::Query);
 
-        // Execute the command
         let cmd = ShowMirrorStatsByDatabase;
         let messages = cmd.execute().await.unwrap();
 
@@ -230,7 +218,6 @@ mod test {
 
     #[tokio::test]
     async fn test_parse_commands() {
-        // Test parsing works
         let cmd1 = ShowMirrorStats::parse("show mirror_stats").unwrap();
         assert_eq!(cmd1.name(), "SHOW MIRROR_STATS");
 
