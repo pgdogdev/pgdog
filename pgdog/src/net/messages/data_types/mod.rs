@@ -7,6 +7,8 @@ use bytes::Bytes;
 pub mod array;
 pub mod bigint;
 pub mod boolean;
+pub mod double;
+pub mod float;
 pub mod integer;
 pub mod interval;
 pub mod numeric;
@@ -16,6 +18,8 @@ pub mod timestamptz;
 pub mod uuid;
 pub mod vector;
 
+pub use double::Double;
+pub use float::Float;
 pub use interval::Interval;
 pub use numeric::Numeric;
 pub use timestamp::Timestamp;
@@ -27,7 +31,7 @@ pub trait FromDataType: Sized + PartialOrd + Ord + PartialEq {
     fn encode(&self, encoding: Format) -> Result<Bytes, Error>;
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, PartialOrd)]
 pub enum Datum {
     /// BIGINT.
     Bigint(i64),
@@ -45,8 +49,12 @@ pub enum Datum {
     TimestampTz(TimestampTz),
     /// UUID.
     Uuid(Uuid),
-    /// NUMERIC, REAL, DOUBLE PRECISION.
+    /// NUMERIC.
     Numeric(Numeric),
+    /// REAL (float4).
+    Float(Float),
+    /// DOUBLE PRECISION (float8).
+    Double(Double),
     /// Vector
     Vector(Vector),
     /// We don't know.
@@ -55,6 +63,50 @@ pub enum Datum {
     Null,
     /// Boolean
     Boolean(bool),
+}
+
+impl Eq for Datum {}
+
+impl std::hash::Hash for Datum {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        use Datum::*;
+        std::mem::discriminant(self).hash(state);
+        match self {
+            Bigint(v) => v.hash(state),
+            Integer(v) => v.hash(state),
+            SmallInt(v) => v.hash(state),
+            Interval(v) => v.hash(state),
+            Text(v) => v.hash(state),
+            Timestamp(v) => v.hash(state),
+            TimestampTz(v) => v.hash(state),
+            Uuid(v) => v.hash(state),
+            Numeric(v) => v.hash(state),
+            Float(v) => {
+                if v.0.is_nan() {
+                    0u32.hash(state);
+                } else {
+                    v.0.to_bits().hash(state);
+                }
+            }
+            Double(v) => {
+                if v.0.is_nan() {
+                    0u64.hash(state);
+                } else {
+                    v.0.to_bits().hash(state);
+                }
+            }
+            Vector(v) => v.hash(state),
+            Unknown(v) => v.hash(state),
+            Null => {}
+            Boolean(v) => v.hash(state),
+        }
+    }
+}
+
+impl Ord for Datum {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.partial_cmp(other).unwrap_or(std::cmp::Ordering::Equal)
+    }
 }
 
 impl ToDataRowColumn for Datum {
@@ -71,6 +123,8 @@ impl ToDataRowColumn for Datum {
             TimestampTz(tz) => tz.to_data_row_column(),
             Uuid(uuid) => uuid.to_data_row_column(),
             Numeric(num) => num.to_data_row_column(),
+            Float(val) => val.to_data_row_column(),
+            Double(val) => val.to_data_row_column(),
             Vector(vector) => vector.to_data_row_column(),
             Unknown(bytes) => bytes.clone().into(),
             Null => Data::null(),
@@ -91,6 +145,12 @@ impl Add for Datum {
             (SmallInt(a), SmallInt(b)) => SmallInt(a + b),
             (Interval(a), Interval(b)) => Interval(a + b),
             (Numeric(a), Numeric(b)) => Numeric(a + b),
+            (Float(a), Float(b)) => {
+                Float(crate::net::messages::data_types::float::Float(a.0 + b.0))
+            }
+            (Double(a), Double(b)) => {
+                Double(crate::net::messages::data_types::double::Double(a.0 + b.0))
+            }
             (Datum::Null, b) => b,
             (a, Datum::Null) => a,
             _ => Datum::Null, // Might be good to raise an error.
@@ -109,9 +169,9 @@ impl Datum {
             DataType::Integer => Ok(Datum::Integer(i32::decode(bytes, encoding)?)),
             DataType::Text => Ok(Datum::Text(String::decode(bytes, encoding)?)),
             DataType::Interval => Ok(Datum::Interval(Interval::decode(bytes, encoding)?)),
-            DataType::Numeric | DataType::DoublePrecision | DataType::Real => {
-                Ok(Datum::Numeric(Numeric::decode(bytes, encoding)?))
-            }
+            DataType::Numeric => Ok(Datum::Numeric(Numeric::decode(bytes, encoding)?)),
+            DataType::Real => Ok(Datum::Float(Float::decode(bytes, encoding)?)),
+            DataType::DoublePrecision => Ok(Datum::Double(Double::decode(bytes, encoding)?)),
             DataType::Uuid => Ok(Datum::Uuid(Uuid::decode(bytes, encoding)?)),
             DataType::Timestamp => Ok(Datum::Timestamp(Timestamp::decode(bytes, encoding)?)),
             DataType::TimestampTz => Ok(Datum::TimestampTz(TimestampTz::decode(bytes, encoding)?)),
@@ -132,11 +192,13 @@ impl Datum {
             Datum::Uuid(uuid) => uuid.encode(format),
             Datum::Text(s) => s.encode(format),
             Datum::Boolean(b) => b.encode(format),
+            Datum::Float(f) => f.encode(format),
+            Datum::Double(d) => d.encode(format),
+            Datum::Numeric(n) => n.encode(format),
             _ => Err(Error::UnexpectedPayload),
         }
     }
 }
-
 
 /// PostgreSQL data types.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
