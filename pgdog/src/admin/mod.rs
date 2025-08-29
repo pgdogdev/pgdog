@@ -21,6 +21,7 @@ pub mod setup_schema;
 pub mod show_clients;
 pub mod show_config;
 pub mod show_lists;
+pub mod show_mirror_stats;
 pub mod show_peers;
 pub mod show_pools;
 pub mod show_prepared_statements;

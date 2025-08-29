@@ -16,6 +16,7 @@ use crate::frontend::client::TransactionType;
 use crate::frontend::comms::comms;
 use crate::frontend::PreparedStatements;
 use crate::net::{Parameter, Parameters, Stream};
+use crate::stats::mirror::{categorize_error, MirrorErrorType, MirrorStats};
 
 use crate::frontend::ClientRequest;
 
@@ -72,6 +73,19 @@ impl Mirror {
     ///
     pub fn spawn(cluster: &Cluster) -> Result<MirrorHandler, Error> {
         let config = config();
+        Self::spawn_with_config(
+            cluster,
+            config.config.general.mirror_exposure,
+            config.config.general.mirror_queue,
+        )
+    }
+
+    pub fn spawn_with_config(
+        cluster: &Cluster,
+        exposure: f32,
+        queue_depth: usize,
+    ) -> Result<MirrorHandler, Error> {
+        let config = config();
         let params = Parameters::from(vec![
             Parameter {
                 name: "user".into(),
@@ -89,9 +103,13 @@ impl Mirror {
         // Mirror traffic handler.
         let mut mirror = Self::new(&params, &config);
 
+        // Get the database and user names for stats tracking
+        let database_name = cluster.name().to_string();
+        let user_name = cluster.user().to_string();
+
         // Mirror queue.
-        let (tx, mut rx) = channel(config.config.general.mirror_queue);
-        let handler = MirrorHandler::new(tx, config.config.general.mirror_exposure);
+        let (tx, mut rx) = channel(queue_depth);
+        let handler = MirrorHandler::new(tx, exposure, database_name.clone(), user_name.clone());
 
         spawn(async move {
             loop {
@@ -99,8 +117,17 @@ impl Mirror {
                     req = rx.recv() => {
                         if let Some(mut req) = req {
                             // TODO: timeout these.
-                            if let Err(err) = mirror.handle(&mut req, &mut query_engine).await {
-                                error!("mirror error: {}", err);
+                            let start = Instant::now();
+                            match mirror.handle(&mut req, &mut query_engine).await {
+                                Ok(_) => {
+                                    let latency_ms = start.elapsed().as_millis() as u64;
+                                    MirrorStats::instance().record_success(&database_name, &user_name, latency_ms);
+                                }
+                                Err(err) => {
+                                    let error_type = categorize_mirror_error(&err);
+                                    MirrorStats::instance().record_error(&database_name, &user_name, error_type);
+                                    error!("mirror error: {} (type: {:?})", err, error_type);
+                                }
                             }
                         } else {
                             debug!("mirror client shutting down");
@@ -121,7 +148,6 @@ impl Mirror {
         query_engine: &mut QueryEngine,
     ) -> Result<(), Error> {
         debug!("mirroring {} client requests", request.buffer.len());
-
         for req in &mut request.buffer {
             if req.delay > Duration::ZERO {
                 sleep(req.delay).await;
@@ -136,6 +162,45 @@ impl Mirror {
     }
 }
 
+/// Categorize a mirror error into a specific error type.
+fn categorize_mirror_error(err: &Error) -> MirrorErrorType {
+    use crate::backend::pool::Error as PoolError;
+
+    match err {
+        Error::Pool(pool_err) => match pool_err {
+            PoolError::ConnectTimeout
+            | PoolError::CheckoutTimeout
+            | PoolError::ReplicaCheckoutTimeout
+            | PoolError::HealthcheckTimeout => MirrorErrorType::Timeout,
+            PoolError::ServerError
+            | PoolError::ManualBan
+            | PoolError::Banned
+            | PoolError::Offline
+            | PoolError::NoPrimary
+            | PoolError::AllReplicasDown
+            | PoolError::NoDatabases => MirrorErrorType::Connection,
+            _ => {
+                // Other pool errors - categorize by string
+                categorize_error(&pool_err.to_string())
+            }
+        },
+        Error::ReadTimeout => MirrorErrorType::Timeout,
+
+        Error::NotConnected | Error::NotInSync | Error::ConnectionError(_) => {
+            MirrorErrorType::Connection
+        }
+
+        // IO errors are typically connection-related
+        Error::Io(_) => MirrorErrorType::Connection,
+
+        // Fall back to string categorization for other error types
+        _ => {
+            let error_str = err.to_string();
+            categorize_error(&error_str)
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
     use crate::{backend::pool::Request, config, net::Query};
@@ -145,7 +210,12 @@ mod test {
     #[tokio::test]
     async fn test_mirror_exposure() {
         let (tx, rx) = channel(25);
-        let mut handle = MirrorHandler::new(tx.clone(), 1.0);
+        let mut handle = MirrorHandler::new(
+            tx.clone(),
+            1.0,
+            "test_db".to_string(),
+            "test_user".to_string(),
+        );
 
         for _ in 0..25 {
             assert!(
@@ -159,7 +229,12 @@ mod test {
 
         let (tx, rx) = channel(25);
 
-        let mut handle = MirrorHandler::new(tx.clone(), 0.5);
+        let mut handle = MirrorHandler::new(
+            tx.clone(),
+            0.5,
+            "test_db".to_string(),
+            "test_user".to_string(),
+        );
         let dropped = (0..25)
             .into_iter()
             .map(|_| handle.send(&vec![].into()) && handle.send(&vec![].into()) && handle.flush())

@@ -1,13 +1,29 @@
 //! Admin command parser.
 
 use super::{
-    ban::Ban, maintenance_mode::MaintenanceMode, pause::Pause, prelude::Message, probe::Probe,
-    reconnect::Reconnect, reload::Reload, reset_query_cache::ResetQueryCache, set::Set,
-    setup_schema::SetupSchema, show_clients::ShowClients, show_config::ShowConfig,
-    show_lists::ShowLists, show_peers::ShowPeers, show_pools::ShowPools,
-    show_prepared_statements::ShowPreparedStatements, show_query_cache::ShowQueryCache,
-    show_servers::ShowServers, show_stats::ShowStats, show_version::ShowVersion,
-    shutdown::Shutdown, Command, Error,
+    ban::Ban,
+    maintenance_mode::MaintenanceMode,
+    pause::Pause,
+    prelude::Message,
+    probe::Probe,
+    reconnect::Reconnect,
+    reload::Reload,
+    reset_query_cache::ResetQueryCache,
+    set::Set,
+    setup_schema::SetupSchema,
+    show_clients::ShowClients,
+    show_config::ShowConfig,
+    show_lists::ShowLists,
+    show_mirror_stats::{ShowMirrorStats, ShowMirrorStatsByDatabase},
+    show_peers::ShowPeers,
+    show_pools::ShowPools,
+    show_prepared_statements::ShowPreparedStatements,
+    show_query_cache::ShowQueryCache,
+    show_servers::ShowServers,
+    show_stats::ShowStats,
+    show_version::ShowVersion,
+    shutdown::Shutdown,
+    Command, Error,
 };
 
 use tracing::debug;
@@ -25,6 +41,8 @@ pub enum ParseResult {
     ShowQueryCache(ShowQueryCache),
     ResetQueryCache(ResetQueryCache),
     ShowStats(ShowStats),
+    ShowMirrorStats(ShowMirrorStats),
+    ShowMirrorStatsByDatabase(ShowMirrorStatsByDatabase),
     ShowVersion(ShowVersion),
     SetupSchema(SetupSchema),
     Shutdown(Shutdown),
@@ -53,6 +71,10 @@ impl ParseResult {
             ShowQueryCache(show_query_cache) => show_query_cache.execute().await,
             ResetQueryCache(reset_query_cache) => reset_query_cache.execute().await,
             ShowStats(show_stats) => show_stats.execute().await,
+            ShowMirrorStats(show_mirror_stats) => show_mirror_stats.execute().await,
+            ShowMirrorStatsByDatabase(show_mirror_stats_by_database) => {
+                show_mirror_stats_by_database.execute().await
+            }
             ShowVersion(show_version) => show_version.execute().await,
             SetupSchema(setup_schema) => setup_schema.execute().await,
             Shutdown(shutdown) => shutdown.execute().await,
@@ -81,6 +103,10 @@ impl ParseResult {
             ShowQueryCache(show_query_cache) => show_query_cache.name(),
             ResetQueryCache(reset_query_cache) => reset_query_cache.name(),
             ShowStats(show_stats) => show_stats.name(),
+            ShowMirrorStats(show_mirror_stats) => show_mirror_stats.name(),
+            ShowMirrorStatsByDatabase(show_mirror_stats_by_database) => {
+                show_mirror_stats_by_database.name()
+            }
             ShowVersion(show_version) => show_version.name(),
             SetupSchema(setup_schema) => setup_schema.name(),
             Shutdown(shutdown) => shutdown.name(),
@@ -117,6 +143,10 @@ impl Parser {
                 "peers" => ParseResult::ShowPeers(ShowPeers::parse(&sql)?),
                 "query_cache" => ParseResult::ShowQueryCache(ShowQueryCache::parse(&sql)?),
                 "stats" => ParseResult::ShowStats(ShowStats::parse(&sql)?),
+                "mirror_stats" => ParseResult::ShowMirrorStats(ShowMirrorStats::parse(&sql)?),
+                "mirror_stats_by_database" => {
+                    ParseResult::ShowMirrorStatsByDatabase(ShowMirrorStatsByDatabase::parse(&sql)?)
+                }
                 "version" => ParseResult::ShowVersion(ShowVersion::parse(&sql)?),
                 "lists" => ParseResult::ShowLists(ShowLists::parse(&sql)?),
                 "prepared" => ParseResult::ShowPrepared(ShowPreparedStatements::parse(&sql)?),

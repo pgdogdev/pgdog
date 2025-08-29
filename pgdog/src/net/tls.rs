@@ -364,7 +364,7 @@ mod tests {
 
         let good_ca_path = PathBuf::from("tests/tls/cert.pem");
 
-        info!("Using test CA file: {}", good_ca_path.display());
+        info!("using test CA file: {}", good_ca_path.display());
         // check that the file exists
         assert!(good_ca_path.exists(), "Test CA file should exist");
 
