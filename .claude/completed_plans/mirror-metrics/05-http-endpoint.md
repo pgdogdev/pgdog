@@ -1,5 +1,10 @@
 # Sub-Plan 05: HTTP Endpoint Integration
 
+**STATUS: ✅ COMPLETE**
+**Completed: 2025-08-28**
+
+Metrics exposed at /metrics endpoint with proper content-type
+
 ## Objective
 Integrate MirrorStats with PgDog's existing HTTP metrics endpoint at port 9090, ensuring mirror metrics appear alongside existing pool and client metrics.
 
