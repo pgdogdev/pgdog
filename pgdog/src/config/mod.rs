@@ -70,7 +70,7 @@ pub fn from_env() -> Result<ConfigAndUsers, Error> {
     let mut urls = vec![];
     let mut index = 1;
     loop {
-        if let Ok(url) = env::var(&format!("PGDOG_DATABASE_URL_{}", index)) {
+        if let Ok(url) = env::var(format!("PGDOG_DATABASE_URL_{}", index)) {
             urls.push(url);
             index += 1;
         } else {
@@ -79,7 +79,7 @@ pub fn from_env() -> Result<ConfigAndUsers, Error> {
     }
 
     if urls.is_empty() {
-        return Err(Error::NoDbsInEnv);
+        Err(Error::NoDbsInEnv)
     } else {
         from_urls(&urls)
     }
