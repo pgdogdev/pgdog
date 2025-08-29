@@ -140,7 +140,7 @@ impl Command for ShowMirrorStatsByDatabase {
 
         // Per-cluster stats (shown as database and user)
         {
-            let cluster_stats = stats.cluster_stats.read().unwrap();
+            let cluster_stats = stats.cluster_stats.read();
             for ((database, user), cluster_stat) in cluster_stats.iter() {
                 let mut dr = DataRow::new();
                 dr.add(database.as_str())

@@ -103,13 +103,13 @@ impl Mirror {
         // Mirror traffic handler.
         let mut mirror = Self::new(&params, &config);
 
-        // Mirror queue.
-        let (tx, mut rx) = channel(queue_depth);
-        let handler = MirrorHandler::new(tx, exposure);
-
         // Get the database and user names for stats tracking
         let database_name = cluster.name().to_string();
         let user_name = cluster.user().to_string();
+
+        // Mirror queue.
+        let (tx, mut rx) = channel(queue_depth);
+        let handler = MirrorHandler::new(tx, exposure, database_name.clone(), user_name.clone());
 
         spawn(async move {
             loop {
@@ -213,7 +213,12 @@ mod test {
     #[tokio::test]
     async fn test_mirror_exposure() {
         let (tx, rx) = channel(25);
-        let mut handle = MirrorHandler::new(tx.clone(), 1.0);
+        let mut handle = MirrorHandler::new(
+            tx.clone(),
+            1.0,
+            "test_db".to_string(),
+            "test_user".to_string(),
+        );
 
         for _ in 0..25 {
             assert!(
@@ -227,7 +232,12 @@ mod test {
 
         let (tx, rx) = channel(25);
 
-        let mut handle = MirrorHandler::new(tx.clone(), 0.5);
+        let mut handle = MirrorHandler::new(
+            tx.clone(),
+            0.5,
+            "test_db".to_string(),
+            "test_user".to_string(),
+        );
         let dropped = (0..25)
             .into_iter()
             .map(|_| handle.send(&vec![].into()) && handle.send(&vec![].into()) && handle.flush())

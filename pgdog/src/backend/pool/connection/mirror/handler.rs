@@ -9,29 +9,22 @@ use crate::stats::mirror::{MirrorErrorType, MirrorStats};
 /// Mirror handle state.
 #[derive(Debug, Clone, PartialEq, Copy)]
 enum MirrorHandlerState {
-    /// Subsequent requests will be dropped until
-    /// mirror handle is flushed.
     Dropping,
-    /// Requests are being buffered and will be forwarded
-    /// to the mirror when flushed.
     Sending,
-    /// Mirror handle is idle.
     Idle,
 }
 
-/// Mirror handle.
 #[derive(Debug)]
 pub struct MirrorHandler {
-    /// Sender.
     tx: Sender<MirrorRequest>,
     /// Percentage of requests being mirrored. 0 = 0%, 1.0 = 100%.
     exposure: f32,
-    /// Mirror handle state.
     state: MirrorHandlerState,
-    /// Request buffer.
     buffer: Vec<BufferWithDelay>,
     /// Request timer, to simulate delays between queries.
     timer: Instant,
+    database: String,
+    user: String,
 }
 
 impl MirrorHandler {
@@ -40,14 +33,15 @@ impl MirrorHandler {
         &self.buffer
     }
 
-    /// Create new mirror handle with exposure.
-    pub fn new(tx: Sender<MirrorRequest>, exposure: f32) -> Self {
+    pub fn new(tx: Sender<MirrorRequest>, exposure: f32, database: String, user: String) -> Self {
         Self {
             tx,
             exposure,
             state: MirrorHandlerState::Idle,
             buffer: vec![],
             timer: Instant::now(),
+            database,
+            user,
         }
     }
 
@@ -98,7 +92,6 @@ impl MirrorHandler {
         }
     }
 
-    /// Flush buffered requests to mirror.
     pub fn flush(&mut self) -> bool {
         if self.state == MirrorHandlerState::Dropping {
             debug!("mirror transaction dropped");
@@ -113,11 +106,9 @@ impl MirrorHandler {
             }) {
                 Ok(_) => true,
                 Err(_) => {
-                    // Buffer is full, count as dropped
                     let stats = MirrorStats::instance();
                     stats.increment_dropped();
-                    // Note: we don't have user context here, using "unknown" for both
-                    stats.record_error("unknown", "unknown", MirrorErrorType::BufferFull);
+                    stats.record_error(&self.database, &self.user, MirrorErrorType::BufferFull);
                     false
                 }
             }

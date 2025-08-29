@@ -1,8 +1,9 @@
 //! Mirror statistics.
 
+use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, OnceLock, RwLock};
+use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
 use super::{Measurement, MeasurementType, Metric, OpenMetric};
@@ -78,10 +79,10 @@ impl Clone for MirrorStats {
             latency_sum_ms: AtomicU64::new(self.latency_sum_ms.load(Ordering::Relaxed)),
             latency_count: AtomicU64::new(self.latency_count.load(Ordering::Relaxed)),
             latency_max_ms: AtomicU64::new(self.latency_max_ms.load(Ordering::Relaxed)),
-            last_success: RwLock::new(*self.last_success.read().unwrap()),
-            last_error: RwLock::new(*self.last_error.read().unwrap()),
+            last_success: RwLock::new(*self.last_success.read()),
+            last_error: RwLock::new(*self.last_error.read()),
             consecutive_errors: AtomicU64::new(self.consecutive_errors.load(Ordering::Relaxed)),
-            cluster_stats: Arc::new(RwLock::new(self.cluster_stats.read().unwrap().clone())),
+            cluster_stats: Arc::new(RwLock::new(self.cluster_stats.read().clone())),
         }
     }
 }
@@ -155,7 +156,7 @@ impl MirrorStats {
 
         // Update cluster-specific stats
         {
-            let mut stats = self.cluster_stats.write().unwrap();
+            let mut stats = self.cluster_stats.write();
             stats
                 .entry((database.to_string(), user.to_string()))
                 .or_insert_with(ClusterMirrorStats::default)
@@ -167,7 +168,7 @@ impl MirrorStats {
         self.consecutive_errors.store(0, Ordering::Relaxed);
 
         // Update last success timestamp
-        *self.last_success.write().unwrap() = Instant::now();
+        *self.last_success.write() = Instant::now();
     }
 
     /// Record an error in mirror operation.
@@ -192,7 +193,7 @@ impl MirrorStats {
 
         // Update cluster-specific error count
         {
-            let mut stats = self.cluster_stats.write().unwrap();
+            let mut stats = self.cluster_stats.write();
             stats
                 .entry((database.to_string(), user.to_string()))
                 .or_insert_with(ClusterMirrorStats::default)
@@ -204,7 +205,7 @@ impl MirrorStats {
         self.consecutive_errors.fetch_add(1, Ordering::Relaxed);
 
         // Update last error timestamp
-        *self.last_error.write().unwrap() = Some(Instant::now());
+        *self.last_error.write() = Some(Instant::now());
     }
 
     /// Reset all counters to zero.
@@ -220,7 +221,7 @@ impl MirrorStats {
         self.latency_count.store(0, Ordering::Relaxed);
         self.latency_max_ms.store(0, Ordering::Relaxed);
         self.consecutive_errors.store(0, Ordering::Relaxed);
-        self.cluster_stats.write().unwrap().clear();
+        self.cluster_stats.write().clear();
     }
 
     /// Get total error count.
@@ -478,7 +479,7 @@ impl MirrorStats {
 
         // Per-database metrics
         {
-            let cluster_stats = self.cluster_stats.read().unwrap();
+            let cluster_stats = self.cluster_stats.read();
             let mut db_request_measurements = vec![];
             let mut db_error_measurements = vec![];
 
@@ -585,7 +586,7 @@ mod test {
         stats.record_success("test_db", "test_user", 50);
         let after = Instant::now();
 
-        let last_success = *stats.last_success.read().unwrap();
+        let last_success = *stats.last_success.read();
         assert!(last_success > before);
         assert!(last_success < after);
     }
@@ -613,7 +614,7 @@ mod test {
         stats.record_success("db2", "user2", 200);
 
         {
-            let cluster_stats = stats.cluster_stats.read().unwrap();
+            let cluster_stats = stats.cluster_stats.read();
             let db1_stats = cluster_stats
                 .get(&("db1".to_string(), "user1".to_string()))
                 .unwrap();
@@ -734,14 +735,14 @@ mod test {
         fn test_last_error_timestamp() {
             let stats = MirrorStats::default();
 
-            assert!(stats.last_error.read().unwrap().is_none());
+            assert!(stats.last_error.read().is_none());
 
             let before = Instant::now();
             std::thread::sleep(Duration::from_millis(10));
             stats.record_error("db1", "user1", MirrorErrorType::Connection);
             let after = Instant::now();
 
-            let last_error = stats.last_error.read().unwrap().unwrap();
+            let last_error = stats.last_error.read().unwrap();
             assert!(last_error > before);
             assert!(last_error < after);
         }
@@ -755,7 +756,7 @@ mod test {
             stats.record_error("db2", "user2", MirrorErrorType::Timeout);
 
             {
-                let cluster_stats = stats.cluster_stats.read().unwrap();
+                let cluster_stats = stats.cluster_stats.read();
                 let db1_stats = cluster_stats
                     .get(&("db1".to_string(), "user1".to_string()))
                     .unwrap();
