@@ -6,7 +6,7 @@ use rand::{thread_rng, Rng};
 use tokio::select;
 use tokio::time::{sleep, Instant};
 use tokio::{spawn, sync::mpsc::*};
-use tracing::{debug, error};
+use tracing::{debug, error, trace};
 
 use crate::backend::Cluster;
 use crate::config::{config, ConfigAndUsers};
@@ -17,6 +17,7 @@ use crate::frontend::comms::comms;
 use crate::frontend::PreparedStatements;
 use crate::net::{Parameter, Parameters, Stream};
 use crate::stats::mirror::{categorize_error, MirrorErrorType, MirrorStats};
+use std::sync::Arc;
 
 use crate::frontend::ClientRequest;
 
@@ -32,7 +33,6 @@ pub use request::*;
 
 /// Mirror handler. One is created for each client connected
 /// to PgDog.
-#[derive(Debug)]
 pub struct Mirror {
     /// Mirror's prepared statements. Should be similar
     /// to client's statements, if exposure is high.
@@ -47,10 +47,12 @@ pub struct Mirror {
     pub transaction: Option<TransactionType>,
     /// Cross-shard queries.
     pub cross_shard_disabled: bool,
+    /// Reference to destination cluster for health checks.
+    pub cluster: Arc<Cluster>,
 }
 
 impl Mirror {
-    fn new(params: &Parameters, config: &ConfigAndUsers) -> Self {
+    fn new(params: &Parameters, config: &ConfigAndUsers, cluster: Arc<Cluster>) -> Self {
         Self {
             prepared_statements: PreparedStatements::new(),
             params: params.clone(),
@@ -58,6 +60,7 @@ impl Mirror {
             stream: Stream::DevNull,
             transaction: None,
             cross_shard_disabled: config.config.general.cross_shard_disabled,
+            cluster,
         }
     }
 
@@ -100,8 +103,11 @@ impl Mirror {
         // Same query engine as the client, except with a potentially different database config.
         let mut query_engine = QueryEngine::new(&params, &comms(), false, &None)?;
 
+        // Create cluster Arc for sharing with mirror task
+        let cluster_arc = Arc::new(cluster.clone());
+
         // Mirror traffic handler.
-        let mut mirror = Self::new(&params, &config);
+        let mut mirror = Self::new(&params, &config, cluster_arc.clone());
 
         // Get the database and user names for stats tracking
         let database_name = cluster.name().to_string();
@@ -118,13 +124,16 @@ impl Mirror {
                         if let Some(mut req) = req {
                             // TODO: timeout these.
                             let start = Instant::now();
+                            trace!("Mirror task: Processing request with {} buffers", req.buffer.len());
                             match mirror.handle(&mut req, &mut query_engine).await {
                                 Ok(_) => {
                                     let latency_ms = start.elapsed().as_millis() as u64;
+                                    trace!("Mirror task: Success, recording as mirrored");
                                     MirrorStats::instance().record_success(&database_name, &user_name, latency_ms);
                                 }
                                 Err(err) => {
                                     let error_type = categorize_mirror_error(&err);
+                                    trace!("Mirror task: Error occurred, recording as error type: {:?}", error_type);
                                     MirrorStats::instance().record_error(&database_name, &user_name, error_type);
                                     error!("mirror error: {} (type: {:?})", err, error_type);
                                 }
@@ -147,6 +156,29 @@ impl Mirror {
         request: &mut MirrorRequest,
         query_engine: &mut QueryEngine,
     ) -> Result<(), Error> {
+        // Check if destination cluster has any available pools
+        // Check all shards for availability
+        trace!(
+            "Mirror: Checking {} shards for availability",
+            self.cluster.shards().len()
+        );
+        let pools_available = self.cluster.shards().iter().any(|shard| {
+            let pools = shard.pools();
+            trace!("Mirror: Shard has {} pools", pools.len());
+            let available = pools.iter().any(|pool| {
+                let banned = pool.banned();
+                trace!("Mirror: Pool {} banned: {}", pool.addr(), banned);
+                !banned
+            });
+            available
+        });
+
+        if !pools_available {
+            // All pools are banned, return connection error
+            trace!("Mirror: All pools banned, returning error");
+            return Err(Error::Pool(crate::backend::pool::Error::Banned));
+        }
+
         debug!("mirroring {} client requests", request.buffer.len());
         for req in &mut request.buffer {
             if req.delay > Duration::ZERO {
