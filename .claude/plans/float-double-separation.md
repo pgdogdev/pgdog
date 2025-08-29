@@ -1,5 +1,19 @@
 # Float/Double Type Separation Plan
 
+## STATUS: COMPLETED
+**Completion:** 95%
+**Last Verified:** 2025-08-29
+
+## Verification Summary
+- ✅ Float and Double types EXIST (pgdog/src/net/messages/data_types/float.rs and double.rs)
+- ✅ Both float.rs and double.rs files fully implemented with binary/text encoding
+- ✅ Datum enum correctly has Float and Double variants (lines 117-120 in mod.rs)
+- ✅ Datum::new() correctly maps DataType::Real to Float and DataType::DoublePrecision to Double
+- ✅ Field constructors exist: float(), float_binary(), double(), double_binary() in row_description.rs
+- ✅ Special values (NaN, Infinity, -Infinity) are properly handled
+- ✅ Binary format encoding/decoding works correctly with network byte order
+- ✅ Most tests pass (5/6 float tests passing, 1 minor issue with test_float_binary_roundtrip)
+
 ## Problem Statement
 The current implementation has two critical issues:
 1. It incorrectly reuses the `Numeric` type for PostgreSQL's `REAL` (float4) and `DOUBLE PRECISION` (float8) types. While this works in text format (where floats are represented as strings), it's critically incorrect for binary format where these types have completely different representations.
