@@ -2,6 +2,7 @@ use crate::{
     frontend::router::parser::Shard,
     net::messages::{Numeric, Vector},
 };
+use rust_decimal::prelude::ToPrimitive;
 
 pub enum Distance<'a> {
     Euclidean(&'a Vector, &'a Vector),
@@ -15,7 +16,8 @@ impl Distance<'_> {
                 assert_eq!(p.len(), q.len());
                 p.iter()
                     .zip(q.iter())
-                    .map(|(p, q)| (**q - **p).powi(2))
+                    // TODO: vectors should use f64?
+                    .map(|(p, q)| (q.to_f64().unwrap_or(0.0) - p.to_f64().unwrap_or(0.0)).powi(2))
                     .sum::<f64>()
                     .sqrt()
             }
