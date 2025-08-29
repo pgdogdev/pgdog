@@ -50,4 +50,10 @@ async fn test_cross_shard_disabled() {
 
     // Still works with cross-shard disabled.
     admin.fetch_all("SHOW QUERY_CACHE").await.unwrap();
+
+    // Set it back to default value.
+    admin
+        .execute("SET cross_shard_disabled TO false")
+        .await
+        .unwrap();
 }
