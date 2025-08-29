@@ -9,4 +9,5 @@ pub mod reload;
 pub mod set_sharding_key;
 pub mod syntax_error;
 pub mod test_mirror_with_sharding;
+pub mod test_mirror_stats_bug;
 pub mod timestamp_sorting;
