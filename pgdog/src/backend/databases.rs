@@ -468,15 +468,15 @@ pub fn from_config(config: &ConfigAndUsers) -> Databases {
 
         if source_users != dest_users {
             warn!(
-                "mirroring disabled for {} -> {}: user lists don't match. Source: {:?}, Destination: {:?}",
-                mirroring.source, mirroring.destination, source_users, dest_users
+                "mirroring disabled for \"{}\" -> \"{}\": users don't match",
+                mirroring.source, mirroring.destination,
             );
             continue;
         }
 
         if source_users.is_empty() {
             warn!(
-                "mirroring disabled for {} -> {}: no users found",
+                "mirroring disabled for  \"{}\" -> \"{}\": no users found",
                 mirroring.source, mirroring.destination
             );
             continue;
