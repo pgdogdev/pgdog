@@ -38,11 +38,14 @@ impl From<&Url> for User {
         } else {
             user.to_string()
         };
-        let password = value.password().unwrap_or("postgres").to_owned();
+        let password = match value.password() {
+            Some(password) => Some(password.to_owned()),
+            None => None,
+        };
 
         User {
             name: user,
-            password: Some(password),
+            password,
             database: database_name(value),
             ..Default::default()
         }

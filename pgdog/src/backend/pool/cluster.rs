@@ -127,7 +127,7 @@ impl Cluster {
             rw_split,
         } = config;
 
-        Self {
+        let cluster = Self {
             shards: shards
                 .iter()
                 .map(|config| Shard::new(&config.primary, &config.replicas, lb_strategy, rw_split))
@@ -143,7 +143,9 @@ impl Cluster {
             multi_tenant: multi_tenant.clone(),
             rw_strategy,
             rw_split,
-        }
+        };
+
+        cluster
     }
 
     /// Get a connection to a primary of the given shard.

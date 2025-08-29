@@ -202,6 +202,16 @@ impl Shard {
         }
     }
 
+    pub fn toggle_pause(&self, pause: bool) {
+        for pool in self.pools() {
+            if pause {
+                pool.pause();
+            } else {
+                pool.resume();
+            }
+        }
+    }
+
     fn comms(&self) -> &ShardComms {
         &self.comms
     }
