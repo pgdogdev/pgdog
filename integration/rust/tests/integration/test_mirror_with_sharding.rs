@@ -510,7 +510,7 @@ async fn test_mirror_queue_overflow() {
     let test_name = "queue_overflow";
     let config_file = format!("/tmp/mirror_test_{}.toml", test_name);
     let users_file = format!("/tmp/mirror_test_{}_users.toml", test_name);
-    
+
     // Write configuration with small queue_depth and initially unreachable mirror destination
     let config = r#"
 [general]
@@ -572,16 +572,15 @@ database = "mirror_db"
     tokio::time::sleep(Duration::from_millis(1000)).await;
 
     // Set up source database
-    let mut source_conn =
-        PgConnection::connect("postgres://pgdog:pgdog@127.0.0.1:5432/pgdog")
-            .await
-            .expect("Failed to connect to source");
+    let mut source_conn = PgConnection::connect("postgres://pgdog:pgdog@127.0.0.1:5432/pgdog")
+        .await
+        .expect("Failed to connect to source");
 
     // Clean up and create table
     let _ = sqlx::query("DROP TABLE IF EXISTS queue_test")
         .execute(&mut source_conn)
         .await;
-    
+
     sqlx::query("CREATE TABLE queue_test (id BIGINT PRIMARY KEY, data TEXT)")
         .execute(&mut source_conn)
         .await
@@ -597,11 +596,13 @@ database = "mirror_db"
         .simple_query("SHOW MIRROR_STATS")
         .await
         .expect("Failed to query initial mirror stats");
-    
+
     let (initial_total, initial_mirrored, initial_dropped) = parse_mirror_stats(&initial_stats);
-    
-    println!("Initial stats - Total: {}, Mirrored: {}, Dropped: {}", 
-             initial_total, initial_mirrored, initial_dropped);
+
+    println!(
+        "Initial stats - Total: {}, Mirrored: {}, Dropped: {}",
+        initial_total, initial_mirrored, initial_dropped
+    );
 
     // Connect through PgDog to source_db
     let (client, connection) =
@@ -625,7 +626,7 @@ database = "mirror_db"
         );
         client.simple_query(&query).await.unwrap();
         client.simple_query("COMMIT").await.unwrap();
-        
+
         // Small delay to ensure mirror processing attempts
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
@@ -638,50 +639,54 @@ database = "mirror_db"
         .simple_query("SHOW MIRROR_STATS")
         .await
         .expect("Failed to query overflow stats");
-    
+
     let (overflow_total, overflow_mirrored, overflow_dropped) = parse_mirror_stats(&overflow_stats);
-    
+
     // Calculate differentials
     let stats_total = overflow_total - initial_total;
     let stats_mirrored = overflow_mirrored - initial_mirrored;
     let stats_dropped = overflow_dropped - initial_dropped;
-    
-    println!("After overflow - Total: {}, Mirrored: {}, Dropped: {}", 
-             stats_total, stats_mirrored, stats_dropped);
+
+    println!(
+        "After overflow - Total: {}, Mirrored: {}, Dropped: {}",
+        stats_total, stats_mirrored, stats_dropped
+    );
 
     // The current implementation appears to count requests as "mirrored" even when
     // the destination is unreachable (pool banned). This is different from "dropped"
     // which occurs when the queue overflows.
-    // 
+    //
     // For now, we'll verify that the stats are being tracked, even if the semantics
     // differ from our expectations. The key behavior we want to test is queue overflow.
-    
+
     // All 15 requests should be accounted for
     assert_eq!(
-        stats_total, 45,  // 15 transactions * 3 queries each (BEGIN, INSERT, COMMIT)
+        stats_total,
+        45, // 15 transactions * 3 queries each (BEGIN, INSERT, COMMIT)
         "Expected 45 total requests, got {}",
         stats_total
     );
-    
+
     // Since the destination is unreachable but queue can hold 10, we expect:
     // - First 10 transactions queued (but fail to send due to banned pool)
     // - Remaining 5 should be dropped due to queue overflow
     // However, current implementation counts them as "mirrored" not "dropped"
-    
+
     println!("Note: Current implementation counts failed sends as 'mirrored' not 'dropped'");
     println!("This may need refinement in the mirroring implementation");
-    
+
     // Verify stats are non-zero and being tracked
     assert!(
         stats_mirrored > 0 || stats_dropped > 0,
         "Expected some requests to be tracked in stats, but both mirrored ({}) and dropped ({}) are 0",
-        stats_mirrored, stats_dropped
+        stats_mirrored,
+        stats_dropped
     );
 
     // Now let's test with a reachable mirror but artificially slow processing
     // to actually trigger queue overflow
     println!("\nTesting queue overflow with slow processing...");
-    
+
     let _fixed_config = r#"
 [general]
 openmetrics_port = 9090
@@ -712,7 +717,7 @@ password = "pgdog"
 
     // For this test, we'll verify the queue overflow behavior only
     // In a production scenario, you'd restart pgdog or have dynamic config reload
-    
+
     println!("✓ Mirror queue overflow test completed!");
     println!("  - Queue depth limit enforced");
     println!("  - Dropped {} requests when queue was full", stats_dropped);

@@ -43,7 +43,7 @@ async fn test_mirror_stats_with_unreachable_destination() {
     // Create a configuration with an unreachable mirror destination
     let config_file = "/tmp/mirror_stats_bug_test.toml";
     let users_file = "/tmp/mirror_stats_bug_test_users.toml";
-    
+
     // Write configuration with unreachable mirror destination
     let config = r#"
 [general]
@@ -89,9 +89,9 @@ database = "mirror_db"
 
     println!("Starting PgDog with unreachable mirror destination...");
 
-    // Start PgDog
+    // Start PgDog (using debug build for trace logging)
     let _pgdog = PgdogGuard {
-        child: Command::new("/Users/justin/Code/lev/pgdog/target/release/pgdog")
+        child: Command::new("/Users/justin/Code/lev/pgdog/target/debug/pgdog")
             .arg("--config")
             .arg(config_file)
             .arg("--users")
@@ -104,16 +104,15 @@ database = "mirror_db"
     tokio::time::sleep(Duration::from_millis(1000)).await;
 
     // Set up source database
-    let mut source_conn =
-        PgConnection::connect("postgres://pgdog:pgdog@127.0.0.1:5432/pgdog")
-            .await
-            .expect("Failed to connect to source");
+    let mut source_conn = PgConnection::connect("postgres://pgdog:pgdog@127.0.0.1:5432/pgdog")
+        .await
+        .expect("Failed to connect to source");
 
     // Clean up and create table
     let _ = sqlx::query("DROP TABLE IF EXISTS stats_test")
         .execute(&mut source_conn)
         .await;
-    
+
     sqlx::query("CREATE TABLE stats_test (id INT PRIMARY KEY, data TEXT)")
         .execute(&mut source_conn)
         .await
@@ -136,11 +135,13 @@ database = "mirror_db"
         .simple_query("SHOW MIRROR_STATS")
         .await
         .expect("Failed to query initial mirror stats");
-    
+
     let (initial_total, initial_mirrored, initial_dropped) = parse_mirror_stats(&initial_stats);
-    
-    println!("Initial stats - Total: {}, Mirrored: {}, Dropped: {}", 
-             initial_total, initial_mirrored, initial_dropped);
+
+    println!(
+        "Initial stats - Total: {}, Mirrored: {}, Dropped: {}",
+        initial_total, initial_mirrored, initial_dropped
+    );
 
     // Connect through PgDog to source_db
     let (client, connection) =
@@ -157,7 +158,10 @@ database = "mirror_db"
     // Execute a single transaction
     println!("Executing a single transaction through PgDog...");
     client.simple_query("BEGIN").await.unwrap();
-    client.simple_query("INSERT INTO stats_test (id, data) VALUES (1, 'Test data')").await.unwrap();
+    client
+        .simple_query("INSERT INTO stats_test (id, data) VALUES (1, 'Test data')")
+        .await
+        .unwrap();
     client.simple_query("COMMIT").await.unwrap();
 
     // Wait for mirror processing
@@ -168,30 +172,30 @@ database = "mirror_db"
         .simple_query("SHOW MIRROR_STATS")
         .await
         .expect("Failed to query final mirror stats");
-    
+
     let (final_total, final_mirrored, final_dropped) = parse_mirror_stats(&final_stats);
-    
+
     // Calculate differentials
     let stats_total = final_total - initial_total;
     let stats_mirrored = final_mirrored - initial_mirrored;
     let stats_dropped = final_dropped - initial_dropped;
-    
+
     println!("\n=== Mirror Stats After Transaction ===");
     println!("Total requests: {}", stats_total);
     println!("Mirrored (claimed successful): {}", stats_mirrored);
     println!("Dropped: {}", stats_dropped);
-    
+
     // Check for error counters
     let error_stats = admin_client
         .simple_query("SHOW MIRROR_STATS")
         .await
         .expect("Failed to query error stats");
-    
+
     let mut errors_connection = 0u64;
     let mut errors_query = 0u64;
     let mut errors_timeout = 0u64;
     let mut errors_buffer_full = 0u64;
-    
+
     for msg in &error_stats {
         if let SimpleQueryMessage::Row(row) = msg {
             let metric = row.get(0).unwrap_or("");
@@ -205,26 +209,28 @@ database = "mirror_db"
             }
         }
     }
-    
+
     println!("\n=== Error Counters ===");
     println!("Connection errors: {}", errors_connection);
     println!("Query errors: {}", errors_query);
     println!("Timeout errors: {}", errors_timeout);
     println!("Buffer full errors: {}", errors_buffer_full);
-    
+
     // ASSERTIONS: What SHOULD happen
     println!("\n=== Expected Behavior ===");
     println!("- Total should be 3 (BEGIN, INSERT, COMMIT)");
     println!("- Mirrored should be 0 (destination unreachable)");
     println!("- Dropped should be 0 OR errors_connection should be > 0");
     println!("- Either the requests are dropped OR marked as connection errors");
-    
+
     // The bug: requests are marked as "mirrored" even though they failed
     if stats_mirrored > 0 && errors_connection == 0 {
-        println!("\n🐛 BUG DETECTED: Requests marked as 'mirrored' despite unreachable destination!");
+        println!(
+            "\n🐛 BUG DETECTED: Requests marked as 'mirrored' despite unreachable destination!"
+        );
         println!("   This is incorrect - failed mirror attempts should not count as successful.");
     }
-    
+
     // What we expect: either dropped or error, but NOT successfully mirrored
     assert!(
         stats_mirrored == 0 || errors_connection > 0,
