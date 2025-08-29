@@ -26,6 +26,8 @@ pub struct QueryEngineContext<'a> {
     pub(super) cross_shard_disabled: bool,
     /// Client memory usage.
     pub(super) memory_usage: usize,
+    /// Is the client an admin.
+    pub(super) admin: bool,
 }
 
 impl<'a> QueryEngineContext<'a> {
@@ -41,6 +43,7 @@ impl<'a> QueryEngineContext<'a> {
             timeouts: client.timeouts,
             cross_shard_disabled: client.cross_shard_disabled,
             memory_usage,
+            admin: client.admin,
         }
     }
 
@@ -55,6 +58,7 @@ impl<'a> QueryEngineContext<'a> {
             timeouts: mirror.timeouts,
             cross_shard_disabled: mirror.cross_shard_disabled,
             memory_usage: 0,
+            admin: false,
         }
     }
 
