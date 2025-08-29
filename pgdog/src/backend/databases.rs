@@ -318,14 +318,6 @@ impl Databases {
         let normal = self.all().values().filter(|c| c.mirror_of().is_none());
         for cluster in mirrors.chain(normal) {
             cluster.launch();
-            if let Some(mirror_of) = cluster.mirror_of() {
-                info!(
-                    r#"enabling mirroring of database "{}" into "{}""#,
-                    mirror_of,
-                    cluster.name(),
-                );
-            }
-
             if cluster.pooler_mode() == PoolerMode::Session && cluster.router_needed() {
                 warn!(
                     r#"database "{}" requires transaction mode to route queries"#,
@@ -476,22 +468,22 @@ pub fn from_config(config: &ConfigAndUsers) -> Databases {
 
         if source_users != dest_users {
             warn!(
-                "Mirroring disabled for {} -> {}: user lists don't match. Source: {:?}, Destination: {:?}",
-                mirroring.source, mirroring.destination, source_users, dest_users
+                "mirroring disabled for \"{}\" -> \"{}\": users don't match",
+                mirroring.source, mirroring.destination,
             );
             continue;
         }
 
         if source_users.is_empty() {
             warn!(
-                "Mirroring disabled for {} -> {}: no users found",
+                "mirroring disabled for  \"{}\" -> \"{}\": no users found",
                 mirroring.source, mirroring.destination
             );
             continue;
         }
 
         info!(
-            "Enabling mirroring: {} -> {} (exposure: {:.1}%, queue_depth: {})",
+            "mirroring \"{}\" -> \"{}\" (exposure: {:.1}%, queue_depth: {})",
             mirroring.source,
             mirroring.destination,
             mirroring.exposure * 100.0,
@@ -551,15 +543,15 @@ mod tests {
     fn test_mirror_with_mismatched_users() {
         let config_toml = r#"
             [general]
-            
+
             [[databases]]
             name = "main"
             host = "127.0.0.1"
-            
+
             [[databases]]
             name = "mirror"
             host = "127.0.0.1"
-            
+
             [[mirroring]]
             source = "main"
             destination = "mirror"
@@ -570,12 +562,12 @@ mod tests {
             name = "user1"
             password = "pass"
             database = "main"
-            
+
             [[users]]
             name = "mirror_user1"
             password = "pass"
             database = "mirror"
-            
+
             [[users]]
             name = "mirror_user2"
             password = "pass"
@@ -595,15 +587,15 @@ mod tests {
     fn test_mirror_with_matching_users() {
         let config_toml = r#"
             [general]
-            
+
             [[databases]]
             name = "main"
             host = "127.0.0.1"
-            
+
             [[databases]]
             name = "mirror"
             host = "127.0.0.1"
-            
+
             [[mirroring]]
             source = "main"
             destination = "mirror"
@@ -616,7 +608,7 @@ mod tests {
             name = "user1"
             password = "pass"
             database = "main"
-            
+
             [[users]]
             name = "user1"
             password = "pass"
@@ -644,25 +636,25 @@ mod tests {
     fn test_mirror_multiple_destinations() {
         let config_toml = r#"
             [general]
-            
+
             [[databases]]
             name = "main"
             host = "127.0.0.1"
-            
+
             [[databases]]
             name = "mirror1"
             host = "127.0.0.1"
-            
+
             [[databases]]
             name = "mirror2"
             host = "127.0.0.1"
-            
+
             [[mirroring]]
             source = "main"
             destination = "mirror1"
             exposure = 1.0
             queue_depth = 256
-            
+
             [[mirroring]]
             source = "main"
             destination = "mirror2"
@@ -675,12 +667,12 @@ mod tests {
             name = "user1"
             password = "pass"
             database = "main"
-            
+
             [[users]]
             name = "user1"
             password = "pass"
             database = "mirror1"
-            
+
             [[users]]
             name = "user1"
             password = "pass"
@@ -720,15 +712,15 @@ mod tests {
     fn test_mirror_multiple_users() {
         let config_toml = r#"
             [general]
-            
+
             [[databases]]
             name = "main"
             host = "127.0.0.1"
-            
+
             [[databases]]
             name = "mirror"
             host = "127.0.0.1"
-            
+
             [[mirroring]]
             source = "main"
             destination = "mirror"
@@ -741,27 +733,27 @@ mod tests {
             name = "user1"
             password = "pass"
             database = "main"
-            
+
             [[users]]
             name = "user2"
             password = "pass"
             database = "main"
-            
+
             [[users]]
             name = "user3"
             password = "pass"
             database = "main"
-            
+
             [[users]]
             name = "user1"
             password = "pass"
             database = "mirror"
-            
+
             [[users]]
             name = "user2"
             password = "pass"
             database = "mirror"
-            
+
             [[users]]
             name = "user3"
             password = "pass"
