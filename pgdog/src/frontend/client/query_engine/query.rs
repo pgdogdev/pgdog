@@ -18,7 +18,11 @@ impl QueryEngine {
         route: &Route,
     ) -> Result<(), Error> {
         // Check for cross-shard quries.
-        if context.cross_shard_disabled && route.is_cross_shard() {
+        if context.cross_shard_disabled
+            && route.is_cross_shard()
+            && !context.admin
+            && context.client_request.executable()
+        {
             let bytes_sent = context
                 .stream
                 .error(
