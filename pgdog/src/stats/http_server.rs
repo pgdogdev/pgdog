@@ -10,7 +10,7 @@ use hyper_util::rt::TokioIo;
 use tokio::net::TcpListener;
 use tracing::info;
 
-use super::{Clients, Metric, MirrorStats, Pools, QueryCache};
+use super::{Clients, MirrorStats, Pools, QueryCache};
 
 async fn metrics(_: Request<hyper::body::Incoming>) -> Result<Response<Full<Bytes>>, Infallible> {
     let clients = Clients::load();
@@ -24,7 +24,12 @@ async fn metrics(_: Request<hyper::body::Incoming>) -> Result<Response<Full<Byte
 
     // Add mirror metrics
     let mirror_stats = MirrorStats::instance();
-    let mirror_metric = Metric::new(mirror_stats.as_ref().clone());
+    let mirror_metrics: Vec<_> = mirror_stats
+        .metrics()
+        .into_iter()
+        .map(|m| m.to_string())
+        .collect();
+    let mirror_metrics = mirror_metrics.join("\n");
 
     let metrics_data = clients.to_string()
         + "\n"
@@ -32,7 +37,7 @@ async fn metrics(_: Request<hyper::body::Incoming>) -> Result<Response<Full<Byte
         + "\n"
         + &query_cache
         + "\n"
-        + &mirror_metric.to_string();
+        + &mirror_metrics;
     let response = Response::builder()
         .header(
             hyper::header::CONTENT_TYPE,

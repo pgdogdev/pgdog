@@ -95,13 +95,24 @@ describe 'mirror metrics' do
     uri = URI('http://localhost:9090/metrics')
     response = Net::HTTP.get(uri)
     
-    # Check for mirror metrics in OpenMetrics format
-    expect(response).to include('# TYPE mirror')
-    expect(response).to include('mirror{type="total"}')
-    expect(response).to include('mirror{type="mirrored"}')
+    # Check for mirror metrics in new Prometheus-compliant format
+    # Note: prefix (pgdog_) would be added via config.openmetrics_namespace
+    expect(response).to include('# TYPE mirror_requests_total counter')
+    expect(response).to include('# TYPE mirror_requests_mirrored_total counter')
+    expect(response).to include('# TYPE mirror_errors_total counter')
+    expect(response).to include('mirror_requests_total')
+    expect(response).to include('mirror_requests_mirrored_total')
+    
+    # Check for error metrics with labels
+    expect(response).to include('mirror_errors_total{error_type="connection"}')
+    expect(response).to include('mirror_errors_total{error_type="query"}')
+    
+    # Check for latency metrics in seconds
+    expect(response).to include('# UNIT mirror_latency_seconds_avg seconds')
+    expect(response).to include('# UNIT mirror_latency_seconds_max seconds')
     
     # Parse a metric value to ensure it's numeric
-    if response =~ /mirror\{type="total"\}\s+(\d+)/
+    if response =~ /mirror_requests_total\s+(\d+)/
       total = $1.to_i
       expect(total).to be >= 0
     end

@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock, RwLock};
 use std::time::Instant;
 
-use super::{Measurement, MeasurementType, OpenMetric};
+use super::{Measurement, MeasurementType, Metric, OpenMetric};
 
 /// Mirror statistics singleton instance.
 static MIRROR_STATS: OnceLock<Arc<MirrorStats>> = OnceLock::new();
@@ -309,111 +309,222 @@ pub fn categorize_io_error(error: &std::io::Error) -> MirrorErrorType {
     }
 }
 
-impl OpenMetric for MirrorStats {
+/// Individual metric for OpenMetric implementation
+struct MirrorMetric {
+    name: String,
+    help: String,
+    metric_type: String,
+    unit: Option<String>,
+    measurements: Vec<Measurement>,
+}
+
+impl OpenMetric for MirrorMetric {
     fn name(&self) -> String {
-        "mirror".into()
+        self.name.clone()
     }
 
     fn measurements(&self) -> Vec<Measurement> {
-        let mut measurements = vec![];
+        self.measurements.clone()
+    }
 
-        // Request metrics
-        measurements.push(Measurement {
-            labels: vec![("type".into(), "total".into())],
-            measurement: MeasurementType::Integer(
-                self.requests_total.load(Ordering::Relaxed) as i64
-            ),
-        });
-        measurements.push(Measurement {
-            labels: vec![("type".into(), "mirrored".into())],
-            measurement: MeasurementType::Integer(
-                self.requests_mirrored.load(Ordering::Relaxed) as i64
-            ),
-        });
-        measurements.push(Measurement {
-            labels: vec![("type".into(), "dropped".into())],
-            measurement: MeasurementType::Integer(
-                self.requests_dropped.load(Ordering::Relaxed) as i64
-            ),
-        });
+    fn help(&self) -> Option<String> {
+        Some(self.help.clone())
+    }
 
-        // Error metrics
-        measurements.push(Measurement {
-            labels: vec![("error".into(), "connection".into())],
+    fn unit(&self) -> Option<String> {
+        self.unit.clone()
+    }
+
+    fn metric_type(&self) -> String {
+        self.metric_type.clone()
+    }
+}
+
+impl MirrorStats {
+    /// Generate all mirror metrics following Prometheus naming conventions
+    pub fn metrics(&self) -> Vec<Metric> {
+        let mut metrics = vec![];
+
+        // Request counters
+        metrics.push(Metric::new(MirrorMetric {
+            name: "mirror_requests_total".into(),
+            help: "Total number of requests received for mirroring".into(),
+            metric_type: "counter".into(),
+            unit: None,
+            measurements: vec![Measurement {
+                labels: vec![],
+                measurement: MeasurementType::Integer(
+                    self.requests_total.load(Ordering::Relaxed) as i64
+                ),
+            }],
+        }));
+
+        metrics.push(Metric::new(MirrorMetric {
+            name: "mirror_requests_mirrored_total".into(),
+            help: "Total number of successfully mirrored requests".into(),
+            metric_type: "counter".into(),
+            unit: None,
+            measurements: vec![Measurement {
+                labels: vec![],
+                measurement: MeasurementType::Integer(
+                    self.requests_mirrored.load(Ordering::Relaxed) as i64,
+                ),
+            }],
+        }));
+
+        metrics.push(Metric::new(MirrorMetric {
+            name: "mirror_requests_dropped_total".into(),
+            help: "Total number of dropped requests due to buffer overflow".into(),
+            metric_type: "counter".into(),
+            unit: None,
+            measurements: vec![Measurement {
+                labels: vec![],
+                measurement: MeasurementType::Integer(
+                    self.requests_dropped.load(Ordering::Relaxed) as i64,
+                ),
+            }],
+        }));
+
+        // Consolidated error metric with labels
+        let mut error_measurements = vec![];
+        error_measurements.push(Measurement {
+            labels: vec![("error_type".into(), "connection".into())],
             measurement: MeasurementType::Integer(
                 self.errors_connection.load(Ordering::Relaxed) as i64
             ),
         });
-        measurements.push(Measurement {
-            labels: vec![("error".into(), "query".into())],
+        error_measurements.push(Measurement {
+            labels: vec![("error_type".into(), "query".into())],
             measurement: MeasurementType::Integer(self.errors_query.load(Ordering::Relaxed) as i64),
         });
-        measurements.push(Measurement {
-            labels: vec![("error".into(), "timeout".into())],
+        error_measurements.push(Measurement {
+            labels: vec![("error_type".into(), "timeout".into())],
             measurement: MeasurementType::Integer(
                 self.errors_timeout.load(Ordering::Relaxed) as i64
             ),
         });
-        measurements.push(Measurement {
-            labels: vec![("error".into(), "buffer_full".into())],
+        error_measurements.push(Measurement {
+            labels: vec![("error_type".into(), "buffer_full".into())],
             measurement: MeasurementType::Integer(
                 self.errors_buffer_full.load(Ordering::Relaxed) as i64
             ),
         });
 
-        // Latency metrics
+        metrics.push(Metric::new(MirrorMetric {
+            name: "mirror_errors_total".into(),
+            help: "Total number of mirror errors by type".into(),
+            metric_type: "counter".into(),
+            unit: None,
+            measurements: error_measurements,
+        }));
+
+        // Latency metrics in seconds
         let count = self.latency_count.load(Ordering::Relaxed);
         if count > 0 {
-            let sum = self.latency_sum_ms.load(Ordering::Relaxed);
-            let avg = sum / count;
-            measurements.push(Measurement {
-                labels: vec![("metric".into(), "avg_latency_ms".into())],
-                measurement: MeasurementType::Integer(avg as i64),
-            });
-            measurements.push(Measurement {
-                labels: vec![("metric".into(), "max_latency_ms".into())],
-                measurement: MeasurementType::Integer(
-                    self.latency_max_ms.load(Ordering::Relaxed) as i64
-                ),
-            });
+            let sum_ms = self.latency_sum_ms.load(Ordering::Relaxed);
+            let sum_seconds = sum_ms as f64 / 1000.0;
+            let avg_seconds = sum_seconds / count as f64;
+            let max_ms = self.latency_max_ms.load(Ordering::Relaxed);
+            let max_seconds = max_ms as f64 / 1000.0;
+
+            // Average latency
+            metrics.push(Metric::new(MirrorMetric {
+                name: "mirror_latency_seconds_avg".into(),
+                help: "Average mirror operation latency".into(),
+                metric_type: "gauge".into(),
+                unit: Some("seconds".into()),
+                measurements: vec![Measurement {
+                    labels: vec![],
+                    measurement: MeasurementType::Float(avg_seconds),
+                }],
+            }));
+
+            // Max latency
+            metrics.push(Metric::new(MirrorMetric {
+                name: "mirror_latency_seconds_max".into(),
+                help: "Maximum mirror operation latency".into(),
+                metric_type: "gauge".into(),
+                unit: Some("seconds".into()),
+                measurements: vec![Measurement {
+                    labels: vec![],
+                    measurement: MeasurementType::Float(max_seconds),
+                }],
+            }));
+
+            // Sum for histogram calculation
+            metrics.push(Metric::new(MirrorMetric {
+                name: "mirror_latency_seconds_sum".into(),
+                help: "Sum of all mirror operation latencies".into(),
+                metric_type: "counter".into(),
+                unit: Some("seconds".into()),
+                measurements: vec![Measurement {
+                    labels: vec![],
+                    measurement: MeasurementType::Float(sum_seconds),
+                }],
+            }));
+
+            // Count for histogram calculation
+            metrics.push(Metric::new(MirrorMetric {
+                name: "mirror_latency_seconds_count".into(),
+                help: "Count of mirror operations with latency measurements".into(),
+                metric_type: "counter".into(),
+                unit: None,
+                measurements: vec![Measurement {
+                    labels: vec![],
+                    measurement: MeasurementType::Integer(count as i64),
+                }],
+            }));
         }
 
-        // Per-cluster metrics (exposed as database and user labels)
+        // Per-database metrics
         {
             let cluster_stats = self.cluster_stats.read().unwrap();
+            let mut db_request_measurements = vec![];
+            let mut db_error_measurements = vec![];
+
             for ((database, user), stats) in cluster_stats.iter() {
-                measurements.push(Measurement {
+                db_request_measurements.push(Measurement {
                     labels: vec![
                         ("database".into(), database.clone()),
                         ("user".into(), user.clone()),
-                        ("type".into(), "mirrored".into()),
                     ],
                     measurement: MeasurementType::Integer(
                         stats.mirrored.load(Ordering::Relaxed) as i64
                     ),
                 });
-                measurements.push(Measurement {
+                db_error_measurements.push(Measurement {
                     labels: vec![
                         ("database".into(), database.clone()),
                         ("user".into(), user.clone()),
-                        ("type".into(), "errors".into()),
                     ],
                     measurement: MeasurementType::Integer(
                         stats.errors.load(Ordering::Relaxed) as i64
                     ),
                 });
             }
+
+            if !db_request_measurements.is_empty() {
+                metrics.push(Metric::new(MirrorMetric {
+                    name: "mirror_database_requests_total".into(),
+                    help: "Total mirrored requests per database and user".into(),
+                    metric_type: "counter".into(),
+                    unit: None,
+                    measurements: db_request_measurements,
+                }));
+            }
+
+            if !db_error_measurements.is_empty() {
+                metrics.push(Metric::new(MirrorMetric {
+                    name: "mirror_database_errors_total".into(),
+                    help: "Total mirror errors per database and user".into(),
+                    metric_type: "counter".into(),
+                    unit: None,
+                    measurements: db_error_measurements,
+                }));
+            }
         }
 
-        measurements
-    }
-
-    fn metric_type(&self) -> String {
-        "counter".into()
-    }
-
-    fn help(&self) -> Option<String> {
-        Some("Mirror operation metrics".into())
+        metrics
     }
 }
 
