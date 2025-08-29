@@ -1,5 +1,6 @@
 pub mod auth;
 pub mod ban;
+pub mod cross_shard_disabled;
 pub mod distinct;
 pub mod fake_transactions;
 pub mod maintenance_mode;
