@@ -46,7 +46,7 @@ impl From<Option<usize>> for Shard {
 
 /// Path a query should take and any transformations
 /// that should be applied along the way.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Route {
     shard: Shard,
     read: bool,

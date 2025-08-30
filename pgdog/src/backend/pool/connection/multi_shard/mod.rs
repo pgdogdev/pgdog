@@ -62,6 +62,13 @@ impl MultiShard {
         }
     }
 
+    /// Update multi-shard state.
+    pub(super) fn update(&mut self, shards: usize, route: &Route) {
+        self.reset();
+        self.shards = shards;
+        self.route = route.clone();
+    }
+
     pub(super) fn reset(&mut self) {
         self.counters = Counters::default();
         self.buffer.reset();
@@ -102,14 +109,17 @@ impl MultiShard {
 
                 if self.counters.command_complete_count % self.shards == 0 {
                     self.buffer.full();
-                    self.buffer
-                        .aggregate(self.route.aggregate(), &self.decoder)?;
 
-                    self.buffer.sort(self.route.order_by(), &self.decoder);
-                    self.buffer.distinct(self.route.distinct(), &self.decoder);
+                    if !self.buffer.is_empty() {
+                        self.buffer
+                            .aggregate(self.route.aggregate(), &self.decoder)?;
+
+                        self.buffer.sort(self.route.order_by(), &self.decoder);
+                        self.buffer.distinct(self.route.distinct(), &self.decoder);
+                    }
 
                     if has_rows {
-                        let rows = if self.route.should_buffer() {
+                        let rows = if self.should_buffer() {
                             self.buffer.len()
                         } else {
                             self.counters.rows
@@ -144,7 +154,7 @@ impl MultiShard {
             }
 
             'D' => {
-                if !self.route.should_buffer() && self.counters.row_description % self.shards == 0 {
+                if !self.should_buffer() && self.counters.row_description % self.shards == 0 {
                     forward = Some(message);
                 } else {
                     self.buffer.add(message)?;
@@ -198,6 +208,10 @@ impl MultiShard {
         }
 
         Ok(forward)
+    }
+
+    fn should_buffer(&self) -> bool {
+        self.shards > 1 && self.route.should_buffer()
     }
 
     /// Multi-shard state is ready to send messages.

@@ -32,6 +32,7 @@ pub fn pool() -> Pool {
             database_name: "pgdog".into(),
             user: "pgdog".into(),
             password: "pgdog".into(),
+            ..Default::default()
         },
         config,
     });
@@ -54,6 +55,7 @@ pub fn pool_with_prepared_capacity(capacity: usize) -> Pool {
             database_name: "pgdog".into(),
             user: "pgdog".into(),
             password: "pgdog".into(),
+            ..Default::default()
         },
         config,
     });

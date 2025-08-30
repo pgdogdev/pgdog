@@ -24,7 +24,6 @@ pub use sharding::{Lists, Ranges};
 pub struct Router {
     query_parser: QueryParser,
     latest_command: Command,
-    routed: bool,
 }
 
 impl Default for Router {
@@ -39,7 +38,6 @@ impl Router {
         Self {
             query_parser: QueryParser::default(),
             latest_command: Command::default(),
-            routed: false,
         }
     }
 
@@ -56,7 +54,6 @@ impl Router {
         }
 
         let command = self.query_parser.parse(context)?;
-        self.routed = !matches!(command, Command::StartTransaction { .. });
         self.latest_command = command;
         Ok(&self.latest_command)
     }
@@ -89,12 +86,6 @@ impl Router {
     pub fn reset(&mut self) {
         self.query_parser = QueryParser::default();
         self.latest_command = Command::default();
-        self.routed = false;
-    }
-
-    /// The router is configured.
-    pub fn routed(&self) -> bool {
-        self.routed
     }
 
     /// Query parser is inside a transaction.

@@ -5,6 +5,7 @@ use std::os::raw::c_void;
 use pgdog_plugin::pg_query::protobuf::ParseResult;
 use pgdog_plugin::{PdParameters, PdRouterContext, PdStatement};
 
+use crate::frontend::client::TransactionType;
 use crate::net::Bind;
 use crate::{
     backend::ShardingSchema,
@@ -66,7 +67,10 @@ impl<'a> QueryParserContext<'a> {
 
     /// Write override enabled?
     pub(super) fn write_override(&self) -> bool {
-        self.router_context.in_transaction() && self.rw_conservative()
+        matches!(
+            self.router_context.transaction(),
+            Some(TransactionType::ReadWrite)
+        ) && self.rw_conservative()
     }
 
     /// Are we using the conservative read/write separation strategy?

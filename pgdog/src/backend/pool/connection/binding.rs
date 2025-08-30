@@ -11,14 +11,17 @@ use super::*;
 /// The server(s) the client is connected to.
 #[derive(Debug)]
 pub enum Binding {
-    Server(Option<Guard>),
-    Admin(Backend),
+    /// Direct-to-shard transaction.
+    Direct(Option<Guard>),
+    /// Admin database connection.
+    Admin(AdminServer),
+    /// Multi-shard transaction.
     MultiShard(Vec<Guard>, Box<MultiShard>),
 }
 
 impl Default for Binding {
     fn default() -> Self {
-        Binding::Server(None)
+        Binding::Direct(None)
     }
 }
 
@@ -26,7 +29,7 @@ impl Binding {
     /// Close all connections to all servers.
     pub fn disconnect(&mut self) {
         match self {
-            Binding::Server(guard) => drop(guard.take()),
+            Binding::Direct(guard) => drop(guard.take()),
             Binding::Admin(_) => (),
             Binding::MultiShard(guards, _) => guards.clear(),
         }
@@ -36,7 +39,7 @@ impl Binding {
     /// they are probably broken and should not be re-used.
     pub fn force_close(&mut self) {
         match self {
-            Binding::Server(Some(ref mut guard)) => guard.stats_mut().state(State::ForceClose),
+            Binding::Direct(Some(ref mut guard)) => guard.stats_mut().state(State::ForceClose),
             Binding::MultiShard(ref mut guards, _) => {
                 for guard in guards {
                     guard.stats_mut().state(State::ForceClose);
@@ -51,7 +54,7 @@ impl Binding {
     /// Are we connnected to a backend?
     pub fn connected(&self) -> bool {
         match self {
-            Binding::Server(server) => server.is_some(),
+            Binding::Direct(server) => server.is_some(),
             Binding::MultiShard(servers, _) => !servers.is_empty(),
             Binding::Admin(_) => true,
         }
@@ -59,7 +62,7 @@ impl Binding {
 
     pub(super) async fn read(&mut self) -> Result<Message, Error> {
         match self {
-            Binding::Server(guard) => {
+            Binding::Direct(guard) => {
                 if let Some(guard) = guard.as_mut() {
                     guard.read().await
                 } else {
@@ -118,7 +121,7 @@ impl Binding {
         match self {
             Binding::Admin(backend) => Ok(backend.send(client_request).await?),
 
-            Binding::Server(server) => {
+            Binding::Direct(server) => {
                 if let Some(server) = server {
                     server.send(client_request).await
                 } else {
@@ -126,10 +129,27 @@ impl Binding {
                 }
             }
 
-            Binding::MultiShard(servers, _state) => {
-                for server in servers.iter_mut() {
-                    server.send(client_request).await?;
+            Binding::MultiShard(servers, state) => {
+                let mut shards_sent = servers.len();
+                for (shard, server) in servers.iter_mut().enumerate() {
+                    let send = match client_request.route().shard() {
+                        Shard::Direct(s) => {
+                            shards_sent = 1;
+                            *s == shard
+                        }
+                        Shard::Multi(shards) => {
+                            shards_sent = shards.len();
+                            shards.contains(&shard)
+                        }
+                        Shard::All => true,
+                    };
+
+                    if send {
+                        server.send(client_request).await?;
+                    }
                 }
+
+                state.update(shards_sent, client_request.route());
 
                 Ok(())
             }
@@ -170,7 +190,7 @@ impl Binding {
                 Ok(())
             }
 
-            Binding::Server(Some(ref mut server)) => {
+            Binding::Direct(Some(ref mut server)) => {
                 for row in rows {
                     server
                         .send_one(&ProtocolMessage::from(row.message()))
@@ -187,7 +207,7 @@ impl Binding {
     pub(super) fn done(&self) -> bool {
         match self {
             Binding::Admin(admin) => admin.done(),
-            Binding::Server(Some(server)) => server.done(),
+            Binding::Direct(Some(server)) => server.done(),
             Binding::MultiShard(servers, _state) => servers.iter().all(|s| s.done()),
             _ => true,
         }
@@ -196,7 +216,7 @@ impl Binding {
     pub fn has_more_messages(&self) -> bool {
         match self {
             Binding::Admin(admin) => !admin.done(),
-            Binding::Server(Some(server)) => server.has_more_messages(),
+            Binding::Direct(Some(server)) => server.has_more_messages(),
             Binding::MultiShard(servers, _state) => servers.iter().any(|s| s.has_more_messages()),
             _ => false,
         }
@@ -204,7 +224,7 @@ impl Binding {
 
     pub(super) fn state_check(&self, state: State) -> bool {
         match self {
-            Binding::Server(Some(server)) => {
+            Binding::Direct(Some(server)) => {
                 debug!(
                     "server is in \"{}\" state [{}]",
                     server.stats().state,
@@ -223,7 +243,7 @@ impl Binding {
     /// Execute a query on all servers.
     pub async fn execute(&mut self, query: &str) -> Result<(), Error> {
         match self {
-            Binding::Server(Some(ref mut server)) => {
+            Binding::Direct(Some(ref mut server)) => {
                 server.execute(query).await?;
             }
 
@@ -241,7 +261,7 @@ impl Binding {
 
     pub async fn link_client(&mut self, params: &Parameters) -> Result<usize, Error> {
         match self {
-            Binding::Server(Some(ref mut server)) => server.link_client(params).await,
+            Binding::Direct(Some(ref mut server)) => server.link_client(params).await,
             Binding::MultiShard(ref mut servers, _) => {
                 let mut max = 0;
                 for server in servers {
@@ -259,7 +279,7 @@ impl Binding {
 
     pub fn changed_params(&mut self) -> Parameters {
         match self {
-            Binding::Server(Some(ref mut server)) => server.changed_params().clone(),
+            Binding::Direct(Some(ref mut server)) => server.changed_params().clone(),
             Binding::MultiShard(ref mut servers, _) => {
                 if let Some(first) = servers.first() {
                     first.changed_params().clone()
@@ -273,7 +293,7 @@ impl Binding {
 
     pub(super) fn dirty(&mut self) {
         match self {
-            Binding::Server(Some(ref mut server)) => server.mark_dirty(true),
+            Binding::Direct(Some(ref mut server)) => server.mark_dirty(true),
             Binding::MultiShard(ref mut servers, _state) => {
                 servers.iter_mut().for_each(|s| s.mark_dirty(true))
             }
@@ -284,7 +304,7 @@ impl Binding {
     #[cfg(test)]
     pub fn is_dirty(&self) -> bool {
         match self {
-            Binding::Server(Some(ref server)) => server.dirty(),
+            Binding::Direct(Some(ref server)) => server.dirty(),
             Binding::MultiShard(ref servers, _state) => servers.iter().any(|s| s.dirty()),
             _ => false,
         }
@@ -294,7 +314,7 @@ impl Binding {
         match self {
             Binding::Admin(_) => false,
             Binding::MultiShard(ref servers, _state) => servers.iter().all(|s| s.copy_mode()),
-            Binding::Server(Some(ref server)) => server.copy_mode(),
+            Binding::Direct(Some(ref server)) => server.copy_mode(),
             _ => false,
         }
     }

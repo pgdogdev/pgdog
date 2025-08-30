@@ -6,7 +6,7 @@ use pg_query::{
 use super::Error;
 use crate::net::Bind;
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct Limit {
     pub limit: Option<usize>,
     pub offset: Option<usize>,

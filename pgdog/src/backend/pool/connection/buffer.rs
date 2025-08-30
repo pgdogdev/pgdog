@@ -56,18 +56,21 @@ impl Buffer {
                     if let Some(index) = decoder.rd().field_index(name) {
                         cols.push(OrderBy::Asc(index + 1));
                     }
+                    // TODO: Error out instead of silently not sorting.
                 }
                 OrderBy::Desc(_) => cols.push(column.clone()),
                 OrderBy::DescColumn(name) => {
                     if let Some(index) = decoder.rd().field_index(name) {
                         cols.push(OrderBy::Desc(index + 1));
                     }
+                    // TODO: Error out instead of silently not sorting.
                 }
                 OrderBy::AscVectorL2(_, _) => cols.push(column.clone()),
                 OrderBy::AscVectorL2Column(name, vector) => {
                     if let Some(index) = decoder.rd().field_index(name) {
                         cols.push(OrderBy::AscVectorL2(index + 1, vector.clone()));
                     }
+                    // TODO: Error out instead of silently not sorting.
                 }
             };
         }
