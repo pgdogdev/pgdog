@@ -93,6 +93,7 @@ impl Router {
     }
 
     /// The router is configured.
+    #[cfg(test)]
     pub fn routed(&self) -> bool {
         self.routed
     }

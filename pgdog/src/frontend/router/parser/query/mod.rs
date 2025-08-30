@@ -134,12 +134,12 @@ impl QueryParser {
         }
 
         // e.g. Parse, Describe, Flush
-        // if !context.router_context.executable {
-        //     return Ok(Command::Query(
-        //         Route::write(Shard::Direct(round_robin::next() % context.shards))
-        //             .set_read(context.read_only),
-        //     ));
-        // }
+        if !context.router_context.executable {
+            return Ok(Command::Query(
+                Route::write(Shard::Direct(round_robin::next() % context.shards))
+                    .set_read(context.read_only),
+            ));
+        }
 
         // Parse hardcoded shard from a query comment.
         if context.router_needed {

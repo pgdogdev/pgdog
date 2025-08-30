@@ -1,4 +1,6 @@
 //! ClientRequest (messages buffer).
+use lazy_static::lazy_static;
+
 use crate::{
     net::{
         messages::{Bind, CopyData, Protocol, Query},
@@ -7,10 +9,7 @@ use crate::{
     stats::memory::MemoryUsage,
 };
 
-use super::{
-    router::{parser::Shard, Route},
-    PreparedStatements,
-};
+use super::{router::Route, PreparedStatements};
 
 pub use super::BufferedQuery;
 
@@ -18,7 +17,7 @@ pub use super::BufferedQuery;
 #[derive(Debug, Clone)]
 pub struct ClientRequest {
     pub messages: Vec<ProtocolMessage>,
-    pub route: Route,
+    pub route: Option<Route>,
 }
 
 impl MemoryUsage for ClientRequest {
@@ -40,7 +39,7 @@ impl ClientRequest {
     pub fn new() -> Self {
         Self {
             messages: Vec::with_capacity(5),
-            route: Route::write(Shard::All),
+            route: None,
         }
     }
 
@@ -165,6 +164,14 @@ impl ClientRequest {
         self.messages.push(Query::new(query).into());
         Ok(())
     }
+
+    /// Get the route for this client request.
+    pub fn route(&self) -> &Route {
+        lazy_static! {
+            static ref DEFAULT_ROUTE: Route = Route::default();
+        }
+        self.route.as_ref().unwrap_or(&DEFAULT_ROUTE)
+    }
 }
 
 impl From<ClientRequest> for Vec<ProtocolMessage> {
@@ -177,7 +184,7 @@ impl From<Vec<ProtocolMessage>> for ClientRequest {
     fn from(messages: Vec<ProtocolMessage>) -> Self {
         ClientRequest {
             messages,
-            route: Route::write(Shard::All),
+            route: None,
         }
     }
 }
