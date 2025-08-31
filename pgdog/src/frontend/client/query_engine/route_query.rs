@@ -24,7 +24,11 @@ impl QueryEngine {
         )?;
         match self.router.query(router_context) {
             Ok(cmd) => {
-                trace!("routing {:#?} to {:#?}", context.client_request, cmd);
+                trace!(
+                    "routing {:#?} to {:#?}",
+                    context.client_request.messages,
+                    cmd
+                );
             }
             Err(err) => {
                 if err.empty_query() {
