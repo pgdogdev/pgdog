@@ -32,8 +32,9 @@ pub fn pg_query_version() {
     let contents: Option<toml::Value> = toml::from_str(&contents).ok();
     if let Some(contents) = contents
         && let Some(dependencies) = contents.get("dependencies")
-            && let Some(pg_query) = dependencies.get("pg_query")
-                && let Some(version) = pg_query.as_str() {
-                    println!("cargo:rustc-env=PGDOG_PGQUERY_VERSION={}", version);
-                }
+        && let Some(pg_query) = dependencies.get("pg_query")
+        && let Some(version) = pg_query.as_str()
+    {
+        println!("cargo:rustc-env=PGDOG_PGQUERY_VERSION={}", version);
+    }
 }
