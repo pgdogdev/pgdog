@@ -41,6 +41,7 @@ pub struct QueryEngine {
     streaming: bool,
     client_id: BackendKeyData,
     test_mode: bool,
+    set_route: Option<Route>,
 }
 
 impl QueryEngine {
@@ -125,10 +126,14 @@ impl QueryEngine {
         self.backend.mirror(context.client_request);
 
         let command = self.router.command();
-        let route = command.route().clone();
+        let route = if let Some(ref route) = self.set_route {
+            route.clone()
+        } else {
+            command.route().clone()
+        };
 
         // FIXME, we should not to copy route twice.
-        context.client_request.route = route.clone();
+        context.client_request.route = Some(route.clone());
 
         match command {
             Command::Shards(shards) => self.show_shards(context, *shards).await?,
@@ -140,15 +145,25 @@ impl QueryEngine {
                     .await?
             }
             Command::CommitTransaction => {
+                self.set_route = None;
+
                 if self.backend.connected() {
-                    self.execute(context, &route).await?
+                    let transaction_route = self.transaction_route(&route)?;
+                    context.client_request.route = Some(transaction_route.clone());
+
+                    self.execute(context, &transaction_route).await?
                 } else {
                     self.end_transaction(context, false).await?
                 }
             }
             Command::RollbackTransaction => {
+                self.set_route = None;
+
                 if self.backend.connected() {
-                    self.execute(context, &route).await?
+                    let transaction_route = self.transaction_route(&route)?;
+                    context.client_request.route = Some(transaction_route.clone());
+
+                    self.execute(context, &transaction_route).await?
                 } else {
                     self.end_transaction(context, true).await?
                 }
@@ -173,6 +188,9 @@ impl QueryEngine {
                 } else {
                     self.set(context, name.clone(), value.clone()).await?
                 }
+            }
+            Command::SetRoute(route) => {
+                self.set_route(context, route.clone()).await?;
             }
             Command::Copy(_) => self.execute(context, &route).await?,
             Command::Rewrite(query) => {

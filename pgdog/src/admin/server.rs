@@ -18,17 +18,17 @@ use super::Error;
 
 /// Admin backend.
 #[derive(Debug)]
-pub struct Backend {
+pub struct AdminServer {
     messages: VecDeque<Message>,
 }
 
-impl Default for Backend {
+impl Default for AdminServer {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl Backend {
+impl AdminServer {
     /// New admin backend handler.
     pub fn new() -> Self {
         Self {

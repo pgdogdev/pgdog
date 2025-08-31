@@ -45,3 +45,6 @@ perf.data.old
 
 /pgdog.toml
 /users.toml
+
+# Ignore generated bindings
+pgdog-plugin/src/bindings.rs

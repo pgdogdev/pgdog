@@ -34,15 +34,17 @@ impl QueryEngine {
             return Ok(());
         }
 
-        if !self.connect(context, route).await? {
-            return Ok(());
-        }
-
         // We need to run a query now.
-        if context.client_request.executable() {
-            if let Some(begin_stmt) = self.begin_stmt.take() {
-                self.backend.execute(begin_stmt.query()).await?;
+        if let Some(begin_stmt) = self.begin_stmt.take() {
+            // Connect to one shard if not sharded or to all shards
+            // for a cross-shard tranasction.
+            if !self.connect_transaction(context, route).await? {
+                return Ok(());
             }
+
+            self.backend.execute(begin_stmt.query()).await?;
+        } else if !self.connect(context, route).await? {
+            return Ok(());
         }
 
         // Set response format.
@@ -93,13 +95,8 @@ impl QueryEngine {
         // ReadyForQuery (B)
         if code == 'Z' {
             self.stats.query();
-            // TODO: This is messed up.
-            //
-            // 1. We're ignoring server-set transaction state. Client gets a ReadyForQuery with transaction state set to Idle even
-            // if they sent a BEGIN statement to us already.
-            // 2. We're sending non-data fetching statements to the server without starting a transacation, e.g. Parse, Describe, Sync.
-            // 3. We're confusing the hell out of pretty much anyone reading this. I wrote the damn thing and I'm still confused.
-            let in_transaction = message.in_transaction() || self.begin_stmt.is_some();
+
+            let in_transaction = message.in_transaction();
             if !in_transaction {
                 context.transaction = None;
             } else if context.transaction.is_none() {

@@ -4,7 +4,6 @@ use async_trait::async_trait;
 
 use crate::net::messages::Message;
 
-pub mod backend;
 pub mod ban;
 pub mod error;
 pub mod maintenance_mode;
@@ -16,6 +15,7 @@ pub mod probe;
 pub mod reconnect;
 pub mod reload;
 pub mod reset_query_cache;
+pub mod server;
 pub mod set;
 pub mod setup_schema;
 pub mod show_clients;

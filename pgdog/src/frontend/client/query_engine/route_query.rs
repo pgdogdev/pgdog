@@ -8,11 +8,6 @@ impl QueryEngine {
         &mut self,
         context: &mut QueryEngineContext<'_>,
     ) -> Result<bool, Error> {
-        // Route request if we haven't already.
-        // if self.router.routed() {
-        //     return Ok(true);
-        // }
-
         // Admin doesn't have a cluster.
         let cluster = if let Ok(cluster) = self.backend.cluster() {
             cluster
