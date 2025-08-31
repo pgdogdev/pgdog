@@ -52,4 +52,8 @@ impl<'a> RouterContext<'a> {
     pub fn in_transaction(&self) -> bool {
         self.transaction.is_some()
     }
+
+    pub fn transaction(&self) -> &Option<TransactionType> {
+        &self.transaction
+    }
 }

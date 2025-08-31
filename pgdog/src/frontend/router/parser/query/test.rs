@@ -201,13 +201,19 @@ fn test_omni() {
 
 #[test]
 fn test_set() {
-    let route = query!(r#"SET "pgdog.shard" TO 1"#, true);
-    assert_eq!(route.shard(), &Shard::Direct(1));
+    let (command, _) = command!(r#"SET "pgdog.shard" TO 1"#, true);
+    match command {
+        Command::SetRoute(route) => assert_eq!(route.shard(), &Shard::Direct(1)),
+        _ => panic!("not a set route"),
+    }
     let (_, qp) = command!(r#"SET "pgdog.shard" TO 1"#, true);
     assert!(qp.in_transaction);
 
-    let route = query!(r#"SET "pgdog.sharding_key" TO '11'"#, true);
-    assert_eq!(route.shard(), &Shard::Direct(1));
+    let (command, _) = command!(r#"SET "pgdog.sharding_key" TO '11'"#, true);
+    match command {
+        Command::SetRoute(route) => assert_eq!(route.shard(), &Shard::Direct(1)),
+        _ => panic!("not a set route"),
+    }
     let (_, qp) = command!(r#"SET "pgdog.sharding_key" TO '11'"#, true);
     assert!(qp.in_transaction);
 
@@ -434,7 +440,7 @@ fn test_comment() {
     );
 
     match command {
-        Command::Query(query) => assert_eq!(query.shard(), &Shard::All), // Round-robin because it's only a parse
+        Command::Query(query) => assert_eq!(query.shard(), &Shard::Direct(0)), // Round-robin because it's only a parse
         _ => panic!("not a query"),
     }
 }

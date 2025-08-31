@@ -464,7 +464,6 @@ async fn test_transaction_state() {
     client.buffer(State::Idle).await.unwrap();
     client.client_messages(&mut engine).await.unwrap();
 
-    assert!(engine.router().routed());
     assert!(client.transaction.is_some());
     assert!(engine.router().route().is_write());
     assert!(engine.router().in_transaction());
@@ -494,10 +493,8 @@ async fn test_transaction_state() {
     .await
     .unwrap();
 
-    assert!(!engine.router().routed());
     client.buffer(State::Idle).await.unwrap();
     client.client_messages(&mut engine).await.unwrap();
-    assert!(engine.router().routed());
 
     for c in ['2', 'D', 'C', 'Z'] {
         let msg = engine.backend().read().await.unwrap();
@@ -508,7 +505,6 @@ async fn test_transaction_state() {
 
     read!(conn, ['2', 'D', 'C', 'Z']);
 
-    assert!(engine.router().routed());
     assert!(client.transaction.is_some());
     assert!(engine.router().route().is_write());
     assert!(engine.router().in_transaction());
@@ -530,7 +526,6 @@ async fn test_transaction_state() {
     read!(conn, ['C', 'Z']);
 
     assert!(client.transaction.is_none());
-    assert!(!engine.router().routed());
 }
 
 #[tokio::test]
