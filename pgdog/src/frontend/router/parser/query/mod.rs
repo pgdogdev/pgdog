@@ -133,14 +133,6 @@ impl QueryParser {
             }
         }
 
-        // e.g. Parse, Describe, Flush
-        if !context.router_context.executable {
-            return Ok(Command::Query(
-                Route::write(Shard::Direct(round_robin::next() % context.shards))
-                    .set_read(context.read_only),
-            ));
-        }
-
         // Parse hardcoded shard from a query comment.
         if context.router_needed {
             if let Some(BufferedQuery::Query(ref query)) = context.router_context.query {
@@ -267,6 +259,15 @@ impl QueryParser {
             // They are sent to all shards concurrently.
             _ => Ok(Command::Query(Route::write(None))),
         }?;
+
+        // e.g. Parse, Describe, Flush-style flow.
+        if !context.router_context.executable {
+            if let Command::Query(query) = command {
+                return Ok(Command::Query(
+                    query.set_shard(round_robin::next() % context.shards),
+                ));
+            }
+        }
 
         // Run plugins, if any.
         self.plugins(
