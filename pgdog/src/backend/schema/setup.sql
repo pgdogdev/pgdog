@@ -49,20 +49,24 @@ GRANT USAGE ON SEQUENCE pgdog.validator_bigint_id_seq TO PUBLIC;
 
 -- Generate a primary key from a sequence that will
 -- match the shard number this is ran on.
-CREATE OR REPLACE FUNCTION pgdog.next_id_auto() RETURNS BIGINT AS $body$
+CREATE OR REPLACE FUNCTION pgdog.next_id_seq(sequence_name regclass) RETURNS BIGINT AS $body$
 DECLARE next_value BIGINT;
 DECLARE seq_oid oid;
 DECLARE table_oid oid;
 DECLARE shards INTEGER;
 DECLARE shard INTEGER;
 BEGIN
-    SELECT 'pgdog.validator_bigint_id_seq'::regclass INTO seq_oid;
+    SELECT sequence_name INTO seq_oid;
     SELECT 'pgdog.validator_bigint'::regclass INTO table_oid;
     SELECT
         pgdog.config.shard,
         pgdog.config.shards
     INTO shard, shards
     FROM pgdog.config;
+
+    IF shards IS NULL OR shard IS NULL THEN
+        RAISE EXCEPTION 'pgdog.config not set';
+    END IF;
 
     LOOP
         -- This is atomic.
@@ -72,6 +76,12 @@ BEGIN
             RETURN next_value;
         END IF;
     END LOOP;
+END;
+$body$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION pgdog.next_id_auto() RETURNS BIGINT AS $body$
+BEGIN
+    RETURN pgdog.next_id_seq('pgdog.validator_bigint_id_seq'::regclass);
 END;
 $body$ LANGUAGE plpgsql;
 
