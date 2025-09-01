@@ -1,5 +1,6 @@
 //! Connection listener. Handles all client connections.
 
+use std::io::ErrorKind;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
@@ -7,7 +8,7 @@ use crate::backend::databases::{databases, reload, shutdown};
 use crate::config::config;
 use crate::net::messages::BackendKeyData;
 use crate::net::messages::{hello::SslReply, Startup};
-use crate::net::tls::acceptor;
+use crate::net::{self, tls::acceptor};
 use crate::net::{tweak, Stream};
 use crate::sighup::Sighup;
 use tokio::net::{TcpListener, TcpStream};
@@ -140,7 +141,19 @@ impl Listener {
         let tls = acceptor();
 
         loop {
-            let startup = Startup::from_stream(&mut stream).await?;
+            let startup = match Startup::from_stream(&mut stream).await {
+                Ok(startup) => startup,
+                Err(net::Error::Io(io_err)) => {
+                    // Load balancers like AWS ELB use TCP to health check
+                    // targets and abruptly disconnect.
+                    if io_err.kind() == ErrorKind::ConnectionReset {
+                        return Ok(());
+                    } else {
+                        return Err(net::Error::Io(io_err).into());
+                    }
+                }
+                Err(err) => return Err(err.into()),
+            };
 
             match startup {
                 Startup::Ssl => {
