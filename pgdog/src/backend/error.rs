@@ -48,6 +48,9 @@ pub enum Error {
     #[error("no cluster connected")]
     NoCluster,
 
+    #[error("database \"{0}\" has no schema owner")]
+    NoSchemaOwner(String),
+
     #[error("{0}")]
     ScramAuth(#[from] crate::auth::scram::Error),
 
