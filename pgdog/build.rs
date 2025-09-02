@@ -13,7 +13,7 @@ fn main() {
         let git_hash = String::from_utf8(output.stdout).unwrap_or_default();
         println!(
             "cargo:rustc-env=GIT_HASH={}",
-            git_hash.chars().take(6).collect::<String>()
+            git_hash.chars().take(7).collect::<String>()
         );
     } else {
         println!("cargo:rustc-env=GIT_HASH={}", env!("CARGO_PKG_VERSION"));
