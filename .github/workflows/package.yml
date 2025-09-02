@@ -95,6 +95,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Get short commit SHA
+        id: commit
+        run: |
+          COMMIT_SHA=$(git rev-parse --short HEAD)
+          echo "sha=$COMMIT_SHA" >> $GITHUB_OUTPUT
+          echo "Short commit SHA: $COMMIT_SHA"
+
       - name: Download digests
         uses: actions/download-artifact@v4
         with:
@@ -133,8 +140,8 @@ jobs:
             type=ref,event=pr
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=sha,prefix={{branch}}-,format=short
             type=raw,value=${{ steps.tag.outputs.tag }},enable=${{ steps.tag.outputs.tag != '' }}
+            type=raw,value=${{ steps.commit.outputs.sha }}
 
       - name: Create manifest list and push
         working-directory: ${{ runner.temp }}/digests
