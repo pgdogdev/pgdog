@@ -9,6 +9,13 @@ database = "pgdog_sharded"
 password = "pgdog"
 
 [[users]]
+name = "pgdog_migrator"
+database = "pgdog_sharded"
+password = "pgdog"
+server_user = "pgdog"
+schema_owner = true
+
+[[users]]
 name = "pgdog"
 database = "failover"
 password = "pgdog"

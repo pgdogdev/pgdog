@@ -7,7 +7,9 @@ use thiserror::Error;
 use tokio::{select, signal::ctrl_c};
 use tracing::error;
 
+use crate::backend::schema::sync::config::ShardConfig;
 use crate::backend::schema::sync::pg_dump::{PgDump, SyncState};
+use crate::backend::Schema;
 use crate::backend::{databases::databases, replication::logical::Publisher};
 use crate::config::{Config, Users};
 
@@ -94,9 +96,6 @@ pub enum Commands {
         /// Source database name.
         #[arg(long)]
         from_database: String,
-        /// Source user name.
-        #[arg(long)]
-        from_user: String,
         /// Publication name.
         #[arg(long)]
         publication: String,
@@ -104,9 +103,6 @@ pub enum Commands {
         /// Destination database.
         #[arg(long)]
         to_database: String,
-        /// Destination user name.
-        #[arg(long)]
-        to_user: String,
 
         /// Dry run. Print schema commands, don't actually execute them.
         #[arg(long)]
@@ -119,6 +115,14 @@ pub enum Commands {
         /// Data sync has been complete.
         #[arg(long)]
         data_sync_complete: bool,
+    },
+
+    /// Perform cluster configuration steps
+    /// required for sharded operations.
+    Setup {
+        /// Database name.
+        #[arg(long)]
+        database: String,
     },
 }
 
@@ -251,17 +255,15 @@ pub async fn schema_sync(commands: Commands) -> Result<(), Box<dyn std::error::E
     let (source, destination, publication, dry_run, ignore_errors, data_sync_complete) =
         if let Commands::SchemaSync {
             from_database,
-            from_user,
             to_database,
-            to_user,
             publication,
             dry_run,
             ignore_errors,
             data_sync_complete,
         } = commands
         {
-            let source = databases().cluster((from_user.as_str(), from_database.as_str()))?;
-            let dest = databases().cluster((to_user.as_str(), to_database.as_str()))?;
+            let source = databases().schema_owner(&from_database)?;
+            let dest = databases().schema_owner(&to_database)?;
 
             (
                 source,
@@ -283,6 +285,10 @@ pub async fn schema_sync(commands: Commands) -> Result<(), Box<dyn std::error::E
         SyncState::PreData
     };
 
+    if state == SyncState::PreData {
+        ShardConfig::sync_all(&destination).await?;
+    }
+
     for output in output {
         if dry_run {
             let queries = output.statements(state)?;
@@ -293,6 +299,15 @@ pub async fn schema_sync(commands: Commands) -> Result<(), Box<dyn std::error::E
             output.restore(&destination, ignore_errors, state).await?;
         }
     }
+
+    Ok(())
+}
+
+pub async fn setup(database: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let databases = databases();
+    let schema_owner = databases.schema_owner(database)?;
+
+    ShardConfig::sync_all(&schema_owner).await?;
 
     Ok(())
 }
