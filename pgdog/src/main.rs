@@ -13,7 +13,6 @@ use pgdog::util::pgdog_version;
 use tokio::runtime::Builder;
 use tracing::info;
 
-use std::ops::Deref;
 use std::process::exit;
 
 #[cfg(not(target_env = "msvc"))]
