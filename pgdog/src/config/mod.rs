@@ -954,6 +954,9 @@ pub struct User {
     pub idle_timeout: Option<u64>,
     /// Read-only mode.
     pub read_only: Option<bool>,
+    /// Schema owner.
+    #[serde(default)]
+    pub schema_admin: bool,
 }
 
 impl User {
