@@ -9,7 +9,6 @@ use tracing::error;
 
 use crate::backend::schema::sync::config::ShardConfig;
 use crate::backend::schema::sync::pg_dump::{PgDump, SyncState};
-use crate::backend::Schema;
 use crate::backend::{databases::databases, replication::logical::Publisher};
 use crate::config::{Config, Users};
 

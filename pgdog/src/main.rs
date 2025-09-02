@@ -156,7 +156,7 @@ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Erro
 
             if let Commands::Setup { database } = command {
                 info!("🔄 entering setup mode");
-                cli::setup(&database).await?;
+                cli::setup(database).await?;
             }
         }
     }
