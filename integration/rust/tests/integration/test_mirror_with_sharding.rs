@@ -485,20 +485,23 @@ async fn test_mirroring_statistical_distribution_with_sharding() {
         total_mirrored, stats_mirrored
     );
 
-    // With 50% exposure and hash-based selection, the stats_mirrored should be close to total_mirrored
-    let tolerance = 10; // Allow some variance due to transaction bundling
+    // With 50% exposure and 300 total queries, expect roughly 150 mirrored and 150 dropped
+    let expected_mirrored_queries = (stats_total as f64 * 0.5) as u64;
+    let tolerance = 15; // Allow variance due to statistical sampling
     assert!(
-        (stats_mirrored as i64 - total_mirrored as i64).abs() <= tolerance,
-        "Stats mirrored ({}) should be close to actual mirrored rows ({}) ±{}",
+        (stats_mirrored as i64 - expected_mirrored_queries as i64).abs() <= tolerance as i64,
+        "Stats mirrored ({}) should be close to ~50% of total ({}) ±{}",
         stats_mirrored,
-        total_mirrored,
+        expected_mirrored_queries,
         tolerance
     );
 
-    // Dropped should be 0 or very low (only actual errors/overflow, not exposure sampling)
+    let expected_dropped_queries = stats_total - expected_mirrored_queries;
     assert!(
-        stats_dropped <= 10,
-        "Dropped count should be low (only errors/overflow), got {}",
+        (stats_dropped as i64 - expected_dropped_queries as i64).abs() <= tolerance as i64,
+        "Dropped count should be close to expected ({}) ±{}, got {}",
+        expected_dropped_queries,
+        tolerance,
         stats_dropped
     );
 

@@ -24,6 +24,7 @@ impl QueryEngine {
         let bytes_sent = context.stream.send_many(&messages).await?;
         self.stats.sent(bytes_sent);
         self.begin_stmt = None;
+        context.transaction = None; // Clear transaction state
 
         debug!("transaction ended");
         Ok(())

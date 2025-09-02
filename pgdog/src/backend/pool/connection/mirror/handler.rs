@@ -25,6 +25,8 @@ pub struct MirrorHandler {
     timer: Instant,
     database: String,
     user: String,
+    /// Count of requests dropped in current transaction due to exposure sampling
+    dropped_in_transaction: usize,
 }
 
 impl MirrorHandler {
@@ -42,6 +44,7 @@ impl MirrorHandler {
             timer: Instant::now(),
             database,
             user,
+            dropped_in_transaction: 0,
         }
     }
 
@@ -56,6 +59,7 @@ impl MirrorHandler {
         match self.state {
             MirrorHandlerState::Dropping => {
                 debug!("mirror dropping request");
+                self.dropped_in_transaction += 1;
                 false
             }
             MirrorHandlerState::Idle => {
@@ -75,6 +79,7 @@ impl MirrorHandler {
                     true
                 } else {
                     self.state = MirrorHandlerState::Dropping;
+                    self.dropped_in_transaction = 1; // Start counting this first dropped request
                     debug!("mirror dropping transaction [exposure: {}]", self.exposure);
                     false
                 }
@@ -93,12 +98,24 @@ impl MirrorHandler {
 
     pub fn flush(&mut self) -> bool {
         if self.state == MirrorHandlerState::Dropping {
-            debug!("mirror transaction dropped");
+            debug!(
+                "mirror transaction dropped, recording {} dropped requests",
+                self.dropped_in_transaction
+            );
             self.state = MirrorHandlerState::Idle;
+
+            // Record all dropped requests due to exposure sampling
+            let stats = MirrorStats::instance();
+            for _ in 0..self.dropped_in_transaction {
+                stats.record_outcome(&self.database, &self.user, MirrorOutcome::Dropped);
+            }
+            self.dropped_in_transaction = 0; // Reset counter for next transaction
+
             false
         } else {
             debug!("mirror transaction flushed");
             self.state = MirrorHandlerState::Idle;
+            self.dropped_in_transaction = 0; // Reset counter for next transaction
 
             let buffer = std::mem::take(&mut self.buffer);
             let buffer_len = buffer.len();
