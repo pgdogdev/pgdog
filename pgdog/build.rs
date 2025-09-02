@@ -3,7 +3,6 @@ use std::process::Command;
 // Compile time checks.
 fn main() {
     println!("cargo:rerun-if-changed=src/frontend/router/sharding/hashfn.c");
-    println!("cargo:rerun-if-changed=../.git/HEAD");
 
     cc::Build::new()
         .file("src/frontend/router/sharding/hashfn.c")
