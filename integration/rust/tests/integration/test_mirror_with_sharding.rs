@@ -95,8 +95,9 @@ database = "sharded_cluster"
     }
 
     fn start_pgdog(&self) -> PgdogGuard {
+        let pgdog_path = format!("{}/../../target/debug/pgdog", env!("CARGO_MANIFEST_DIR"));
         PgdogGuard {
-            child: Command::new("/Users/justin/Code/lev/pgdog/target/release/pgdog")
+            child: Command::new(&pgdog_path)
                 .arg("--config")
                 .arg(&self.config_file)
                 .arg("--users")
@@ -159,10 +160,11 @@ async fn connect_admin() -> Result<Client, Box<dyn std::error::Error>> {
 }
 
 // Helper function to parse mirror stats from admin query
-fn parse_mirror_stats(stats: &[SimpleQueryMessage]) -> (u64, u64, u64) {
+fn parse_mirror_stats(stats: &[SimpleQueryMessage]) -> (u64, u64, u64, u64) {
     let mut total = 0u64;
     let mut mirrored = 0u64;
     let mut dropped = 0u64;
+    let mut errors = 0u64;
 
     for msg in stats {
         if let SimpleQueryMessage::Row(row) = msg {
@@ -172,12 +174,15 @@ fn parse_mirror_stats(stats: &[SimpleQueryMessage]) -> (u64, u64, u64) {
                 "requests_total" => total = value_str.parse().unwrap_or(0),
                 "requests_mirrored" => mirrored = value_str.parse().unwrap_or(0),
                 "requests_dropped" => dropped = value_str.parse().unwrap_or(0),
+                "errors_connection" | "errors_query" | "errors_timeout" | "errors_buffer_full" => {
+                    errors += value_str.parse::<u64>().unwrap_or(0);
+                }
                 _ => {}
             }
         }
     }
 
-    (total, mirrored, dropped)
+    (total, mirrored, dropped, errors)
 }
 
 // Helper function to query and count rows in shards
@@ -323,7 +328,8 @@ async fn test_mirroring_statistical_distribution_with_sharding() {
         .await
         .expect("Failed to query initial mirror stats");
 
-    let (initial_total, initial_mirrored, initial_dropped) = parse_mirror_stats(&initial_stats);
+    let (initial_total, initial_mirrored, initial_dropped, initial_errors) =
+        parse_mirror_stats(&initial_stats);
 
     // Connect through PgDog to source_db
     let (client, connection) =
@@ -441,16 +447,29 @@ async fn test_mirroring_statistical_distribution_with_sharding() {
         .await
         .expect("Failed to query final mirror stats");
 
-    let (final_total, final_mirrored, final_dropped) = parse_mirror_stats(&final_stats);
+    let (final_total, final_mirrored, final_dropped, final_errors) =
+        parse_mirror_stats(&final_stats);
 
     // Calculate differentials
     let stats_total = final_total - initial_total;
     let stats_mirrored = final_mirrored - initial_mirrored;
     let stats_dropped = final_dropped - initial_dropped;
+    let stats_errors = final_errors - initial_errors;
 
     println!(
-        "MirrorStats Differential - Total: {}, Mirrored: {}, Dropped: {}",
-        stats_total, stats_mirrored, stats_dropped
+        "MirrorStats Differential - Total: {}, Mirrored: {}, Dropped: {}, Errors: {}",
+        stats_total, stats_mirrored, stats_dropped, stats_errors
+    );
+
+    // CRITICAL: Total must equal mirrored + dropped + errors
+    assert_eq!(
+        stats_mirrored + stats_dropped + stats_errors,
+        stats_total,
+        "Stats don't add up! Mirrored ({}) + Dropped ({}) + Errors ({}) should equal Total ({})",
+        stats_mirrored,
+        stats_dropped,
+        stats_errors,
+        stats_total
     );
 
     // Validate stats match our observations
@@ -503,16 +522,17 @@ async fn test_mirroring_statistical_distribution_with_sharding() {
     );
 }
 
-#[tokio::test]
-#[serial]
-async fn test_mirror_queue_overflow() {
-    // Create a configuration with queue_depth limit and initially unreachable mirror
-    let test_name = "queue_overflow";
+// Helper function to set up mirror test configuration
+async fn setup_mirror_test(
+    test_name: &str,
+    mirror_port: u16,
+    queue_depth: usize,
+) -> (String, String, PgdogGuard) {
     let config_file = format!("/tmp/mirror_test_{}.toml", test_name);
     let users_file = format!("/tmp/mirror_test_{}_users.toml", test_name);
 
-    // Write configuration with small queue_depth and initially unreachable mirror destination
-    let config = r#"
+    let config = format!(
+        r#"
 [general]
 openmetrics_port = 9090
 
@@ -522,23 +542,25 @@ name = "source_db"
 host = "127.0.0.1"
 database_name = "pgdog"
 
-# Mirror destination - initially unreachable (wrong port)
+# Mirror destination
 [[databases]]
 name = "mirror_db"
 host = "127.0.0.1"
-port = 9999  # Invalid port to simulate unreachable
+port = {}
 database_name = "pgdog"
 
-# Mirror configuration with small queue depth
+# Configure mirroring with specified queue depth
 [[mirroring]]
 source = "source_db"
 destination = "mirror_db"
 exposure = 1.0
-queue_depth = 10  # Small queue for testing overflow
+queue_depth = {}
 
 [admin]
 password = "pgdog"
-"#;
+"#,
+        mirror_port, queue_depth
+    );
 
     let users_config = r#"
 [[users]]
@@ -555,11 +577,9 @@ database = "mirror_db"
     std::fs::write(&config_file, config).expect("Failed to write config");
     std::fs::write(&users_file, users_config).expect("Failed to write users config");
 
-    println!("Starting PgDog with queue_depth=10 and unreachable mirror...");
-
-    // Start PgDog
-    let _pgdog = PgdogGuard {
-        child: Command::new("/Users/justin/Code/lev/pgdog/target/release/pgdog")
+    let pgdog_path = format!("{}/../../target/debug/pgdog", env!("CARGO_MANIFEST_DIR"));
+    let pgdog = PgdogGuard {
+        child: Command::new(&pgdog_path)
             .arg("--config")
             .arg(&config_file)
             .arg("--users")
@@ -570,6 +590,27 @@ database = "mirror_db"
 
     // Give it time to start
     tokio::time::sleep(Duration::from_millis(1000)).await;
+
+    (config_file, users_file, pgdog)
+}
+
+// Helper function to get and parse mirror stats
+async fn get_mirror_stats(admin_client: &Client) -> (u64, u64, u64, u64) {
+    let stats = admin_client
+        .simple_query("SHOW MIRROR_STATS")
+        .await
+        .expect("Failed to query mirror stats");
+    parse_mirror_stats(&stats)
+}
+
+#[tokio::test]
+#[serial]
+async fn test_mirror_queue_with_unreachable_destination() {
+    println!("Starting PgDog with queue_depth=10 and unreachable mirror...");
+
+    // Set up with unreachable mirror (port 9999)
+    let (_config_file, _users_file, _pgdog) =
+        setup_mirror_test("queue_unreachable", 9999, 10).await;
 
     // Set up source database
     let mut source_conn = PgConnection::connect("postgres://pgdog:pgdog@127.0.0.1:5432/pgdog")
@@ -592,16 +633,12 @@ database = "mirror_db"
         .expect("Failed to connect to admin database");
 
     // Get initial mirror stats
-    let initial_stats = admin_client
-        .simple_query("SHOW MIRROR_STATS")
-        .await
-        .expect("Failed to query initial mirror stats");
-
-    let (initial_total, initial_mirrored, initial_dropped) = parse_mirror_stats(&initial_stats);
+    let (initial_total, initial_mirrored, initial_dropped, initial_errors) =
+        get_mirror_stats(&admin_client).await;
 
     println!(
-        "Initial stats - Total: {}, Mirrored: {}, Dropped: {}",
-        initial_total, initial_mirrored, initial_dropped
+        "Initial stats - Total: {}, Mirrored: {}, Dropped: {}, Errors: {}",
+        initial_total, initial_mirrored, initial_dropped, initial_errors
     );
 
     // Connect through PgDog to source_db
@@ -635,31 +672,21 @@ database = "mirror_db"
     tokio::time::sleep(Duration::from_millis(1000)).await;
 
     // Get stats after overflow
-    let overflow_stats = admin_client
-        .simple_query("SHOW MIRROR_STATS")
-        .await
-        .expect("Failed to query overflow stats");
-
-    let (overflow_total, overflow_mirrored, overflow_dropped) = parse_mirror_stats(&overflow_stats);
+    let (overflow_total, overflow_mirrored, overflow_dropped, overflow_errors) =
+        get_mirror_stats(&admin_client).await;
 
     // Calculate differentials
     let stats_total = overflow_total - initial_total;
     let stats_mirrored = overflow_mirrored - initial_mirrored;
     let stats_dropped = overflow_dropped - initial_dropped;
+    let stats_errors = overflow_errors - initial_errors;
 
     println!(
-        "After overflow - Total: {}, Mirrored: {}, Dropped: {}",
-        stats_total, stats_mirrored, stats_dropped
+        "After overflow - Total: {}, Mirrored: {}, Dropped: {}, Errors: {}",
+        stats_total, stats_mirrored, stats_dropped, stats_errors
     );
 
-    // The current implementation appears to count requests as "mirrored" even when
-    // the destination is unreachable (pool banned). This is different from "dropped"
-    // which occurs when the queue overflows.
-    //
-    // For now, we'll verify that the stats are being tracked, even if the semantics
-    // differ from our expectations. The key behavior we want to test is queue overflow.
-
-    // All 15 requests should be accounted for
+    // All 15 transactions = 45 requests should be accounted for
     assert_eq!(
         stats_total,
         45, // 15 transactions * 3 queries each (BEGIN, INSERT, COMMIT)
@@ -667,20 +694,35 @@ database = "mirror_db"
         stats_total
     );
 
-    // Since the destination is unreachable but queue can hold 10, we expect:
-    // - First 10 transactions queued (but fail to send due to banned pool)
-    // - Remaining 5 should be dropped due to queue overflow
-    // However, current implementation counts them as "mirrored" not "dropped"
-
-    println!("Note: Current implementation counts failed sends as 'mirrored' not 'dropped'");
-    println!("This may need refinement in the mirroring implementation");
-
-    // Verify stats are non-zero and being tracked
-    assert!(
-        stats_mirrored > 0 || stats_dropped > 0,
-        "Expected some requests to be tracked in stats, but both mirrored ({}) and dropped ({}) are 0",
+    // CRITICAL: Total must equal mirrored + dropped + errors
+    assert_eq!(
+        stats_mirrored + stats_dropped + stats_errors,
+        stats_total,
+        "Stats don't add up! Mirrored ({}) + Dropped ({}) + Errors ({}) should equal Total ({})",
         stats_mirrored,
+        stats_dropped,
+        stats_errors,
+        stats_total
+    );
+
+    // Since destination is unreachable but queue consumer is active,
+    // all requests get processed and fail (no queue overflow)
+    assert_eq!(
+        stats_mirrored, 0,
+        "Expected 0 requests to be mirrored (unreachable destination), got {}",
+        stats_mirrored
+    );
+
+    assert_eq!(
+        stats_dropped, 0,
+        "Expected 0 requests to be dropped (consumer drains queue), got {}",
         stats_dropped
+    );
+
+    assert_eq!(
+        stats_errors, 45,
+        "Expected all 45 requests to error (unreachable destination), got {}",
+        stats_errors
     );
 
     // Now let's test with a reachable mirror but artificially slow processing
@@ -722,4 +764,141 @@ password = "pgdog"
     println!("  - Queue depth limit enforced");
     println!("  - Dropped {} requests when queue was full", stats_dropped);
     println!("  - MirrorStats correctly tracks dropped requests");
+}
+
+#[tokio::test]
+#[serial]
+async fn test_mirror_queue_overflow_with_slow_queries() {
+    println!("Starting PgDog with queue_depth=2 to test overflow...");
+
+    // Set up with reachable mirror (port 5432) and tiny queue depth of 2
+    let (_config_file, _users_file, _pgdog) =
+        setup_mirror_test("queue_overflow_slow", 5432, 2).await;
+
+    // Connect to admin database to monitor stats
+    let admin_client = connect_admin()
+        .await
+        .expect("Failed to connect to admin database");
+
+    // Get initial mirror stats
+    let (initial_total, initial_mirrored, initial_dropped, initial_errors) =
+        get_mirror_stats(&admin_client).await;
+
+    println!(
+        "Initial stats - Total: {}, Mirrored: {}, Dropped: {}, Errors: {}",
+        initial_total, initial_mirrored, initial_dropped, initial_errors
+    );
+
+    // Connect through PgDog to source_db
+    let (client, connection) =
+        tokio_postgres::connect("postgres://pgdog:pgdog@127.0.0.1:6432/source_db", NoTls)
+            .await
+            .expect("Failed to connect through PgDog");
+
+    tokio::spawn(async move {
+        if let Err(e) = connection.await {
+            eprintln!("connection error: {}", e);
+        }
+    });
+
+    println!("Spawning 100 concurrent connections to send 10 queries each (1000 total)...");
+
+    // Spawn many concurrent tasks, each with its own connection
+    // This should overwhelm the tiny queue (depth=2)
+    let mut handles = vec![];
+
+    for batch in 0..100 {
+        let handle = tokio::spawn(async move {
+            // Each task gets its own connection
+            let (task_client, task_connection) =
+                tokio_postgres::connect("postgres://pgdog:pgdog@127.0.0.1:6432/source_db", NoTls)
+                    .await
+                    .expect("Failed to connect");
+
+            tokio::spawn(async move {
+                if let Err(e) = task_connection.await {
+                    eprintln!("task connection error: {}", e);
+                }
+            });
+
+            // Send 10 transactions from this connection
+            for i in 1..=10 {
+                let query_num = batch * 10 + i;
+                task_client.simple_query("BEGIN").await.unwrap();
+                task_client
+                    .simple_query(&format!("SELECT {} as query_num", query_num))
+                    .await
+                    .unwrap();
+                task_client.simple_query("COMMIT").await.unwrap();
+            }
+        });
+        handles.push(handle);
+    }
+
+    println!("All tasks spawned, waiting for completion...");
+
+    // Wait for all tasks to complete
+    let mut completed = 0;
+    for handle in handles {
+        let _ = handle.await;
+        completed += 1;
+        if completed % 10 == 0 {
+            println!("Completed {} / 100 tasks", completed);
+        }
+    }
+
+    println!("All 1000 transactions sent");
+
+    // Give mirrors time to process
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    // Get final mirror stats
+    let (final_total, final_mirrored, final_dropped, final_errors) =
+        get_mirror_stats(&admin_client).await;
+
+    // Calculate differentials
+    let stats_total = final_total - initial_total;
+    let stats_mirrored = final_mirrored - initial_mirrored;
+    let stats_dropped = final_dropped - initial_dropped;
+    let stats_errors = final_errors - initial_errors;
+
+    println!(
+        "After slow queries - Total: {}, Mirrored: {}, Dropped: {}, Errors: {}",
+        stats_total, stats_mirrored, stats_dropped, stats_errors
+    );
+
+    // Verify results - 1000 transactions * 3 queries each
+    assert_eq!(
+        stats_total, 3000,
+        "Expected 3000 total requests (1000 transactions * 3 queries), got {}",
+        stats_total
+    );
+
+    // CRITICAL: Total must equal mirrored + dropped + errors
+    assert_eq!(
+        stats_mirrored + stats_dropped + stats_errors,
+        stats_total,
+        "Stats don't add up! Mirrored ({}) + Dropped ({}) + Errors ({}) should equal Total ({})",
+        stats_mirrored,
+        stats_dropped,
+        stats_errors,
+        stats_total
+    );
+
+    // With queue_depth=2 and 1000 concurrent transactions,
+    // we should see some dropped requests due to queue overflow
+    assert!(
+        stats_dropped > 0,
+        "Expected some requests to be dropped due to queue overflow, but got 0"
+    );
+
+    assert!(
+        stats_mirrored > 0,
+        "Expected some requests to be successfully mirrored, but got 0"
+    );
+
+    println!("✓ Mirror queue overflow test completed!");
+    println!("  - Total: {}", stats_total);
+    println!("  - Successfully mirrored: {}", stats_mirrored);
+    println!("  - Dropped due to queue overflow: {}", stats_dropped);
 }

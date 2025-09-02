@@ -16,7 +16,7 @@ use crate::frontend::client::TransactionType;
 use crate::frontend::comms::comms;
 use crate::frontend::PreparedStatements;
 use crate::net::{Parameter, Parameters, Stream};
-use crate::stats::mirror::{categorize_error, MirrorErrorType, MirrorStats};
+use crate::stats::mirror::{categorize_error, MirrorErrorType, MirrorOutcome, MirrorStats};
 use std::sync::Arc;
 
 use crate::frontend::ClientRequest;
@@ -128,13 +128,29 @@ impl Mirror {
                             match mirror.handle(&mut req, &mut query_engine).await {
                                 Ok(_) => {
                                     let latency_ms = start.elapsed().as_millis() as u64;
-                                    trace!("Mirror task: Success, recording as mirrored");
-                                    MirrorStats::instance().record_success(&database_name, &user_name, latency_ms);
+                                    trace!("Mirror task: Success for {} queries, recording as mirrored", req.buffer.len());
+                                    // Record success for EACH query in the request
+                                    let stats = MirrorStats::instance();
+                                    for _ in 0..req.buffer.len() {
+                                        stats.record_outcome(
+                                            &database_name,
+                                            &user_name,
+                                            MirrorOutcome::Mirrored { latency_ms }
+                                        );
+                                    }
                                 }
                                 Err(err) => {
                                     let error_type = categorize_mirror_error(&err);
-                                    trace!("Mirror task: Error occurred, recording as error type: {:?}", error_type);
-                                    MirrorStats::instance().record_error(&database_name, &user_name, error_type);
+                                    trace!("Mirror task: Error occurred for {} queries, recording as error type: {:?}", req.buffer.len(), error_type);
+                                    // Record an error for EACH query in the failed request
+                                    let stats = MirrorStats::instance();
+                                    for _ in 0..req.buffer.len() {
+                                        stats.record_outcome(
+                                            &database_name,
+                                            &user_name,
+                                            MirrorOutcome::Errored(error_type)
+                                        );
+                                    }
                                     error!("mirror error: {} (type: {:?})", err, error_type);
                                 }
                             }

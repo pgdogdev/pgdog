@@ -4,7 +4,7 @@
 //!
 
 use super::*;
-use crate::stats::mirror::{MirrorErrorType, MirrorStats};
+use crate::stats::mirror::{MirrorOutcome, MirrorStats};
 
 /// Mirror handle state.
 #[derive(Debug, Clone, PartialEq, Copy)]
@@ -100,14 +100,17 @@ impl MirrorHandler {
             debug!("mirror transaction flushed");
             self.state = MirrorHandlerState::Idle;
 
-            match self.tx.try_send(MirrorRequest {
-                buffer: std::mem::take(&mut self.buffer),
-            }) {
+            let buffer = std::mem::take(&mut self.buffer);
+            let buffer_len = buffer.len();
+            match self.tx.try_send(MirrorRequest { buffer }) {
                 Ok(_) => true,
-                Err(_) => {
+                Err(e) => {
+                    debug!("MirrorHandler::flush failed to send, channel full. Buffer had {} queries. Error: {:?}", buffer_len, e);
                     let stats = MirrorStats::instance();
-                    stats.increment_dropped();
-                    stats.record_error(&self.database, &self.user, MirrorErrorType::BufferFull);
+                    // Record each request in the buffer as dropped (queue overflow)
+                    for _ in 0..buffer_len {
+                        stats.record_outcome(&self.database, &self.user, MirrorOutcome::Dropped);
+                    }
                     false
                 }
             }

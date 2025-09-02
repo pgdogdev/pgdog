@@ -90,8 +90,9 @@ database = "mirror_db"
     println!("Starting PgDog with unreachable mirror destination...");
 
     // Start PgDog (using debug build for trace logging)
+    let pgdog_path = format!("{}/../../target/debug/pgdog", env!("CARGO_MANIFEST_DIR"));
     let _pgdog = PgdogGuard {
-        child: Command::new("/Users/justin/Code/lev/pgdog/target/debug/pgdog")
+        child: Command::new(&pgdog_path)
             .arg("--config")
             .arg(config_file)
             .arg("--users")

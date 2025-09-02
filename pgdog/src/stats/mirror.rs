@@ -20,6 +20,17 @@ pub enum MirrorErrorType {
     BufferFull,
 }
 
+/// Mirror request outcome - ensures mutual exclusivity.
+#[derive(Debug, Clone, Copy)]
+pub enum MirrorOutcome {
+    /// Request was successfully mirrored
+    Mirrored { latency_ms: u64 },
+    /// Request was dropped due to queue overflow
+    Dropped,
+    /// Request encountered an error during processing
+    Errored(MirrorErrorType),
+}
+
 /// Per-cluster mirror statistics.
 #[derive(Debug, Default)]
 pub struct ClusterMirrorStats {
@@ -131,6 +142,74 @@ impl MirrorStats {
         self.requests_dropped.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Record the outcome of a mirror request (ensures mutual exclusivity).
+    /// Each request must have exactly ONE outcome: mirrored, dropped, or errored.
+    /// NOTE: This does NOT increment total - that should be done when the request is queued.
+    pub fn record_outcome(&self, database: &str, user: &str, outcome: MirrorOutcome) {
+        match outcome {
+            MirrorOutcome::Mirrored { latency_ms } => {
+                // Successfully mirrored
+                self.requests_mirrored.fetch_add(1, Ordering::Relaxed);
+
+                // Update latency stats
+                self.latency_sum_ms.fetch_add(latency_ms, Ordering::Relaxed);
+                self.latency_count.fetch_add(1, Ordering::Relaxed);
+                self.latency_max_ms.fetch_max(latency_ms, Ordering::Relaxed);
+
+                // Update cluster stats
+                {
+                    let mut stats = self.cluster_stats.write();
+                    let cluster_stat = stats
+                        .entry((database.to_string(), user.to_string()))
+                        .or_insert_with(ClusterMirrorStats::default);
+                    cluster_stat.mirrored.fetch_add(1, Ordering::Relaxed);
+                    cluster_stat
+                        .avg_latency_ms
+                        .store(latency_ms, Ordering::Relaxed);
+                }
+
+                // Reset consecutive errors and update last success
+                self.consecutive_errors.store(0, Ordering::Relaxed);
+                *self.last_success.write() = Instant::now();
+            }
+            MirrorOutcome::Dropped => {
+                // Dropped due to queue overflow
+                self.requests_dropped.fetch_add(1, Ordering::Relaxed);
+            }
+            MirrorOutcome::Errored(error_type) => {
+                // Failed with an error
+                match error_type {
+                    MirrorErrorType::Connection => {
+                        self.errors_connection.fetch_add(1, Ordering::Relaxed);
+                    }
+                    MirrorErrorType::Query => {
+                        self.errors_query.fetch_add(1, Ordering::Relaxed);
+                    }
+                    MirrorErrorType::Timeout => {
+                        self.errors_timeout.fetch_add(1, Ordering::Relaxed);
+                    }
+                    MirrorErrorType::BufferFull => {
+                        self.errors_buffer_full.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+
+                // Update cluster error stats
+                {
+                    let mut stats = self.cluster_stats.write();
+                    stats
+                        .entry((database.to_string(), user.to_string()))
+                        .or_insert_with(ClusterMirrorStats::default)
+                        .errors
+                        .fetch_add(1, Ordering::Relaxed);
+                }
+
+                // Update consecutive errors and last error
+                self.consecutive_errors.fetch_add(1, Ordering::Relaxed);
+                *self.last_error.write() = Some(Instant::now());
+            }
+        }
+    }
+
     /// Record a successful mirror operation.
     pub fn record_success(&self, database: &str, user: &str, latency_ms: u64) {
         self.requests_mirrored.fetch_add(1, Ordering::Relaxed);
@@ -168,7 +247,8 @@ impl MirrorStats {
 
     /// Record an error in mirror operation.
     pub fn record_error(&self, database: &str, user: &str, error_type: MirrorErrorType) {
-        self.requests_total.fetch_add(1, Ordering::Relaxed);
+        // DO NOT increment requests_total here - it was already counted when queued!
+        // Only increment error counters
 
         match error_type {
             MirrorErrorType::Connection => {
