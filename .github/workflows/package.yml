@@ -134,7 +134,7 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=sha,prefix={{branch}}-,format=short
-            ${{ steps.tag.outputs.tag && format('type=raw,value={0}', steps.tag.outputs.tag) || '' }}
+            type=raw,value=${{ steps.tag.outputs.tag }},enable=${{ steps.tag.outputs.tag != '' }}
 
       - name: Create manifest list and push
         working-directory: ${{ runner.temp }}/digests
