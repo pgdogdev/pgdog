@@ -48,3 +48,4 @@ perf.data.old
 
 # Ignore generated bindings
 pgdog-plugin/src/bindings.rs
+local/

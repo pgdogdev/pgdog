@@ -9,6 +9,7 @@ use pgdog::frontend::listener::Listener;
 use pgdog::net;
 use pgdog::plugin;
 use pgdog::stats;
+use pgdog::util::pgdog_version;
 use tokio::runtime::Builder;
 use tracing::info;
 
@@ -60,11 +61,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         _ => (),
     }
 
-    info!(
-        "🐕 PgDog v{} ({})",
-        env!("GIT_HASH"),
-        pgdog_plugin::comp::rustc_version().deref()
-    );
+    info!("🐕 PgDog {}", pgdog_version());
     let config = config::load(&args.config, &args.users)?;
 
     // Get databases from environment or from --database-url args.
