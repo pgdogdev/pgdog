@@ -1,6 +1,7 @@
 //! What's a project without a util module.
 
 use chrono::{DateTime, Local, Utc};
+use pgdog_plugin::comp;
 use rand::{distributions::Alphanumeric, Rng};
 use std::time::Duration; // 0.8
 
@@ -73,6 +74,16 @@ pub fn random_string(n: usize) -> String {
 /// Escape PostgreSQL identifiers by doubling any embedded quotes.
 pub fn escape_identifier(s: &str) -> String {
     s.replace("\"", "\"\"")
+}
+
+/// Get PgDog's version string.
+pub fn pgdog_version() -> String {
+    format!(
+        "v{} [main@{}, {}]",
+        env!("CARGO_PKG_VERSION"),
+        env!("GIT_HASH"),
+        comp::rustc_version().to_string()
+    )
 }
 
 #[cfg(test)]
