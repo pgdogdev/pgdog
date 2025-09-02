@@ -28,6 +28,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-tags: true
 
       - name: Prepare
         run: |
@@ -94,6 +96,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-tags: true
 
       - name: Get short commit SHA
         id: commit
