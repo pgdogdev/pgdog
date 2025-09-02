@@ -13,7 +13,7 @@ name = "pgdog_migrator"
 database = "pgdog_sharded"
 password = "pgdog"
 server_user = "pgdog"
-schema_owner = true
+schema_admin = true
 
 [[users]]
 name = "pgdog"

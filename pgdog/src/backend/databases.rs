@@ -218,7 +218,7 @@ impl Databases {
     /// Get the schema owner for this database.
     pub fn schema_owner(&self, database: &str) -> Result<Cluster, Error> {
         for (user, cluster) in &self.databases {
-            if cluster.schema_owner() && user.database == database {
+            if cluster.schema_admin() && user.database == database {
                 return Ok(cluster.clone());
             }
         }
@@ -457,7 +457,7 @@ pub fn from_config(config: &ConfigAndUsers) -> Databases {
     // Duplicate schema owner check.
     let mut dupl_schema_owners = HashMap::<String, usize>::new();
     for (user, cluster) in &mut databases {
-        if cluster.schema_owner() {
+        if cluster.schema_admin() {
             let entry = dupl_schema_owners.entry(user.database.clone()).or_insert(0);
             *entry += 1;
 
@@ -466,7 +466,7 @@ pub fn from_config(config: &ConfigAndUsers) -> Databases {
                     r#"database "{}" has duplicate schema owner "{}", ignoring setting"#,
                     user.database, user.user
                 );
-                cluster.toggle_schema_owner(false);
+                cluster.toggle_schema_admin(false);
             }
         }
     }

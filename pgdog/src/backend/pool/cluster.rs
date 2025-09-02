@@ -45,7 +45,7 @@ pub struct Cluster {
     multi_tenant: Option<MultiTenant>,
     rw_strategy: ReadWriteStrategy,
     rw_split: ReadWriteSplit,
-    schema_owner: bool,
+    schema_admin: bool,
 }
 
 /// Sharding configuration from the cluster.
@@ -82,7 +82,7 @@ pub struct ClusterConfig<'a> {
     pub multi_tenant: &'a Option<MultiTenant>,
     pub rw_strategy: ReadWriteStrategy,
     pub rw_split: ReadWriteSplit,
-    pub schema_owner: bool,
+    pub schema_admin: bool,
 }
 
 impl<'a> ClusterConfig<'a> {
@@ -107,7 +107,7 @@ impl<'a> ClusterConfig<'a> {
             multi_tenant,
             rw_strategy: general.read_write_strategy,
             rw_split: general.read_write_split,
-            schema_owner: user.schema_owner,
+            schema_admin: user.schema_admin,
         }
     }
 }
@@ -128,7 +128,7 @@ impl Cluster {
             multi_tenant,
             rw_strategy,
             rw_split,
-            schema_owner,
+            schema_admin,
         } = config;
 
         Self {
@@ -147,7 +147,7 @@ impl Cluster {
             multi_tenant: multi_tenant.clone(),
             rw_strategy,
             rw_split,
-            schema_owner,
+            schema_admin,
         }
     }
 
@@ -198,7 +198,7 @@ impl Cluster {
             multi_tenant: self.multi_tenant.clone(),
             rw_strategy: self.rw_strategy,
             rw_split: self.rw_split,
-            schema_owner: self.schema_owner,
+            schema_admin: self.schema_admin,
         }
     }
 
@@ -274,13 +274,13 @@ impl Cluster {
     }
 
     /// This database/user pair is responsible for schema management.
-    pub fn schema_owner(&self) -> bool {
-        self.schema_owner
+    pub fn schema_admin(&self) -> bool {
+        self.schema_admin
     }
 
     /// Change schema owner attribute.
-    pub fn toggle_schema_owner(&mut self, owner: bool) {
-        self.schema_owner = owner;
+    pub fn toggle_schema_admin(&mut self, owner: bool) {
+        self.schema_admin = owner;
     }
 
     /// We'll need the query router to figure out

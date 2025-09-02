@@ -956,7 +956,7 @@ pub struct User {
     pub read_only: Option<bool>,
     /// Schema owner.
     #[serde(default)]
-    pub schema_owner: bool,
+    pub schema_admin: bool,
 }
 
 impl User {
