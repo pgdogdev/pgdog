@@ -96,7 +96,7 @@ impl MirrorHandler {
     /// Flush buffered requests to mirror.
     pub fn flush(&mut self) -> bool {
         if self.state == MirrorHandlerState::Dropping {
-            info!("mirror transaction dropped");
+            warn!("mirror transaction dropped");
             self.state = MirrorHandlerState::Idle;
             false
         } else {
