@@ -103,11 +103,15 @@ impl MirrorHandler {
             debug!("mirror transaction flushed");
             self.state = MirrorHandlerState::Idle;
 
-            self.tx
-                .try_send(MirrorRequest {
-                    buffer: std::mem::take(&mut self.buffer),
-                })
-                .is_ok()
+            match self.tx.try_send(MirrorRequest {
+                buffer: std::mem::take(&mut self.buffer),
+            }) {
+                Ok(()) => true,
+                Err(e) => {
+                    warn!("mirror buffer overflow, dropping transaction");
+                    false
+                }
+            }
         }
     }
 }
