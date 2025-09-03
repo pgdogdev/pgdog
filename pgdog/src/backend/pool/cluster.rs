@@ -1,6 +1,6 @@
 //! A collection of replicas and a primary.
 
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use std::sync::Arc;
 use tokio::spawn;
 use tracing::{error, info};
@@ -17,7 +17,7 @@ use crate::{
     net::{messages::BackendKeyData, Query},
 };
 
-use super::{Address, Config, Error, Guard, Request, Shard};
+use super::{Address, Config, Error, Guard, MirrorStats, Request, Shard};
 use crate::config::LoadBalancingStrategy;
 
 #[derive(Clone, Debug)]
@@ -46,6 +46,7 @@ pub struct Cluster {
     rw_strategy: ReadWriteStrategy,
     rw_split: ReadWriteSplit,
     schema_admin: bool,
+    stats: Arc<Mutex<MirrorStats>>,
 }
 
 /// Sharding configuration from the cluster.
@@ -148,6 +149,7 @@ impl Cluster {
             rw_strategy,
             rw_split,
             schema_admin,
+            stats: Arc::new(Mutex::new(MirrorStats::default())),
         }
     }
 
@@ -199,6 +201,7 @@ impl Cluster {
             rw_strategy: self.rw_strategy,
             rw_split: self.rw_split,
             schema_admin: self.schema_admin,
+            stats: Arc::new(Mutex::new(MirrorStats::default())),
         }
     }
 
@@ -281,6 +284,10 @@ impl Cluster {
     /// Change schema owner attribute.
     pub fn toggle_schema_admin(&mut self, owner: bool) {
         self.schema_admin = owner;
+    }
+
+    pub fn stats(&self) -> Arc<Mutex<MirrorStats>> {
+        self.stats.clone()
     }
 
     /// We'll need the query router to figure out
