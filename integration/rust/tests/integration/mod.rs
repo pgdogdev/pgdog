@@ -5,6 +5,7 @@ pub mod distinct;
 pub mod fake_transactions;
 pub mod maintenance_mode;
 pub mod notify;
+pub mod per_stmt_routing;
 pub mod prepared;
 pub mod reload;
 pub mod set_sharding_key;

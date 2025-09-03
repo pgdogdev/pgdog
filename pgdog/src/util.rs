@@ -3,7 +3,7 @@
 use chrono::{DateTime, Local, Utc};
 use pgdog_plugin::comp;
 use rand::{distributions::Alphanumeric, Rng};
-use std::time::Duration; // 0.8
+use std::{ops::Deref, time::Duration}; // 0.8
 
 pub fn format_time(time: DateTime<Local>) -> String {
     time.format("%Y-%m-%d %H:%M:%S%.3f %Z").to_string()
@@ -82,7 +82,7 @@ pub fn pgdog_version() -> String {
         "v{} [main@{}, {}]",
         env!("CARGO_PKG_VERSION"),
         env!("GIT_HASH"),
-        comp::rustc_version().to_string()
+        comp::rustc_version().deref()
     )
 }
 
