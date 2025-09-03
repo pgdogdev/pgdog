@@ -96,18 +96,22 @@ impl MirrorHandler {
     /// Flush buffered requests to mirror.
     pub fn flush(&mut self) -> bool {
         if self.state == MirrorHandlerState::Dropping {
-            warn!("mirror transaction dropped");
+            debug!("mirror transaction dropped");
             self.state = MirrorHandlerState::Idle;
             false
         } else {
             debug!("mirror transaction flushed");
             self.state = MirrorHandlerState::Idle;
 
-            self.tx
-                .try_send(MirrorRequest {
-                    buffer: std::mem::take(&mut self.buffer),
-                })
-                .is_ok()
+            match self.tx.try_send(MirrorRequest {
+                buffer: std::mem::take(&mut self.buffer),
+            }) {
+                Ok(()) => true,
+                Err(e) => {
+                    warn!("mirror buffer overflow: {}", e);
+                    false
+                }
+            }
         }
     }
 }
