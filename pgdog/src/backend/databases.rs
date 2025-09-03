@@ -174,7 +174,7 @@ impl ToUser for (&str, Option<&str>) {
 pub struct Databases {
     databases: HashMap<User, Cluster>,
     manual_queries: HashMap<String, ManualQuery>,
-    mirrors: HashMap<String, Vec<Cluster>>,
+    mirrors: HashMap<User, Vec<Cluster>>,
 }
 
 impl Databases {
@@ -228,9 +228,8 @@ impl Databases {
 
     pub fn mirrors(&self, user: impl ToUser) -> Result<Option<&[Cluster]>, Error> {
         let user = user.to_user();
-        if let Some(cluster) = self.databases.get(&user) {
-            let name = cluster.name();
-            Ok(self.mirrors.get(name).map(|m| m.as_slice()))
+        if self.databases.contains_key(&user) {
+            Ok(self.mirrors.get(&user).map(|m| m.as_slice()))
         } else {
             Err(Error::NoDatabase(user.clone()))
         }
@@ -473,19 +472,112 @@ pub fn from_config(config: &ConfigAndUsers) -> Databases {
 
     let mut mirrors = HashMap::new();
 
-    for cluster in databases.values() {
+    for (source_user, source_cluster) in databases.iter() {
         let mirror_clusters = databases
             .iter()
-            .find(|(_, c)| c.mirror_of() == Some(cluster.name()))
+            .filter(|(mirror_user, mirror_cluster)| {
+                mirror_cluster.mirror_of() == Some(source_cluster.name())
+                    && mirror_user.user == source_user.user
+            })
             .map(|(_, c)| c.clone())
-            .into_iter()
             .collect::<Vec<_>>();
-        mirrors.insert(cluster.name().to_owned(), mirror_clusters);
+
+        if !mirror_clusters.is_empty() {
+            mirrors.insert(source_user.clone(), mirror_clusters);
+        }
     }
 
     Databases {
         databases,
         manual_queries: config.config.manual_queries(),
         mirrors,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{Config, ConfigAndUsers, Database, Role};
+
+    #[test]
+    fn test_mirror_user_isolation() {
+        // Test that mirrors are isolated per user-database pair, not shared across all users.
+
+        let mut config = Config::default();
+
+        // Source database and two mirror destinations, both mirroring "db1"
+        config.databases = vec![
+            Database {
+                name: "db1".to_string(),
+                host: "localhost".to_string(),
+                port: 5432,
+                role: Role::Primary,
+                ..Default::default()
+            },
+            Database {
+                name: "alice_mirror_db".to_string(),
+                host: "localhost".to_string(),
+                port: 5433,
+                role: Role::Primary,
+                mirror_of: Some("db1".to_string()),
+                ..Default::default()
+            },
+            Database {
+                name: "bob_mirror_db".to_string(),
+                host: "localhost".to_string(),
+                port: 5434,
+                role: Role::Primary,
+                mirror_of: Some("db1".to_string()),
+                ..Default::default()
+            },
+        ];
+
+        let users = crate::config::Users {
+            users: vec![
+                crate::config::User {
+                    name: "alice".to_string(),
+                    database: "db1".to_string(),
+                    password: Some("pass".to_string()),
+                    ..Default::default()
+                },
+                crate::config::User {
+                    name: "bob".to_string(),
+                    database: "db1".to_string(),
+                    password: Some("pass".to_string()),
+                    ..Default::default()
+                },
+                crate::config::User {
+                    name: "alice".to_string(),
+                    database: "alice_mirror_db".to_string(),
+                    password: Some("pass".to_string()),
+                    ..Default::default()
+                },
+                crate::config::User {
+                    name: "bob".to_string(),
+                    database: "bob_mirror_db".to_string(),
+                    password: Some("pass".to_string()),
+                    ..Default::default()
+                },
+            ],
+        };
+
+        let databases = from_config(&ConfigAndUsers {
+            config,
+            users,
+            config_path: std::path::PathBuf::new(),
+            users_path: std::path::PathBuf::new(),
+        });
+
+        let alice_mirrors = databases.mirrors(("alice", "db1")).unwrap().unwrap_or(&[]);
+        let bob_mirrors = databases.mirrors(("bob", "db1")).unwrap().unwrap_or(&[]);
+
+        // Each user should get only their own mirror
+        assert_eq!(alice_mirrors.len(), 1);
+        assert_eq!(alice_mirrors[0].user(), "alice");
+        assert_eq!(alice_mirrors[0].name(), "alice_mirror_db");
+
+        assert_eq!(bob_mirrors.len(), 1);
+        assert_eq!(bob_mirrors[0].user(), "bob");
+        assert_eq!(bob_mirrors[0].name(), "bob_mirror_db");
     }
 }
