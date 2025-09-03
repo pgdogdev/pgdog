@@ -108,7 +108,7 @@ impl MirrorHandler {
             }) {
                 Ok(()) => true,
                 Err(e) => {
-                    warn!("mirror buffer overflow: {}", e);
+                    warn!("mirror buffer overflow, dropping transaction");
                     false
                 }
             }
