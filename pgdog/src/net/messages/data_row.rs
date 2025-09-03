@@ -3,7 +3,6 @@
 use crate::net::Decoder;
 
 use super::{code, prelude::*, Datum, Format, FromDataType, Numeric, RowDescription};
-use bytes::BytesMut;
 use std::ops::{Deref, DerefMut};
 
 #[derive(Debug, Clone, Eq, Hash, PartialEq)]
@@ -257,17 +256,13 @@ impl FromBytes for DataRow {
         let columns = (0..bytes.get_i16())
             .map(|_| {
                 let len = bytes.get_i32() as isize; // NULL = -1
-                let mut column = BytesMut::new();
 
                 if len < 0 {
-                    return (column.freeze(), true);
+                    return (Bytes::new(), true);
                 }
 
-                for _ in 0..len {
-                    column.put_u8(bytes.get_u8());
-                }
-
-                (column.freeze(), false)
+                let column = bytes.split_to(len as usize);
+                (column, false)
             })
             .map(Data::from)
             .collect();
@@ -311,5 +306,33 @@ mod test {
         assert_eq!(dr.columns.len(), 5);
         assert_eq!(dr.get::<String>(4, Format::Text).unwrap(), "test");
         assert_eq!(dr.get::<String>(0, Format::Text).unwrap(), "");
+    }
+
+    #[test]
+    fn test_data_row_serde() {
+        let mut dr = DataRow::new();
+        dr.add("hello");
+        dr.add(42i64);
+        dr.add(true);
+        dr.add(Data::null());
+        dr.add("world");
+
+        let serialized = dr.to_bytes().unwrap();
+        let deserialized = DataRow::from_bytes(serialized).unwrap();
+
+        assert_eq!(deserialized.len(), 5);
+        assert_eq!(
+            deserialized.get::<String>(0, Format::Text).unwrap(),
+            "hello"
+        );
+        assert_eq!(deserialized.get::<String>(1, Format::Text).unwrap(), "42");
+        assert_eq!(deserialized.get::<String>(2, Format::Text).unwrap(), "t");
+        assert_eq!(deserialized.column(3), Some(Bytes::new()));
+        assert_eq!(
+            deserialized.get::<String>(4, Format::Text).unwrap(),
+            "world"
+        );
+
+        assert_eq!(dr, deserialized);
     }
 }
