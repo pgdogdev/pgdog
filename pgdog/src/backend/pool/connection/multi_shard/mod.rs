@@ -6,8 +6,8 @@ use crate::{
     frontend::{router::Route, PreparedStatements},
     net::{
         messages::{
-            command_complete::CommandComplete, FromBytes, Message, Protocol, RowDescription,
-            ToBytes,
+            command_complete::CommandComplete, DataRow, FromBytes, Message, Protocol,
+            RowDescription, ToBytes,
         },
         Decoder,
     },
@@ -16,8 +16,13 @@ use crate::{
 use super::buffer::Buffer;
 
 mod context;
+mod error;
 #[cfg(test)]
 mod test;
+mod validator;
+
+pub use error::Error;
+use validator::Validator;
 
 #[derive(Default, Debug)]
 struct Counters {
@@ -49,6 +54,8 @@ pub struct MultiShard {
     /// Sorting/aggregate buffer.
     buffer: Buffer,
     decoder: Decoder,
+    /// Row consistency validator.
+    validator: Validator,
 }
 
 impl MultiShard {
@@ -72,6 +79,7 @@ impl MultiShard {
     pub(super) fn reset(&mut self) {
         self.counters = Counters::default();
         self.buffer.reset();
+        self.validator.reset();
         // Don't reset:
         //  1. Route to keep routing decision
         //  2. Number of shards
@@ -80,7 +88,7 @@ impl MultiShard {
 
     /// Check if the message should be sent to the client, skipped,
     /// or modified.
-    pub(super) fn forward(&mut self, message: Message) -> Result<Option<Message>, super::Error> {
+    pub(super) fn forward(&mut self, message: Message) -> Result<Option<Message>, Error> {
         let mut forward = None;
 
         match message.code() {
@@ -112,7 +120,8 @@ impl MultiShard {
 
                     if !self.buffer.is_empty() {
                         self.buffer
-                            .aggregate(self.route.aggregate(), &self.decoder)?;
+                            .aggregate(self.route.aggregate(), &self.decoder)
+                            .map_err(Error::from)?;
 
                         self.buffer.sort(self.route.order_by(), &self.decoder);
                         self.buffer.distinct(self.route.distinct(), &self.decoder);
@@ -133,12 +142,17 @@ impl MultiShard {
 
             'T' => {
                 self.counters.row_description += 1;
+                let rd = RowDescription::from_bytes(message.to_bytes()?)?;
+
+                // Validate row description consistency
+                let is_first = self.validator.validate_row_description(&rd)?;
+
                 // Set row description info as soon as we have it,
                 // so it's available to the aggregator and sorter.
-                if self.counters.row_description == 1 {
-                    let rd = RowDescription::from_bytes(message.to_bytes()?)?;
+                if is_first {
                     self.decoder.row_description(&rd);
                 }
+
                 if self.counters.row_description == self.shards {
                     // Only send it to the client once all shards sent it,
                     // so we don't get early requests from clients.
@@ -154,10 +168,16 @@ impl MultiShard {
             }
 
             'D' => {
+                if self.shards > 1 {
+                    // Validate data row consistency.
+                    let data_row = DataRow::from_bytes(message.to_bytes()?)?;
+                    self.validator.validate_data_row(&data_row)?;
+                }
+
                 if !self.should_buffer() && self.counters.row_description % self.shards == 0 {
                     forward = Some(message);
                 } else {
-                    self.buffer.add(message)?;
+                    self.buffer.add(message).map_err(Error::from)?;
                 }
             }
 

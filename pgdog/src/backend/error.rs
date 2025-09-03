@@ -110,6 +110,9 @@ pub enum Error {
 
     #[error("{0}")]
     FrontendError(Box<crate::frontend::Error>),
+
+    #[error("{0}")]
+    MultiShard(#[from] crate::backend::pool::connection::multi_shard::Error),
 }
 
 impl From<crate::frontend::Error> for Error {
