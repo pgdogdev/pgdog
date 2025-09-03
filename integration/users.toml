@@ -17,3 +17,13 @@ password = "pgdog"
 name = "pgdog"
 database = "single_sharded_list"
 password = "pgdog"
+
+[[users]]
+name = "pgdog"
+database = "shard_0"
+password = "pgdog"
+
+[[users]]
+name = "pgdog"
+database = "shard_1"
+password = "pgdog"

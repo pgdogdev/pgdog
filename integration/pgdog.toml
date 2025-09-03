@@ -14,6 +14,8 @@ prepared_statements_limit = 500
 # dns_ttl = 15_000
 query_cache_limit = 500
 pub_sub_channel_size = 4098
+mirror_exposure = 0.5
+mirror_queue = 128
 
 # ------------------------------------------------------------------------------
 # ----- Database :: pgdog ------------------------------------------------------
@@ -156,6 +158,13 @@ primary = true
 [[sharded_tables]]
 database = "pgdog_sharded"
 column = "customer_id"
+data_type = "bigint"
+
+# Table for mirror tests
+[[sharded_tables]]
+database = "pgdog_sharded"
+name = "users"
+column = "user_id"
 data_type = "bigint"
 
 # ------------------------------------------------------------------------------
@@ -307,6 +316,15 @@ fingerprint = "04dc05f480b702d3"
 
 [[manual_queries]]
 fingerprint = "2d9944fc9caeaadd" # [3285733254894627549]
+
+# ------------------------------------------------------------------------------
+# ----- Mirroring --------------------------------------------------------------
+
+[[mirroring]]
+source = "pgdog"
+destination = "pgdog_sharded"
+exposure = 0.5
+queue_depth = 128
 
 # ------------------------------------------------------------------------------
 # ------------------------------------------------------------------------------

@@ -98,10 +98,6 @@ impl MirrorHandler {
 
     pub fn flush(&mut self) -> bool {
         if self.state == MirrorHandlerState::Dropping {
-            debug!(
-                "mirror transaction dropped, recording {} dropped requests",
-                self.dropped_in_transaction
-            );
             self.state = MirrorHandlerState::Idle;
 
             // Record all dropped requests due to exposure sampling
@@ -113,7 +109,6 @@ impl MirrorHandler {
 
             false
         } else {
-            debug!("mirror transaction flushed");
             self.state = MirrorHandlerState::Idle;
             self.dropped_in_transaction = 0; // Reset counter for next transaction
 

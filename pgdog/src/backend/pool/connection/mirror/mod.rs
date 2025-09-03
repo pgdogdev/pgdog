@@ -180,12 +180,7 @@ impl Mirror {
         );
         let pools_available = self.cluster.shards().iter().any(|shard| {
             let pools = shard.pools();
-            trace!("Mirror: Shard has {} pools", pools.len());
-            let available = pools.iter().any(|pool| {
-                let banned = pool.banned();
-                trace!("Mirror: Pool {} banned: {}", pool.addr(), banned);
-                !banned
-            });
+            let available = pools.iter().any(|pool| !pool.banned());
             available
         });
 

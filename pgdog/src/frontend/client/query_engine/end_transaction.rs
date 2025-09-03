@@ -26,7 +26,6 @@ impl QueryEngine {
         self.begin_stmt = None;
         context.transaction = None; // Clear transaction state
 
-        debug!("transaction ended");
         Ok(())
     }
 }

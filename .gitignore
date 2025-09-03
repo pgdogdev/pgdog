@@ -48,3 +48,4 @@ perf.data.old
 CLAUDE.local.md
 .claude/plans/
 .claude/completed_plans/
+integration/log.txt

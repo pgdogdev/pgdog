@@ -220,9 +220,9 @@ async fn test_mirroring_to_sharded_cluster() {
     let (_source_conn, mut shard0_conn, mut shard1_conn) =
         setup_databases().await.expect("Failed to setup databases");
 
-    // Connect through PgDog to source_db
+    // Connect through PgDog to pgdog database
     let (client, connection) =
-        tokio_postgres::connect("postgres://pgdog:pgdog@127.0.0.1:6432/source_db", NoTls)
+        tokio_postgres::connect("postgres://pgdog:pgdog@127.0.0.1:6432/pgdog", NoTls)
             .await
             .expect("Failed to connect through PgDog");
 
@@ -301,17 +301,10 @@ async fn test_mirroring_to_sharded_cluster() {
 #[tokio::test]
 #[serial]
 async fn test_mirroring_statistical_distribution_with_sharding() {
-    // Set up configuration with 50% exposure
-    let config = MirrorTestConfig::new("statistical", 0.5);
-    config.write_configs().expect("Failed to write configs");
+    println!("Testing statistical mirroring with standard configuration (exposure=0.5)...");
 
-    println!("Starting PgDog with statistical mirroring configuration (exposure=0.5)...");
-
-    // Start PgDog with automatic cleanup on drop
-    let _pgdog = config.start_pgdog();
-
-    // Give it time to start
-    tokio::time::sleep(Duration::from_millis(1000)).await;
+    // This test uses the standard integration configuration
+    // Assumes pgdog is already running with integration/pgdog.toml and integration/users.toml
 
     // Set up databases
     let (mut source_conn, mut shard0_conn, mut shard1_conn) =
@@ -331,9 +324,9 @@ async fn test_mirroring_statistical_distribution_with_sharding() {
     let (initial_total, initial_mirrored, initial_dropped, initial_errors) =
         parse_mirror_stats(&initial_stats);
 
-    // Connect through PgDog to source_db
+    // Connect through PgDog to the standard pgdog database
     let (client, connection) =
-        tokio_postgres::connect("postgres://pgdog:pgdog@127.0.0.1:6432/source_db", NoTls)
+        tokio_postgres::connect("postgres://pgdog:pgdog@127.0.0.1:6432/pgdog", NoTls)
             .await
             .expect("Failed to connect through PgDog");
 
@@ -792,9 +785,9 @@ async fn test_mirror_queue_overflow_with_slow_queries() {
         initial_total, initial_mirrored, initial_dropped, initial_errors
     );
 
-    // Connect through PgDog to source_db
+    // Connect through PgDog to pgdog database
     let (client, connection) =
-        tokio_postgres::connect("postgres://pgdog:pgdog@127.0.0.1:6432/source_db", NoTls)
+        tokio_postgres::connect("postgres://pgdog:pgdog@127.0.0.1:6432/pgdog", NoTls)
             .await
             .expect("Failed to connect through PgDog");
 
@@ -814,7 +807,7 @@ async fn test_mirror_queue_overflow_with_slow_queries() {
         let handle = tokio::spawn(async move {
             // Each task gets its own connection
             let (task_client, task_connection) =
-                tokio_postgres::connect("postgres://pgdog:pgdog@127.0.0.1:6432/source_db", NoTls)
+                tokio_postgres::connect("postgres://pgdog:pgdog@127.0.0.1:6432/pgdog", NoTls)
                     .await
                     .expect("Failed to connect");
 
