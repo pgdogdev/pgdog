@@ -4,6 +4,9 @@
 //!
 
 use super::*;
+use crate::backend::pool::MirrorStats;
+use parking_lot::Mutex;
+use std::sync::Arc;
 
 /// Mirror handle state.
 #[derive(Debug, Clone, PartialEq, Copy)]
@@ -31,6 +34,8 @@ pub struct MirrorHandler {
     buffer: Vec<BufferWithDelay>,
     /// Request timer, to simulate delays between queries.
     timer: Instant,
+    /// Reference to cluster stats for tracking mirror metrics.
+    stats: Arc<Mutex<MirrorStats>>,
 }
 
 impl MirrorHandler {
@@ -40,13 +45,14 @@ impl MirrorHandler {
     }
 
     /// Create new mirror handle with exposure.
-    pub fn new(tx: Sender<MirrorRequest>, exposure: f32) -> Self {
+    pub fn new(tx: Sender<MirrorRequest>, exposure: f32, stats: Arc<Mutex<MirrorStats>>) -> Self {
         Self {
             tx,
             exposure,
             state: MirrorHandlerState::Idle,
             buffer: vec![],
             timer: Instant::now(),
+            stats,
         }
     }
 
@@ -95,9 +101,12 @@ impl MirrorHandler {
 
     /// Flush buffered requests to mirror.
     pub fn flush(&mut self) -> bool {
+        self.increment_total_count();
+
         if self.state == MirrorHandlerState::Dropping {
             debug!("mirror transaction dropped");
             self.state = MirrorHandlerState::Idle;
+            self.increment_dropped_count();
             false
         } else {
             debug!("mirror transaction flushed");
@@ -106,12 +115,204 @@ impl MirrorHandler {
             match self.tx.try_send(MirrorRequest {
                 buffer: std::mem::take(&mut self.buffer),
             }) {
-                Ok(()) => true,
+                Ok(()) => {
+                    self.increment_mirrored_count();
+                    true
+                }
                 Err(_) => {
                     warn!("mirror buffer overflow, dropping transaction");
+                    self.increment_error_count();
                     false
                 }
             }
         }
+    }
+
+    /// Increment the total request count.
+    pub fn increment_total_count(&self) {
+        let mut stats = self.stats.lock();
+        stats.counts.total_count += 1;
+    }
+
+    /// Increment the mirrored request count.
+    pub fn increment_mirrored_count(&self) {
+        let mut stats = self.stats.lock();
+        stats.counts.mirrored_count += 1;
+    }
+
+    /// Increment the dropped request count.
+    pub fn increment_dropped_count(&self) {
+        let mut stats = self.stats.lock();
+        stats.counts.dropped_count += 1;
+    }
+
+    /// Increment the error count.
+    pub fn increment_error_count(&self) {
+        let mut stats = self.stats.lock();
+        stats.counts.error_count += 1;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backend::pool::MirrorStats;
+    use parking_lot::Mutex;
+    use std::sync::Arc;
+    use tokio::sync::mpsc::{channel, Receiver};
+
+    fn create_test_handler(
+        exposure: f32,
+    ) -> (
+        MirrorHandler,
+        Arc<Mutex<MirrorStats>>,
+        Receiver<MirrorRequest>,
+    ) {
+        let (tx, rx) = channel(1000); // Keep receiver to prevent channel closure
+        let stats = Arc::new(Mutex::new(MirrorStats::default()));
+        let handler = MirrorHandler::new(tx, exposure, stats.clone());
+        (handler, stats, rx)
+    }
+
+    fn get_stats_counts(stats: &Arc<Mutex<MirrorStats>>) -> (usize, usize, usize, usize) {
+        let stats = stats.lock();
+        (
+            stats.counts.total_count,
+            stats.counts.mirrored_count,
+            stats.counts.dropped_count,
+            stats.counts.error_count,
+        )
+    }
+
+    #[test]
+    fn test_stats_initially_zero() {
+        let (_handler, stats, _rx) = create_test_handler(1.0);
+        let (total, mirrored, dropped, error) = get_stats_counts(&stats);
+        assert_eq!(total, 0, "total_count should be 0 initially");
+        assert_eq!(mirrored, 0, "mirrored_count should be 0 initially");
+        assert_eq!(dropped, 0, "dropped_count should be 0 initially");
+        assert_eq!(error, 0, "error_count should be 0 initially");
+    }
+
+    #[test]
+    fn test_successful_mirror_updates_stats() {
+        let (mut handler, stats, _rx) = create_test_handler(1.0);
+
+        // Send some requests
+        assert!(handler.send(&vec![].into()));
+        assert!(handler.send(&vec![].into()));
+        assert!(handler.send(&vec![].into()));
+
+        // Stats shouldn't update until flush
+        let (total, mirrored, dropped, _) = get_stats_counts(&stats);
+        assert_eq!(total, 0, "total_count should be 0 before flush");
+        assert_eq!(mirrored, 0, "mirrored_count should be 0 before flush");
+        assert_eq!(dropped, 0, "dropped_count should be 0 before flush");
+
+        // Flush should update stats
+        assert!(handler.flush());
+        let (total, mirrored, dropped, _) = get_stats_counts(&stats);
+        assert_eq!(total, 1, "total_count should be 1 after flush");
+        assert_eq!(
+            mirrored, 1,
+            "mirrored_count should be 1 after successful flush"
+        );
+        assert_eq!(dropped, 0, "dropped_count should remain 0");
+    }
+
+    #[test]
+    fn test_dropped_requests_update_stats() {
+        let (mut handler, stats, _rx) = create_test_handler(0.0); // 0% exposure - always drop
+
+        // First request determines if we're dropping or sending
+        assert!(
+            !handler.send(&vec![].into()),
+            "Should drop with 0% exposure"
+        );
+
+        // Flush a dropped request
+        assert!(!handler.flush());
+        let (total, mirrored, dropped, _) = get_stats_counts(&stats);
+        assert_eq!(total, 1, "total_count should be 1 after flush");
+        assert_eq!(
+            mirrored, 0,
+            "mirrored_count should be 0 for dropped request"
+        );
+        assert_eq!(dropped, 1, "dropped_count should be 1 after dropping");
+    }
+
+    #[test]
+    fn test_multiple_transactions() {
+        let (mut handler, stats, _rx) = create_test_handler(1.0);
+
+        // Transaction 1: successful
+        assert!(handler.send(&vec![].into()));
+        assert!(handler.send(&vec![].into()));
+        assert!(handler.flush());
+
+        // Transaction 2: successful
+        assert!(handler.send(&vec![].into()));
+        assert!(handler.flush());
+
+        // Transaction 3: successful
+        assert!(handler.send(&vec![].into()));
+        assert!(handler.send(&vec![].into()));
+        assert!(handler.send(&vec![].into()));
+        assert!(handler.flush());
+
+        let (total, mirrored, dropped, _) = get_stats_counts(&stats);
+        assert_eq!(total, 3, "total_count should be 3 after 3 flushes");
+        assert_eq!(
+            mirrored, 3,
+            "mirrored_count should be 3 after 3 successful flushes"
+        );
+        assert_eq!(dropped, 0, "dropped_count should be 0");
+    }
+
+    #[test]
+    fn test_increment_methods() {
+        let (handler, stats, _rx) = create_test_handler(1.0);
+
+        // Test each increment method directly
+        handler.increment_total_count();
+        handler.increment_mirrored_count();
+        handler.increment_dropped_count();
+        handler.increment_error_count();
+
+        let (total, mirrored, dropped, error) = get_stats_counts(&stats);
+        assert_eq!(total, 1, "increment_total_count should increment by 1");
+        assert_eq!(
+            mirrored, 1,
+            "increment_mirrored_count should increment by 1"
+        );
+        assert_eq!(dropped, 1, "increment_dropped_count should increment by 1");
+        assert_eq!(error, 1, "increment_error_count should increment by 1");
+
+        // Test incrementing multiple times
+        handler.increment_total_count();
+        handler.increment_total_count();
+
+        let (total, _, _, _) = get_stats_counts(&stats);
+        assert_eq!(total, 3, "Multiple increments should accumulate");
+    }
+
+    #[test]
+    fn test_mixed_success_and_drops() {
+        // Create handler with partial exposure
+        let (mut handler1, stats, _rx1) = create_test_handler(1.0);
+        let (mut handler2, _, _rx2) = create_test_handler(0.0);
+
+        // handler1: successful transaction
+        assert!(handler1.send(&vec![].into()));
+        assert!(handler1.flush());
+
+        // handler2 (0% exposure): dropped transaction
+        assert!(!handler2.send(&vec![].into()));
+
+        // For handler1's stats
+        let (total, mirrored, dropped, _) = get_stats_counts(&stats);
+        assert_eq!(total, 1, "Should have 1 total from handler1");
+        assert_eq!(mirrored, 1, "Should have 1 mirrored from handler1");
+        assert_eq!(dropped, 0, "Should have 0 dropped from handler1");
     }
 }

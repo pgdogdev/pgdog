@@ -91,8 +91,10 @@ impl Mirror {
 
         // Mirror queue.
         let (tx, mut rx) = channel(config.config.general.mirror_queue);
-        let handler = MirrorHandler::new(tx, config.config.general.mirror_exposure);
+        let handler =
+            MirrorHandler::new(tx, config.config.general.mirror_exposure, cluster.stats());
 
+        let stats_for_errors = cluster.stats();
         spawn(async move {
             loop {
                 select! {
@@ -101,6 +103,9 @@ impl Mirror {
                             // TODO: timeout these.
                             if let Err(err) = mirror.handle(&mut req, &mut query_engine).await {
                                 error!("mirror error: {}", err);
+                                // Increment error count on mirror handling error
+                                let mut stats = stats_for_errors.lock();
+                                stats.counts.error_count += 1;
                             }
                         } else {
                             debug!("mirror client shutting down");
@@ -144,8 +149,13 @@ mod test {
 
     #[tokio::test]
     async fn test_mirror_exposure() {
+        use crate::backend::pool::MirrorStats;
+        use parking_lot::Mutex;
+        use std::sync::Arc;
+
         let (tx, rx) = channel(25);
-        let mut handle = MirrorHandler::new(tx.clone(), 1.0);
+        let stats = Arc::new(Mutex::new(MirrorStats::default()));
+        let mut handle = MirrorHandler::new(tx.clone(), 1.0, stats.clone());
 
         for _ in 0..25 {
             assert!(
@@ -158,8 +168,8 @@ mod test {
         assert_eq!(rx.len(), 25);
 
         let (tx, rx) = channel(25);
-
-        let mut handle = MirrorHandler::new(tx.clone(), 0.5);
+        let stats2 = Arc::new(Mutex::new(MirrorStats::default()));
+        let mut handle = MirrorHandler::new(tx.clone(), 0.5, stats2);
         let dropped = (0..25)
             .into_iter()
             .map(|_| handle.send(&vec![].into()) && handle.send(&vec![].into()) && handle.flush())
@@ -225,6 +235,57 @@ mod test {
             );
             assert!(mirror.buffer().is_empty(), "mirror buffer should be empty");
         }
+
+        cluster.shutdown();
+    }
+
+    #[tokio::test]
+    async fn test_mirror_stats_tracking() {
+        config::test::load_test();
+        let cluster = Cluster::new_test();
+        cluster.launch();
+
+        // Get initial stats
+        let initial_stats = {
+            let stats_arc = cluster.stats();
+            let stats = stats_arc.lock();
+            stats.counts
+        };
+
+        let mut mirror = Mirror::spawn(&cluster).unwrap();
+
+        // Send a simple transaction
+        assert!(mirror.send(&vec![Query::new("BEGIN").into()].into()));
+        assert!(mirror.send(&vec![Query::new("SELECT 1").into()].into()));
+        assert!(mirror.send(&vec![Query::new("COMMIT").into()].into()));
+
+        // Flush should increment stats
+        assert!(mirror.flush());
+
+        // Wait for async processing
+        sleep(Duration::from_millis(100)).await;
+
+        // Verify stats were incremented
+        let final_stats = {
+            let stats_arc = cluster.stats();
+            let stats = stats_arc.lock();
+            stats.counts
+        };
+
+        assert_eq!(
+            final_stats.total_count,
+            initial_stats.total_count + 1,
+            "total_count should be incremented by 1, was {} now {}",
+            initial_stats.total_count,
+            final_stats.total_count
+        );
+        assert_eq!(
+            final_stats.mirrored_count,
+            initial_stats.mirrored_count + 1,
+            "mirrored_count should be incremented by 1, was {} now {}",
+            initial_stats.mirrored_count,
+            final_stats.mirrored_count
+        );
 
         cluster.shutdown();
     }
