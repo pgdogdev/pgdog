@@ -2,6 +2,8 @@ use pg_query::protobuf::Integer;
 use pg_query::protobuf::{self, a_const::Val, SelectStmt};
 use pg_query::NodeEnum;
 
+use crate::frontend::router::parser::Function;
+
 use super::Error;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -58,39 +60,35 @@ impl Aggregate {
         for (idx, node) in stmt.target_list.iter().enumerate() {
             if let Some(NodeEnum::ResTarget(ref res)) = &node.node {
                 if let Some(node) = &res.val {
-                    if let Some(NodeEnum::FuncCall(func)) = &node.node {
-                        if let Some(name) = func.funcname.first() {
-                            if let Some(NodeEnum::String(protobuf::String { sval })) = &name.node {
-                                match sval.as_str() {
-                                    "count" => {
-                                        targets.push(AggregateTarget {
-                                            column: idx,
-                                            function: AggregateFunction::Count,
-                                        });
-                                    }
-
-                                    "max" => {
-                                        targets.push(AggregateTarget {
-                                            column: idx,
-                                            function: AggregateFunction::Max,
-                                        });
-                                    }
-
-                                    "min" => {
-                                        targets.push(AggregateTarget {
-                                            column: idx,
-                                            function: AggregateFunction::Min,
-                                        });
-                                    }
-
-                                    "sum" => targets.push(AggregateTarget {
-                                        column: idx,
-                                        function: AggregateFunction::Max,
-                                    }),
-
-                                    _ => {}
-                                }
+                    if let Ok(func) = Function::try_from(node.as_ref()) {
+                        match func.name {
+                            "count" => {
+                                targets.push(AggregateTarget {
+                                    column: idx,
+                                    function: AggregateFunction::Count,
+                                });
                             }
+
+                            "max" => {
+                                targets.push(AggregateTarget {
+                                    column: idx,
+                                    function: AggregateFunction::Max,
+                                });
+                            }
+
+                            "min" => {
+                                targets.push(AggregateTarget {
+                                    column: idx,
+                                    function: AggregateFunction::Min,
+                                });
+                            }
+
+                            "sum" => targets.push(AggregateTarget {
+                                column: idx,
+                                function: AggregateFunction::Max,
+                            }),
+
+                            _ => {}
                         }
                     }
                 }
@@ -134,5 +132,32 @@ impl Aggregate {
 
     pub fn len(&self) -> usize {
         self.targets.len()
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_parse_aggregate() {
+        let query = pg_query::parse("SELECT COUNT(*)::bigint FROM users")
+            .unwrap()
+            .protobuf
+            .stmts
+            .first()
+            .cloned()
+            .unwrap();
+        match query.stmt.unwrap().node.unwrap() {
+            NodeEnum::SelectStmt(stmt) => {
+                let aggr = Aggregate::parse(&stmt).unwrap();
+                assert_eq!(
+                    aggr.targets().first().unwrap().function,
+                    AggregateFunction::Count
+                );
+            }
+
+            _ => panic!("not a select"),
+        }
     }
 }
