@@ -107,7 +107,7 @@ impl MirrorHandler {
                 buffer: std::mem::take(&mut self.buffer),
             }) {
                 Ok(()) => true,
-                Err(e) => {
+                Err(_) => {
                     warn!("mirror buffer overflow, dropping transaction");
                     false
                 }

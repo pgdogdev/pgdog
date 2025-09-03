@@ -1,5 +1,5 @@
 use pg_query::protobuf::Integer;
-use pg_query::protobuf::{self, a_const::Val, SelectStmt};
+use pg_query::protobuf::{a_const::Val, SelectStmt};
 use pg_query::NodeEnum;
 
 use crate::frontend::router::parser::Function;
