@@ -240,6 +240,10 @@ pub struct Config {
     /// Replication config.
     #[serde(default)]
     pub replication: Replication,
+
+    /// Mirroring configurations.
+    #[serde(default)]
+    pub mirroring: Vec<Mirroring>,
 }
 
 impl Config {
@@ -345,6 +349,40 @@ impl Config {
     /// Multi-tenanncy is enabled.
     pub fn multi_tenant(&self) -> &Option<MultiTenant> {
         &self.multi_tenant
+    }
+
+    /// Get mirroring configuration for a specific source/destination pair.
+    pub fn get_mirroring_config(
+        &self,
+        source_db: &str,
+        destination_db: &str,
+    ) -> Option<MirrorConfig> {
+        self.mirroring
+            .iter()
+            .find(|m| m.source_db == source_db && m.destination_db == destination_db)
+            .map(|m| MirrorConfig {
+                queue_length: m.queue_length.unwrap_or(self.general.mirror_queue),
+                exposure: m.exposure.unwrap_or(self.general.mirror_exposure),
+            })
+    }
+
+    /// Get all mirroring configurations mapped by source database.
+    pub fn mirroring_by_source(&self) -> HashMap<String, Vec<(String, MirrorConfig)>> {
+        let mut result = HashMap::new();
+
+        for mirror in &self.mirroring {
+            let config = MirrorConfig {
+                queue_length: mirror.queue_length.unwrap_or(self.general.mirror_queue),
+                exposure: mirror.exposure.unwrap_or(self.general.mirror_exposure),
+            };
+
+            result
+                .entry(mirror.source_db.clone())
+                .or_insert_with(Vec::new)
+                .push((mirror.destination_db.clone(), config));
+        }
+
+        result
     }
 }
 
@@ -836,8 +874,6 @@ pub struct Database {
     pub statement_timeout: Option<u64>,
     /// Idle timeout.
     pub idle_timeout: Option<u64>,
-    /// Mirror of another database.
-    pub mirror_of: Option<String>,
     /// Read-only mode.
     pub read_only: Option<bool>,
 }
@@ -1390,6 +1426,29 @@ impl Default for Replication {
     }
 }
 
+/// Mirroring configuration.
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[serde(deny_unknown_fields)]
+pub struct Mirroring {
+    /// Source database name to mirror from.
+    pub source_db: String,
+    /// Destination database name to mirror to.
+    pub destination_db: String,
+    /// Queue length for this mirror (overrides global mirror_queue).
+    pub queue_length: Option<usize>,
+    /// Exposure for this mirror (overrides global mirror_exposure).
+    pub exposure: Option<f32>,
+}
+
+/// Runtime mirror configuration with resolved values.
+#[derive(Debug, Clone)]
+pub struct MirrorConfig {
+    /// Queue length for this mirror.
+    pub queue_length: usize,
+    /// Exposure for this mirror.
+    pub exposure: f32,
+}
+
 #[cfg(test)]
 pub mod test {
     use crate::backend::databases::init;
@@ -1522,6 +1581,82 @@ column = "tenant_id"
         config.config.general.pooler_mode = PoolerMode::Transaction;
         config.config.general.prepared_statements = PreparedStatements::Disabled;
         assert!(!config.prepared_statements(), "Prepared statements should remain disabled when explicitly set to Disabled in transaction mode");
+    }
+
+    #[test]
+    fn test_mirroring_config() {
+        let source = r#"
+[general]
+host = "0.0.0.0"
+port = 6432
+mirror_queue = 128
+mirror_exposure = 1.0
+
+[[databases]]
+name = "source_db"
+host = "127.0.0.1"
+port = 5432
+
+[[databases]]
+name = "destination_db1"
+host = "127.0.0.1"
+port = 5433
+
+[[databases]]
+name = "destination_db2"
+host = "127.0.0.1"
+port = 5434
+
+[[mirroring]]
+source_db = "source_db"
+destination_db = "destination_db1"
+queue_length = 256
+exposure = 0.5
+
+[[mirroring]]
+source_db = "source_db"
+destination_db = "destination_db2"
+exposure = 0.75
+"#;
+
+        let config: Config = toml::from_str(source).unwrap();
+
+        // Verify we have 2 mirroring configurations
+        assert_eq!(config.mirroring.len(), 2);
+
+        // Check first mirroring config
+        assert_eq!(config.mirroring[0].source_db, "source_db");
+        assert_eq!(config.mirroring[0].destination_db, "destination_db1");
+        assert_eq!(config.mirroring[0].queue_length, Some(256));
+        assert_eq!(config.mirroring[0].exposure, Some(0.5));
+
+        // Check second mirroring config
+        assert_eq!(config.mirroring[1].source_db, "source_db");
+        assert_eq!(config.mirroring[1].destination_db, "destination_db2");
+        assert_eq!(config.mirroring[1].queue_length, None); // Should use global default
+        assert_eq!(config.mirroring[1].exposure, Some(0.75));
+
+        // Verify global defaults are still set
+        assert_eq!(config.general.mirror_queue, 128);
+        assert_eq!(config.general.mirror_exposure, 1.0);
+
+        // Test get_mirroring_config method
+        let mirror_config = config
+            .get_mirroring_config("source_db", "destination_db1")
+            .unwrap();
+        assert_eq!(mirror_config.queue_length, 256);
+        assert_eq!(mirror_config.exposure, 0.5);
+
+        let mirror_config2 = config
+            .get_mirroring_config("source_db", "destination_db2")
+            .unwrap();
+        assert_eq!(mirror_config2.queue_length, 128); // Uses global default
+        assert_eq!(mirror_config2.exposure, 0.75);
+
+        // Non-existent mirror config should return None
+        assert!(config
+            .get_mirroring_config("source_db", "non_existent")
+            .is_none());
     }
 }
 

@@ -64,13 +64,14 @@ impl Mirror {
     ///
     /// # Arguments
     ///
+    /// * `source_db`: Source database name for mirrored traffic.
     /// * `cluster`: Destination cluster for mirrored traffic.
     ///
     /// # Return
     ///
     /// Handler for sending queries to the background task.
     ///
-    pub fn spawn(cluster: &Cluster) -> Result<MirrorHandler, Error> {
+    pub fn spawn(source_db: &str, cluster: &Cluster) -> Result<MirrorHandler, Error> {
         let config = config();
         let params = Parameters::from(vec![
             Parameter {
@@ -89,10 +90,18 @@ impl Mirror {
         // Mirror traffic handler.
         let mut mirror = Self::new(&params, &config);
 
+        // Get mirror-specific configuration or use global defaults
+        let mirror_config = config
+            .config
+            .get_mirroring_config(source_db, cluster.name())
+            .unwrap_or_else(|| crate::config::MirrorConfig {
+                queue_length: config.config.general.mirror_queue,
+                exposure: config.config.general.mirror_exposure,
+            });
+
         // Mirror queue.
-        let (tx, mut rx) = channel(config.config.general.mirror_queue);
-        let handler =
-            MirrorHandler::new(tx, config.config.general.mirror_exposure, cluster.stats());
+        let (tx, mut rx) = channel(mirror_config.queue_length);
+        let handler = MirrorHandler::new(tx, mirror_config.exposure, cluster.stats());
 
         let stats_for_errors = cluster.stats();
         spawn(async move {
@@ -194,7 +203,7 @@ mod test {
         config::test::load_test();
         let cluster = Cluster::new_test();
         cluster.launch();
-        let mut mirror = Mirror::spawn(&cluster).unwrap();
+        let mut mirror = Mirror::spawn("pgdog", &cluster).unwrap();
         let mut conn = cluster.primary(0, &Request::default()).await.unwrap();
 
         for _ in 0..3 {
@@ -252,7 +261,7 @@ mod test {
             stats.counts
         };
 
-        let mut mirror = Mirror::spawn(&cluster).unwrap();
+        let mut mirror = Mirror::spawn("pgdog", &cluster).unwrap();
 
         // Send a simple transaction
         assert!(mirror.send(&vec![Query::new("BEGIN").into()].into()));

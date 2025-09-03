@@ -312,12 +312,13 @@ impl Connection {
                 let databases = databases();
                 let cluster = databases.cluster(user)?;
 
-                self.cluster = Some(cluster);
+                self.cluster = Some(cluster.clone());
+                let source_db = cluster.name();
                 self.mirrors = databases
                     .mirrors(user)?
                     .unwrap_or(&[])
                     .iter()
-                    .map(Mirror::spawn)
+                    .map(|dest_cluster| Mirror::spawn(source_db, dest_cluster))
                     .collect::<Result<Vec<_>, Error>>()?;
                 debug!(
                     r#"database "{}" has {} mirrors"#,

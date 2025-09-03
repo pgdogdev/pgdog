@@ -461,3 +461,19 @@ fingerprint = "2d9944fc9caeaadd" # [3285733254894627549]
 
 # [multi_tenant]
 # column = "tenant_id"
+
+#
+# Mirroring configuration.
+# Allows a new cluster to be validated and load tested
+# by mirroring data from the primary cluster and reporting
+# statistics.
+# In case of many Dropped transactions, it may be helpful
+# to increase queue_length for bursty workloads.
+# It is also helpful to begin with exposure = 0.0 and
+# gradually ramp up to full 1.0 over time
+#
+# [[mirroring]]
+# source_db = "pgdog"
+# destination_db = "pgdog_mirror"
+# queue_length = 256  # Optional: overrides general.mirror_queue
+# exposure = 0.5      # Optional: overrides general.mirror_exposure
