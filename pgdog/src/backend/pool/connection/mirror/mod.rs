@@ -6,7 +6,7 @@ use rand::{thread_rng, Rng};
 use tokio::select;
 use tokio::time::{sleep, Instant};
 use tokio::{spawn, sync::mpsc::*};
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
 
 use crate::backend::Cluster;
 use crate::config::{config, ConfigAndUsers};
