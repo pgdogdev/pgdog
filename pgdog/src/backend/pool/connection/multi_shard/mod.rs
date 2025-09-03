@@ -74,6 +74,7 @@ impl MultiShard {
         self.reset();
         self.shards = shards;
         self.route = route.clone();
+        self.validator.reset();
     }
 
     pub(super) fn reset(&mut self) {
