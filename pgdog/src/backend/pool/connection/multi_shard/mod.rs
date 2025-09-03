@@ -253,11 +253,15 @@ impl MultiShard {
                         .row_description(bind.statement())
                     {
                         self.decoder.row_description(&rd);
+                        self.validator.set_row_description(&rd);
                     }
                 }
                 self.decoder.bind(bind);
             }
-            Context::RowDescription(rd) => self.decoder.row_description(rd),
+            Context::RowDescription(rd) => {
+                self.decoder.row_description(rd);
+                self.validator.set_row_description(rd);
+            }
         }
     }
 }

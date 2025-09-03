@@ -202,3 +202,102 @@ async fn shard_consistency_validator_success() -> Result<(), Box<dyn std::error:
 
     Ok(())
 }
+
+#[tokio::test]
+async fn shard_consistency_data_row_validator_prepared_statement()
+-> Result<(), Box<dyn std::error::Error>> {
+    let conns = connections_sqlx().await;
+    let sharded = conns.get(1).cloned().unwrap();
+
+    // Clean up any existing test tables
+    sharded
+        .execute("/* pgdog_shard: 0 */ DROP TABLE IF EXISTS shard_datarow_test")
+        .await
+        .ok();
+    sharded
+        .execute("/* pgdog_shard: 1 */ DROP TABLE IF EXISTS shard_datarow_test")
+        .await
+        .ok();
+
+    // Create tables with same schema but we'll query them differently to trigger DataRow validation
+    // Both tables have same structure so RowDescription will match initially
+    sharded
+        .execute("/* pgdog_shard: 0 */ CREATE TABLE shard_datarow_test (id BIGINT PRIMARY KEY, name VARCHAR(100), extra TEXT DEFAULT 'default')")
+        .await?;
+
+    sharded
+        .execute("/* pgdog_shard: 1 */ CREATE TABLE shard_datarow_test (id BIGINT PRIMARY KEY, name VARCHAR(100), extra TEXT DEFAULT 'default')")
+        .await?;
+
+    // Insert test data
+    sharded
+        .execute("/* pgdog_shard: 0 */ INSERT INTO shard_datarow_test (id, name) VALUES (1, 'test1'), (2, 'test2')")
+        .await?;
+
+    sharded
+        .execute("/* pgdog_shard: 1 */ INSERT INTO shard_datarow_test (id, name, extra) VALUES (3, 'test3', 'extra3'), (4, 'test4', 'extra4')")
+        .await?;
+
+    // Use a prepared statement that selects different column sets from each shard
+    // This creates a scenario where RowDescription might initially match, but DataRow counts differ
+    // The key is to use conditional logic or different column selection per shard
+
+    // Actually, let's create a simpler test - use views with different column counts
+    sharded
+        .execute("/* pgdog_shard: 0 */ CREATE VIEW datarow_view AS SELECT id, name FROM shard_datarow_test")
+        .await?;
+
+    sharded
+        .execute("/* pgdog_shard: 1 */ CREATE VIEW datarow_view AS SELECT id, name, extra FROM shard_datarow_test") 
+        .await?;
+
+    // Now prepare a statement against the views
+    let result = sharded
+        .prepare("SELECT * FROM datarow_view WHERE id > $1 ORDER BY id")
+        .await;
+
+    // We want this test to specifically trigger DataRow validation, not RowDescription validation
+    // If prepare fails due to RowDescription mismatch, we should fail the test
+    let _stmt = result.expect("Prepare should succeed - we want to test DataRow validation, not RowDescription validation");
+
+    // Now execute the prepared statement to trigger DataRow validation
+    let execute_result = sqlx::query("SELECT * FROM datarow_view WHERE id > $1 ORDER BY id")
+        .bind(0i64)
+        .fetch_all(&sharded)
+        .await;
+
+    assert!(
+        execute_result.is_err(),
+        "Expected query to fail due to inconsistent DataRow column counts between shard views"
+    );
+
+    let error = execute_result.unwrap_err();
+    let error_string = error.to_string();
+
+    // Specifically check for DataRow count error (not RowDescription error)
+    assert!(
+        error_string.contains("inconsistent column count in data rows"),
+        "Expected error message to indicate DataRow count inconsistency, got: {}. This test should specifically trigger DataRow validation, not RowDescription validation.",
+        error_string
+    );
+
+    // Clean up
+    sharded
+        .execute("/* pgdog_shard: 0 */ DROP VIEW IF EXISTS datarow_view")
+        .await
+        .ok();
+    sharded
+        .execute("/* pgdog_shard: 1 */ DROP VIEW IF EXISTS datarow_view")
+        .await
+        .ok();
+    sharded
+        .execute("/* pgdog_shard: 0 */ DROP TABLE IF EXISTS shard_datarow_test")
+        .await
+        .ok();
+    sharded
+        .execute("/* pgdog_shard: 1 */ DROP TABLE IF EXISTS shard_datarow_test")
+        .await
+        .ok();
+
+    Ok(())
+}

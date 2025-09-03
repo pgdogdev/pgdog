@@ -6,7 +6,7 @@ use super::Error;
 
 /// Validates consistency of rows and row descriptions across multiple shards.
 #[derive(Debug, Default)]
-pub struct Validator {
+pub(super) struct Validator {
     /// First row description received for consistency validation
     first_row_description: Option<RowDescription>,
     /// Expected column count from first data row
@@ -15,14 +15,19 @@ pub struct Validator {
 
 impl Validator {
     /// Reset the validator state.
-    pub fn reset(&mut self) {
+    pub(super) fn reset(&mut self) {
         self.first_row_description = None;
         self.expected_column_count = None;
     }
 
+    /// Set the row description.
+    pub(super) fn set_row_description(&mut self, rd: &RowDescription) {
+        self.first_row_description = Some(rd.clone());
+    }
+
     /// Validate a row description against the first one received.
     /// Returns true if this is the first row description, false if it's a duplicate that matches.
-    pub fn validate_row_description(&mut self, rd: &RowDescription) -> Result<bool, Error> {
+    pub(super) fn validate_row_description(&mut self, rd: &RowDescription) -> Result<bool, Error> {
         match &self.first_row_description {
             None => {
                 // First row description - store it for comparison
@@ -57,7 +62,7 @@ impl Validator {
     }
 
     /// Validate a data row's column count against expected count.
-    pub fn validate_data_row(&mut self, data_row: &DataRow) -> Result<(), Error> {
+    pub(super) fn validate_data_row(&mut self, data_row: &DataRow) -> Result<(), Error> {
         let column_count = data_row.len();
 
         match self.expected_column_count {
