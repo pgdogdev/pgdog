@@ -8,11 +8,7 @@ async fn shard_consistency_validator() -> Result<(), Box<dyn std::error::Error>>
 
     // Clean up any existing test tables
     sharded
-        .execute("/* pgdog_shard: 0 */ DROP TABLE IF EXISTS shard_test")
-        .await
-        .ok();
-    sharded
-        .execute("/* pgdog_shard: 1 */ DROP TABLE IF EXISTS shard_test")
+        .execute("DROP TABLE IF EXISTS shard_test")
         .await
         .ok();
 
@@ -59,11 +55,7 @@ async fn shard_consistency_validator() -> Result<(), Box<dyn std::error::Error>>
 
     // Clean up
     sharded
-        .execute("/* pgdog_shard: 0 */ DROP TABLE IF EXISTS shard_test")
-        .await
-        .ok();
-    sharded
-        .execute("/* pgdog_shard: 1 */ DROP TABLE IF EXISTS shard_test")
+        .execute("DROP TABLE IF EXISTS shard_test")
         .await
         .ok();
 
@@ -77,11 +69,7 @@ async fn shard_consistency_validator_column_names() -> Result<(), Box<dyn std::e
 
     // Clean up any existing test tables
     sharded
-        .execute("/* pgdog_shard: 0 */ DROP TABLE IF EXISTS shard_name_test")
-        .await
-        .ok();
-    sharded
-        .execute("/* pgdog_shard: 1 */ DROP TABLE IF EXISTS shard_name_test")
+        .execute("DROP TABLE IF EXISTS shard_name_test")
         .await
         .ok();
 
@@ -130,11 +118,7 @@ async fn shard_consistency_validator_column_names() -> Result<(), Box<dyn std::e
 
     // Clean up
     sharded
-        .execute("/* pgdog_shard: 0 */ DROP TABLE IF EXISTS shard_name_test")
-        .await
-        .ok();
-    sharded
-        .execute("/* pgdog_shard: 1 */ DROP TABLE IF EXISTS shard_name_test")
+        .execute("DROP TABLE IF EXISTS shard_name_test")
         .await
         .ok();
 
@@ -148,21 +132,13 @@ async fn shard_consistency_validator_success() -> Result<(), Box<dyn std::error:
 
     // Clean up any existing test tables
     sharded
-        .execute("/* pgdog_shard: 0 */ DROP TABLE IF EXISTS shard_consistent_test")
-        .await
-        .ok();
-    sharded
-        .execute("/* pgdog_shard: 1 */ DROP TABLE IF EXISTS shard_consistent_test")
+        .execute("DROP TABLE IF EXISTS shard_consistent_test")
         .await
         .ok();
 
     // Create identical table schemas on both shards
     sharded
-        .execute("/* pgdog_shard: 0 */ CREATE TABLE shard_consistent_test (id BIGINT PRIMARY KEY, name VARCHAR(100))")
-        .await?;
-
-    sharded
-        .execute("/* pgdog_shard: 1 */ CREATE TABLE shard_consistent_test (id BIGINT PRIMARY KEY, name VARCHAR(100))")
+        .execute("CREATE TABLE shard_consistent_test (id BIGINT PRIMARY KEY, name VARCHAR(100))")
         .await?;
 
     // Insert test data
@@ -192,11 +168,7 @@ async fn shard_consistency_validator_success() -> Result<(), Box<dyn std::error:
 
     // Clean up
     sharded
-        .execute("/* pgdog_shard: 0 */ DROP TABLE IF EXISTS shard_consistent_test")
-        .await
-        .ok();
-    sharded
-        .execute("/* pgdog_shard: 1 */ DROP TABLE IF EXISTS shard_consistent_test")
+        .execute("DROP TABLE IF EXISTS shard_consistent_test")
         .await
         .ok();
 
@@ -211,22 +183,14 @@ async fn shard_consistency_data_row_validator_prepared_statement()
 
     // Clean up any existing test tables
     sharded
-        .execute("/* pgdog_shard: 0 */ DROP TABLE IF EXISTS shard_datarow_test")
-        .await
-        .ok();
-    sharded
-        .execute("/* pgdog_shard: 1 */ DROP TABLE IF EXISTS shard_datarow_test")
+        .execute("DROP TABLE IF EXISTS shard_datarow_test")
         .await
         .ok();
 
     // Create tables with same schema but we'll query them differently to trigger DataRow validation
     // Both tables have same structure so RowDescription will match initially
     sharded
-        .execute("/* pgdog_shard: 0 */ CREATE TABLE shard_datarow_test (id BIGINT PRIMARY KEY, name VARCHAR(100), extra TEXT DEFAULT 'default')")
-        .await?;
-
-    sharded
-        .execute("/* pgdog_shard: 1 */ CREATE TABLE shard_datarow_test (id BIGINT PRIMARY KEY, name VARCHAR(100), extra TEXT DEFAULT 'default')")
+        .execute("CREATE TABLE shard_datarow_test (id BIGINT PRIMARY KEY, name VARCHAR(100), extra TEXT DEFAULT 'default')")
         .await?;
 
     // Insert test data
@@ -283,19 +247,11 @@ async fn shard_consistency_data_row_validator_prepared_statement()
 
     // Clean up
     sharded
-        .execute("/* pgdog_shard: 0 */ DROP VIEW IF EXISTS datarow_view")
+        .execute("DROP VIEW IF EXISTS datarow_view")
         .await
         .ok();
     sharded
-        .execute("/* pgdog_shard: 1 */ DROP VIEW IF EXISTS datarow_view")
-        .await
-        .ok();
-    sharded
-        .execute("/* pgdog_shard: 0 */ DROP TABLE IF EXISTS shard_datarow_test")
-        .await
-        .ok();
-    sharded
-        .execute("/* pgdog_shard: 1 */ DROP TABLE IF EXISTS shard_datarow_test")
+        .execute("DROP TABLE IF EXISTS shard_datarow_test")
         .await
         .ok();
 
