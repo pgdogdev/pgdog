@@ -318,7 +318,10 @@ impl Connection {
                     .mirrors(user)?
                     .unwrap_or(&[])
                     .iter()
-                    .map(|dest_cluster| Mirror::spawn(source_db, dest_cluster))
+                    .map(|dest_cluster| {
+                        let mirror_config = databases.mirror_config(source_db, dest_cluster.name());
+                        Mirror::spawn(source_db, dest_cluster, mirror_config)
+                    })
                     .collect::<Result<Vec<_>, Error>>()?;
                 debug!(
                     r#"database "{}" has {} mirrors"#,

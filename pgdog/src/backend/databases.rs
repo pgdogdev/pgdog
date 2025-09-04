@@ -174,6 +174,7 @@ pub struct Databases {
     databases: HashMap<User, Cluster>,
     manual_queries: HashMap<String, ManualQuery>,
     mirrors: HashMap<User, Vec<Cluster>>,
+    mirror_configs: HashMap<(String, String), crate::config::MirrorConfig>,
 }
 
 impl Databases {
@@ -232,6 +233,16 @@ impl Databases {
         } else {
             Err(Error::NoDatabase(user.clone()))
         }
+    }
+
+    /// Get precomputed mirror configuration.
+    pub fn mirror_config(
+        &self,
+        source_db: &str,
+        destination_db: &str,
+    ) -> Option<&crate::config::MirrorConfig> {
+        self.mirror_configs
+            .get(&(source_db.to_string(), destination_db.to_string()))
     }
 
     /// Get replication configuration for the database.
@@ -300,6 +311,7 @@ impl Databases {
                 .collect(),
             manual_queries: self.manual_queries.clone(),
             mirrors: self.mirrors.clone(),
+            mirror_configs: self.mirror_configs.clone(),
         }
     }
 
@@ -510,10 +522,30 @@ pub fn from_config(config: &ConfigAndUsers) -> Databases {
         }
     }
 
+    // Build precomputed mirror configurations
+    let mut mirror_configs = HashMap::new();
+    for mirror in &config.config.mirroring {
+        if valid_mirrors.contains(&(mirror.source_db.clone(), mirror.destination_db.clone())) {
+            let mirror_config = crate::config::MirrorConfig {
+                queue_length: mirror
+                    .queue_length
+                    .unwrap_or(config.config.general.mirror_queue),
+                exposure: mirror
+                    .exposure
+                    .unwrap_or(config.config.general.mirror_exposure),
+            };
+            mirror_configs.insert(
+                (mirror.source_db.clone(), mirror.destination_db.clone()),
+                mirror_config,
+            );
+        }
+    }
+
     Databases {
         databases,
         manual_queries: config.config.manual_queries(),
         mirrors,
+        mirror_configs,
     }
 }
 
@@ -674,6 +706,419 @@ mod tests {
         assert!(
             user2_mirrors.is_none() || user2_mirrors.unwrap().is_empty(),
             "Expected no mirrors for user2 due to user mismatch"
+        );
+    }
+
+    #[test]
+    fn test_precomputed_mirror_configs() {
+        // Test that mirror configs are precomputed correctly during initialization
+        let mut config = Config::default();
+        config.general.mirror_queue = 100;
+        config.general.mirror_exposure = 0.8;
+
+        config.databases = vec![
+            Database {
+                name: "source_db".to_string(),
+                host: "localhost".to_string(),
+                port: 5432,
+                role: Role::Primary,
+                ..Default::default()
+            },
+            Database {
+                name: "dest_db".to_string(),
+                host: "localhost".to_string(),
+                port: 5433,
+                role: Role::Primary,
+                ..Default::default()
+            },
+        ];
+
+        config.mirroring = vec![crate::config::Mirroring {
+            source_db: "source_db".to_string(),
+            destination_db: "dest_db".to_string(),
+            queue_length: Some(256),
+            exposure: Some(0.5),
+        }];
+
+        let users = crate::config::Users {
+            users: vec![
+                crate::config::User {
+                    name: "user1".to_string(),
+                    database: "source_db".to_string(),
+                    password: Some("pass".to_string()),
+                    ..Default::default()
+                },
+                crate::config::User {
+                    name: "user1".to_string(),
+                    database: "dest_db".to_string(),
+                    password: Some("pass".to_string()),
+                    ..Default::default()
+                },
+            ],
+        };
+
+        let databases = from_config(&ConfigAndUsers {
+            config,
+            users,
+            config_path: std::path::PathBuf::new(),
+            users_path: std::path::PathBuf::new(),
+        });
+
+        // Verify mirror config exists and has custom values
+        let mirror_config = databases.mirror_config("source_db", "dest_db");
+        assert!(
+            mirror_config.is_some(),
+            "Mirror config should be precomputed"
+        );
+        let config = mirror_config.unwrap();
+        assert_eq!(
+            config.queue_length, 256,
+            "Custom queue length should be used"
+        );
+        assert_eq!(config.exposure, 0.5, "Custom exposure should be used");
+
+        // Non-existent mirror config should return None
+        let no_config = databases.mirror_config("source_db", "non_existent");
+        assert!(
+            no_config.is_none(),
+            "Non-existent mirror config should return None"
+        );
+    }
+
+    #[test]
+    fn test_mirror_config_with_global_defaults() {
+        // Test that global defaults are used when mirror-specific values aren't provided
+        let mut config = Config::default();
+        config.general.mirror_queue = 150;
+        config.general.mirror_exposure = 0.9;
+
+        config.databases = vec![
+            Database {
+                name: "db1".to_string(),
+                host: "localhost".to_string(),
+                port: 5432,
+                role: Role::Primary,
+                ..Default::default()
+            },
+            Database {
+                name: "db2".to_string(),
+                host: "localhost".to_string(),
+                port: 5433,
+                role: Role::Primary,
+                ..Default::default()
+            },
+        ];
+
+        // Mirror config without custom values - should use defaults
+        config.mirroring = vec![crate::config::Mirroring {
+            source_db: "db1".to_string(),
+            destination_db: "db2".to_string(),
+            queue_length: None,
+            exposure: None,
+        }];
+
+        let users = crate::config::Users {
+            users: vec![
+                crate::config::User {
+                    name: "user".to_string(),
+                    database: "db1".to_string(),
+                    password: Some("pass".to_string()),
+                    ..Default::default()
+                },
+                crate::config::User {
+                    name: "user".to_string(),
+                    database: "db2".to_string(),
+                    password: Some("pass".to_string()),
+                    ..Default::default()
+                },
+            ],
+        };
+
+        let databases = from_config(&ConfigAndUsers {
+            config,
+            users,
+            config_path: std::path::PathBuf::new(),
+            users_path: std::path::PathBuf::new(),
+        });
+
+        let mirror_config = databases.mirror_config("db1", "db2");
+        assert!(
+            mirror_config.is_some(),
+            "Mirror config should be precomputed"
+        );
+        let config = mirror_config.unwrap();
+        assert_eq!(
+            config.queue_length, 150,
+            "Global default queue length should be used"
+        );
+        assert_eq!(
+            config.exposure, 0.9,
+            "Global default exposure should be used"
+        );
+    }
+
+    #[test]
+    fn test_mirror_config_partial_overrides() {
+        // Test that we can override just queue or just exposure
+        let mut config = Config::default();
+        config.general.mirror_queue = 100;
+        config.general.mirror_exposure = 1.0;
+
+        config.databases = vec![
+            Database {
+                name: "primary".to_string(),
+                host: "localhost".to_string(),
+                port: 5432,
+                role: Role::Primary,
+                ..Default::default()
+            },
+            Database {
+                name: "mirror1".to_string(),
+                host: "localhost".to_string(),
+                port: 5433,
+                role: Role::Primary,
+                ..Default::default()
+            },
+            Database {
+                name: "mirror2".to_string(),
+                host: "localhost".to_string(),
+                port: 5434,
+                role: Role::Primary,
+                ..Default::default()
+            },
+        ];
+
+        config.mirroring = vec![
+            crate::config::Mirroring {
+                source_db: "primary".to_string(),
+                destination_db: "mirror1".to_string(),
+                queue_length: Some(200), // Override queue only
+                exposure: None,
+            },
+            crate::config::Mirroring {
+                source_db: "primary".to_string(),
+                destination_db: "mirror2".to_string(),
+                queue_length: None,
+                exposure: Some(0.25), // Override exposure only
+            },
+        ];
+
+        let users = crate::config::Users {
+            users: vec![
+                crate::config::User {
+                    name: "user".to_string(),
+                    database: "primary".to_string(),
+                    password: Some("pass".to_string()),
+                    ..Default::default()
+                },
+                crate::config::User {
+                    name: "user".to_string(),
+                    database: "mirror1".to_string(),
+                    password: Some("pass".to_string()),
+                    ..Default::default()
+                },
+                crate::config::User {
+                    name: "user".to_string(),
+                    database: "mirror2".to_string(),
+                    password: Some("pass".to_string()),
+                    ..Default::default()
+                },
+            ],
+        };
+
+        let databases = from_config(&ConfigAndUsers {
+            config,
+            users,
+            config_path: std::path::PathBuf::new(),
+            users_path: std::path::PathBuf::new(),
+        });
+
+        // Check mirror1 config - custom queue, default exposure
+        let mirror1_config = databases.mirror_config("primary", "mirror1").unwrap();
+        assert_eq!(
+            mirror1_config.queue_length, 200,
+            "Custom queue length should be used"
+        );
+        assert_eq!(
+            mirror1_config.exposure, 1.0,
+            "Default exposure should be used"
+        );
+
+        // Check mirror2 config - default queue, custom exposure
+        let mirror2_config = databases.mirror_config("primary", "mirror2").unwrap();
+        assert_eq!(
+            mirror2_config.queue_length, 100,
+            "Default queue length should be used"
+        );
+        assert_eq!(
+            mirror2_config.exposure, 0.25,
+            "Custom exposure should be used"
+        );
+    }
+
+    #[test]
+    fn test_invalid_mirror_not_precomputed() {
+        // Test that invalid mirror configs (user mismatch) are not precomputed
+        let mut config = Config::default();
+
+        config.databases = vec![
+            Database {
+                name: "source".to_string(),
+                host: "localhost".to_string(),
+                port: 5432,
+                role: Role::Primary,
+                ..Default::default()
+            },
+            Database {
+                name: "dest".to_string(),
+                host: "localhost".to_string(),
+                port: 5433,
+                role: Role::Primary,
+                ..Default::default()
+            },
+        ];
+
+        config.mirroring = vec![crate::config::Mirroring {
+            source_db: "source".to_string(),
+            destination_db: "dest".to_string(),
+            queue_length: Some(256),
+            exposure: Some(0.5),
+        }];
+
+        // Create user mismatch - user1 for source, user2 for dest
+        let users = crate::config::Users {
+            users: vec![
+                crate::config::User {
+                    name: "user1".to_string(),
+                    database: "source".to_string(),
+                    password: Some("pass".to_string()),
+                    ..Default::default()
+                },
+                crate::config::User {
+                    name: "user2".to_string(), // Different user!
+                    database: "dest".to_string(),
+                    password: Some("pass".to_string()),
+                    ..Default::default()
+                },
+            ],
+        };
+
+        let databases = from_config(&ConfigAndUsers {
+            config,
+            users,
+            config_path: std::path::PathBuf::new(),
+            users_path: std::path::PathBuf::new(),
+        });
+
+        // Should not have precomputed this invalid config
+        let mirror_config = databases.mirror_config("source", "dest");
+        assert!(
+            mirror_config.is_none(),
+            "Invalid mirror config should not be precomputed"
+        );
+    }
+
+    #[test]
+    fn test_mirror_config_no_users() {
+        // Test that mirror configs without any users are not precomputed
+        let mut config = Config::default();
+        config.general.mirror_queue = 100;
+        config.general.mirror_exposure = 0.8;
+
+        config.databases = vec![
+            Database {
+                name: "source_db".to_string(),
+                host: "localhost".to_string(),
+                port: 5432,
+                role: Role::Primary,
+                ..Default::default()
+            },
+            Database {
+                name: "dest_db".to_string(),
+                host: "localhost".to_string(),
+                port: 5433,
+                role: Role::Primary,
+                ..Default::default()
+            },
+        ];
+
+        // Configure mirroring
+        config.mirroring = vec![crate::config::Mirroring {
+            source_db: "source_db".to_string(),
+            destination_db: "dest_db".to_string(),
+            queue_length: Some(256),
+            exposure: Some(0.5),
+        }];
+
+        // No users at all
+        let users = crate::config::Users { users: vec![] };
+
+        let databases = from_config(&ConfigAndUsers {
+            config: config.clone(),
+            users,
+            config_path: std::path::PathBuf::new(),
+            users_path: std::path::PathBuf::new(),
+        });
+
+        // Mirror config should not be precomputed when there are no users
+        let mirror_config = databases.mirror_config("source_db", "dest_db");
+        assert!(
+            mirror_config.is_none(),
+            "Mirror config should not be precomputed when no users exist"
+        );
+
+        // Now test with users for only one database
+        let users_partial = crate::config::Users {
+            users: vec![
+                crate::config::User {
+                    name: "user1".to_string(),
+                    database: "source_db".to_string(),
+                    password: Some("pass".to_string()),
+                    ..Default::default()
+                },
+                // No user for dest_db!
+            ],
+        };
+
+        let databases_partial = from_config(&ConfigAndUsers {
+            config: config.clone(),
+            users: users_partial,
+            config_path: std::path::PathBuf::new(),
+            users_path: std::path::PathBuf::new(),
+        });
+
+        // Mirror config should not be precomputed when destination has no users
+        let mirror_config_partial = databases_partial.mirror_config("source_db", "dest_db");
+        assert!(
+            mirror_config_partial.is_none(),
+            "Mirror config should not be precomputed when destination has no users"
+        );
+
+        // Test the opposite - users only for destination
+        let users_dest_only = crate::config::Users {
+            users: vec![
+                crate::config::User {
+                    name: "user1".to_string(),
+                    database: "dest_db".to_string(),
+                    password: Some("pass".to_string()),
+                    ..Default::default()
+                },
+                // No user for source_db!
+            ],
+        };
+
+        let databases_dest_only = from_config(&ConfigAndUsers {
+            config,
+            users: users_dest_only,
+            config_path: std::path::PathBuf::new(),
+            users_path: std::path::PathBuf::new(),
+        });
+
+        // Mirror config should not be precomputed when source has no users
+        let mirror_config_dest_only = databases_dest_only.mirror_config("source_db", "dest_db");
+        assert!(
+            mirror_config_dest_only.is_none(),
+            "Mirror config should not be precomputed when source has no users"
         );
     }
 }
