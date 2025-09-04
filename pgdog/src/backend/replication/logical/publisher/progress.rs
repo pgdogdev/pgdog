@@ -26,7 +26,6 @@ enum ProgressKind {
 #[derive(Debug, Clone)]
 pub(crate) struct Progress {
     inner: Arc<Inner>,
-    #[allow(dead_code)]
     kind: ProgressKind,
 }
 

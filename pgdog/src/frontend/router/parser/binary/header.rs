@@ -23,7 +23,6 @@ pub(crate) fn binary_signature() -> &'static Vec<u8> {
 }
 
 #[derive(Debug, Clone, Default)]
-#[allow(dead_code)]
 pub(crate) struct Header {
     pub(super) flags: i32,
     pub(super) has_oid: bool,

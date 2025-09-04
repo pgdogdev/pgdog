@@ -419,7 +419,6 @@ impl Inner {
     }
 
     #[inline(always)]
-    #[allow(dead_code)]
     pub(crate) fn manually_banned(&self) -> bool {
         self.ban.map(|ban| ban.manual()).unwrap_or(false)
     }

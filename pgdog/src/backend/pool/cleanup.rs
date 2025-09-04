@@ -18,7 +18,6 @@ static NONE: Lazy<Vec<Query>> = Lazy::new(Vec::new);
 
 /// Queries used to clean up server connections after
 /// client modifications.
-#[allow(dead_code)]
 pub(crate) struct Cleanup {
     queries: &'static Vec<Query>,
     reset: bool,

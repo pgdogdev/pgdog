@@ -16,7 +16,6 @@ pub(crate) struct ContextBuilder<'a> {
     lists: Option<Lists<'a>>,
     probes: usize,
     hasher: Hasher,
-    #[allow(dead_code)]
     array: bool,
 }
 

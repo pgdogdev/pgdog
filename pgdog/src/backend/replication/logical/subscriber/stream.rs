@@ -48,10 +48,8 @@ struct Key {
 
 #[derive(Default, Debug, Clone)]
 struct Statements {
-    #[allow(dead_code)]
     insert: Statement,
     upsert: Statement,
-    #[allow(dead_code)]
     update: Statement,
 }
 

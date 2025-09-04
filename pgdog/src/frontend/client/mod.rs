@@ -35,7 +35,6 @@ pub(crate) struct Client {
     addr: SocketAddr,
     stream: Stream,
     id: BackendKeyData,
-    #[allow(dead_code)]
     connect_params: Parameters,
     params: Parameters,
     comms: Comms,

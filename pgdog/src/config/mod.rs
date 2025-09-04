@@ -879,7 +879,6 @@ pub struct Database {
 }
 
 impl Database {
-    #[allow(dead_code)]
     fn max_connections() -> usize {
         usize::MAX
     }
