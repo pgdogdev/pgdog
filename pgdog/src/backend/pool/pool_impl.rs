@@ -28,7 +28,7 @@ fn next_pool_id() -> u64 {
 
 /// Connection pool.
 #[derive(Clone)]
-pub struct Pool {
+pub(crate) struct Pool {
     inner: Arc<InnerSync>,
 }
 
@@ -50,7 +50,7 @@ impl std::fmt::Debug for Pool {
 
 impl Pool {
     /// Create new connection pool.
-    pub fn new(config: &PoolConfig) -> Self {
+    pub(crate) fn new(config: &PoolConfig) -> Self {
         let id = next_pool_id();
         Self {
             inner: Arc::new(InnerSync {
@@ -65,7 +65,7 @@ impl Pool {
 
     /// Test pool, no connections.
     #[cfg(test)]
-    pub fn new_test() -> Self {
+    pub(crate) fn new_test() -> Self {
         let config = PoolConfig {
             address: Address::new_test(),
             config: Config::default(),
@@ -79,7 +79,7 @@ impl Pool {
     }
 
     /// Launch the maintenance loop, bringing the pool online.
-    pub fn launch(&self) {
+    pub(crate) fn launch(&self) {
         let mut guard = self.lock();
         if !guard.online {
             guard.online = true;
@@ -87,11 +87,11 @@ impl Pool {
         }
     }
 
-    pub async fn get_forced(&self, request: &Request) -> Result<Guard, Error> {
+    pub(crate) async fn get_forced(&self, request: &Request) -> Result<Guard, Error> {
         self.get_internal(request, true).await
     }
 
-    pub async fn get(&self, request: &Request) -> Result<Guard, Error> {
+    pub(crate) async fn get(&self, request: &Request) -> Result<Guard, Error> {
         self.get_internal(request, false).await
     }
 
@@ -185,7 +185,7 @@ impl Pool {
     }
 
     /// Create new identical connection pool.
-    pub fn duplicate(&self) -> Pool {
+    pub(crate) fn duplicate(&self) -> Pool {
         Pool::new(&PoolConfig {
             address: self.addr().clone(),
             config: *self.lock().config(),
@@ -225,12 +225,12 @@ impl Pool {
     }
 
     /// Server connection used by the client.
-    pub fn peer(&self, id: &BackendKeyData) -> Option<BackendKeyData> {
+    pub(crate) fn peer(&self, id: &BackendKeyData) -> Option<BackendKeyData> {
         self.lock().peer(id)
     }
 
     /// Send a cancellation request if the client is connected to a server.
-    pub async fn cancel(&self, id: &BackendKeyData) -> Result<(), super::super::Error> {
+    pub(crate) async fn cancel(&self, id: &BackendKeyData) -> Result<(), super::super::Error> {
         if let Some(server) = self.peer(id) {
             Server::cancel(self.addr(), &server).await?;
         }
@@ -239,18 +239,18 @@ impl Pool {
     }
 
     /// Is this pool banned?
-    pub fn banned(&self) -> bool {
+    pub(crate) fn banned(&self) -> bool {
         self.lock().banned()
     }
 
     /// Pool is available to serve connections.
-    pub fn available(&self) -> bool {
+    pub(crate) fn available(&self) -> bool {
         let guard = self.lock();
         !guard.paused && guard.online
     }
 
     /// Ban this connection pool from serving traffic.
-    pub fn ban(&self, reason: Error) {
+    pub(crate) fn ban(&self, reason: Error) {
         let now = Instant::now();
         let banned = self.lock().maybe_ban(now, reason);
 
@@ -261,14 +261,14 @@ impl Pool {
 
     /// Unban this pool from serving traffic, unless manually banned.
     #[allow(dead_code)]
-    pub fn maybe_unban(&self) {
+    pub(crate) fn maybe_unban(&self) {
         let unbanned = self.lock().maybe_unban();
         if unbanned {
             info!("pool unbanned [{}]", self.addr());
         }
     }
 
-    pub fn unban(&self) {
+    pub(crate) fn unban(&self) {
         if self.lock().unban() {
             info!("pool unbanned [{}]", self.addr());
         }
@@ -310,7 +310,7 @@ impl Pool {
     }
 
     /// Pause pool, closing all open connections.
-    pub fn pause(&self) {
+    pub(crate) fn pause(&self) {
         let mut guard = self.lock();
 
         guard.paused = true;
@@ -318,7 +318,7 @@ impl Pool {
     }
 
     /// Resume the pool.
-    pub fn resume(&self) {
+    pub(crate) fn resume(&self) {
         {
             let mut guard = self.lock();
             guard.paused = false;
@@ -329,12 +329,12 @@ impl Pool {
     }
 
     /// Create a connection to the pool, untracked by the logic here.
-    pub async fn standalone(&self) -> Result<Server, Error> {
+    pub(crate) async fn standalone(&self) -> Result<Server, Error> {
         Monitor::create_connection(self).await
     }
 
     /// Shutdown the pool.
-    pub fn shutdown(&self) {
+    pub(crate) fn shutdown(&self) {
         let mut guard = self.lock();
 
         guard.online = false;
@@ -358,13 +358,13 @@ impl Pool {
 
     /// Pool address.
     #[inline]
-    pub fn addr(&self) -> &Address {
+    pub(crate) fn addr(&self) -> &Address {
         &self.inner.addr
     }
 
     /// Get pool configuration.
     #[inline]
-    pub fn config(&self) -> &Config {
+    pub(crate) fn config(&self) -> &Config {
         &self.inner.config
     }
 
@@ -408,7 +408,7 @@ impl Pool {
     }
 
     /// Pool state.
-    pub fn state(&self) -> State {
+    pub(crate) fn state(&self) -> State {
         State::get(self)
     }
 
@@ -419,12 +419,12 @@ impl Pool {
     }
 
     /// Fetch OIDs for user-defined data types.
-    pub fn oids(&self) -> Option<Oids> {
+    pub(crate) fn oids(&self) -> Option<Oids> {
         self.lock().oids
     }
 
     /// `pg_current_wal_flush_lsn()` on the primary.
-    pub async fn wal_flush_lsn(&self) -> Result<u64, Error> {
+    pub(crate) async fn wal_flush_lsn(&self) -> Result<u64, Error> {
         let mut guard = self.get(&Request::default()).await?;
 
         let rows: Vec<DataRow> = guard
@@ -441,7 +441,7 @@ impl Pool {
     }
 
     /// `pg_last_wal_replay_lsn()` on a replica.
-    pub async fn wal_replay_lsn(&self) -> Result<u64, Error> {
+    pub(crate) async fn wal_replay_lsn(&self) -> Result<u64, Error> {
         let mut guard = self.get(&Request::default()).await?;
 
         let rows: Vec<DataRow> = guard
@@ -457,7 +457,7 @@ impl Pool {
         parse_pg_lsn(&lsn).map_err(|_| Error::ReplicaLsnQueryFailed)
     }
 
-    pub fn set_replica_lag(&self, replica_lag: ReplicaLag) {
+    pub(crate) fn set_replica_lag(&self, replica_lag: ReplicaLag) {
         self.lock().replica_lag = replica_lag;
     }
 }

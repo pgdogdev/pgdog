@@ -1,7 +1,7 @@
 use super::{code, prelude::*};
 
 #[derive(Debug, Clone)]
-pub struct CopyDone;
+pub(crate) struct CopyDone;
 
 impl FromBytes for CopyDone {
     fn from_bytes(mut bytes: Bytes) -> Result<Self, Error> {
@@ -25,7 +25,7 @@ impl Protocol for CopyDone {
 }
 
 impl CopyDone {
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         4
     }
 }

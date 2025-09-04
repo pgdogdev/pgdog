@@ -5,12 +5,12 @@ use crate::{
 };
 
 #[derive(Debug)]
-pub struct Key<'a> {
-    pub table: &'a ShardedTable,
-    pub position: usize,
+pub(crate) struct Key<'a> {
+    pub(crate) table: &'a ShardedTable,
+    pub(crate) position: usize,
 }
 
-pub struct Tables<'a> {
+pub(crate) struct Tables<'a> {
     schema: &'a ShardingSchema,
 }
 

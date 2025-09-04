@@ -7,7 +7,7 @@ use super::{
 };
 
 #[derive(Debug, Clone)]
-pub enum ProtocolMessage {
+pub(crate) enum ProtocolMessage {
     Bind(Bind),
     Parse(Parse),
     Describe(Describe),
@@ -23,7 +23,7 @@ pub enum ProtocolMessage {
 }
 
 impl ProtocolMessage {
-    pub fn extended(&self) -> bool {
+    pub(crate) fn extended(&self) -> bool {
         use ProtocolMessage::*;
         matches!(
             self,
@@ -31,7 +31,7 @@ impl ProtocolMessage {
         )
     }
 
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         match self {
             Self::Bind(bind) => bind.len(),
             Self::Parse(parse) => parse.len(),

@@ -22,7 +22,7 @@ use crate::config::LoadBalancingStrategy;
 
 #[derive(Clone, Debug)]
 /// Database configuration.
-pub struct PoolConfig {
+pub(crate) struct PoolConfig {
     /// Database address.
     pub(crate) address: Address,
     /// Pool settings.
@@ -32,7 +32,7 @@ pub struct PoolConfig {
 /// A collection of sharded replicas and primaries
 /// belonging to the same database cluster.
 #[derive(Clone, Default, Debug)]
-pub struct Cluster {
+pub(crate) struct Cluster {
     name: String,
     shards: Vec<Shard>,
     user: String,
@@ -50,38 +50,38 @@ pub struct Cluster {
 
 /// Sharding configuration from the cluster.
 #[derive(Debug, Clone, Default)]
-pub struct ShardingSchema {
+pub(crate) struct ShardingSchema {
     /// Number of shards.
-    pub shards: usize,
+    pub(crate) shards: usize,
     /// Sharded tables.
-    pub tables: ShardedTables,
+    pub(crate) tables: ShardedTables,
 }
 
 impl ShardingSchema {
-    pub fn tables(&self) -> &ShardedTables {
+    pub(crate) fn tables(&self) -> &ShardedTables {
         &self.tables
     }
 }
 
-pub struct ClusterShardConfig {
-    pub primary: Option<PoolConfig>,
-    pub replicas: Vec<PoolConfig>,
+pub(crate) struct ClusterShardConfig {
+    pub(crate) primary: Option<PoolConfig>,
+    pub(crate) replicas: Vec<PoolConfig>,
 }
 
 /// Cluster creation config.
-pub struct ClusterConfig<'a> {
-    pub name: &'a str,
-    pub shards: &'a [ClusterShardConfig],
-    pub lb_strategy: LoadBalancingStrategy,
-    pub user: &'a str,
-    pub password: &'a str,
-    pub pooler_mode: PoolerMode,
-    pub sharded_tables: ShardedTables,
-    pub replication_sharding: Option<String>,
-    pub multi_tenant: &'a Option<MultiTenant>,
-    pub rw_strategy: ReadWriteStrategy,
-    pub rw_split: ReadWriteSplit,
-    pub schema_admin: bool,
+pub(crate) struct ClusterConfig<'a> {
+    pub(crate) name: &'a str,
+    pub(crate) shards: &'a [ClusterShardConfig],
+    pub(crate) lb_strategy: LoadBalancingStrategy,
+    pub(crate) user: &'a str,
+    pub(crate) password: &'a str,
+    pub(crate) pooler_mode: PoolerMode,
+    pub(crate) sharded_tables: ShardedTables,
+    pub(crate) replication_sharding: Option<String>,
+    pub(crate) multi_tenant: &'a Option<MultiTenant>,
+    pub(crate) rw_strategy: ReadWriteStrategy,
+    pub(crate) rw_split: ReadWriteSplit,
+    pub(crate) schema_admin: bool,
 }
 
 impl<'a> ClusterConfig<'a> {
@@ -111,7 +111,7 @@ impl<'a> ClusterConfig<'a> {
 
 impl Cluster {
     /// Create new cluster of shards.
-    pub fn new(config: ClusterConfig) -> Self {
+    pub(crate) fn new(config: ClusterConfig) -> Self {
         let ClusterConfig {
             name,
             shards,
@@ -148,13 +148,13 @@ impl Cluster {
     }
 
     /// Get a connection to a primary of the given shard.
-    pub async fn primary(&self, shard: usize, request: &Request) -> Result<Guard, Error> {
+    pub(crate) async fn primary(&self, shard: usize, request: &Request) -> Result<Guard, Error> {
         let shard = self.shards.get(shard).ok_or(Error::NoShard(shard))?;
         shard.primary(request).await
     }
 
     /// Get a connection to a replica of the given shard.
-    pub async fn replica(&self, shard: usize, request: &Request) -> Result<Guard, Error> {
+    pub(crate) async fn replica(&self, shard: usize, request: &Request) -> Result<Guard, Error> {
         let shard = self.shards.get(shard).ok_or(Error::NoShard(shard))?;
         shard.replica(request).await
     }
@@ -180,7 +180,7 @@ impl Cluster {
     ///
     /// This will allocate new server connections. Use when reloading configuration
     /// and you expect to drop the current Cluster entirely.
-    pub fn duplicate(&self) -> Self {
+    pub(crate) fn duplicate(&self) -> Self {
         Self {
             shards: self.shards.iter().map(|s| s.duplicate()).collect(),
             name: self.name.clone(),
@@ -199,7 +199,7 @@ impl Cluster {
     }
 
     /// Cancel a query executed by one of the shards.
-    pub async fn cancel(&self, id: &BackendKeyData) -> Result<(), super::super::Error> {
+    pub(crate) async fn cancel(&self, id: &BackendKeyData) -> Result<(), super::super::Error> {
         for shard in &self.shards {
             shard.cancel(id).await?;
         }
@@ -208,42 +208,42 @@ impl Cluster {
     }
 
     /// Get all shards.
-    pub fn shards(&self) -> &[Shard] {
+    pub(crate) fn shards(&self) -> &[Shard] {
         &self.shards
     }
 
     /// Get the password the user should use to connect to the database.
-    pub fn password(&self) -> &str {
+    pub(crate) fn password(&self) -> &str {
         &self.password
     }
 
     /// User name.
-    pub fn user(&self) -> &str {
+    pub(crate) fn user(&self) -> &str {
         &self.user
     }
 
     /// Cluster name (database name).
-    pub fn name(&self) -> &str {
+    pub(crate) fn name(&self) -> &str {
         &self.name
     }
 
     /// Get pooler mode.
-    pub fn pooler_mode(&self) -> PoolerMode {
+    pub(crate) fn pooler_mode(&self) -> PoolerMode {
         self.pooler_mode
     }
 
     // Get sharded tables if any.
-    pub fn sharded_tables(&self) -> &[ShardedTable] {
+    pub(crate) fn sharded_tables(&self) -> &[ShardedTable] {
         self.sharded_tables.tables()
     }
 
     /// Find sharded column position, if the table and columns match the configuration.
-    pub fn sharded_column(&self, table: &str, columns: &[&str]) -> Option<ShardedColumn> {
+    pub(crate) fn sharded_column(&self, table: &str, columns: &[&str]) -> Option<ShardedColumn> {
         self.sharded_tables.sharded_column(table, columns)
     }
 
     /// A cluster is read_only if zero shards have a primary.
-    pub fn read_only(&self) -> bool {
+    pub(crate) fn read_only(&self) -> bool {
         for shard in &self.shards {
             if shard.has_primary() {
                 return false;
@@ -254,7 +254,7 @@ impl Cluster {
     }
 
     /// This cluster is write_only if zero shards have a replica.
-    pub fn write_only(&self) -> bool {
+    pub(crate) fn write_only(&self) -> bool {
         for shard in &self.shards {
             if shard.has_replicas() {
                 return false;
@@ -265,39 +265,39 @@ impl Cluster {
     }
 
     /// This database/user pair is responsible for schema management.
-    pub fn schema_admin(&self) -> bool {
+    pub(crate) fn schema_admin(&self) -> bool {
         self.schema_admin
     }
 
     /// Change schema owner attribute.
-    pub fn toggle_schema_admin(&mut self, owner: bool) {
+    pub(crate) fn toggle_schema_admin(&mut self, owner: bool) {
         self.schema_admin = owner;
     }
 
-    pub fn stats(&self) -> Arc<Mutex<MirrorStats>> {
+    pub(crate) fn stats(&self) -> Arc<Mutex<MirrorStats>> {
         self.stats.clone()
     }
 
     /// We'll need the query router to figure out
     /// where a query should go.
-    pub fn router_needed(&self) -> bool {
+    pub(crate) fn router_needed(&self) -> bool {
         !(self.shards().len() == 1 && (self.read_only() || self.write_only()))
     }
 
     /// Multi-tenant config.
-    pub fn multi_tenant(&self) -> &Option<MultiTenant> {
+    pub(crate) fn multi_tenant(&self) -> &Option<MultiTenant> {
         &self.multi_tenant
     }
 
     /// Get replication configuration for this cluster.
-    pub fn replication_sharding_config(&self) -> Option<ReplicationConfig> {
+    pub(crate) fn replication_sharding_config(&self) -> Option<ReplicationConfig> {
         self.replication_sharding
             .as_ref()
             .and_then(|database| databases().replication(database))
     }
 
     /// Get all data required for sharding.
-    pub fn sharding_schema(&self) -> ShardingSchema {
+    pub(crate) fn sharding_schema(&self) -> ShardingSchema {
         ShardingSchema {
             shards: self.shards.len(),
             tables: self.sharded_tables.clone(),
@@ -322,12 +322,12 @@ impl Cluster {
     }
 
     /// Get currently loaded schema.
-    pub fn schema(&self) -> Schema {
+    pub(crate) fn schema(&self) -> Schema {
         self.schema.read().clone()
     }
 
     /// Read/write strategy
-    pub fn read_write_strategy(&self) -> &ReadWriteStrategy {
+    pub(crate) fn read_write_strategy(&self) -> &ReadWriteStrategy {
         &self.rw_strategy
     }
 
@@ -355,7 +355,7 @@ impl Cluster {
     }
 
     /// Execute a query on every primary in the cluster.
-    pub async fn execute(
+    pub(crate) async fn execute(
         &self,
         query: impl Into<Query> + Clone,
     ) -> Result<(), crate::backend::Error> {
@@ -382,7 +382,7 @@ mod test {
     use super::Cluster;
 
     impl Cluster {
-        pub fn new_test() -> Self {
+        pub(crate) fn new_test() -> Self {
             Cluster {
                 sharded_tables: ShardedTables::new(
                     vec![ShardedTable {
@@ -431,14 +431,14 @@ mod test {
             }
         }
 
-        pub fn new_test_single_shard() -> Cluster {
+        pub(crate) fn new_test_single_shard() -> Cluster {
             let mut cluster = Self::new_test();
             cluster.shards.pop();
 
             cluster
         }
 
-        pub fn set_read_write_strategy(&mut self, rw_strategy: ReadWriteStrategy) {
+        pub(crate) fn set_read_write_strategy(&mut self, rw_strategy: ReadWriteStrategy) {
             self.rw_strategy = rw_strategy;
         }
     }

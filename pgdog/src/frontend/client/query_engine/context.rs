@@ -9,7 +9,7 @@ use crate::{
 };
 
 /// Context passed to the query engine to execute a query.
-pub struct QueryEngineContext<'a> {
+pub(crate) struct QueryEngineContext<'a> {
     /// Prepared statements cache.
     pub(super) prepared_statements: &'a mut PreparedStatements,
     /// Client session parameters.
@@ -33,7 +33,7 @@ pub struct QueryEngineContext<'a> {
 }
 
 impl<'a> QueryEngineContext<'a> {
-    pub fn new(client: &'a mut Client) -> Self {
+    pub(crate) fn new(client: &'a mut Client) -> Self {
         let memory_usage = client.memory_usage();
 
         Self {
@@ -57,7 +57,7 @@ impl<'a> QueryEngineContext<'a> {
     }
 
     /// Create context from mirror.
-    pub fn new_mirror(mirror: &'a mut Mirror, buffer: &'a mut ClientRequest) -> Self {
+    pub(crate) fn new_mirror(mirror: &'a mut Mirror, buffer: &'a mut ClientRequest) -> Self {
         Self {
             prepared_statements: &mut mirror.prepared_statements,
             params: &mut mirror.params,
@@ -72,11 +72,11 @@ impl<'a> QueryEngineContext<'a> {
         }
     }
 
-    pub fn transaction(&self) -> Option<TransactionType> {
+    pub(crate) fn transaction(&self) -> Option<TransactionType> {
         self.transaction
     }
 
-    pub fn in_transaction(&self) -> bool {
+    pub(crate) fn in_transaction(&self) -> bool {
         self.transaction.is_some()
     }
 }

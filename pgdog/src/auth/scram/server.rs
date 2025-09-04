@@ -21,7 +21,7 @@ enum Provider {
 /// Derive the SCRAM-SHA-256 auth
 /// from a plain text password.
 #[derive(Clone)]
-pub struct UserPassword {
+pub(crate) struct UserPassword {
     password: String,
 }
 
@@ -32,7 +32,7 @@ pub struct UserPassword {
 /// TODO: Doesn't work yet. I'm not sure how to actually
 /// implement this.
 #[derive(Clone)]
-pub struct HashedPassword {
+pub(crate) struct HashedPassword {
     hash: String,
 }
 
@@ -104,14 +104,14 @@ impl AuthenticationProvider for HashedPassword {
 
 /// SCRAM-SHA-256 server that handles
 /// authenticating clients.
-pub struct Server {
+pub(crate) struct Server {
     provider: Provider,
     client_response: String,
 }
 
 impl Server {
     /// Create new SCRAM server.
-    pub fn new(password: &str) -> Self {
+    pub(crate) fn new(password: &str) -> Self {
         Self {
             provider: Provider::Plain(UserPassword {
                 password: password.to_owned(),
@@ -120,7 +120,7 @@ impl Server {
         }
     }
 
-    pub fn hashed(hash: &str) -> Self {
+    pub(crate) fn hashed(hash: &str) -> Self {
         Self {
             provider: Provider::Hashed(HashedPassword {
                 hash: hash.to_owned(),
@@ -130,7 +130,7 @@ impl Server {
     }
 
     /// Handle authentication.
-    pub async fn handle(mut self, stream: &mut Stream) -> Result<bool, Error> {
+    pub(crate) async fn handle(mut self, stream: &mut Stream) -> Result<bool, Error> {
         let scram = match self.provider {
             Provider::Plain(plain) => Scram::Plain(ScramServer::new(plain)),
             Provider::Hashed(hashed) => Scram::Hashed(ScramServer::new(hashed)),

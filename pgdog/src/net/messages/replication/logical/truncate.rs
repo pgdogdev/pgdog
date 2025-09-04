@@ -2,10 +2,10 @@ use super::super::super::code;
 use super::super::super::prelude::*;
 
 #[derive(Debug, Clone)]
-pub struct Truncate {
-    pub num_relations: i32,
-    pub options: i8,
-    pub oid: i32,
+pub(crate) struct Truncate {
+    pub(crate) num_relations: i32,
+    pub(crate) options: i8,
+    pub(crate) oid: i32,
 }
 
 impl FromBytes for Truncate {

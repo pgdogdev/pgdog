@@ -26,7 +26,7 @@ struct ParallelSync {
 
 impl ParallelSync {
     // Run parallel sync.
-    pub fn run(mut self) {
+    pub(crate) fn run(mut self) {
         spawn(async move {
             // This won't acquire until we have at least 1 available permit.
             // Permit will be given back when this task completes.
@@ -51,7 +51,7 @@ impl ParallelSync {
 }
 
 /// Sync tables in parallel up to maximum concurrency.
-pub struct ParallelSyncManager {
+pub(crate) struct ParallelSyncManager {
     permit: Arc<Semaphore>,
     tables: Vec<Table>,
     replicas: Vec<Pool>,
@@ -60,7 +60,11 @@ pub struct ParallelSyncManager {
 
 impl ParallelSyncManager {
     /// Create parallel sync manager.
-    pub fn new(tables: Vec<Table>, replicas: Vec<Pool>, dest: &Cluster) -> Result<Self, Error> {
+    pub(crate) fn new(
+        tables: Vec<Table>,
+        replicas: Vec<Pool>,
+        dest: &Cluster,
+    ) -> Result<Self, Error> {
         if replicas.is_empty() {
             return Err(Error::NoReplicas);
         }
@@ -74,7 +78,7 @@ impl ParallelSyncManager {
     }
 
     /// Run parallel table sync and return table LSNs when everything is done.
-    pub async fn run(self) -> Result<Vec<Table>, Error> {
+    pub(crate) async fn run(self) -> Result<Vec<Table>, Error> {
         let mut replicas_iter = self.replicas.iter();
         // Loop through replicas, one at a time.
         // This works around Rust iterators not having a "rewind" function.

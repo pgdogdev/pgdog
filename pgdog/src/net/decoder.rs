@@ -19,19 +19,19 @@ impl From<&RowDescription> for Decoder {
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct Decoder {
+pub(crate) struct Decoder {
     formats: Vec<Format>,
     rd: RowDescription,
 }
 
 impl Decoder {
     /// New column decoder.
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::default()
     }
 
     /// Infer types from Bind, if any provided.
-    pub fn bind(&mut self, bind: &Bind) {
+    pub(crate) fn bind(&mut self, bind: &Bind) {
         // Only override RowDescription formats if
         // Bind specifies formats.
         if !bind.codes().is_empty() {
@@ -49,14 +49,14 @@ impl Decoder {
     }
 
     /// Infer types from RowDescription, if any.
-    pub fn row_description(&mut self, rd: &RowDescription) {
+    pub(crate) fn row_description(&mut self, rd: &RowDescription) {
         let formats = rd.fields.iter().map(|f| f.format()).collect();
         self.formats = formats;
         self.rd = rd.clone();
     }
 
     /// Get format used for column at position.
-    pub fn format(&self, position: usize) -> Format {
+    pub(crate) fn format(&self, position: usize) -> Format {
         match self.formats.len() {
             0 => Format::Text,
             1 => self.formats[0],
@@ -64,7 +64,7 @@ impl Decoder {
         }
     }
 
-    pub fn rd(&self) -> &RowDescription {
+    pub(crate) fn rd(&self) -> &RowDescription {
         &self.rd
     }
 }

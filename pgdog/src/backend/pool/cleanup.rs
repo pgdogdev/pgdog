@@ -19,7 +19,7 @@ static NONE: Lazy<Vec<Query>> = Lazy::new(Vec::new);
 /// Queries used to clean up server connections after
 /// client modifications.
 #[allow(dead_code)]
-pub struct Cleanup {
+pub(crate) struct Cleanup {
     queries: &'static Vec<Query>,
     reset: bool,
     dirty: bool,
@@ -55,7 +55,7 @@ impl std::fmt::Display for Cleanup {
 
 impl Cleanup {
     /// New cleanup operation.
-    pub fn new(guard: &Guard, server: &mut Server) -> Self {
+    pub(crate) fn new(guard: &Guard, server: &mut Server) -> Self {
         let mut clean = if guard.reset {
             Self::all()
         } else if server.dirty() {
@@ -72,7 +72,7 @@ impl Cleanup {
     }
 
     /// Cleanup prepared statements.
-    pub fn prepared_statements() -> Self {
+    pub(crate) fn prepared_statements() -> Self {
         Self {
             queries: &*PREPARED,
             deallocate: true,
@@ -81,7 +81,7 @@ impl Cleanup {
     }
 
     /// Cleanup parameters.
-    pub fn parameters() -> Self {
+    pub(crate) fn parameters() -> Self {
         Self {
             queries: &*DIRTY,
             dirty: true,
@@ -90,7 +90,7 @@ impl Cleanup {
     }
 
     /// Cleanup everything.
-    pub fn all() -> Self {
+    pub(crate) fn all() -> Self {
         Self {
             reset: true,
             dirty: true,
@@ -101,26 +101,26 @@ impl Cleanup {
     }
 
     /// Nothing to clean up.
-    pub fn none() -> Self {
+    pub(crate) fn none() -> Self {
         Self::default()
     }
 
     /// Cleanup needed?
-    pub fn needed(&self) -> bool {
+    pub(crate) fn needed(&self) -> bool {
         !self.queries.is_empty() || !self.close.is_empty()
     }
 
     /// Get queries to execute on the server to perform cleanup.
-    pub fn queries(&self) -> &[Query] {
+    pub(crate) fn queries(&self) -> &[Query] {
         self.queries
     }
 
     /// Prepared statemens to close.
-    pub fn close(&self) -> &[Close] {
+    pub(crate) fn close(&self) -> &[Close] {
         &self.close
     }
 
-    pub fn is_reset_params(&self) -> bool {
+    pub(crate) fn is_reset_params(&self) -> bool {
         self.dirty
     }
 }

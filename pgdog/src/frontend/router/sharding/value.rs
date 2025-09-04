@@ -10,7 +10,7 @@ use crate::{
 use bytes::Bytes;
 
 #[derive(Debug, Clone)]
-pub enum Data<'a> {
+pub(crate) enum Data<'a> {
     Text(&'a str),
     Binary(&'a [u8]),
     Integer(i64),
@@ -41,20 +41,20 @@ impl<'a> From<&'a Bytes> for Data<'a> {
 }
 
 #[derive(Debug, Clone)]
-pub struct Value<'a> {
+pub(crate) struct Value<'a> {
     data_type: DataType,
     data: Data<'a>,
 }
 
 impl<'a> Value<'a> {
-    pub fn new(data: impl Into<Data<'a>>, data_type: DataType) -> Self {
+    pub(crate) fn new(data: impl Into<Data<'a>>, data_type: DataType) -> Self {
         Self {
             data_type,
             data: data.into(),
         }
     }
 
-    pub fn from_param(
+    pub(crate) fn from_param(
         param: &'a ParameterWithFormat<'a>,
         data_type: DataType,
     ) -> Result<Self, Error> {
@@ -67,7 +67,7 @@ impl<'a> Value<'a> {
         }
     }
 
-    pub fn vector(&self) -> Result<Option<Vector>, Error> {
+    pub(crate) fn vector(&self) -> Result<Option<Vector>, Error> {
         if self.data_type == DataType::Vector {
             match self.data {
                 Data::Text(text) => Ok(Some(Vector::decode(text.as_bytes(), Format::Text)?)),
@@ -79,7 +79,7 @@ impl<'a> Value<'a> {
         }
     }
 
-    pub fn valid(&self) -> bool {
+    pub(crate) fn valid(&self) -> bool {
         match self.data_type {
             DataType::Bigint => match self.data {
                 Data::Text(text) => text.parse::<i64>().is_ok(),
@@ -101,11 +101,11 @@ impl<'a> Value<'a> {
         }
     }
 
-    pub fn data(&self) -> &Data<'_> {
+    pub(crate) fn data(&self) -> &Data<'_> {
         &self.data
     }
 
-    pub fn integer(&self) -> Result<Option<i64>, Error> {
+    pub(crate) fn integer(&self) -> Result<Option<i64>, Error> {
         if self.data_type == DataType::Bigint {
             match self.data {
                 Data::Integer(int) => Ok(Some(int)),
@@ -122,7 +122,7 @@ impl<'a> Value<'a> {
         }
     }
 
-    pub fn varchar(&self) -> Result<Option<&str>, Error> {
+    pub(crate) fn varchar(&self) -> Result<Option<&str>, Error> {
         if self.data_type == DataType::Varchar {
             match self.data {
                 Data::Integer(_) => Ok(None),
@@ -134,7 +134,7 @@ impl<'a> Value<'a> {
         }
     }
 
-    pub fn uuid(&self) -> Result<Option<Uuid>, Error> {
+    pub(crate) fn uuid(&self) -> Result<Option<Uuid>, Error> {
         if self.data_type != DataType::Uuid {
             return Ok(None);
         }
@@ -148,7 +148,7 @@ impl<'a> Value<'a> {
         Ok(Some(uuid))
     }
 
-    pub fn hash(&self, hasher: Hasher) -> Result<Option<u64>, Error> {
+    pub(crate) fn hash(&self, hasher: Hasher) -> Result<Option<u64>, Error> {
         match self.data_type {
             DataType::Bigint => match self.data {
                 Data::Text(text) => Ok(Some(hasher.bigint(text.parse()?))),

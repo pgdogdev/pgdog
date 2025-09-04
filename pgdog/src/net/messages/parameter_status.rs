@@ -8,11 +8,11 @@ use crate::net::{
 
 /// ParameterStatus (B) message.
 #[derive(Debug)]
-pub struct ParameterStatus {
+pub(crate) struct ParameterStatus {
     /// Parameter name, e.g. `client_encoding`.
-    pub name: String,
+    pub(crate) name: String,
     /// Parameter value, e.g. `UTF8`.
-    pub value: String,
+    pub(crate) value: String,
 }
 
 impl From<Parameter> for ParameterStatus {
@@ -45,7 +45,7 @@ impl From<ParameterStatus> for Parameter {
 impl ParameterStatus {
     /// Fake parameter status messages we can return
     /// to a client to make this seem like a legitimate PostgreSQL connection.
-    pub fn fake() -> Vec<ParameterStatus> {
+    pub(crate) fn fake() -> Vec<ParameterStatus> {
         vec![
             ParameterStatus {
                 name: "server_name".into(),

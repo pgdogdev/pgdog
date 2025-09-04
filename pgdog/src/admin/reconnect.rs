@@ -5,7 +5,7 @@ use crate::backend::databases::reconnect;
 use super::prelude::*;
 
 /// Recreate connections.
-pub struct Reconnect;
+pub(crate) struct Reconnect;
 
 #[async_trait]
 impl Command for Reconnect {

@@ -7,20 +7,20 @@ use crate::{
 };
 
 /// Get all relations in the database.
-pub static TABLES: &str = include_str!("relations.sql");
+pub(crate) static TABLES: &str = include_str!("relations.sql");
 
 #[derive(Debug, Clone)]
-pub struct Relation {
+pub(crate) struct Relation {
     schema: String,
-    pub name: String,
-    pub type_: String,
-    pub owner: String,
-    pub persistence: String,
-    pub access_method: String,
-    pub size: usize,
-    pub description: String,
-    pub oid: i32,
-    pub columns: HashMap<String, Column>,
+    pub(crate) name: String,
+    pub(crate) type_: String,
+    pub(crate) owner: String,
+    pub(crate) persistence: String,
+    pub(crate) access_method: String,
+    pub(crate) size: usize,
+    pub(crate) description: String,
+    pub(crate) oid: i32,
+    pub(crate) columns: HashMap<String, Column>,
 }
 
 impl From<DataRow> for Relation {
@@ -42,7 +42,7 @@ impl From<DataRow> for Relation {
 
 impl Relation {
     /// Load relations and their columns.
-    pub async fn load(server: &mut Server) -> Result<Vec<Relation>, Error> {
+    pub(crate) async fn load(server: &mut Server) -> Result<Vec<Relation>, Error> {
         let mut relations: HashMap<_, _> = server
             .fetch_all::<Relation>(TABLES)
             .await?
@@ -69,7 +69,7 @@ impl Relation {
     }
 
     /// Get schema where the table is located.
-    pub fn schema(&self) -> &str {
+    pub(crate) fn schema(&self) -> &str {
         if self.schema.is_empty() {
             "public"
         } else {
@@ -78,22 +78,22 @@ impl Relation {
     }
 
     /// This is an index.
-    pub fn is_index(&self) -> bool {
+    pub(crate) fn is_index(&self) -> bool {
         matches!(self.type_.as_str(), "index" | "partitioned index")
     }
 
     /// This is a table.
-    pub fn is_table(&self) -> bool {
+    pub(crate) fn is_table(&self) -> bool {
         matches!(self.type_.as_str(), "table" | "partitioned table")
     }
 
     /// This is a sequence.
-    pub fn is_sequence(&self) -> bool {
+    pub(crate) fn is_sequence(&self) -> bool {
         self.type_ == "sequence"
     }
 
     /// Columns by name.
-    pub fn columns(&self) -> &HashMap<String, Column> {
+    pub(crate) fn columns(&self) -> &HashMap<String, Column> {
         &self.columns
     }
 }

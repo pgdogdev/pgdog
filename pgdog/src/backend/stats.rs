@@ -21,7 +21,7 @@ static STATS: Lazy<Mutex<HashMap<BackendKeyData, ConnectedServer>>> =
     Lazy::new(|| Mutex::new(HashMap::default()));
 
 /// Get a copy of latest stats.
-pub fn stats() -> HashMap<BackendKeyData, ConnectedServer> {
+pub(crate) fn stats() -> HashMap<BackendKeyData, ConnectedServer> {
     STATS.lock().clone()
 }
 
@@ -40,30 +40,30 @@ fn disconnect(id: &BackendKeyData) {
 
 /// Connected server.
 #[derive(Clone, Debug)]
-pub struct ConnectedServer {
-    pub stats: Stats,
-    pub addr: Address,
-    pub application_name: String,
-    pub client: Option<BackendKeyData>,
+pub(crate) struct ConnectedServer {
+    pub(crate) stats: Stats,
+    pub(crate) addr: Address,
+    pub(crate) application_name: String,
+    pub(crate) client: Option<BackendKeyData>,
 }
 
 /// Server connection stats.
 #[derive(Copy, Clone, Debug, Default)]
-pub struct Counts {
-    pub bytes_sent: usize,
-    pub bytes_received: usize,
-    pub transactions: usize,
-    pub queries: usize,
-    pub rollbacks: usize,
-    pub errors: usize,
-    pub prepared_statements: usize,
-    pub query_time: Duration,
-    pub transaction_time: Duration,
-    pub parse: usize,
-    pub bind: usize,
-    pub healthchecks: usize,
-    pub close: usize,
-    pub memory_used: usize,
+pub(crate) struct Counts {
+    pub(crate) bytes_sent: usize,
+    pub(crate) bytes_received: usize,
+    pub(crate) transactions: usize,
+    pub(crate) queries: usize,
+    pub(crate) rollbacks: usize,
+    pub(crate) errors: usize,
+    pub(crate) prepared_statements: usize,
+    pub(crate) query_time: Duration,
+    pub(crate) transaction_time: Duration,
+    pub(crate) parse: usize,
+    pub(crate) bind: usize,
+    pub(crate) healthchecks: usize,
+    pub(crate) close: usize,
+    pub(crate) memory_used: usize,
 }
 
 impl Add for Counts {
@@ -93,22 +93,22 @@ impl Add for Counts {
 
 /// Server statistics.
 #[derive(Copy, Clone, Debug)]
-pub struct Stats {
-    pub id: BackendKeyData,
-    pub state: State,
-    pub last_used: Instant,
-    pub last_healthcheck: Option<Instant>,
-    pub created_at: Instant,
-    pub created_at_time: SystemTime,
-    pub total: Counts,
-    pub last_checkout: Counts,
+pub(crate) struct Stats {
+    pub(crate) id: BackendKeyData,
+    pub(crate) state: State,
+    pub(crate) last_used: Instant,
+    pub(crate) last_healthcheck: Option<Instant>,
+    pub(crate) created_at: Instant,
+    pub(crate) created_at_time: SystemTime,
+    pub(crate) total: Counts,
+    pub(crate) last_checkout: Counts,
     query_timer: Option<Instant>,
     transaction_timer: Option<Instant>,
 }
 
 impl Stats {
     /// Register new server with statistics.
-    pub fn connect(id: BackendKeyData, addr: &Address, params: &Parameters) -> Self {
+    pub(crate) fn connect(id: BackendKeyData, addr: &Address, params: &Parameters) -> Self {
         let now = Instant::now();
         let stats = Stats {
             id,
@@ -149,7 +149,7 @@ impl Stats {
         self.update();
     }
 
-    pub fn link_client(&mut self, client_name: &str, server_server: &str) {
+    pub(crate) fn link_client(&mut self, client_name: &str, server_server: &str) {
         if client_name != server_server {
             let mut guard = STATS.lock();
             if let Some(entry) = guard.get_mut(&self.id) {
@@ -159,7 +159,7 @@ impl Stats {
         }
     }
 
-    pub fn parse_complete(&mut self) {
+    pub(crate) fn parse_complete(&mut self) {
         self.total.parse += 1;
         self.last_checkout.parse += 1;
         self.total.prepared_statements += 1;
@@ -168,45 +168,45 @@ impl Stats {
 
     /// Overwrite how many prepared statements we have in the cache
     /// for stats.
-    pub fn set_prepared_statements(&mut self, size: usize) {
+    pub(crate) fn set_prepared_statements(&mut self, size: usize) {
         self.total.prepared_statements = size;
         self.update();
     }
 
-    pub fn close_many(&mut self, closed: usize, size: usize) {
+    pub(crate) fn close_many(&mut self, closed: usize, size: usize) {
         self.total.prepared_statements = size;
         self.total.close += closed;
         self.last_checkout.close += closed;
         self.update();
     }
 
-    pub fn copy_mode(&mut self) {
+    pub(crate) fn copy_mode(&mut self) {
         self.state(State::CopyMode);
     }
 
-    pub fn bind_complete(&mut self) {
+    pub(crate) fn bind_complete(&mut self) {
         self.total.bind += 1;
         self.last_checkout.bind += 1;
     }
 
     /// A transaction has been completed.
-    pub fn transaction(&mut self, now: Instant) {
+    pub(crate) fn transaction(&mut self, now: Instant) {
         self.transaction_state(now, State::Idle);
     }
 
     /// Error occurred in a transaction.
-    pub fn transaction_error(&mut self, now: Instant) {
+    pub(crate) fn transaction_error(&mut self, now: Instant) {
         self.transaction_state(now, State::TransactionError);
     }
 
     /// An error occurred in general.
-    pub fn error(&mut self) {
+    pub(crate) fn error(&mut self) {
         self.total.errors += 1;
         self.last_checkout.errors += 1;
     }
 
     /// A query has been completed.
-    pub fn query(&mut self, now: Instant) {
+    pub(crate) fn query(&mut self, now: Instant) {
         self.total.queries += 1;
         self.last_checkout.queries += 1;
         if let Some(query_timer) = self.query_timer.take() {
@@ -222,7 +222,7 @@ impl Stats {
     }
 
     /// Manual state change.
-    pub fn state(&mut self, state: State) {
+    pub(crate) fn state(&mut self, state: State) {
         let update = self.state != state;
         self.state = state;
         if update {
@@ -244,19 +244,19 @@ impl Stats {
     }
 
     /// Send bytes to server.
-    pub fn send(&mut self, bytes: usize) {
+    pub(crate) fn send(&mut self, bytes: usize) {
         self.total.bytes_sent += bytes;
         self.last_checkout.bytes_sent += bytes;
     }
 
     /// Receive bytes from server.
-    pub fn receive(&mut self, bytes: usize) {
+    pub(crate) fn receive(&mut self, bytes: usize) {
         self.total.bytes_received += bytes;
         self.last_checkout.bytes_received += bytes;
     }
 
     /// Track healtchecks.
-    pub fn healthcheck(&mut self) {
+    pub(crate) fn healthcheck(&mut self) {
         self.total.healthchecks += 1;
         self.last_checkout.healthchecks += 1;
         self.last_healthcheck = Some(Instant::now());
@@ -264,20 +264,20 @@ impl Stats {
     }
 
     #[inline]
-    pub fn memory_used(&mut self, memory: usize) {
+    pub(crate) fn memory_used(&mut self, memory: usize) {
         self.total.memory_used = memory;
         self.last_checkout.memory_used = memory;
     }
 
     /// Track rollbacks.
-    pub fn rollback(&mut self) {
+    pub(crate) fn rollback(&mut self) {
         self.total.rollbacks += 1;
         self.last_checkout.rollbacks += 1;
         self.update();
     }
 
     /// Update server stats globally.
-    pub fn update(&self) {
+    pub(crate) fn update(&self) {
         update(self.id, *self)
     }
 
@@ -287,7 +287,7 @@ impl Stats {
     }
 
     /// Reset last_checkout counts.
-    pub fn reset_last_checkout(&mut self) -> Counts {
+    pub(crate) fn reset_last_checkout(&mut self) -> Counts {
         let counts = self.last_checkout;
         self.last_checkout = Counts::default();
         counts

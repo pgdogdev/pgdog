@@ -10,17 +10,17 @@ use chrono::{Datelike, NaiveDate, NaiveDateTime, NaiveTime, Timelike};
 const POSTGRES_EPOCH_MICROS: i64 = 946684800000000; // microseconds
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Default, Hash)]
-pub struct Timestamp {
-    pub year: i64,
-    pub month: i8,
-    pub day: i8,
-    pub hour: i8,
-    pub minute: i8,
-    pub second: i8,
-    pub micros: i32,
-    pub offset: Option<i8>,
+pub(crate) struct Timestamp {
+    pub(crate) year: i64,
+    pub(crate) month: i8,
+    pub(crate) day: i8,
+    pub(crate) hour: i8,
+    pub(crate) minute: i8,
+    pub(crate) second: i8,
+    pub(crate) micros: i32,
+    pub(crate) offset: Option<i8>,
     /// Special value indicator: None for normal values, Some(true) for infinity, Some(false) for -infinity
-    pub special: Option<bool>,
+    pub(crate) special: Option<bool>,
 }
 
 impl PartialOrd for Timestamp {
@@ -85,7 +85,7 @@ macro_rules! assign {
 
 impl Timestamp {
     /// Create a timestamp representing positive infinity
-    pub fn infinity() -> Self {
+    pub(crate) fn infinity() -> Self {
         Self {
             special: Some(true),
             ..Default::default()
@@ -93,7 +93,7 @@ impl Timestamp {
     }
 
     /// Create a timestamp representing negative infinity
-    pub fn neg_infinity() -> Self {
+    pub(crate) fn neg_infinity() -> Self {
         Self {
             special: Some(false),
             ..Default::default()
@@ -102,7 +102,7 @@ impl Timestamp {
 
     /// Convert to microseconds since PostgreSQL epoch (2000-01-01)
     /// Returns i64::MAX for infinity, i64::MIN for -infinity
-    pub fn to_pg_epoch_micros(&self) -> Result<i64, Error> {
+    pub(crate) fn to_pg_epoch_micros(&self) -> Result<i64, Error> {
         match self.special {
             Some(true) => Ok(i64::MAX),
             Some(false) => Ok(i64::MIN),
@@ -127,7 +127,7 @@ impl Timestamp {
     }
 
     /// Create timestamp from microseconds since PostgreSQL epoch (2000-01-01)
-    pub fn from_pg_epoch_micros(micros: i64) -> Result<Self, Error> {
+    pub(crate) fn from_pg_epoch_micros(micros: i64) -> Result<Self, Error> {
         if micros == i64::MAX {
             return Ok(Self::infinity());
         }

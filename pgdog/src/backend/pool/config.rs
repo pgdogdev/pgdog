@@ -8,119 +8,119 @@ use crate::config::{Database, General, PoolerMode, User};
 
 /// Pool configuration.
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq)]
-pub struct Config {
+pub(crate) struct Config {
     /// Minimum connections that should be in the pool.
-    pub min: usize,
+    pub(crate) min: usize,
     /// Maximum connections allowed in the pool.
-    pub max: usize,
+    pub(crate) max: usize,
     /// How long to wait for a connection before giving up.
-    pub checkout_timeout: Duration, // ms
+    pub(crate) checkout_timeout: Duration, // ms
     /// Interval duration of DNS cache refresh.
-    pub dns_ttl: Duration, // ms
+    pub(crate) dns_ttl: Duration, // ms
     /// Close connections that have been idle for longer than this.
-    pub idle_timeout: Duration, // ms
+    pub(crate) idle_timeout: Duration, // ms
     /// How long to wait for connections to be created.
-    pub connect_timeout: Duration, // ms
+    pub(crate) connect_timeout: Duration, // ms
     /// How many times to attempt a connection before returning an error.
-    pub connect_attempts: u64,
+    pub(crate) connect_attempts: u64,
     /// How long to wait between connection attempts.
-    pub connect_attempt_delay: Duration,
+    pub(crate) connect_attempt_delay: Duration,
     /// How long a connection can be open.
-    pub max_age: Duration,
+    pub(crate) max_age: Duration,
     /// Can this pool be banned from serving traffic?
-    pub bannable: bool,
+    pub(crate) bannable: bool,
     /// Healtheck timeout.
-    pub healthcheck_timeout: Duration, // ms
+    pub(crate) healthcheck_timeout: Duration, // ms
     /// Healtcheck interval.
-    pub healthcheck_interval: Duration, // ms
+    pub(crate) healthcheck_interval: Duration, // ms
     /// Idle healthcheck interval.
-    pub idle_healthcheck_interval: Duration, // ms
+    pub(crate) idle_healthcheck_interval: Duration, // ms
     /// Idle healthcheck delay.
-    pub idle_healthcheck_delay: Duration, // ms
+    pub(crate) idle_healthcheck_delay: Duration, // ms
     /// Read timeout (dangerous).
-    pub read_timeout: Duration, // ms
+    pub(crate) read_timeout: Duration, // ms
     /// Write timeout (dangerous).
-    pub write_timeout: Duration, // ms
+    pub(crate) write_timeout: Duration, // ms
     /// Query timeout (dangerous).
-    pub query_timeout: Duration, // ms
+    pub(crate) query_timeout: Duration, // ms
     /// Max ban duration.
-    pub ban_timeout: Duration, // ms
+    pub(crate) ban_timeout: Duration, // ms
     /// Rollback timeout for dirty connections.
-    pub rollback_timeout: Duration,
+    pub(crate) rollback_timeout: Duration,
     /// Statement timeout
-    pub statement_timeout: Option<Duration>,
+    pub(crate) statement_timeout: Option<Duration>,
     /// Replication mode.
-    pub replication_mode: bool,
+    pub(crate) replication_mode: bool,
     /// Pooler mode.
-    pub pooler_mode: PoolerMode,
+    pub(crate) pooler_mode: PoolerMode,
     /// Read only mode.
-    pub read_only: bool,
+    pub(crate) read_only: bool,
     /// Maximum prepared statements per connection.
-    pub prepared_statements_limit: usize,
+    pub(crate) prepared_statements_limit: usize,
 }
 
 impl Config {
     /// Connect timeout duration.
-    pub fn connect_timeout(&self) -> Duration {
+    pub(crate) fn connect_timeout(&self) -> Duration {
         self.connect_timeout
     }
 
     /// Checkout timeout duration.
-    pub fn checkout_timeout(&self) -> Duration {
+    pub(crate) fn checkout_timeout(&self) -> Duration {
         self.checkout_timeout
     }
 
     /// DNS TTL duration.
-    pub fn dns_ttl(&self) -> Duration {
+    pub(crate) fn dns_ttl(&self) -> Duration {
         self.dns_ttl
     }
 
     /// Idle timeout duration.
-    pub fn idle_timeout(&self) -> Duration {
+    pub(crate) fn idle_timeout(&self) -> Duration {
         self.idle_timeout
     }
 
     /// Max age duration.
-    pub fn max_age(&self) -> Duration {
+    pub(crate) fn max_age(&self) -> Duration {
         self.max_age
     }
 
     /// Healthcheck timeout.
-    pub fn healthcheck_timeout(&self) -> Duration {
+    pub(crate) fn healthcheck_timeout(&self) -> Duration {
         self.healthcheck_timeout
     }
 
     /// How long to wait between healtchecks.
-    pub fn healthcheck_interval(&self) -> Duration {
+    pub(crate) fn healthcheck_interval(&self) -> Duration {
         self.healthcheck_interval
     }
 
     /// Idle healtcheck interval.
-    pub fn idle_healthcheck_interval(&self) -> Duration {
+    pub(crate) fn idle_healthcheck_interval(&self) -> Duration {
         self.idle_healthcheck_interval
     }
 
     /// Idle healtcheck delay.
-    pub fn idle_healthcheck_delay(&self) -> Duration {
+    pub(crate) fn idle_healthcheck_delay(&self) -> Duration {
         self.idle_healthcheck_delay
     }
 
     /// Ban timeout.
-    pub fn ban_timeout(&self) -> Duration {
+    pub(crate) fn ban_timeout(&self) -> Duration {
         self.ban_timeout
     }
 
     /// Rollback timeout.
-    pub fn rollback_timeout(&self) -> Duration {
+    pub(crate) fn rollback_timeout(&self) -> Duration {
         self.rollback_timeout
     }
 
     /// Read timeout.
-    pub fn read_timeout(&self) -> Duration {
+    pub(crate) fn read_timeout(&self) -> Duration {
         self.read_timeout
     }
 
-    pub fn query_timeout(&self) -> Duration {
+    pub(crate) fn query_timeout(&self) -> Duration {
         self.query_timeout
     }
 
@@ -131,7 +131,7 @@ impl Config {
     ///
     /// The ban is taken into account if the primary
     /// is used for reads.
-    pub fn default_primary() -> Self {
+    pub(crate) fn default_primary() -> Self {
         Self {
             bannable: true,
             ..Default::default()
@@ -139,7 +139,7 @@ impl Config {
     }
 
     /// Create from database/user configuration.
-    pub fn new(general: &General, database: &Database, user: &User) -> Self {
+    pub(crate) fn new(general: &General, database: &Database, user: &User) -> Self {
         Config {
             min: database
                 .min_pool_size

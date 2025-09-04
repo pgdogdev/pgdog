@@ -1,7 +1,7 @@
 use super::{super::Error, header::Header, tuple::Tuple};
 
 #[derive(Clone, Default)]
-pub struct BinaryStream {
+pub(crate) struct BinaryStream {
     header: Option<Header>,
     buffer: Vec<u8>,
 }
@@ -16,11 +16,11 @@ impl std::fmt::Debug for BinaryStream {
 }
 
 impl BinaryStream {
-    pub fn write(&mut self, bytes: &[u8]) {
+    pub(crate) fn write(&mut self, bytes: &[u8]) {
         self.buffer.extend(bytes);
     }
 
-    pub fn tuple(&mut self) -> Result<Option<Tuple>, Error> {
+    pub(crate) fn tuple(&mut self) -> Result<Option<Tuple>, Error> {
         loop {
             if let Some(header) = &self.header {
                 let tuple = Tuple::read(header, &mut self.buffer.as_slice())?;
@@ -36,11 +36,11 @@ impl BinaryStream {
         }
     }
 
-    pub fn tuples(&mut self) -> Iter<'_> {
+    pub(crate) fn tuples(&mut self) -> Iter<'_> {
         Iter::new(self)
     }
 
-    pub fn header(&mut self) -> Result<&Header, Error> {
+    pub(crate) fn header(&mut self) -> Result<&Header, Error> {
         if let Some(ref header) = self.header {
             Ok(header)
         } else {
@@ -52,7 +52,7 @@ impl BinaryStream {
     }
 }
 
-pub struct Iter<'a> {
+pub(crate) struct Iter<'a> {
     stream: &'a mut BinaryStream,
 }
 

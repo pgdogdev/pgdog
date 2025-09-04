@@ -4,7 +4,7 @@ use crate::backend::databases::databases;
 
 use super::prelude::*;
 
-pub struct ShowMirrors;
+pub(crate) struct ShowMirrors;
 
 #[async_trait]
 impl Command for ShowMirrors {

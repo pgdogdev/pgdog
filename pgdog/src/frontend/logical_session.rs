@@ -35,7 +35,7 @@ use super::router::parser::Shard;
 // ----- LogicalSession --------------------------------------------------------
 
 #[derive(Debug)]
-pub struct LogicalSession<'a> {
+pub(crate) struct LogicalSession<'a> {
     configuration_parameters: HashMap<ConfigParameter<'a>, ConfigValue>,
     synced_shards: HashSet<&'a Shard>,
     swapped_values: HashMap<(&'a Shard, ConfigParameter<'a>), ConfigValue>,
@@ -48,7 +48,7 @@ impl<'a> Default for LogicalSession<'a> {
 }
 
 impl<'a> LogicalSession<'a> {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             configuration_parameters: HashMap::new(),
             synced_shards: HashSet::new(),
@@ -61,7 +61,7 @@ impl<'a> LogicalSession<'a> {
 // ----- Named Struct: ConfigParameter(&str) -----------------------------------
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ConfigParameter<'a>(&'a str);
+pub(crate) struct ConfigParameter<'a>(&'a str);
 
 impl<'a> From<&'a str> for ConfigParameter<'a> {
     fn from(s: &'a str) -> Self {
@@ -79,7 +79,7 @@ impl<'a> fmt::Display for ConfigParameter<'a> {
 // ----- Named Struct: ConfigValue(Strig) --------------------------------------
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ConfigValue(String);
+pub(crate) struct ConfigValue(String);
 
 impl From<String> for ConfigValue {
     fn from(s: String) -> Self {
@@ -109,7 +109,7 @@ impl<'a> LogicalSession<'a> {
     ///
     /// * `name` - The name of the configuration parameter (e.g., "TimeZone").
     /// * `value` - The desired value (e.g., "UTC").
-    pub fn set_variable<P, V>(&mut self, name: P, value: V) -> Result<(), SessionError>
+    pub(crate) fn set_variable<P, V>(&mut self, name: P, value: V) -> Result<(), SessionError>
     where
         P: Into<ConfigParameter<'a>>,
         V: Into<ConfigValue>,
@@ -127,7 +127,7 @@ impl<'a> LogicalSession<'a> {
     /// # Arguments
     ///
     /// * `name` - The name of the configuration parameter to lookup.
-    pub fn get_variable<P>(&self, name: P) -> Option<ConfigValue>
+    pub(crate) fn get_variable<P>(&self, name: P) -> Option<ConfigValue>
     where
         P: Into<ConfigParameter<'a>>,
     {
@@ -140,7 +140,7 @@ impl<'a> LogicalSession<'a> {
     /// # Arguments
     ///
     /// * `shard` - Reference to the shard that has been updated.
-    pub fn sync_shard(&mut self, shard: &'a Shard) {
+    pub(crate) fn sync_shard(&mut self, shard: &'a Shard) {
         self.synced_shards.insert(shard);
     }
 
@@ -149,7 +149,7 @@ impl<'a> LogicalSession<'a> {
     /// # Arguments
     ///
     /// * `shard` - The shard to check sync status for.
-    pub fn is_shard_synced(&self, shard: &Shard) -> bool {
+    pub(crate) fn is_shard_synced(&self, shard: &Shard) -> bool {
         self.synced_shards.contains(shard)
     }
 
@@ -171,7 +171,7 @@ impl<'a> LogicalSession<'a> {
     ///
     /// -- 3. Apply new setting:
     /// SET TimeZone = 'America/New_York';
-    pub fn store_swapped_value<P, V>(&mut self, shard: &'a Shard, name: P, value: V)
+    pub(crate) fn store_swapped_value<P, V>(&mut self, shard: &'a Shard, name: P, value: V)
     where
         P: Into<ConfigParameter<'a>>,
         V: Into<ConfigValue>,
@@ -186,7 +186,7 @@ impl<'a> LogicalSession<'a> {
     ///
     /// * `shard` - The shard to retrieve the swapped value from.
     /// * `name`  - The configuration parameter name.
-    pub fn take_swapped_value<P>(&mut self, shard: &'a Shard, name: P) -> Option<ConfigValue>
+    pub(crate) fn take_swapped_value<P>(&mut self, shard: &'a Shard, name: P) -> Option<ConfigValue>
     where
         P: Into<ConfigParameter<'a>>,
     {
@@ -195,7 +195,7 @@ impl<'a> LogicalSession<'a> {
     }
 
     /// Reset the session state (e.g., on connection close or explicit RESET).
-    pub fn reset(&mut self) {
+    pub(crate) fn reset(&mut self) {
         self.configuration_parameters.clear();
         self.synced_shards.clear();
         self.swapped_values.clear();
@@ -205,7 +205,9 @@ impl<'a> LogicalSession<'a> {
     ///
     /// # Returns
     /// A map of `(Shard, ConfigParameter) -> ConfigValue` containing all swapped values.
-    pub fn reset_after_take(&mut self) -> HashMap<(&'a Shard, ConfigParameter<'a>), ConfigValue> {
+    pub(crate) fn reset_after_take(
+        &mut self,
+    ) -> HashMap<(&'a Shard, ConfigParameter<'a>), ConfigValue> {
         // take swapped_values out and leave an empty map
         let prev = std::mem::take(&mut self.swapped_values);
 
@@ -235,7 +237,7 @@ impl<'a> LogicalSession<'a> {
 // ----- Error -----------------------------------------------------------------
 
 #[derive(Debug)]
-pub enum SessionError {
+pub(crate) enum SessionError {
     InvalidVariableName(String),
 }
 

@@ -8,18 +8,18 @@ use super::{Error, PreparedStatements};
 
 /// Rewrite messages.
 #[derive(Debug)]
-pub struct Rewrite<'a> {
+pub(crate) struct Rewrite<'a> {
     statements: &'a mut PreparedStatements,
 }
 
 impl<'a> Rewrite<'a> {
     /// New rewrite module.
-    pub fn new(statements: &'a mut PreparedStatements) -> Self {
+    pub(crate) fn new(statements: &'a mut PreparedStatements) -> Self {
         Self { statements }
     }
 
     /// Rewrite a message if needed.
-    pub fn rewrite(&mut self, message: ProtocolMessage) -> Result<ProtocolMessage, Error> {
+    pub(crate) fn rewrite(&mut self, message: ProtocolMessage) -> Result<ProtocolMessage, Error> {
         match message {
             ProtocolMessage::Bind(bind) => Ok(self.bind(bind)?.into()),
             ProtocolMessage::Describe(describe) => Ok(self.describe(describe)?.into()),

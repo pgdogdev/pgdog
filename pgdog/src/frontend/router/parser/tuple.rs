@@ -8,9 +8,9 @@ use super::Value;
 
 /// List of values in a single row.
 #[derive(Debug, Clone, PartialEq)]
-pub struct Tuple<'a> {
+pub(crate) struct Tuple<'a> {
     /// List of values.
-    pub values: Vec<Value<'a>>,
+    pub(crate) values: Vec<Value<'a>>,
 }
 
 impl<'a> TryFrom<&'a List> for Tuple<'a> {

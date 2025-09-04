@@ -49,7 +49,7 @@ pub enum Error {
 
 impl Error {
     /// Checkout timeout.
-    pub fn checkout_timeout(&self) -> bool {
+    pub(crate) fn checkout_timeout(&self) -> bool {
         use crate::backend::pool::Error as PoolError;
         use crate::backend::Error as BackendError;
 

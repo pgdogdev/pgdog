@@ -18,7 +18,7 @@ use super::Error;
 
 /// Admin backend.
 #[derive(Debug)]
-pub struct AdminServer {
+pub(crate) struct AdminServer {
     messages: VecDeque<Message>,
 }
 
@@ -30,14 +30,14 @@ impl Default for AdminServer {
 
 impl AdminServer {
     /// New admin backend handler.
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             messages: VecDeque::new(),
         }
     }
 
     /// Handle command.
-    pub async fn send(&mut self, client_request: &ClientRequest) -> Result<(), Error> {
+    pub(crate) async fn send(&mut self, client_request: &ClientRequest) -> Result<(), Error> {
         let message = client_request.messages.first().ok_or(Error::Empty)?;
         let message: ProtocolMessage = message.clone();
 
@@ -65,7 +65,7 @@ impl AdminServer {
     }
 
     /// Receive command result.
-    pub async fn read(&mut self) -> Result<Message, Error> {
+    pub(crate) async fn read(&mut self) -> Result<Message, Error> {
         if let Some(message) = self.messages.pop_front() {
             Ok(message)
         } else {
@@ -75,7 +75,7 @@ impl AdminServer {
         }
     }
 
-    pub fn done(&self) -> bool {
+    pub(crate) fn done(&self) -> bool {
         self.messages.is_empty()
     }
 }

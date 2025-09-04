@@ -21,11 +21,11 @@ pub(crate) fn waiter() -> Option<Notified<'static>> {
     }
 }
 
-pub fn start() {
+pub(crate) fn start() {
     MAINTENANCE_MODE.on.store(true, Ordering::Relaxed);
 }
 
-pub fn stop() {
+pub(crate) fn stop() {
     MAINTENANCE_MODE.on.store(false, Ordering::Relaxed);
     MAINTENANCE_MODE.notify.notify_waiters();
 }

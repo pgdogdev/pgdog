@@ -3,5 +3,5 @@ pub mod header;
 pub mod stream;
 pub mod tuple;
 
-pub use stream::BinaryStream;
-pub use tuple::{Data, Tuple};
+pub(crate) use stream::BinaryStream;
+pub(crate) use tuple::{Data, Tuple};

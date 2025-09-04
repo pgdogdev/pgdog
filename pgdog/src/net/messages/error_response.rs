@@ -9,14 +9,14 @@ use super::prelude::*;
 
 /// ErrorResponse (B) message.
 #[derive(Debug)]
-pub struct ErrorResponse {
+pub(crate) struct ErrorResponse {
     severity: String,
-    pub code: String,
-    pub message: String,
-    pub detail: Option<String>,
-    pub context: Option<String>,
-    pub file: Option<String>,
-    pub routine: Option<String>,
+    pub(crate) code: String,
+    pub(crate) message: String,
+    pub(crate) detail: Option<String>,
+    pub(crate) context: Option<String>,
+    pub(crate) file: Option<String>,
+    pub(crate) routine: Option<String>,
 }
 
 impl Default for ErrorResponse {
@@ -35,7 +35,7 @@ impl Default for ErrorResponse {
 
 impl ErrorResponse {
     /// Authentication error.
-    pub fn auth(user: &str, database: &str) -> ErrorResponse {
+    pub(crate) fn auth(user: &str, database: &str) -> ErrorResponse {
         ErrorResponse {
             severity: "FATAL".into(),
             code: "28000".into(),
@@ -50,7 +50,7 @@ impl ErrorResponse {
         }
     }
 
-    pub fn cross_shard_disabled() -> ErrorResponse {
+    pub(crate) fn cross_shard_disabled() -> ErrorResponse {
         ErrorResponse {
             severity: "ERROR".into(),
             code: "58000".into(),
@@ -62,7 +62,7 @@ impl ErrorResponse {
         }
     }
 
-    pub fn client_idle_timeout(duration: Duration) -> ErrorResponse {
+    pub(crate) fn client_idle_timeout(duration: Duration) -> ErrorResponse {
         ErrorResponse {
             severity: "FATAL".into(),
             code: "57P05".into(),
@@ -78,7 +78,7 @@ impl ErrorResponse {
     }
 
     /// Connection error.
-    pub fn connection() -> ErrorResponse {
+    pub(crate) fn connection() -> ErrorResponse {
         ErrorResponse {
             severity: "ERROR".into(),
             code: "58000".into(),
@@ -91,7 +91,7 @@ impl ErrorResponse {
     }
 
     /// Pooler is shutting down.
-    pub fn shutting_down() -> ErrorResponse {
+    pub(crate) fn shutting_down() -> ErrorResponse {
         ErrorResponse {
             severity: "FATAL".into(),
             code: "57P01".into(),
@@ -103,7 +103,7 @@ impl ErrorResponse {
         }
     }
 
-    pub fn syntax(err: &str) -> ErrorResponse {
+    pub(crate) fn syntax(err: &str) -> ErrorResponse {
         Self {
             severity: "ERROR".into(),
             code: "42601".into(),
@@ -115,7 +115,7 @@ impl ErrorResponse {
         }
     }
 
-    pub fn from_err(err: &impl std::error::Error) -> Self {
+    pub(crate) fn from_err(err: &impl std::error::Error) -> Self {
         let message = err.to_string();
         Self {
             severity: "ERROR".into(),
@@ -128,7 +128,7 @@ impl ErrorResponse {
         }
     }
 
-    pub fn no_transaction() -> Self {
+    pub(crate) fn no_transaction() -> Self {
         Self {
             severity: "WARNING".into(),
             code: "25P01".into(),

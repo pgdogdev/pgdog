@@ -2,10 +2,10 @@ use crate::backend::databases::databases;
 
 use super::{Measurement, Metric, OpenMetric};
 
-pub struct MirrorStatsMetrics;
+pub(crate) struct MirrorStatsMetrics;
 
 impl MirrorStatsMetrics {
-    pub fn load() -> Vec<Metric> {
+    pub(crate) fn load() -> Vec<Metric> {
         let mut metrics = vec![];
 
         let mut total_count_measurements = vec![];

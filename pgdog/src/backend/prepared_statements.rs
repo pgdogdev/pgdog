@@ -20,7 +20,7 @@ use super::{
 };
 
 #[derive(Debug, Clone)]
-pub enum HandleResult {
+pub(crate) enum HandleResult {
     Forward,
     Drop,
     Prepend(ProtocolMessage),
@@ -32,7 +32,7 @@ pub enum HandleResult {
 /// while the local cache has the names of the prepared statements
 /// currently prepared on the server connection.
 #[derive(Debug)]
-pub struct PreparedStatements {
+pub(crate) struct PreparedStatements {
     global_cache: Arc<Mutex<GlobalCache>>,
     local_cache: LruCache<String, ()>,
     state: ProtocolState,
@@ -64,7 +64,7 @@ impl Default for PreparedStatements {
 
 impl PreparedStatements {
     /// New server prepared statements.
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             global_cache: frontend::PreparedStatements::global(),
             local_cache: LruCache::unbounded(),
@@ -78,17 +78,17 @@ impl PreparedStatements {
 
     /// Set maximum prepared statements capacity.
     #[inline]
-    pub fn set_capacity(&mut self, capacity: usize) {
+    pub(crate) fn set_capacity(&mut self, capacity: usize) {
         self.capacity = capacity;
     }
 
     /// Get prepared statements capacity.
-    pub fn capacity(&self) -> usize {
+    pub(crate) fn capacity(&self) -> usize {
         self.capacity
     }
 
     /// Handle extended protocol message.
-    pub fn handle(&mut self, request: &ProtocolMessage) -> Result<HandleResult, Error> {
+    pub(crate) fn handle(&mut self, request: &ProtocolMessage) -> Result<HandleResult, Error> {
         match request {
             ProtocolMessage::Bind(bind) => {
                 if !bind.anonymous() {
@@ -191,7 +191,7 @@ impl PreparedStatements {
     }
 
     /// Should we forward the message to the client.
-    pub fn forward(&mut self, message: &Message) -> Result<bool, Error> {
+    pub(crate) fn forward(&mut self, message: &Message) -> Result<bool, Error> {
         let code = message.code();
         let action = self.state.action(code)?;
 
@@ -277,18 +277,18 @@ impl PreparedStatements {
     }
 
     /// The server has prepared this statement already.
-    pub fn contains(&mut self, name: &str) -> bool {
+    pub(crate) fn contains(&mut self, name: &str) -> bool {
         self.local_cache.promote(name)
     }
 
     /// Indicate this statement is prepared on the connection.
-    pub fn prepared(&mut self, name: &str) {
+    pub(crate) fn prepared(&mut self, name: &str) {
         self.local_cache.push(name.to_owned(), ());
         self.memory_used = self.memory_usage();
     }
 
     /// How much memory is used by this structure, approx.
-    pub fn memory_used(&self) -> usize {
+    pub(crate) fn memory_used(&self) -> usize {
         self.memory_used
     }
 
@@ -300,7 +300,7 @@ impl PreparedStatements {
 
     /// Get the globally stored RowDescription for this prepared statement,
     /// if any.
-    pub fn row_description(&self, name: &str) -> Option<RowDescription> {
+    pub(crate) fn row_description(&self, name: &str) -> Option<RowDescription> {
         self.global_cache.lock().row_description(name)
     }
 
@@ -324,28 +324,28 @@ impl PreparedStatements {
 
     /// Indicate all prepared statements have been removed
     /// from the server connection.
-    pub fn clear(&mut self) {
+    pub(crate) fn clear(&mut self) {
         self.local_cache.clear();
         self.memory_used = self.memory_usage();
     }
 
     /// Get current extended protocol state.
-    pub fn state(&self) -> &ProtocolState {
+    pub(crate) fn state(&self) -> &ProtocolState {
         &self.state
     }
 
     /// Get mutable reference to protocol state.
-    pub fn state_mut(&mut self) -> &mut ProtocolState {
+    pub(crate) fn state_mut(&mut self) -> &mut ProtocolState {
         &mut self.state
     }
 
     /// Number of prepared statements in local (connection) cache.
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.local_cache.len()
     }
 
     /// True if the local (connection) prepared statement cache is empty.
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
@@ -355,7 +355,7 @@ impl PreparedStatements {
     /// Make sure to actually execute the close messages you receive
     /// from this method, or the statements will be out of sync with
     /// what's actually inside Postgres.
-    pub fn ensure_capacity(&mut self) -> Vec<Close> {
+    pub(crate) fn ensure_capacity(&mut self) -> Vec<Close> {
         let mut close = vec![];
         while self.local_cache.len() > self.capacity {
             let candidate = self.local_cache.pop_lru();

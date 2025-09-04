@@ -9,40 +9,40 @@ use super::super::Error;
 use super::header::Header;
 
 #[derive(Debug, Clone)]
-pub enum Data {
+pub(crate) enum Data {
     Null,
     Column(Bytes),
 }
 
 impl Data {
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         match self {
             Self::Null => 0,
             Self::Column(bytes) => bytes.len(),
         }
     }
 
-    pub fn encoded_len(&self) -> i32 {
+    pub(crate) fn encoded_len(&self) -> i32 {
         match self {
             Self::Null => -1,
             Self::Column(bytes) => bytes.len() as i32,
         }
     }
 
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.len() == 0
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct Tuple {
+pub(crate) struct Tuple {
     row: Vec<Data>,
     oid: Option<i32>,
     end: bool,
 }
 
 impl Tuple {
-    pub fn new(row: &[Data]) -> Self {
+    pub(crate) fn new(row: &[Data]) -> Self {
         Self {
             row: row.to_vec(),
             oid: None,
@@ -50,7 +50,7 @@ impl Tuple {
         }
     }
 
-    pub fn new_end() -> Self {
+    pub(crate) fn new_end() -> Self {
         Self {
             row: vec![],
             oid: None,
@@ -106,7 +106,7 @@ impl Tuple {
             }
     }
 
-    pub fn end(&self) -> bool {
+    pub(crate) fn end(&self) -> bool {
         self.end
     }
 }

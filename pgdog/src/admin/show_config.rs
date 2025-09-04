@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use super::prelude::*;
 
-pub struct ShowConfig;
+pub(crate) struct ShowConfig;
 
 #[async_trait]
 impl Command for ShowConfig {

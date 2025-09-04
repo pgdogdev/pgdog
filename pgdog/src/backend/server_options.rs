@@ -1,18 +1,18 @@
 use crate::net::Parameter;
 
 #[derive(Debug, Clone, Default)]
-pub struct ServerOptions {
-    pub params: Vec<Parameter>,
+pub(crate) struct ServerOptions {
+    pub(crate) params: Vec<Parameter>,
 }
 
 impl ServerOptions {
-    pub fn replication_mode(&self) -> bool {
+    pub(crate) fn replication_mode(&self) -> bool {
         self.params
             .iter()
             .any(|p| p.name == "replication" && p.value == "database")
     }
 
-    pub fn new_replication() -> Self {
+    pub(crate) fn new_replication() -> Self {
         Self {
             params: vec![Parameter {
                 name: "replication".into(),

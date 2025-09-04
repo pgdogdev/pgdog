@@ -54,7 +54,7 @@ struct Comms {
 
 /// Notification listener.
 #[derive(Debug, Clone)]
-pub struct PubSubListener {
+pub(crate) struct PubSubListener {
     pool: Pool,
     tx: mpsc::Sender<Request>,
     channels: Channels,
@@ -63,7 +63,7 @@ pub struct PubSubListener {
 
 impl PubSubListener {
     /// Create new listener on the server connection.
-    pub fn new(pool: &Pool) -> Self {
+    pub(crate) fn new(pool: &Pool) -> Self {
         let (tx, mut rx) = mpsc::channel(config().config.general.pub_sub_channel_size);
 
         let pool = pool.clone();
@@ -112,17 +112,17 @@ impl PubSubListener {
     }
 
     /// Launch the listener.
-    pub fn launch(&self) {
+    pub(crate) fn launch(&self) {
         self.comms.start.notify_one();
     }
 
     /// Shutdown the listener.
-    pub fn shutdown(&self) {
+    pub(crate) fn shutdown(&self) {
         self.comms.shutdown.notify_one();
     }
 
     /// Listen on a channel.
-    pub async fn listen(
+    pub(crate) async fn listen(
         &self,
         channel: &str,
     ) -> Result<broadcast::Receiver<NotificationResponse>, Error> {
@@ -142,7 +142,7 @@ impl PubSubListener {
     }
 
     /// Notify a channel with payload.
-    pub async fn notify(&self, channel: &str, payload: &str) -> Result<(), Error> {
+    pub(crate) async fn notify(&self, channel: &str, payload: &str) -> Result<(), Error> {
         self.tx
             .send(Request::Notify {
                 channel: channel.to_string(),

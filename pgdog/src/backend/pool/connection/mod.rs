@@ -42,7 +42,7 @@ use multi_shard::MultiShard;
 
 /// Wrapper around a server connection.
 #[derive(Default, Debug)]
-pub struct Connection {
+pub(crate) struct Connection {
     user: String,
     passthrough_password: Option<String>,
     database: String,
@@ -116,14 +116,14 @@ impl Connection {
     }
 
     /// Send client request to mirrors.
-    pub fn mirror(&mut self, buffer: &crate::frontend::ClientRequest) {
+    pub(crate) fn mirror(&mut self, buffer: &crate::frontend::ClientRequest) {
         for mirror in &mut self.mirrors {
             mirror.send(buffer);
         }
     }
 
     /// Tell mirrors to flush buffered transaction.
-    pub fn mirror_flush(&mut self) {
+    pub(crate) fn mirror_flush(&mut self) {
         for mirror in &mut self.mirrors {
             mirror.flush();
         }
@@ -226,7 +226,7 @@ impl Connection {
     }
 
     /// Subscribe to a channel.
-    pub async fn listen(&mut self, channel: &str, shard: Shard) -> Result<(), Error> {
+    pub(crate) async fn listen(&mut self, channel: &str, shard: Shard) -> Result<(), Error> {
         let num = match shard {
             Shard::Direct(shard) => shard,
             _ => return Err(Error::ProtocolOutOfSync),
@@ -241,12 +241,12 @@ impl Connection {
     }
 
     /// Stop listening on a channel.
-    pub fn unlisten(&mut self, channel: &str) {
+    pub(crate) fn unlisten(&mut self, channel: &str) {
         self.pub_sub.unlisten(channel);
     }
 
     /// Notify a channel.
-    pub async fn notify(
+    pub(crate) async fn notify(
         &mut self,
         channel: &str,
         payload: &str,
@@ -405,7 +405,7 @@ impl Connection {
     }
 
     /// This is an admin DB connection.
-    pub fn is_admin(&self) -> bool {
+    pub(crate) fn is_admin(&self) -> bool {
         matches!(self.binding, Binding::Admin(_))
     }
 }

@@ -3,17 +3,17 @@ use std::{ops::Range, str::from_utf8};
 
 /// A complete CSV record.
 #[derive(Clone)]
-pub struct Record {
+pub(crate) struct Record {
     /// Raw record data.
-    pub data: Vec<u8>,
+    pub(crate) data: Vec<u8>,
     /// Field ranges.
-    pub fields: Vec<Range<usize>>,
+    pub(crate) fields: Vec<Range<usize>>,
     /// Delimiter.
-    pub delimiter: char,
+    pub(crate) delimiter: char,
     /// Format used.
-    pub format: CopyFormat,
+    pub(crate) format: CopyFormat,
     /// Null string.
-    pub null_string: String,
+    pub(crate) null_string: String,
 }
 
 impl std::fmt::Debug for Record {
@@ -75,16 +75,16 @@ impl Record {
     }
 
     /// Number of fields in the record.
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.fields.len()
     }
 
     /// Return true if there are no fields in the record.
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
-    pub fn get(&self, index: usize) -> Option<&str> {
+    pub(crate) fn get(&self, index: usize) -> Option<&str> {
         self.fields
             .get(index)
             .cloned()

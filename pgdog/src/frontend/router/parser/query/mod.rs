@@ -53,7 +53,7 @@ use tracing::{debug, trace};
 /// of the parsing.
 ///
 #[derive(Debug)]
-pub struct QueryParser {
+pub(crate) struct QueryParser {
     // The statement is executed inside a transaction.
     in_transaction: bool,
     // No matter what query is executed, we'll send it to the primary.
@@ -77,12 +77,12 @@ impl Default for QueryParser {
 
 impl QueryParser {
     /// Indicates we are in a transaction.
-    pub fn in_transaction(&self) -> bool {
+    pub(crate) fn in_transaction(&self) -> bool {
         self.in_transaction
     }
 
     /// Parse a query and return a command.
-    pub fn parse(&mut self, context: RouterContext) -> Result<Command, Error> {
+    pub(crate) fn parse(&mut self, context: RouterContext) -> Result<Command, Error> {
         let mut qp_context = QueryParserContext::new(context);
 
         let mut command = if qp_context.query().is_ok() {

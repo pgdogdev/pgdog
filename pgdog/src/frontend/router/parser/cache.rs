@@ -17,28 +17,28 @@ static CACHE: Lazy<Cache> = Lazy::new(Cache::new);
 
 /// AST cache statistics.
 #[derive(Default, Debug, Copy, Clone)]
-pub struct Stats {
+pub(crate) struct Stats {
     /// Cache hits.
-    pub hits: usize,
+    pub(crate) hits: usize,
     /// Cache misses (new queries).
-    pub misses: usize,
+    pub(crate) misses: usize,
     /// Direct shard queries.
-    pub direct: usize,
+    pub(crate) direct: usize,
     /// Multi-shard queries.
-    pub multi: usize,
+    pub(crate) multi: usize,
 }
 
 /// Abstract syntax tree (query) cache entry,
 /// with statistics.
 #[derive(Debug, Clone)]
-pub struct CachedAst {
+pub(crate) struct CachedAst {
     /// pg_query-produced AST.
-    pub ast: Arc<ParseResult>,
+    pub(crate) ast: Arc<ParseResult>,
     /// Statistics. Use a separate Mutex to avoid
     /// contention when updating them.
-    pub stats: Arc<Mutex<Stats>>,
+    pub(crate) stats: Arc<Mutex<Stats>>,
     /// Was this entry cached?
-    pub cached: bool,
+    pub(crate) cached: bool,
 }
 
 impl CachedAst {
@@ -55,13 +55,13 @@ impl CachedAst {
     }
 
     /// Get the reference to the AST.
-    pub fn ast(&self) -> &ParseResult {
+    pub(crate) fn ast(&self) -> &ParseResult {
         &self.ast
     }
 
     /// Update stats for this statement, given the route
     /// calculated by the query parser.
-    pub fn update_stats(&self, route: &Route) {
+    pub(crate) fn update_stats(&self, route: &Route) {
         let mut guard = self.stats.lock();
 
         if route.is_cross_shard() {
@@ -83,7 +83,7 @@ struct Inner {
 
 /// AST cache.
 #[derive(Clone, Debug)]
-pub struct Cache {
+pub(crate) struct Cache {
     inner: Arc<Mutex<Inner>>,
 }
 
@@ -101,7 +101,7 @@ impl Cache {
     /// Resize cache to capacity, evicting any statements exceeding the capacity.
     ///
     /// Minimum capacity is 1.
-    pub fn resize(capacity: usize) {
+    pub(crate) fn resize(capacity: usize) {
         let capacity = if capacity == 0 { 1 } else { capacity };
 
         CACHE
@@ -119,7 +119,7 @@ impl Cache {
     /// N.B. There is a race here that allows multiple threads to
     /// parse the same query. That's better imo than locking the data structure
     /// while we parse the query.
-    pub fn parse(&self, query: &str) -> Result<CachedAst> {
+    pub(crate) fn parse(&self, query: &str) -> Result<CachedAst> {
         {
             let mut guard = self.inner.lock();
             let ast = guard.queries.get_mut(query).map(|entry| {
@@ -143,14 +143,14 @@ impl Cache {
     }
 
     /// Parse a statement but do not store it in the cache.
-    pub fn parse_uncached(&self, query: &str) -> Result<CachedAst> {
+    pub(crate) fn parse_uncached(&self, query: &str) -> Result<CachedAst> {
         let mut entry = CachedAst::new(parse(query)?);
         entry.cached = false;
         Ok(entry)
     }
 
     /// Record a query sent over the simple protocol, while removing parameters.
-    pub fn record_normalized(&self, query: &str, route: &Route) -> Result<()> {
+    pub(crate) fn record_normalized(&self, query: &str, route: &Route) -> Result<()> {
         let normalized = pg_query::normalize(query)?;
 
         let mut guard = self.inner.lock();
@@ -169,12 +169,12 @@ impl Cache {
     }
 
     /// Get global cache instance.
-    pub fn get() -> Self {
+    pub(crate) fn get() -> Self {
         CACHE.clone()
     }
 
     /// Get cache stats.
-    pub fn stats() -> (Stats, usize) {
+    pub(crate) fn stats() -> (Stats, usize) {
         let cache = Self::get();
         let (len, query_stats, mut stats) = {
             let guard = cache.inner.lock();
@@ -197,7 +197,7 @@ impl Cache {
     }
 
     /// Get a copy of all queries stored in the cache.
-    pub fn queries() -> HashMap<String, CachedAst> {
+    pub(crate) fn queries() -> HashMap<String, CachedAst> {
         Self::get()
             .inner
             .lock()
@@ -209,7 +209,7 @@ impl Cache {
 
     /// Reset cache, removing all statements
     /// and setting stats to 0.
-    pub fn reset() {
+    pub(crate) fn reset() {
         let cache = Self::get();
         let mut guard = cache.inner.lock();
         guard.queries.clear();

@@ -3,16 +3,16 @@ use super::super::super::prelude::*;
 use super::tuple_data::{Column, TupleData};
 
 #[derive(Debug, Clone)]
-pub struct Update {
-    pub oid: i32,
-    pub key: Option<TupleData>,
-    pub old: Option<TupleData>,
-    pub new: TupleData,
+pub(crate) struct Update {
+    pub(crate) oid: i32,
+    pub(crate) key: Option<TupleData>,
+    pub(crate) old: Option<TupleData>,
+    pub(crate) new: TupleData,
 }
 
 impl Update {
     /// Get column at index.
-    pub fn column(&self, index: usize) -> Option<&Column> {
+    pub(crate) fn column(&self, index: usize) -> Option<&Column> {
         self.new.columns.get(index)
     }
 }

@@ -4,13 +4,13 @@ use crate::net::messages::BackendKeyData;
 
 /// Connection request.
 #[derive(Clone, Debug, Copy)]
-pub struct Request {
-    pub id: BackendKeyData,
-    pub created_at: Instant,
+pub(crate) struct Request {
+    pub(crate) id: BackendKeyData,
+    pub(crate) created_at: Instant,
 }
 
 impl Request {
-    pub fn new(id: BackendKeyData) -> Self {
+    pub(crate) fn new(id: BackendKeyData) -> Self {
         Self {
             id,
             created_at: Instant::now(),

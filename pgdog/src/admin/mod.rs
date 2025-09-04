@@ -31,11 +31,11 @@ pub mod show_stats;
 pub mod show_version;
 pub mod shutdown;
 
-pub use error::Error;
+pub(crate) use error::Error;
 
 /// All pooler commands implement this trait.
 #[async_trait]
-pub trait Command: Sized {
+pub(crate) trait Command: Sized {
     /// Execute the command and return results to the client.
     async fn execute(&self) -> Result<Vec<Message>, Error>;
     /// Command name.

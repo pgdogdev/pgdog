@@ -3,7 +3,7 @@ use bytes::{Buf, Bytes};
 use super::{Error, Format, FromDataType};
 
 #[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
-pub struct Array {
+pub(crate) struct Array {
     payload: Vec<Bytes>,
     oid: i32,
     flags: i32,

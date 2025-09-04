@@ -97,7 +97,7 @@ impl Listener {
     }
 
     /// Shutdown this listener.
-    pub fn shutdown(&self) {
+    pub(crate) fn shutdown(&self) {
         self.shutdown.notify_one();
     }
 

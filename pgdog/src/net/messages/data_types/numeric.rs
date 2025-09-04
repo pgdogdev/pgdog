@@ -20,7 +20,7 @@ use super::*;
 /// We don't expect NaN's so we're going to implement Ord for this below.
 #[derive(PartialEq, Copy, Clone, Debug)]
 #[repr(C)]
-pub struct Numeric {
+pub(crate) struct Numeric {
     data: f64,
 }
 

@@ -5,16 +5,16 @@ use crate::util::escape_identifier;
 
 /// Sequence name in a query.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
-pub struct Sequence<'a> {
+pub(crate) struct Sequence<'a> {
     /// Table representing the sequence name and schema.
-    pub table: Table<'a>,
+    pub(crate) table: Table<'a>,
 }
 
 /// Owned version of Sequence that owns its string data.
 #[derive(Debug, Clone, PartialEq, Default)]
-pub struct OwnedSequence {
+pub(crate) struct OwnedSequence {
     /// Table representing the sequence name and schema.
-    pub table: OwnedTable,
+    pub(crate) table: OwnedTable,
 }
 
 impl Display for Sequence<'_> {
@@ -54,12 +54,12 @@ impl From<OwnedTable> for OwnedSequence {
 
 impl<'a> Sequence<'a> {
     /// Convert this borrowed Sequence to an owned OwnedSequence
-    pub fn to_owned(&self) -> OwnedSequence {
+    pub(crate) fn to_owned(&self) -> OwnedSequence {
         OwnedSequence::from(*self)
     }
 
     /// Generate a setval statement to set the sequence to the max value of the given column
-    pub fn setval_from_column(&self, column: &Column<'a>) -> Result<String, Error> {
+    pub(crate) fn setval_from_column(&self, column: &Column<'a>) -> Result<String, Error> {
         let sequence_name = self.table.to_string();
 
         let table = column.table().ok_or(Error::ColumnNoTable)?;

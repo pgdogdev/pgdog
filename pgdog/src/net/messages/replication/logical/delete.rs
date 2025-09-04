@@ -3,10 +3,10 @@ use super::super::super::prelude::*;
 use super::tuple_data::TupleData;
 
 #[derive(Debug, Clone)]
-pub struct Delete {
-    pub oid: i32,
-    pub key: Option<TupleData>,
-    pub old: Option<TupleData>,
+pub(crate) struct Delete {
+    pub(crate) oid: i32,
+    pub(crate) key: Option<TupleData>,
+    pub(crate) old: Option<TupleData>,
 }
 
 impl FromBytes for Delete {

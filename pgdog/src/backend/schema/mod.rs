@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::{collections::HashMap, ops::Deref};
 use tracing::debug;
 
-pub use relation::Relation;
+pub(crate) use relation::Relation;
 
 use super::{pool::Request, Cluster, Error, Server};
 
@@ -21,13 +21,13 @@ struct Inner {
 
 /// Load schema from database.
 #[derive(Debug, Clone, Default)]
-pub struct Schema {
+pub(crate) struct Schema {
     inner: Arc<Inner>,
 }
 
 impl Schema {
     /// Load schema from a server connection.
-    pub async fn load(server: &mut Server) -> Result<Self, Error> {
+    pub(crate) async fn load(server: &mut Server) -> Result<Self, Error> {
         let relations = Relation::load(server)
             .await?
             .into_iter()
@@ -59,19 +59,19 @@ impl Schema {
     }
 
     /// Load schema from primary database.
-    pub async fn from_cluster(cluster: &Cluster, shard: usize) -> Result<Self, Error> {
+    pub(crate) async fn from_cluster(cluster: &Cluster, shard: usize) -> Result<Self, Error> {
         let mut primary = cluster.primary(shard, &Request::default()).await?;
         Self::load(&mut primary).await
     }
 
     /// Install PgDog functions and schema.
-    pub async fn setup(server: &mut Server) -> Result<(), Error> {
+    pub(crate) async fn setup(server: &mut Server) -> Result<(), Error> {
         server.execute_checked(SETUP).await?;
         Ok(())
     }
 
     /// Install PgDog-specific functions and triggers.
-    pub async fn install(cluster: &Cluster) -> Result<(), Error> {
+    pub(crate) async fn install(cluster: &Cluster) -> Result<(), Error> {
         let shards = cluster.shards();
         let sharded_tables = cluster.sharded_tables();
 
@@ -132,7 +132,7 @@ impl Schema {
     }
 
     /// Get table by name.
-    pub fn table(&self, name: &str, schema: Option<&str>) -> Option<&Relation> {
+    pub(crate) fn table(&self, name: &str, schema: Option<&str>) -> Option<&Relation> {
         let schema = schema.unwrap_or("public");
         self.inner
             .relations
@@ -140,7 +140,7 @@ impl Schema {
     }
 
     /// Get all indices.
-    pub fn tables(&self) -> Vec<&Relation> {
+    pub(crate) fn tables(&self) -> Vec<&Relation> {
         self.inner
             .relations
             .values()
@@ -149,7 +149,7 @@ impl Schema {
     }
 
     /// Get all sequences.
-    pub fn sequences(&self) -> Vec<&Relation> {
+    pub(crate) fn sequences(&self) -> Vec<&Relation> {
         self.inner
             .relations
             .values()
@@ -158,7 +158,7 @@ impl Schema {
     }
 
     /// Get search path components.
-    pub fn search_path(&self) -> &[String] {
+    pub(crate) fn search_path(&self) -> &[String] {
         &self.inner.search_path
     }
 }

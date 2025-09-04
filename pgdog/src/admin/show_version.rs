@@ -5,7 +5,7 @@ use super::{
     *,
 };
 
-pub struct ShowVersion;
+pub(crate) struct ShowVersion;
 
 #[async_trait]
 impl Command for ShowVersion {

@@ -8,7 +8,7 @@ use super::prelude::*;
 use pg_query::{parse, protobuf::a_const, NodeEnum};
 use serde::de::DeserializeOwned;
 
-pub struct Set {
+pub(crate) struct Set {
     name: String,
     value: String,
 }

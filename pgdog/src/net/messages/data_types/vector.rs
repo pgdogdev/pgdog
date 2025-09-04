@@ -17,7 +17,7 @@ use super::{Datum, FromDataType, Numeric};
 
 #[derive(Clone, PartialEq, PartialOrd, Ord, Eq, Hash)]
 #[repr(C)]
-pub struct Vector {
+pub(crate) struct Vector {
     values: Vec<Numeric>,
 }
 
@@ -94,17 +94,17 @@ impl ToDataRowColumn for Vector {
 
 impl Vector {
     /// Length of the vector.
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.values.len()
     }
 
     /// Is the vector empty?
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
     /// Compute L2 distance between the vectors.
-    pub fn distance_l2(&self, other: &Self) -> f64 {
+    pub(crate) fn distance_l2(&self, other: &Self) -> f64 {
         Distance::Euclidean(self, other).distance()
     }
 }

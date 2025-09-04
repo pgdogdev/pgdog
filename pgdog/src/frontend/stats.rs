@@ -7,39 +7,39 @@ use crate::state::State;
 
 /// Client statistics.
 #[derive(Copy, Clone, Debug)]
-pub struct Stats {
+pub(crate) struct Stats {
     /// Bytes sent over network.
-    pub bytes_sent: usize,
+    pub(crate) bytes_sent: usize,
     /// Bytes received over network.
-    pub bytes_received: usize,
+    pub(crate) bytes_received: usize,
     /// Transactions served.
-    pub transactions: usize,
+    pub(crate) transactions: usize,
     /// Queries served.
-    pub queries: usize,
+    pub(crate) queries: usize,
     /// Errors.
-    pub errors: usize,
+    pub(crate) errors: usize,
     /// Total transaction time.
-    pub transaction_time: Duration,
+    pub(crate) transaction_time: Duration,
     /// Last transaction time.
-    pub last_transaction_time: Duration,
+    pub(crate) last_transaction_time: Duration,
     /// Total query time.
-    pub query_time: Duration,
+    pub(crate) query_time: Duration,
     /// Total wait time.
-    pub wait_time: Duration,
+    pub(crate) wait_time: Duration,
     /// Current client state.
-    pub state: State,
+    pub(crate) state: State,
     transaction_timer: Instant,
     query_timer: Instant,
     wait_timer: Instant,
     /// Last time this client sent a query.
-    pub last_request: SystemTime,
+    pub(crate) last_request: SystemTime,
     /// Number of bytes used by the stream buffer, where all the messages
     /// are stored until they are processed.
-    pub memory_used: usize,
+    pub(crate) memory_used: usize,
     /// Number of prepared statements in the local cache.
-    pub prepared_statements: usize,
+    pub(crate) prepared_statements: usize,
     /// Client is locked to a particular server.
-    pub locked: bool,
+    pub(crate) locked: bool,
 }
 
 impl Default for Stats {
@@ -97,7 +97,7 @@ impl Stats {
     }
 
     /// Get wait time if waiting.
-    pub fn wait_time(&self) -> Duration {
+    pub(crate) fn wait_time(&self) -> Duration {
         if self.state == State::Waiting {
             self.wait_timer.elapsed()
         } else {

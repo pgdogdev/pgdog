@@ -7,11 +7,11 @@ use super::{code, prelude::*};
 use super::FromBytes;
 
 pub mod password;
-pub use password::Password;
+pub(crate) use password::Password;
 
 /// Authentication messages.
 #[derive(Debug)]
-pub enum Authentication {
+pub(crate) enum Authentication {
     /// AuthenticationOk (F)
     Ok,
     /// AuthenticationSASL (B)
@@ -28,7 +28,7 @@ pub enum Authentication {
 
 impl Authentication {
     /// Request SCRAM-SHA-256 auth.
-    pub fn scram() -> Authentication {
+    pub(crate) fn scram() -> Authentication {
         Authentication::Sasl("SCRAM-SHA-256".to_string())
     }
 }

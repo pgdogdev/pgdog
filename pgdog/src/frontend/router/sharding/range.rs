@@ -5,12 +5,12 @@ use crate::{
 };
 
 #[derive(Debug)]
-pub struct Ranges<'a> {
+pub(crate) struct Ranges<'a> {
     mappings: &'a [ShardedMapping],
 }
 
 impl<'a> Ranges<'a> {
-    pub fn new(mapping: &'a Option<Mapping>) -> Option<Self> {
+    pub(crate) fn new(mapping: &'a Option<Mapping>) -> Option<Self> {
         if let Some(Mapping::Range(mappings)) = mapping {
             Some(Self { mappings })
         } else {
@@ -18,7 +18,7 @@ impl<'a> Ranges<'a> {
         }
     }
 
-    pub fn valid(&self) -> bool {
+    pub(crate) fn valid(&self) -> bool {
         let bounds = self
             .mappings
             .iter()
@@ -89,14 +89,14 @@ impl<'a> Ranges<'a> {
 }
 
 #[derive(Debug)]
-pub struct Range<'a> {
+pub(crate) struct Range<'a> {
     start: &'a Option<FlexibleType>,
     end: &'a Option<FlexibleType>,
     shard: usize,
 }
 
 impl<'a> Range<'a> {
-    pub fn new(mapping: &'a ShardedMapping) -> Self {
+    pub(crate) fn new(mapping: &'a ShardedMapping) -> Self {
         Self {
             start: &mapping.start,
             end: &mapping.end,

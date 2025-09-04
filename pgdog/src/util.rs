@@ -5,11 +5,11 @@ use pgdog_plugin::comp;
 use rand::{distributions::Alphanumeric, Rng};
 use std::{ops::Deref, time::Duration}; // 0.8
 
-pub fn format_time(time: DateTime<Local>) -> String {
+pub(crate) fn format_time(time: DateTime<Local>) -> String {
     time.format("%Y-%m-%d %H:%M:%S%.3f %Z").to_string()
 }
 
-pub fn human_duration_optional(duration: Option<Duration>) -> String {
+pub(crate) fn human_duration_optional(duration: Option<Duration>) -> String {
     if let Some(duration) = duration {
         human_duration(duration)
     } else {
@@ -19,7 +19,7 @@ pub fn human_duration_optional(duration: Option<Duration>) -> String {
 
 /// Get a human-readable duration for amounts that
 /// a human would use.
-pub fn human_duration(duration: Duration) -> String {
+pub(crate) fn human_duration(duration: Duration) -> String {
     let second = 1000;
     let minute = second * 60;
     let hour = minute * 60;
@@ -55,7 +55,7 @@ pub fn human_duration(duration: Duration) -> String {
 static POSTGRES_EPOCH: i64 = 946684800000000000;
 
 /// Number of microseconds since Postgres epoch.
-pub fn postgres_now() -> i64 {
+pub(crate) fn postgres_now() -> i64 {
     let start = DateTime::from_timestamp_nanos(POSTGRES_EPOCH).fixed_offset();
     let now = Utc::now().fixed_offset();
     // Panic if overflow.
@@ -63,7 +63,7 @@ pub fn postgres_now() -> i64 {
 }
 
 /// Generate a random string of length n.
-pub fn random_string(n: usize) -> String {
+pub(crate) fn random_string(n: usize) -> String {
     rand::thread_rng()
         .sample_iter(&Alphanumeric)
         .take(n)
@@ -72,7 +72,7 @@ pub fn random_string(n: usize) -> String {
 }
 
 /// Escape PostgreSQL identifiers by doubling any embedded quotes.
-pub fn escape_identifier(s: &str) -> String {
+pub(crate) fn escape_identifier(s: &str) -> String {
     s.replace("\"", "\"\"")
 }
 

@@ -4,8 +4,8 @@ pub mod error;
 pub mod logical;
 pub mod sharded_tables;
 
-pub use buffer::Buffer;
-pub use config::ReplicationConfig;
-pub use error::Error;
-pub use logical::*;
-pub use sharded_tables::{ShardedColumn, ShardedTables};
+pub(crate) use buffer::Buffer;
+pub(crate) use config::ReplicationConfig;
+pub(crate) use error::Error;
+pub(crate) use logical::*;
+pub(crate) use sharded_tables::{ShardedColumn, ShardedTables};

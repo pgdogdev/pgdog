@@ -4,7 +4,7 @@ use std::ops::Deref;
 
 use crate::config::config;
 
-pub trait OpenMetric: Send + Sync {
+pub(crate) trait OpenMetric: Send + Sync {
     fn name(&self) -> String;
     /// Metric measurement.
     fn measurements(&self) -> Vec<Measurement>;
@@ -22,7 +22,7 @@ pub trait OpenMetric: Send + Sync {
 }
 
 #[derive(Debug, Clone)]
-pub enum MeasurementType {
+pub(crate) enum MeasurementType {
     Float(f64),
     Integer(i64),
     Millis(u128),
@@ -53,13 +53,13 @@ impl From<u128> for MeasurementType {
 }
 
 #[derive(Debug, Clone)]
-pub struct Measurement {
-    pub labels: Vec<(String, String)>,
-    pub measurement: MeasurementType,
+pub(crate) struct Measurement {
+    pub(crate) labels: Vec<(String, String)>,
+    pub(crate) measurement: MeasurementType,
 }
 
 impl Measurement {
-    pub fn render(&self, name: &str) -> String {
+    pub(crate) fn render(&self, name: &str) -> String {
         let labels = if self.labels.is_empty() {
             "".into()
         } else {
@@ -83,12 +83,12 @@ impl Measurement {
     }
 }
 
-pub struct Metric {
+pub(crate) struct Metric {
     metric: Box<dyn OpenMetric>,
 }
 
 impl Metric {
-    pub fn new(metric: impl OpenMetric + 'static) -> Self {
+    pub(crate) fn new(metric: impl OpenMetric + 'static) -> Self {
         Self {
             metric: Box::new(metric),
         }

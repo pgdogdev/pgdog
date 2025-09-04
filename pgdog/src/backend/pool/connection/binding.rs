@@ -10,7 +10,7 @@ use super::*;
 
 /// The server(s) the client is connected to.
 #[derive(Debug)]
-pub enum Binding {
+pub(crate) enum Binding {
     /// Direct-to-shard transaction.
     Direct(Option<Guard>),
     /// Admin database connection.
@@ -27,7 +27,7 @@ impl Default for Binding {
 
 impl Binding {
     /// Close all connections to all servers.
-    pub fn disconnect(&mut self) {
+    pub(crate) fn disconnect(&mut self) {
         match self {
             Binding::Direct(guard) => drop(guard.take()),
             Binding::Admin(_) => (),
@@ -37,7 +37,7 @@ impl Binding {
 
     /// Close connections and indicate to servers that
     /// they are probably broken and should not be re-used.
-    pub fn force_close(&mut self) {
+    pub(crate) fn force_close(&mut self) {
         match self {
             Binding::Direct(Some(ref mut guard)) => guard.stats_mut().state(State::ForceClose),
             Binding::MultiShard(ref mut guards, _) => {
@@ -52,7 +52,7 @@ impl Binding {
     }
 
     /// Are we connnected to a backend?
-    pub fn connected(&self) -> bool {
+    pub(crate) fn connected(&self) -> bool {
         match self {
             Binding::Direct(server) => server.is_some(),
             Binding::MultiShard(servers, _) => !servers.is_empty(),
@@ -117,7 +117,7 @@ impl Binding {
     }
 
     /// Send an entire buffer of messages to the servers(s).
-    pub async fn send(&mut self, client_request: &ClientRequest) -> Result<(), Error> {
+    pub(crate) async fn send(&mut self, client_request: &ClientRequest) -> Result<(), Error> {
         match self {
             Binding::Admin(backend) => Ok(backend.send(client_request).await?),
 
@@ -157,7 +157,7 @@ impl Binding {
     }
 
     /// Send copy messages to shards they are destined to go.
-    pub async fn send_copy(&mut self, rows: Vec<CopyRow>) -> Result<(), Error> {
+    pub(crate) async fn send_copy(&mut self, rows: Vec<CopyRow>) -> Result<(), Error> {
         match self {
             Binding::MultiShard(servers, _state) => {
                 for row in rows {
@@ -213,7 +213,7 @@ impl Binding {
         }
     }
 
-    pub fn has_more_messages(&self) -> bool {
+    pub(crate) fn has_more_messages(&self) -> bool {
         match self {
             Binding::Admin(admin) => !admin.done(),
             Binding::Direct(Some(server)) => server.has_more_messages(),
@@ -241,7 +241,7 @@ impl Binding {
     }
 
     /// Execute a query on all servers.
-    pub async fn execute(&mut self, query: &str) -> Result<(), Error> {
+    pub(crate) async fn execute(&mut self, query: &str) -> Result<(), Error> {
         match self {
             Binding::Direct(Some(ref mut server)) => {
                 server.execute(query).await?;
@@ -259,7 +259,7 @@ impl Binding {
         Ok(())
     }
 
-    pub async fn link_client(&mut self, params: &Parameters) -> Result<usize, Error> {
+    pub(crate) async fn link_client(&mut self, params: &Parameters) -> Result<usize, Error> {
         match self {
             Binding::Direct(Some(ref mut server)) => server.link_client(params).await,
             Binding::MultiShard(ref mut servers, _) => {
@@ -277,7 +277,7 @@ impl Binding {
         }
     }
 
-    pub fn changed_params(&mut self) -> Parameters {
+    pub(crate) fn changed_params(&mut self) -> Parameters {
         match self {
             Binding::Direct(Some(ref mut server)) => server.changed_params().clone(),
             Binding::MultiShard(ref mut servers, _) => {
@@ -302,7 +302,7 @@ impl Binding {
     }
 
     #[cfg(test)]
-    pub fn is_dirty(&self) -> bool {
+    pub(crate) fn is_dirty(&self) -> bool {
         match self {
             Binding::Direct(Some(ref server)) => server.dirty(),
             Binding::MultiShard(ref servers, _state) => servers.iter().any(|s| s.dirty()),
@@ -310,7 +310,7 @@ impl Binding {
         }
     }
 
-    pub fn copy_mode(&self) -> bool {
+    pub(crate) fn copy_mode(&self) -> bool {
         match self {
             Binding::Admin(_) => false,
             Binding::MultiShard(ref servers, _state) => servers.iter().all(|s| s.copy_mode()),

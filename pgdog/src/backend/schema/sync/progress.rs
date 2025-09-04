@@ -9,7 +9,7 @@ use super::Statement;
 use parking_lot::Mutex;
 
 #[derive(Clone)]
-pub enum Item {
+pub(crate) enum Item {
     Index {
         schema: String,
         table: String,
@@ -131,14 +131,14 @@ impl Comms {
 }
 
 #[derive(Clone)]
-pub struct Progress {
+pub(crate) struct Progress {
     item: Arc<Mutex<ItemTracker>>,
     comms: Arc<Comms>,
     total: usize,
 }
 
 impl Progress {
-    pub fn new(total: usize) -> Self {
+    pub(crate) fn new(total: usize) -> Self {
         let me = Self {
             item: Arc::new(Mutex::new(ItemTracker::new())),
             comms: Arc::new(Comms::new()),
@@ -154,13 +154,13 @@ impl Progress {
         me
     }
 
-    pub fn done(&self) {
+    pub(crate) fn done(&self) {
         let elapsed = self.item.lock().timer.elapsed();
 
         info!("finished in {:.3}s", elapsed.as_secs_f64());
     }
 
-    pub fn next(&self, item: impl Into<Item>) {
+    pub(crate) fn next(&self, item: impl Into<Item>) {
         {
             let mut guard = self.item.lock();
             guard.item = item.into().clone();

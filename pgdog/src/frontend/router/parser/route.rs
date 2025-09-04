@@ -3,7 +3,7 @@ use std::fmt::Display;
 use super::{Aggregate, DistinctBy, FunctionBehavior, Limit, LockingBehavior, OrderBy};
 
 #[derive(Debug, Clone, PartialEq, PartialOrd, Ord, Eq, Hash, Default)]
-pub enum Shard {
+pub(crate) enum Shard {
     Direct(usize),
     Multi(Vec<usize>),
     #[default]
@@ -25,11 +25,11 @@ impl Display for Shard {
 }
 
 impl Shard {
-    pub fn all(&self) -> bool {
+    pub(crate) fn all(&self) -> bool {
         matches!(self, Shard::All)
     }
 
-    pub fn direct(shard: usize) -> Self {
+    pub(crate) fn direct(shard: usize) -> Self {
         Self::Direct(shard)
     }
 }
@@ -47,7 +47,7 @@ impl From<Option<usize>> for Shard {
 /// Path a query should take and any transformations
 /// that should be applied along the way.
 #[derive(Debug, Clone, Default, PartialEq)]
-pub struct Route {
+pub(crate) struct Route {
     shard: Shard,
     read: bool,
     order_by: Vec<OrderBy>,
@@ -70,7 +70,7 @@ impl Display for Route {
 
 impl Route {
     /// SELECT query.
-    pub fn select(
+    pub(crate) fn select(
         shard: Shard,
         order_by: Vec<OrderBy>,
         aggregate: Aggregate,
@@ -89,7 +89,7 @@ impl Route {
     }
 
     /// A query that should go to a replica.
-    pub fn read(shard: impl Into<Shard>) -> Self {
+    pub(crate) fn read(shard: impl Into<Shard>) -> Self {
         Self {
             shard: shard.into(),
             read: true,
@@ -98,83 +98,83 @@ impl Route {
     }
 
     /// A write query.
-    pub fn write(shard: impl Into<Shard>) -> Self {
+    pub(crate) fn write(shard: impl Into<Shard>) -> Self {
         Self {
             shard: shard.into(),
             ..Default::default()
         }
     }
 
-    pub fn is_read(&self) -> bool {
+    pub(crate) fn is_read(&self) -> bool {
         self.read
     }
 
-    pub fn is_write(&self) -> bool {
+    pub(crate) fn is_write(&self) -> bool {
         !self.is_read()
     }
 
     /// Get shard if any.
-    pub fn shard(&self) -> &Shard {
+    pub(crate) fn shard(&self) -> &Shard {
         &self.shard
     }
 
     /// Should this query go to all shards?
-    pub fn is_all_shards(&self) -> bool {
+    pub(crate) fn is_all_shards(&self) -> bool {
         matches!(self.shard, Shard::All)
     }
 
-    pub fn is_multi_shard(&self) -> bool {
+    pub(crate) fn is_multi_shard(&self) -> bool {
         matches!(self.shard, Shard::Multi(_))
     }
 
-    pub fn is_cross_shard(&self) -> bool {
+    pub(crate) fn is_cross_shard(&self) -> bool {
         self.is_all_shards() || self.is_multi_shard()
     }
 
-    pub fn order_by(&self) -> &[OrderBy] {
+    pub(crate) fn order_by(&self) -> &[OrderBy] {
         &self.order_by
     }
 
-    pub fn aggregate(&self) -> &Aggregate {
+    pub(crate) fn aggregate(&self) -> &Aggregate {
         &self.aggregate
     }
 
-    pub fn set_shard_mut(&mut self, shard: usize) {
+    pub(crate) fn set_shard_mut(&mut self, shard: usize) {
         self.shard = Shard::Direct(shard);
     }
 
-    pub fn set_shard(mut self, shard: usize) -> Self {
+    pub(crate) fn set_shard(mut self, shard: usize) -> Self {
         self.set_shard_mut(shard);
         self
     }
 
-    pub fn set_shard_raw_mut(&mut self, shard: &Shard) {
+    pub(crate) fn set_shard_raw_mut(&mut self, shard: &Shard) {
         self.shard = shard.clone();
     }
 
-    pub fn should_buffer(&self) -> bool {
+    pub(crate) fn should_buffer(&self) -> bool {
         !self.order_by().is_empty() || !self.aggregate().is_empty() || self.distinct().is_some()
     }
 
-    pub fn limit(&self) -> &Limit {
+    pub(crate) fn limit(&self) -> &Limit {
         &self.limit
     }
 
-    pub fn set_read(mut self, read: bool) -> Self {
+    pub(crate) fn set_read(mut self, read: bool) -> Self {
         self.set_read_mut(read);
         self
     }
 
-    pub fn set_read_mut(&mut self, read: bool) {
+    pub(crate) fn set_read_mut(&mut self, read: bool) {
         self.read = read;
     }
 
-    pub fn set_write(mut self, write: FunctionBehavior) -> Self {
+    pub(crate) fn set_write(mut self, write: FunctionBehavior) -> Self {
         self.set_write_mut(write);
         self
     }
 
-    pub fn set_write_mut(&mut self, write: FunctionBehavior) {
+    pub(crate) fn set_write_mut(&mut self, write: FunctionBehavior) {
         let FunctionBehavior {
             writes,
             locking_behavior,
@@ -183,16 +183,16 @@ impl Route {
         self.lock_session = matches!(locking_behavior, LockingBehavior::Lock);
     }
 
-    pub fn set_lock_session(mut self) -> Self {
+    pub(crate) fn set_lock_session(mut self) -> Self {
         self.lock_session = true;
         self
     }
 
-    pub fn lock_session(&self) -> bool {
+    pub(crate) fn lock_session(&self) -> bool {
         self.lock_session
     }
 
-    pub fn distinct(&self) -> &Option<DistinctBy> {
+    pub(crate) fn distinct(&self) -> &Option<DistinctBy> {
         &self.distinct
     }
 }

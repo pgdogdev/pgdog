@@ -10,7 +10,7 @@ use super::{Error, Pool};
 use crate::backend::Server;
 
 /// Perform a healtcheck on a connection.
-pub struct Healtcheck<'a> {
+pub(crate) struct Healtcheck<'a> {
     conn: &'a mut Server,
     pool: &'a Pool,
     healthcheck_interval: Duration,
@@ -20,7 +20,7 @@ pub struct Healtcheck<'a> {
 
 impl<'a> Healtcheck<'a> {
     /// Perform a healtcheck only if necessary.
-    pub fn conditional(
+    pub(crate) fn conditional(
         conn: &'a mut Server,
         pool: &'a Pool,
         healthcheck_interval: Duration,
@@ -37,7 +37,11 @@ impl<'a> Healtcheck<'a> {
     }
 
     /// Perform a mandatory healtcheck.
-    pub fn mandatory(conn: &'a mut Server, pool: &'a Pool, healthcheck_timeout: Duration) -> Self {
+    pub(crate) fn mandatory(
+        conn: &'a mut Server,
+        pool: &'a Pool,
+        healthcheck_timeout: Duration,
+    ) -> Self {
         Self::conditional(
             conn,
             pool,
@@ -48,7 +52,7 @@ impl<'a> Healtcheck<'a> {
     }
 
     /// Perform the healtcheck if it's required.
-    pub async fn healthcheck(&mut self) -> Result<(), Error> {
+    pub(crate) async fn healthcheck(&mut self) -> Result<(), Error> {
         let healtcheck_age = self.conn.healthcheck_age(self.now);
 
         if healtcheck_age < self.healthcheck_interval {

@@ -17,7 +17,7 @@ use super::prelude::*;
 
 use super::Command;
 
-pub struct ShowPeers;
+pub(crate) struct ShowPeers;
 
 #[async_trait]
 impl Command for ShowPeers {

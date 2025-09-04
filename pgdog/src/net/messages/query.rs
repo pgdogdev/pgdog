@@ -7,9 +7,9 @@ use std::str::{from_utf8, from_utf8_unchecked};
 
 /// Query (F) message.
 #[derive(Clone)]
-pub struct Query {
+pub(crate) struct Query {
     /// Query string.
-    pub payload: Bytes,
+    pub(crate) payload: Bytes,
 }
 
 impl std::fmt::Debug for Query {
@@ -21,12 +21,12 @@ impl std::fmt::Debug for Query {
 }
 
 impl Query {
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.payload.len()
     }
 
     /// Create new query.
-    pub fn new(query: impl ToString) -> Self {
+    pub(crate) fn new(query: impl ToString) -> Self {
         let mut payload = Payload::named('Q');
         payload.put_string(&query.to_string());
         let payload = payload.freeze();
@@ -34,7 +34,7 @@ impl Query {
         Self { payload }
     }
 
-    pub fn query(&self) -> &str {
+    pub(crate) fn query(&self) -> &str {
         // SAFETY:  We check for valid UTF-8 on creation.
         //          Don't read the trailing null byte.
         unsafe { from_utf8_unchecked(&self.payload[5..self.payload.len() - 1]) }

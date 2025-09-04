@@ -6,19 +6,19 @@ use std::collections::HashMap;
 static COLUMNS: &str = include_str!("columns.sql");
 
 #[derive(Debug, Clone)]
-pub struct Column {
-    pub table_catalog: String,
-    pub table_schema: String,
-    pub table_name: String,
-    pub column_name: String,
-    pub column_default: String,
-    pub is_nullable: bool,
-    pub data_type: String,
+pub(crate) struct Column {
+    pub(crate) table_catalog: String,
+    pub(crate) table_schema: String,
+    pub(crate) table_name: String,
+    pub(crate) column_name: String,
+    pub(crate) column_default: String,
+    pub(crate) is_nullable: bool,
+    pub(crate) data_type: String,
 }
 
 impl Column {
     /// Load all columns from server.
-    pub async fn load(
+    pub(crate) async fn load(
         server: &mut Server,
     ) -> Result<HashMap<(String, String), Vec<Column>>, Error> {
         let mut result = HashMap::new();

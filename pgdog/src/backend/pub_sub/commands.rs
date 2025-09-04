@@ -1,3 +1,3 @@
-pub enum Commands {
+pub(crate) enum Commands {
     Subscribe(String),
 }

@@ -9,18 +9,18 @@ use crate::config::config;
 use super::{ClientRequest, Error};
 
 /// Log queries.
-pub struct QueryLogger<'a> {
+pub(crate) struct QueryLogger<'a> {
     buffer: &'a ClientRequest,
 }
 
 impl<'a> QueryLogger<'a> {
     /// Create new query logger.
-    pub fn new(buffer: &'a ClientRequest) -> Self {
+    pub(crate) fn new(buffer: &'a ClientRequest) -> Self {
         Self { buffer }
     }
 
     /// Log queries
-    pub async fn log(&self) -> Result<(), Error> {
+    pub(crate) async fn log(&self) -> Result<(), Error> {
         let path = &config().config.general.query_log;
 
         if let Some(path) = path {

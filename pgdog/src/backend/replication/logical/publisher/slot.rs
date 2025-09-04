@@ -12,15 +12,15 @@ use tokio::time::timeout;
 use tracing::{debug, trace};
 
 #[derive(Debug, Clone, Default, Copy)]
-pub struct Lsn {
-    pub high: i64,
-    pub low: i64,
-    pub lsn: i64,
+pub(crate) struct Lsn {
+    pub(crate) high: i64,
+    pub(crate) low: i64,
+    pub(crate) lsn: i64,
 }
 
 impl Lsn {
     /// Get LSN from the 64-bit representation.
-    pub fn from_i64(lsn: i64) -> Self {
+    pub(crate) fn from_i64(lsn: i64) -> Self {
         let high = ((lsn >> 32) as u32) as i64;
         let low = ((lsn & 0xFFFF_FFFF) as u32) as i64;
         Self { high, low, lsn }
@@ -55,14 +55,14 @@ impl Display for Lsn {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub enum Snapshot {
+pub(crate) enum Snapshot {
     Export,
     Use,
     Nothing,
 }
 
 #[derive(Debug, Clone, PartialEq, Copy)]
-pub enum SlotKind {
+pub(crate) enum SlotKind {
     DataSync,
     Replication,
 }
@@ -78,7 +78,7 @@ impl Display for Snapshot {
 }
 
 #[derive(Debug)]
-pub struct ReplicationSlot {
+pub(crate) struct ReplicationSlot {
     address: Address,
     publication: String,
     name: String,
@@ -91,7 +91,7 @@ pub struct ReplicationSlot {
 
 impl ReplicationSlot {
     /// Create replication slot used for streaming the WAL.
-    pub fn replication(publication: &str, address: &Address) -> Self {
+    pub(crate) fn replication(publication: &str, address: &Address) -> Self {
         let name = format!("__pgdog_repl_{}", random_string(19).to_lowercase());
 
         Self {
@@ -107,7 +107,7 @@ impl ReplicationSlot {
     }
 
     /// Create replication slot for data sync.
-    pub fn data_sync(publication: &str, address: &Address) -> Self {
+    pub(crate) fn data_sync(publication: &str, address: &Address) -> Self {
         let name = format!("__pgdog_{}", random_string(24).to_lowercase());
 
         Self {
@@ -123,18 +123,18 @@ impl ReplicationSlot {
     }
 
     /// Connect to database using replication mode.
-    pub async fn connect(&mut self) -> Result<(), Error> {
+    pub(crate) async fn connect(&mut self) -> Result<(), Error> {
         self.server = Some(Server::connect(&self.address, ServerOptions::new_replication()).await?);
 
         Ok(())
     }
 
-    pub fn server(&mut self) -> Result<&mut Server, Error> {
+    pub(crate) fn server(&mut self) -> Result<&mut Server, Error> {
         self.server.as_mut().ok_or(Error::NotConnected)
     }
 
     /// Create the slot.
-    pub async fn create_slot(&mut self) -> Result<Lsn, Error> {
+    pub(crate) async fn create_slot(&mut self) -> Result<Lsn, Error> {
         if self.server.is_none() {
             self.connect().await?;
         }
@@ -179,7 +179,7 @@ impl ReplicationSlot {
     }
 
     /// Drop the slot.
-    pub async fn drop_slot(&mut self) -> Result<(), Error> {
+    pub(crate) async fn drop_slot(&mut self) -> Result<(), Error> {
         let drop_slot = self.drop_slot_query(true);
         self.server()?.execute(&drop_slot).await?;
 
@@ -201,7 +201,7 @@ impl ReplicationSlot {
     }
 
     /// Start replication.
-    pub async fn start_replication(&mut self) -> Result<(), Error> {
+    pub(crate) async fn start_replication(&mut self) -> Result<(), Error> {
         // TODO: This is definitely Postgres version-specific.
         let query = Query::new(format!(
             r#"START_REPLICATION SLOT "{}" LOGICAL {} ("proto_version" '4', origin 'any', "publication_names" '"{}"')"#,
@@ -226,7 +226,7 @@ impl ReplicationSlot {
     }
 
     /// Replicate from slot until finished.
-    pub async fn replicate(
+    pub(crate) async fn replicate(
         &mut self,
         max_wait: Duration,
     ) -> Result<Option<ReplicationData>, Error> {
@@ -256,7 +256,7 @@ impl ReplicationSlot {
     }
 
     /// Update origin on last flushed LSN.
-    pub async fn status_update(&mut self, status_update: StatusUpdate) -> Result<(), Error> {
+    pub(crate) async fn status_update(&mut self, status_update: StatusUpdate) -> Result<(), Error> {
         debug!(
             "confirmed {} flushed [{}]",
             status_update.last_flushed,
@@ -272,7 +272,7 @@ impl ReplicationSlot {
     }
 
     /// Ask remote to close stream.
-    pub async fn stop_replication(&mut self) -> Result<(), Error> {
+    pub(crate) async fn stop_replication(&mut self) -> Result<(), Error> {
         self.server()?.send_one(&CopyDone.into()).await?;
         self.server()?.flush().await?;
 
@@ -280,13 +280,13 @@ impl ReplicationSlot {
     }
 
     /// Current slot LSN.
-    pub fn lsn(&self) -> Lsn {
+    pub(crate) fn lsn(&self) -> Lsn {
         self.lsn
     }
 }
 
 #[derive(Debug)]
-pub enum ReplicationData {
+pub(crate) enum ReplicationData {
     CopyData(CopyData),
     CopyDone,
 }

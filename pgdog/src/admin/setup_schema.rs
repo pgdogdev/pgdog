@@ -3,7 +3,7 @@ use crate::backend::{databases::databases, Schema};
 
 use super::prelude::*;
 
-pub struct SetupSchema;
+pub(crate) struct SetupSchema;
 
 #[async_trait]
 impl Command for SetupSchema {

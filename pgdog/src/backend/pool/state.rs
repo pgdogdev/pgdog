@@ -7,41 +7,41 @@ use super::{inner::ReplicaLag, Ban, Config, Pool, Stats};
 
 /// Pool state.
 #[derive(Debug)]
-pub struct State {
+pub(crate) struct State {
     /// Number of connections checked out.
-    pub checked_out: usize,
+    pub(crate) checked_out: usize,
     /// Number of idle connections.
-    pub idle: usize,
+    pub(crate) idle: usize,
     /// Total number of connections managed by the pool.
-    pub total: usize,
+    pub(crate) total: usize,
     /// Is the pool online?
-    pub online: bool,
+    pub(crate) online: bool,
     /// Pool has no idle connections.
-    pub empty: bool,
+    pub(crate) empty: bool,
     /// Pool configuration.
-    pub config: Config,
+    pub(crate) config: Config,
     /// The pool is paused.
-    pub paused: bool,
+    pub(crate) paused: bool,
     /// Number of clients waiting for a connection.
-    pub waiting: usize,
+    pub(crate) waiting: usize,
     /// Pool ban.
-    pub ban: Option<Ban>,
+    pub(crate) ban: Option<Ban>,
     /// Pool is banned.
-    pub banned: bool,
+    pub(crate) banned: bool,
     /// Errors.
-    pub errors: usize,
+    pub(crate) errors: usize,
     /// Out of sync
-    pub out_of_sync: usize,
+    pub(crate) out_of_sync: usize,
     /// Re-synced servers.
-    pub re_synced: usize,
+    pub(crate) re_synced: usize,
     /// Statistics
-    pub stats: Stats,
+    pub(crate) stats: Stats,
     /// Max wait.
-    pub maxwait: Duration,
+    pub(crate) maxwait: Duration,
     /// Pool mode
-    pub pooler_mode: PoolerMode,
+    pub(crate) pooler_mode: PoolerMode,
     /// Lag
-    pub replica_lag: ReplicaLag,
+    pub(crate) replica_lag: ReplicaLag,
 }
 
 impl State {

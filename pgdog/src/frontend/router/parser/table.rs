@@ -6,20 +6,20 @@ use crate::util::escape_identifier;
 
 /// Table name in a query.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
-pub struct Table<'a> {
+pub(crate) struct Table<'a> {
     /// Table name.
-    pub name: &'a str,
+    pub(crate) name: &'a str,
     /// Schema name, if specified.
-    pub schema: Option<&'a str>,
+    pub(crate) schema: Option<&'a str>,
 }
 
 /// Owned version of Table that owns its string data.
 #[derive(Debug, Clone, PartialEq, Default)]
-pub struct OwnedTable {
+pub(crate) struct OwnedTable {
     /// Table name.
-    pub name: String,
+    pub(crate) name: String,
     /// Schema name, if specified.
-    pub schema: Option<String>,
+    pub(crate) schema: Option<String>,
 }
 
 impl Display for Table<'_> {
@@ -39,7 +39,7 @@ impl Display for Table<'_> {
 
 impl<'a> Table<'a> {
     /// Convert this borrowed Table to an owned OwnedTable
-    pub fn to_owned(&self) -> OwnedTable {
+    pub(crate) fn to_owned(&self) -> OwnedTable {
         OwnedTable::from(*self)
     }
 }

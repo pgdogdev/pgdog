@@ -2,21 +2,21 @@ use super::{ShardedColumn, ShardedTables};
 
 /// Logical replication configuration.
 #[derive(Debug, Clone)]
-pub struct ReplicationConfig {
+pub(crate) struct ReplicationConfig {
     /// Total number of shards.
-    pub shards: usize,
+    pub(crate) shards: usize,
     /// Sharded tables.
-    pub sharded_tables: ShardedTables,
+    pub(crate) sharded_tables: ShardedTables,
 }
 
 impl ReplicationConfig {
     /// Get the position of the sharded column in a row.
-    pub fn sharded_column(&self, table: &str, columns: &[&str]) -> Option<ShardedColumn> {
+    pub(crate) fn sharded_column(&self, table: &str, columns: &[&str]) -> Option<ShardedColumn> {
         self.sharded_tables.sharded_column(table, columns)
     }
 
     /// Total number of shards.
-    pub fn shards(&self) -> usize {
+    pub(crate) fn shards(&self) -> usize {
         self.shards
     }
 }

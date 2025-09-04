@@ -2,7 +2,7 @@ use super::code;
 use super::prelude::*;
 
 #[derive(Debug, Clone)]
-pub struct Sync;
+pub(crate) struct Sync;
 
 impl Default for Sync {
     fn default() -> Self {
@@ -11,11 +11,11 @@ impl Default for Sync {
 }
 
 impl Sync {
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         5
     }
 
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {}
     }
 }

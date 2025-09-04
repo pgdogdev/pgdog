@@ -3,12 +3,12 @@ use crate::{
     net::messages::{Numeric, Vector},
 };
 
-pub enum Distance<'a> {
+pub(crate) enum Distance<'a> {
     Euclidean(&'a Vector, &'a Vector),
 }
 
 impl Distance<'_> {
-    pub fn distance(&self) -> f64 {
+    pub(crate) fn distance(&self) -> f64 {
         match self {
             // TODO: SIMD this.
             Self::Euclidean(p, q) => {
@@ -24,14 +24,14 @@ impl Distance<'_> {
 }
 
 #[derive(Debug)]
-pub struct Centroids<'a> {
+pub(crate) struct Centroids<'a> {
     centroids: &'a [Vector],
 }
 
 impl Centroids<'_> {
     /// Find the shards with the closest centroids,
     /// according to the number of probes.
-    pub fn shard(&self, vector: &Vector, shards: usize, probes: usize) -> Shard {
+    pub(crate) fn shard(&self, vector: &Vector, shards: usize, probes: usize) -> Shard {
         let mut selected = vec![];
         let mut centroids = self.centroids.iter().enumerate().collect::<Vec<_>>();
         centroids.sort_by_key(|(_, c)| Numeric::from(c.distance_l2(vector)));

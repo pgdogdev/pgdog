@@ -7,7 +7,7 @@ use super::code;
 use super::prelude::*;
 
 #[derive(Clone)]
-pub struct Execute {
+pub(crate) struct Execute {
     payload: Bytes,
     portal_len: usize,
 }
@@ -27,7 +27,7 @@ impl Debug for Execute {
 }
 
 impl Execute {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let mut payload = Payload::named('E');
         payload.put_string("");
         payload.put_i32(0);
@@ -37,7 +37,7 @@ impl Execute {
         }
     }
 
-    pub fn new_portal(name: &str) -> Self {
+    pub(crate) fn new_portal(name: &str) -> Self {
         let mut payload = Payload::named('E');
         payload.put_string(name);
         payload.put_i32(0);
@@ -47,7 +47,7 @@ impl Execute {
         }
     }
 
-    pub fn portal(&self) -> &str {
+    pub(crate) fn portal(&self) -> &str {
         let start = 5;
         let end = start
             + if self.portal_len > 0 {
@@ -60,12 +60,12 @@ impl Execute {
     }
 
     /// Number of rows to return.
-    pub fn max_rows(&self) -> i32 {
+    pub(crate) fn max_rows(&self) -> i32 {
         let mut buf = &self.payload[5 + self.portal_len..];
         buf.get_i32()
     }
 
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.payload.len()
     }
 }

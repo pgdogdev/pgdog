@@ -20,7 +20,7 @@ use super::{ConnectedClient, Stats};
 static COMMS: Lazy<Comms> = Lazy::new(Comms::new);
 
 /// Get global communication channel.
-pub fn comms() -> Comms {
+pub(crate) fn comms() -> Comms {
     COMMS.clone()
 }
 
@@ -38,7 +38,7 @@ struct Global {
 
 /// Bi-directional communications between client and internals.
 #[derive(Clone, Debug)]
-pub struct Comms {
+pub(crate) struct Comms {
     global: Arc<Global>,
     id: Option<BackendKeyData>,
 }
@@ -64,16 +64,16 @@ impl Comms {
     }
 
     /// Get all connected clients.
-    pub fn clients(&self) -> HashMap<BackendKeyData, ConnectedClient> {
+    pub(crate) fn clients(&self) -> HashMap<BackendKeyData, ConnectedClient> {
         self.global.clients.lock().clone()
     }
 
     /// Number of connected clients.
-    pub fn clients_len(&self) -> usize {
+    pub(crate) fn clients_len(&self) -> usize {
         self.global.clients.lock().len()
     }
 
-    pub fn clients_memory(&self) -> usize {
+    pub(crate) fn clients_memory(&self) -> usize {
         self.global
             .clients
             .lock()
@@ -82,22 +82,27 @@ impl Comms {
             .sum::<usize>()
     }
 
-    pub fn tracker(&self) -> &TaskTracker {
+    pub(crate) fn tracker(&self) -> &TaskTracker {
         &self.global.tracker
     }
 
     /// Get number of connected clients.
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.global.clients.lock().len()
     }
 
     /// There are no connected clients.
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
     /// New client connected.
-    pub fn connect(&mut self, id: &BackendKeyData, addr: SocketAddr, params: &Parameters) -> Self {
+    pub(crate) fn connect(
+        &mut self,
+        id: &BackendKeyData,
+        addr: SocketAddr,
+        params: &Parameters,
+    ) -> Self {
         self.global
             .clients
             .lock()
@@ -107,7 +112,7 @@ impl Comms {
     }
 
     /// Update client parameters.
-    pub fn update_params(&self, params: &Parameters) {
+    pub(crate) fn update_params(&self, params: &Parameters) {
         if let Some(id) = self.id {
             let mut guard = self.global.clients.lock();
             if let Some(entry) = guard.get_mut(&id) {
@@ -117,14 +122,14 @@ impl Comms {
     }
 
     /// Client disconnected.
-    pub fn disconnect(&mut self) {
+    pub(crate) fn disconnect(&mut self) {
         if let Some(id) = self.id.take() {
             self.global.clients.lock().remove(&id);
         }
     }
 
     /// Update stats.
-    pub fn stats(&self, stats: Stats) {
+    pub(crate) fn stats(&self, stats: Stats) {
         if let Some(ref id) = self.id {
             let mut guard = self.global.clients.lock();
             if let Some(entry) = guard.get_mut(id) {
@@ -134,23 +139,23 @@ impl Comms {
     }
 
     /// Notify clients pgDog is shutting down.
-    pub fn shutdown(&self) {
+    pub(crate) fn shutdown(&self) {
         self.global.offline.store(true, Ordering::Relaxed);
         self.global.shutdown.notify_waiters();
         self.global.tracker.close();
     }
 
     /// Wait for shutdown signal.
-    pub fn shutting_down(&self) -> Arc<Notify> {
+    pub(crate) fn shutting_down(&self) -> Arc<Notify> {
         self.global.shutdown.clone()
     }
 
     /// pgDog is shutting down now.
-    pub fn offline(&self) -> bool {
+    pub(crate) fn offline(&self) -> bool {
         self.global.offline.load(Ordering::Relaxed)
     }
 
-    pub fn client_id(&self) -> BackendKeyData {
+    pub(crate) fn client_id(&self) -> BackendKeyData {
         self.id.unwrap_or_default()
     }
 }

@@ -9,7 +9,7 @@ use super::prelude::*;
 
 /// CommandComplete (B) message.
 #[derive(Clone)]
-pub struct CommandComplete {
+pub(crate) struct CommandComplete {
     payload: Bytes,
 }
 
@@ -23,7 +23,7 @@ impl Debug for CommandComplete {
 
 impl CommandComplete {
     /// Number of rows sent/received.
-    pub fn rows(&self) -> Result<Option<usize>, Error> {
+    pub(crate) fn rows(&self) -> Result<Option<usize>, Error> {
         Ok(self
             .command()
             .split(" ")
@@ -48,7 +48,7 @@ impl CommandComplete {
     }
 
     /// Rewrite the message with new number of rows.
-    pub fn rewrite(&self, rows: usize) -> Result<Self, Error> {
+    pub(crate) fn rewrite(&self, rows: usize) -> Result<Self, Error> {
         let mut parts = self.command().split(" ").collect::<Vec<_>>();
         parts.pop();
         let rows = rows.to_string();
@@ -58,21 +58,21 @@ impl CommandComplete {
     }
 
     /// Start transaction.
-    pub fn new_begin() -> Self {
+    pub(crate) fn new_begin() -> Self {
         Self::from_str("BEGIN")
     }
 
     /// Rollback transaction.
-    pub fn new_rollback() -> Self {
+    pub(crate) fn new_rollback() -> Self {
         Self::from_str("ROLLBACK")
     }
 
     /// Commit transaction.
-    pub fn new_commit() -> Self {
+    pub(crate) fn new_commit() -> Self {
         Self::from_str("COMMIT")
     }
 
-    pub fn new(command: impl ToString) -> Self {
+    pub(crate) fn new(command: impl ToString) -> Self {
         Self::from_str(command.to_string().as_str())
     }
 }

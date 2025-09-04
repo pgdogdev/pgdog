@@ -29,10 +29,10 @@ pub mod unknown_command;
 #[cfg(test)]
 mod testing;
 
-pub use context::QueryEngineContext;
+pub(crate) use context::QueryEngineContext;
 
 #[derive(Default, Debug)]
-pub struct QueryEngine {
+pub(crate) struct QueryEngine {
     begin_stmt: Option<BufferedQuery>,
     router: Router,
     comms: Comms,
@@ -46,7 +46,7 @@ pub struct QueryEngine {
 
 impl QueryEngine {
     /// Create new query engine.
-    pub fn new(
+    pub(crate) fn new(
         params: &Parameters,
         comms: &Comms,
         admin: bool,
@@ -69,7 +69,7 @@ impl QueryEngine {
         })
     }
 
-    pub fn from_client(client: &Client) -> Result<Self, Error> {
+    pub(crate) fn from_client(client: &Client) -> Result<Self, Error> {
         Self::new(
             &client.params,
             &client.comms,
@@ -79,22 +79,25 @@ impl QueryEngine {
     }
 
     /// Wait for an async message from the backend.
-    pub async fn read_backend(&mut self) -> Result<Message, Error> {
+    pub(crate) async fn read_backend(&mut self) -> Result<Message, Error> {
         Ok(self.backend.read().await?)
     }
 
     /// Query engine finished executing.
-    pub fn done(&self) -> bool {
+    pub(crate) fn done(&self) -> bool {
         !self.backend.connected() && self.begin_stmt.is_none()
     }
 
     /// Current state.
-    pub fn client_state(&self) -> State {
+    pub(crate) fn client_state(&self) -> State {
         self.stats.state
     }
 
     /// Handle client request.
-    pub async fn handle(&mut self, context: &mut QueryEngineContext<'_>) -> Result<(), Error> {
+    pub(crate) async fn handle(
+        &mut self,
+        context: &mut QueryEngineContext<'_>,
+    ) -> Result<(), Error> {
         self.stats
             .received(context.client_request.total_message_len());
 

@@ -1,6 +1,6 @@
 pub mod copy;
 pub mod parallel_connection;
 pub mod stream;
-pub use copy::CopySubscriber;
-pub use parallel_connection::ParallelConnection;
-pub use stream::StreamSubscriber;
+pub(crate) use copy::CopySubscriber;
+pub(crate) use parallel_connection::ParallelConnection;
+pub(crate) use stream::StreamSubscriber;

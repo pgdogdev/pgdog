@@ -6,11 +6,11 @@ use std::{
 };
 
 #[derive(Debug, Clone, Default, Copy)]
-pub struct Counts {
-    pub total_count: usize,
-    pub mirrored_count: usize,
-    pub dropped_count: usize,
-    pub error_count: usize,
+pub(crate) struct Counts {
+    pub(crate) total_count: usize,
+    pub(crate) mirrored_count: usize,
+    pub(crate) dropped_count: usize,
+    pub(crate) error_count: usize,
 }
 
 impl Sub for Counts {
@@ -64,6 +64,6 @@ impl Sum for Counts {
 }
 
 #[derive(Debug, Clone, Default, Copy)]
-pub struct MirrorStats {
-    pub counts: Counts,
+pub(crate) struct MirrorStats {
+    pub(crate) counts: Counts,
 }

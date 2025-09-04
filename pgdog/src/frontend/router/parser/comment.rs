@@ -27,7 +27,7 @@ fn get_matched_value<'a>(caps: &'a regex::Captures<'a>) -> Option<&'a str> {
 ///
 /// See [`SHARD`] and [`SHARDING_KEY`] for the style of comment we expect.
 ///
-pub fn shard(query: &str, schema: &ShardingSchema) -> Result<Shard, Error> {
+pub(crate) fn shard(query: &str, schema: &ShardingSchema) -> Result<Shard, Error> {
     let tokens = scan(query).map_err(Error::PgQuery)?;
 
     for token in tokens.tokens.iter() {

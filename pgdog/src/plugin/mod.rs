@@ -10,7 +10,7 @@ use tokio::time::Instant;
 use tracing::{debug, error, info, warn};
 
 static LIBS: OnceCell<Vec<Library>> = OnceCell::new();
-pub static PLUGINS: OnceCell<Vec<Plugin>> = OnceCell::new();
+pub(crate) static PLUGINS: OnceCell<Vec<Plugin>> = OnceCell::new();
 
 /// Load plugins.
 ///
@@ -90,7 +90,7 @@ pub fn shutdown() {
 }
 
 /// Get plugin by name.
-pub fn plugin(name: &str) -> Option<&Plugin<'_>> {
+pub(crate) fn plugin(name: &str) -> Option<&Plugin<'_>> {
     PLUGINS
         .get()
         .unwrap()
@@ -99,7 +99,7 @@ pub fn plugin(name: &str) -> Option<&Plugin<'_>> {
 }
 
 /// Get all loaded plugins.
-pub fn plugins() -> Option<&'static Vec<Plugin<'static>>> {
+pub(crate) fn plugins() -> Option<&'static Vec<Plugin<'static>>> {
     PLUGINS.get()
 }
 

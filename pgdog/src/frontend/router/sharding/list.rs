@@ -6,12 +6,12 @@ use super::{Error, Mapping, Shard, Value};
 use crate::config::{FlexibleType, ShardedMapping, ShardedMappingKind};
 
 #[derive(Debug, PartialEq, Eq)]
-pub struct Lists<'a> {
+pub(crate) struct Lists<'a> {
     list: &'a ListShards,
 }
 
 impl<'a> Lists<'a> {
-    pub fn new(mapping: &'a Option<Mapping>) -> Option<Self> {
+    pub(crate) fn new(mapping: &'a Option<Mapping>) -> Option<Self> {
         if let Some(Mapping::List(list)) = mapping {
             Some(Self { list })
         } else {
@@ -37,7 +37,7 @@ impl<'a> Lists<'a> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ListShards {
+pub(crate) struct ListShards {
     mapping: HashMap<FlexibleType, usize>,
 }
 
@@ -56,11 +56,11 @@ impl Hash for ListShards {
 }
 
 impl ListShards {
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.mapping.is_empty()
     }
 
-    pub fn new(mappings: &[ShardedMapping]) -> Self {
+    pub(crate) fn new(mappings: &[ShardedMapping]) -> Self {
         let mut mapping = HashMap::new();
 
         for map in mappings
@@ -75,7 +75,7 @@ impl ListShards {
         Self { mapping }
     }
 
-    pub fn shard(&self, value: &FlexibleType) -> Result<Shard, Error> {
+    pub(crate) fn shard(&self, value: &FlexibleType) -> Result<Shard, Error> {
         if let Some(shard) = self.mapping.get(value) {
             Ok(Shard::Direct(*shard))
         } else {

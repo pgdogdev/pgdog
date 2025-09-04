@@ -5,28 +5,28 @@ use pg_query::{
 };
 
 #[derive(Debug, PartialEq, Clone)]
-pub enum DistinctColumn {
+pub(crate) enum DistinctColumn {
     Name(String),
     Index(usize),
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub enum DistinctBy {
+pub(crate) enum DistinctBy {
     Row,
     Columns(Vec<DistinctColumn>),
 }
 
 #[derive(Debug, Clone)]
-pub struct Distinct<'a> {
+pub(crate) struct Distinct<'a> {
     stmt: &'a SelectStmt,
 }
 
 impl<'a> Distinct<'a> {
-    pub fn new(stmt: &'a SelectStmt) -> Self {
+    pub(crate) fn new(stmt: &'a SelectStmt) -> Self {
         Self { stmt }
     }
 
-    pub fn distinct(&self) -> Result<Option<DistinctBy>, Error> {
+    pub(crate) fn distinct(&self) -> Result<Option<DistinctBy>, Error> {
         match self.stmt.distinct_clause.first() {
             Some(Node { node: None }) => return Ok(Some(DistinctBy::Row)),
             None => return Ok(None),

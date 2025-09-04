@@ -19,7 +19,7 @@ use super::{Error, ReplicationConfig};
 static CENTROID_PROBES: usize = 1;
 
 #[derive(Debug)]
-pub struct Buffer {
+pub(crate) struct Buffer {
     replication_config: ReplicationConfig,
     begin: Option<XLogData>,
     message: Option<XLogData>,
@@ -33,7 +33,7 @@ pub struct Buffer {
 
 impl Buffer {
     /// New replication buffer.
-    pub fn new(
+    pub(crate) fn new(
         shard: Shard,
         cluster: &ReplicationConfig,
         sharding_schema: &ShardingSchema,
@@ -54,7 +54,7 @@ impl Buffer {
     /// Buffer message maybe. If message isn't buffered,
     /// it's sent to the client. Some messages are skipped,
     /// like Insert/Update/Delete that don't belong to the shard.
-    pub fn handle(&mut self, message: Message) -> Result<(), Error> {
+    pub(crate) fn handle(&mut self, message: Message) -> Result<(), Error> {
         let data = match message.code() {
             'd' => CopyData::from_bytes(message.to_bytes()?)?,
             _ => {
@@ -131,7 +131,7 @@ impl Buffer {
     }
 
     /// Retrieve one message from the buffer, if any is stored.
-    pub fn message(&mut self) -> Option<Message> {
+    pub(crate) fn message(&mut self) -> Option<Message> {
         self.buffer.pop_front()
     }
 

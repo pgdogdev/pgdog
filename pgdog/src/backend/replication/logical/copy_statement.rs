@@ -4,7 +4,7 @@
 
 /// COPY statement generator.
 #[derive(Debug, Clone)]
-pub struct CopyStatement {
+pub(crate) struct CopyStatement {
     schema: String,
     table: String,
     columns: Vec<String>,
@@ -19,7 +19,7 @@ impl CopyStatement {
     /// * `table`: Name of the table.
     /// * `columns`: Table column names.
     ///
-    pub fn new(schema: &str, table: &str, columns: &[String]) -> CopyStatement {
+    pub(crate) fn new(schema: &str, table: &str, columns: &[String]) -> CopyStatement {
         CopyStatement {
             schema: schema.to_owned(),
             table: table.to_owned(),
@@ -28,12 +28,12 @@ impl CopyStatement {
     }
 
     /// Generate COPY ... TO STDOUT statement.
-    pub fn copy_out(&self) -> String {
+    pub(crate) fn copy_out(&self) -> String {
         self.copy(true)
     }
 
     /// Generate COPY ... FROM STDIN statement.
-    pub fn copy_in(&self) -> String {
+    pub(crate) fn copy_in(&self) -> String {
         self.copy(false)
     }
 

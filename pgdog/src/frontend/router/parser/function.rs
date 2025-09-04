@@ -20,7 +20,7 @@ static WRITE_ONLY: Lazy<HashMap<&'static str, LockingBehavior>> = Lazy::new(|| {
 });
 
 #[derive(Debug, Copy, Clone, PartialEq, Default)]
-pub enum LockingBehavior {
+pub(crate) enum LockingBehavior {
     Lock,
     Unlock,
     #[default]
@@ -28,13 +28,13 @@ pub enum LockingBehavior {
 }
 
 #[derive(Default, Debug, Copy, Clone)]
-pub struct FunctionBehavior {
-    pub writes: bool,
-    pub locking_behavior: LockingBehavior,
+pub(crate) struct FunctionBehavior {
+    pub(crate) writes: bool,
+    pub(crate) locking_behavior: LockingBehavior,
 }
 
 impl FunctionBehavior {
-    pub fn writes_only() -> FunctionBehavior {
+    pub(crate) fn writes_only() -> FunctionBehavior {
         FunctionBehavior {
             writes: true,
             ..Default::default()
@@ -42,8 +42,8 @@ impl FunctionBehavior {
     }
 }
 
-pub struct Function<'a> {
-    pub name: &'a str,
+pub(crate) struct Function<'a> {
+    pub(crate) name: &'a str,
 }
 
 impl<'a> Function<'a> {
@@ -58,7 +58,7 @@ impl<'a> Function<'a> {
     }
 
     /// This function likely writes.
-    pub fn behavior(&self) -> FunctionBehavior {
+    pub(crate) fn behavior(&self) -> FunctionBehavior {
         if let Some(locks) = WRITE_ONLY.get(&self.name) {
             FunctionBehavior {
                 writes: true,

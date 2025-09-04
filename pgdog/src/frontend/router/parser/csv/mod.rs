@@ -3,8 +3,8 @@ use csv_core::{ReadRecordResult, Reader, ReaderBuilder};
 pub mod iterator;
 pub mod record;
 
-pub use iterator::Iter;
-pub use record::Record;
+pub(crate) use iterator::Iter;
+pub(crate) use record::Record;
 
 use super::CopyFormat;
 
@@ -15,7 +15,7 @@ static ENDS_BUFFER: usize = 2048; // Max of 2048 columns in a CSV.
 
 /// CSV reader that can handle partial inputs.
 #[derive(Clone)]
-pub struct CsvStream {
+pub(crate) struct CsvStream {
     /// Input buffer.
     buffer: Vec<u8>,
     /// Temporary buffer for the record.
@@ -51,7 +51,12 @@ impl std::fmt::Debug for CsvStream {
 
 impl CsvStream {
     /// Create new CSV stream reader.
-    pub fn new(delimiter: char, headers: bool, format: CopyFormat, null_string: &str) -> Self {
+    pub(crate) fn new(
+        delimiter: char,
+        headers: bool,
+        format: CopyFormat,
+        null_string: &str,
+    ) -> Self {
         Self {
             buffer: Vec::new(),
             record: vec![0u8; RECORD_BUFFER],
@@ -77,13 +82,13 @@ impl CsvStream {
     ///
     /// This data will be appended to the input buffer. To read records from
     /// that stream, call [`Self::record`].
-    pub fn write(&mut self, data: &[u8]) {
+    pub(crate) fn write(&mut self, data: &[u8]) {
         self.buffer.extend(data);
     }
 
     /// Fetch a record from the stream. This mutates the inner buffer,
     /// so you can only fetch the record once.
-    pub fn record(&mut self) -> Result<Option<Record>, super::Error> {
+    pub(crate) fn record(&mut self) -> Result<Option<Record>, super::Error> {
         loop {
             let (result, read, written, ends) = self.reader.read_record(
                 &self.buffer[self.read..],
@@ -132,12 +137,12 @@ impl CsvStream {
     }
 
     /// Get an iterator over all records available in the buffer.
-    pub fn records(&mut self) -> Iter<'_> {
+    pub(crate) fn records(&mut self) -> Iter<'_> {
         Iter::new(self)
     }
 
     /// Get headers from the CSV, if any.
-    pub fn headers(&mut self) -> Result<Option<&Record>, super::Error> {
+    pub(crate) fn headers(&mut self) -> Result<Option<&Record>, super::Error> {
         if self.headers {
             if let Some(ref headers) = self.headers_record {
                 return Ok(Some(headers));

@@ -3,7 +3,7 @@
 use thiserror::Error;
 
 #[derive(Debug, Error)]
-pub enum Error {
+pub(crate) enum Error {
     #[error("inconsistent row descriptions between shards: expected {expected} columns, got {actual} columns")]
     InconsistentRowDescription { expected: usize, actual: usize },
 

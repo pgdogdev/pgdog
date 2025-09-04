@@ -15,18 +15,18 @@ use super::{Column, Error, Shard, Table, Tuple, Value};
 
 /// Parse an `INSERT` statement.
 #[derive(Debug)]
-pub struct Insert<'a> {
+pub(crate) struct Insert<'a> {
     stmt: &'a InsertStmt,
 }
 
 impl<'a> Insert<'a> {
     /// Parse an `INSERT` statement.
-    pub fn new(stmt: &'a InsertStmt) -> Self {
+    pub(crate) fn new(stmt: &'a InsertStmt) -> Self {
         Self { stmt }
     }
 
     /// Get columns, if any are specified.
-    pub fn columns(&'a self) -> Vec<Column<'a>> {
+    pub(crate) fn columns(&'a self) -> Vec<Column<'a>> {
         self.stmt
             .cols
             .iter()
@@ -37,12 +37,12 @@ impl<'a> Insert<'a> {
     }
 
     /// Get table name, if specified (should always be).
-    pub fn table(&'a self) -> Option<Table<'a>> {
+    pub(crate) fn table(&'a self) -> Option<Table<'a>> {
         self.stmt.relation.as_ref().map(Table::from)
     }
 
     /// Get rows from the statement.
-    pub fn tuples(&'a self) -> Vec<Tuple<'a>> {
+    pub(crate) fn tuples(&'a self) -> Vec<Tuple<'a>> {
         if let Some(select) = &self.stmt.select_stmt {
             if let Some(NodeEnum::SelectStmt(stmt)) = &select.node {
                 let tuples = stmt
@@ -58,7 +58,7 @@ impl<'a> Insert<'a> {
     }
 
     /// Get the sharding key for the statement.
-    pub fn shard(
+    pub(crate) fn shard(
         &'a self,
         schema: &'a ShardingSchema,
         bind: Option<&Bind>,

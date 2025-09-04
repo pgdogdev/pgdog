@@ -9,22 +9,22 @@ use crate::config::{config, Database, User};
 
 /// Server address.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
-pub struct Address {
+pub(crate) struct Address {
     /// Server host.
-    pub host: String,
+    pub(crate) host: String,
     /// Server port.
-    pub port: u16,
+    pub(crate) port: u16,
     /// PostgreSQL database name.
-    pub database_name: String,
+    pub(crate) database_name: String,
     /// Username.
-    pub user: String,
+    pub(crate) user: String,
     /// Password.
-    pub password: String,
+    pub(crate) password: String,
 }
 
 impl Address {
     /// Create new address from config values.
-    pub fn new(database: &Database, user: &User) -> Self {
+    pub(crate) fn new(database: &Database, user: &User) -> Self {
         Address {
             host: database.host.clone(),
             port: database.port,
@@ -50,7 +50,7 @@ impl Address {
         }
     }
 
-    pub async fn addr(&self) -> Result<SocketAddr, Error> {
+    pub(crate) async fn addr(&self) -> Result<SocketAddr, Error> {
         let dns_cache_override_enabled = config().config.general.dns_ttl().is_some();
 
         if dns_cache_override_enabled {
@@ -67,7 +67,7 @@ impl Address {
     }
 
     #[cfg(test)]
-    pub fn new_test() -> Self {
+    pub(crate) fn new_test() -> Self {
         Self {
             host: "127.0.0.1".into(),
             port: 5432,

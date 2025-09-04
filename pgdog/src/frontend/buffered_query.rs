@@ -3,24 +3,24 @@ use std::ops::Deref;
 use crate::net::{Parse, Query};
 
 #[derive(Debug, Clone)]
-pub enum BufferedQuery {
+pub(crate) enum BufferedQuery {
     Query(Query),
     Prepared(Parse),
 }
 
 impl BufferedQuery {
-    pub fn query(&self) -> &str {
+    pub(crate) fn query(&self) -> &str {
         match self {
             Self::Query(query) => query.query(),
             Self::Prepared(parse) => parse.query(),
         }
     }
 
-    pub fn extended(&self) -> bool {
+    pub(crate) fn extended(&self) -> bool {
         matches!(self, Self::Prepared(_))
     }
 
-    pub fn simple(&self) -> bool {
+    pub(crate) fn simple(&self) -> bool {
         matches!(self, Self::Query(_))
     }
 }

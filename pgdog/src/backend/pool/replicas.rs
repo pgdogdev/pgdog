@@ -19,7 +19,7 @@ use super::{Error, Guard, Pool, PoolConfig, Request};
 
 /// Replicas pools.
 #[derive(Clone, Default, Debug)]
-pub struct Replicas {
+pub(crate) struct Replicas {
     /// Connection pools.
     pub(super) pools: Vec<Pool>,
     /// Checkout timeout.
@@ -32,7 +32,7 @@ pub struct Replicas {
 
 impl Replicas {
     /// Create new replicas pools.
-    pub fn new(addrs: &[PoolConfig], lb_strategy: LoadBalancingStrategy) -> Replicas {
+    pub(crate) fn new(addrs: &[PoolConfig], lb_strategy: LoadBalancingStrategy) -> Replicas {
         let checkout_timeout = addrs
             .iter()
             .map(|c| c.config.checkout_timeout())
@@ -46,7 +46,11 @@ impl Replicas {
     }
 
     /// Get a live connection from the pool.
-    pub async fn get(&self, request: &Request, primary: &Option<Pool>) -> Result<Guard, Error> {
+    pub(crate) async fn get(
+        &self,
+        request: &Request,
+        primary: &Option<Pool>,
+    ) -> Result<Guard, Error> {
         match timeout(self.checkout_timeout, self.get_internal(request, primary)).await {
             Ok(Ok(conn)) => Ok(conn),
             Ok(Err(err)) => Err(err),
@@ -55,7 +59,7 @@ impl Replicas {
     }
 
     /// Move connections from this replica set to another.
-    pub fn move_conns_to(&self, destination: &Replicas) {
+    pub(crate) fn move_conns_to(&self, destination: &Replicas) {
         assert_eq!(self.pools.len(), destination.pools.len());
 
         for (from, to) in self.pools.iter().zip(destination.pools.iter()) {
@@ -64,7 +68,7 @@ impl Replicas {
     }
 
     /// The two replica sets are referring to the same databases.
-    pub fn can_move_conns_to(&self, destination: &Replicas) -> bool {
+    pub(crate) fn can_move_conns_to(&self, destination: &Replicas) -> bool {
         self.pools.len() == destination.pools.len()
             && self
                 .pools
@@ -74,17 +78,17 @@ impl Replicas {
     }
 
     /// How many replicas we are connected to.
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.pools.len()
     }
 
     /// There are no replicas.
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
     /// Create new identical replica pool.
-    pub fn duplicate(&self) -> Replicas {
+    pub(crate) fn duplicate(&self) -> Replicas {
         Self {
             pools: self.pools.iter().map(|p| p.duplicate()).collect(),
             checkout_timeout: self.checkout_timeout,
@@ -94,7 +98,7 @@ impl Replicas {
     }
 
     /// Cancel a query if one is running.
-    pub async fn cancel(&self, id: &BackendKeyData) -> Result<(), super::super::Error> {
+    pub(crate) async fn cancel(&self, id: &BackendKeyData) -> Result<(), super::super::Error> {
         for pool in &self.pools {
             pool.cancel(id).await?;
         }
@@ -103,7 +107,7 @@ impl Replicas {
     }
 
     /// Pools handle.
-    pub fn pools(&self) -> &[Pool] {
+    pub(crate) fn pools(&self) -> &[Pool] {
         &self.pools
     }
 

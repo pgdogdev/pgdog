@@ -23,7 +23,7 @@ enum MirrorHandlerState {
 
 /// Mirror handle.
 #[derive(Debug)]
-pub struct MirrorHandler {
+pub(crate) struct MirrorHandler {
     /// Sender.
     tx: Sender<MirrorRequest>,
     /// Percentage of requests being mirrored. 0 = 0%, 1.0 = 100%.
@@ -45,7 +45,11 @@ impl MirrorHandler {
     }
 
     /// Create new mirror handle with exposure.
-    pub fn new(tx: Sender<MirrorRequest>, exposure: f32, stats: Arc<Mutex<MirrorStats>>) -> Self {
+    pub(crate) fn new(
+        tx: Sender<MirrorRequest>,
+        exposure: f32,
+        stats: Arc<Mutex<MirrorStats>>,
+    ) -> Self {
         Self {
             tx,
             exposure,
@@ -60,7 +64,7 @@ impl MirrorHandler {
     ///
     /// Returns true if request will be sent, false otherwise.
     ///
-    pub fn send(&mut self, buffer: &ClientRequest) -> bool {
+    pub(crate) fn send(&mut self, buffer: &ClientRequest) -> bool {
         match self.state {
             MirrorHandlerState::Dropping => {
                 debug!("mirror dropping request");
@@ -100,7 +104,7 @@ impl MirrorHandler {
     }
 
     /// Flush buffered requests to mirror.
-    pub fn flush(&mut self) -> bool {
+    pub(crate) fn flush(&mut self) -> bool {
         self.increment_total_count();
 
         if self.state == MirrorHandlerState::Dropping {
@@ -129,25 +133,25 @@ impl MirrorHandler {
     }
 
     /// Increment the total request count.
-    pub fn increment_total_count(&self) {
+    pub(crate) fn increment_total_count(&self) {
         let mut stats = self.stats.lock();
         stats.counts.total_count += 1;
     }
 
     /// Increment the mirrored request count.
-    pub fn increment_mirrored_count(&self) {
+    pub(crate) fn increment_mirrored_count(&self) {
         let mut stats = self.stats.lock();
         stats.counts.mirrored_count += 1;
     }
 
     /// Increment the dropped request count.
-    pub fn increment_dropped_count(&self) {
+    pub(crate) fn increment_dropped_count(&self) {
         let mut stats = self.stats.lock();
         stats.counts.dropped_count += 1;
     }
 
     /// Increment the error count.
-    pub fn increment_error_count(&self) {
+    pub(crate) fn increment_error_count(&self) {
         let mut stats = self.stats.lock();
         stats.counts.error_count += 1;
     }

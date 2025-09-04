@@ -24,22 +24,22 @@ enum ProgressKind {
 }
 
 #[derive(Debug, Clone)]
-pub struct Progress {
+pub(crate) struct Progress {
     inner: Arc<Inner>,
     #[allow(dead_code)]
     kind: ProgressKind,
 }
 
 impl Progress {
-    pub fn new_data_sync(table: &PublicationTable) -> Self {
+    pub(crate) fn new_data_sync(table: &PublicationTable) -> Self {
         Self::new(Some(table), ProgressKind::DataSync)
     }
 
-    pub fn new_replication(table: &PublicationTable) -> Self {
+    pub(crate) fn new_replication(table: &PublicationTable) -> Self {
         Self::new(Some(table), ProgressKind::Replication)
     }
 
-    pub fn new_stream() -> Self {
+    pub(crate) fn new_stream() -> Self {
         Self::new(None, ProgressKind::Replication)
     }
 
@@ -93,14 +93,14 @@ impl Progress {
         Progress { inner, kind }
     }
 
-    pub fn update(&self, total_bytes: usize, lsn: i64) {
+    pub(crate) fn update(&self, total_bytes: usize, lsn: i64) {
         self.inner
             .bytes_sharded
             .store(total_bytes, Ordering::Relaxed);
         self.inner.lsn.store(lsn, Ordering::Relaxed);
     }
 
-    pub fn done(&self) {
+    pub(crate) fn done(&self) {
         self.inner.done.notify_one();
     }
 }

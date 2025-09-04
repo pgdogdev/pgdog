@@ -5,7 +5,7 @@ use crate::net::messages::ErrorResponse;
 use super::databases::User;
 
 #[derive(Debug, Error)]
-pub enum Error {
+pub(crate) enum Error {
     #[error("{0}")]
     Io(#[from] std::io::Error),
 
@@ -123,7 +123,7 @@ impl From<crate::frontend::Error> for Error {
 
 impl Error {
     /// Checkout timeout.
-    pub fn no_server(&self) -> bool {
+    pub(crate) fn no_server(&self) -> bool {
         use crate::backend::pool::Error as PoolError;
         match self {
             // These are recoverable errors.

@@ -1,7 +1,7 @@
 //! Sharding key in a query.
 
 #[derive(Debug, PartialEq)]
-pub enum Key {
+pub(crate) enum Key {
     /// Parameter, like $1, $2, referring to a value
     /// sent in a separate Bind message.
     Parameter { pos: usize, array: bool },

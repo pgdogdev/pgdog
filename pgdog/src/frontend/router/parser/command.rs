@@ -6,7 +6,7 @@ use crate::{
 use lazy_static::lazy_static;
 
 #[derive(Debug, Clone)]
-pub enum Command {
+pub(crate) enum Command {
     Query(Route),
     Copy(Box<CopyParser>),
     StartTransaction {
@@ -38,7 +38,7 @@ pub enum Command {
 }
 
 impl Command {
-    pub fn route(&self) -> &Route {
+    pub(crate) fn route(&self) -> &Route {
         lazy_static! {
             static ref DEFAULT_ROUTE: Route = Route::write(Shard::All);
         }
@@ -57,7 +57,7 @@ impl Default for Command {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum SetVal {
+pub(crate) enum SetVal {
     Integer(i64),
     Boolean(bool),
     String(String),

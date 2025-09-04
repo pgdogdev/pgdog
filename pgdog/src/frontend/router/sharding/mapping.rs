@@ -5,13 +5,13 @@ use crate::{
 };
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
-pub enum Mapping {
+pub(crate) enum Mapping {
     Range(Vec<ShardedMapping>), // TODO: optimize with a BTreeMap.
     List(ListShards),           // Optimized.
 }
 
 impl Mapping {
-    pub fn new(mappings: &[ShardedMapping]) -> Option<Self> {
+    pub(crate) fn new(mappings: &[ShardedMapping]) -> Option<Self> {
         let range = mappings
             .iter()
             .filter(|m| m.kind == ShardedMappingKind::Range)
@@ -28,7 +28,7 @@ impl Mapping {
         }
     }
 
-    pub fn valid(&self) -> bool {
+    pub(crate) fn valid(&self) -> bool {
         match self {
             Self::Range(_) => Ranges::new(&Some(self.clone()))
                 .map(|r| r.valid())

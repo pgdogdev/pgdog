@@ -3,7 +3,7 @@ use std::ops::Deref;
 use super::BufferWithDelay;
 
 #[derive(Clone, Debug)]
-pub struct MirrorRequest {
+pub(crate) struct MirrorRequest {
     pub(super) buffer: Vec<BufferWithDelay>,
 }
 

@@ -6,27 +6,27 @@ use uuid::Uuid;
 use super::{bigint, uuid, varchar};
 
 #[derive(Copy, Clone, Debug, PartialEq)]
-pub enum Hasher {
+pub(crate) enum Hasher {
     Postgres,
     Sha1,
 }
 
 impl Hasher {
-    pub fn bigint(&self, value: i64) -> u64 {
+    pub(crate) fn bigint(&self, value: i64) -> u64 {
         match self {
             Hasher::Postgres => bigint(value),
             Hasher::Sha1 => Self::sha1(value.to_string().as_bytes()),
         }
     }
 
-    pub fn uuid(&self, value: Uuid) -> u64 {
+    pub(crate) fn uuid(&self, value: Uuid) -> u64 {
         match self {
             Hasher::Postgres => uuid(value),
             Hasher::Sha1 => Self::sha1(value.as_bytes()),
         }
     }
 
-    pub fn varchar(&self, value: &[u8]) -> u64 {
+    pub(crate) fn varchar(&self, value: &[u8]) -> u64 {
         match self {
             Hasher::Postgres => varchar(value),
             Hasher::Sha1 => Self::sha1(value),

@@ -15,15 +15,15 @@ pub mod query_logger;
 pub mod router;
 pub mod stats;
 
-pub use buffered_query::BufferedQuery;
-pub use client::Client;
-pub use client_request::ClientRequest;
-pub use comms::Comms;
-pub use connected_client::ConnectedClient;
+pub(crate) use buffered_query::BufferedQuery;
+pub(crate) use client::Client;
+pub(crate) use client_request::ClientRequest;
+pub(crate) use comms::Comms;
+pub(crate) use connected_client::ConnectedClient;
 pub use error::Error;
-pub use prepared_statements::{PreparedStatements, Rewrite};
+pub(crate) use prepared_statements::{PreparedStatements, Rewrite};
 #[cfg(debug_assertions)]
-pub use query_logger::QueryLogger;
-pub use router::{Command, Router};
-pub use router::{RouterContext, SearchPath};
-pub use stats::Stats;
+pub(crate) use query_logger::QueryLogger;
+pub(crate) use router::{Command, Router};
+pub(crate) use router::{RouterContext, SearchPath};
+pub(crate) use stats::Stats;

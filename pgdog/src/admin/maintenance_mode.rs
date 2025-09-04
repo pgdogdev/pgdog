@@ -6,7 +6,7 @@ use super::prelude::*;
 
 /// Turn maintenance mode on/off.
 #[derive(Default)]
-pub struct MaintenanceMode {
+pub(crate) struct MaintenanceMode {
     enable: bool,
 }
 

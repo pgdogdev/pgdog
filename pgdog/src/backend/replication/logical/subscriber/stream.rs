@@ -98,7 +98,7 @@ impl Statement {
 }
 
 #[derive(Debug)]
-pub struct StreamSubscriber {
+pub(crate) struct StreamSubscriber {
     /// Destination cluster.
     cluster: Cluster,
 
@@ -130,7 +130,7 @@ pub struct StreamSubscriber {
 }
 
 impl StreamSubscriber {
-    pub fn new(cluster: &Cluster, tables: &[Table]) -> Self {
+    pub(crate) fn new(cluster: &Cluster, tables: &[Table]) -> Self {
         Self {
             cluster: cluster.clone(),
             sharding_schema: cluster.sharding_schema(),
@@ -157,7 +157,7 @@ impl StreamSubscriber {
     }
 
     // Connect to all the shards.
-    pub async fn connect(&mut self) -> Result<(), Error> {
+    pub(crate) async fn connect(&mut self) -> Result<(), Error> {
         let mut conns = vec![];
 
         for shard in self.cluster.shards() {
@@ -350,7 +350,7 @@ impl StreamSubscriber {
     /// Handle replication stream message.
     ///
     /// Return true if stream is done, false otherwise.
-    pub async fn handle(&mut self, data: CopyData) -> Result<Option<StatusUpdate>, Error> {
+    pub(crate) async fn handle(&mut self, data: CopyData) -> Result<Option<StatusUpdate>, Error> {
         // Lazily connect to all shards.
         if self.connections.is_empty() {
             self.connect().await?;
@@ -380,7 +380,7 @@ impl StreamSubscriber {
     }
 
     /// Get latest LSN we flushed to replicas.
-    pub fn status_update(&self) -> StatusUpdate {
+    pub(crate) fn status_update(&self) -> StatusUpdate {
         StatusUpdate {
             last_applied: self.lsn,
             last_flushed: self.lsn, // We use transactions which are flushed.
@@ -391,7 +391,7 @@ impl StreamSubscriber {
     }
 
     /// Number of bytes processed.
-    pub fn bytes_sharded(&self) -> usize {
+    pub(crate) fn bytes_sharded(&self) -> usize {
         self.bytes_sharded
     }
 
@@ -399,19 +399,19 @@ impl StreamSubscriber {
     ///
     /// Return true if LSN has been updated to a new value,
     /// i.e., the stream is moving forward.
-    pub fn set_current_lsn(&mut self, lsn: i64) -> bool {
+    pub(crate) fn set_current_lsn(&mut self, lsn: i64) -> bool {
         self.lsn_changed = lsn != self.lsn;
         self.lsn = lsn;
         self.lsn_changed
     }
 
     /// Get current LSN.
-    pub fn lsn(&self) -> i64 {
+    pub(crate) fn lsn(&self) -> i64 {
         self.lsn
     }
 
     /// Lsn changed since the last time we updated it.
-    pub fn lsn_changed(&self) -> bool {
+    pub(crate) fn lsn_changed(&self) -> bool {
         self.lsn_changed
     }
 }

@@ -11,7 +11,7 @@ use super::prelude::*;
 
 /// Parse (F) message.
 #[derive(Clone, Hash, Eq, PartialEq, Default)]
-pub struct Parse {
+pub(crate) struct Parse {
     /// Prepared statement name.
     name: Bytes,
     /// Prepared statement query.
@@ -33,13 +33,13 @@ impl Debug for Parse {
 }
 
 impl Parse {
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.name.len() + self.query.len() + self.data_types.len() + 5
     }
 
     /// New anonymous prepared statement.
     #[cfg(test)]
-    pub fn new_anonymous(query: &str) -> Self {
+    pub(crate) fn new_anonymous(query: &str) -> Self {
         Self {
             name: Bytes::from("\0"),
             query: Bytes::from(query.to_owned() + "\0"),
@@ -49,7 +49,7 @@ impl Parse {
     }
 
     /// New prepared statement.
-    pub fn named(name: impl ToString, query: impl ToString) -> Self {
+    pub(crate) fn named(name: impl ToString, query: impl ToString) -> Self {
         Self {
             name: Bytes::from(name.to_string() + "\0"),
             query: Bytes::from(query.to_string() + "\0"),
@@ -59,27 +59,27 @@ impl Parse {
     }
 
     /// Anonymous prepared statement.
-    pub fn anonymous(&self) -> bool {
+    pub(crate) fn anonymous(&self) -> bool {
         self.name.len() == 1 // Just the null byte.
     }
 
-    pub fn query(&self) -> &str {
+    pub(crate) fn query(&self) -> &str {
         // SAFETY: We check that this is valid UTF-8 in Self::from_bytes.
         unsafe { from_utf8_unchecked(&self.query[0..self.query.len() - 1]) }
     }
 
     /// Get query reference.
-    pub fn query_ref(&self) -> Bytes {
+    pub(crate) fn query_ref(&self) -> Bytes {
         self.query.clone()
     }
 
-    pub fn name(&self) -> &str {
+    pub(crate) fn name(&self) -> &str {
         // SAFETY: We check that this is valid UTF-8 in Self::from_bytes.
         unsafe { from_utf8_unchecked(&self.name[0..self.name.len() - 1]) }
     }
 
     /// Rename prepared statement, re-allocating it into its own memory space.
-    pub fn rename(&self, name: &str) -> Parse {
+    pub(crate) fn rename(&self, name: &str) -> Parse {
         Parse {
             name: Bytes::from(name.to_string() + "\0"),
             query: Bytes::from(self.query().to_owned() + "\0"),
@@ -89,32 +89,32 @@ impl Parse {
     }
 
     /// Rename the prepared statement with minimal allocations.
-    pub fn rename_fast(mut self, name: &str) -> Parse {
+    pub(crate) fn rename_fast(mut self, name: &str) -> Parse {
         self.name = Bytes::from(name.to_string() + "\0");
         self.original = None;
         self
     }
 
-    pub fn data_types(&self) -> DataTypesIter<'_> {
+    pub(crate) fn data_types(&self) -> DataTypesIter<'_> {
         DataTypesIter {
             data_types: &self.data_types,
             offset: 0,
         }
     }
 
-    pub fn data_types_ref(&self) -> Bytes {
+    pub(crate) fn data_types_ref(&self) -> Bytes {
         self.data_types.clone()
     }
 }
 
 #[derive(Debug)]
-pub struct DataTypesIter<'a> {
+pub(crate) struct DataTypesIter<'a> {
     data_types: &'a Bytes,
     offset: usize,
 }
 
 impl DataTypesIter<'_> {
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         (self.data_types.len() - size_of::<i16>()) / size_of::<i32>()
     }
 }

@@ -5,17 +5,17 @@ use crate::frontend::PreparedStatements;
 use crate::net::Parse;
 
 #[derive(Debug, Clone)]
-pub struct Rewrite<'a> {
+pub(crate) struct Rewrite<'a> {
     ast: &'a ParseResult,
 }
 
 impl<'a> Rewrite<'a> {
-    pub fn new(ast: &'a ParseResult) -> Self {
+    pub(crate) fn new(ast: &'a ParseResult) -> Self {
         Self { ast }
     }
 
     /// Statement needs to be rewritten.
-    pub fn needs_rewrite(&self) -> bool {
+    pub(crate) fn needs_rewrite(&self) -> bool {
         for stmt in &self.ast.protobuf.stmts {
             if let Some(ref stmt) = stmt.stmt {
                 if let Some(ref node) = stmt.node {
@@ -32,7 +32,10 @@ impl<'a> Rewrite<'a> {
         false
     }
 
-    pub fn rewrite(&self, prepared_statements: &mut PreparedStatements) -> Result<Command, Error> {
+    pub(crate) fn rewrite(
+        &self,
+        prepared_statements: &mut PreparedStatements,
+    ) -> Result<Command, Error> {
         let mut ast = self.ast.protobuf.clone();
 
         for stmt in &mut ast.stmts {

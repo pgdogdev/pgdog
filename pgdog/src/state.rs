@@ -2,7 +2,7 @@
 
 /// Client/server state.
 #[derive(Debug, PartialEq, Default, Copy, Clone)]
-pub enum State {
+pub(crate) enum State {
     /// Waiting for work.
     #[default]
     Idle,

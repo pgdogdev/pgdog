@@ -10,7 +10,7 @@ use crate::net::messages::*;
 use crate::util::format_time;
 
 /// Show clients command.
-pub struct ShowClients {
+pub(crate) struct ShowClients {
     filter: NamedRow,
 }
 

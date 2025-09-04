@@ -11,7 +11,7 @@ use crate::{
     net::Parameters,
 };
 
-pub struct MultiTenantCheck<'a> {
+pub(crate) struct MultiTenantCheck<'a> {
     user: &'a str,
     config: &'a MultiTenant,
     schema: Schema,
@@ -20,7 +20,7 @@ pub struct MultiTenantCheck<'a> {
 }
 
 impl<'a> MultiTenantCheck<'a> {
-    pub fn new(
+    pub(crate) fn new(
         user: &'a str,
         config: &'a MultiTenant,
         schema: Schema,
@@ -36,7 +36,7 @@ impl<'a> MultiTenantCheck<'a> {
         }
     }
 
-    pub fn run(&self) -> Result<(), Error> {
+    pub(crate) fn run(&self) -> Result<(), Error> {
         let stmt = self
             .ast
             .protobuf

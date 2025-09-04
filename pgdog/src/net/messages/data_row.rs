@@ -6,7 +6,7 @@ use super::{code, prelude::*, Datum, Format, FromDataType, Numeric, RowDescripti
 use std::ops::{Deref, DerefMut};
 
 #[derive(Debug, Clone, Eq, Hash, PartialEq)]
-pub struct Data {
+pub(crate) struct Data {
     data: Bytes,
     is_null: bool,
 }
@@ -44,7 +44,7 @@ impl From<(Bytes, bool)> for Data {
 }
 
 impl Data {
-    pub fn null() -> Self {
+    pub(crate) fn null() -> Self {
         Self {
             data: Bytes::new(),
             is_null: true,
@@ -54,13 +54,13 @@ impl Data {
 
 /// DataRow message.
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
-pub struct DataRow {
+pub(crate) struct DataRow {
     columns: Vec<Data>,
 }
 
 /// Convert value to data row column
 /// using text formatting.
-pub trait ToDataRowColumn {
+pub(crate) trait ToDataRowColumn {
     fn to_data_row_column(&self) -> Data;
 }
 
@@ -138,19 +138,19 @@ impl Default for DataRow {
 
 impl DataRow {
     /// New data row.
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self { columns: vec![] }
     }
 
     /// Add a column to the data row.
-    pub fn add(&mut self, value: impl ToDataRowColumn) -> &mut Self {
+    pub(crate) fn add(&mut self, value: impl ToDataRowColumn) -> &mut Self {
         self.columns.push(value.to_data_row_column());
         self
     }
 
     /// Insert column at index. If row is smaller than index,
     /// columns will be prefilled with NULLs.
-    pub fn insert(&mut self, index: usize, value: impl ToDataRowColumn) -> &mut Self {
+    pub(crate) fn insert(&mut self, index: usize, value: impl ToDataRowColumn) -> &mut Self {
         while self.columns.len() <= index {
             self.columns.push(Data::null());
         }
@@ -159,7 +159,7 @@ impl DataRow {
     }
 
     /// Create data row from columns.
-    pub fn from_columns(columns: Vec<impl ToDataRowColumn>) -> Self {
+    pub(crate) fn from_columns(columns: Vec<impl ToDataRowColumn>) -> Self {
         let mut dr = Self::new();
         for column in columns {
             dr.add(column);
@@ -169,34 +169,34 @@ impl DataRow {
 
     /// Get data for column at index.
     #[inline]
-    pub fn column(&self, index: usize) -> Option<Bytes> {
+    pub(crate) fn column(&self, index: usize) -> Option<Bytes> {
         self.columns.get(index).cloned().map(|d| d.data)
     }
 
     /// Get integer at index with text/binary encoding.
-    pub fn get_int(&self, index: usize, text: bool) -> Option<i64> {
+    pub(crate) fn get_int(&self, index: usize, text: bool) -> Option<i64> {
         self.get::<i64>(index, if text { Format::Text } else { Format::Binary })
     }
 
     // Get float at index with text/binary encoding.
-    pub fn get_float(&self, index: usize, text: bool) -> Option<f64> {
+    pub(crate) fn get_float(&self, index: usize, text: bool) -> Option<f64> {
         self.get::<Numeric>(index, if text { Format::Text } else { Format::Binary })
             .map(|numeric| *numeric.deref())
     }
 
     /// Get text value at index.
-    pub fn get_text(&self, index: usize) -> Option<String> {
+    pub(crate) fn get_text(&self, index: usize) -> Option<String> {
         self.get::<String>(index, Format::Text)
     }
 
     /// Get column at index given format encoding.
-    pub fn get<T: FromDataType>(&self, index: usize, format: Format) -> Option<T> {
+    pub(crate) fn get<T: FromDataType>(&self, index: usize, format: Format) -> Option<T> {
         self.column(index)
             .and_then(|col| T::decode(&col, format).ok())
     }
 
     /// Get column at index given row description.
-    pub fn get_column<'a>(
+    pub(crate) fn get_column<'a>(
         &self,
         index: usize,
         decoder: &'a Decoder,
@@ -214,7 +214,7 @@ impl DataRow {
     }
 
     /// Render the data row.
-    pub fn into_row<'a>(&self, rd: &'a RowDescription) -> Result<Vec<Column<'a>>, Error> {
+    pub(crate) fn into_row<'a>(&self, rd: &'a RowDescription) -> Result<Vec<Column<'a>>, Error> {
         let mut row = vec![];
 
         for (index, field) in rd.fields.iter().enumerate() {
@@ -230,23 +230,23 @@ impl DataRow {
     }
 
     /// How many columns in the data row.
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.columns.len()
     }
 
     /// No columns.
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.len() == 0
     }
 }
 
 /// Column with data type mapped to a Rust type.
 #[derive(Debug, Clone)]
-pub struct Column<'a> {
+pub(crate) struct Column<'a> {
     /// Column name.
-    pub name: &'a str,
+    pub(crate) name: &'a str,
     /// Column value.
-    pub value: Datum,
+    pub(crate) value: Datum,
 }
 
 impl FromBytes for DataRow {

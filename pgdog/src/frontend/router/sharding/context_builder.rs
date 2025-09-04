@@ -7,7 +7,7 @@ use crate::{
 use super::{Centroids, Context, Data, Error, Hasher, Lists, Operator, Ranges, Value};
 
 #[derive(Debug)]
-pub struct ContextBuilder<'a> {
+pub(crate) struct ContextBuilder<'a> {
     data_type: DataType,
     value: Option<Value<'a>>,
     operator: Option<Operator<'a>>,
@@ -21,7 +21,7 @@ pub struct ContextBuilder<'a> {
 }
 
 impl<'a> ContextBuilder<'a> {
-    pub fn new(table: &'a ShardedTable) -> Self {
+    pub(crate) fn new(table: &'a ShardedTable) -> Self {
         Self {
             data_type: table.data_type,
             centroids: if table.centroids.is_empty() {
@@ -43,7 +43,7 @@ impl<'a> ContextBuilder<'a> {
     }
 
     /// Infer sharding function from config.
-    pub fn infer_from_from_and_config(
+    pub(crate) fn infer_from_from_and_config(
         value: &'a str,
         sharding_schema: &'a ShardingSchema,
     ) -> Result<Self, Error> {
@@ -95,7 +95,7 @@ impl<'a> ContextBuilder<'a> {
     }
 
     /// Guess the data type.
-    pub fn from_string(value: &'a str) -> Result<Self, Error> {
+    pub(crate) fn from_string(value: &'a str) -> Result<Self, Error> {
         let bigint = Value::new(value, DataType::Bigint);
         let uuid = Value::new(value, DataType::Uuid);
         let varchar = Value::new(value, DataType::Varchar);
@@ -141,7 +141,7 @@ impl<'a> ContextBuilder<'a> {
         }
     }
 
-    pub fn shards(mut self, shards: usize) -> Self {
+    pub(crate) fn shards(mut self, shards: usize) -> Self {
         if let Some(centroids) = self.centroids.take() {
             self.operator = Some(Operator::Centroids {
                 shards,
@@ -158,17 +158,17 @@ impl<'a> ContextBuilder<'a> {
         self
     }
 
-    pub fn data(mut self, data: impl Into<Data<'a>>) -> Self {
+    pub(crate) fn data(mut self, data: impl Into<Data<'a>>) -> Self {
         self.value = Some(Value::new(data, self.data_type));
         self
     }
 
-    pub fn value(mut self, value: Value<'a>) -> Self {
+    pub(crate) fn value(mut self, value: Value<'a>) -> Self {
         self.value = Some(value);
         self
     }
 
-    pub fn build(mut self) -> Result<Context<'a>, Error> {
+    pub(crate) fn build(mut self) -> Result<Context<'a>, Error> {
         let operator = self.operator.take().ok_or(Error::IncompleteContext)?;
         let value = self.value.take().ok_or(Error::IncompleteContext)?;
 

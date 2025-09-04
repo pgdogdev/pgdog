@@ -14,7 +14,7 @@ use std::str::from_utf8_unchecked;
 
 #[derive(PartialEq, Debug, Copy, Clone, PartialOrd, Ord, Eq)]
 #[repr(C)]
-pub enum Format {
+pub(crate) enum Format {
     Text = 0,
     Binary = 1,
 }
@@ -30,11 +30,11 @@ impl From<Format> for i16 {
 
 /// Parameter data.
 #[derive(Clone, PartialEq, PartialOrd, Ord, Eq)]
-pub struct Parameter {
+pub(crate) struct Parameter {
     /// Parameter data length.
-    pub len: i32,
+    pub(crate) len: i32,
     /// Parameter data.
-    pub data: Vec<u8>,
+    pub(crate) data: Vec<u8>,
 }
 
 impl Debug for Parameter {
@@ -56,14 +56,14 @@ impl Parameter {
     }
 
     /// Create a null parameter (no data).
-    pub fn new_null() -> Self {
+    pub(crate) fn new_null() -> Self {
         Self {
             len: -1,
             data: vec![],
         }
     }
 
-    pub fn new(data: &[u8]) -> Self {
+    pub(crate) fn new(data: &[u8]) -> Self {
         Self {
             len: data.len() as i32,
             data: data.to_vec(),
@@ -73,49 +73,49 @@ impl Parameter {
 
 /// Parameter with encoded format.
 #[derive(Debug, Clone)]
-pub struct ParameterWithFormat<'a> {
+pub(crate) struct ParameterWithFormat<'a> {
     parameter: &'a Parameter,
     format: Format,
 }
 
 impl<'a> ParameterWithFormat<'a> {
     /// Get text representation if it's valid UTF-8.
-    pub fn text(&self) -> Option<&str> {
+    pub(crate) fn text(&self) -> Option<&str> {
         from_utf8(&self.parameter.data).ok()
     }
 
     /// Get BIGINT if one is encoded in the field.
-    pub fn bigint(&self) -> Option<i64> {
+    pub(crate) fn bigint(&self) -> Option<i64> {
         Self::decode(self)
     }
 
     /// Get UUID, if one is encoded in the field.
-    pub fn uuid(&self) -> Option<Uuid> {
+    pub(crate) fn uuid(&self) -> Option<Uuid> {
         Self::decode(self)
     }
 
     /// Get vector, if one is encoded in the field.
-    pub fn vector(&self) -> Option<Vector> {
+    pub(crate) fn vector(&self) -> Option<Vector> {
         Self::decode(self)
     }
 
     /// Get decoded value.
-    pub fn decode<T: FromDataType>(&self) -> Option<T> {
+    pub(crate) fn decode<T: FromDataType>(&self) -> Option<T> {
         T::decode(&self.parameter.data, self.format).ok()
     }
 
-    pub fn format(&self) -> Format {
+    pub(crate) fn format(&self) -> Format {
         self.format
     }
 
-    pub fn data(&'a self) -> &'a [u8] {
+    pub(crate) fn data(&'a self) -> &'a [u8] {
         &self.parameter.data
     }
 }
 
 /// Bind (F) message.
 #[derive(Debug, Clone, PartialEq, PartialOrd, Ord, Eq)]
-pub struct Bind {
+pub(crate) struct Bind {
     /// Portal name.
     portal: Bytes,
     /// Prepared statement name.
@@ -177,14 +177,14 @@ impl Bind {
     }
 
     /// Rename this Bind message to a different prepared statement.
-    pub fn rename(mut self, name: impl ToString) -> Self {
+    pub(crate) fn rename(mut self, name: impl ToString) -> Self {
         self.statement = Bytes::from(name.to_string() + "\0");
         self.original = None;
         self
     }
 
     /// Is this Bind message anonymous?
-    pub fn anonymous(&self) -> bool {
+    pub(crate) fn anonymous(&self) -> bool {
         self.statement.len() == 1
     }
 
@@ -195,18 +195,18 @@ impl Bind {
     }
 
     /// Format codes, if any.
-    pub fn codes(&self) -> &[Format] {
+    pub(crate) fn codes(&self) -> &[Format] {
         &self.codes
     }
 
-    pub fn new_statement(name: &str) -> Self {
+    pub(crate) fn new_statement(name: &str) -> Self {
         Self {
             statement: Bytes::from(name.to_string() + "\0"),
             ..Default::default()
         }
     }
 
-    pub fn new_params(name: &str, params: &[Parameter]) -> Self {
+    pub(crate) fn new_params(name: &str, params: &[Parameter]) -> Self {
         Self {
             statement: Bytes::from(name.to_string() + "\0"),
             params: params.to_vec(),
@@ -214,7 +214,7 @@ impl Bind {
         }
     }
 
-    pub fn new_name_portal(name: &str, portal: &str) -> Self {
+    pub(crate) fn new_name_portal(name: &str, portal: &str) -> Self {
         Self {
             statement: Bytes::from(name.to_string() + "\0"),
             portal: Bytes::from(portal.to_string() + "\0"),
@@ -222,7 +222,7 @@ impl Bind {
         }
     }
 
-    pub fn new_params_codes(name: &str, params: &[Parameter], codes: &[Format]) -> Self {
+    pub(crate) fn new_params_codes(name: &str, params: &[Parameter], codes: &[Format]) -> Self {
         Self {
             statement: Bytes::from(name.to_string() + "\0"),
             codes: codes.to_vec(),
@@ -231,7 +231,7 @@ impl Bind {
         }
     }
 
-    pub fn new_params_codes_results(
+    pub(crate) fn new_params_codes_results(
         name: &str,
         params: &[Parameter],
         codes: &[Format],
@@ -243,11 +243,11 @@ impl Bind {
         me
     }
 
-    pub fn params_raw(&self) -> &Vec<Parameter> {
+    pub(crate) fn params_raw(&self) -> &Vec<Parameter> {
         &self.params
     }
 
-    pub fn format_codes_raw(&self) -> &Vec<Format> {
+    pub(crate) fn format_codes_raw(&self) -> &Vec<Format> {
         &self.codes
     }
 }

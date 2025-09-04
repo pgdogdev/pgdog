@@ -5,7 +5,7 @@ pub mod error;
 pub mod overrides;
 pub mod url;
 
-use error::Error;
+pub use error::Error;
 pub use overrides::Overrides;
 use parking_lot::Mutex;
 
@@ -46,7 +46,7 @@ pub fn load(config: &PathBuf, users: &PathBuf) -> Result<ConfigAndUsers, Error> 
     set(config)
 }
 
-pub fn set(mut config: ConfigAndUsers) -> Result<ConfigAndUsers, Error> {
+pub(crate) fn set(mut config: ConfigAndUsers) -> Result<ConfigAndUsers, Error> {
     config.config.check();
     for table in config.config.sharded_tables.iter_mut() {
         table.load_centroids()?;
@@ -113,14 +113,14 @@ pub struct ConfigAndUsers {
     /// users.toml
     pub users: Users,
     /// Path to pgdog.toml.
-    pub config_path: PathBuf,
+    pub(crate) config_path: PathBuf,
     /// Path to users.toml.
-    pub users_path: PathBuf,
+    pub(crate) users_path: PathBuf,
 }
 
 impl ConfigAndUsers {
     /// Load configuration from disk or use defaults.
-    pub fn load(config_path: &PathBuf, users_path: &PathBuf) -> Result<Self, Error> {
+    pub(crate) fn load(config_path: &PathBuf, users_path: &PathBuf) -> Result<Self, Error> {
         let config: Config = if let Ok(config) = read_to_string(config_path) {
             let config = match toml::from_str(&config) {
                 Ok(config) => config,
@@ -169,7 +169,7 @@ impl ConfigAndUsers {
     }
 
     /// Prepared statements are enabled.
-    pub fn prepared_statements(&self) -> bool {
+    pub(crate) fn prepared_statements(&self) -> bool {
         // Disable prepared statements automatically in session mode
         if self.config.general.pooler_mode == PoolerMode::Session {
             false
@@ -179,11 +179,11 @@ impl ConfigAndUsers {
     }
 
     /// Prepared statements are in "full" mode (used for query parser decision).
-    pub fn prepared_statements_full(&self) -> bool {
+    pub(crate) fn prepared_statements_full(&self) -> bool {
         self.config.general.prepared_statements.full()
     }
 
-    pub fn pub_sub_enabled(&self) -> bool {
+    pub(crate) fn pub_sub_enabled(&self) -> bool {
         self.config.general.pub_sub_channel_size > 0
     }
 }
@@ -219,36 +219,36 @@ pub struct Config {
 
     /// List of sharded tables.
     #[serde(default)]
-    pub sharded_tables: Vec<ShardedTable>,
+    pub(crate) sharded_tables: Vec<ShardedTable>,
 
     /// Queries routed manually to a single shard.
     #[serde(default)]
-    pub manual_queries: Vec<ManualQuery>,
+    pub(crate) manual_queries: Vec<ManualQuery>,
 
     /// List of omnisharded tables.
     #[serde(default)]
-    pub omnisharded_tables: Vec<OmnishardedTables>,
+    pub(crate) omnisharded_tables: Vec<OmnishardedTables>,
 
     /// Explicit sharding key mappings.
     #[serde(default)]
-    pub sharded_mappings: Vec<ShardedMapping>,
+    pub(crate) sharded_mappings: Vec<ShardedMapping>,
 
     /// Replica lag configuration.
     #[serde(default, deserialize_with = "ReplicaLag::deserialize_optional")]
-    pub replica_lag: Option<ReplicaLag>,
+    pub(crate) replica_lag: Option<ReplicaLag>,
 
     /// Replication config.
     #[serde(default)]
-    pub replication: Replication,
+    pub(crate) replication: Replication,
 
     /// Mirroring configurations.
     #[serde(default)]
-    pub mirroring: Vec<Mirroring>,
+    pub(crate) mirroring: Vec<Mirroring>,
 }
 
 impl Config {
     /// Organize all databases by name for quicker retrieval.
-    pub fn databases(&self) -> HashMap<String, Vec<Vec<Database>>> {
+    pub(crate) fn databases(&self) -> HashMap<String, Vec<Vec<Database>>> {
         let mut databases = HashMap::new();
         for database in &self.databases {
             let entry = databases
@@ -266,7 +266,7 @@ impl Config {
     }
 
     /// Organize sharded tables by database name.
-    pub fn sharded_tables(&self) -> HashMap<String, Vec<ShardedTable>> {
+    pub(crate) fn sharded_tables(&self) -> HashMap<String, Vec<ShardedTable>> {
         let mut tables = HashMap::new();
 
         for table in &self.sharded_tables {
@@ -279,7 +279,7 @@ impl Config {
         tables
     }
 
-    pub fn omnisharded_tables(&self) -> HashMap<String, Vec<String>> {
+    pub(crate) fn omnisharded_tables(&self) -> HashMap<String, Vec<String>> {
         let mut tables = HashMap::new();
 
         for table in &self.omnisharded_tables {
@@ -295,7 +295,7 @@ impl Config {
     }
 
     /// Manual queries.
-    pub fn manual_queries(&self) -> HashMap<String, ManualQuery> {
+    pub(crate) fn manual_queries(&self) -> HashMap<String, ManualQuery> {
         let mut queries = HashMap::new();
 
         for query in &self.manual_queries {
@@ -306,7 +306,7 @@ impl Config {
     }
 
     /// Sharded mappings.
-    pub fn sharded_mappings(
+    pub(crate) fn sharded_mappings(
         &self,
     ) -> HashMap<(String, String, Option<String>), Vec<ShardedMapping>> {
         let mut mappings = HashMap::new();
@@ -326,7 +326,7 @@ impl Config {
         mappings
     }
 
-    pub fn check(&self) {
+    pub(crate) fn check(&self) {
         // Check databases.
         let mut duplicate_primaries = HashSet::new();
         for database in self.databases.clone() {
@@ -347,12 +347,12 @@ impl Config {
     }
 
     /// Multi-tenanncy is enabled.
-    pub fn multi_tenant(&self) -> &Option<MultiTenant> {
+    pub(crate) fn multi_tenant(&self) -> &Option<MultiTenant> {
         &self.multi_tenant
     }
 
     /// Get mirroring configuration for a specific source/destination pair.
-    pub fn get_mirroring_config(
+    pub(crate) fn get_mirroring_config(
         &self,
         source_db: &str,
         destination_db: &str,
@@ -367,7 +367,7 @@ impl Config {
     }
 
     /// Get all mirroring configurations mapped by source database.
-    pub fn mirroring_by_source(&self) -> HashMap<String, Vec<(String, MirrorConfig)>> {
+    pub(crate) fn mirroring_by_source(&self) -> HashMap<String, Vec<(String, MirrorConfig)>> {
         let mut result = HashMap::new();
 
         for mirror in &self.mirroring {
@@ -400,52 +400,52 @@ pub struct General {
     pub workers: usize,
     /// Default pool size, e.g. 10.
     #[serde(default = "General::default_pool_size")]
-    pub default_pool_size: usize,
+    pub(crate) default_pool_size: usize,
     /// Minimum number of connections to maintain in the pool.
     #[serde(default = "General::min_pool_size")]
-    pub min_pool_size: usize,
+    pub(crate) min_pool_size: usize,
     /// Pooler mode, e.g. transaction.
     #[serde(default)]
-    pub pooler_mode: PoolerMode,
+    pub(crate) pooler_mode: PoolerMode,
     /// How often to check a connection.
     #[serde(default = "General::healthcheck_interval")]
-    pub healthcheck_interval: u64,
+    pub(crate) healthcheck_interval: u64,
     /// How often to issue a healthcheck via an idle connection.
     #[serde(default = "General::idle_healthcheck_interval")]
-    pub idle_healthcheck_interval: u64,
+    pub(crate) idle_healthcheck_interval: u64,
     /// Delay idle healthchecks by this time at startup.
     #[serde(default = "General::idle_healthcheck_delay")]
-    pub idle_healthcheck_delay: u64,
+    pub(crate) idle_healthcheck_delay: u64,
     /// Healthcheck timeout.
     #[serde(default = "General::healthcheck_timeout")]
-    pub healthcheck_timeout: u64,
+    pub(crate) healthcheck_timeout: u64,
     /// Maximum duration of a ban.
     #[serde(default = "General::ban_timeout")]
-    pub ban_timeout: u64,
+    pub(crate) ban_timeout: u64,
     /// Rollback timeout.
     #[serde(default = "General::rollback_timeout")]
-    pub rollback_timeout: u64,
+    pub(crate) rollback_timeout: u64,
     /// Load balancing strategy.
     #[serde(default = "General::load_balancing_strategy")]
-    pub load_balancing_strategy: LoadBalancingStrategy,
+    pub(crate) load_balancing_strategy: LoadBalancingStrategy,
     /// How aggressive should the query parser be in determining reads.
     #[serde(default)]
-    pub read_write_strategy: ReadWriteStrategy,
+    pub(crate) read_write_strategy: ReadWriteStrategy,
     /// Read write split.
     #[serde(default)]
-    pub read_write_split: ReadWriteSplit,
+    pub(crate) read_write_split: ReadWriteSplit,
     /// TLS certificate.
-    pub tls_certificate: Option<PathBuf>,
+    pub(crate) tls_certificate: Option<PathBuf>,
     /// TLS private key.
-    pub tls_private_key: Option<PathBuf>,
+    pub(crate) tls_private_key: Option<PathBuf>,
     /// TLS verification mode (for connecting to servers)
     #[serde(default = "General::default_tls_verify")]
-    pub tls_verify: TlsVerifyMode,
+    pub(crate) tls_verify: TlsVerifyMode,
     /// TLS CA certificate (for connecting to servers).
-    pub tls_server_ca_certificate: Option<PathBuf>,
+    pub(crate) tls_server_ca_certificate: Option<PathBuf>,
     /// Shutdown timeout.
     #[serde(default = "General::default_shutdown_timeout")]
-    pub shutdown_timeout: u64,
+    pub(crate) shutdown_timeout: u64,
     /// Broadcast IP.
     pub broadcast_address: Option<Ipv4Addr>,
     /// Broadcast port.
@@ -453,68 +453,68 @@ pub struct General {
     pub broadcast_port: u16,
     /// Load queries to file (warning: slow, don't use in production).
     #[serde(default)]
-    pub query_log: Option<PathBuf>,
+    pub(crate) query_log: Option<PathBuf>,
     /// Enable OpenMetrics server on this port.
     pub openmetrics_port: Option<u16>,
     /// OpenMetrics prefix.
-    pub openmetrics_namespace: Option<String>,
+    pub(crate) openmetrics_namespace: Option<String>,
     /// Prepared statatements support.
     #[serde(default)]
     prepared_statements: PreparedStatements,
     /// Limit on the number of prepared statements in the server cache.
     #[serde(default = "General::prepared_statements_limit")]
-    pub prepared_statements_limit: usize,
+    pub(crate) prepared_statements_limit: usize,
     #[serde(default = "General::query_cache_limit")]
-    pub query_cache_limit: usize,
+    pub(crate) query_cache_limit: usize,
     /// Automatically add connection pools for user/database pairs we don't have.
     #[serde(default = "General::default_passthrough_auth")]
-    pub passthrough_auth: PassthoughAuth,
+    pub(crate) passthrough_auth: PassthoughAuth,
     /// Server connect timeout.
     #[serde(default = "General::default_connect_timeout")]
-    pub connect_timeout: u64,
+    pub(crate) connect_timeout: u64,
     /// Attempt connections multiple times on bad networks.
     #[serde(default = "General::connect_attempts")]
-    pub connect_attempts: u64,
+    pub(crate) connect_attempts: u64,
     /// How long to wait between connection attempts.
     #[serde(default = "General::default_connect_attempt_delay")]
-    pub connect_attempt_delay: u64,
+    pub(crate) connect_attempt_delay: u64,
     /// How long to wait for a query to return the result before aborting. Dangerous: don't use unless your network is bad.
     #[serde(default = "General::default_query_timeout")]
-    pub query_timeout: u64,
+    pub(crate) query_timeout: u64,
     /// Checkout timeout.
     #[serde(default = "General::checkout_timeout")]
-    pub checkout_timeout: u64,
+    pub(crate) checkout_timeout: u64,
     /// Dry run for sharding. Parse the query, route to shard 0.
     #[serde(default)]
     pub dry_run: bool,
     /// Idle timeout.
     #[serde(default = "General::idle_timeout")]
-    pub idle_timeout: u64,
+    pub(crate) idle_timeout: u64,
     /// Client idle timeout.
     #[serde(default = "General::default_client_idle_timeout")]
-    pub client_idle_timeout: u64,
+    pub(crate) client_idle_timeout: u64,
     /// Mirror queue size.
     #[serde(default = "General::mirror_queue")]
-    pub mirror_queue: usize,
+    pub(crate) mirror_queue: usize,
     /// Mirror exposure
     #[serde(default = "General::mirror_exposure")]
-    pub mirror_exposure: f32,
+    pub(crate) mirror_exposure: f32,
     #[serde(default)]
-    pub auth_type: AuthType,
+    pub(crate) auth_type: AuthType,
     /// Disable cross-shard queries.
     #[serde(default)]
-    pub cross_shard_disabled: bool,
+    pub(crate) cross_shard_disabled: bool,
     /// How often to refresh DNS entries, in ms.
     #[serde(default)]
-    pub dns_ttl: Option<u64>,
+    pub(crate) dns_ttl: Option<u64>,
     /// LISTEN/NOTIFY channel size.
     #[serde(default)]
-    pub pub_sub_channel_size: usize,
+    pub(crate) pub_sub_channel_size: usize,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 #[serde(rename_all = "snake_case")]
-pub enum PreparedStatements {
+pub(crate) enum PreparedStatements {
     Disabled,
     #[default]
     Extended,
@@ -522,18 +522,18 @@ pub enum PreparedStatements {
 }
 
 impl PreparedStatements {
-    pub fn full(&self) -> bool {
+    pub(crate) fn full(&self) -> bool {
         matches!(self, PreparedStatements::Full)
     }
 
-    pub fn enabled(&self) -> bool {
+    pub(crate) fn enabled(&self) -> bool {
         !matches!(self, PreparedStatements::Disabled)
     }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
 #[serde(rename_all = "snake_case")]
-pub enum PassthoughAuth {
+pub(crate) enum PassthoughAuth {
     #[default]
     Disabled,
     Enabled,
@@ -542,7 +542,7 @@ pub enum PassthoughAuth {
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
 #[serde(rename_all = "snake_case")]
-pub enum AuthType {
+pub(crate) enum AuthType {
     Md5,
     #[default]
     Scram,
@@ -550,22 +550,22 @@ pub enum AuthType {
 }
 
 impl AuthType {
-    pub fn md5(&self) -> bool {
+    pub(crate) fn md5(&self) -> bool {
         matches!(self, Self::Md5)
     }
 
-    pub fn scram(&self) -> bool {
+    pub(crate) fn scram(&self) -> bool {
         matches!(self, Self::Scram)
     }
 
-    pub fn trust(&self) -> bool {
+    pub(crate) fn trust(&self) -> bool {
         matches!(self, Self::Trust)
     }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Copy)]
 #[serde(rename_all = "snake_case")]
-pub enum ReadWriteStrategy {
+pub(crate) enum ReadWriteStrategy {
     #[default]
     Conservative,
     Aggressive,
@@ -765,12 +765,12 @@ impl General {
     }
 
     /// Get shutdown timeout as a duration.
-    pub fn shutdown_timeout(&self) -> Duration {
+    pub(crate) fn shutdown_timeout(&self) -> Duration {
         Duration::from_millis(self.shutdown_timeout)
     }
 
     /// Get TLS config, if any.
-    pub fn tls(&self) -> Option<(&PathBuf, &PathBuf)> {
+    pub(crate) fn tls(&self) -> Option<(&PathBuf, &PathBuf)> {
         if let Some(cert) = &self.tls_certificate {
             if let Some(key) = &self.tls_private_key {
                 return Some((cert, key));
@@ -780,23 +780,23 @@ impl General {
         None
     }
 
-    pub fn passthrough_auth(&self) -> bool {
+    pub(crate) fn passthrough_auth(&self) -> bool {
         self.tls().is_some() && self.passthrough_auth == PassthoughAuth::Enabled
             || self.passthrough_auth == PassthoughAuth::EnabledPlain
     }
 
     /// Support for LISTEN/NOTIFY.
-    pub fn pub_sub_enabled(&self) -> bool {
+    pub(crate) fn pub_sub_enabled(&self) -> bool {
         self.pub_sub_channel_size > 0
     }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
-pub struct Stats {}
+pub(crate) struct Stats {}
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Copy, Eq, Ord, PartialOrd)]
 #[serde(rename_all = "snake_case")]
-pub enum PoolerMode {
+pub(crate) enum PoolerMode {
     #[default]
     Transaction,
     Session,
@@ -813,7 +813,7 @@ impl std::fmt::Display for PoolerMode {
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Copy)]
 #[serde(rename_all = "snake_case")]
-pub enum LoadBalancingStrategy {
+pub(crate) enum LoadBalancingStrategy {
     #[default]
     Random,
     RoundRobin,
@@ -822,7 +822,7 @@ pub enum LoadBalancingStrategy {
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Copy)]
 #[serde(rename_all = "snake_case")]
-pub enum TlsVerifyMode {
+pub(crate) enum TlsVerifyMode {
     #[default]
     Disabled,
     Prefer,
@@ -832,7 +832,7 @@ pub enum TlsVerifyMode {
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Copy)]
 #[serde(rename_all = "snake_case")]
-pub enum ReadWriteSplit {
+pub(crate) enum ReadWriteSplit {
     #[default]
     IncludePrimary,
     ExcludePrimary,
@@ -843,39 +843,39 @@ pub enum ReadWriteSplit {
 #[serde(deny_unknown_fields)]
 pub struct Database {
     /// Database name visible to the clients.
-    pub name: String,
+    pub(crate) name: String,
     /// Database role, e.g. primary.
     #[serde(default)]
-    pub role: Role,
+    pub(crate) role: Role,
     /// Database host or IP address, e.g. 127.0.0.1.
-    pub host: String,
+    pub(crate) host: String,
     /// Database port, e.g. 5432.
     #[serde(default = "Database::port")]
-    pub port: u16,
+    pub(crate) port: u16,
     /// Shard.
     #[serde(default)]
-    pub shard: usize,
+    pub(crate) shard: usize,
     /// PostgreSQL database name, e.g. "postgres".
-    pub database_name: Option<String>,
+    pub(crate) database_name: Option<String>,
     /// Use this user to connect to the database, overriding the userlist.
-    pub user: Option<String>,
+    pub(crate) user: Option<String>,
     /// Use this password to login, overriding the userlist.
-    pub password: Option<String>,
+    pub(crate) password: Option<String>,
     // Maximum number of connections to this database from this pooler.
     // #[serde(default = "Database::max_connections")]
     // pub max_connections: usize,
     /// Pool size for this database pools, overriding `default_pool_size`.
-    pub pool_size: Option<usize>,
+    pub(crate) pool_size: Option<usize>,
     /// Minimum pool size for this database pools, overriding `min_pool_size`.
-    pub min_pool_size: Option<usize>,
+    pub(crate) min_pool_size: Option<usize>,
     /// Pooler mode.
-    pub pooler_mode: Option<PoolerMode>,
+    pub(crate) pooler_mode: Option<PoolerMode>,
     /// Statement timeout.
-    pub statement_timeout: Option<u64>,
+    pub(crate) statement_timeout: Option<u64>,
     /// Idle timeout.
-    pub idle_timeout: Option<u64>,
+    pub(crate) idle_timeout: Option<u64>,
     /// Read-only mode.
-    pub read_only: Option<bool>,
+    pub(crate) read_only: Option<bool>,
 }
 
 impl Database {
@@ -893,7 +893,7 @@ impl Database {
     Serialize, Deserialize, Debug, Clone, Default, PartialEq, Ord, PartialOrd, Eq, Hash, Copy,
 )]
 #[serde(rename_all = "snake_case")]
-pub enum Role {
+pub(crate) enum Role {
     #[default]
     Primary,
     Replica,
@@ -910,23 +910,23 @@ impl std::fmt::Display for Role {
 
 /// pgDog plugin.
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
-pub struct Plugin {
+pub(crate) struct Plugin {
     /// Plugin name.
-    pub name: String,
+    pub(crate) name: String,
 }
 
 /// Users and passwords.
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 #[serde(deny_unknown_fields)]
-pub struct Users {
+pub(crate) struct Users {
     /// Users and passwords.
     #[serde(default)]
-    pub users: Vec<User>,
+    pub(crate) users: Vec<User>,
 }
 
 impl Users {
     /// Organize users by database name.
-    pub fn users(&self) -> HashMap<String, Vec<User>> {
+    pub(crate) fn users(&self) -> HashMap<String, Vec<User>> {
         let mut users = HashMap::new();
 
         for user in &self.users {
@@ -937,7 +937,7 @@ impl Users {
         users
     }
 
-    pub fn check(&mut self, config: &Config) {
+    pub(crate) fn check(&mut self, config: &Config) {
         for user in &mut self.users {
             if user.password().is_empty() {
                 if !config.general.passthrough_auth() {
@@ -962,41 +962,41 @@ impl Users {
 /// User allowed to connect to pgDog.
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, Ord, PartialOrd)]
 #[serde(deny_unknown_fields)]
-pub struct User {
+pub(crate) struct User {
     /// User name.
-    pub name: String,
+    pub(crate) name: String,
     /// Database name, from pgdog.toml.
-    pub database: String,
+    pub(crate) database: String,
     /// User's password.
-    pub password: Option<String>,
+    pub(crate) password: Option<String>,
     /// Pool size for this user pool, overriding `default_pool_size`.
-    pub pool_size: Option<usize>,
+    pub(crate) pool_size: Option<usize>,
     /// Minimum pool size for this user pool, overriding `min_pool_size`.
-    pub min_pool_size: Option<usize>,
+    pub(crate) min_pool_size: Option<usize>,
     /// Pooler mode.
-    pub pooler_mode: Option<PoolerMode>,
+    pub(crate) pooler_mode: Option<PoolerMode>,
     /// Server username.
-    pub server_user: Option<String>,
+    pub(crate) server_user: Option<String>,
     /// Server password.
-    pub server_password: Option<String>,
+    pub(crate) server_password: Option<String>,
     /// Statement timeout.
-    pub statement_timeout: Option<u64>,
+    pub(crate) statement_timeout: Option<u64>,
     /// Relication mode.
     #[serde(default)]
-    pub replication_mode: bool,
+    pub(crate) replication_mode: bool,
     /// Sharding into this database.
-    pub replication_sharding: Option<String>,
+    pub(crate) replication_sharding: Option<String>,
     /// Idle timeout.
-    pub idle_timeout: Option<u64>,
+    pub(crate) idle_timeout: Option<u64>,
     /// Read-only mode.
-    pub read_only: Option<bool>,
+    pub(crate) read_only: Option<bool>,
     /// Schema owner.
     #[serde(default)]
-    pub schema_admin: bool,
+    pub(crate) schema_admin: bool,
 }
 
 impl User {
-    pub fn password(&self) -> &str {
+    pub(crate) fn password(&self) -> &str {
         if let Some(ref s) = self.password {
             s.as_str()
         } else {
@@ -1008,16 +1008,16 @@ impl User {
 /// Admin database settings.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(deny_unknown_fields)]
-pub struct Admin {
+pub(crate) struct Admin {
     /// Admin database name.
     #[serde(default = "Admin::name")]
-    pub name: String,
+    pub(crate) name: String,
     /// Admin user name.
     #[serde(default = "Admin::user")]
-    pub user: String,
+    pub(crate) user: String,
     /// Admin user's password.
     #[serde(default = "Admin::password")]
-    pub password: String,
+    pub(crate) password: String,
 }
 
 impl Default for Admin {
@@ -1044,7 +1044,7 @@ impl Admin {
     }
 
     /// The password has been randomly generated.
-    pub fn random(&self) -> bool {
+    pub(crate) fn random(&self) -> bool {
         let prefix = "_pgdog_";
         self.password.starts_with(prefix) && self.password.len() == prefix.len() + 12
     }
@@ -1062,35 +1062,35 @@ fn admin_password() -> String {
 /// Sharded table.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 #[serde(deny_unknown_fields)]
-pub struct ShardedTable {
+pub(crate) struct ShardedTable {
     /// Database this table belongs to.
-    pub database: String,
+    pub(crate) database: String,
     /// Table name. If none specified, all tables with the specified
     /// column are considered sharded.
-    pub name: Option<String>,
+    pub(crate) name: Option<String>,
     /// Table sharded on this column.
     #[serde(default)]
-    pub column: String,
+    pub(crate) column: String,
     /// This table is the primary sharding anchor (e.g. "users").
     #[serde(default)]
-    pub primary: bool,
+    pub(crate) primary: bool,
     /// Centroids for vector sharding.
     #[serde(default)]
-    pub centroids: Vec<Vector>,
+    pub(crate) centroids: Vec<Vector>,
     #[serde(default)]
-    pub centroids_path: Option<PathBuf>,
+    pub(crate) centroids_path: Option<PathBuf>,
     /// Data type of the column.
     #[serde(default)]
-    pub data_type: DataType,
+    pub(crate) data_type: DataType,
     /// How many centroids to probe.
     #[serde(default)]
-    pub centroid_probes: usize,
+    pub(crate) centroid_probes: usize,
     /// Hasher function.
     #[serde(default)]
-    pub hasher: Hasher,
+    pub(crate) hasher: Hasher,
     /// Explicit routing rules.
     #[serde(skip, default)]
-    pub mapping: Option<Mapping>,
+    pub(crate) mapping: Option<Mapping>,
 }
 
 impl ShardedTable {
@@ -1098,7 +1098,7 @@ impl ShardedTable {
     ///
     /// Centroids can be very large vectors (1000+ columns).
     /// Hardcoding them in pgdog.toml is then impractical.
-    pub fn load_centroids(&mut self) -> Result<(), Error> {
+    pub(crate) fn load_centroids(&mut self) -> Result<(), Error> {
         if let Some(centroids_path) = &self.centroids_path {
             if let Ok(f) = std::fs::read_to_string(centroids_path) {
                 let centroids: Vec<Vector> = serde_json::from_str(&f)?;
@@ -1125,7 +1125,7 @@ impl ShardedTable {
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
 #[serde(rename_all = "snake_case")]
-pub enum Hasher {
+pub(crate) enum Hasher {
     #[default]
     Postgres,
     Sha1,
@@ -1133,7 +1133,7 @@ pub enum Hasher {
 
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Default, Copy, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
-pub enum DataType {
+pub(crate) enum DataType {
     #[default]
     Bigint,
     Uuid,
@@ -1143,16 +1143,16 @@ pub enum DataType {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, Eq)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
-pub struct ShardedMapping {
-    pub database: String,
-    pub column: String,
-    pub table: Option<String>,
-    pub kind: ShardedMappingKind,
-    pub start: Option<FlexibleType>,
-    pub end: Option<FlexibleType>,
+pub(crate) struct ShardedMapping {
+    pub(crate) database: String,
+    pub(crate) column: String,
+    pub(crate) table: Option<String>,
+    pub(crate) kind: ShardedMappingKind,
+    pub(crate) start: Option<FlexibleType>,
+    pub(crate) end: Option<FlexibleType>,
     #[serde(default)]
-    pub values: HashSet<FlexibleType>,
-    pub shard: usize,
+    pub(crate) values: HashSet<FlexibleType>,
+    pub(crate) shard: usize,
 }
 
 impl Hash for ShardedMapping {
@@ -1179,7 +1179,7 @@ impl Hash for ShardedMapping {
 
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Default, Hash, Eq)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
-pub enum ShardedMappingKind {
+pub(crate) enum ShardedMappingKind {
     #[default]
     List,
     Range,
@@ -1187,7 +1187,7 @@ pub enum ShardedMappingKind {
 
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Eq, Hash)]
 #[serde(untagged)]
-pub enum FlexibleType {
+pub(crate) enum FlexibleType {
     Integer(i64),
     Uuid(uuid::Uuid),
     String(String),
@@ -1213,20 +1213,20 @@ impl From<String> for FlexibleType {
 
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Default)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
-pub struct OmnishardedTables {
+pub(crate) struct OmnishardedTables {
     database: String,
     tables: Vec<String>,
 }
 
 /// Queries with manual routing rules.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ManualQuery {
-    pub fingerprint: String,
+pub(crate) struct ManualQuery {
+    pub(crate) fingerprint: String,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 #[serde(rename_all = "snake_case")]
-pub struct Tcp {
+pub(crate) struct Tcp {
     #[serde(default = "Tcp::default_keepalive")]
     keepalive: bool,
     user_timeout: Option<u64>,
@@ -1277,35 +1277,35 @@ impl Tcp {
         true
     }
 
-    pub fn keepalive(&self) -> bool {
+    pub(crate) fn keepalive(&self) -> bool {
         self.keepalive
     }
 
-    pub fn time(&self) -> Option<Duration> {
+    pub(crate) fn time(&self) -> Option<Duration> {
         self.time.map(Duration::from_millis)
     }
 
-    pub fn interval(&self) -> Option<Duration> {
+    pub(crate) fn interval(&self) -> Option<Duration> {
         self.interval.map(Duration::from_millis)
     }
 
-    pub fn user_timeout(&self) -> Option<Duration> {
+    pub(crate) fn user_timeout(&self) -> Option<Duration> {
         self.user_timeout.map(Duration::from_millis)
     }
 
-    pub fn retries(&self) -> Option<u32> {
+    pub(crate) fn retries(&self) -> Option<u32> {
         self.retries
     }
 
-    pub fn congestion_control(&self) -> &Option<String> {
+    pub(crate) fn congestion_control(&self) -> &Option<String> {
         &self.congestion_control
     }
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 #[serde(rename_all = "snake_case")]
-pub struct MultiTenant {
-    pub column: String,
+pub(crate) struct MultiTenant {
+    pub(crate) column: String,
 }
 
 //--------------------------------------------------------------------------------------------------
@@ -1320,9 +1320,9 @@ struct RawReplicaLag {
 }
 
 #[derive(Debug, Clone)]
-pub struct ReplicaLag {
-    pub check_interval: Duration,
-    pub max_age: Duration,
+pub(crate) struct ReplicaLag {
+    pub(crate) check_interval: Duration,
+    pub(crate) max_age: Duration,
 }
 
 impl ReplicaLag {
@@ -1335,7 +1335,7 @@ impl ReplicaLag {
     }
 
     /// Custom “all-or-none” deserializer that returns Option<Self>.
-    pub fn deserialize_optional<'de, D>(de: D) -> Result<Option<Self>, D::Error>
+    pub(crate) fn deserialize_optional<'de, D>(de: D) -> Result<Option<Self>, D::Error>
     where
         D: serde::de::Deserializer<'de>,
     {
@@ -1406,10 +1406,10 @@ impl Default for ReplicaLag {
 /// Replication configuration.
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 #[serde(rename_all = "snake_case")]
-pub struct Replication {
+pub(crate) struct Replication {
     /// Path to the pg_dump executable.
     #[serde(default = "Replication::pg_dump_path")]
-    pub pg_dump_path: PathBuf,
+    pub(crate) pg_dump_path: PathBuf,
 }
 
 impl Replication {
@@ -1429,24 +1429,24 @@ impl Default for Replication {
 /// Mirroring configuration.
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 #[serde(deny_unknown_fields)]
-pub struct Mirroring {
+pub(crate) struct Mirroring {
     /// Source database name to mirror from.
-    pub source_db: String,
+    pub(crate) source_db: String,
     /// Destination database name to mirror to.
-    pub destination_db: String,
+    pub(crate) destination_db: String,
     /// Queue length for this mirror (overrides global mirror_queue).
-    pub queue_length: Option<usize>,
+    pub(crate) queue_length: Option<usize>,
     /// Exposure for this mirror (overrides global mirror_exposure).
-    pub exposure: Option<f32>,
+    pub(crate) exposure: Option<f32>,
 }
 
 /// Runtime mirror configuration with resolved values.
 #[derive(Debug, Clone)]
-pub struct MirrorConfig {
+pub(crate) struct MirrorConfig {
     /// Queue length for this mirror.
-    pub queue_length: usize,
+    pub(crate) queue_length: usize,
     /// Exposure for this mirror.
-    pub exposure: f32,
+    pub(crate) exposure: f32,
 }
 
 #[cfg(test)]
@@ -1455,7 +1455,7 @@ pub mod test {
 
     use super::*;
 
-    pub fn load_test() {
+    pub(crate) fn load_test() {
         let mut config = ConfigAndUsers::default();
         config.config.databases = vec![Database {
             name: "pgdog".into(),
@@ -1474,7 +1474,7 @@ pub mod test {
         init();
     }
 
-    pub fn load_test_replicas() {
+    pub(crate) fn load_test_replicas() {
         let mut config = ConfigAndUsers::default();
         config.config.databases = vec![
             Database {

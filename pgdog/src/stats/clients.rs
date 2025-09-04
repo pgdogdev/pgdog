@@ -4,12 +4,12 @@ use crate::frontend::comms::comms;
 
 use super::{Measurement, Metric, OpenMetric};
 
-pub struct Clients {
+pub(crate) struct Clients {
     total: usize,
 }
 
 impl Clients {
-    pub fn load() -> Metric {
+    pub(crate) fn load() -> Metric {
         let total = comms().clients_len();
         Metric::new(Self { total })
     }

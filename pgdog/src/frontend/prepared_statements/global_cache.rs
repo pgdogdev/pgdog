@@ -13,7 +13,7 @@ fn global_name(counter: usize) -> String {
 }
 
 #[derive(Debug, Clone)]
-pub struct Statement {
+pub(crate) struct Statement {
     parse: Parse,
     row_description: Option<RowDescription>,
     version: usize,
@@ -32,7 +32,7 @@ impl MemoryUsage for Statement {
 }
 
 impl Statement {
-    pub fn query(&self) -> &str {
+    pub(crate) fn query(&self) -> &str {
         self.parse.query()
     }
 
@@ -53,10 +53,10 @@ impl Statement {
 /// need to plan a new one.
 ///
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
-pub struct CacheKey {
-    pub query: Bytes,
-    pub data_types: Bytes,
-    pub version: usize,
+pub(crate) struct CacheKey {
+    pub(crate) query: Bytes,
+    pub(crate) data_types: Bytes,
+    pub(crate) version: usize,
 }
 
 impl MemoryUsage for CacheKey {
@@ -68,16 +68,16 @@ impl MemoryUsage for CacheKey {
 }
 
 impl CacheKey {
-    pub fn query(&self) -> Result<&str, crate::net::Error> {
+    pub(crate) fn query(&self) -> Result<&str, crate::net::Error> {
         // Postgres string.
         Ok(from_utf8(&self.query[0..self.query.len() - 1])?)
     }
 }
 
 #[derive(Debug, Copy, Clone)]
-pub struct CachedStmt {
-    pub counter: usize,
-    pub used: usize,
+pub(crate) struct CachedStmt {
+    pub(crate) counter: usize,
+    pub(crate) used: usize,
 }
 
 impl MemoryUsage for CachedStmt {
@@ -88,7 +88,7 @@ impl MemoryUsage for CachedStmt {
 }
 
 impl CachedStmt {
-    pub fn name(&self) -> String {
+    pub(crate) fn name(&self) -> String {
         global_name(self.counter)
     }
 }
@@ -105,7 +105,7 @@ impl CachedStmt {
 ///    results returned by executing those statements in a multi-shard context.
 ///
 #[derive(Default, Debug, Clone)]
-pub struct GlobalCache {
+pub(crate) struct GlobalCache {
     statements: HashMap<CacheKey, CachedStmt>,
     names: HashMap<String, Statement>,
     counter: usize,
@@ -128,7 +128,7 @@ impl GlobalCache {
     ///
     /// If the statement exists, no entry is created
     /// and the global name is returned instead.
-    pub fn insert(&mut self, parse: &Parse) -> (bool, String) {
+    pub(crate) fn insert(&mut self, parse: &Parse) -> (bool, String) {
         let parse_key = CacheKey {
             query: parse.query_ref(),
             data_types: parse.data_types_ref(),
@@ -172,7 +172,7 @@ impl GlobalCache {
 
     /// Insert a prepared statement into the global cache ignoring
     /// duplicate check.
-    pub fn insert_anyway(&mut self, parse: &Parse) -> String {
+    pub(crate) fn insert_anyway(&mut self, parse: &Parse) -> String {
         self.counter += 1;
         self.versions += 1;
 
@@ -207,7 +207,7 @@ impl GlobalCache {
 
     /// Client sent a Describe for a prepared statement and received a RowDescription.
     /// We record the RowDescription for later use by the results decoder.
-    pub fn insert_row_description(&mut self, name: &str, row_description: &RowDescription) {
+    pub(crate) fn insert_row_description(&mut self, name: &str, row_description: &RowDescription) {
         if let Some(ref mut entry) = self.names.get_mut(name) {
             if entry.row_description.is_none() {
                 entry.row_description = Some(row_description.clone());
@@ -218,7 +218,7 @@ impl GlobalCache {
     /// Get the query string stored in the global cache
     /// for the given globally unique prepared statement name.
     #[inline]
-    pub fn query(&self, name: &str) -> Option<&str> {
+    pub(crate) fn query(&self, name: &str) -> Option<&str> {
         self.names.get(name).map(|s| s.query())
     }
 
@@ -227,7 +227,7 @@ impl GlobalCache {
     ///
     /// It can be used to prepare this statement on a server connection
     /// or to inspect the original query.
-    pub fn parse(&self, name: &str) -> Option<Parse> {
+    pub(crate) fn parse(&self, name: &str) -> Option<Parse> {
         self.names.get(name).map(|p| p.parse.clone())
     }
 
@@ -235,22 +235,22 @@ impl GlobalCache {
     ///
     /// It can be used to decode results received from executing the prepared
     /// statement.
-    pub fn row_description(&self, name: &str) -> Option<RowDescription> {
+    pub(crate) fn row_description(&self, name: &str) -> Option<RowDescription> {
         self.names.get(name).and_then(|p| p.row_description.clone())
     }
 
     /// Number of prepared statements in the local cache.
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.statements.len()
     }
 
     /// True if the local cache is empty.
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
     /// Close prepared statement.
-    pub fn close(&mut self, name: &str, capacity: usize) -> bool {
+    pub(crate) fn close(&mut self, name: &str, capacity: usize) -> bool {
         let used = if let Some(stmt) = self.names.get(name) {
             if let Some(stmt) = self.statements.get_mut(&stmt.cache_key()) {
                 stmt.used = stmt.used.saturating_sub(1);
@@ -271,7 +271,7 @@ impl GlobalCache {
     }
 
     /// Close all unused statements exceeding capacity.
-    pub fn close_unused(&mut self, capacity: usize) -> usize {
+    pub(crate) fn close_unused(&mut self, capacity: usize) -> usize {
         let mut remove = self.statements.len() as i64 - capacity as i64;
         let mut to_remove = vec![];
         for stmt in self.statements.values() {
@@ -300,7 +300,7 @@ impl GlobalCache {
     }
 
     /// Decrement usage of prepared statement without removing it.
-    pub fn decrement(&mut self, name: &str) {
+    pub(crate) fn decrement(&mut self, name: &str) {
         if let Some(stmt) = self.names.get(name) {
             if let Some(stmt) = self.statements.get_mut(&stmt.cache_key()) {
                 stmt.used = stmt.used.saturating_sub(1);
@@ -309,11 +309,11 @@ impl GlobalCache {
     }
 
     /// Get all prepared statements by name.
-    pub fn names(&self) -> &HashMap<String, Statement> {
+    pub(crate) fn names(&self) -> &HashMap<String, Statement> {
         &self.names
     }
 
-    pub fn statements(&self) -> &HashMap<CacheKey, CachedStmt> {
+    pub(crate) fn statements(&self) -> &HashMap<CacheKey, CachedStmt> {
         &self.statements
     }
 }

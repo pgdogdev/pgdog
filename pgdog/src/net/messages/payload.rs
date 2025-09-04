@@ -5,7 +5,7 @@ use bytes::{BufMut, Bytes, BytesMut};
 use std::ops::{Deref, DerefMut};
 
 /// Payload wrapper.
-pub struct Payload {
+pub(crate) struct Payload {
     bytes: BytesMut,
     name: Option<char>,
     with_len: bool,
@@ -19,7 +19,7 @@ impl Default for Payload {
 
 impl Payload {
     /// Create new payload.
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             bytes: BytesMut::new(),
             name: None,
@@ -32,7 +32,7 @@ impl Payload {
     }
 
     /// Create new named payload.
-    pub fn named(name: char) -> Self {
+    pub(crate) fn named(name: char) -> Self {
         Self {
             bytes: BytesMut::new(),
             name: Some(name),
@@ -40,7 +40,7 @@ impl Payload {
         }
     }
 
-    pub fn wrapped(name: char) -> Self {
+    pub(crate) fn wrapped(name: char) -> Self {
         Self {
             bytes: BytesMut::new(),
             name: Some(name),
@@ -49,14 +49,14 @@ impl Payload {
     }
 
     /// Finish assembly and return final bytes array.
-    pub fn freeze(self) -> Bytes {
+    pub(crate) fn freeze(self) -> Bytes {
         use super::ToBytes;
         self.to_bytes().unwrap()
     }
 
     /// Add a C-style string to the payload. It will be NULL-terminated
     /// automatically.
-    pub fn put_string(&mut self, string: &str) {
+    pub(crate) fn put_string(&mut self, string: &str) {
         self.bytes.reserve(string.len() + 1);
         self.bytes.put_slice(string.as_bytes());
         self.bytes.put_u8(0);

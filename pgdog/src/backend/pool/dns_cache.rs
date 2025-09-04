@@ -39,7 +39,7 @@ impl DnsCache {
     }
 
     /// Create a new DNS cache instance.
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         // Initialize the Resolver with system config (e.g., /etc/resolv.conf on Unix)
         let resolver = Resolver::builder(TokioConnectionProvider::default())
             .unwrap()
@@ -53,7 +53,7 @@ impl DnsCache {
     }
 
     /// Resolve hostname to socket address string.
-    pub async fn resolve(&self, hostname: &str) -> Result<IpAddr, Error> {
+    pub(crate) async fn resolve(&self, hostname: &str) -> Result<IpAddr, Error> {
         if let Some(ip) = self.get_cached_ip(hostname) {
             return Ok(ip);
         }
@@ -344,13 +344,13 @@ mod tests {
 
 impl DnsCache {
     #[cfg(test)]
-    pub fn clear_cache_for_testing(&self) {
+    pub(crate) fn clear_cache_for_testing(&self) {
         let mut cache = self.cache.write();
         cache.clear();
     }
 
     #[cfg(test)]
-    pub fn get_cached_hostnames_for_testing(&self) -> Vec<String> {
+    pub(crate) fn get_cached_hostnames_for_testing(&self) -> Vec<String> {
         let hostnames = self.hostnames.read();
         hostnames.iter().cloned().collect()
     }

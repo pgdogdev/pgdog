@@ -4,12 +4,12 @@ use super::super::code;
 use super::super::prelude::*;
 
 #[derive(Debug, Clone)]
-pub struct HotStandbyFeedback {
-    pub system_clock: i64,
-    pub global_xmin: i32,
-    pub epoch: i32,
-    pub catalog_min: i32,
-    pub epoch_catalog_min: i32,
+pub(crate) struct HotStandbyFeedback {
+    pub(crate) system_clock: i64,
+    pub(crate) global_xmin: i32,
+    pub(crate) epoch: i32,
+    pub(crate) catalog_min: i32,
+    pub(crate) epoch_catalog_min: i32,
 }
 
 impl FromBytes for HotStandbyFeedback {

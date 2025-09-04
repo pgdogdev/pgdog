@@ -18,7 +18,7 @@ use super::{super::Parameter, FromBytes, Payload, Protocol, ToBytes};
 ///
 /// See: <https://www.postgresql.org/docs/current/protocol-message-formats.html>
 #[derive(Debug)]
-pub enum Startup {
+pub(crate) enum Startup {
     /// SSLRequest (F)
     Ssl,
     /// StartupMessage (F)
@@ -29,7 +29,7 @@ pub enum Startup {
 
 impl Startup {
     /// Read Startup message from a stream.
-    pub async fn from_stream(stream: &mut (impl AsyncRead + Unpin)) -> Result<Self, Error> {
+    pub(crate) async fn from_stream(stream: &mut (impl AsyncRead + Unpin)) -> Result<Self, Error> {
         let _len = stream.read_i32().await?;
         let code = stream.read_i32().await?;
 
@@ -89,7 +89,7 @@ impl Startup {
     /// Get a startup parameter by name.
     ///
     /// If no such parameter exists, `None` is returned.
-    pub fn parameter(&self, name: &str) -> Option<&str> {
+    pub(crate) fn parameter(&self, name: &str) -> Option<&str> {
         match self {
             Startup::Ssl | Startup::Cancel { .. } => None,
             Startup::Startup { params } => params.get(name).and_then(|s| s.as_str()),
@@ -97,7 +97,7 @@ impl Startup {
     }
 
     /// Create new startup message from config.
-    pub fn new(user: &str, database: &str, mut params: Vec<Parameter>) -> Self {
+    pub(crate) fn new(user: &str, database: &str, mut params: Vec<Parameter>) -> Self {
         params.extend(vec![
             Parameter {
                 name: "user".into(),
@@ -114,7 +114,7 @@ impl Startup {
     }
 
     /// Create new startup TLS request.
-    pub fn tls() -> Self {
+    pub(crate) fn tls() -> Self {
         Self::Ssl
     }
 }
@@ -168,7 +168,7 @@ impl super::ToBytes for Startup {
 
 /// Reply to a SSLRequest (F) message.
 #[derive(Debug, PartialEq)]
-pub enum SslReply {
+pub(crate) enum SslReply {
     Yes,
     No,
 }

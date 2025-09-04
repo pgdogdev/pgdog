@@ -3,5 +3,5 @@ pub mod error;
 pub mod pg_dump;
 pub mod progress;
 
-pub use error::Error;
-pub use pg_dump::Statement;
+pub(crate) use error::Error;
+pub(crate) use pg_dump::Statement;

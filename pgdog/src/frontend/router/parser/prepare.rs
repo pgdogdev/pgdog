@@ -2,7 +2,7 @@ use super::Error;
 use pg_query::protobuf::PrepareStmt;
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct Prepare {
+pub(crate) struct Prepare {
     name: String,
     statement: String,
 }

@@ -9,7 +9,7 @@ use crate::{
 use super::prelude::*;
 
 #[derive(Debug, Clone)]
-pub struct Probe {
+pub(crate) struct Probe {
     url: Url,
 }
 

@@ -1,6 +1,6 @@
 use std::mem::take;
 
-pub fn escape(s: &str, quote: char) -> String {
+pub(crate) fn escape(s: &str, quote: char) -> String {
     let mut result = String::with_capacity(s.len());
     for c in s.chars() {
         if c == quote {
@@ -15,7 +15,7 @@ pub fn escape(s: &str, quote: char) -> String {
 }
 
 /// Convert escape characters into SQL-safe entities.
-pub fn unescape(s: &str) -> String {
+pub(crate) fn unescape(s: &str) -> String {
     let mut result = Vec::new();
     let mut buffer = String::with_capacity(s.len());
 

@@ -3,7 +3,7 @@ use std::time::Duration;
 use crate::{config::General, frontend::ClientRequest, state::State};
 
 #[derive(Debug, Clone, Copy)]
-pub struct Timeouts {
+pub(crate) struct Timeouts {
     pub(super) query_timeout: Duration,
     pub(super) client_idle_timeout: Duration,
 }

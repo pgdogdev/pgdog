@@ -7,14 +7,14 @@ use super::super::Error;
 use std::{collections::VecDeque, fmt::Debug};
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum Action {
+pub(crate) enum Action {
     Forward,
     Ignore,
     ForwardAndRemove(VecDeque<String>),
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]
-pub enum ExecutionCode {
+pub(crate) enum ExecutionCode {
     ReadyForQuery,
     ExecutionCompleted,
     ParseComplete,
@@ -56,7 +56,7 @@ impl From<char> for ExecutionCode {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum ExecutionItem {
+pub(crate) enum ExecutionItem {
     Code(ExecutionCode),
     Ignore(ExecutionCode),
 }
@@ -69,7 +69,7 @@ impl MemoryUsage for ExecutionItem {
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct ProtocolState {
+pub(crate) struct ProtocolState {
     queue: VecDeque<ExecutionItem>,
     names: VecDeque<String>,
     simulated: VecDeque<Message>,
@@ -129,7 +129,7 @@ impl ProtocolState {
     ///
     /// Returns a message only if it should be returned at the current state
     /// of the extended pipeline.
-    pub fn get_simulated(&mut self) -> Option<Message> {
+    pub(crate) fn get_simulated(&mut self) -> Option<Message> {
         let code = self.queue.front();
         let message = self.simulated.front();
         if let Some(ExecutionItem::Code(code)) = code {
@@ -145,7 +145,10 @@ impl ProtocolState {
 
     /// Should we ignore the message we just received
     /// and not forward it to the client.
-    pub fn action(&mut self, code: impl Into<ExecutionCode> + Debug) -> Result<Action, Error> {
+    pub(crate) fn action(
+        &mut self,
+        code: impl Into<ExecutionCode> + Debug,
+    ) -> Result<Action, Error> {
         let code = code.into();
         match code {
             ExecutionCode::Untracked => return Ok(Action::Forward),

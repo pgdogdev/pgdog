@@ -17,17 +17,17 @@ struct Inner {
 }
 
 #[derive(Debug)]
-pub struct CommonMapping {
+pub(crate) struct CommonMapping {
     /// The column data type.
-    pub data_type: DataType,
+    pub(crate) data_type: DataType,
     /// The list/range mapping, if any.
     /// If none, the column is using hash sharding.
-    pub mapping: Option<Mapping>,
+    pub(crate) mapping: Option<Mapping>,
 }
 
 /// Sharded tables.
 #[derive(Debug, Clone)]
-pub struct ShardedTables {
+pub(crate) struct ShardedTables {
     inner: Arc<Inner>,
 }
 
@@ -46,7 +46,7 @@ impl From<&[ShardedTable]> for ShardedTables {
 }
 
 impl ShardedTables {
-    pub fn new(tables: Vec<ShardedTable>, omnisharded_tables: Vec<String>) -> Self {
+    pub(crate) fn new(tables: Vec<ShardedTable>, omnisharded_tables: Vec<String>) -> Self {
         let mut common_mapping = HashSet::new();
         for table in &tables {
             common_mapping.insert((
@@ -75,28 +75,28 @@ impl ShardedTables {
         }
     }
 
-    pub fn tables(&self) -> &[ShardedTable] {
+    pub(crate) fn tables(&self) -> &[ShardedTable] {
         &self.inner.tables
     }
 
-    pub fn omnishards(&self) -> &HashSet<String> {
+    pub(crate) fn omnishards(&self) -> &HashSet<String> {
         &self.inner.omnisharded
     }
 
     /// The deployment has only one sharded table.
-    pub fn common_mapping(&self) -> &Option<CommonMapping> {
+    pub(crate) fn common_mapping(&self) -> &Option<CommonMapping> {
         &self.inner.common_mapping
     }
 
     /// Find a specific sharded table.
-    pub fn table(&self, name: &str) -> Option<&ShardedTable> {
+    pub(crate) fn table(&self, name: &str) -> Option<&ShardedTable> {
         self.tables()
             .iter()
             .find(|t| t.name.as_deref() == Some(name))
     }
 
     /// Find out which column (if any) is sharded in the given table.
-    pub fn sharded_column(&self, table: &str, columns: &[&str]) -> Option<ShardedColumn> {
+    pub(crate) fn sharded_column(&self, table: &str, columns: &[&str]) -> Option<ShardedColumn> {
         let with_names = self
             .tables()
             .iter()
@@ -135,15 +135,15 @@ impl ShardedTables {
 }
 
 #[derive(Debug, Clone)]
-pub struct ShardedColumn {
-    pub data_type: DataType,
-    pub position: usize,
-    pub centroids: Vec<Vector>,
-    pub centroid_probes: usize,
+pub(crate) struct ShardedColumn {
+    pub(crate) data_type: DataType,
+    pub(crate) position: usize,
+    pub(crate) centroids: Vec<Vector>,
+    pub(crate) centroid_probes: usize,
 }
 
 impl ShardedColumn {
-    pub fn from_sharded_table(table: &ShardedTable, columns: &[&str]) -> Option<Self> {
+    pub(crate) fn from_sharded_table(table: &ShardedTable, columns: &[&str]) -> Option<Self> {
         columns
             .iter()
             .position(|c| *c == table.column.as_str())

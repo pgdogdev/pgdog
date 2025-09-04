@@ -18,7 +18,7 @@ use crate::config::Role;
 use crate::net::replication::ReplicationMeta;
 
 #[derive(Debug)]
-pub struct Publisher {
+pub(crate) struct Publisher {
     /// Destination cluster.
     cluster: Cluster,
     /// Name of the publication.
@@ -30,7 +30,7 @@ pub struct Publisher {
 }
 
 impl Publisher {
-    pub fn new(cluster: &Cluster, publication: &str) -> Self {
+    pub(crate) fn new(cluster: &Cluster, publication: &str) -> Self {
         Self {
             cluster: cluster.clone(),
             publication: publication.to_string(),
@@ -40,7 +40,7 @@ impl Publisher {
     }
 
     /// Synchronize tables for all shards.
-    pub async fn sync_tables(&mut self) -> Result<(), Error> {
+    pub(crate) async fn sync_tables(&mut self) -> Result<(), Error> {
         for (number, shard) in self.cluster.shards().iter().enumerate() {
             // Load tables from publication.
             let mut primary = shard.primary(&Request::default()).await?;
@@ -76,7 +76,7 @@ impl Publisher {
     ///
     /// This uses a dedicated replication slot which will survive crashes and reboots.
     /// N.B.: The slot needs to be manually dropped!
-    pub async fn replicate(&mut self, dest: &Cluster) -> Result<(), Error> {
+    pub(crate) async fn replicate(&mut self, dest: &Cluster) -> Result<(), Error> {
         // Replicate shards in parallel.
         let mut streams = vec![];
 
@@ -166,7 +166,7 @@ impl Publisher {
     /// re-sharding the cluster in the process.
     ///
     /// TODO: Parallelize shard syncs.
-    pub async fn data_sync(&mut self, dest: &Cluster) -> Result<(), Error> {
+    pub(crate) async fn data_sync(&mut self, dest: &Cluster) -> Result<(), Error> {
         // Create replication slots.
         self.create_slots().await?;
 

@@ -6,7 +6,7 @@ use crate::{
 
 use super::prelude::*;
 
-pub struct ShowLists;
+pub(crate) struct ShowLists;
 
 #[async_trait]
 impl Command for ShowLists {

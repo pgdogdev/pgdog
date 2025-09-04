@@ -9,12 +9,12 @@ use std::string::String;
 use super::Key;
 
 #[derive(Debug)]
-pub struct Column<'a> {
+pub(crate) struct Column<'a> {
     /// Table name if fully qualified.
     /// Can be an alias.
-    pub table: Option<&'a str>,
+    pub(crate) table: Option<&'a str>,
     /// Column name.
-    pub name: &'a str,
+    pub(crate) name: &'a str,
 }
 
 #[derive(Debug)]
@@ -29,14 +29,14 @@ enum Output<'a> {
 
 /// Parse `WHERE` clause of a statement looking for sharding keys.
 #[derive(Debug)]
-pub struct WhereClause<'a> {
+pub(crate) struct WhereClause<'a> {
     output: Vec<Output<'a>>,
 }
 
 impl<'a> WhereClause<'a> {
     /// Parse the `WHERE` clause of a statement and extract
     /// all possible sharding keys.
-    pub fn new(
+    pub(crate) fn new(
         table_name: Option<&'a str>,
         where_clause: &'a Option<Box<Node>>,
     ) -> Option<WhereClause<'a>> {
@@ -49,7 +49,7 @@ impl<'a> WhereClause<'a> {
         Some(Self { output })
     }
 
-    pub fn keys(&self, table_name: Option<&str>, column_name: &str) -> Vec<Key> {
+    pub(crate) fn keys(&self, table_name: Option<&str>, column_name: &str) -> Vec<Key> {
         let mut keys = vec![];
         for output in &self.output {
             keys.extend(Self::search_for_keys(output, table_name, column_name));

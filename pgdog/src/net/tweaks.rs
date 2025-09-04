@@ -5,7 +5,7 @@ use tokio::net::TcpStream;
 
 use crate::config::config;
 
-pub fn tweak(socket: &TcpStream) -> Result<()> {
+pub(crate) fn tweak(socket: &TcpStream) -> Result<()> {
     let config = config();
     let config = &config.config.tcp;
 

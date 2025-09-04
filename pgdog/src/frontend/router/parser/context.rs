@@ -20,7 +20,7 @@ use super::Error;
 /// Contains a lot of info we collect from the router context
 /// and its inputs.
 ///
-pub struct QueryParserContext<'a> {
+pub(crate) struct QueryParserContext<'a> {
     /// Cluster is read-only, i.e. has no primary.
     pub(super) read_only: bool,
     /// Cluster has no replicas, only a primary.
@@ -48,7 +48,7 @@ pub struct QueryParserContext<'a> {
 
 impl<'a> QueryParserContext<'a> {
     /// Create query parser context from router context.
-    pub fn new(router_context: RouterContext<'a>) -> Self {
+    pub(crate) fn new(router_context: RouterContext<'a>) -> Self {
         let config = config();
         Self {
             read_only: router_context.cluster.read_only(),

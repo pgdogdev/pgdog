@@ -14,15 +14,15 @@ pub mod error;
 pub mod global_cache;
 pub mod rewrite;
 
-pub use error::Error;
-pub use global_cache::GlobalCache;
+pub(crate) use error::Error;
+pub(crate) use global_cache::GlobalCache;
 
-pub use rewrite::Rewrite;
+pub(crate) use rewrite::Rewrite;
 
 static CACHE: Lazy<PreparedStatements> = Lazy::new(PreparedStatements::default);
 
 #[derive(Clone, Debug)]
-pub struct PreparedStatements {
+pub(crate) struct PreparedStatements {
     pub(super) global: Arc<Mutex<GlobalCache>>,
     pub(super) local: HashMap<String, String>,
     pub(super) enabled: bool,
@@ -54,24 +54,27 @@ impl Default for PreparedStatements {
 
 impl PreparedStatements {
     /// New shared prepared statements cache.
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         CACHE.clone()
     }
 
     /// Get global cache.
-    pub fn global() -> Arc<Mutex<GlobalCache>> {
+    pub(crate) fn global() -> Arc<Mutex<GlobalCache>> {
         Self::new().global.clone()
     }
 
     /// Maybe rewrite message.
-    pub fn maybe_rewrite(&mut self, message: ProtocolMessage) -> Result<ProtocolMessage, Error> {
+    pub(crate) fn maybe_rewrite(
+        &mut self,
+        message: ProtocolMessage,
+    ) -> Result<ProtocolMessage, Error> {
         let mut rewrite = Rewrite::new(self);
         let message = rewrite.rewrite(message)?;
         Ok(message)
     }
 
     /// Register prepared statement with the global cache.
-    pub fn insert(&mut self, parse: Parse) -> Parse {
+    pub(crate) fn insert(&mut self, parse: Parse) -> Parse {
         let (_new, name) = { self.global.lock().insert(&parse) };
         let existed = self.local.insert(parse.name().to_owned(), name.clone());
         self.memory_used = self.memory_usage();
@@ -89,7 +92,7 @@ impl PreparedStatements {
     }
 
     /// Insert statement into the cache bypassing duplicate checks.
-    pub fn insert_anyway(&mut self, parse: Parse) -> Parse {
+    pub(crate) fn insert_anyway(&mut self, parse: Parse) -> Parse {
         let name = self.global.lock().insert_anyway(&parse);
         self.local.insert(parse.name().to_owned(), name.clone());
         self.memory_used = self.memory_usage();
@@ -97,22 +100,22 @@ impl PreparedStatements {
     }
 
     /// Get global statement counter.
-    pub fn name(&self, name: &str) -> Option<&String> {
+    pub(crate) fn name(&self, name: &str) -> Option<&String> {
         self.local.get(name)
     }
 
     /// Number of prepared statements in the local cache.
-    pub fn len_local(&self) -> usize {
+    pub(crate) fn len_local(&self) -> usize {
         self.local.len()
     }
 
     /// Is the local cache empty?
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.len_local() == 0
     }
 
     /// Remove prepared statement from local cache.
-    pub fn close(&mut self, name: &str) {
+    pub(crate) fn close(&mut self, name: &str) {
         if let Some(global_name) = self.local.remove(name) {
             self.global.lock().close(&global_name, self.capacity);
             self.memory_used = self.memory_usage();
@@ -120,7 +123,7 @@ impl PreparedStatements {
     }
 
     /// Close all prepared statements on this client.
-    pub fn close_all(&mut self) {
+    pub(crate) fn close_all(&mut self) {
         if !self.local.is_empty() {
             let mut global = self.global.lock();
 
@@ -134,7 +137,7 @@ impl PreparedStatements {
     }
 
     /// How much memory is used, approx.
-    pub fn memory_used(&self) -> usize {
+    pub(crate) fn memory_used(&self) -> usize {
         self.memory_used
     }
 }

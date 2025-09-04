@@ -22,7 +22,7 @@ static ACCEPTOR: OnceCell<Option<TlsAcceptor>> = OnceCell::new();
 static CONNECTOR: OnceCell<TlsConnector> = OnceCell::new();
 
 /// Get preloaded TLS acceptor.
-pub fn acceptor() -> Option<&'static TlsAcceptor> {
+pub(crate) fn acceptor() -> Option<&'static TlsAcceptor> {
     if let Some(Some(acceptor)) = ACCEPTOR.get() {
         return Some(acceptor);
     }
@@ -33,7 +33,7 @@ pub fn acceptor() -> Option<&'static TlsAcceptor> {
 /// Create a new TLS acceptor from the cert and key.
 ///
 /// This is not atomic, so call it on startup only.
-pub fn load_acceptor(cert: &PathBuf, key: &PathBuf) -> Result<Option<TlsAcceptor>, Error> {
+pub(crate) fn load_acceptor(cert: &PathBuf, key: &PathBuf) -> Result<Option<TlsAcceptor>, Error> {
     if let Some(acceptor) = ACCEPTOR.get() {
         return Ok(acceptor.clone());
     }
@@ -68,7 +68,7 @@ pub fn load_acceptor(cert: &PathBuf, key: &PathBuf) -> Result<Option<TlsAcceptor
 }
 
 /// Create new TLS connector using the default configuration.
-pub fn connector() -> Result<TlsConnector, Error> {
+pub(crate) fn connector() -> Result<TlsConnector, Error> {
     if let Some(connector) = CONNECTOR.get() {
         return Ok(connector.clone());
     }
@@ -151,7 +151,7 @@ impl ServerCertVerifier for AllowAllVerifier {
 }
 
 /// Create a TLS connector with the specified verification mode.
-pub fn connector_with_verify_mode(
+pub(crate) fn connector_with_verify_mode(
     mode: TlsVerifyMode,
     ca_cert_path: Option<&PathBuf>,
 ) -> Result<TlsConnector, Error> {

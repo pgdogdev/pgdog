@@ -15,21 +15,21 @@ use super::{Copy, PublicationTable, PublicationTableColumn, ReplicaIdentity, Rep
 use tracing::info;
 
 #[derive(Debug, Clone)]
-pub struct Table {
+pub(crate) struct Table {
     /// Name of the table publication.
-    pub publication: String,
+    pub(crate) publication: String,
     /// Table data.
-    pub table: PublicationTable,
+    pub(crate) table: PublicationTable,
     /// Table replica identity.
-    pub identity: ReplicaIdentity,
+    pub(crate) identity: ReplicaIdentity,
     /// Table columns.
-    pub columns: Vec<PublicationTableColumn>,
+    pub(crate) columns: Vec<PublicationTableColumn>,
     /// Table data as of this LSN.
-    pub lsn: Lsn,
+    pub(crate) lsn: Lsn,
 }
 
 impl Table {
-    pub async fn load(publication: &str, server: &mut Server) -> Result<Vec<Self>, Error> {
+    pub(crate) async fn load(publication: &str, server: &mut Server) -> Result<Vec<Self>, Error> {
         let tables = PublicationTable::load(publication, server).await?;
         let mut results = vec![];
 
@@ -50,7 +50,7 @@ impl Table {
     }
 
     /// Upsert record into table.
-    pub fn insert(&self, upsert: bool) -> String {
+    pub(crate) fn insert(&self, upsert: bool) -> String {
         let names = format!(
             "({})",
             self.columns
@@ -96,7 +96,7 @@ impl Table {
     }
 
     /// Reload table data inside the transaction.
-    pub async fn reload(&mut self, server: &mut Server) -> Result<(), Error> {
+    pub(crate) async fn reload(&mut self, server: &mut Server) -> Result<(), Error> {
         if !server.in_transaction() {
             return Err(Error::TransactionNotStarted);
         }
@@ -107,7 +107,11 @@ impl Table {
         Ok(())
     }
 
-    pub async fn data_sync(&mut self, source: &Address, dest: &Cluster) -> Result<Lsn, Error> {
+    pub(crate) async fn data_sync(
+        &mut self,
+        source: &Address,
+        dest: &Cluster,
+    ) -> Result<Lsn, Error> {
         info!(
             "data sync for \"{}\".\"{}\" started [{}]",
             self.table.schema, self.table.name, source

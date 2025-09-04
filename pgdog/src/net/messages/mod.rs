@@ -31,42 +31,42 @@ pub mod row_description;
 pub mod sync;
 pub mod terminate;
 
-pub use auth::{Authentication, Password};
-pub use backend_key::BackendKeyData;
-pub use bind::{Bind, Format, Parameter, ParameterWithFormat};
-pub use close::Close;
-pub use close_complete::CloseComplete;
-pub use command_complete::CommandComplete;
-pub use copy_data::CopyData;
-pub use copy_done::CopyDone;
-pub use copy_fail::CopyFail;
-pub use data_row::{DataRow, ToDataRowColumn};
-pub use data_types::*;
-pub use describe::Describe;
-pub use empty_query_response::EmptyQueryResponse;
-pub use error_response::ErrorResponse;
-pub use execute::Execute;
-pub use flush::Flush;
-pub use hello::Startup;
-pub use notice_response::NoticeResponse;
-pub use notification_response::NotificationResponse;
-pub use parameter_description::ParameterDescription;
-pub use parameter_status::ParameterStatus;
-pub use parse::Parse;
-pub use parse_complete::ParseComplete;
-pub use payload::Payload;
-pub use query::Query;
-pub use rfq::ReadyForQuery;
-pub use row_description::{Field, RowDescription};
-pub use sync::Sync;
-pub use terminate::Terminate;
+pub(crate) use auth::{Authentication, Password};
+pub(crate) use backend_key::BackendKeyData;
+pub(crate) use bind::{Bind, Format, Parameter, ParameterWithFormat};
+pub(crate) use close::Close;
+pub(crate) use close_complete::CloseComplete;
+pub(crate) use command_complete::CommandComplete;
+pub(crate) use copy_data::CopyData;
+pub(crate) use copy_done::CopyDone;
+pub(crate) use copy_fail::CopyFail;
+pub(crate) use data_row::{DataRow, ToDataRowColumn};
+pub(crate) use data_types::*;
+pub(crate) use describe::Describe;
+pub(crate) use empty_query_response::EmptyQueryResponse;
+pub(crate) use error_response::ErrorResponse;
+pub(crate) use execute::Execute;
+pub(crate) use flush::Flush;
+pub(crate) use hello::Startup;
+pub(crate) use notice_response::NoticeResponse;
+pub(crate) use notification_response::NotificationResponse;
+pub(crate) use parameter_description::ParameterDescription;
+pub(crate) use parameter_status::ParameterStatus;
+pub(crate) use parse::Parse;
+pub(crate) use parse_complete::ParseComplete;
+pub(crate) use payload::Payload;
+pub(crate) use query::Query;
+pub(crate) use rfq::ReadyForQuery;
+pub(crate) use row_description::{Field, RowDescription};
+pub(crate) use sync::Sync;
+pub(crate) use terminate::Terminate;
 
 use crate::{net::Error, stats::memory::MemoryUsage};
 
 use bytes::Bytes;
 
 /// Convert a Rust struct to a PostgreSQL wire protocol message.
-pub trait ToBytes {
+pub(crate) trait ToBytes {
     /// Create the protocol message as an array of bytes.
     /// The message must conform to the spec. No additional manipulation
     /// of the data will take place.
@@ -74,13 +74,13 @@ pub trait ToBytes {
 }
 
 /// Convert a PostgreSQL wire protocol message to a Rust struct.
-pub trait FromBytes: Sized {
+pub(crate) trait FromBytes: Sized {
     /// Perform the conversion.
     fn from_bytes(bytes: Bytes) -> Result<Self, Error>;
 }
 
 /// PostgreSQL wire protocol message.
-pub trait Protocol: ToBytes + FromBytes + std::fmt::Debug {
+pub(crate) trait Protocol: ToBytes + FromBytes + std::fmt::Debug {
     /// 99% of messages have a letter code.
     fn code(&self) -> char;
 
@@ -96,7 +96,7 @@ pub trait Protocol: ToBytes + FromBytes + std::fmt::Debug {
 }
 
 #[derive(Clone, PartialEq, Default, Copy, Debug)]
-pub enum Source {
+pub(crate) enum Source {
     Backend,
     #[default]
     Frontend,
@@ -104,7 +104,7 @@ pub enum Source {
 
 /// PostgreSQL protocol message.
 #[derive(Clone, Default, PartialEq)]
-pub struct Message {
+pub(crate) struct Message {
     payload: Bytes,
     stream: bool,
     source: Source,
@@ -187,7 +187,7 @@ impl FromBytes for Message {
 
 impl Message {
     /// Create new message from network payload.
-    pub fn new(payload: Bytes) -> Self {
+    pub(crate) fn new(payload: Bytes) -> Self {
         Self {
             payload,
             stream: false,
@@ -196,44 +196,44 @@ impl Message {
     }
 
     /// This message is part of a stream and should be flushed asap.
-    pub fn stream(mut self, stream: bool) -> Self {
+    pub(crate) fn stream(mut self, stream: bool) -> Self {
         self.stream = stream;
         self
     }
 
     /// Take the message payload.
-    pub fn payload(&self) -> Bytes {
+    pub(crate) fn payload(&self) -> Bytes {
         self.payload.clone()
     }
 
     /// Number of bytes in the message.
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.payload.len()
     }
 
     /// Is the message empty?
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
     /// This message is coming from the backend.
-    pub fn backend(mut self) -> Self {
+    pub(crate) fn backend(mut self) -> Self {
         self.source = Source::Backend;
         self
     }
 
     /// This message is coming from the frontend.
-    pub fn frontend(mut self) -> Self {
+    pub(crate) fn frontend(mut self) -> Self {
         self.source = Source::Frontend;
         self
     }
 
     /// Where is this message coming from?
-    pub fn source(&self) -> Source {
+    pub(crate) fn source(&self) -> Source {
         self.source
     }
 
-    pub fn in_transaction(&self) -> bool {
+    pub(crate) fn in_transaction(&self) -> bool {
         self.code() == 'Z' && matches!(self.payload[5] as char, 'T' | 'E')
     }
 }

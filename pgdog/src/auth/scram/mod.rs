@@ -4,6 +4,6 @@ pub mod error;
 pub mod server;
 pub mod state;
 
-pub use client::Client;
-pub use error::Error;
-pub use server::Server;
+pub(crate) use client::Client;
+pub(crate) use error::Error;
+pub(crate) use server::Server;

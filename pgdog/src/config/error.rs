@@ -28,7 +28,7 @@ pub enum Error {
 }
 
 impl Error {
-    pub fn config(source: &str, err: toml::de::Error) -> Self {
+    pub(crate) fn config(source: &str, err: toml::de::Error) -> Self {
         let span = err.span();
         let message = err.message();
 

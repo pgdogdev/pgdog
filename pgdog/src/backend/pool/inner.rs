@@ -366,7 +366,7 @@ impl Inner {
 
     /// Ban the pool from serving traffic if that's allowed per configuration.
     #[inline]
-    pub fn maybe_ban(&mut self, now: Instant, reason: Error) -> bool {
+    pub(crate) fn maybe_ban(&mut self, now: Instant, reason: Error) -> bool {
         if self.config.bannable || reason == Error::ManualBan {
             let ban = Ban {
                 created_at: now,
@@ -396,7 +396,7 @@ impl Inner {
 
     /// Remove the pool ban unless it' been manually banned.
     #[inline(always)]
-    pub fn maybe_unban(&mut self) -> bool {
+    pub(crate) fn maybe_unban(&mut self) -> bool {
         let mut unbanned = false;
         if let Some(ban) = self.ban.take() {
             if ban.reason == Error::ManualBan {
@@ -409,18 +409,18 @@ impl Inner {
         unbanned
     }
 
-    pub fn unban(&mut self) -> bool {
+    pub(crate) fn unban(&mut self) -> bool {
         self.ban.take().is_some()
     }
 
     #[inline(always)]
-    pub fn banned(&self) -> bool {
+    pub(crate) fn banned(&self) -> bool {
         self.ban.is_some()
     }
 
     #[inline(always)]
     #[allow(dead_code)]
-    pub fn manually_banned(&self) -> bool {
+    pub(crate) fn manually_banned(&self) -> bool {
         self.ban.map(|ban| ban.manual()).unwrap_or(false)
     }
 }
@@ -435,7 +435,7 @@ pub(super) struct CheckInResult {
 // ----- ReplicaLag --------------------------------------------------------------------------------
 
 #[derive(Clone, Copy, Debug)]
-pub enum ReplicaLag {
+pub(crate) enum ReplicaLag {
     NonApplicable,
     Duration(std::time::Duration),
     Bytes(u64),
@@ -443,7 +443,7 @@ pub enum ReplicaLag {
 }
 
 impl ReplicaLag {
-    pub fn simple_display(&self) -> String {
+    pub(crate) fn simple_display(&self) -> String {
         match self {
             Self::NonApplicable => "n/a".to_string(),
             Self::Duration(d) => {

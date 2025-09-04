@@ -18,7 +18,7 @@ use super::messages::{ErrorResponse, Message, Protocol, ReadyForQuery, Terminate
 #[pin_project(project = StreamProjection)]
 #[derive(Debug)]
 #[allow(clippy::large_enum_variant)]
-pub enum Stream {
+pub(crate) enum Stream {
     Plain(#[pin] BufStream<TcpStream>),
     Tls(#[pin] BufStream<tokio_rustls::TlsStream<TcpStream>>),
     DevNull,
@@ -80,23 +80,23 @@ impl AsyncWrite for Stream {
 
 impl Stream {
     /// Wrap an unencrypted TCP stream.
-    pub fn plain(stream: TcpStream) -> Self {
+    pub(crate) fn plain(stream: TcpStream) -> Self {
         Self::Plain(BufStream::with_capacity(9126, 9126, stream))
     }
 
     /// Wrap an encrypted TCP stream.
-    pub fn tls(stream: tokio_rustls::TlsStream<TcpStream>) -> Self {
+    pub(crate) fn tls(stream: tokio_rustls::TlsStream<TcpStream>) -> Self {
         Self::Tls(BufStream::with_capacity(9126, 9126, stream))
     }
 
     /// This is a TLS stream.
-    pub fn is_tls(&self) -> bool {
+    pub(crate) fn is_tls(&self) -> bool {
         matches!(self, Self::Tls(_))
     }
 
     /// Get peer address if any. We're not using UNIX sockets (yet)
     /// so the peer address should always be available.
-    pub fn peer_addr(&self) -> PeerAddr {
+    pub(crate) fn peer_addr(&self) -> PeerAddr {
         match self {
             Self::Plain(stream) => stream.get_ref().peer_addr().ok().into(),
             Self::Tls(stream) => stream.get_ref().get_ref().0.peer_addr().ok().into(),
@@ -105,7 +105,7 @@ impl Stream {
     }
 
     /// Check socket is okay while we wait for something else.
-    pub async fn check(&mut self) -> Result<(), crate::net::Error> {
+    pub(crate) async fn check(&mut self) -> Result<(), crate::net::Error> {
         let mut buf = [0u8; 1];
         match self {
             Self::Plain(plain) => plain.get_mut().peek(&mut buf).await?,
@@ -122,7 +122,10 @@ impl Stream {
     ///
     /// This is fast because the stream is buffered. Make sure to call [`Stream::send_flush`]
     /// for the last message in the exchange.
-    pub async fn send(&mut self, message: &impl Protocol) -> Result<usize, crate::net::Error> {
+    pub(crate) async fn send(
+        &mut self,
+        message: &impl Protocol,
+    ) -> Result<usize, crate::net::Error> {
         let bytes = message.to_bytes()?;
 
         match self {
@@ -160,7 +163,7 @@ impl Stream {
     ///
     /// This will flush all buffers and ensure the data is actually sent via the socket.
     /// Use this only for the last message in the exchange to avoid bottlenecks.
-    pub async fn send_flush(
+    pub(crate) async fn send_flush(
         &mut self,
         message: &impl Protocol,
     ) -> Result<usize, crate::net::Error> {
@@ -172,7 +175,7 @@ impl Stream {
     }
 
     /// Send multiple messages and flush the buffer.
-    pub async fn send_many(
+    pub(crate) async fn send_many(
         &mut self,
         messages: &[impl Protocol],
     ) -> Result<usize, crate::net::Error> {
@@ -192,13 +195,16 @@ impl Stream {
     /// The stream is buffered, so this is quite fast. The pooler will perform exactly
     /// one memory allocation per protocol message. It can be optimized to re-use an existing
     /// buffer but it's not worth the complexity.
-    pub async fn read(&mut self) -> Result<Message, crate::net::Error> {
+    pub(crate) async fn read(&mut self) -> Result<Message, crate::net::Error> {
         let mut buf = BytesMut::with_capacity(5);
         self.read_buf(&mut buf).await
     }
 
     /// Read data into a buffer, avoiding unnecessary allocations.
-    pub async fn read_buf(&mut self, bytes: &mut BytesMut) -> Result<Message, crate::net::Error> {
+    pub(crate) async fn read_buf(
+        &mut self,
+        bytes: &mut BytesMut,
+    ) -> Result<Message, crate::net::Error> {
         let code = self.read_u8().await?;
         let len = self.read_i32().await?;
 
@@ -226,7 +232,7 @@ impl Stream {
     }
 
     /// Send an error to the client and disconnect gracefully.
-    pub async fn fatal(&mut self, error: ErrorResponse) -> Result<(), crate::net::Error> {
+    pub(crate) async fn fatal(&mut self, error: ErrorResponse) -> Result<(), crate::net::Error> {
         self.send(&error).await?;
         self.send_flush(&Terminate).await?;
 
@@ -235,7 +241,7 @@ impl Stream {
 
     /// Send an error to the client and let them know we are ready
     /// for more queries.
-    pub async fn error(
+    pub(crate) async fn error(
         &mut self,
         error: ErrorResponse,
         in_transaction: bool,
@@ -263,7 +269,7 @@ impl Stream {
 
 /// Wrapper around SocketAddr
 /// to make it easier to debug.
-pub struct PeerAddr {
+pub(crate) struct PeerAddr {
     addr: Option<SocketAddr>,
 }
 

@@ -2,7 +2,7 @@ use crate::frontend::comms::comms;
 
 use super::prelude::*;
 
-pub struct Shutdown;
+pub(crate) struct Shutdown;
 
 #[async_trait]
 impl Command for Shutdown {

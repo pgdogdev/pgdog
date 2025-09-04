@@ -6,7 +6,7 @@ use super::*;
 use bytes::Bytes;
 
 #[derive(Eq, PartialEq, Ord, PartialOrd, Default, Debug, Clone, Hash)]
-pub struct Interval {
+pub(crate) struct Interval {
     years: i64,
     months: i8,
     days: i8,

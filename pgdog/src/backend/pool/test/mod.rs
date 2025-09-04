@@ -18,7 +18,7 @@ use super::*;
 
 mod replica;
 
-pub fn pool() -> Pool {
+pub(crate) fn pool() -> Pool {
     let config = Config {
         max: 1,
         min: 1,
@@ -40,7 +40,7 @@ pub fn pool() -> Pool {
     pool
 }
 
-pub fn pool_with_prepared_capacity(capacity: usize) -> Pool {
+pub(crate) fn pool_with_prepared_capacity(capacity: usize) -> Pool {
     let config = Config {
         max: 1,
         min: 1,

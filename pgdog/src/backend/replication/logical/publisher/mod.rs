@@ -7,7 +7,7 @@ pub mod publisher_impl;
 pub mod queries;
 pub mod table;
 pub use copy::*;
-pub use parallel_sync::ParallelSyncManager;
+pub(crate) use parallel_sync::ParallelSyncManager;
 pub use queries::*;
 pub use table::*;
 
@@ -16,12 +16,12 @@ mod test {
 
     use crate::backend::{server::test::test_replication_server, Server};
 
-    pub struct PublicationTest {
-        pub server: Server,
+    pub(crate) struct PublicationTest {
+        pub(crate) server: Server,
     }
 
     impl PublicationTest {
-        pub async fn cleanup(&mut self) {
+        pub(crate) async fn cleanup(&mut self) {
             self.server
                 .execute("DROP PUBLICATION IF EXISTS publication_test")
                 .await
@@ -37,7 +37,7 @@ mod test {
         }
     }
 
-    pub async fn setup_publication() -> PublicationTest {
+    pub(crate) async fn setup_publication() -> PublicationTest {
         let mut server = test_replication_server().await;
 
         server.execute("CREATE TABLE IF NOT EXISTS publication_test_one (id BIGSERIAL PRIMARY KEY, email VARCHAR NOT NULL)").await.unwrap();

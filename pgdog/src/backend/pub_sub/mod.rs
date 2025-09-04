@@ -3,5 +3,5 @@ pub mod commands;
 pub mod listener;
 pub mod notification;
 
-pub use client::PubSubClient;
-pub use listener::PubSubListener;
+pub(crate) use client::PubSubClient;
+pub(crate) use listener::PubSubListener;

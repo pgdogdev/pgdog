@@ -6,7 +6,7 @@ use crate::net::messages::{DataRow, Format};
 use super::Guard;
 
 #[derive(Debug, Clone, Default, Copy)]
-pub struct Oids {
+pub(crate) struct Oids {
     vector: Option<i32>,
 }
 
@@ -42,7 +42,7 @@ impl Oids {
     }
 
     /// Get pgvector oid, if installed.
-    pub fn vector(&self) -> Option<i32> {
+    pub(crate) fn vector(&self) -> Option<i32> {
         self.vector
     }
 }

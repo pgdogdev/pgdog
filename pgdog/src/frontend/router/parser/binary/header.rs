@@ -18,13 +18,13 @@ static SIGNATURE: Lazy<Vec<u8>> = Lazy::new(|| {
 });
 
 /// Get binary COPY signature.
-pub fn binary_signature() -> &'static Vec<u8> {
+pub(crate) fn binary_signature() -> &'static Vec<u8> {
     SIGNATURE.deref()
 }
 
 #[derive(Debug, Clone, Default)]
 #[allow(dead_code)]
-pub struct Header {
+pub(crate) struct Header {
     pub(super) flags: i32,
     pub(super) has_oid: bool,
     pub(super) header_extension: i32,
@@ -58,7 +58,7 @@ impl Header {
         SIGNATURE.len() + std::mem::size_of::<i32>() * 2
     }
 
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             flags: 0,
             has_oid: false,

@@ -6,7 +6,7 @@ use crate::{
 // SHOW POOLS command.
 use super::prelude::*;
 
-pub struct ShowPools;
+pub(crate) struct ShowPools;
 
 #[async_trait]
 impl Command for ShowPools {

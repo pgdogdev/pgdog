@@ -7,7 +7,7 @@ use super::code;
 use super::prelude::*;
 
 #[derive(Clone)]
-pub struct Close {
+pub(crate) struct Close {
     payload: Bytes,
 }
 
@@ -21,7 +21,7 @@ impl Debug for Close {
 }
 
 impl Close {
-    pub fn named(name: &str) -> Self {
+    pub(crate) fn named(name: &str) -> Self {
         let mut payload = Payload::named('C');
         payload.put_u8(b'S');
         payload.put_string(name);
@@ -30,7 +30,7 @@ impl Close {
         }
     }
 
-    pub fn portal(name: &str) -> Self {
+    pub(crate) fn portal(name: &str) -> Self {
         let mut payload = Payload::named('C');
         payload.put_u8(b'P');
         payload.put_string(name);
@@ -39,24 +39,24 @@ impl Close {
         }
     }
 
-    pub fn anonymous(&self) -> bool {
+    pub(crate) fn anonymous(&self) -> bool {
         self.name().is_empty() || self.kind() != 'S'
     }
 
-    pub fn is_statement(&self) -> bool {
+    pub(crate) fn is_statement(&self) -> bool {
         self.kind() == 'S'
     }
 
-    pub fn name(&self) -> &str {
+    pub(crate) fn name(&self) -> &str {
         // SAFETY: Name is checked for utf-8 in Bytes::from_bytes
         unsafe { from_utf8_unchecked(&self.payload[6..self.payload.len() - 1]) }
     }
 
-    pub fn kind(&self) -> char {
+    pub(crate) fn kind(&self) -> char {
         self.payload[5] as char
     }
 
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.payload.len()
     }
 }

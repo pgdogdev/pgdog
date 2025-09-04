@@ -6,11 +6,11 @@ use rand::Rng;
 
 /// BackendKeyData (B)
 #[derive(Copy, Clone, Debug, Hash, PartialEq, Eq)]
-pub struct BackendKeyData {
+pub(crate) struct BackendKeyData {
     /// Process ID.
-    pub pid: i32,
+    pub(crate) pid: i32,
     /// Process secret.
-    pub secret: i32,
+    pub(crate) secret: i32,
 }
 
 impl Default for BackendKeyData {
@@ -21,7 +21,7 @@ impl Default for BackendKeyData {
 
 impl BackendKeyData {
     /// Create new random BackendKeyData (B) message.
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             pid: rand::thread_rng().gen(),
             secret: rand::thread_rng().gen(),

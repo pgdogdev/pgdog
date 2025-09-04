@@ -8,8 +8,8 @@ use super::super::super::prelude::*;
 use super::string::unescape;
 
 #[derive(Clone)]
-pub struct TupleData {
-    pub columns: Vec<Column>,
+pub(crate) struct TupleData {
+    pub(crate) columns: Vec<Column>,
 }
 
 impl std::fmt::Debug for TupleData {
@@ -28,7 +28,7 @@ impl std::fmt::Debug for TupleData {
 }
 
 impl TupleData {
-    pub fn from_buffer(bytes: &mut Bytes) -> Result<Self, Error> {
+    pub(crate) fn from_buffer(bytes: &mut Bytes) -> Result<Self, Error> {
         let num_columns = bytes.get_i16();
         let mut columns = vec![];
 
@@ -58,7 +58,7 @@ impl TupleData {
         Ok(Self { columns })
     }
 
-    pub fn to_sql(&self) -> Result<String, Error> {
+    pub(crate) fn to_sql(&self) -> Result<String, Error> {
         let columns = self
             .columns
             .iter()
@@ -69,7 +69,7 @@ impl TupleData {
     }
 
     /// Create Bind message from this Tuple.
-    pub fn to_bind(&self, name: &str) -> Bind {
+    pub(crate) fn to_bind(&self, name: &str) -> Bind {
         let params = self
             .columns
             .iter()
@@ -88,23 +88,23 @@ impl TupleData {
 
 /// Explains what's inside the column.
 #[derive(Debug, Clone)]
-pub enum Identifier {
+pub(crate) enum Identifier {
     Format(Format),
     Null,
     Toasted,
 }
 
 #[derive(Debug, Clone)]
-pub struct Column {
-    pub identifier: Identifier,
-    pub len: i32,
-    pub data: Bytes,
+pub(crate) struct Column {
+    pub(crate) identifier: Identifier,
+    pub(crate) len: i32,
+    pub(crate) data: Bytes,
 }
 
 impl Column {
     /// Convert column to SQL representation,
     /// if it's encoded with UTF-8 compatible encoding.
-    pub fn to_sql(&self) -> Result<String, Error> {
+    pub(crate) fn to_sql(&self) -> Result<String, Error> {
         match self.identifier {
             Identifier::Null => Ok("NULL".into()),
             Identifier::Format(Format::Binary) => Err(Error::NotTextEncoding),
@@ -118,7 +118,7 @@ impl Column {
 
     /// Get UTF-8 representation of the data,
     /// if data is encoded with UTF-8.
-    pub fn as_str(&self) -> Option<&str> {
+    pub(crate) fn as_str(&self) -> Option<&str> {
         from_utf8(&self.data[..]).ok()
     }
 }

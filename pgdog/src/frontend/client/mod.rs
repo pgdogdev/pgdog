@@ -31,7 +31,7 @@ pub mod query_engine;
 pub mod timeouts;
 
 /// Frontend client.
-pub struct Client {
+pub(crate) struct Client {
     addr: SocketAddr,
     stream: Stream,
     id: BackendKeyData,
@@ -52,7 +52,7 @@ pub struct Client {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum TransactionType {
+pub(crate) enum TransactionType {
     ReadOnly,
     #[default]
     ReadWrite,
@@ -82,7 +82,7 @@ impl MemoryUsage for Client {
 
 impl Client {
     /// Create new frontend client from the given TCP stream.
-    pub async fn spawn(
+    pub(crate) async fn spawn(
         mut stream: Stream,
         params: Parameters,
         addr: SocketAddr,
@@ -238,7 +238,7 @@ impl Client {
     }
 
     #[cfg(test)]
-    pub fn new_test(stream: Stream, addr: SocketAddr) -> Self {
+    pub(crate) fn new_test(stream: Stream, addr: SocketAddr) -> Self {
         use crate::{config::config, frontend::comms::comms};
 
         let mut connect_params = Parameters::default();
@@ -266,7 +266,7 @@ impl Client {
     }
 
     /// Get client's identifier.
-    pub fn id(&self) -> BackendKeyData {
+    pub(crate) fn id(&self) -> BackendKeyData {
         self.id
     }
 
@@ -453,7 +453,7 @@ impl Client {
         Ok(BufferEvent::HaveRequest)
     }
 
-    pub fn in_transaction(&self) -> bool {
+    pub(crate) fn in_transaction(&self) -> bool {
         self.transaction.is_some()
     }
 }

@@ -1,7 +1,7 @@
 use crate::net::{Bind, RowDescription};
 
 #[derive(Debug, Clone)]
-pub enum Context<'a> {
+pub(crate) enum Context<'a> {
     Bind(&'a Bind),
     RowDescription(&'a RowDescription),
 }

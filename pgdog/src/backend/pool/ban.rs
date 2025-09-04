@@ -6,7 +6,7 @@ use super::Error;
 
 /// Pool ban.
 #[derive(Debug, Copy, Clone)]
-pub struct Ban {
+pub(crate) struct Ban {
     /// When the banw as created.
     pub(super) created_at: Instant,
     /// Why it was created.

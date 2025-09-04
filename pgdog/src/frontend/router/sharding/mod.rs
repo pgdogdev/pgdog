@@ -22,27 +22,27 @@ pub mod test;
 pub mod value;
 pub mod vector;
 
-pub use context::*;
-pub use context_builder::*;
-pub use error::Error;
-pub use hasher::Hasher;
-pub use operator::*;
-pub use tables::*;
-pub use value::*;
-pub use vector::{Centroids, Distance};
+pub(crate) use context::*;
+pub(crate) use context_builder::*;
+pub(crate) use error::Error;
+pub(crate) use hasher::Hasher;
+pub(crate) use operator::*;
+pub(crate) use tables::*;
+pub(crate) use value::*;
+pub(crate) use vector::{Centroids, Distance};
 
 use super::parser::Shard;
-pub use list::{ListShards, Lists};
-pub use mapping::Mapping;
-pub use range::Ranges;
+pub(crate) use list::{ListShards, Lists};
+pub(crate) use mapping::Mapping;
+pub(crate) use range::Ranges;
 
 /// Hash `BIGINT`.
-pub fn bigint(id: i64) -> u64 {
+pub(crate) fn bigint(id: i64) -> u64 {
     unsafe { ffi::hash_combine64(0, ffi::hashint8extended(id)) }
 }
 
 /// Hash UUID.
-pub fn uuid(uuid: Uuid) -> u64 {
+pub(crate) fn uuid(uuid: Uuid) -> u64 {
     unsafe {
         ffi::hash_combine64(
             0,
@@ -52,7 +52,7 @@ pub fn uuid(uuid: Uuid) -> u64 {
 }
 
 /// Hash VARCHAR.
-pub fn varchar(s: &[u8]) -> u64 {
+pub(crate) fn varchar(s: &[u8]) -> u64 {
     unsafe { ffi::hash_combine64(0, ffi::hash_bytes_extended(s.as_ptr(), s.len() as i64)) }
 }
 
@@ -132,7 +132,11 @@ pub(crate) fn shard_binary(
 }
 
 /// Shard query parameter.
-pub fn shard_param(value: &ParameterWithFormat, table: &ShardedTable, shards: usize) -> Shard {
+pub(crate) fn shard_param(
+    value: &ParameterWithFormat,
+    table: &ShardedTable,
+    shards: usize,
+) -> Shard {
     match value.format() {
         Format::Binary => shard_binary(
             value.data(),

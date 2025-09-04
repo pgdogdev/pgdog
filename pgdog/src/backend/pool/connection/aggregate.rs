@@ -43,7 +43,7 @@ struct Accumulator<'a> {
 }
 
 impl<'a> Accumulator<'a> {
-    pub fn from_aggregate(aggregate: &'a Aggregate) -> Vec<Self> {
+    pub(crate) fn from_aggregate(aggregate: &'a Aggregate) -> Vec<Self> {
         aggregate
             .targets()
             .iter()

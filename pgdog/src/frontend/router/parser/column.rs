@@ -11,28 +11,28 @@ use crate::util::escape_identifier;
 
 /// Column name extracted from a query.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
-pub struct Column<'a> {
+pub(crate) struct Column<'a> {
     /// Column name.
-    pub name: &'a str,
+    pub(crate) name: &'a str,
     /// Table name.
-    pub table: Option<&'a str>,
+    pub(crate) table: Option<&'a str>,
     /// Schema name.
-    pub schema: Option<&'a str>,
+    pub(crate) schema: Option<&'a str>,
 }
 
 /// Owned version of Column that owns its string data.
 #[derive(Debug, Clone, PartialEq, Default)]
-pub struct OwnedColumn {
+pub(crate) struct OwnedColumn {
     /// Column name.
-    pub name: String,
+    pub(crate) name: String,
     /// Table name.
-    pub table: Option<String>,
+    pub(crate) table: Option<String>,
     /// Schema name.
-    pub schema: Option<String>,
+    pub(crate) schema: Option<String>,
 }
 
 impl<'a> Column<'a> {
-    pub fn table(&self) -> Option<Table<'a>> {
+    pub(crate) fn table(&self) -> Option<Table<'a>> {
         self.table.map(|table| Table {
             name: table,
             schema: self.schema,
@@ -40,13 +40,13 @@ impl<'a> Column<'a> {
     }
 
     /// Convert this borrowed Column to an owned OwnedColumn
-    pub fn to_owned(&self) -> OwnedColumn {
+    pub(crate) fn to_owned(&self) -> OwnedColumn {
         OwnedColumn::from(*self)
     }
 }
 
 impl<'a> Column<'a> {
-    pub fn from_string(string: &'a Node) -> Result<Self, ()> {
+    pub(crate) fn from_string(string: &'a Node) -> Result<Self, ()> {
         match &string.node {
             Some(NodeEnum::String(protobuf::String { sval })) => Ok(Self {
                 name: sval.as_str(),

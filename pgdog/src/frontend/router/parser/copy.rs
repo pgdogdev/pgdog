@@ -17,15 +17,15 @@ use super::{binary::Data, BinaryStream, Column, CsvStream, Error, Table};
 
 /// Copy information parsed from a COPY statement.
 #[derive(Debug, Clone)]
-pub struct CopyInfo {
+pub(crate) struct CopyInfo {
     /// CSV contains headers.
-    pub headers: bool,
+    pub(crate) headers: bool,
     /// CSV delimiter.
-    pub delimiter: char,
+    pub(crate) delimiter: char,
     /// Columns declared by the caller.
-    pub columns: Vec<String>,
+    pub(crate) columns: Vec<String>,
     /// Table name target for the COPY.
-    pub table_name: String,
+    pub(crate) table_name: String,
 }
 
 impl Default for CopyInfo {
@@ -40,7 +40,7 @@ impl Default for CopyInfo {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum CopyFormat {
+pub(crate) enum CopyFormat {
     Text,
     Csv,
     Binary,
@@ -53,7 +53,7 @@ enum CopyStream {
 }
 
 #[derive(Debug, Clone)]
-pub struct CopyParser {
+pub(crate) struct CopyParser {
     /// CSV contains headers.
     headers: bool,
     /// CSV delimiter.
@@ -89,7 +89,7 @@ impl Default for CopyParser {
 
 impl CopyParser {
     /// Create new copy parser from a COPY statement.
-    pub fn new(stmt: &CopyStmt, cluster: &Cluster) -> Result<Option<Self>, Error> {
+    pub(crate) fn new(stmt: &CopyStmt, cluster: &Cluster) -> Result<Option<Self>, Error> {
         let mut parser = Self {
             is_from: stmt.is_from,
             ..Default::default()
@@ -188,7 +188,7 @@ impl CopyParser {
 
     /// Split CopyData (F) messages into multiple CopyData (F) messages
     /// with shard numbers.
-    pub fn shard(&mut self, data: &[CopyData]) -> Result<Vec<CopyRow>, Error> {
+    pub(crate) fn shard(&mut self, data: &[CopyData]) -> Result<Vec<CopyRow>, Error> {
         let mut rows = vec![];
 
         for row in data {

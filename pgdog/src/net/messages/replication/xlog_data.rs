@@ -16,11 +16,11 @@ use super::logical::update::Update;
 
 /// XLogData (B) message.
 #[derive(Clone)]
-pub struct XLogData {
-    pub starting_point: i64,
-    pub current_end: i64,
-    pub system_clock: i64,
-    pub bytes: Bytes,
+pub(crate) struct XLogData {
+    pub(crate) starting_point: i64,
+    pub(crate) current_end: i64,
+    pub(crate) system_clock: i64,
+    pub(crate) bytes: Bytes,
 }
 
 impl std::fmt::Debug for XLogData {
@@ -46,7 +46,7 @@ impl std::fmt::Debug for XLogData {
 
 impl XLogData {
     /// New relation message.
-    pub fn relation(system_clock: i64, relation: &Relation) -> Result<Self, Error> {
+    pub(crate) fn relation(system_clock: i64, relation: &Relation) -> Result<Self, Error> {
         Ok(Self {
             starting_point: 0,
             current_end: 0,
@@ -56,12 +56,12 @@ impl XLogData {
     }
 
     /// Convert to message.
-    pub fn to_message(&self) -> Result<Message, Error> {
+    pub(crate) fn to_message(&self) -> Result<Message, Error> {
         Ok(Message::new(CopyData::bytes(self.to_bytes()?).to_bytes()?))
     }
 
     /// Extract payload.
-    pub fn payload(&self) -> Option<XLogPayload> {
+    pub(crate) fn payload(&self) -> Option<XLogPayload> {
         if self.bytes.is_empty() {
             return None;
         }
@@ -102,12 +102,12 @@ impl XLogData {
     ///
     /// Caller is responsible to make sure the message has the right code.
     ///
-    pub fn get<T: FromBytes>(&self) -> Option<T> {
+    pub(crate) fn get<T: FromBytes>(&self) -> Option<T> {
         T::from_bytes(self.bytes.clone()).ok()
     }
 
     /// Length.
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.bytes.len()
     }
 }
@@ -147,7 +147,7 @@ impl Protocol for XLogData {
 }
 
 #[derive(Debug, Clone)]
-pub enum XLogPayload {
+pub(crate) enum XLogPayload {
     Begin(Begin),
     Commit(Commit),
     Insert(Insert),

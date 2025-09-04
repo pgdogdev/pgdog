@@ -7,13 +7,13 @@ use super::Error;
 use crate::net::Bind;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
-pub struct Limit {
-    pub limit: Option<usize>,
-    pub offset: Option<usize>,
+pub(crate) struct Limit {
+    pub(crate) limit: Option<usize>,
+    pub(crate) offset: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
-pub struct LimitClause<'a> {
+pub(crate) struct LimitClause<'a> {
     stmt: &'a SelectStmt,
     bind: Option<&'a Bind>,
 }

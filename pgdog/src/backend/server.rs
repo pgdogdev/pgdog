@@ -40,7 +40,7 @@ use crate::{net::tweak, state::State};
 
 /// PostgreSQL server connection.
 #[derive(Debug)]
-pub struct Server {
+pub(crate) struct Server {
     addr: Address,
     stream: Option<Stream>,
     id: BackendKeyData,
@@ -78,7 +78,7 @@ impl MemoryUsage for Server {
 
 impl Server {
     /// Create new PostgreSQL server connection.
-    pub async fn connect(addr: &Address, options: ServerOptions) -> Result<Self, Error> {
+    pub(crate) async fn connect(addr: &Address, options: ServerOptions) -> Result<Self, Error> {
         debug!("=> {}", addr);
         let stream = TcpStream::connect(addr.addr().await?).await?;
         tweak(&stream)?;
@@ -265,7 +265,7 @@ impl Server {
     }
 
     /// Request query cancellation for the given backend server identifier.
-    pub async fn cancel(addr: &Address, id: &BackendKeyData) -> Result<(), Error> {
+    pub(crate) async fn cancel(addr: &Address, id: &BackendKeyData) -> Result<(), Error> {
         let mut stream = TcpStream::connect(addr.addr().await?).await?;
         stream
             .write_all(
@@ -282,7 +282,7 @@ impl Server {
     }
 
     /// Send messages to the server and flush the buffer.
-    pub async fn send(&mut self, client_request: &ClientRequest) -> Result<(), Error> {
+    pub(crate) async fn send(&mut self, client_request: &ClientRequest) -> Result<(), Error> {
         self.stats.state(State::Active);
 
         for message in client_request.messages.iter() {
@@ -297,7 +297,7 @@ impl Server {
 
     /// Send one message to the server but don't flush the buffer,
     /// accelerating bulk transfers.
-    pub async fn send_one(&mut self, message: &ProtocolMessage) -> Result<(), Error> {
+    pub(crate) async fn send_one(&mut self, message: &ProtocolMessage) -> Result<(), Error> {
         self.stats.state(State::Active);
 
         let result = self.prepared_statements.handle(message)?;
@@ -322,7 +322,7 @@ impl Server {
     }
 
     /// Flush all pending messages making sure they are sent to the server immediately.
-    pub async fn flush(&mut self) -> Result<(), Error> {
+    pub(crate) async fn flush(&mut self) -> Result<(), Error> {
         if let Err(err) = self.stream().flush().await {
             trace!("😳");
             self.stats.state(State::Error);
@@ -333,7 +333,7 @@ impl Server {
     }
 
     /// Read a single message from the server.
-    pub async fn read(&mut self) -> Result<Message, Error> {
+    pub(crate) async fn read(&mut self) -> Result<Message, Error> {
         let message = loop {
             if let Some(message) = self.prepared_statements.state_mut().get_simulated() {
                 return Ok(message.backend());
@@ -431,7 +431,7 @@ impl Server {
     }
 
     /// Synchronize parameters between client and server.
-    pub async fn link_client(&mut self, params: &Parameters) -> Result<usize, Error> {
+    pub(crate) async fn link_client(&mut self, params: &Parameters) -> Result<usize, Error> {
         // Sync application_name parameter
         // and update it in the stats.
         let default_name = "PgDog";
@@ -460,11 +460,11 @@ impl Server {
         }
     }
 
-    pub fn changed_params(&self) -> &Parameters {
+    pub(crate) fn changed_params(&self) -> &Parameters {
         &self.changed_params
     }
 
-    pub fn reset_changed_params(&mut self) {
+    pub(crate) fn reset_changed_params(&mut self) {
         self.changed_params.clear();
     }
 
@@ -472,12 +472,12 @@ impl Server {
     ///
     /// There are no more expected messages from the server connection
     /// and we haven't started an explicit transaction.
-    pub fn done(&self) -> bool {
+    pub(crate) fn done(&self) -> bool {
         self.prepared_statements.done() && !self.in_transaction()
     }
 
     /// Server can execute a query.
-    pub fn in_sync(&self) -> bool {
+    pub(crate) fn in_sync(&self) -> bool {
         matches!(
             self.stats.state,
             State::Idle | State::IdleInTransaction | State::TransactionError
@@ -486,60 +486,60 @@ impl Server {
 
     /// Server is done executing all queries and is
     /// not inside a transaction.
-    pub fn can_check_in(&self) -> bool {
+    pub(crate) fn can_check_in(&self) -> bool {
         self.stats.state == State::Idle
     }
 
     /// Server hasn't sent all messages yet.
-    pub fn has_more_messages(&self) -> bool {
+    pub(crate) fn has_more_messages(&self) -> bool {
         self.prepared_statements.has_more_messages() || self.streaming
     }
 
-    pub fn copy_mode(&self) -> bool {
+    pub(crate) fn copy_mode(&self) -> bool {
         self.prepared_statements.copy_mode()
     }
 
     /// Server is still inside a transaction.
     #[inline]
-    pub fn in_transaction(&self) -> bool {
+    pub(crate) fn in_transaction(&self) -> bool {
         self.in_transaction
     }
 
     /// The server connection permanently failed.
     #[inline]
-    pub fn error(&self) -> bool {
+    pub(crate) fn error(&self) -> bool {
         self.stats.state == State::Error
     }
 
     /// Did the schema change and prepared statements are broken.
-    pub fn schema_changed(&self) -> bool {
+    pub(crate) fn schema_changed(&self) -> bool {
         self.schema_changed
     }
 
     /// Prepared statements changed outside of our pipeline,
     /// need to resync from `pg_prepared_statements` view.
-    pub fn sync_prepared(&self) -> bool {
+    pub(crate) fn sync_prepared(&self) -> bool {
         self.sync_prepared
     }
 
     /// Connection was left with an unfinished query.
-    pub fn needs_drain(&self) -> bool {
+    pub(crate) fn needs_drain(&self) -> bool {
         !self.in_sync()
     }
 
     /// Close the connection, don't do any recovery.
-    pub fn force_close(&self) -> bool {
+    pub(crate) fn force_close(&self) -> bool {
         self.stats.state == State::ForceClose
     }
 
     /// Server parameters.
     #[inline]
-    pub fn params(&self) -> &Parameters {
+    pub(crate) fn params(&self) -> &Parameters {
         &self.params
     }
 
     /// Execute a batch of queries and return all results.
-    pub async fn execute_batch(&mut self, queries: &[Query]) -> Result<Vec<Message>, Error> {
+    pub(crate) async fn execute_batch(&mut self, queries: &[Query]) -> Result<Vec<Message>, Error> {
         let mut err = None;
         if !self.in_sync() {
             return Err(Error::NotInSync);
@@ -586,13 +586,13 @@ impl Server {
     }
 
     /// Execute a query on the server and return the result.
-    pub async fn execute(&mut self, query: impl Into<Query>) -> Result<Vec<Message>, Error> {
+    pub(crate) async fn execute(&mut self, query: impl Into<Query>) -> Result<Vec<Message>, Error> {
         let query = query.into();
         self.execute_batch(&[query]).await
     }
 
     /// Execute query and raise an error if one is returned by PostgreSQL.
-    pub async fn execute_checked(
+    pub(crate) async fn execute_checked(
         &mut self,
         query: impl Into<Query>,
     ) -> Result<Vec<Message>, Error> {
@@ -607,7 +607,7 @@ impl Server {
     }
 
     /// Execute a query and return all rows.
-    pub async fn fetch_all<T: From<DataRow>>(
+    pub(crate) async fn fetch_all<T: From<DataRow>>(
         &mut self,
         query: impl Into<Query>,
     ) -> Result<Vec<T>, Error> {
@@ -624,7 +624,7 @@ impl Server {
     }
 
     /// Perform a healthcheck on this connection using the provided query.
-    pub async fn healthcheck(&mut self, query: &str) -> Result<(), Error> {
+    pub(crate) async fn healthcheck(&mut self, query: &str) -> Result<(), Error> {
         debug!("running healthcheck \"{}\" [{}]", query, self.addr);
 
         self.execute(query).await?;
@@ -634,7 +634,7 @@ impl Server {
     }
 
     /// Attempt to rollback the transaction on this server, if any has been started.
-    pub async fn rollback(&mut self) {
+    pub(crate) async fn rollback(&mut self) {
         if self.in_transaction() {
             if let Err(_err) = self.execute("ROLLBACK").await {
                 self.stats.state(State::Error);
@@ -647,7 +647,7 @@ impl Server {
         }
     }
 
-    pub async fn drain(&mut self) {
+    pub(crate) async fn drain(&mut self) {
         while self.has_more_messages() {
             if self.read().await.is_err() {
                 self.stats.state(State::Error);
@@ -675,7 +675,7 @@ impl Server {
         }
     }
 
-    pub async fn sync_prepared_statements(&mut self) -> Result<(), Error> {
+    pub(crate) async fn sync_prepared_statements(&mut self) -> Result<(), Error> {
         let names = self
             .fetch_all::<String>("SELECT name FROM pg_prepared_statements")
             .await?;
@@ -693,7 +693,7 @@ impl Server {
     }
 
     /// Close any prepared statements that exceed cache capacity.
-    pub fn ensure_prepared_capacity(&mut self) -> Vec<Close> {
+    pub(crate) fn ensure_prepared_capacity(&mut self) -> Vec<Close> {
         let close = self.prepared_statements.ensure_capacity();
         self.stats
             .close_many(close.len(), self.prepared_statements.len());
@@ -701,7 +701,7 @@ impl Server {
     }
 
     /// Close multiple prepared statements.
-    pub async fn close_many(&mut self, close: &[Close]) -> Result<(), Error> {
+    pub(crate) async fn close_many(&mut self, close: &[Close]) -> Result<(), Error> {
         if close.is_empty() {
             return Ok(());
         }
@@ -744,53 +744,53 @@ impl Server {
         Ok(())
     }
 
-    pub async fn reconnect(&self) -> Result<Server, Error> {
+    pub(crate) async fn reconnect(&self) -> Result<Server, Error> {
         Self::connect(&self.addr, self.startup_options.clone()).await
     }
 
     /// Reset error state caused by schema change.
     #[inline]
-    pub fn reset_schema_changed(&mut self) {
+    pub(crate) fn reset_schema_changed(&mut self) {
         self.schema_changed = false;
         self.prepared_statements.clear();
     }
 
     #[inline]
-    pub fn reset_params(&mut self) {
+    pub(crate) fn reset_params(&mut self) {
         self.client_params.clear();
     }
 
     #[inline]
-    pub fn reset_re_synced(&mut self) {
+    pub(crate) fn reset_re_synced(&mut self) {
         self.re_synced = false;
     }
 
     #[inline]
-    pub fn re_synced(&self) -> bool {
+    pub(crate) fn re_synced(&self) -> bool {
         self.re_synced
     }
 
     /// Server connection unique identifier.
     #[inline]
-    pub fn id(&self) -> &BackendKeyData {
+    pub(crate) fn id(&self) -> &BackendKeyData {
         &self.id
     }
 
     /// How old this connection is.
     #[inline]
-    pub fn age(&self, instant: Instant) -> Duration {
+    pub(crate) fn age(&self, instant: Instant) -> Duration {
         instant.duration_since(self.stats.created_at)
     }
 
     /// How long this connection has been idle.
     #[inline]
-    pub fn idle_for(&self, instant: Instant) -> Duration {
+    pub(crate) fn idle_for(&self, instant: Instant) -> Duration {
         instant.duration_since(self.stats.last_used)
     }
 
     /// How long has it been since the last connection healthcheck.
     #[inline]
-    pub fn healthcheck_age(&self, instant: Instant) -> Duration {
+    pub(crate) fn healthcheck_age(&self, instant: Instant) -> Duration {
         if let Some(last_healthcheck) = self.stats.last_healthcheck {
             instant.duration_since(last_healthcheck)
         } else {
@@ -800,7 +800,7 @@ impl Server {
 
     /// Get server address.
     #[inline]
-    pub fn addr(&self) -> &Address {
+    pub(crate) fn addr(&self) -> &Address {
         &self.addr
     }
 
@@ -812,12 +812,12 @@ impl Server {
     /// Server needs a cleanup because client changed a session variable
     /// of parameter.
     #[inline]
-    pub fn dirty(&self) -> bool {
+    pub(crate) fn dirty(&self) -> bool {
         self.dirty
     }
 
     #[inline]
-    pub fn mark_dirty(&mut self, dirty: bool) {
+    pub(crate) fn mark_dirty(&mut self, dirty: bool) {
         self.dirty = dirty;
     }
 
@@ -829,42 +829,42 @@ impl Server {
 
     /// Server is streaming data.
     #[inline]
-    pub fn streaming(&self) -> bool {
+    pub(crate) fn streaming(&self) -> bool {
         self.streaming
     }
 
     #[inline]
-    pub fn stats(&self) -> &Stats {
+    pub(crate) fn stats(&self) -> &Stats {
         &self.stats
     }
 
     #[inline]
-    pub fn stats_mut(&mut self) -> &mut Stats {
+    pub(crate) fn stats_mut(&mut self) -> &mut Stats {
         &mut self.stats
     }
 
     #[inline]
-    pub fn set_pooler_mode(&mut self, pooler_mode: PoolerMode) {
+    pub(crate) fn set_pooler_mode(&mut self, pooler_mode: PoolerMode) {
         self.pooler_mode = pooler_mode;
     }
 
     #[inline]
-    pub fn pooler_mode(&self) -> &PoolerMode {
+    pub(crate) fn pooler_mode(&self) -> &PoolerMode {
         &self.pooler_mode
     }
 
     #[inline]
-    pub fn replication_mode(&self) -> bool {
+    pub(crate) fn replication_mode(&self) -> bool {
         self.replication_mode
     }
 
     #[inline]
-    pub fn prepared_statements_mut(&mut self) -> &mut PreparedStatements {
+    pub(crate) fn prepared_statements_mut(&mut self) -> &mut PreparedStatements {
         &mut self.prepared_statements
     }
 
     #[inline]
-    pub fn prepared_statements(&self) -> &PreparedStatements {
+    pub(crate) fn prepared_statements(&self) -> &PreparedStatements {
         &self.prepared_statements
     }
 }
@@ -927,7 +927,7 @@ pub mod test {
     }
 
     impl Server {
-        pub fn new_error() -> Server {
+        pub(crate) fn new_error() -> Server {
             let mut server = Server::default();
             server.stats.state(State::Error);
 
@@ -935,13 +935,13 @@ pub mod test {
         }
     }
 
-    pub async fn test_server() -> Server {
+    pub(crate) async fn test_server() -> Server {
         Server::connect(&Address::new_test(), ServerOptions::default())
             .await
             .unwrap()
     }
 
-    pub async fn test_replication_server() -> Server {
+    pub(crate) async fn test_replication_server() -> Server {
         Server::connect(&Address::new_test(), ServerOptions::new_replication())
             .await
             .unwrap()

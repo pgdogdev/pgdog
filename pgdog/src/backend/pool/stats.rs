@@ -9,20 +9,20 @@ use std::{
 };
 
 #[derive(Debug, Clone, Default, Copy)]
-pub struct Counts {
-    pub xact_count: usize,
-    pub query_count: usize,
-    pub server_assignment_count: usize,
-    pub received: usize,
-    pub sent: usize,
-    pub xact_time: Duration,
-    pub query_time: Duration,
-    pub wait_time: Duration,
-    pub parse_count: usize,
-    pub bind_count: usize,
-    pub rollbacks: usize,
-    pub healthchecks: usize,
-    pub close: usize,
+pub(crate) struct Counts {
+    pub(crate) xact_count: usize,
+    pub(crate) query_count: usize,
+    pub(crate) server_assignment_count: usize,
+    pub(crate) received: usize,
+    pub(crate) sent: usize,
+    pub(crate) xact_time: Duration,
+    pub(crate) query_time: Duration,
+    pub(crate) wait_time: Duration,
+    pub(crate) parse_count: usize,
+    pub(crate) bind_count: usize,
+    pub(crate) rollbacks: usize,
+    pub(crate) healthchecks: usize,
+    pub(crate) close: usize,
 }
 
 impl Sub for Counts {
@@ -129,17 +129,17 @@ impl Add for Counts {
 }
 
 #[derive(Debug, Clone, Default, Copy)]
-pub struct Stats {
+pub(crate) struct Stats {
     // Total counts.
-    pub counts: Counts,
+    pub(crate) counts: Counts,
     last_counts: Counts,
     // Average counts.
-    pub averages: Counts,
+    pub(crate) averages: Counts,
 }
 
 impl Stats {
     /// Calculate averages.
-    pub fn calc_averages(&mut self, time: Duration) {
+    pub(crate) fn calc_averages(&mut self, time: Duration) {
         let secs = time.as_secs() as usize;
         if secs > 0 {
             self.averages = (self.counts - self.last_counts) / secs;

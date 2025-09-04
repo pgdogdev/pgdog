@@ -2,7 +2,7 @@ use super::prelude::*;
 use crate::backend::{databases::databases, pool};
 
 #[derive(Default)]
-pub struct Ban {
+pub(crate) struct Ban {
     id: Option<u64>,
     unban: bool,
 }

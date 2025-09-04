@@ -8,7 +8,7 @@ use crate::backend::Error;
 use crate::backend::Pool;
 use crate::backend::Schema;
 
-pub struct ShardConfig {
+pub(crate) struct ShardConfig {
     shard: usize,
     shards: usize,
     pool: Pool,
@@ -16,7 +16,7 @@ pub struct ShardConfig {
 
 impl ShardConfig {
     /// Sync schema and set shard config.
-    pub async fn sync(&self) -> Result<(), Error> {
+    pub(crate) async fn sync(&self) -> Result<(), Error> {
         let mut conn = self.pool.get(&Request::default()).await?;
 
         Schema::setup(&mut conn).await?;
@@ -34,7 +34,7 @@ impl ShardConfig {
     }
 
     /// Sync all shards.
-    pub async fn sync_all(cluster: &Cluster) -> Result<(), Error> {
+    pub(crate) async fn sync_all(cluster: &Cluster) -> Result<(), Error> {
         let shards = cluster.shards().len();
 
         info!("setting up schema on {} shards", shards);

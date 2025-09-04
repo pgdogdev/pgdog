@@ -10,16 +10,16 @@ use super::super::code;
 use super::super::prelude::*;
 
 #[derive(Debug, Clone)]
-pub struct StatusUpdate {
-    pub last_written: i64,
-    pub last_flushed: i64,
-    pub last_applied: i64,
-    pub system_clock: i64,
-    pub reply: u8,
+pub(crate) struct StatusUpdate {
+    pub(crate) last_written: i64,
+    pub(crate) last_flushed: i64,
+    pub(crate) last_applied: i64,
+    pub(crate) system_clock: i64,
+    pub(crate) reply: u8,
 }
 
 impl StatusUpdate {
-    pub fn wrapped(self) -> Result<CopyData, Error> {
+    pub(crate) fn wrapped(self) -> Result<CopyData, Error> {
         Ok(CopyData::new(
             &ReplicationMeta::StatusUpdate(self).to_bytes()?,
         ))
@@ -27,7 +27,7 @@ impl StatusUpdate {
 
     /// Generate a request from peer to update me now
     /// with latest lsn.
-    pub fn new_reply(lsn: Lsn) -> Self {
+    pub(crate) fn new_reply(lsn: Lsn) -> Self {
         Self {
             last_applied: lsn.lsn,
             last_flushed: lsn.lsn,

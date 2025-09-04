@@ -7,23 +7,23 @@ use crate::frontend::router::parser::Function;
 use super::Error;
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct AggregateTarget {
+pub(crate) struct AggregateTarget {
     column: usize,
     function: AggregateFunction,
 }
 
 impl AggregateTarget {
-    pub fn function(&self) -> &AggregateFunction {
+    pub(crate) fn function(&self) -> &AggregateFunction {
         &self.function
     }
 
-    pub fn column(&self) -> usize {
+    pub(crate) fn column(&self) -> usize {
         self.column
     }
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum AggregateFunction {
+pub(crate) enum AggregateFunction {
     Count,
     Max,
     Min,
@@ -32,14 +32,14 @@ pub enum AggregateFunction {
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
-pub struct Aggregate {
+pub(crate) struct Aggregate {
     targets: Vec<AggregateTarget>,
     group_by: Vec<usize>,
 }
 
 impl Aggregate {
     /// Figure out what aggregates are present and which ones PgDog supports.
-    pub fn parse(stmt: &SelectStmt) -> Result<Self, Error> {
+    pub(crate) fn parse(stmt: &SelectStmt) -> Result<Self, Error> {
         let mut targets = vec![];
         let group_by = stmt
             .group_clause
@@ -98,15 +98,15 @@ impl Aggregate {
         Ok(Self { targets, group_by })
     }
 
-    pub fn targets(&self) -> &[AggregateTarget] {
+    pub(crate) fn targets(&self) -> &[AggregateTarget] {
         &self.targets
     }
 
-    pub fn group_by(&self) -> &[usize] {
+    pub(crate) fn group_by(&self) -> &[usize] {
         &self.group_by
     }
 
-    pub fn new_count(column: usize) -> Self {
+    pub(crate) fn new_count(column: usize) -> Self {
         Self {
             targets: vec![AggregateTarget {
                 function: AggregateFunction::Count,
@@ -116,7 +116,7 @@ impl Aggregate {
         }
     }
 
-    pub fn new_count_group_by(column: usize, group_by: &[usize]) -> Self {
+    pub(crate) fn new_count_group_by(column: usize, group_by: &[usize]) -> Self {
         Self {
             targets: vec![AggregateTarget {
                 function: AggregateFunction::Count,
@@ -126,11 +126,11 @@ impl Aggregate {
         }
     }
 
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.targets.len()
     }
 }

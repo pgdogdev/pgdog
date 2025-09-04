@@ -1,7 +1,7 @@
 use super::{code, prelude::*};
 
 #[derive(Debug, Clone)]
-pub struct CopyFail {
+pub(crate) struct CopyFail {
     error: Bytes,
 }
 
@@ -29,7 +29,7 @@ impl Protocol for CopyFail {
 }
 
 impl CopyFail {
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.error.len() + 4
     }
 }

@@ -16,19 +16,19 @@ pub mod timestamptz;
 pub mod uuid;
 pub mod vector;
 
-pub use interval::Interval;
-pub use numeric::Numeric;
-pub use timestamp::Timestamp;
-pub use timestamptz::TimestampTz;
-pub use vector::Vector;
+pub(crate) use interval::Interval;
+pub(crate) use numeric::Numeric;
+pub(crate) use timestamp::Timestamp;
+pub(crate) use timestamptz::TimestampTz;
+pub(crate) use vector::Vector;
 
-pub trait FromDataType: Sized + PartialOrd + Ord + PartialEq {
+pub(crate) trait FromDataType: Sized + PartialOrd + Ord + PartialEq {
     fn decode(bytes: &[u8], encoding: Format) -> Result<Self, Error>;
     fn encode(&self, encoding: Format) -> Result<Bytes, Error>;
 }
 
 #[derive(Debug, Clone, PartialEq, PartialOrd, Eq, Ord, Hash)]
-pub enum Datum {
+pub(crate) enum Datum {
     /// BIGINT.
     Bigint(i64),
     /// INTEGER.
@@ -99,7 +99,7 @@ impl Add for Datum {
 }
 
 impl Datum {
-    pub fn new(bytes: &[u8], data_type: DataType, encoding: Format) -> Result<Self, Error> {
+    pub(crate) fn new(bytes: &[u8], data_type: DataType, encoding: Format) -> Result<Self, Error> {
         if bytes.is_empty() {
             return Ok(Datum::Null);
         }
@@ -121,11 +121,11 @@ impl Datum {
         }
     }
 
-    pub fn is_null(&self) -> bool {
+    pub(crate) fn is_null(&self) -> bool {
         matches!(self, Datum::Null)
     }
 
-    pub fn encode(&self, format: Format) -> Result<Bytes, Error> {
+    pub(crate) fn encode(&self, format: Format) -> Result<Bytes, Error> {
         match self {
             Datum::Bigint(i) => i.encode(format),
             Datum::Integer(i) => i.encode(format),
@@ -139,7 +139,7 @@ impl Datum {
 
 /// PostgreSQL data types.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum DataType {
+pub(crate) enum DataType {
     Bigint,
     Integer,
     Text,

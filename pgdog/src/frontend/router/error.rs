@@ -1,7 +1,7 @@
 use thiserror::Error;
 
 #[derive(Debug, Error)]
-pub enum Error {
+pub(crate) enum Error {
     #[error("routing plugin missing")]
     RoutingPluginMissing,
 
@@ -28,7 +28,7 @@ pub enum Error {
 }
 
 impl Error {
-    pub fn empty_query(&self) -> bool {
+    pub(crate) fn empty_query(&self) -> bool {
         matches!(self, Self::Parser(super::parser::Error::EmptyQuery))
     }
 }

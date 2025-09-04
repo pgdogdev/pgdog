@@ -20,12 +20,12 @@ use super::{Error, Guard, Pool, PoolConfig, Replicas, Request};
 // ----- Public Interface --------------------------------------------------------------------------
 
 #[derive(Clone, Debug)]
-pub struct Shard {
+pub(crate) struct Shard {
     inner: Arc<ShardInner>,
 }
 
 impl Shard {
-    pub fn new(
+    pub(crate) fn new(
         primary: &Option<PoolConfig>,
         replicas: &[PoolConfig],
         lb_strategy: LoadBalancingStrategy,
@@ -37,7 +37,7 @@ impl Shard {
     }
 
     /// Get connection to primary database.
-    pub async fn primary(&self, request: &Request) -> Result<Guard, Error> {
+    pub(crate) async fn primary(&self, request: &Request) -> Result<Guard, Error> {
         self.primary
             .as_ref()
             .ok_or(Error::NoPrimary)?
@@ -47,7 +47,7 @@ impl Shard {
 
     /// Get connection to one of the replica databases, using the configured
     /// load balancing algorithm.
-    pub async fn replica(&self, request: &Request) -> Result<Guard, Error> {
+    pub(crate) async fn replica(&self, request: &Request) -> Result<Guard, Error> {
         if self.replicas.is_empty() {
             self.primary
                 .as_ref()
@@ -67,7 +67,7 @@ impl Shard {
     }
 
     /// Get connection to primary if configured, otherwise replica.
-    pub async fn primary_or_replica(&self, request: &Request) -> Result<Guard, Error> {
+    pub(crate) async fn primary_or_replica(&self, request: &Request) -> Result<Guard, Error> {
         if self.primary.is_some() {
             self.primary(request).await
         } else {
@@ -75,7 +75,7 @@ impl Shard {
         }
     }
 
-    pub fn move_conns_to(&self, destination: &Shard) {
+    pub(crate) fn move_conns_to(&self, destination: &Shard) {
         if let Some(ref primary) = self.primary {
             if let Some(ref other) = destination.primary {
                 primary.move_conns_to(other);
@@ -100,7 +100,7 @@ impl Shard {
     }
 
     /// Listen for notifications on channel.
-    pub async fn listen(
+    pub(crate) async fn listen(
         &self,
         channel: &str,
     ) -> Result<broadcast::Receiver<NotificationResponse>, Error> {
@@ -112,7 +112,7 @@ impl Shard {
     }
 
     /// Notify channel with optional payload (payload can be empty string).
-    pub async fn notify(&self, channel: &str, payload: &str) -> Result<(), Error> {
+    pub(crate) async fn notify(&self, channel: &str, payload: &str) -> Result<(), Error> {
         if let Some(ref listener) = self.pub_sub {
             listener.notify(channel, payload).await
         } else {
@@ -121,7 +121,7 @@ impl Shard {
     }
 
     /// Clone pools but keep them independent.
-    pub fn duplicate(&self) -> Self {
+    pub(crate) fn duplicate(&self) -> Self {
         let primary = self
             .inner
             .primary
@@ -145,7 +145,7 @@ impl Shard {
     }
 
     /// Bring every pool online.
-    pub fn launch(&self) {
+    pub(crate) fn launch(&self) {
         self.pools().iter().for_each(|pool| pool.launch());
         ShardMonitor::run(self);
         if let Some(ref listener) = self.pub_sub {
@@ -153,15 +153,15 @@ impl Shard {
         }
     }
 
-    pub fn has_primary(&self) -> bool {
+    pub(crate) fn has_primary(&self) -> bool {
         self.primary.is_some()
     }
 
-    pub fn has_replicas(&self) -> bool {
+    pub(crate) fn has_replicas(&self) -> bool {
         !self.replicas.is_empty()
     }
 
-    pub async fn cancel(&self, id: &BackendKeyData) -> Result<(), super::super::Error> {
+    pub(crate) async fn cancel(&self, id: &BackendKeyData) -> Result<(), super::super::Error> {
         if let Some(ref primary) = self.primary {
             primary.cancel(id).await?;
         }
@@ -170,14 +170,14 @@ impl Shard {
         Ok(())
     }
 
-    pub fn pools(&self) -> Vec<Pool> {
+    pub(crate) fn pools(&self) -> Vec<Pool> {
         self.pools_with_roles()
             .into_iter()
             .map(|(_, pool)| pool)
             .collect()
     }
 
-    pub fn pools_with_roles(&self) -> Vec<(Role, Pool)> {
+    pub(crate) fn pools_with_roles(&self) -> Vec<(Role, Pool)> {
         let mut pools = vec![];
         if let Some(primary) = self.primary.clone() {
             pools.push((Role::Primary, primary));
@@ -194,7 +194,7 @@ impl Shard {
     }
 
     /// Shutdown every pool.
-    pub fn shutdown(&self) {
+    pub(crate) fn shutdown(&self) {
         self.comms.shutdown.notify_waiters();
         self.pools().iter().for_each(|pool| pool.shutdown());
         if let Some(ref listener) = self.pub_sub {
@@ -219,7 +219,7 @@ impl Deref for Shard {
 // ----- Private Implementation --------------------------------------------------------------------
 
 #[derive(Default, Debug)]
-pub struct ShardInner {
+pub(crate) struct ShardInner {
     primary: Option<Pool>,
     replicas: Replicas,
     rw_split: ReadWriteSplit,
@@ -260,7 +260,7 @@ impl ShardInner {
 
 #[derive(Debug)]
 struct ShardComms {
-    pub shutdown: Notify,
+    pub(crate) shutdown: Notify,
 }
 
 impl Default for ShardComms {
@@ -277,7 +277,7 @@ impl Default for ShardComms {
 struct ShardMonitor {}
 
 impl ShardMonitor {
-    pub fn run(shard: &Shard) {
+    pub(crate) fn run(shard: &Shard) {
         let shard = shard.clone();
         spawn(async move { Self::monitor_replicas(shard).await });
     }
@@ -381,8 +381,8 @@ impl ShardMonitor {
 // ----- Utils :: Primary LSN Metrics --------------------------------------------------------------
 
 struct LsnMetrics {
-    pub average_bytes_per_sec: f64,
-    pub max_lsn: u64,
+    pub(crate) average_bytes_per_sec: f64,
+    pub(crate) max_lsn: u64,
 }
 
 /// Sample WAL LSN at 0, half, and full window; compute avg rate and max LSN.

@@ -9,13 +9,13 @@ pub mod tls;
 pub mod tweaks;
 
 use bytes::{Buf, Bytes};
-pub use decoder::Decoder;
+pub(crate) use decoder::Decoder;
 pub use error::Error;
-pub use messages::*;
-pub use parameter::{Parameter, Parameters};
-pub use protocol_message::ProtocolMessage;
-pub use stream::Stream;
-pub use tweaks::tweak;
+pub(crate) use messages::*;
+pub(crate) use parameter::{Parameter, Parameters};
+pub(crate) use protocol_message::ProtocolMessage;
+pub(crate) use stream::Stream;
+pub(crate) use tweaks::tweak;
 
 use std::{io::Cursor, marker::Unpin};
 use tokio::io::{AsyncRead, AsyncReadExt};
@@ -29,7 +29,7 @@ static MAX_C_STRING_LEN: usize = 4096;
 ///
 /// UTF-8 encoding is expected and no other encoding is supported.
 ///
-pub async fn c_string(stream: &mut (impl AsyncRead + Unpin)) -> Result<String, Error> {
+pub(crate) async fn c_string(stream: &mut (impl AsyncRead + Unpin)) -> Result<String, Error> {
     let mut buf = String::new();
     let mut max = MAX_C_STRING_LEN;
 
@@ -52,7 +52,7 @@ pub async fn c_string(stream: &mut (impl AsyncRead + Unpin)) -> Result<String, E
 /// Read a C-Style String from the buffer.
 ///
 /// See [`c_string`] for how this works.
-pub fn c_string_buf(buf: &mut Bytes) -> String {
+pub(crate) fn c_string_buf(buf: &mut Bytes) -> String {
     let len = c_string_buf_len(&buf[..]);
     let mut result = String::with_capacity(len);
     while buf.remaining() > 0 {
@@ -69,7 +69,7 @@ pub fn c_string_buf(buf: &mut Bytes) -> String {
 }
 
 /// Get the length of a C-String including terminating NULL.
-pub fn c_string_buf_len(buf: &[u8]) -> usize {
+pub(crate) fn c_string_buf_len(buf: &[u8]) -> usize {
     let mut cursor = Cursor::new(buf);
     let mut len = 0;
 

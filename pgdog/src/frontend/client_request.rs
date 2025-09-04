@@ -11,13 +11,13 @@ use crate::{
 
 use super::{router::Route, PreparedStatements};
 
-pub use super::BufferedQuery;
+pub(crate) use super::BufferedQuery;
 
 /// Message buffer.
 #[derive(Debug, Clone)]
-pub struct ClientRequest {
-    pub messages: Vec<ProtocolMessage>,
-    pub route: Option<Route>,
+pub(crate) struct ClientRequest {
+    pub(crate) messages: Vec<ProtocolMessage>,
+    pub(crate) route: Option<Route>,
 }
 
 impl MemoryUsage for ClientRequest {
@@ -36,7 +36,7 @@ impl Default for ClientRequest {
 
 impl ClientRequest {
     /// Create new buffer.
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             messages: Vec::with_capacity(5),
             route: None,
@@ -45,7 +45,7 @@ impl ClientRequest {
 
     /// The buffer is full and the client won't send any more messages
     /// until it gets a reply, or we don't want to buffer the data in memory.
-    pub fn full(&self) -> bool {
+    pub(crate) fn full(&self) -> bool {
         if let Some(message) = self.messages.last() {
             // Flush (F) | Sync (F) | Query (F) | CopyDone (F) | CopyFail (F)
             if matches!(message.code(), 'H' | 'S' | 'Q' | 'c' | 'f') {
@@ -68,12 +68,12 @@ impl ClientRequest {
     }
 
     /// Number of bytes in the buffer.
-    pub fn total_message_len(&self) -> usize {
+    pub(crate) fn total_message_len(&self) -> usize {
         self.messages.iter().map(|b| b.len()).sum()
     }
 
     /// If this buffer contains a query, retrieve it.
-    pub fn query(&self) -> Result<Option<BufferedQuery>, Error> {
+    pub(crate) fn query(&self) -> Result<Option<BufferedQuery>, Error> {
         for message in &self.messages {
             match message {
                 ProtocolMessage::Query(query) => {
@@ -106,7 +106,7 @@ impl ClientRequest {
     }
 
     /// If this buffer contains bound parameters, retrieve them.
-    pub fn parameters(&self) -> Result<Option<&Bind>, Error> {
+    pub(crate) fn parameters(&self) -> Result<Option<&Bind>, Error> {
         for message in &self.messages {
             if let ProtocolMessage::Bind(bind) = message {
                 return Ok(Some(bind));
@@ -117,7 +117,7 @@ impl ClientRequest {
     }
 
     /// Get all CopyData messages.
-    pub fn copy_data(&self) -> Result<Vec<CopyData>, Error> {
+    pub(crate) fn copy_data(&self) -> Result<Vec<CopyData>, Error> {
         let mut rows = vec![];
         for message in &self.messages {
             if let ProtocolMessage::CopyData(copy_data) = message {
@@ -129,7 +129,7 @@ impl ClientRequest {
     }
 
     /// Remove all CopyData messages and return the rest.
-    pub fn without_copy_data(&self) -> Self {
+    pub(crate) fn without_copy_data(&self) -> Self {
         let mut messages = self.messages.clone();
         messages.retain(|m| m.code() != 'd');
 
@@ -140,7 +140,7 @@ impl ClientRequest {
     }
 
     /// The buffer has COPY messages.
-    pub fn copy(&self) -> bool {
+    pub(crate) fn copy(&self) -> bool {
         self.messages
             .last()
             .map(|m| m.code() == 'd' || m.code() == 'c')
@@ -156,7 +156,7 @@ impl ClientRequest {
     }
 
     /// Rewrite query in buffer.
-    pub fn rewrite(&mut self, query: &str) -> Result<(), Error> {
+    pub(crate) fn rewrite(&mut self, query: &str) -> Result<(), Error> {
         if self.messages.iter().any(|c| c.code() != 'Q') {
             return Err(Error::OnlySimpleForRewrites);
         }
@@ -166,7 +166,7 @@ impl ClientRequest {
     }
 
     /// Get the route for this client request.
-    pub fn route(&self) -> &Route {
+    pub(crate) fn route(&self) -> &Route {
         lazy_static! {
             static ref DEFAULT_ROUTE: Route = Route::default();
         }

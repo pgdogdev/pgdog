@@ -35,8 +35,8 @@ use super::router::parser::Shard;
 // ----- LogicalTransaction ----------------------------------------------------
 
 #[derive(Debug)]
-pub struct LogicalTransaction {
-    pub status: TransactionStatus,
+pub(crate) struct LogicalTransaction {
+    pub(crate) status: TransactionStatus,
     manual_shard: Option<Shard>,
     dirty_shard: Option<Shard>,
 }
@@ -48,7 +48,7 @@ impl Default for LogicalTransaction {
 }
 
 impl LogicalTransaction {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             status: TransactionStatus::Idle,
             manual_shard: None,
@@ -64,7 +64,7 @@ impl LogicalTransaction {
     /// Return the shard to apply statements to.
     /// If a manual shard is set, returns it. Otherwise returns the touched shard.
     /// In practice, either only one value is set, or both values are the same.
-    pub fn active_shard(&self) -> Option<Shard> {
+    pub(crate) fn active_shard(&self) -> Option<Shard> {
         self.dirty_shard
             .clone()
             .or_else(|| self.manual_shard.clone())
@@ -77,7 +77,7 @@ impl LogicalTransaction {
     /// # Errors
     /// - `AlreadyInTransaction` if already `BeginPending` or `InProgress`.
     /// - `AlreadyFinalized` if `Committed` or `RolledBack`.tx or finalized.
-    pub fn soft_begin(&mut self) -> Result<(), TransactionError> {
+    pub(crate) fn soft_begin(&mut self) -> Result<(), TransactionError> {
         match self.status {
             TransactionStatus::Idle => {
                 self.status = TransactionStatus::BeginPending;
@@ -103,7 +103,7 @@ impl LogicalTransaction {
     /// - `AlreadyFinalized` if `Committed` or `RolledBack`.
     /// - `InvalidManualShardType` if `shard` is not `Shard::Direct(_)`.
     /// - `ShardConflict` if `active_shard` is set to a different shard.
-    pub fn execute_query(&mut self, shard: Shard) -> Result<(), TransactionError> {
+    pub(crate) fn execute_query(&mut self, shard: Shard) -> Result<(), TransactionError> {
         self.touch_shard(shard)?;
 
         match self.status {
@@ -127,7 +127,7 @@ impl LogicalTransaction {
     /// - `NoPendingBegins` if `Idle`.
     /// - `NoActiveTransaction` if `BeginPending` (nothing ran).
     /// - `AlreadyFinalized` if already `Committed` or `RolledBack`.
-    pub fn commit(&mut self) -> Result<(), TransactionError> {
+    pub(crate) fn commit(&mut self) -> Result<(), TransactionError> {
         match self.status {
             TransactionStatus::InProgress => {
                 self.status = TransactionStatus::Committed;
@@ -149,7 +149,7 @@ impl LogicalTransaction {
     /// - `NoPendingBegins` if `Idle`.
     /// - `NoActiveTransaction` if `BeginPending` (nothing ran).
     /// - `AlreadyFinalized` if already `Committed` or `RolledBack`.
-    pub fn rollback(&mut self) -> Result<(), TransactionError> {
+    pub(crate) fn rollback(&mut self) -> Result<(), TransactionError> {
         match self.status {
             TransactionStatus::InProgress => {
                 self.status = TransactionStatus::RolledBack;
@@ -167,7 +167,7 @@ impl LogicalTransaction {
     ///
     /// Sets status to `Idle`, clears manual and dirty shard
     /// Safe to call in any state.
-    pub fn reset(&mut self) {
+    pub(crate) fn reset(&mut self) {
         self.status = TransactionStatus::Idle;
         self.manual_shard = None;
         self.dirty_shard = None;
@@ -182,7 +182,7 @@ impl LogicalTransaction {
     /// # Errors
     /// - `InvalidManualShardType` unless `Shard::Direct(_)`.
     /// - `ShardConflict` if `dirty_shard` is set to a different shard.
-    pub fn set_manual_shard(&mut self, shard: Shard) -> Result<(), TransactionError> {
+    pub(crate) fn set_manual_shard(&mut self, shard: Shard) -> Result<(), TransactionError> {
         // only Shard::Direct(n) is valid in a transaction
         if !matches!(shard, Shard::Direct(_)) {
             return Err(TransactionError::InvalidShardType);
@@ -241,7 +241,7 @@ impl LogicalTransaction {
 // ----- Error -----------------------------------------------------------------
 
 #[derive(Debug)]
-pub enum TransactionError {
+pub(crate) enum TransactionError {
     // Transaction lifecycle
     AlreadyInTransaction,
     NoActiveTransaction,
@@ -275,7 +275,7 @@ impl Error for TransactionError {}
 // ----- SubStruct: TransactionStatus ------------------------------------------
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TransactionStatus {
+pub(crate) enum TransactionStatus {
     /// No transaction started.
     Idle,
     /// BEGIN issued by client; waiting to relay it until first in-transaction query.

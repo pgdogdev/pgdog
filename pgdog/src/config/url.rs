@@ -51,7 +51,7 @@ impl From<&Url> for User {
 
 impl ConfigAndUsers {
     /// Load from database URLs.
-    pub fn databases_from_urls(mut self, urls: &[String]) -> Result<Self, Error> {
+    pub(crate) fn databases_from_urls(mut self, urls: &[String]) -> Result<Self, Error> {
         let urls = urls
             .iter()
             .map(|url| Url::parse(url))

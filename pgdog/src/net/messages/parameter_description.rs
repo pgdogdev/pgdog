@@ -2,7 +2,7 @@ use super::code;
 use super::prelude::*;
 
 #[derive(Debug, Clone)]
-pub struct ParameterDescription {
+pub(crate) struct ParameterDescription {
     params: Vec<i32>,
 }
 

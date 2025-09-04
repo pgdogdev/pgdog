@@ -22,14 +22,14 @@ ORDER BY n.nspname, c.relname";
 
 /// Table included in a publication.
 #[derive(Debug, Clone, PartialEq)]
-pub struct PublicationTable {
-    pub schema: String,
-    pub name: String,
-    pub attributes: String,
+pub(crate) struct PublicationTable {
+    pub(crate) schema: String,
+    pub(crate) name: String,
+    pub(crate) attributes: String,
 }
 
 impl PublicationTable {
-    pub async fn load(
+    pub(crate) async fn load(
         publication: &str,
         server: &mut Server,
     ) -> Result<Vec<PublicationTable>, Error> {
@@ -62,14 +62,14 @@ ON (c.relnamespace = n.oid) WHERE n.nspname = $1 AND c.relname = $2";
 
 /// Identifies the columns part of the replica identity for a table.
 #[derive(Debug, Clone)]
-pub struct ReplicaIdentity {
-    pub oid: i32,
-    pub identity: String,
-    pub kind: String,
+pub(crate) struct ReplicaIdentity {
+    pub(crate) oid: i32,
+    pub(crate) identity: String,
+    pub(crate) kind: String,
 }
 
 impl ReplicaIdentity {
-    pub async fn load(table: &PublicationTable, server: &mut Server) -> Result<Self, Error> {
+    pub(crate) async fn load(table: &PublicationTable, server: &mut Server) -> Result<Self, Error> {
         let identity: ReplicaIdentity = server
             .fetch_all(
                 REPLICA_IDENTIFY
@@ -109,15 +109,18 @@ FROM
     WHERE a.attnum > 0::pg_catalog.int2 AND NOT a.attisdropped AND a.attgenerated = '' AND a.attrelid = $2 ORDER BY a.attnum";
 
 #[derive(Debug, Clone)]
-pub struct PublicationTableColumn {
-    pub oid: i32,
-    pub name: String,
-    pub type_oid: i32,
-    pub identity: bool,
+pub(crate) struct PublicationTableColumn {
+    pub(crate) oid: i32,
+    pub(crate) name: String,
+    pub(crate) type_oid: i32,
+    pub(crate) identity: bool,
 }
 
 impl PublicationTableColumn {
-    pub async fn load(identity: &ReplicaIdentity, server: &mut Server) -> Result<Vec<Self>, Error> {
+    pub(crate) async fn load(
+        identity: &ReplicaIdentity,
+        server: &mut Server,
+    ) -> Result<Vec<Self>, Error> {
         Ok(server
             .fetch_all(
                 COLUMNS

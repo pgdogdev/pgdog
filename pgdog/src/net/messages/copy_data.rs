@@ -8,38 +8,38 @@ use super::replication::XLogData;
 
 /// CopyData (F & B) message.
 #[derive(Clone, PartialEq)]
-pub struct CopyData {
+pub(crate) struct CopyData {
     data: Bytes,
 }
 
 impl CopyData {
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.data.len()
     }
 
     /// New copy data row.
-    pub fn new(data: &[u8]) -> Self {
+    pub(crate) fn new(data: &[u8]) -> Self {
         Self {
             data: Bytes::copy_from_slice(data),
         }
     }
 
     /// New copy data from bytes.
-    pub fn bytes(data: Bytes) -> Self {
+    pub(crate) fn bytes(data: Bytes) -> Self {
         Self { data }
     }
 
     /// Get copy data.
-    pub fn data(&self) -> &[u8] {
+    pub(crate) fn data(&self) -> &[u8] {
         &self.data[..]
     }
 
     /// Get XLogData message from body, if there is one.
-    pub fn xlog_data(&self) -> Option<XLogData> {
+    pub(crate) fn xlog_data(&self) -> Option<XLogData> {
         XLogData::from_bytes(self.data.clone()).ok()
     }
 
-    pub fn replication_meta(&self) -> Option<ReplicationMeta> {
+    pub(crate) fn replication_meta(&self) -> Option<ReplicationMeta> {
         ReplicationMeta::from_bytes(self.data.clone()).ok()
     }
 }

@@ -4,11 +4,11 @@ use super::super::super::code;
 use super::super::super::prelude::*;
 
 #[derive(Debug, Clone)]
-pub struct Commit {
-    pub flags: i8,
-    pub commit_lsn: i64,
-    pub end_lsn: i64,
-    pub commit_timestamp: i64,
+pub(crate) struct Commit {
+    pub(crate) flags: i8,
+    pub(crate) commit_lsn: i64,
+    pub(crate) end_lsn: i64,
+    pub(crate) commit_timestamp: i64,
 }
 
 impl FromBytes for Commit {

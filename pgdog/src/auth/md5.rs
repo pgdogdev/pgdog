@@ -10,7 +10,7 @@ use super::Error;
 use crate::net::messages::{Authentication, Password};
 
 #[derive(Debug, Clone)]
-pub struct Client<'a> {
+pub(crate) struct Client<'a> {
     password: &'a str,
     user: &'a str,
     salt: [u8; 4],
@@ -18,7 +18,7 @@ pub struct Client<'a> {
 
 impl<'a> Client<'a> {
     /// Create new MD5 client.
-    pub fn new(user: &'a str, password: &'a str) -> Self {
+    pub(crate) fn new(user: &'a str, password: &'a str) -> Self {
         Self {
             password,
             user,
@@ -26,7 +26,7 @@ impl<'a> Client<'a> {
         }
     }
 
-    pub fn new_salt(user: &'a str, password: &'a str, salt: &[u8]) -> Result<Self, Error> {
+    pub(crate) fn new_salt(user: &'a str, password: &'a str, salt: &[u8]) -> Result<Self, Error> {
         Ok(Self {
             user,
             password,
@@ -35,11 +35,11 @@ impl<'a> Client<'a> {
     }
 
     /// Challenge
-    pub fn challenge(&self) -> Authentication {
+    pub(crate) fn challenge(&self) -> Authentication {
         Authentication::Md5(Bytes::from(self.salt.to_vec()))
     }
 
-    pub fn encrypted(&self) -> String {
+    pub(crate) fn encrypted(&self) -> String {
         let mut md5 = Context::new();
         md5.consume(self.password);
         md5.consume(self.user);
@@ -53,12 +53,12 @@ impl<'a> Client<'a> {
         password
     }
 
-    pub fn response(&self) -> Password {
+    pub(crate) fn response(&self) -> Password {
         Password::new_password(self.encrypted())
     }
 
     /// Check encrypted password against what we have.
-    pub fn check(&self, encrypted: &str) -> bool {
+    pub(crate) fn check(&self, encrypted: &str) -> bool {
         self.encrypted() == encrypted
     }
 }

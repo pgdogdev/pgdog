@@ -26,11 +26,11 @@ static IMMUTABLE_PARAMS: Lazy<Vec<String>> = Lazy::new(|| {
 
 /// Startup parameter.
 #[derive(Debug, Clone, PartialEq)]
-pub struct Parameter {
+pub(crate) struct Parameter {
     /// Parameter name.
-    pub name: String,
+    pub(crate) name: String,
     /// Parameter value.
-    pub value: String,
+    pub(crate) value: String,
 }
 
 impl<T: ToString> From<(T, T)> for Parameter {
@@ -43,13 +43,13 @@ impl<T: ToString> From<(T, T)> for Parameter {
 }
 
 #[derive(Debug, Clone)]
-pub struct MergeResult {
-    pub queries: Vec<Query>,
-    pub changed_params: usize,
+pub(crate) struct MergeResult {
+    pub(crate) queries: Vec<Query>,
+    pub(crate) changed_params: usize,
 }
 
 #[derive(Debug, Clone, Hash, PartialEq)]
-pub enum ParameterValue {
+pub(crate) enum ParameterValue {
     String(String),
     Tuple(Vec<String>),
 }
@@ -93,7 +93,7 @@ impl From<String> for ParameterValue {
 }
 
 impl ParameterValue {
-    pub fn as_str(&self) -> Option<&str> {
+    pub(crate) fn as_str(&self) -> Option<&str> {
         match self {
             Self::String(s) => Some(s.as_str()),
             _ => None,
@@ -103,7 +103,7 @@ impl ParameterValue {
 
 /// List of parameters.
 #[derive(Default, Debug, Clone, PartialEq)]
-pub struct Parameters {
+pub(crate) struct Parameters {
     params: BTreeMap<String, ParameterValue>,
     hash: u64,
 }
@@ -127,7 +127,7 @@ impl From<BTreeMap<String, ParameterValue>> for Parameters {
 
 impl Parameters {
     /// Lowercase all param names.
-    pub fn insert(
+    pub(crate) fn insert(
         &mut self,
         name: impl ToString,
         value: impl Into<ParameterValue>,
@@ -161,7 +161,7 @@ impl Parameters {
         }
     }
 
-    pub fn tracked(&self) -> Parameters {
+    pub(crate) fn tracked(&self) -> Parameters {
         self.params
             .iter()
             .filter(|(k, _)| !IMMUTABLE_PARAMS.contains(k))
@@ -172,18 +172,18 @@ impl Parameters {
 
     /// Merge params from self into other, generating the queries
     /// needed to sync that state on the server.
-    pub fn identical(&self, other: &Self) -> bool {
+    pub(crate) fn identical(&self, other: &Self) -> bool {
         self.hash == other.hash
     }
 
-    pub fn set_queries(&self) -> Vec<Query> {
+    pub(crate) fn set_queries(&self) -> Vec<Query> {
         self.params
             .iter()
             .map(|(name, value)| Query::new(format!(r#"SET "{}" TO {}"#, name, value)))
             .collect()
     }
 
-    pub fn reset_queries(&self) -> Vec<Query> {
+    pub(crate) fn reset_queries(&self) -> Vec<Query> {
         self.params
             .keys()
             .map(|name| Query::new(format!(r#"RESET "{}""#, name)))
@@ -191,7 +191,7 @@ impl Parameters {
     }
 
     /// Get self-declared shard number.
-    pub fn shard(&self) -> Option<usize> {
+    pub(crate) fn shard(&self) -> Option<usize> {
         if let Some(ParameterValue::String(application_name)) = self.get("application_name") {
             if application_name.starts_with("pgdog_shard_") {
                 application_name
@@ -207,14 +207,14 @@ impl Parameters {
     }
 
     /// Get parameter value or returned an error.
-    pub fn get_required(&self, name: &str) -> Result<&str, Error> {
+    pub(crate) fn get_required(&self, name: &str) -> Result<&str, Error> {
         self.get(name)
             .and_then(|s| s.as_str())
             .ok_or(Error::MissingParameter(name.into()))
     }
 
     /// Get parameter value or returned a default value if it doesn't exist.
-    pub fn get_default<'a>(&'a self, name: &str, default_value: &'a str) -> &'a str {
+    pub(crate) fn get_default<'a>(&'a self, name: &str, default_value: &'a str) -> &'a str {
         self.get(name)
             .map_or(default_value, |p| p.as_str().unwrap_or(default_value))
     }

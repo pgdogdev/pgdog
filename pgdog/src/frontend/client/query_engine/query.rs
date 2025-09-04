@@ -74,7 +74,7 @@ impl QueryEngine {
         Ok(())
     }
 
-    pub async fn server_message(
+    pub(crate) async fn server_message(
         &mut self,
         context: &mut QueryEngineContext<'_>,
         message: Message,

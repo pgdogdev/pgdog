@@ -8,7 +8,7 @@ use super::prelude::*;
 
 /// Describe (F) message.
 #[derive(Clone)]
-pub struct Describe {
+pub(crate) struct Describe {
     payload: Bytes,
     original: Option<Bytes>,
 }
@@ -53,15 +53,15 @@ impl Protocol for Describe {
 }
 
 impl Describe {
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.payload.len()
     }
 
-    pub fn anonymous(&self) -> bool {
+    pub(crate) fn anonymous(&self) -> bool {
         self.kind() != 'S' || self.statement().is_empty()
     }
 
-    pub fn rename(self, name: impl ToString) -> Self {
+    pub(crate) fn rename(self, name: impl ToString) -> Self {
         let mut payload = Payload::named('D');
         payload.put_u8(self.kind() as u8);
         payload.put_string(&name.to_string());
@@ -71,7 +71,7 @@ impl Describe {
         }
     }
 
-    pub fn new_statement(name: &str) -> Describe {
+    pub(crate) fn new_statement(name: &str) -> Describe {
         let mut payload = Payload::named('D');
         payload.put_u8(b'S');
         payload.put_string(name);
@@ -81,15 +81,15 @@ impl Describe {
         }
     }
 
-    pub fn is_statement(&self) -> bool {
+    pub(crate) fn is_statement(&self) -> bool {
         self.kind() == 'S'
     }
 
-    pub fn is_portal(&self) -> bool {
+    pub(crate) fn is_portal(&self) -> bool {
         self.kind() == 'P'
     }
 
-    pub fn new_portal(name: &str) -> Describe {
+    pub(crate) fn new_portal(name: &str) -> Describe {
         let mut payload = Payload::named('D');
         payload.put_u8(b'P');
         payload.put_string(name);
@@ -105,7 +105,7 @@ impl Describe {
         unsafe { from_utf8_unchecked(&self.payload[6..self.payload.len() - 1]) }
     }
 
-    pub fn kind(&self) -> char {
+    pub(crate) fn kind(&self) -> char {
         self.payload[5] as char
     }
 }

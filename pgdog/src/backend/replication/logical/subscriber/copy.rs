@@ -18,7 +18,7 @@ use super::super::{CopyStatement, Error};
 static BUFFER_SIZE: usize = 3;
 
 #[derive(Debug)]
-pub struct CopySubscriber {
+pub(crate) struct CopySubscriber {
     copy: CopyParser,
     cluster: Cluster,
     buffer: Vec<CopyData>,
@@ -33,7 +33,7 @@ impl CopySubscriber {
     /// 1. What kind of encoding we use.
     /// 2. Which column is used for sharding.
     ///
-    pub fn new(copy_stmt: &CopyStatement, cluster: &Cluster) -> Result<Self, Error> {
+    pub(crate) fn new(copy_stmt: &CopyStatement, cluster: &Cluster) -> Result<Self, Error> {
         let stmt = pg_query::parse(copy_stmt.clone().copy_in().as_str())?;
         let stmt = stmt
             .protobuf
@@ -65,7 +65,7 @@ impl CopySubscriber {
     }
 
     /// Connect to all shards. One connection per primary.
-    pub async fn connect(&mut self) -> Result<(), Error> {
+    pub(crate) async fn connect(&mut self) -> Result<(), Error> {
         let mut servers = vec![];
         for shard in self.cluster.shards() {
             let primary = shard
@@ -85,7 +85,7 @@ impl CopySubscriber {
     }
 
     /// Disconnect from all shards.
-    pub async fn disconnect(&mut self) -> Result<(), Error> {
+    pub(crate) async fn disconnect(&mut self) -> Result<(), Error> {
         for conn in std::mem::take(&mut self.connections) {
             conn.reattach().await?;
         }
@@ -94,7 +94,7 @@ impl CopySubscriber {
     }
 
     /// Start COPY on all shards.
-    pub async fn start_copy(&mut self) -> Result<(), Error> {
+    pub(crate) async fn start_copy(&mut self) -> Result<(), Error> {
         let stmt = Query::new(self.stmt.copy_in());
 
         if self.connections.is_empty() {
@@ -121,7 +121,7 @@ impl CopySubscriber {
     }
 
     /// Finish COPY on all shards.
-    pub async fn copy_done(&mut self) -> Result<(), Error> {
+    pub(crate) async fn copy_done(&mut self) -> Result<(), Error> {
         self.flush().await?;
 
         for server in &mut self.connections {
@@ -149,7 +149,7 @@ impl CopySubscriber {
     }
 
     /// Send data to subscriber, buffered.
-    pub async fn copy_data(&mut self, data: CopyData) -> Result<(), Error> {
+    pub(crate) async fn copy_data(&mut self, data: CopyData) -> Result<(), Error> {
         self.buffer.push(data);
         if self.buffer.len() == BUFFER_SIZE {
             self.flush().await?
@@ -186,7 +186,7 @@ impl CopySubscriber {
     }
 
     /// Total amount of bytes shaded.
-    pub fn bytes_sharded(&self) -> usize {
+    pub(crate) fn bytes_sharded(&self) -> usize {
         self.bytes_sharded
     }
 }

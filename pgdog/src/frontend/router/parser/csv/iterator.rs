@@ -1,6 +1,6 @@
 use super::{super::Error, CsvStream, Record};
 
-pub struct Iter<'a> {
+pub(crate) struct Iter<'a> {
     csv: &'a mut CsvStream,
 }
 

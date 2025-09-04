@@ -1,7 +1,7 @@
 use super::{Centroids, Lists, Ranges};
 
 #[derive(Debug)]
-pub enum Operator<'a> {
+pub(crate) enum Operator<'a> {
     Shards(usize),
     Centroids {
         shards: usize,

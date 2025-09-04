@@ -2,7 +2,7 @@ use crate::net::{code, FromBytes, ToBytes};
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 
 #[derive(Debug, Clone)]
-pub struct StreamStart {
+pub(crate) struct StreamStart {
     xid: i32,
     first: i8,
 }

@@ -9,7 +9,7 @@ use tokio::sync::{
 use tokio::{select, spawn};
 
 #[derive(Debug)]
-pub struct PubSubClient {
+pub(crate) struct PubSubClient {
     shutdown: Arc<Notify>,
     tx: mpsc::Sender<NotificationResponse>,
     rx: mpsc::Receiver<NotificationResponse>,
@@ -23,7 +23,7 @@ impl Default for PubSubClient {
 }
 
 impl PubSubClient {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let size = config().config.general.pub_sub_channel_size;
         let (tx, rx) = mpsc::channel(std::cmp::max(1, size));
 
@@ -36,7 +36,11 @@ impl PubSubClient {
     }
 
     /// Listen on a channel.
-    pub fn listen(&mut self, channel: &str, mut rx: broadcast::Receiver<NotificationResponse>) {
+    pub(crate) fn listen(
+        &mut self,
+        channel: &str,
+        mut rx: broadcast::Receiver<NotificationResponse>,
+    ) {
         let shutdown = self.shutdown.clone();
         let tx = self.tx.clone();
 
@@ -71,12 +75,12 @@ impl PubSubClient {
     }
 
     /// Wait for a message from the pub/sub channel.
-    pub async fn recv(&mut self) -> Option<NotificationResponse> {
+    pub(crate) async fn recv(&mut self) -> Option<NotificationResponse> {
         self.rx.recv().await
     }
 
     /// Stop listening on a channel.
-    pub fn unlisten(&mut self, channel: &str) {
+    pub(crate) fn unlisten(&mut self, channel: &str) {
         if let Some(notify) = self.unlisten.remove(channel) {
             notify.notify_one();
         }
