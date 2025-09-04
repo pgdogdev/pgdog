@@ -13,6 +13,7 @@ jobs:
           override: true
       - name: Install CMake 3.31
         run: |
+          sudo apt update && sudo apt install mold -y
           sudo apt remove cmake
           sudo pip3 install cmake==3.31.6
           cmake --version
@@ -31,6 +32,7 @@ jobs:
           override: true
       - name: Install CMake 3.31
         run: |
+          sudo apt update && sudo apt install mold -y
           sudo apt remove cmake
           sudo pip3 install cmake==3.31.6
           cmake --version
@@ -85,7 +87,7 @@ jobs:
           sudo -u postgres createuser --superuser --login $USER
           sudo -u postgres createdb $USER
           bash integration/setup.sh
-          sudo apt update && sudo apt install -y python3-virtualenv
+          sudo apt update && sudo apt install -y python3-virtualenv mold
           sudo gem install bundler
           sudo apt remove -y cmake
           sudo pip3 install cmake==3.31.6
