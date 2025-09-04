@@ -25,6 +25,7 @@ impl Command for ShowMirrors {
             Field::numeric("mirrored_count"),
             Field::numeric("dropped_count"),
             Field::numeric("error_count"),
+            Field::numeric("queue_length"),
         ];
 
         let mut messages = vec![RowDescription::new(&fields).message()?];
@@ -42,7 +43,8 @@ impl Command for ShowMirrors {
                 .add(counts.total_count as i64)
                 .add(counts.mirrored_count as i64)
                 .add(counts.dropped_count as i64)
-                .add(counts.error_count as i64);
+                .add(counts.error_count as i64)
+                .add(counts.queue_length as i64);
 
             messages.push(dr.message()?);
         }
@@ -84,11 +86,11 @@ mod tests {
         let row_desc = RowDescription::from_bytes(messages[0].to_bytes().unwrap()).unwrap();
         let fields = &row_desc.fields;
 
-        // Should have 6 columns for per-cluster stats
+        // Should have 7 columns for per-cluster stats
         assert_eq!(
             fields.len(),
-            6,
-            "Should have 6 columns for per-cluster stats"
+            7,
+            "Should have 7 columns for per-cluster stats"
         );
 
         // Check column names
@@ -99,6 +101,7 @@ mod tests {
             "mirrored_count",
             "dropped_count",
             "error_count",
+            "queue_length",
         ];
         for (i, expected) in expected_columns.iter().enumerate() {
             assert_eq!(
@@ -118,7 +121,7 @@ mod tests {
 
             // Skip validating database and user strings for now since DataRow doesn't have get_string
             // Just validate the counter values are integers (>= 0)
-            for i in 2..6 {
+            for i in 2..7 {
                 let value = data_row.get_int(i, true).unwrap_or(0);
                 assert!(value >= 0, "Column {} should have non-negative value", i);
             }

@@ -113,6 +113,11 @@ impl Mirror {
                 select! {
                     req = rx.recv() => {
                         if let Some(mut req) = req {
+                            // Decrement queue_length when we receive a message from the channel
+                            {
+                                let mut stats = stats_for_errors.lock();
+                                stats.counts.queue_length = stats.counts.queue_length.saturating_sub(1);
+                            }
                             // TODO: timeout these.
                             if let Err(err) = mirror.handle(&mut req, &mut query_engine).await {
                                 error!("mirror error: {}", err);
