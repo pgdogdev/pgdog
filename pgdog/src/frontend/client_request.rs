@@ -4,7 +4,7 @@ use lazy_static::lazy_static;
 use crate::{
     net::{
         messages::{Bind, CopyData, Protocol, Query},
-        Error, ProtocolMessage,
+        Error, Flush, ProtocolMessage,
     },
     stats::memory::MemoryUsage,
 };
@@ -172,6 +172,53 @@ impl ClientRequest {
         }
         self.route.as_ref().unwrap_or(&DEFAULT_ROUTE)
     }
+
+    /// Split request into multiple serviceable requests by the query engine.
+    pub fn splice(&self) -> Result<Vec<Self>, Error> {
+        let execs = self.messages.iter().filter(|m| m.code() == 'E').count();
+        if execs <= 1 {
+            return Ok(vec![]);
+        }
+        let mut requests: Vec<Self> = vec![];
+        let mut req = Self::new();
+
+        for message in &self.messages {
+            let code = message.code();
+            match code {
+                'P' | 'B' | 'D' | 'C' => {
+                    req.messages.push(message.clone());
+                }
+
+                'E' | 'S' => {
+                    if code == 'S' {
+                        if req.messages.is_empty() {
+                            if let Some(last) = requests.last_mut() {
+                                last.messages.push(message.clone());
+                            } else {
+                                req.messages.push(message.clone());
+                            }
+                        } else {
+                            req.messages.push(message.clone());
+                        }
+                    } else {
+                        req.messages.push(message.clone());
+                        req.messages.push(Flush.into());
+                    }
+
+                    requests.push(req);
+                    req = Self::new();
+                }
+
+                c => return Err(Error::UnexpectedMessage(c, 'S')),
+            }
+        }
+
+        if !req.messages.is_empty() {
+            requests.push(req);
+        }
+
+        Ok(requests)
+    }
 }
 
 impl From<ClientRequest> for Vec<ProtocolMessage> {
@@ -186,5 +233,39 @@ impl From<Vec<ProtocolMessage>> for ClientRequest {
             messages,
             route: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::net::{Describe, Execute, Parse, Sync};
+
+    use super::*;
+
+    #[test]
+    fn test_request_splice() {
+        let messages = vec![
+            ProtocolMessage::from(Parse::named("start", "BEGIN")),
+            Bind::new_statement("start").into(),
+            Execute::new().into(),
+            Parse::named("test", "SELECT $1").into(),
+            Bind::new_statement("test").into(),
+            Execute::new().into(),
+            Describe::new_statement("test").into(),
+            Sync::new().into(),
+        ];
+        let req = ClientRequest::from(messages);
+        let splice = req.splice().unwrap();
+        assert_eq!(splice.len(), 3);
+
+        let messages = vec![
+            ProtocolMessage::from(Parse::named("test", "SELECT $1")),
+            Bind::new_statement("test").into(),
+            Execute::new().into(),
+            Sync.into(),
+        ];
+        let req = ClientRequest::from(messages);
+        let splice = req.splice().unwrap();
+        assert!(splice.is_empty());
     }
 }

@@ -356,9 +356,22 @@ impl Client {
 
     /// Handle client messages.
     async fn client_messages(&mut self, query_engine: &mut QueryEngine) -> Result<(), Error> {
-        let mut context = QueryEngineContext::new(self);
-        query_engine.handle(&mut context).await?;
-        self.transaction = context.transaction();
+        // If client sent multiple requests, split them up and execute indivdiually.
+        let mut spliced = self.client_request.splice()?;
+        if spliced.is_empty() {
+            let mut context = QueryEngineContext::new(self);
+            query_engine.handle(&mut context).await?;
+            self.transaction = context.transaction();
+        } else {
+            let total = spliced.len();
+            for (num, req) in spliced.iter_mut().enumerate() {
+                debug!("processing spliced request {}/{}", num + 1, total);
+                let mut context = QueryEngineContext::new(self).spliced(req, total - num - 1);
+                query_engine.handle(&mut context).await?;
+                self.transaction = context.transaction();
+            }
+        }
+
         Ok(())
     }
 
