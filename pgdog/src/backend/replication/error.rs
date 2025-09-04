@@ -5,7 +5,7 @@ use thiserror::Error;
 use crate::backend;
 
 #[derive(Debug, Error)]
-pub(crate) enum Error {
+pub enum Error {
     #[error("{0}")]
     Net(#[from] crate::net::Error),
 

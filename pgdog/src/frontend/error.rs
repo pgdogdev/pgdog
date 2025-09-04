@@ -6,7 +6,7 @@ use thiserror::Error;
 
 /// Frontend error.
 #[derive(Debug, Error)]
-pub(crate) enum Error {
+pub enum Error {
     #[error("{0}")]
     Io(#[from] std::io::Error),
 

@@ -2,7 +2,7 @@
 use thiserror::Error;
 
 #[derive(Debug, Error)]
-pub(crate) enum Error {
+pub enum Error {
     #[error("out of order auth")]
     OutOfOrder,
 

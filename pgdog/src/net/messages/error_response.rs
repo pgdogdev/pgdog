@@ -9,7 +9,7 @@ use super::prelude::*;
 
 /// ErrorResponse (B) message.
 #[derive(Debug)]
-pub(crate) struct ErrorResponse {
+pub struct ErrorResponse {
     severity: String,
     pub(crate) code: String,
     pub(crate) message: String,

@@ -3,7 +3,7 @@ use std::{array::TryFromSliceError, ffi::NulError, num::ParseIntError};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
-pub(crate) enum Error {
+pub enum Error {
     #[error("{0}")]
     Parse(#[from] ParseIntError),
 

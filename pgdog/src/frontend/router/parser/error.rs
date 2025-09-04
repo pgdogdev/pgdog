@@ -5,7 +5,7 @@ use thiserror::Error;
 use crate::frontend::router::sharding;
 
 #[derive(Debug, Error)]
-pub(crate) enum Error {
+pub enum Error {
     #[error("{0}")]
     PgQuery(pg_query::Error),
 

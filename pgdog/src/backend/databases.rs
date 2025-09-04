@@ -131,7 +131,7 @@ pub(crate) fn add(mut user: crate::config::User) {
 
 /// Database/user pair that identifies a database cluster pool.
 #[derive(Debug, PartialEq, Hash, Eq, Clone)]
-pub(crate) struct User {
+pub struct User {
     /// User name.
     pub(crate) user: String,
     /// Database name.

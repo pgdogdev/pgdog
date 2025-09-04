@@ -2,7 +2,7 @@
 use thiserror::Error;
 
 #[derive(Debug, Error, PartialEq, Clone, Copy)]
-pub(crate) enum Error {
+pub enum Error {
     #[error("checkout timeout")]
     CheckoutTimeout,
 

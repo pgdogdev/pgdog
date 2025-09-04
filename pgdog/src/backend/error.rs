@@ -5,7 +5,7 @@ use crate::net::messages::ErrorResponse;
 use super::databases::User;
 
 #[derive(Debug, Error)]
-pub(crate) enum Error {
+pub enum Error {
     #[error("{0}")]
     Io(#[from] std::io::Error),
 
