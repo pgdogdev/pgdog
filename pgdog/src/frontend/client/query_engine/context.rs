@@ -16,6 +16,8 @@ pub struct QueryEngineContext<'a> {
     pub(super) params: &'a mut Parameters,
     /// Request
     pub(super) client_request: &'a mut ClientRequest,
+    /// Request position in a splice.
+    pub(super) requests_left: usize,
     /// Client's socket to send responses to.
     pub(super) stream: &'a mut Stream,
     /// Client in transaction?
@@ -44,7 +46,14 @@ impl<'a> QueryEngineContext<'a> {
             cross_shard_disabled: client.cross_shard_disabled,
             memory_usage,
             admin: client.admin,
+            requests_left: 0,
         }
+    }
+
+    pub fn spliced(mut self, req: &'a mut ClientRequest, request_left: usize) -> Self {
+        self.client_request = req;
+        self.requests_left = request_left;
+        self
     }
 
     /// Create context from mirror.
@@ -59,6 +68,7 @@ impl<'a> QueryEngineContext<'a> {
             cross_shard_disabled: mirror.cross_shard_disabled,
             memory_usage: 0,
             admin: false,
+            requests_left: 0,
         }
     }
 
