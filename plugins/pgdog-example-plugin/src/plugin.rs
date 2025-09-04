@@ -93,9 +93,8 @@ pub(crate) fn route_query(context: Context) -> Result<Route, PluginError> {
         // No params bound.
     } else {
         let param = params
-            .get(0)
-            .map(|p| p.decode(params.parameter_format(0)))
-            .flatten();
+            .first()
+            .and_then(|p| p.decode(params.parameter_format(0)));
         if let Some(param) = param {
             println!("Decoded parameter 0 ($1): {:?}", param);
         }

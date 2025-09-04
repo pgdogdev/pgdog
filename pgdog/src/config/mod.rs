@@ -510,6 +510,12 @@ pub struct General {
     /// LISTEN/NOTIFY channel size.
     #[serde(default)]
     pub pub_sub_channel_size: usize,
+    /// Log client connections.
+    #[serde(default = "General::log_connections")]
+    pub log_connections: bool,
+    /// Log client disconnections.
+    #[serde(default = "General::log_disconnections")]
+    pub log_disconnections: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -617,6 +623,8 @@ impl Default for General {
             cross_shard_disabled: bool::default(),
             dns_ttl: None,
             pub_sub_channel_size: 0,
+            log_connections: Self::log_connections(),
+            log_disconnections: Self::log_disconnections(),
         }
     }
 }
@@ -748,6 +756,14 @@ impl General {
 
     fn query_cache_limit() -> usize {
         usize::MAX
+    }
+
+    fn log_connections() -> bool {
+        true
+    }
+
+    fn log_disconnections() -> bool {
+        true
     }
 
     fn default_passthrough_auth() -> PassthoughAuth {

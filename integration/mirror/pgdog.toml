@@ -1,5 +1,6 @@
 [general]
 mirror_exposure = 1.0
+openmetrics_port = 9090
 
 [[databases]]
 name = "pgdog"

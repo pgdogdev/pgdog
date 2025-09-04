@@ -128,6 +128,9 @@ impl Guard {
                     error!("server reset error [{}]", server.addr());
                 }
                 Ok(_) => {
+                    if cleanup.is_deallocate() {
+                        server.prepared_statements_mut().clear();
+                    }
                     server.cleaned();
                 }
             }
@@ -253,5 +256,27 @@ mod test {
 
         guard.mark_dirty(true);
         drop(guard);
+    }
+
+    #[tokio::test]
+    async fn test_cleanup_prepared_statements() {
+        crate::logger();
+        let pool = pool();
+        let mut guard = pool.get(&Request::default()).await.unwrap();
+
+        guard
+            .send(&vec![Parse::named("test", "SELECT $1").into(), Flush.into()].into())
+            .await
+            .unwrap();
+        let msg = guard.read().await.unwrap();
+        assert_eq!(msg.code(), '1');
+        assert!(guard.done());
+
+        assert_eq!(guard.prepared_statements().len(), 1);
+        guard.reset = true;
+        drop(guard);
+
+        let guard = pool.get(&Request::default()).await.unwrap();
+        assert!(guard.prepared_statements().is_empty());
     }
 }
