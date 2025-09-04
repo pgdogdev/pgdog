@@ -15,7 +15,7 @@ use crate::backend::{
     databases,
     pool::{Connection, Request},
 };
-use crate::config::{self, AuthType};
+use crate::config::{self, config, AuthType};
 use crate::frontend::client::query_engine::{QueryEngine, QueryEngineContext};
 use crate::net::messages::{
     Authentication, BackendKeyData, ErrorResponse, FromBytes, Message, Password, Protocol,
@@ -25,6 +25,7 @@ use crate::net::ProtocolMessage;
 use crate::net::{parameter::Parameters, Stream};
 use crate::state::State;
 use crate::stats::memory::MemoryUsage;
+use crate::util::user_database_from_params;
 
 // pub mod counter;
 pub mod query_engine;
@@ -88,8 +89,7 @@ impl Client {
         addr: SocketAddr,
         mut comms: Comms,
     ) -> Result<(), Error> {
-        let user = params.get_default("user", "postgres");
-        let database = params.get_default("database", user);
+        let (user, database) = user_database_from_params(&params);
         let config = config::config();
 
         let admin = database == config.config.admin.name && config.config.admin.user == user;
@@ -202,7 +202,12 @@ impl Client {
         stream.send_flush(&ReadyForQuery::idle()).await?;
         comms.connect(&id, addr, &params);
 
-        info!("client connected [{}]", addr,);
+        if config.config.general.log_connections {
+            info!(
+                r#"client "{}" connected to database "{}" [{}]"#,
+                user, database, addr
+            );
+        }
 
         let mut client = Self {
             addr,
@@ -273,13 +278,27 @@ impl Client {
     /// Run the client and log disconnect.
     async fn spawn_internal(&mut self) {
         match self.run().await {
-            Ok(_) => info!("client disconnected [{}]", self.addr),
+            Ok(_) => {
+                if config().config.general.log_disconnections {
+                    let (user, database) = user_database_from_params(&self.params);
+                    info!(
+                        r#"client "{}" disconnected from database "{}" [{}]"#,
+                        user, database, self.addr
+                    )
+                }
+            }
             Err(err) => {
                 let _ = self
                     .stream
                     .error(ErrorResponse::from_err(&err), false)
                     .await;
-                error!("client disconnected with error [{}]: {}", self.addr, err)
+                if config().config.general.log_disconnections {
+                    let (user, database) = user_database_from_params(&self.params);
+                    error!(
+                        r#"client "{}" disconnected from database "{}" with error [{}]: {}"#,
+                        user, database, self.addr, err
+                    )
+                }
             }
         }
     }
