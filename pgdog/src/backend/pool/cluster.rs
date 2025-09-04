@@ -40,7 +40,6 @@ pub struct Cluster {
     pooler_mode: PoolerMode,
     sharded_tables: ShardedTables,
     replication_sharding: Option<String>,
-    mirror_of: Option<String>,
     schema: Arc<RwLock<Schema>>,
     multi_tenant: Option<MultiTenant>,
     rw_strategy: ReadWriteStrategy,
@@ -79,7 +78,6 @@ pub struct ClusterConfig<'a> {
     pub pooler_mode: PoolerMode,
     pub sharded_tables: ShardedTables,
     pub replication_sharding: Option<String>,
-    pub mirror_of: Option<&'a str>,
     pub multi_tenant: &'a Option<MultiTenant>,
     pub rw_strategy: ReadWriteStrategy,
     pub rw_split: ReadWriteSplit,
@@ -92,7 +90,6 @@ impl<'a> ClusterConfig<'a> {
         user: &'a User,
         shards: &'a [ClusterShardConfig],
         sharded_tables: ShardedTables,
-        mirror_of: Option<&'a str>,
         multi_tenant: &'a Option<MultiTenant>,
     ) -> Self {
         Self {
@@ -104,7 +101,6 @@ impl<'a> ClusterConfig<'a> {
             lb_strategy: general.load_balancing_strategy,
             shards,
             sharded_tables,
-            mirror_of,
             multi_tenant,
             rw_strategy: general.read_write_strategy,
             rw_split: general.read_write_split,
@@ -125,7 +121,6 @@ impl Cluster {
             pooler_mode,
             sharded_tables,
             replication_sharding,
-            mirror_of,
             multi_tenant,
             rw_strategy,
             rw_split,
@@ -143,7 +138,6 @@ impl Cluster {
             pooler_mode,
             sharded_tables,
             replication_sharding,
-            mirror_of: mirror_of.map(|s| s.to_owned()),
             schema: Arc::new(RwLock::new(Schema::default())),
             multi_tenant: multi_tenant.clone(),
             rw_strategy,
@@ -195,7 +189,6 @@ impl Cluster {
             pooler_mode: self.pooler_mode,
             sharded_tables: self.sharded_tables.clone(),
             replication_sharding: self.replication_sharding.clone(),
-            mirror_of: self.mirror_of.clone(),
             schema: self.schema.clone(),
             multi_tenant: self.multi_tenant.clone(),
             rw_strategy: self.rw_strategy,
@@ -217,11 +210,6 @@ impl Cluster {
     /// Get all shards.
     pub fn shards(&self) -> &[Shard] {
         &self.shards
-    }
-
-    /// Mirrors getter.
-    pub fn mirror_of(&self) -> Option<&str> {
-        self.mirror_of.as_deref()
     }
 
     /// Get the password the user should use to connect to the database.
