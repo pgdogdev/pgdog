@@ -6,15 +6,9 @@ pub mod xlog_data;
 
 pub(crate) use hot_standby_feedback::HotStandbyFeedback;
 pub(crate) use keep_alive::KeepAlive;
-pub(crate) use logical::begin::Begin;
 pub(crate) use logical::commit::Commit;
-pub(crate) use logical::delete::Delete;
 pub(crate) use logical::insert::Insert;
 pub(crate) use logical::relation::Relation;
-pub(crate) use logical::stream_start::StreamStart;
-pub(crate) use logical::truncate::Truncate;
-pub(crate) use logical::tuple_data::TupleData;
-pub(crate) use logical::update::Update;
 pub(crate) use status_update::StatusUpdate;
 pub(crate) use xlog_data::XLogData;
 

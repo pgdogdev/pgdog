@@ -7,4 +7,3 @@ pub(crate) use copy_statement::CopyStatement;
 pub(crate) use error::Error;
 
 pub(crate) use publisher::publisher_impl::Publisher;
-pub(crate) use subscriber::{CopySubscriber, StreamSubscriber};

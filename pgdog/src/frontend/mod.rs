@@ -21,9 +21,7 @@ pub(crate) use client_request::ClientRequest;
 pub(crate) use comms::Comms;
 pub(crate) use connected_client::ConnectedClient;
 pub use error::Error;
-pub(crate) use prepared_statements::{PreparedStatements, Rewrite};
-#[cfg(debug_assertions)]
-pub(crate) use query_logger::QueryLogger;
+pub(crate) use prepared_statements::PreparedStatements;
 pub(crate) use router::{Command, Router};
 pub(crate) use router::{RouterContext, SearchPath};
 pub(crate) use stats::Stats;

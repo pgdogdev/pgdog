@@ -29,7 +29,7 @@ pub(crate) use hasher::Hasher;
 pub(crate) use operator::*;
 pub(crate) use tables::*;
 pub(crate) use value::*;
-pub(crate) use vector::{Centroids, Distance};
+pub(crate) use vector::Centroids;
 
 use super::parser::Shard;
 pub(crate) use list::{ListShards, Lists};

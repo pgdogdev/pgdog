@@ -17,7 +17,7 @@ pub(crate) use parser::{Command, QueryParser, Route};
 use super::ClientRequest;
 pub(crate) use context::RouterContext;
 pub(crate) use search_path::SearchPath;
-pub(crate) use sharding::{Lists, Ranges};
+pub(crate) use sharding::Ranges;
 
 /// Query router.
 #[derive(Debug)]

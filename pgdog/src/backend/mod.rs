@@ -15,7 +15,7 @@ pub mod server_options;
 pub mod stats;
 
 pub(crate) use error::Error;
-pub(crate) use pool::{Cluster, ClusterShardConfig, Pool, Replicas, Shard, ShardingSchema};
+pub(crate) use pool::{Cluster, ClusterShardConfig, Pool, ShardingSchema};
 pub(crate) use prepared_statements::PreparedStatements;
 pub(crate) use protocol::*;
 pub(crate) use pub_sub::{PubSubClient, PubSubListener};

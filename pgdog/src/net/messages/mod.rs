@@ -33,7 +33,7 @@ pub mod terminate;
 
 pub(crate) use auth::{Authentication, Password};
 pub(crate) use backend_key::BackendKeyData;
-pub(crate) use bind::{Bind, Format, Parameter, ParameterWithFormat};
+pub(crate) use bind::{Bind, Format, ParameterWithFormat};
 pub(crate) use close::Close;
 pub(crate) use close_complete::CloseComplete;
 pub(crate) use command_complete::CommandComplete;

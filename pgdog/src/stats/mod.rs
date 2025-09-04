@@ -12,5 +12,5 @@ pub mod query_cache;
 pub(crate) use clients::Clients;
 pub use logger::Logger as StatsLogger;
 pub(crate) use mirror_stats::MirrorStatsMetrics;
-pub(crate) use pools::{PoolMetric, Pools};
+pub(crate) use pools::Pools;
 pub(crate) use query_cache::QueryCache;
