@@ -25,9 +25,9 @@ pub mod buffer_with_delay;
 pub mod handler;
 pub mod request;
 
-pub use buffer_with_delay::*;
-pub use handler::*;
-pub use request::*;
+pub(crate) use buffer_with_delay::*;
+pub(crate) use handler::*;
+pub(crate) use request::*;
 
 /// Mirror handler. One is created for each client connected
 /// to PgDog.
