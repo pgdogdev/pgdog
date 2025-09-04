@@ -123,4 +123,8 @@ impl Cleanup {
     pub fn is_reset_params(&self) -> bool {
         self.dirty
     }
+
+    pub fn is_deallocate(&self) -> bool {
+        self.deallocate
+    }
 }

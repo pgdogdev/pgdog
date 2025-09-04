@@ -3,7 +3,9 @@
 use chrono::{DateTime, Local, Utc};
 use pgdog_plugin::comp;
 use rand::{distributions::Alphanumeric, Rng};
-use std::{ops::Deref, time::Duration}; // 0.8
+use std::{ops::Deref, time::Duration};
+
+use crate::net::Parameters; // 0.8
 
 pub fn format_time(time: DateTime<Local>) -> String {
     time.format("%Y-%m-%d %H:%M:%S%.3f %Z").to_string()
@@ -84,6 +86,14 @@ pub fn pgdog_version() -> String {
         env!("GIT_HASH"),
         comp::rustc_version().deref()
     )
+}
+
+/// Get user and database parameters.
+pub fn user_database_from_params(params: &Parameters) -> (&str, &str) {
+    let user = params.get_default("user", "postgres");
+    let database = params.get_default("database", user);
+
+    (user, database)
 }
 
 #[cfg(test)]
