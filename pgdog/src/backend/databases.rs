@@ -431,12 +431,26 @@ pub(crate) fn new_pool(
             config.multi_tenant(),
         );
 
+        let cluster = Cluster::new(cluster_config);
+
+        // If passthrough auth is enabled and user has no password, pause the pools
+        // to prevent connection attempts with empty credentials
+        let is_admin = user.database == config.admin.name && user.name == config.admin.user;
+        if general.passthrough_auth() && user.password().is_empty() && !is_admin {
+            // Pause all pools in the cluster before they attempt connections
+            for shard in cluster.shards() {
+                for pool in shard.pools() {
+                    pool.pause();
+                }
+            }
+        }
+
         Some((
             User {
                 user: user.name.clone(),
                 database: user.database.clone(),
             },
-            Cluster::new(cluster_config),
+            cluster,
         ))
     } else {
         None
