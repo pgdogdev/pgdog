@@ -119,7 +119,7 @@ impl QueryEngine {
 
             // Release the connection back into the pool before flushing data to client.
             // Flushing can take a minute and we don't want to block the connection from being reused.
-            if self.backend.transaction_mode() {
+            if self.backend.transaction_mode() && context.requests_left == 0 {
                 self.backend.disconnect();
             }
 

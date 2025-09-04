@@ -35,10 +35,10 @@ impl From<crate::backend::Error> for Error {
         // Convert backend error to net error if it contains one, otherwise wrap as IO error
         match value {
             crate::backend::Error::Net(net_err) => Self::Net(net_err),
-            other => Self::Net(crate::net::Error::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("{}", other),
-            ))),
+            other => Self::Net(crate::net::Error::Io(std::io::Error::other(format!(
+                "{}",
+                other
+            )))),
         }
     }
 }
