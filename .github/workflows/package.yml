@@ -17,7 +17,7 @@ jobs:
       matrix:
         include:
           - platform: linux/amd64
-            runner: blacksmith-4vcpu-ubuntu-2404
+            runner: ubuntu-24.04
           - platform: linux/arm64
             runner: ubuntu-24.04-arm
     permissions:
@@ -85,7 +85,7 @@ jobs:
           push-to-registry: true
 
   merge:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     needs:
       - build
     permissions:
