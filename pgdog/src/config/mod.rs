@@ -111,7 +111,7 @@ pub struct ConfigAndUsers {
     /// pgdog.toml
     pub config: Config,
     /// users.toml
-    pub users: Users,
+    pub(crate) users: Users,
     /// Path to pgdog.toml.
     pub(crate) config_path: PathBuf,
     /// Path to users.toml.
@@ -198,24 +198,24 @@ pub struct Config {
 
     /// Statistics.
     #[serde(default)]
-    pub stats: Stats,
+    pub(crate) stats: Stats,
 
     /// TCP settings
     #[serde(default)]
-    pub tcp: Tcp,
+    pub(crate) tcp: Tcp,
 
     /// Multi-tenant
-    pub multi_tenant: Option<MultiTenant>,
+    pub(crate) multi_tenant: Option<MultiTenant>,
 
     /// Servers.
     #[serde(default)]
     pub databases: Vec<Database>,
 
     #[serde(default)]
-    pub plugins: Vec<Plugin>,
+    pub(crate) plugins: Vec<Plugin>,
 
     #[serde(default)]
-    pub admin: Admin,
+    pub(crate) admin: Admin,
 
     /// List of sharded tables.
     #[serde(default)]
