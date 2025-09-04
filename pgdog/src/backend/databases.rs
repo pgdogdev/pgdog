@@ -477,7 +477,7 @@ pub fn from_config(config: &ConfigAndUsers) -> Databases {
             ));
         } else {
             error!(
-                "Mirroring disabled for {} -> {}: invalid configuration (source exists: {}, destination exists: {}, users match: {})",
+                "mirroring disabled from \"{}\" into \"{}\": users don't match",
                 mirror_config.source_db, mirror_config.destination_db,
                 !source_users.is_empty(), !dest_users.is_empty(), source_users == dest_users
             );
