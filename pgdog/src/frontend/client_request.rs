@@ -205,7 +205,10 @@ impl ClientRequest {
                         req.messages.push(Flush.into());
                     }
 
-                    requests.push(req);
+                    if !req.messages.is_empty() {
+                        requests.push(req);
+                    }
+
                     req = Self::new();
                 }
 
