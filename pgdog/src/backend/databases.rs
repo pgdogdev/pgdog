@@ -490,8 +490,7 @@ pub fn from_config(config: &ConfigAndUsers) -> Databases {
         } else {
             error!(
                 "mirroring disabled from \"{}\" into \"{}\": users don't match",
-                mirror_config.source_db,
-                mirror_config.destination_db
+                mirror_config.source_db, mirror_config.destination_db
             );
         }
     }
