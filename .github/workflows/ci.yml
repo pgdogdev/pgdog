@@ -71,7 +71,7 @@ jobs:
       - name: Run documentation tests
         run: cargo test --doc
   integration:
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rs/toolchain@v1
