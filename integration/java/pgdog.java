@@ -143,6 +143,91 @@ class Transaction extends TestCase {
     }
 }
 
+class TransactionPrepared extends TestCase {
+
+    TransactionPrepared(String database) throws Exception {
+        super(database);
+    }
+
+    public void before() throws Exception {
+        Statement setup = this.connection.createStatement();
+        setup.execute("TRUNCATE TABLE sharded");
+    }
+
+    void run() throws Exception {
+        this.connection.setAutoCommit(false);
+
+        PreparedStatement insertStmt = this.connection.prepareStatement(
+            "INSERT INTO sharded (id, value) VALUES (?, ?)"
+        );
+        PreparedStatement countStmt = this.connection.prepareStatement(
+            "SELECT COUNT(*) as count FROM sharded"
+        );
+        PreparedStatement selectStmt = this.connection.prepareStatement(
+            "SELECT id, value FROM sharded WHERE id = ?"
+        );
+
+        // Verify table is empty
+        ResultSet rs = countStmt.executeQuery();
+        rs.next();
+        assert_equals(rs.getInt("count"), 0);
+
+        // Insert records using prepared statements
+        insertStmt.setInt(1, 1);
+        insertStmt.setString(2, "test1");
+        insertStmt.execute();
+
+        insertStmt.setInt(1, 2);
+        insertStmt.setString(2, "test2");
+        insertStmt.execute();
+
+        // Verify records were inserted within transaction
+        rs = countStmt.executeQuery();
+        rs.next();
+        assert_equals(rs.getInt("count"), 2);
+
+        // Verify specific record using prepared statement
+        selectStmt.setInt(1, 1);
+        rs = selectStmt.executeQuery();
+        rs.next();
+        assert_equals(rs.getInt("id"), 1);
+        assert_equals(rs.getString("value"), "test1");
+
+        // Rollback transaction
+        this.connection.rollback();
+
+        // Verify rollback worked
+        rs = countStmt.executeQuery();
+        rs.next();
+        assert_equals(rs.getInt("count"), 0);
+
+        // Insert more records and commit
+        insertStmt.setInt(1, 3);
+        insertStmt.setString(2, "test3");
+        insertStmt.execute();
+
+        insertStmt.setInt(1, 4);
+        insertStmt.setString(2, "test4");
+        insertStmt.execute();
+
+        this.connection.commit();
+
+        // Verify commit worked
+        rs = countStmt.executeQuery();
+        rs.next();
+        assert_equals(rs.getInt("count"), 2);
+
+        // Verify committed records
+        selectStmt.setInt(1, 3);
+        rs = selectStmt.executeQuery();
+        rs.next();
+        assert_equals(rs.getInt("id"), 3);
+        assert_equals(rs.getString("value"), "test3");
+
+        this.connection.setAutoCommit(true);
+    }
+}
+
 class Pgdog {
 
     public static Connection connect() throws Exception {
@@ -160,5 +245,7 @@ class Pgdog {
         new Prepared("pgdog_sharded").execute();
         new Transaction("pgdog").execute();
         new Transaction("pgdog_sharded").execute();
+        new TransactionPrepared("pgdog").execute();
+        new TransactionPrepared("pgdog_sharded").execute();
     }
 }
