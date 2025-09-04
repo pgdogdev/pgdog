@@ -61,7 +61,6 @@ impl Cleanup {
         } else if server.dirty() {
             Self::parameters()
         } else if server.schema_changed() {
-            println!("\n\n\nschema changed");
             Self::prepared_statements()
         } else {
             Self::none()
