@@ -12,11 +12,13 @@ impl MirrorStatsMetrics {
         let mut mirrored_count_measurements = vec![];
         let mut dropped_count_measurements = vec![];
         let mut error_count_measurements = vec![];
+        let mut queue_length_measurements = vec![];
 
         let mut global_total = 0usize;
         let mut global_mirrored = 0usize;
         let mut global_dropped = 0usize;
         let mut global_error = 0usize;
+        let mut global_queue_length = 0usize;
 
         // Iterate through all clusters and collect their mirror stats
         for (user, cluster) in databases().all() {
@@ -50,11 +52,17 @@ impl MirrorStatsMetrics {
                 measurement: counts.error_count.into(),
             });
 
+            queue_length_measurements.push(Measurement {
+                labels: labels.clone(),
+                measurement: counts.queue_length.into(),
+            });
+
             // Accumulate for global metrics
             global_total += counts.total_count;
             global_mirrored += counts.mirrored_count;
             global_dropped += counts.dropped_count;
             global_error += counts.error_count;
+            global_queue_length += counts.queue_length;
         }
 
         // Add global measurements (no labels)
@@ -76,6 +84,11 @@ impl MirrorStatsMetrics {
         error_count_measurements.push(Measurement {
             labels: vec![],
             measurement: global_error.into(),
+        });
+
+        queue_length_measurements.push(Measurement {
+            labels: vec![],
+            measurement: global_queue_length.into(),
         });
 
         // Create metrics
@@ -105,6 +118,13 @@ impl MirrorStatsMetrics {
             measurements: error_count_measurements,
             help: "Total number of mirror requests that encountered errors.".into(),
             metric_type: "counter".into(),
+        }));
+
+        metrics.push(Metric::new(MirrorStatsMetric {
+            name: "mirror_queue_length".into(),
+            measurements: queue_length_measurements,
+            help: "Current number of transactions in the mirror queue.".into(),
+            metric_type: "gauge".into(),
         }));
 
         metrics
@@ -284,12 +304,13 @@ mod tests {
 
     #[test]
     fn test_pre_seeded_stats_values() {
-        // Test with the exact values requested: total: 10, mirrored: 5, dropped: 3, error: 2
+        // Test with the exact values requested: total: 10, mirrored: 5, dropped: 3, error: 2, queue_length: 7
         let measurements = vec![
             ("mirror_total_count", 10usize),
             ("mirror_mirrored_count", 5usize),
             ("mirror_dropped_count", 3usize),
             ("mirror_error_count", 2usize),
+            ("mirror_queue_length", 7usize),
         ];
 
         for (name, value) in measurements {
@@ -320,5 +341,34 @@ mod tests {
                 rendered
             );
         }
+    }
+
+    #[test]
+    fn test_queue_length_metric_is_gauge() {
+        // Test that queue_length is exported as a gauge, not a counter
+        let metric = MirrorStatsMetric {
+            name: "mirror_queue_length".into(),
+            measurements: vec![Measurement {
+                labels: vec![
+                    ("user".into(), "test_user".into()),
+                    ("database".into(), "test_db".into()),
+                ],
+                measurement: 5usize.into(),
+            }],
+            help: "Current number of transactions in the mirror queue.".into(),
+            metric_type: "gauge".into(),
+        };
+
+        let metric = Metric::new(metric);
+        let rendered = metric.to_string();
+
+        assert!(
+            rendered.contains("# TYPE mirror_queue_length gauge"),
+            "queue_length should be a gauge type"
+        );
+        assert!(rendered.contains(
+            "# HELP mirror_queue_length Current number of transactions in the mirror queue."
+        ));
+        assert!(rendered.contains(r#"mirror_queue_length{user="test_user",database="test_db"} 5"#));
     }
 }

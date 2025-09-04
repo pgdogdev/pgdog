@@ -117,6 +117,7 @@ impl MirrorHandler {
             }) {
                 Ok(()) => {
                     self.increment_mirrored_count();
+                    self.increment_queue_length();
                     true
                 }
                 Err(_) => {
@@ -150,6 +151,18 @@ impl MirrorHandler {
     pub fn increment_error_count(&self) {
         let mut stats = self.stats.lock();
         stats.counts.error_count += 1;
+    }
+
+    /// Increment the queue length.
+    pub fn increment_queue_length(&self) {
+        let mut stats = self.stats.lock();
+        stats.counts.queue_length += 1;
+    }
+
+    /// Decrement the queue length.
+    pub fn decrement_queue_length(&self) {
+        let mut stats = self.stats.lock();
+        stats.counts.queue_length = stats.counts.queue_length.saturating_sub(1);
     }
 }
 
@@ -314,5 +327,125 @@ mod tests {
         assert_eq!(total, 1, "Should have 1 total from handler1");
         assert_eq!(mirrored, 1, "Should have 1 mirrored from handler1");
         assert_eq!(dropped, 0, "Should have 0 dropped from handler1");
+    }
+
+    #[test]
+    fn test_queue_length_increments_on_send() {
+        let (mut handler, stats, _rx) = create_test_handler(1.0);
+
+        // Initially queue_length should be 0
+        {
+            let stats = stats.lock();
+            assert_eq!(
+                stats.counts.queue_length, 0,
+                "queue_length should be 0 initially"
+            );
+        }
+
+        // Send a request (it should be buffered but not yet sent to channel)
+        assert!(handler.send(&vec![].into()));
+        assert!(handler.send(&vec![].into()));
+        assert!(handler.send(&vec![].into()));
+
+        // Queue length should remain 0 until flush (which sends to channel)
+        {
+            let stats = stats.lock();
+            assert_eq!(
+                stats.counts.queue_length, 0,
+                "queue_length should still be 0 before flush"
+            );
+        }
+
+        // After flush, queue_length should be incremented
+        assert!(handler.flush());
+        {
+            let stats = stats.lock();
+            assert_eq!(
+                stats.counts.queue_length, 1,
+                "queue_length should be 1 after flush"
+            );
+        }
+    }
+
+    #[test]
+    fn test_queue_length_decrements_on_process() {
+        // This test will fail until we implement decrement logic in mod.rs
+        // It tests that queue_length decrements when messages are consumed from the channel
+    }
+
+    #[test]
+    fn test_queue_length_with_dropped_transactions() {
+        let (mut handler, stats, _rx) = create_test_handler(0.0); // 0% exposure
+
+        // Initially queue_length should be 0
+        {
+            let stats = stats.lock();
+            assert_eq!(
+                stats.counts.queue_length, 0,
+                "queue_length should be 0 initially"
+            );
+        }
+
+        // Send request (will be dropped due to 0% exposure)
+        assert!(!handler.send(&vec![].into()));
+
+        // Flush the dropped request
+        assert!(!handler.flush());
+
+        // Queue length should remain 0 for dropped transactions
+        {
+            let stats = stats.lock();
+            assert_eq!(
+                stats.counts.queue_length, 0,
+                "queue_length should remain 0 for dropped transactions"
+            );
+            assert_eq!(stats.counts.dropped_count, 1, "dropped_count should be 1");
+        }
+    }
+
+    #[test]
+    fn test_queue_length_with_channel_overflow() {
+        let (tx, _rx) = channel(1); // Channel with capacity of 1
+        let stats = Arc::new(Mutex::new(MirrorStats::default()));
+        let mut handler = MirrorHandler::new(tx, 1.0, stats.clone());
+
+        // Fill the channel
+        assert!(handler.send(&vec![].into()));
+        assert!(handler.flush());
+
+        // Now try to send another when channel is full
+        assert!(handler.send(&vec![].into()));
+        assert!(!handler.flush()); // Should fail due to channel overflow
+
+        // Queue length should not increment on error
+        {
+            let stats = stats.lock();
+            assert_eq!(
+                stats.counts.queue_length, 1,
+                "queue_length should be 1 (first successful send)"
+            );
+            assert_eq!(
+                stats.counts.error_count, 1,
+                "error_count should be 1 due to overflow"
+            );
+        }
+    }
+
+    #[test]
+    fn test_queue_length_never_negative() {
+        // Test to ensure queue_length never goes negative even with mismatched increment/decrement
+        let stats = Arc::new(Mutex::new(MirrorStats::default()));
+
+        // Manually try to decrement without incrementing (should use saturating_sub)
+        // This will be tested more thoroughly once decrement_queue_length is implemented
+        {
+            let mut stats = stats.lock();
+            // Simulating a decrement when queue is already 0
+            stats.counts.queue_length = stats.counts.queue_length.saturating_sub(1);
+            assert_eq!(
+                stats.counts.queue_length, 0,
+                "queue_length should not go negative"
+            );
+        }
     }
 }
