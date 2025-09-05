@@ -46,6 +46,7 @@ pub struct Cluster {
     rw_split: ReadWriteSplit,
     schema_admin: bool,
     stats: Arc<Mutex<MirrorStats>>,
+    cross_shard_disabled: bool,
 }
 
 /// Sharding configuration from the cluster.
@@ -82,6 +83,7 @@ pub struct ClusterConfig<'a> {
     pub rw_strategy: ReadWriteStrategy,
     pub rw_split: ReadWriteSplit,
     pub schema_admin: bool,
+    pub cross_shard_disabled: bool,
 }
 
 impl<'a> ClusterConfig<'a> {
@@ -105,6 +107,9 @@ impl<'a> ClusterConfig<'a> {
             rw_strategy: general.read_write_strategy,
             rw_split: general.read_write_split,
             schema_admin: user.schema_admin,
+            cross_shard_disabled: user
+                .cross_shard_disabled
+                .unwrap_or(general.cross_shard_disabled),
         }
     }
 }
@@ -125,6 +130,7 @@ impl Cluster {
             rw_strategy,
             rw_split,
             schema_admin,
+            cross_shard_disabled,
         } = config;
 
         Self {
@@ -144,6 +150,7 @@ impl Cluster {
             rw_split,
             schema_admin,
             stats: Arc::new(Mutex::new(MirrorStats::default())),
+            cross_shard_disabled,
         }
     }
 
@@ -195,6 +202,7 @@ impl Cluster {
             rw_split: self.rw_split,
             schema_admin: self.schema_admin,
             stats: Arc::new(Mutex::new(MirrorStats::default())),
+            cross_shard_disabled: self.cross_shard_disabled,
         }
     }
 
@@ -329,6 +337,11 @@ impl Cluster {
     /// Read/write strategy
     pub fn read_write_strategy(&self) -> &ReadWriteStrategy {
         &self.rw_strategy
+    }
+
+    /// Cross-shard queries disabled for this cluster.
+    pub fn cross_shard_disabled(&self) -> bool {
+        self.cross_shard_disabled
     }
 
     /// Launch the connection pools.

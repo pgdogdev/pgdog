@@ -508,7 +508,7 @@ pub fn from_config(config: &ConfigAndUsers) -> Databases {
                 // Find the destination cluster for this user
                 if let Some((_dest_user, dest_cluster)) =
                     databases.iter().find(|(user, cluster)| {
-                        user.user == source_user.user && cluster.name() == &mirror.destination_db
+                        user.user == source_user.user && cluster.name() == mirror.destination_db
                     })
                 {
                     mirror_clusters_with_config.push(dest_cluster.clone());

@@ -17,23 +17,6 @@ impl QueryEngine {
         context: &mut QueryEngineContext<'_>,
         route: &Route,
     ) -> Result<(), Error> {
-        // Check for cross-shard quries.
-        if context.cross_shard_disabled
-            && route.is_cross_shard()
-            && !context.admin
-            && context.client_request.executable()
-        {
-            let bytes_sent = context
-                .stream
-                .error(
-                    ErrorResponse::cross_shard_disabled(),
-                    context.in_transaction(),
-                )
-                .await?;
-            self.stats.sent(bytes_sent);
-            return Ok(());
-        }
-
         // We need to run a query now.
         if let Some(begin_stmt) = self.begin_stmt.take() {
             // Connect to one shard if not sharded or to all shards
@@ -44,6 +27,11 @@ impl QueryEngine {
 
             self.backend.execute(begin_stmt.query()).await?;
         } else if !self.connect(context, route).await? {
+            return Ok(());
+        }
+
+        // Check we can run this query.
+        if !self.cross_shard_check(context, route).await? {
             return Ok(());
         }
 
@@ -148,5 +136,48 @@ impl QueryEngine {
         }
 
         Ok(())
+    }
+
+    // Perform cross-shard check.
+    async fn cross_shard_check(
+        &mut self,
+        context: &mut QueryEngineContext<'_>,
+        route: &Route,
+    ) -> Result<bool, Error> {
+        // Check for cross-shard queries.
+        if context.cross_shard_disabled.is_none() {
+            context.cross_shard_disabled = Some(
+                self.backend
+                    .cluster()
+                    .map(|c| c.cross_shard_disabled())
+                    .unwrap_or_default(),
+            );
+        }
+
+        let cross_shard_disabled = context.cross_shard_disabled.unwrap_or_default();
+
+        debug!("cross-shard queries disabled: {}", cross_shard_disabled,);
+
+        if cross_shard_disabled
+            && route.is_cross_shard()
+            && !context.admin
+            && context.client_request.executable()
+        {
+            let bytes_sent = context
+                .stream
+                .error(
+                    ErrorResponse::cross_shard_disabled(),
+                    context.in_transaction(),
+                )
+                .await?;
+            self.stats.sent(bytes_sent);
+
+            if self.backend.connected() && self.backend.done() {
+                self.backend.disconnect();
+            }
+            Ok(false)
+        } else {
+            Ok(true)
+        }
     }
 }

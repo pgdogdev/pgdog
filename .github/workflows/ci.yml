@@ -86,6 +86,8 @@ jobs:
           sudo service postgresql start
           sudo -u postgres createuser --superuser --login $USER
           sudo -u postgres createdb $USER
+          sudo -u postgres psql -c 'ALTER SYSTEM SET max_connections TO 1000;'
+          sudo service postgresql restart
           bash integration/setup.sh
           sudo apt update && sudo apt install -y python3-virtualenv mold
           sudo gem install bundler
