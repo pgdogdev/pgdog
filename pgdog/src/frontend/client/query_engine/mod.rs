@@ -95,9 +95,6 @@ impl QueryEngine {
         self.stats
             .received(context.client_request.total_message_len());
 
-        // If configured, disable cross-shard queries.
-        self.set_cross_shard(context);
-     
         // Intercept commands we don't have to forward to a server.
         if self.intercept_incomplete(context).await? {
             self.update_stats(context);
@@ -135,7 +132,7 @@ impl QueryEngine {
             } => {
                 if *extended {
                     // Transaction control goes to all shards.
-                    context.cross_shard_disabled = false;
+                    context.cross_shard_disabled = Some(false);
                     self.execute(context, &route).await?;
                 } else {
                     self.start_transaction(context, query.clone(), *transaction_type)
@@ -150,7 +147,7 @@ impl QueryEngine {
                     context.client_request.route = Some(transaction_route.clone());
 
                     // Transaction control goes to all shards.
-                    context.cross_shard_disabled = false;
+                    context.cross_shard_disabled = Some(false);
                     self.execute(context, &transaction_route).await?;
                 } else {
                     self.end_transaction(context, false).await?
@@ -164,7 +161,7 @@ impl QueryEngine {
                     context.client_request.route = Some(transaction_route.clone());
 
                     // Transaction control goes to all shards.
-                    context.cross_shard_disabled = false;
+                    context.cross_shard_disabled = Some(false);
                     self.execute(context, &transaction_route).await?;
                 } else {
                     self.end_transaction(context, true).await?
@@ -210,18 +207,6 @@ impl QueryEngine {
         self.update_stats(context);
 
         Ok(())
-    }
-
-    fn set_cross_shard(&self, context: &mut QueryEngineContext<'_>) {
-        context.cross_shard_disabled = self
-            .backend
-            .cluster()
-            .map(|c| c.cross_shard_disabled())
-            .unwrap_or_default();
-        debug!(
-            "cross-shard queries disabled: {}",
-            context.cross_shard_disabled
-        );
     }
 
     fn update_stats(&mut self, context: &mut QueryEngineContext<'_>) {

@@ -27,7 +27,7 @@ async fn test_cross_shard_disabled() {
         .unwrap();
 
     sleep(Duration::from_millis(100)).await;
-    let conns = connections_sqlx().await;
+    // let conns = connections_sqlx().await;
 
     // Not sharded DB.
     sqlx::query("SELECT * FROM sharded")

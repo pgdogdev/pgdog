@@ -25,7 +25,7 @@ pub struct QueryEngineContext<'a> {
     /// Timeouts
     pub(super) timeouts: Timeouts,
     /// Cross shard  queries are disabled.
-    pub(super) cross_shard_disabled: bool,
+    pub(super) cross_shard_disabled: Option<bool>,
     /// Client memory usage.
     pub(super) memory_usage: usize,
     /// Is the client an admin.
@@ -43,7 +43,7 @@ impl<'a> QueryEngineContext<'a> {
             stream: &mut client.stream,
             transaction: client.transaction,
             timeouts: client.timeouts,
-            cross_shard_disabled: false, // Will be set in Self::handle from Cluster.
+            cross_shard_disabled: None,
             memory_usage,
             admin: client.admin,
             requests_left: 0,
@@ -65,7 +65,7 @@ impl<'a> QueryEngineContext<'a> {
             stream: &mut mirror.stream,
             transaction: mirror.transaction,
             timeouts: mirror.timeouts,
-            cross_shard_disabled: false, // Will be set in Self::handle from Cluster.
+            cross_shard_disabled: None,
             memory_usage: 0,
             admin: false,
             requests_left: 0,
