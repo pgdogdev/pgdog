@@ -14,6 +14,7 @@ use tokio_util::task::TaskTracker;
 
 use crate::net::messages::BackendKeyData;
 use crate::net::Parameters;
+use crate::state::State;
 
 use super::{ConnectedClient, Stats};
 
@@ -129,6 +130,16 @@ impl Comms {
             let mut guard = self.global.clients.lock();
             if let Some(entry) = guard.get_mut(id) {
                 entry.stats = stats;
+            }
+        }
+    }
+
+    /// Override client state.
+    pub fn set_state(&self, state: State) {
+        if let Some(ref id) = self.id {
+            let mut guard = self.global.clients.lock();
+            if let Some(entry) = guard.get_mut(id) {
+                entry.stats.state = state;
             }
         }
     }
