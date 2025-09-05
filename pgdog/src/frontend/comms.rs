@@ -134,16 +134,6 @@ impl Comms {
         }
     }
 
-    /// Override client state.
-    pub fn set_state(&self, state: State) {
-        if let Some(ref id) = self.id {
-            let mut guard = self.global.clients.lock();
-            if let Some(entry) = guard.get_mut(id) {
-                entry.stats.state = state;
-            }
-        }
-    }
-
     /// Notify clients pgDog is shutting down.
     pub fn shutdown(&self) {
         self.global.offline.store(true, Ordering::Relaxed);
