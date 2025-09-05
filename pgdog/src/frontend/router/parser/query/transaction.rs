@@ -15,30 +15,25 @@ impl QueryParser {
         stmt: &TransactionStmt,
         context: &QueryParserContext,
     ) -> Result<Command, Error> {
-        // Only allow to intercept transaction statements
-        // if they are using the simple protocol.
-        if context.query()?.simple() {
-            // Send all transactions to primary.
-            if context.rw_conservative() && !context.read_only {
-                self.write_override = true;
-            }
+        let extended = !context.query()?.simple();
 
-            match stmt.kind() {
-                TransactionStmtKind::TransStmtCommit => Ok(Command::CommitTransaction),
-                TransactionStmtKind::TransStmtRollback => Ok(Command::RollbackTransaction),
-                TransactionStmtKind::TransStmtBegin | TransactionStmtKind::TransStmtStart => {
-                    self.in_transaction = true;
-                    let transaction_type =
-                        Self::transaction_type(&stmt.options).unwrap_or_default();
-                    return Ok(Command::StartTransaction {
-                        query: context.query()?.clone(),
-                        transaction_type,
-                    });
-                }
-                _ => Ok(Command::Query(Route::write(None))),
+        if context.rw_conservative() && !context.read_only {
+            self.write_override = true;
+        }
+
+        match stmt.kind() {
+            TransactionStmtKind::TransStmtCommit => Ok(Command::CommitTransaction { extended }),
+            TransactionStmtKind::TransStmtRollback => Ok(Command::RollbackTransaction { extended }),
+            TransactionStmtKind::TransStmtBegin | TransactionStmtKind::TransStmtStart => {
+                self.in_transaction = true;
+                let transaction_type = Self::transaction_type(&stmt.options).unwrap_or_default();
+                return Ok(Command::StartTransaction {
+                    query: context.query()?.clone(),
+                    transaction_type,
+                    extended,
+                });
             }
-        } else {
-            Ok(Command::Query(Route::write(None)))
+            _ => Ok(Command::Query(Route::write(None))),
         }
     }
 

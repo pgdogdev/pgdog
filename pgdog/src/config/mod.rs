@@ -1009,6 +1009,8 @@ pub struct User {
     /// Schema owner.
     #[serde(default)]
     pub schema_admin: bool,
+    /// Disable cross-shard queries for this user.
+    pub cross_shard_disabled: Option<bool>,
 }
 
 impl User {

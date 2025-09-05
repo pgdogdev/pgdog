@@ -49,7 +49,6 @@ pub struct Client {
     timeouts: Timeouts,
     client_request: ClientRequest,
     stream_buffer: BytesMut,
-    cross_shard_disabled: bool,
     passthrough_password: Option<String>,
 }
 
@@ -225,7 +224,7 @@ impl Client {
             client_request: ClientRequest::new(),
             stream_buffer: BytesMut::new(),
             shutdown: false,
-            cross_shard_disabled: false,
+
             passthrough_password,
         };
 
@@ -266,7 +265,6 @@ impl Client {
             client_request: ClientRequest::new(),
             stream_buffer: BytesMut::new(),
             shutdown: false,
-            cross_shard_disabled: false,
             passthrough_password: None,
         }
     }
@@ -422,7 +420,6 @@ impl Client {
         self.prepared_statements.enabled = config.prepared_statements();
         self.prepared_statements.capacity = config.config.general.prepared_statements_limit;
         self.timeouts = Timeouts::from_config(&config.config.general);
-        self.cross_shard_disabled = config.config.general.cross_shard_disabled;
 
         while !self.client_request.full() {
             let idle_timeout = self

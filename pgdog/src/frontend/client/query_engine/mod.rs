@@ -128,30 +128,41 @@ impl QueryEngine {
             Command::StartTransaction {
                 query,
                 transaction_type,
+                extended,
             } => {
-                self.start_transaction(context, query.clone(), *transaction_type)
-                    .await?
+                if *extended {
+                    // Transaction control goes to all shards.
+                    context.cross_shard_disabled = Some(false);
+                    self.execute(context, &route).await?;
+                } else {
+                    self.start_transaction(context, query.clone(), *transaction_type)
+                        .await?
+                }
             }
-            Command::CommitTransaction => {
+            Command::CommitTransaction { extended } => {
                 self.set_route = None;
 
-                if self.backend.connected() {
+                if self.backend.connected() || *extended {
                     let transaction_route = self.transaction_route(&route)?;
                     context.client_request.route = Some(transaction_route.clone());
 
-                    self.execute(context, &transaction_route).await?
+                    // Transaction control goes to all shards.
+                    context.cross_shard_disabled = Some(false);
+                    self.execute(context, &transaction_route).await?;
                 } else {
                     self.end_transaction(context, false).await?
                 }
             }
-            Command::RollbackTransaction => {
+            Command::RollbackTransaction { extended } => {
                 self.set_route = None;
 
-                if self.backend.connected() {
+                if self.backend.connected() || *extended {
                     let transaction_route = self.transaction_route(&route)?;
                     context.client_request.route = Some(transaction_route.clone());
 
-                    self.execute(context, &transaction_route).await?
+                    // Transaction control goes to all shards.
+                    context.cross_shard_disabled = Some(false);
+                    self.execute(context, &transaction_route).await?;
                 } else {
                     self.end_transaction(context, true).await?
                 }
