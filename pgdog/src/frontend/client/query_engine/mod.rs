@@ -139,10 +139,10 @@ impl QueryEngine {
                         .await?
                 }
             }
-            Command::CommitTransaction { .. } => {
+            Command::CommitTransaction { extended } => {
                 self.set_route = None;
 
-                if self.backend.connected() {
+                if self.backend.connected() || *extended {
                     let transaction_route = self.transaction_route(&route)?;
                     context.client_request.route = Some(transaction_route.clone());
 
@@ -153,10 +153,10 @@ impl QueryEngine {
                     self.end_transaction(context, false).await?
                 }
             }
-            Command::RollbackTransaction { .. } => {
+            Command::RollbackTransaction { extended } => {
                 self.set_route = None;
 
-                if self.backend.connected() {
+                if self.backend.connected() || *extended {
                     let transaction_route = self.transaction_route(&route)?;
                     context.client_request.route = Some(transaction_route.clone());
 
