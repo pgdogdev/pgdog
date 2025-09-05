@@ -11,6 +11,7 @@ use tracing::{debug, enabled, error, info, trace, Level as LogLevel};
 
 use super::{ClientRequest, Comms, Error, PreparedStatements};
 use crate::auth::{md5, scram::Server};
+use crate::backend::maintenance_mode;
 use crate::backend::{
     databases,
     pool::{Connection, Request},
@@ -373,7 +374,17 @@ impl Client {
 
     /// Handle client messages.
     async fn client_messages(&mut self, query_engine: &mut QueryEngine) -> Result<(), Error> {
-        // If client sent multiple requests, split them up and execute indivdiually.
+        // Check maintenance mode.
+        if !self.in_transaction() && !self.admin {
+            if let Some(waiter) = maintenance_mode::waiter() {
+                let state = query_engine.get_state();
+                query_engine.set_state(State::Waiting);
+                waiter.await;
+                query_engine.set_state(state);
+            }
+        }
+
+        // If client sent multiple requests, split them up and execute individually.
         let spliced = self.client_request.splice()?;
         if spliced.is_empty() {
             let mut context = QueryEngineContext::new(self);

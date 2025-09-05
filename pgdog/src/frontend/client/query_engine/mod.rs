@@ -1,8 +1,5 @@
 use crate::{
-    backend::{
-        maintenance_mode,
-        pool::{Connection, Request},
-    },
+    backend::pool::{Connection, Request},
     frontend::{
         router::{parser::Shard, Route},
         BufferedQuery, Client, Command, Comms, Error, Router, RouterContext, Stats,
@@ -100,16 +97,7 @@ impl QueryEngine {
 
         // If configured, disable cross-shard queries.
         self.set_cross_shard(context);
-
-        // Check maintenance mode.
-        if !context.in_transaction() && !self.backend.is_admin() {
-            if let Some(waiter) = maintenance_mode::waiter() {
-                self.set_state(State::Waiting);
-                waiter.await;
-                self.set_state(State::Active);
-            }
-        }
-
+     
         // Intercept commands we don't have to forward to a server.
         if self.intercept_incomplete(context).await? {
             self.update_stats(context);
@@ -255,8 +243,12 @@ impl QueryEngine {
         self.comms.stats(self.stats);
     }
 
-    fn set_state(&mut self, state: State) {
+    pub fn set_state(&mut self, state: State) {
         self.stats.state = state;
         self.comms.stats(self.stats);
+    }
+
+    pub fn get_state(&self) -> State {
+        self.stats.state
     }
 }
