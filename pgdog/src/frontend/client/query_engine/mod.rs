@@ -99,11 +99,7 @@ impl QueryEngine {
             .received(context.client_request.total_message_len());
 
         // If configured, disable cross-shard queries.
-        context.cross_shard_disabled = self
-            .backend
-            .cluster()
-            .map(|c| c.cross_shard_disabled())
-            .unwrap_or_default();
+        self.set_cross_shard(context);
 
         // Check maintenance mode.
         if !context.in_transaction() && !self.backend.is_admin() {
@@ -181,7 +177,7 @@ impl QueryEngine {
 
                     // Transaction control goes to all shards.
                     context.cross_shard_disabled = false;
-                    self.execute(context, &transaction_route).await?
+                    self.execute(context, &transaction_route).await?;
                 } else {
                     self.end_transaction(context, true).await?
                 }
@@ -226,6 +222,18 @@ impl QueryEngine {
         self.update_stats(context);
 
         Ok(())
+    }
+
+    fn set_cross_shard(&self, context: &mut QueryEngineContext<'_>) {
+        context.cross_shard_disabled = self
+            .backend
+            .cluster()
+            .map(|c| c.cross_shard_disabled())
+            .unwrap_or_default();
+        debug!(
+            "cross-shard queries disabled: {}",
+            context.cross_shard_disabled
+        );
     }
 
     fn update_stats(&mut self, context: &mut QueryEngineContext<'_>) {

@@ -95,6 +95,8 @@ impl Connection {
             match self.try_conn(request, route).await {
                 Ok(()) => (),
                 Err(Error::Pool(super::Error::Offline | super::Error::AllReplicasDown)) => {
+                    debug!("detected configuration reload, reloading cluster");
+
                     // Wait to reload pools until they are ready.
                     if let Some(wait) = reload_notify::ready() {
                         wait.await;
