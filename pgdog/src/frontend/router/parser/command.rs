@@ -12,9 +12,14 @@ pub enum Command {
     StartTransaction {
         query: BufferedQuery,
         transaction_type: TransactionType,
+        extended: bool,
     },
-    CommitTransaction,
-    RollbackTransaction,
+    CommitTransaction {
+        extended: bool,
+    },
+    RollbackTransaction {
+        extended: bool,
+    },
     ReplicationMeta,
     Set {
         name: String,

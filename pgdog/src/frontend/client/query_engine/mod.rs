@@ -98,6 +98,13 @@ impl QueryEngine {
         self.stats
             .received(context.client_request.total_message_len());
 
+        // If configured, disable cross-shard queries.
+        context.cross_shard_disabled = self
+            .backend
+            .cluster()
+            .map(|c| c.cross_shard_disabled())
+            .unwrap_or_default();
+
         // Check maintenance mode.
         if !context.in_transaction() && !self.backend.is_admin() {
             if let Some(waiter) = maintenance_mode::waiter() {
@@ -140,29 +147,40 @@ impl QueryEngine {
             Command::StartTransaction {
                 query,
                 transaction_type,
+                extended,
             } => {
-                self.start_transaction(context, query.clone(), *transaction_type)
-                    .await?
+                if *extended {
+                    // Transaction control goes to all shards.
+                    context.cross_shard_disabled = false;
+                    self.execute(context, &route).await?;
+                } else {
+                    self.start_transaction(context, query.clone(), *transaction_type)
+                        .await?
+                }
             }
-            Command::CommitTransaction => {
+            Command::CommitTransaction { .. } => {
                 self.set_route = None;
 
                 if self.backend.connected() {
                     let transaction_route = self.transaction_route(&route)?;
                     context.client_request.route = Some(transaction_route.clone());
 
-                    self.execute(context, &transaction_route).await?
+                    // Transaction control goes to all shards.
+                    context.cross_shard_disabled = false;
+                    self.execute(context, &transaction_route).await?;
                 } else {
                     self.end_transaction(context, false).await?
                 }
             }
-            Command::RollbackTransaction => {
+            Command::RollbackTransaction { .. } => {
                 self.set_route = None;
 
                 if self.backend.connected() {
                     let transaction_route = self.transaction_route(&route)?;
                     context.client_request.route = Some(transaction_route.clone());
 
+                    // Transaction control goes to all shards.
+                    context.cross_shard_disabled = false;
                     self.execute(context, &transaction_route).await?
                 } else {
                     self.end_transaction(context, true).await?

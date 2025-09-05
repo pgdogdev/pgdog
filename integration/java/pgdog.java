@@ -5,15 +5,23 @@ abstract class TestCase {
     protected Connection connection;
     protected String test_name;
     protected String database;
+    protected String user;
 
-    TestCase(String database) throws Exception {
+    TestCase(String user, String database) throws Exception {
         this.database = database;
+        this.user = user;
         String url =
             "jdbc:postgresql://127.0.0.1:6432/" +
             database +
-            "?user=pgdog&password=pgdog&ssl=false";
+            "?user=" +
+            user +
+            "&password=pgdog&ssl=false";
         Connection conn = DriverManager.getConnection(url);
         this.connection = conn;
+    }
+
+    TestCase(String database) throws Exception {
+        this("pgdog", database);
     }
 
     public void execute() throws Exception {
@@ -228,6 +236,101 @@ class TransactionPrepared extends TestCase {
     }
 }
 
+class TransactionDirectShard extends TestCase {
+
+    TransactionDirectShard() throws Exception {
+        super("pgdog_no_cross_shard", "pgdog_sharded");
+    }
+
+    void run() throws Exception {
+        this.connection.setAutoCommit(false);
+
+        Statement st = this.connection.createStatement();
+
+        ResultSet rs = st.executeQuery(
+            "SELECT COUNT(*) as count FROM sharded WHERE id = 1"
+        );
+        rs.next();
+        assert_equals(rs.getInt("count"), 0);
+
+        st.execute("INSERT INTO sharded (id, value) VALUES (1, 'test1')");
+        st.execute("INSERT INTO sharded (id, value) VALUES (11, 'test11')");
+
+        rs = st.executeQuery(
+            "SELECT COUNT(*) as count FROM sharded WHERE id IN (1)"
+        );
+        rs.next();
+        assert_equals(rs.getInt("count"), 1);
+
+        rs = st.executeQuery("SELECT id, value FROM sharded WHERE id = 1");
+        rs.next();
+        assert_equals(rs.getInt("id"), 1);
+        assert_equals(rs.getString("value"), "test1");
+
+        rs = st.executeQuery("SELECT id, value FROM sharded WHERE id = 11");
+        rs.next();
+        assert_equals(rs.getInt("id"), 11);
+        assert_equals(rs.getString("value"), "test11");
+
+        this.connection.rollback();
+
+        rs = st.executeQuery(
+            "SELECT COUNT(*) as count FROM sharded WHERE id IN (1)"
+        );
+        rs.next();
+        assert_equals(rs.getInt("count"), 0);
+
+        st.execute("INSERT INTO sharded (id, value) VALUES (2, 'test2')");
+        st.execute("INSERT INTO sharded (id, value) VALUES (12, 'test12')");
+
+        rs = st.executeQuery("SELECT id, value FROM sharded WHERE id = 2");
+        rs.next();
+        assert_equals(rs.getInt("id"), 2);
+        assert_equals(rs.getString("value"), "test2");
+
+        st.execute("UPDATE sharded SET value = 'updated2' WHERE id = 2");
+        st.execute("UPDATE sharded SET value = 'updated12' WHERE id = 12");
+
+        rs = st.executeQuery("SELECT value FROM sharded WHERE id = 2");
+        rs.next();
+        assert_equals(rs.getString("value"), "updated2");
+
+        rs = st.executeQuery("SELECT value FROM sharded WHERE id = 12");
+        rs.next();
+        assert_equals(rs.getString("value"), "updated12");
+
+        this.connection.commit();
+
+        rs = st.executeQuery(
+            "SELECT COUNT(*) as count FROM sharded WHERE id IN (2)"
+        );
+        rs.next();
+        assert_equals(rs.getInt("count"), 1);
+
+        rs = st.executeQuery("SELECT value FROM sharded WHERE id = 2");
+        rs.next();
+        assert_equals(rs.getString("value"), "updated2");
+
+        rs = st.executeQuery("SELECT value FROM sharded WHERE id = 12");
+        rs.next();
+        assert_equals(rs.getString("value"), "updated12");
+
+        st.execute("DELETE FROM sharded WHERE id = 2");
+        st.execute("DELETE FROM sharded WHERE id = 12");
+
+        this.connection.commit();
+
+        rs = st.executeQuery(
+            "SELECT COUNT(*) as count FROM sharded WHERE id IN (2)"
+        );
+        rs.next();
+        assert_equals(rs.getInt("count"), 0);
+
+        this.connection.setAutoCommit(true);
+        st.close();
+    }
+}
+
 class Pgdog {
 
     public static Connection connect() throws Exception {
@@ -247,5 +350,6 @@ class Pgdog {
         new Transaction("pgdog_sharded").execute();
         new TransactionPrepared("pgdog").execute();
         new TransactionPrepared("pgdog_sharded").execute();
+        new TransactionDirectShard().execute();
     }
 }
