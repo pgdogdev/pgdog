@@ -14,7 +14,6 @@ use tokio_util::task::TaskTracker;
 
 use crate::net::messages::BackendKeyData;
 use crate::net::Parameters;
-use crate::state::State;
 
 use super::{ConnectedClient, Stats};
 
