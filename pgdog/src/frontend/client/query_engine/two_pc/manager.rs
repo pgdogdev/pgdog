@@ -1,3 +1,4 @@
+//! Global two-phase commit transaction manager.
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use std::{
@@ -26,6 +27,7 @@ use super::Error;
 
 static MANAGER: Lazy<Manager> = Lazy::new(Manager::init);
 
+/// Two-phase commit transaction manager.
 #[derive(Debug, Clone)]
 pub struct Manager {
     inner: Arc<Mutex<Inner>>,
@@ -52,6 +54,16 @@ impl Manager {
         manager
     }
 
+    #[cfg(test)]
+    pub(super) fn transaction(&self, transaction: &TwoPcTransaction) -> Option<TransactionInfo> {
+        self.inner.lock().transactions.get(transaction).cloned()
+    }
+
+    /// Get all active two-phase transactions.
+    pub fn transactions(&self) -> HashMap<TwoPcTransaction, TransactionInfo> {
+        self.inner.lock().transactions.clone()
+    }
+
     /// Two-pc transaction finished.
     pub(super) async fn done(&self, transaction: &TwoPcTransaction) -> Result<(), Error> {
         self.remove(transaction).await;
@@ -66,21 +78,21 @@ impl Manager {
         identifier: &Arc<User>,
         phase: TwoPcPhase,
     ) -> Result<TwoPcGuard, Error> {
-        let mut guard = self.inner.lock();
-        let entry = guard
-            .transactions
-            .entry(transaction.clone())
-            .or_insert_with(TransactionInfo::default);
-        entry.identifier = identifier.clone();
-        entry.phase = phase;
+        {
+            let mut guard = self.inner.lock();
+            let entry = guard
+                .transactions
+                .entry(transaction.clone())
+                .or_insert_with(TransactionInfo::default);
+            entry.identifier = identifier.clone();
+            entry.phase = phase;
+        }
 
         // TODO: Sync to durable backend.
 
         Ok(TwoPcGuard {
-            phase,
             transaction: transaction.clone(),
             manager: Self::get(),
-            identifier: identifier.clone(),
         })
     }
 
@@ -93,6 +105,7 @@ impl Manager {
 
         if exists {
             self.inner.lock().queue.push_back(guard.transaction);
+            self.notify.notify_one();
         }
     }
 
@@ -113,7 +126,11 @@ impl Manager {
             let transaction = manager.inner.lock().queue.pop_front();
             if let Some(transaction) = transaction {
                 if let Err(err) = manager.cleanup_phase(&transaction).await {
-                    error!("[2pc] error: {}", err);
+                    error!(
+                        r#"[2pc] error cleaning up "{}" transaction: {}"#,
+                        transaction.to_string(),
+                        err
+                    );
 
                     // Retry again later.
                     manager.inner.lock().queue.push_back(transaction);
@@ -162,9 +179,9 @@ impl Manager {
 }
 
 #[derive(Debug, Default, Clone)]
-struct TransactionInfo {
-    phase: TwoPcPhase,
-    identifier: Arc<User>,
+pub struct TransactionInfo {
+    pub phase: TwoPcPhase,
+    pub identifier: Arc<User>,
 }
 
 #[derive(Default, Debug)]

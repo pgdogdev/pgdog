@@ -15,6 +15,9 @@ pub use manager::Manager;
 pub use phase::TwoPcPhase;
 pub use transaction::TwoPcTransaction;
 
+#[cfg(test)]
+mod test;
+
 /// Two-phase commit driver.
 #[derive(Debug, Clone)]
 pub(super) struct TwoPc {

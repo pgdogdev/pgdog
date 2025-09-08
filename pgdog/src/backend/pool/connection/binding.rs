@@ -241,22 +241,23 @@ impl Binding {
     }
 
     /// Execute a query on all servers.
-    pub async fn execute(&mut self, query: &str) -> Result<(), Error> {
+    pub async fn execute(&mut self, query: &str) -> Result<Vec<Message>, Error> {
+        let mut result = vec![];
         match self {
             Binding::Direct(Some(ref mut server)) => {
-                server.execute(query).await?;
+                result.extend(server.execute(query).await?);
             }
 
             Binding::MultiShard(ref mut servers, _) => {
                 for server in servers {
-                    server.execute(query).await?;
+                    result.extend(server.execute(query).await?);
                 }
             }
 
             _ => (),
         }
 
-        Ok(())
+        Ok(result)
     }
 
     /// Execute two-phase commit transaction control statements.

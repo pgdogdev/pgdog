@@ -28,6 +28,7 @@ pub mod show_prepared_statements;
 pub mod show_query_cache;
 pub mod show_servers;
 pub mod show_stats;
+pub mod show_transactions;
 pub mod show_version;
 pub mod shutdown;
 

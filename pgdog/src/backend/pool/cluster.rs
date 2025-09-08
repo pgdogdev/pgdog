@@ -14,7 +14,7 @@ use crate::{
     config::{
         General, MultiTenant, PoolerMode, ReadWriteSplit, ReadWriteStrategy, ShardedTable, User,
     },
-    net::{data_row::Data, messages::BackendKeyData, Query},
+    net::{messages::BackendKeyData, Query},
 };
 
 use super::{Address, Config, Error, Guard, MirrorStats, Request, Shard};
