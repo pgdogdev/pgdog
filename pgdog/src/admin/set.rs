@@ -95,6 +95,10 @@ impl Command for Set {
                 config.config.general.cross_shard_disabled = Self::from_json(&self.value)?;
             }
 
+            "two_pc" => {
+                config.config.general.two_pc = Self::from_json(&self.value)?;
+            }
+
             _ => return Err(Error::Syntax),
         }
 

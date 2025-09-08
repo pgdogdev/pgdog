@@ -3,7 +3,7 @@ use crate::net::{CommandComplete, NoticeResponse, Protocol, ReadyForQuery};
 use super::*;
 
 impl QueryEngine {
-    pub(super) async fn end_transaction(
+    pub(super) async fn end_not_connected(
         &mut self,
         context: &mut QueryEngineContext<'_>,
         rollback: bool,
@@ -28,6 +28,40 @@ impl QueryEngine {
 
         Ok(())
     }
+
+    pub(super) async fn end_connected(
+        &mut self,
+        context: &mut QueryEngineContext<'_>,
+        route: &Route,
+    ) -> Result<(), Error> {
+        let two_pc = self.backend.cluster()?.two_pc_enabled();
+        if two_pc {
+            let name = self.two_pc.name().to_owned();
+            self.two_pc.phase_one().await?;
+            self.backend
+                .execute(format!(r#"PREPARE TRANSACTION '{}'"#, name).as_str())
+                .await?;
+            self.two_pc.phase_two().await?;
+            self.backend
+                .execute(format!(r#"COMMIT PREPARED '{}'"#, name).as_str())
+                .await?;
+            self.two_pc.done().await?;
+
+            // Tell client we finished the transaction.
+            self.end_not_connected(context, false).await?;
+
+            // Update stats.
+            self.stats.query();
+            self.stats.transaction();
+
+            // Disconnect from servers.
+            self.cleanup_backend(context);
+        } else {
+            self.execute(context, route).await?;
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -49,7 +83,7 @@ mod tests {
         let mut engine = QueryEngine::default();
         // state copied from client
         let mut context = QueryEngineContext::new(&mut client);
-        let result = engine.end_transaction(&mut context, false).await;
+        let result = engine.end_not_connected(&mut context, false).await;
         assert!(result.is_ok(), "end_transaction should succeed");
 
         assert_eq!(

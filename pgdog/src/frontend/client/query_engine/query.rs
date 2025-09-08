@@ -102,6 +102,19 @@ impl QueryEngine {
 
         self.stats.sent(message.len());
 
+        // Do this before flushing, because flushing can take time.
+        self.cleanup_backend(context);
+
+        if flush {
+            context.stream.send_flush(&message).await?;
+        } else {
+            context.stream.send(&message).await?;
+        }
+
+        Ok(())
+    }
+
+    pub(super) fn cleanup_backend(&mut self, context: &mut QueryEngineContext<'_>) {
         if self.backend.done() {
             let changed_params = self.backend.changed_params();
 
@@ -128,14 +141,6 @@ impl QueryEngine {
                 self.comms.update_params(context.params);
             }
         }
-
-        if flush {
-            context.stream.send_flush(&message).await?;
-        } else {
-            context.stream.send(&message).await?;
-        }
-
-        Ok(())
     }
 
     // Perform cross-shard check.

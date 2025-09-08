@@ -343,7 +343,8 @@ impl Databases {
 
             if cluster.pooler_mode() == PoolerMode::Session && cluster.router_needed() {
                 warn!(
-                    r#"database "{}" requires transaction mode to route queries"#,
+                    r#"user "{}" for database "{}" requires transaction mode to route queries"#,
+                    cluster.user(),
                     cluster.name()
                 );
             }

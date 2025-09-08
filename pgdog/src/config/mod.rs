@@ -516,6 +516,9 @@ pub struct General {
     /// Log client disconnections.
     #[serde(default = "General::log_disconnections")]
     pub log_disconnections: bool,
+    /// Two-phase commit.
+    #[serde(default)]
+    pub two_pc: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -625,6 +628,7 @@ impl Default for General {
             pub_sub_channel_size: 0,
             log_connections: Self::log_connections(),
             log_disconnections: Self::log_disconnections(),
+            two_pc: bool::default(),
         }
     }
 }
@@ -1011,6 +1015,8 @@ pub struct User {
     pub schema_admin: bool,
     /// Disable cross-shard queries for this user.
     pub cross_shard_disabled: Option<bool>,
+    /// Two-pc.
+    pub two_pc: Option<bool>,
 }
 
 impl User {
