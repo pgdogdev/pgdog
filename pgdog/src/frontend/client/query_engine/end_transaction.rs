@@ -34,17 +34,26 @@ impl QueryEngine {
         context: &mut QueryEngineContext<'_>,
         route: &Route,
     ) -> Result<(), Error> {
-        let two_pc = self.backend.cluster()?.two_pc_enabled();
+        let cluster = self.backend.cluster()?;
+        // 2pc is used only for writes.
+        let two_pc = cluster.two_pc_enabled() && route.is_write();
+
         if two_pc {
-            let name = self.two_pc.name().to_owned();
-            self.two_pc.phase_one().await?;
-            self.backend
-                .execute(format!(r#"PREPARE TRANSACTION '{}'"#, name).as_str())
-                .await?;
-            self.two_pc.phase_two().await?;
-            self.backend
-                .execute(format!(r#"COMMIT PREPARED '{}'"#, name).as_str())
-                .await?;
+            let identifier = cluster.identifier();
+            let name = self.two_pc.transaction().to_string();
+
+            // If interrupted here, the transaction must be rolled back.
+            let _guard_phase_1 = self.two_pc.phase_one(&identifier).await?;
+            self.backend.two_pc(&name, TwoPcPhase::Phase1).await?;
+
+            debug!("[2pc] phase 1 complete");
+
+            // If interrupted here, the transaction must be committed.
+            let _guard_phase_2 = self.two_pc.phase_two(&identifier).await?;
+            self.backend.two_pc(&name, TwoPcPhase::Phase2).await?;
+
+            debug!("[2pc] phase 2 complete");
+
             self.two_pc.done().await?;
 
             // Tell client we finished the transaction.

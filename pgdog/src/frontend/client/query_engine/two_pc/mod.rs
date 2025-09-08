@@ -1,48 +1,73 @@
 //! Two-phase commit handler.
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
-use once_cell::sync::Lazy;
+use crate::backend::databases::User;
 
 use super::Error;
 
-static COUNTER: Lazy<AtomicUsize> = Lazy::new(|| AtomicUsize::new(0));
+pub mod guard;
+pub mod manager;
+pub mod phase;
+pub mod transaction;
+
+pub use guard::TwoPcGuard;
+pub use manager::Manager;
+pub use phase::TwoPcPhase;
+pub use transaction::TwoPcTransaction;
 
 /// Two-phase commit driver.
-#[derive(Default, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub(super) struct TwoPc {
-    name: Option<String>,
+    transaction: Option<TwoPcTransaction>,
+    manager: Manager,
+}
+
+impl Default for TwoPc {
+    fn default() -> Self {
+        Self {
+            transaction: None,
+            manager: Manager::get(),
+        }
+    }
 }
 
 impl TwoPc {
     /// Get a unique name for the two-pc transaction.
-    pub(super) fn name(&mut self) -> &str {
-        if self.name.is_none() {
-            let name = format!("__pgdog_2pc_{}", COUNTER.fetch_add(1, Ordering::Relaxed));
-            self.name = Some(name);
+    pub(super) fn transaction(&mut self) -> TwoPcTransaction {
+        if self.transaction.is_none() {
+            self.transaction = Some(TwoPcTransaction::new());
         }
 
-        self.name.as_ref().unwrap().as_str()
+        self.transaction.unwrap()
     }
 
     /// Start phase one of two-phase commit.
     ///
     /// If we crash during this phase, the transaction must be rolled back.
-    pub(super) async fn phase_one(&mut self) -> Result<(), Error> {
-        Ok(())
+    pub(super) async fn phase_one(&mut self, cluster: &Arc<User>) -> Result<TwoPcGuard, Error> {
+        let transaction = self.transaction();
+        self.manager
+            .transaction_state(&transaction, cluster, TwoPcPhase::Phase1)
+            .await
     }
 
     /// Start phase two of two-phase commit.
     ///
     /// If we crash during this phase, the transaction must be committed.
-    pub(super) async fn phase_two(&mut self) -> Result<(), Error> {
-        Ok(())
+    pub(super) async fn phase_two(&mut self, cluster: &Arc<User>) -> Result<TwoPcGuard, Error> {
+        let transaction = self.transaction();
+        self.manager
+            .transaction_state(&transaction, cluster, TwoPcPhase::Phase2)
+            .await
     }
 
     /// Finish two-pc transaction.
     ///
     /// This is just a cleanup step, to avoid unnecessary checks during crash recovery.
     pub(super) async fn done(&mut self) -> Result<(), Error> {
-        self.name = None;
+        let transaction = self.transaction();
+        self.manager.done(&transaction).await?;
+        self.transaction = None;
         Ok(())
     }
 }

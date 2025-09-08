@@ -28,6 +28,7 @@ pub mod unknown_command;
 mod testing;
 
 pub use context::QueryEngineContext;
+pub use two_pc::phase::TwoPcPhase;
 use two_pc::TwoPc;
 
 #[derive(Default, Debug)]
