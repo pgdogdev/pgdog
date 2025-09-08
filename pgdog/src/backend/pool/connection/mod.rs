@@ -31,6 +31,8 @@ use std::{
 
 pub mod aggregate;
 pub mod binding;
+#[cfg(test)]
+pub mod binding_test;
 pub mod buffer;
 pub mod mirror;
 pub mod multi_shard;

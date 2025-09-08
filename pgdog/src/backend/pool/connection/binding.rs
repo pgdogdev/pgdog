@@ -51,7 +51,7 @@ impl Binding {
         self.disconnect();
     }
 
-    /// Are we connnected to a backend?
+    /// Are we connected to a backend?
     pub fn connected(&self) -> bool {
         match self {
             Binding::Direct(server) => server.is_some(),
@@ -278,12 +278,8 @@ impl Binding {
 
                     match server.execute(query).await {
                         Err(Error::ExecutionError(err)) => {
-                            if !(skip_missing
-                                && err.message.contains(&format!(
-                                    r#"prepared transaction with identifier "{}" does not exist"#,
-                                    name
-                                )))
-                            {
+                            // Undefined object, transaction doesn't exist.
+                            if !(skip_missing && err.code == "42704") {
                                 return Err(Error::ExecutionError(err));
                             }
                         }
