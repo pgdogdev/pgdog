@@ -53,6 +53,7 @@ pub struct Counts {
     pub bytes_sent: usize,
     pub bytes_received: usize,
     pub transactions: usize,
+    pub transactions_2pc: usize,
     pub queries: usize,
     pub rollbacks: usize,
     pub errors: usize,
@@ -74,6 +75,7 @@ impl Add for Counts {
             bytes_sent: self.bytes_sent.saturating_add(rhs.bytes_sent),
             bytes_received: self.bytes_received.saturating_add(rhs.bytes_received),
             transactions: self.transactions.saturating_add(rhs.transactions),
+            transactions_2pc: self.transactions_2pc.saturating_add(rhs.transactions_2pc),
             queries: self.queries.saturating_add(rhs.queries),
             rollbacks: self.rollbacks.saturating_add(rhs.rollbacks),
             errors: self.errors.saturating_add(rhs.errors),
@@ -192,6 +194,12 @@ impl Stats {
     /// A transaction has been completed.
     pub fn transaction(&mut self, now: Instant) {
         self.transaction_state(now, State::Idle);
+    }
+
+    /// Increment two-phase commit transaction count.
+    pub fn transaction_2pc(&mut self) {
+        self.last_checkout.transactions_2pc += 1;
+        self.total.transactions_2pc += 1;
     }
 
     /// Error occurred in a transaction.

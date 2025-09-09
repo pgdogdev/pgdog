@@ -512,3 +512,9 @@ fn test_any() {
 
     assert_eq!(route.shard(), &Shard::All);
 }
+
+#[test]
+fn test_commit_prepared() {
+    let stmt = pg_query::parse("COMMIT PREPARED 'test'").unwrap();
+    println!("{:?}", stmt);
+}

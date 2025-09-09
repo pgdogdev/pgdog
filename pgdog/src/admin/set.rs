@@ -95,6 +95,14 @@ impl Command for Set {
                 config.config.general.cross_shard_disabled = Self::from_json(&self.value)?;
             }
 
+            "two_phase_commit" => {
+                config.config.general.two_phase_commit = Self::from_json(&self.value)?;
+            }
+
+            "two_phase_commit_auto" => {
+                config.config.general.two_phase_commit_auto = Self::from_json(&self.value)?;
+            }
+
             _ => return Err(Error::Syntax),
         }
 

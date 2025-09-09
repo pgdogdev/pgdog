@@ -7,7 +7,7 @@ use tracing::{error, info};
 
 use crate::{
     backend::{
-        databases::databases,
+        databases::{databases, User as DatabaseUser},
         replication::{ReplicationConfig, ShardedColumn},
         Schema, ShardedTables,
     },
@@ -33,9 +33,8 @@ pub struct PoolConfig {
 /// belonging to the same database cluster.
 #[derive(Clone, Default, Debug)]
 pub struct Cluster {
-    name: String,
+    identifier: Arc<DatabaseUser>,
     shards: Vec<Shard>,
-    user: String,
     password: String,
     pooler_mode: PoolerMode,
     sharded_tables: ShardedTables,
@@ -47,6 +46,8 @@ pub struct Cluster {
     schema_admin: bool,
     stats: Arc<Mutex<MirrorStats>>,
     cross_shard_disabled: bool,
+    two_phase_commit: bool,
+    two_phase_commit_auto: bool,
 }
 
 /// Sharding configuration from the cluster.
@@ -84,6 +85,8 @@ pub struct ClusterConfig<'a> {
     pub rw_split: ReadWriteSplit,
     pub schema_admin: bool,
     pub cross_shard_disabled: bool,
+    pub two_pc: bool,
+    pub two_pc_auto: bool,
 }
 
 impl<'a> ClusterConfig<'a> {
@@ -110,6 +113,10 @@ impl<'a> ClusterConfig<'a> {
             cross_shard_disabled: user
                 .cross_shard_disabled
                 .unwrap_or(general.cross_shard_disabled),
+            two_pc: user.two_phase_commit.unwrap_or(general.two_phase_commit),
+            two_pc_auto: user
+                .two_phase_commit_auto
+                .unwrap_or(general.two_phase_commit_auto.unwrap_or(true)), // Enable by default.
         }
     }
 }
@@ -131,16 +138,20 @@ impl Cluster {
             rw_split,
             schema_admin,
             cross_shard_disabled,
+            two_pc,
+            two_pc_auto,
         } = config;
 
         Self {
+            identifier: Arc::new(DatabaseUser {
+                user: user.to_owned(),
+                database: name.to_owned(),
+            }),
             shards: shards
                 .iter()
                 .map(|config| Shard::new(&config.primary, &config.replicas, lb_strategy, rw_split))
                 .collect(),
-            name: name.to_owned(),
             password: password.to_owned(),
-            user: user.to_owned(),
             pooler_mode,
             sharded_tables,
             replication_sharding,
@@ -151,6 +162,8 @@ impl Cluster {
             schema_admin,
             stats: Arc::new(Mutex::new(MirrorStats::default())),
             cross_shard_disabled,
+            two_phase_commit: two_pc && shards.len() > 1,
+            two_phase_commit_auto: two_pc_auto && shards.len() > 1,
         }
     }
 
@@ -189,9 +202,8 @@ impl Cluster {
     /// and you expect to drop the current Cluster entirely.
     pub fn duplicate(&self) -> Self {
         Self {
+            identifier: self.identifier.clone(),
             shards: self.shards.iter().map(|s| s.duplicate()).collect(),
-            name: self.name.clone(),
-            user: self.user.clone(),
             password: self.password.clone(),
             pooler_mode: self.pooler_mode,
             sharded_tables: self.sharded_tables.clone(),
@@ -203,6 +215,8 @@ impl Cluster {
             schema_admin: self.schema_admin,
             stats: Arc::new(Mutex::new(MirrorStats::default())),
             cross_shard_disabled: self.cross_shard_disabled,
+            two_phase_commit: self.two_phase_commit,
+            two_phase_commit_auto: self.two_phase_commit_auto,
         }
     }
 
@@ -227,12 +241,17 @@ impl Cluster {
 
     /// User name.
     pub fn user(&self) -> &str {
-        &self.user
+        &self.identifier.user
     }
 
     /// Cluster name (database name).
     pub fn name(&self) -> &str {
-        &self.name
+        &self.identifier.database
+    }
+
+    /// Get unique cluster identifier.
+    pub fn identifier(&self) -> Arc<DatabaseUser> {
+        self.identifier.clone()
     }
 
     /// Get pooler mode.
@@ -344,6 +363,17 @@ impl Cluster {
         self.cross_shard_disabled
     }
 
+    /// Two-phase commit enabled.
+    pub fn two_pc_enabled(&self) -> bool {
+        self.two_phase_commit
+    }
+
+    /// Two-phase commit transactions started automatically
+    /// for single-statement cross-shard writes.
+    pub fn two_pc_auto_enabled(&self) -> bool {
+        self.two_phase_commit_auto && self.two_pc_enabled()
+    }
+
     /// Launch the connection pools.
     pub(crate) fn launch(&self) {
         for shard in self.shards() {
@@ -383,6 +413,8 @@ impl Cluster {
 
 #[cfg(test)]
 mod test {
+    use std::sync::Arc;
+
     use crate::{
         backend::pool::{Address, Config, PoolConfig},
         backend::{Shard, ShardedTables},
@@ -392,7 +424,7 @@ mod test {
         },
     };
 
-    use super::Cluster;
+    use super::{Cluster, DatabaseUser};
 
     impl Cluster {
         pub fn new_test() -> Self {
@@ -438,8 +470,10 @@ mod test {
                         ReadWriteSplit::default(),
                     ),
                 ],
-                user: "pgdog".into(),
-                name: "pgdog".into(),
+                identifier: Arc::new(DatabaseUser {
+                    user: "pgdog".into(),
+                    database: "pgdog".into(),
+                }),
                 ..Default::default()
             }
         }

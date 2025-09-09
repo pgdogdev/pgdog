@@ -21,12 +21,15 @@ pub mod route_query;
 pub mod set;
 pub mod show_shards;
 pub mod start_transaction;
+pub mod two_pc;
 pub mod unknown_command;
 
 #[cfg(test)]
 mod testing;
 
 pub use context::QueryEngineContext;
+pub use two_pc::phase::TwoPcPhase;
+use two_pc::TwoPc;
 
 #[derive(Default, Debug)]
 pub struct QueryEngine {
@@ -39,6 +42,7 @@ pub struct QueryEngine {
     client_id: BackendKeyData,
     test_mode: bool,
     set_route: Option<Route>,
+    two_pc: TwoPc,
 }
 
 impl QueryEngine {
@@ -145,12 +149,11 @@ impl QueryEngine {
                 if self.backend.connected() || *extended {
                     let transaction_route = self.transaction_route(&route)?;
                     context.client_request.route = Some(transaction_route.clone());
-
-                    // Transaction control goes to all shards.
                     context.cross_shard_disabled = Some(false);
-                    self.execute(context, &transaction_route).await?;
+                    self.end_connected(context, &transaction_route, false)
+                        .await?;
                 } else {
-                    self.end_transaction(context, false).await?
+                    self.end_not_connected(context, false).await?
                 }
             }
             Command::RollbackTransaction { extended } => {
@@ -159,12 +162,11 @@ impl QueryEngine {
                 if self.backend.connected() || *extended {
                     let transaction_route = self.transaction_route(&route)?;
                     context.client_request.route = Some(transaction_route.clone());
-
-                    // Transaction control goes to all shards.
                     context.cross_shard_disabled = Some(false);
-                    self.execute(context, &transaction_route).await?;
+                    self.end_connected(context, &transaction_route, true)
+                        .await?;
                 } else {
-                    self.end_transaction(context, true).await?
+                    self.end_not_connected(context, true).await?
                 }
             }
             Command::Query(_) => self.execute(context, &route).await?,

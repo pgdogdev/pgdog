@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use crate::backend::databases::{databases, reload, shutdown};
 use crate::config::config;
+use crate::frontend::client::query_engine::two_pc::Manager;
 use crate::net::messages::BackendKeyData;
 use crate::net::messages::{hello::SslReply, Startup};
 use crate::net::{self, tls::acceptor};
@@ -102,12 +103,13 @@ impl Listener {
     }
 
     fn start_shutdown(&self) {
-        shutdown();
         comms().shutdown();
 
         let listener = self.clone();
         spawn(async move {
             listener.execute_shutdown().await;
+            Manager::get().shutdown().await; // wait for 2pc to flush
+            shutdown();
         });
     }
 

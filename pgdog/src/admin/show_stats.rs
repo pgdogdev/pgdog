@@ -30,6 +30,7 @@ impl Command for ShowStats {
                 .flat_map(|prefix| {
                     [
                         Field::numeric(&format!("{}_xact_count", prefix)),
+                        Field::numeric(&format!("{}_xact_2pc_count", prefix)),
                         Field::numeric(&format!("{}_query_count", prefix)),
                         Field::numeric(&format!("{}_server_assignment_count", prefix)),
                         Field::numeric(&format!("{}_received", prefix)),
@@ -71,6 +72,7 @@ impl Command for ShowStats {
 
                     for stat in [totals, averages] {
                         dr.add(stat.xact_count)
+                            .add(stat.xact_2pc_count)
                             .add(stat.query_count)
                             .add(stat.server_assignment_count)
                             .add(stat.received)

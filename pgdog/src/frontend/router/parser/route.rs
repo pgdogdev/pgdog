@@ -195,4 +195,8 @@ impl Route {
     pub fn distinct(&self) -> &Option<DistinctBy> {
         &self.distinct
     }
+
+    pub fn should_2pc(&self) -> bool {
+        self.is_cross_shard() && self.is_write()
+    }
 }

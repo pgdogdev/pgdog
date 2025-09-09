@@ -36,6 +36,7 @@ impl Command for ShowClients {
             Field::text("last_request"),
             Field::numeric("queries"),
             Field::numeric("transactions"),
+            Field::numeric("transactions_2pc"),
             Field::numeric("wait_time"),
             Field::numeric("query_time"),
             Field::numeric("transaction_time"),
@@ -96,6 +97,7 @@ impl Command for ShowClients {
                 )
                 .add("queries", client.stats.queries)
                 .add("transactions", client.stats.transactions)
+                .add("transactions_2pc", client.stats.transactions_2pc)
                 .add("wait_time", client.stats.wait_time().as_secs_f64() * 1000.0)
                 .add(
                     "query_time",
