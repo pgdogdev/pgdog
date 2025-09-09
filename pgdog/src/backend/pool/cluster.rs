@@ -156,7 +156,7 @@ impl Cluster {
             schema_admin,
             stats: Arc::new(Mutex::new(MirrorStats::default())),
             cross_shard_disabled,
-            two_pc,
+            two_pc: two_pc && shards.len() > 1,
         }
     }
 

@@ -150,7 +150,8 @@ impl QueryEngine {
                     let transaction_route = self.transaction_route(&route)?;
                     context.client_request.route = Some(transaction_route.clone());
                     context.cross_shard_disabled = Some(false);
-                    self.end_connected(context, &transaction_route).await?;
+                    self.end_connected(context, &transaction_route, false)
+                        .await?;
                 } else {
                     self.end_not_connected(context, false).await?
                 }
@@ -162,7 +163,8 @@ impl QueryEngine {
                     let transaction_route = self.transaction_route(&route)?;
                     context.client_request.route = Some(transaction_route.clone());
                     context.cross_shard_disabled = Some(false);
-                    self.end_connected(context, &transaction_route).await?;
+                    self.end_connected(context, &transaction_route, true)
+                        .await?;
                 } else {
                     self.end_not_connected(context, true).await?
                 }

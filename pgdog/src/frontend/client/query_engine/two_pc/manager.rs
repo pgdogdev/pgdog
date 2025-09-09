@@ -1,8 +1,9 @@
 //! Global two-phase commit transaction manager.
+use fnv::FnvHashMap as HashMap;
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::VecDeque,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,

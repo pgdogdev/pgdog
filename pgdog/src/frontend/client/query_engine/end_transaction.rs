@@ -33,10 +33,12 @@ impl QueryEngine {
         &mut self,
         context: &mut QueryEngineContext<'_>,
         route: &Route,
+        rollback: bool,
     ) -> Result<(), Error> {
         let cluster = self.backend.cluster()?;
-        // 2pc is used only for writes.
-        let two_pc = cluster.two_pc_enabled() && route.is_write();
+
+        // 2pc is used only for writes and is not needed for rollbacks.
+        let two_pc = cluster.two_pc_enabled() && route.is_write() && !rollback;
 
         if two_pc {
             let identifier = cluster.identifier();
