@@ -14,6 +14,7 @@ use std::env;
 use std::fs::read_to_string;
 use std::hash::{Hash, Hasher as StdHasher};
 use std::net::Ipv4Addr;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 use std::{
@@ -518,7 +519,7 @@ pub struct General {
     pub log_disconnections: bool,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum PreparedStatements {
     Disabled,
@@ -534,6 +535,19 @@ impl PreparedStatements {
 
     pub fn enabled(&self) -> bool {
         !matches!(self, PreparedStatements::Disabled)
+    }
+}
+
+impl FromStr for PreparedStatements {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "disabled" => Ok(Self::Disabled),
+            "extended" => Ok(Self::Extended),
+            "full" => Ok(Self::Full),
+            _ => Err(format!("Invalid prepared statements mode: {}", s)),
+        }
     }
 }
 
@@ -569,12 +583,37 @@ impl AuthType {
     }
 }
 
+impl FromStr for AuthType {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "md5" => Ok(Self::Md5),
+            "scram" => Ok(Self::Scram),
+            "trust" => Ok(Self::Trust),
+            _ => Err(format!("Invalid auth type: {}", s)),
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Copy)]
 #[serde(rename_all = "snake_case")]
 pub enum ReadWriteStrategy {
     #[default]
     Conservative,
     Aggressive,
+}
+
+impl FromStr for ReadWriteStrategy {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "conservative" => Ok(Self::Conservative),
+            "aggressive" => Ok(Self::Aggressive),
+            _ => Err(format!("Invalid read-write strategy: {}", s)),
+        }
+    }
 }
 
 impl Default for General {
@@ -585,7 +624,7 @@ impl Default for General {
             workers: Self::workers(),
             default_pool_size: Self::default_pool_size(),
             min_pool_size: Self::min_pool_size(),
-            pooler_mode: PoolerMode::default(),
+            pooler_mode: Self::pooler_mode(),
             healthcheck_interval: Self::healthcheck_interval(),
             idle_healthcheck_interval: Self::idle_healthcheck_interval(),
             idle_healthcheck_delay: Self::idle_healthcheck_delay(),
@@ -593,19 +632,19 @@ impl Default for General {
             ban_timeout: Self::ban_timeout(),
             rollback_timeout: Self::rollback_timeout(),
             load_balancing_strategy: Self::load_balancing_strategy(),
-            read_write_strategy: ReadWriteStrategy::default(),
-            read_write_split: ReadWriteSplit::default(),
-            tls_certificate: None,
-            tls_private_key: None,
+            read_write_strategy: Self::read_write_strategy(),
+            read_write_split: Self::read_write_split(),
+            tls_certificate: Self::tls_certificate(),
+            tls_private_key: Self::tls_private_key(),
             tls_verify: Self::default_tls_verify(),
-            tls_server_ca_certificate: None,
+            tls_server_ca_certificate: Self::tls_server_ca_certificate(),
             shutdown_timeout: Self::default_shutdown_timeout(),
-            broadcast_address: None,
+            broadcast_address: Self::broadcast_address(),
             broadcast_port: Self::broadcast_port(),
-            query_log: None,
-            openmetrics_port: None,
-            openmetrics_namespace: None,
-            prepared_statements: PreparedStatements::default(),
+            query_log: Self::query_log(),
+            openmetrics_port: Self::openmetrics_port(),
+            openmetrics_namespace: Self::openmetrics_namespace(),
+            prepared_statements: Self::prepared_statements(),
             prepared_statements_limit: Self::prepared_statements_limit(),
             query_cache_limit: Self::query_cache_limit(),
             passthrough_auth: Self::default_passthrough_auth(),
@@ -614,15 +653,15 @@ impl Default for General {
             connect_attempts: Self::connect_attempts(),
             query_timeout: Self::default_query_timeout(),
             checkout_timeout: Self::checkout_timeout(),
-            dry_run: bool::default(),
+            dry_run: Self::dry_run(),
             idle_timeout: Self::idle_timeout(),
             client_idle_timeout: Self::default_client_idle_timeout(),
             mirror_queue: Self::mirror_queue(),
             mirror_exposure: Self::mirror_exposure(),
-            auth_type: AuthType::default(),
-            cross_shard_disabled: bool::default(),
-            dns_ttl: None,
-            pub_sub_channel_size: 0,
+            auth_type: Self::auth_type(),
+            cross_shard_disabled: Self::cross_shard_disabled(),
+            dns_ttl: Self::default_dns_ttl(),
+            pub_sub_channel_size: Self::pub_sub_channel_size(),
             log_connections: Self::log_connections(),
             log_disconnections: Self::log_disconnections(),
         }
@@ -639,6 +678,32 @@ impl General {
 
     fn env_string_or_default(env_var: &str, default: &str) -> String {
         env::var(env_var).unwrap_or_else(|_| default.to_string())
+    }
+
+    fn env_bool_or_default(env_var: &str, default: bool) -> bool {
+        env::var(env_var)
+            .ok()
+            .and_then(|v| match v.to_lowercase().as_str() {
+                "true" | "1" | "yes" | "on" => Some(true),
+                "false" | "0" | "no" | "off" => Some(false),
+                _ => None,
+            })
+            .unwrap_or(default)
+    }
+
+    fn env_option<T: std::str::FromStr>(env_var: &str) -> Option<T> {
+        env::var(env_var).ok().and_then(|v| v.parse().ok())
+    }
+
+    fn env_option_string(env_var: &str) -> Option<String> {
+        env::var(env_var).ok().filter(|s| !s.is_empty())
+    }
+
+    fn env_enum_or_default<T: std::str::FromStr + Default>(env_var: &str) -> T {
+        env::var(env_var)
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or_default()
     }
 
     fn host() -> String {
@@ -666,19 +731,22 @@ impl General {
     }
 
     fn idle_healthcheck_interval() -> u64 {
-        30_000
+        Self::env_or_default("PGDOG_IDLE_HEALTHCHECK_INTERVAL", 30_000)
     }
 
     fn idle_healthcheck_delay() -> u64 {
-        5_000
+        Self::env_or_default("PGDOG_IDLE_HEALTHCHECK_DELAY", 5_000)
     }
 
     fn ban_timeout() -> u64 {
-        Duration::from_secs(300).as_millis() as u64
+        Self::env_or_default(
+            "PGDOG_BAN_TIMEOUT",
+            Duration::from_secs(300).as_millis() as u64,
+        )
     }
 
     fn rollback_timeout() -> u64 {
-        5_000
+        Self::env_or_default("PGDOG_ROLLBACK_TIMEOUT", 5_000)
     }
 
     fn idle_timeout() -> u64 {
@@ -689,11 +757,14 @@ impl General {
     }
 
     fn default_client_idle_timeout() -> u64 {
-        Duration::MAX.as_millis() as u64
+        Self::env_or_default(
+            "PGDOG_CLIENT_IDLE_TIMEOUT",
+            Duration::MAX.as_millis() as u64,
+        )
     }
 
     fn default_query_timeout() -> u64 {
-        Duration::MAX.as_millis() as u64
+        Self::env_or_default("PGDOG_QUERY_TIMEOUT", Duration::MAX.as_millis() as u64)
     }
 
     pub(crate) fn query_timeout(&self) -> Duration {
@@ -713,15 +784,18 @@ impl General {
     }
 
     fn load_balancing_strategy() -> LoadBalancingStrategy {
-        LoadBalancingStrategy::Random
+        Self::env_enum_or_default("PGDOG_LOAD_BALANCING_STRATEGY")
     }
 
     fn default_tls_verify() -> TlsVerifyMode {
-        TlsVerifyMode::Prefer
+        env::var("PGDOG_TLS_VERIFY")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(TlsVerifyMode::Prefer)
     }
 
     fn default_shutdown_timeout() -> u64 {
-        60_000
+        Self::env_or_default("PGDOG_SHUTDOWN_TIMEOUT", 60_000)
     }
 
     fn default_connect_timeout() -> u64 {
@@ -729,15 +803,79 @@ impl General {
     }
 
     fn default_connect_attempt_delay() -> u64 {
-        0
+        Self::env_or_default("PGDOG_CONNECT_ATTEMPT_DELAY", 0)
     }
 
     fn connect_attempts() -> u64 {
-        1
+        Self::env_or_default("PGDOG_CONNECT_ATTEMPTS", 1)
+    }
+
+    fn pooler_mode() -> PoolerMode {
+        Self::env_enum_or_default("PGDOG_POOLER_MODE")
+    }
+
+    fn read_write_strategy() -> ReadWriteStrategy {
+        Self::env_enum_or_default("PGDOG_READ_WRITE_STRATEGY")
+    }
+
+    fn read_write_split() -> ReadWriteSplit {
+        Self::env_enum_or_default("PGDOG_READ_WRITE_SPLIT")
+    }
+
+    fn prepared_statements() -> PreparedStatements {
+        Self::env_enum_or_default("PGDOG_PREPARED_STATEMENTS")
+    }
+
+    fn auth_type() -> AuthType {
+        Self::env_enum_or_default("PGDOG_AUTH_TYPE")
+    }
+
+    fn tls_certificate() -> Option<PathBuf> {
+        Self::env_option_string("PGDOG_TLS_CERTIFICATE").map(PathBuf::from)
+    }
+
+    fn tls_private_key() -> Option<PathBuf> {
+        Self::env_option_string("PGDOG_TLS_PRIVATE_KEY").map(PathBuf::from)
+    }
+
+    fn tls_server_ca_certificate() -> Option<PathBuf> {
+        Self::env_option_string("PGDOG_TLS_SERVER_CA_CERTIFICATE").map(PathBuf::from)
+    }
+
+    fn query_log() -> Option<PathBuf> {
+        Self::env_option_string("PGDOG_QUERY_LOG").map(PathBuf::from)
+    }
+
+    fn openmetrics_port() -> Option<u16> {
+        Self::env_option("PGDOG_OPENMETRICS_PORT")
+    }
+
+    fn openmetrics_namespace() -> Option<String> {
+        Self::env_option_string("PGDOG_OPENMETRICS_NAMESPACE")
+    }
+
+    fn default_dns_ttl() -> Option<u64> {
+        Self::env_option("PGDOG_DNS_TTL")
+    }
+
+    fn pub_sub_channel_size() -> usize {
+        Self::env_or_default("PGDOG_PUB_SUB_CHANNEL_SIZE", 0)
+    }
+
+    fn dry_run() -> bool {
+        Self::env_bool_or_default("PGDOG_DRY_RUN", false)
+    }
+
+    fn cross_shard_disabled() -> bool {
+        Self::env_bool_or_default("PGDOG_CROSS_SHARD_DISABLED", false)
+    }
+
+    fn broadcast_address() -> Option<Ipv4Addr> {
+        Self::env_option("PGDOG_BROADCAST_ADDRESS")
     }
 
     fn broadcast_port() -> u16 {
-        Self::port() + 1
+        Self::env_or_default("PGDOG_BROADCAST_PORT", Self::port() + 1)
     }
 
     fn healthcheck_timeout() -> u64 {
@@ -755,27 +893,27 @@ impl General {
     }
 
     fn mirror_queue() -> usize {
-        128
+        Self::env_or_default("PGDOG_MIRROR_QUEUE", 128)
     }
 
     fn mirror_exposure() -> f32 {
-        1.0
+        Self::env_or_default("PGDOG_MIRROR_EXPOSURE", 1.0)
     }
 
     fn prepared_statements_limit() -> usize {
-        usize::MAX
+        Self::env_or_default("PGDOG_PREPARED_STATEMENTS_LIMIT", usize::MAX)
     }
 
     fn query_cache_limit() -> usize {
-        usize::MAX
+        Self::env_or_default("PGDOG_QUERY_CACHE_LIMIT", usize::MAX)
     }
 
     fn log_connections() -> bool {
-        true
+        Self::env_bool_or_default("PGDOG_LOG_CONNECTIONS", true)
     }
 
     fn log_disconnections() -> bool {
-        true
+        Self::env_bool_or_default("PGDOG_LOG_DISCONNECTIONS", true)
     }
 
     fn default_passthrough_auth() -> PassthoughAuth {
@@ -839,6 +977,18 @@ impl std::fmt::Display for PoolerMode {
     }
 }
 
+impl FromStr for PoolerMode {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "transaction" => Ok(Self::Transaction),
+            "session" => Ok(Self::Session),
+            _ => Err(format!("Invalid pooler mode: {}", s)),
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Copy)]
 #[serde(rename_all = "snake_case")]
 pub enum LoadBalancingStrategy {
@@ -846,6 +996,19 @@ pub enum LoadBalancingStrategy {
     Random,
     RoundRobin,
     LeastActiveConnections,
+}
+
+impl FromStr for LoadBalancingStrategy {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().replace('_', "").replace('-', "").as_str() {
+            "random" => Ok(Self::Random),
+            "roundrobin" => Ok(Self::RoundRobin),
+            "leastactiveconnections" => Ok(Self::LeastActiveConnections),
+            _ => Err(format!("Invalid load balancing strategy: {}", s)),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Copy)]
@@ -858,12 +1021,38 @@ pub enum TlsVerifyMode {
     VerifyFull,
 }
 
+impl FromStr for TlsVerifyMode {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().replace('_', "").replace('-', "").as_str() {
+            "disabled" => Ok(Self::Disabled),
+            "prefer" => Ok(Self::Prefer),
+            "verifyca" => Ok(Self::VerifyCa),
+            "verifyfull" => Ok(Self::VerifyFull),
+            _ => Err(format!("Invalid TLS verify mode: {}", s)),
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Copy)]
 #[serde(rename_all = "snake_case")]
 pub enum ReadWriteSplit {
     #[default]
     IncludePrimary,
     ExcludePrimary,
+}
+
+impl FromStr for ReadWriteSplit {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().replace('_', "").replace('-', "").as_str() {
+            "includeprimary" => Ok(Self::IncludePrimary),
+            "excludeprimary" => Ok(Self::ExcludePrimary),
+            _ => Err(format!("Invalid read-write split: {}", s)),
+        }
+    }
 }
 
 /// Database server proxied by pgDog.
@@ -1765,6 +1954,259 @@ exposure = 0.75
 
         assert_eq!(General::host(), "0.0.0.0");
         assert_eq!(General::port(), 6432);
+    }
+
+    #[test]
+    fn test_env_enum_fields() {
+        // Test pooler mode
+        env::set_var("PGDOG_POOLER_MODE", "session");
+        assert_eq!(General::pooler_mode(), PoolerMode::Session);
+        env::remove_var("PGDOG_POOLER_MODE");
+        assert_eq!(General::pooler_mode(), PoolerMode::Transaction);
+
+        // Test load balancing strategy
+        env::set_var("PGDOG_LOAD_BALANCING_STRATEGY", "round_robin");
+        assert_eq!(
+            General::load_balancing_strategy(),
+            LoadBalancingStrategy::RoundRobin
+        );
+        env::remove_var("PGDOG_LOAD_BALANCING_STRATEGY");
+        assert_eq!(
+            General::load_balancing_strategy(),
+            LoadBalancingStrategy::Random
+        );
+
+        // Test read-write strategy
+        env::set_var("PGDOG_READ_WRITE_STRATEGY", "aggressive");
+        assert_eq!(
+            General::read_write_strategy(),
+            ReadWriteStrategy::Aggressive
+        );
+        env::remove_var("PGDOG_READ_WRITE_STRATEGY");
+        assert_eq!(
+            General::read_write_strategy(),
+            ReadWriteStrategy::Conservative
+        );
+
+        // Test read-write split
+        env::set_var("PGDOG_READ_WRITE_SPLIT", "exclude_primary");
+        assert_eq!(General::read_write_split(), ReadWriteSplit::ExcludePrimary);
+        env::remove_var("PGDOG_READ_WRITE_SPLIT");
+        assert_eq!(General::read_write_split(), ReadWriteSplit::IncludePrimary);
+
+        // Test TLS verify mode
+        env::set_var("PGDOG_TLS_VERIFY", "verify_full");
+        assert_eq!(General::default_tls_verify(), TlsVerifyMode::VerifyFull);
+        env::remove_var("PGDOG_TLS_VERIFY");
+        assert_eq!(General::default_tls_verify(), TlsVerifyMode::Prefer);
+
+        // Test prepared statements
+        env::set_var("PGDOG_PREPARED_STATEMENTS", "full");
+        assert_eq!(General::prepared_statements(), PreparedStatements::Full);
+        env::remove_var("PGDOG_PREPARED_STATEMENTS");
+        assert_eq!(General::prepared_statements(), PreparedStatements::Extended);
+
+        // Test auth type
+        env::set_var("PGDOG_AUTH_TYPE", "md5");
+        assert_eq!(General::auth_type(), AuthType::Md5);
+        env::remove_var("PGDOG_AUTH_TYPE");
+        assert_eq!(General::auth_type(), AuthType::Scram);
+    }
+
+    #[test]
+    fn test_env_additional_timeouts() {
+        env::set_var("PGDOG_IDLE_HEALTHCHECK_INTERVAL", "45000");
+        env::set_var("PGDOG_IDLE_HEALTHCHECK_DELAY", "10000");
+        env::set_var("PGDOG_BAN_TIMEOUT", "600000");
+        env::set_var("PGDOG_ROLLBACK_TIMEOUT", "10000");
+        env::set_var("PGDOG_SHUTDOWN_TIMEOUT", "120000");
+        env::set_var("PGDOG_CONNECT_ATTEMPT_DELAY", "1000");
+        env::set_var("PGDOG_QUERY_TIMEOUT", "30000");
+        env::set_var("PGDOG_CLIENT_IDLE_TIMEOUT", "3600000");
+
+        assert_eq!(General::idle_healthcheck_interval(), 45000);
+        assert_eq!(General::idle_healthcheck_delay(), 10000);
+        assert_eq!(General::ban_timeout(), 600000);
+        assert_eq!(General::rollback_timeout(), 10000);
+        assert_eq!(General::default_shutdown_timeout(), 120000);
+        assert_eq!(General::default_connect_attempt_delay(), 1000);
+        assert_eq!(General::default_query_timeout(), 30000);
+        assert_eq!(General::default_client_idle_timeout(), 3600000);
+
+        env::remove_var("PGDOG_IDLE_HEALTHCHECK_INTERVAL");
+        env::remove_var("PGDOG_IDLE_HEALTHCHECK_DELAY");
+        env::remove_var("PGDOG_BAN_TIMEOUT");
+        env::remove_var("PGDOG_ROLLBACK_TIMEOUT");
+        env::remove_var("PGDOG_SHUTDOWN_TIMEOUT");
+        env::remove_var("PGDOG_CONNECT_ATTEMPT_DELAY");
+        env::remove_var("PGDOG_QUERY_TIMEOUT");
+        env::remove_var("PGDOG_CLIENT_IDLE_TIMEOUT");
+
+        assert_eq!(General::idle_healthcheck_interval(), 30000);
+        assert_eq!(General::idle_healthcheck_delay(), 5000);
+        assert_eq!(General::ban_timeout(), 300000);
+        assert_eq!(General::rollback_timeout(), 5000);
+        assert_eq!(General::default_shutdown_timeout(), 60000);
+        assert_eq!(General::default_connect_attempt_delay(), 0);
+    }
+
+    #[test]
+    fn test_env_path_fields() {
+        env::set_var("PGDOG_TLS_CERTIFICATE", "/path/to/cert.pem");
+        env::set_var("PGDOG_TLS_PRIVATE_KEY", "/path/to/key.pem");
+        env::set_var("PGDOG_TLS_SERVER_CA_CERTIFICATE", "/path/to/ca.pem");
+        env::set_var("PGDOG_QUERY_LOG", "/var/log/pgdog/queries.log");
+
+        assert_eq!(
+            General::tls_certificate(),
+            Some(PathBuf::from("/path/to/cert.pem"))
+        );
+        assert_eq!(
+            General::tls_private_key(),
+            Some(PathBuf::from("/path/to/key.pem"))
+        );
+        assert_eq!(
+            General::tls_server_ca_certificate(),
+            Some(PathBuf::from("/path/to/ca.pem"))
+        );
+        assert_eq!(
+            General::query_log(),
+            Some(PathBuf::from("/var/log/pgdog/queries.log"))
+        );
+
+        env::remove_var("PGDOG_TLS_CERTIFICATE");
+        env::remove_var("PGDOG_TLS_PRIVATE_KEY");
+        env::remove_var("PGDOG_TLS_SERVER_CA_CERTIFICATE");
+        env::remove_var("PGDOG_QUERY_LOG");
+
+        assert_eq!(General::tls_certificate(), None);
+        assert_eq!(General::tls_private_key(), None);
+        assert_eq!(General::tls_server_ca_certificate(), None);
+        assert_eq!(General::query_log(), None);
+    }
+
+    #[test]
+    fn test_env_numeric_fields() {
+        env::set_var("PGDOG_BROADCAST_PORT", "7432");
+        env::set_var("PGDOG_OPENMETRICS_PORT", "9090");
+        env::set_var("PGDOG_PREPARED_STATEMENTS_LIMIT", "1000");
+        env::set_var("PGDOG_QUERY_CACHE_LIMIT", "500");
+        env::set_var("PGDOG_CONNECT_ATTEMPTS", "3");
+        env::set_var("PGDOG_MIRROR_QUEUE", "256");
+        env::set_var("PGDOG_MIRROR_EXPOSURE", "0.5");
+        env::set_var("PGDOG_DNS_TTL", "60000");
+        env::set_var("PGDOG_PUB_SUB_CHANNEL_SIZE", "100");
+
+        assert_eq!(General::broadcast_port(), 7432);
+        assert_eq!(General::openmetrics_port(), Some(9090));
+        assert_eq!(General::prepared_statements_limit(), 1000);
+        assert_eq!(General::query_cache_limit(), 500);
+        assert_eq!(General::connect_attempts(), 3);
+        assert_eq!(General::mirror_queue(), 256);
+        assert_eq!(General::mirror_exposure(), 0.5);
+        assert_eq!(General::default_dns_ttl(), Some(60000));
+        assert_eq!(General::pub_sub_channel_size(), 100);
+
+        env::remove_var("PGDOG_BROADCAST_PORT");
+        env::remove_var("PGDOG_OPENMETRICS_PORT");
+        env::remove_var("PGDOG_PREPARED_STATEMENTS_LIMIT");
+        env::remove_var("PGDOG_QUERY_CACHE_LIMIT");
+        env::remove_var("PGDOG_CONNECT_ATTEMPTS");
+        env::remove_var("PGDOG_MIRROR_QUEUE");
+        env::remove_var("PGDOG_MIRROR_EXPOSURE");
+        env::remove_var("PGDOG_DNS_TTL");
+        env::remove_var("PGDOG_PUB_SUB_CHANNEL_SIZE");
+
+        assert_eq!(General::broadcast_port(), General::port() + 1);
+        assert_eq!(General::openmetrics_port(), None);
+        assert_eq!(General::prepared_statements_limit(), usize::MAX);
+        assert_eq!(General::query_cache_limit(), usize::MAX);
+        assert_eq!(General::connect_attempts(), 1);
+        assert_eq!(General::mirror_queue(), 128);
+        assert_eq!(General::mirror_exposure(), 1.0);
+        assert_eq!(General::default_dns_ttl(), None);
+        assert_eq!(General::pub_sub_channel_size(), 0);
+    }
+
+    #[test]
+    fn test_env_boolean_fields() {
+        env::set_var("PGDOG_DRY_RUN", "true");
+        env::set_var("PGDOG_CROSS_SHARD_DISABLED", "yes");
+        env::set_var("PGDOG_LOG_CONNECTIONS", "false");
+        env::set_var("PGDOG_LOG_DISCONNECTIONS", "0");
+
+        assert_eq!(General::dry_run(), true);
+        assert_eq!(General::cross_shard_disabled(), true);
+        assert_eq!(General::log_connections(), false);
+        assert_eq!(General::log_disconnections(), false);
+
+        env::remove_var("PGDOG_DRY_RUN");
+        env::remove_var("PGDOG_CROSS_SHARD_DISABLED");
+        env::remove_var("PGDOG_LOG_CONNECTIONS");
+        env::remove_var("PGDOG_LOG_DISCONNECTIONS");
+
+        assert_eq!(General::dry_run(), false);
+        assert_eq!(General::cross_shard_disabled(), false);
+        assert_eq!(General::log_connections(), true);
+        assert_eq!(General::log_disconnections(), true);
+    }
+
+    #[test]
+    fn test_env_other_fields() {
+        env::set_var("PGDOG_BROADCAST_ADDRESS", "192.168.1.100");
+        env::set_var("PGDOG_OPENMETRICS_NAMESPACE", "pgdog_metrics");
+
+        assert_eq!(
+            General::broadcast_address(),
+            Some("192.168.1.100".parse().unwrap())
+        );
+        assert_eq!(
+            General::openmetrics_namespace(),
+            Some("pgdog_metrics".to_string())
+        );
+
+        env::remove_var("PGDOG_BROADCAST_ADDRESS");
+        env::remove_var("PGDOG_OPENMETRICS_NAMESPACE");
+
+        assert_eq!(General::broadcast_address(), None);
+        assert_eq!(General::openmetrics_namespace(), None);
+    }
+
+    #[test]
+    fn test_env_invalid_enum_values() {
+        env::set_var("PGDOG_POOLER_MODE", "invalid_mode");
+        env::set_var("PGDOG_AUTH_TYPE", "not_an_auth");
+        env::set_var("PGDOG_TLS_VERIFY", "bad_verify");
+
+        // Should fall back to defaults for invalid values
+        assert_eq!(General::pooler_mode(), PoolerMode::Transaction);
+        assert_eq!(General::auth_type(), AuthType::Scram);
+        assert_eq!(General::default_tls_verify(), TlsVerifyMode::Prefer);
+
+        env::remove_var("PGDOG_POOLER_MODE");
+        env::remove_var("PGDOG_AUTH_TYPE");
+        env::remove_var("PGDOG_TLS_VERIFY");
+    }
+
+    #[test]
+    fn test_general_default_uses_env_vars() {
+        // Set some environment variables
+        env::set_var("PGDOG_WORKERS", "8");
+        env::set_var("PGDOG_POOLER_MODE", "session");
+        env::set_var("PGDOG_AUTH_TYPE", "trust");
+        env::set_var("PGDOG_DRY_RUN", "true");
+
+        let general = General::default();
+
+        assert_eq!(general.workers, 8);
+        assert_eq!(general.pooler_mode, PoolerMode::Session);
+        assert_eq!(general.auth_type, AuthType::Trust);
+        assert_eq!(general.dry_run, true);
+
+        env::remove_var("PGDOG_WORKERS");
+        env::remove_var("PGDOG_POOLER_MODE");
+        env::remove_var("PGDOG_AUTH_TYPE");
+        env::remove_var("PGDOG_DRY_RUN");
     }
 }
 
