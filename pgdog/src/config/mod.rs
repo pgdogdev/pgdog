@@ -31,6 +31,95 @@ use serde::{Deserialize, Serialize};
 use tracing::info;
 use tracing::warn;
 
+/// Custom deserializer for boolean values that accepts yes/no, on/off, true/false, 1/0
+mod bool_deserializer {
+    use serde::{de, Deserialize, Deserializer};
+
+    pub fn deserialize_optional<'de, D>(deserializer: D) -> Result<Option<bool>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s: Option<String> = Option::deserialize(deserializer)?;
+        match s {
+            None => Ok(None),
+            Some(s) => match s.to_lowercase().as_str() {
+                "true" | "1" | "yes" | "on" => Ok(Some(true)),
+                "false" | "0" | "no" | "off" => Ok(Some(false)),
+                _ => Err(de::Error::custom(format!(
+                    "Invalid boolean value: {}. Expected: true/false, 1/0, yes/no, on/off",
+                    s
+                ))),
+            },
+        }
+    }
+}
+
+/// Environment variables structure for the General config section
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct GeneralEnvVars {
+    // Simple string and numeric fields
+    pub host: Option<String>,
+    pub port: Option<u16>,
+    pub workers: Option<usize>,
+    pub default_pool_size: Option<usize>,
+    pub min_pool_size: Option<usize>,
+    pub healthcheck_interval: Option<u64>,
+    pub idle_healthcheck_interval: Option<u64>,
+    pub idle_healthcheck_delay: Option<u64>,
+    pub healthcheck_timeout: Option<u64>,
+    pub ban_timeout: Option<u64>,
+    pub rollback_timeout: Option<u64>,
+    pub shutdown_timeout: Option<u64>,
+    pub connect_timeout: Option<u64>,
+    pub connect_attempts: Option<u64>,
+    pub connect_attempt_delay: Option<u64>,
+    pub query_timeout: Option<u64>,
+    pub checkout_timeout: Option<u64>,
+    pub idle_timeout: Option<u64>,
+    pub client_idle_timeout: Option<u64>,
+    pub mirror_queue: Option<usize>,
+    pub mirror_exposure: Option<f32>,
+    pub prepared_statements_limit: Option<usize>,
+    pub query_cache_limit: Option<usize>,
+
+    // Boolean fields with custom deserializer
+    #[serde(deserialize_with = "bool_deserializer::deserialize_optional")]
+    pub dry_run: Option<bool>,
+    #[serde(deserialize_with = "bool_deserializer::deserialize_optional")]
+    pub cross_shard_disabled: Option<bool>,
+    #[serde(deserialize_with = "bool_deserializer::deserialize_optional")]
+    pub log_connections: Option<bool>,
+    #[serde(deserialize_with = "bool_deserializer::deserialize_optional")]
+    pub log_disconnections: Option<bool>,
+
+    // Optional path fields
+    pub tls_certificate: Option<PathBuf>,
+    pub tls_private_key: Option<PathBuf>,
+    pub tls_server_ca_certificate: Option<PathBuf>,
+    pub query_log: Option<PathBuf>,
+
+    // Optional fields
+    pub openmetrics_port: Option<u16>,
+    pub openmetrics_namespace: Option<String>,
+    pub broadcast_address: Option<Ipv4Addr>,
+    pub dns_ttl: Option<u64>,
+    pub pub_sub_channel_size: Option<usize>,
+
+    // Enum fields (these need FromStr implementations)
+    pub pooler_mode: Option<PoolerMode>,
+    pub load_balancing_strategy: Option<LoadBalancingStrategy>,
+    pub read_write_strategy: Option<ReadWriteStrategy>,
+    pub read_write_split: Option<ReadWriteSplit>,
+    pub auth_type: Option<AuthType>,
+    pub tls_verify: Option<TlsVerifyMode>,
+    pub prepared_statements: Option<PreparedStatements>,
+    // Fields that need special handling (not included in envy struct):
+    // - broadcast_port (depends on port)
+    // - passthrough_auth (custom parsing with TODO)
+    // - two_phase_commit fields (not env-configured)
+}
+
 static CONFIG: Lazy<ArcSwap<ConfigAndUsers>> =
     Lazy::new(|| ArcSwap::from_pointee(ConfigAndUsers::default()));
 
@@ -391,43 +480,31 @@ impl Config {
 #[serde(deny_unknown_fields)]
 pub struct General {
     /// Run on this address.
-    #[serde(default = "General::host")]
     pub host: String,
     /// Run on this port.
-    #[serde(default = "General::port")]
     pub port: u16,
     /// Spawn this many Tokio threads.
-    #[serde(default = "General::workers")]
     pub workers: usize,
     /// Default pool size, e.g. 10.
-    #[serde(default = "General::default_pool_size")]
     pub default_pool_size: usize,
     /// Minimum number of connections to maintain in the pool.
-    #[serde(default = "General::min_pool_size")]
     pub min_pool_size: usize,
     /// Pooler mode, e.g. transaction.
     #[serde(default)]
     pub pooler_mode: PoolerMode,
     /// How often to check a connection.
-    #[serde(default = "General::healthcheck_interval")]
     pub healthcheck_interval: u64,
     /// How often to issue a healthcheck via an idle connection.
-    #[serde(default = "General::idle_healthcheck_interval")]
     pub idle_healthcheck_interval: u64,
     /// Delay idle healthchecks by this time at startup.
-    #[serde(default = "General::idle_healthcheck_delay")]
     pub idle_healthcheck_delay: u64,
     /// Healthcheck timeout.
-    #[serde(default = "General::healthcheck_timeout")]
     pub healthcheck_timeout: u64,
     /// Maximum duration of a ban.
-    #[serde(default = "General::ban_timeout")]
     pub ban_timeout: u64,
     /// Rollback timeout.
-    #[serde(default = "General::rollback_timeout")]
     pub rollback_timeout: u64,
     /// Load balancing strategy.
-    #[serde(default = "General::load_balancing_strategy")]
     pub load_balancing_strategy: LoadBalancingStrategy,
     /// How aggressive should the query parser be in determining reads.
     #[serde(default)]
@@ -440,17 +517,14 @@ pub struct General {
     /// TLS private key.
     pub tls_private_key: Option<PathBuf>,
     /// TLS verification mode (for connecting to servers)
-    #[serde(default = "General::default_tls_verify")]
     pub tls_verify: TlsVerifyMode,
     /// TLS CA certificate (for connecting to servers).
     pub tls_server_ca_certificate: Option<PathBuf>,
     /// Shutdown timeout.
-    #[serde(default = "General::default_shutdown_timeout")]
     pub shutdown_timeout: u64,
     /// Broadcast IP.
     pub broadcast_address: Option<Ipv4Addr>,
     /// Broadcast port.
-    #[serde(default = "General::broadcast_port")]
     pub broadcast_port: u16,
     /// Load queries to file (warning: slow, don't use in production).
     #[serde(default)]
@@ -463,42 +537,30 @@ pub struct General {
     #[serde(default)]
     prepared_statements: PreparedStatements,
     /// Limit on the number of prepared statements in the server cache.
-    #[serde(default = "General::prepared_statements_limit")]
     pub prepared_statements_limit: usize,
-    #[serde(default = "General::query_cache_limit")]
     pub query_cache_limit: usize,
     /// Automatically add connection pools for user/database pairs we don't have.
-    #[serde(default = "General::default_passthrough_auth")]
     pub passthrough_auth: PassthoughAuth,
     /// Server connect timeout.
-    #[serde(default = "General::default_connect_timeout")]
     pub connect_timeout: u64,
     /// Attempt connections multiple times on bad networks.
-    #[serde(default = "General::connect_attempts")]
     pub connect_attempts: u64,
     /// How long to wait between connection attempts.
-    #[serde(default = "General::default_connect_attempt_delay")]
     pub connect_attempt_delay: u64,
     /// How long to wait for a query to return the result before aborting. Dangerous: don't use unless your network is bad.
-    #[serde(default = "General::default_query_timeout")]
     pub query_timeout: u64,
     /// Checkout timeout.
-    #[serde(default = "General::checkout_timeout")]
     pub checkout_timeout: u64,
     /// Dry run for sharding. Parse the query, route to shard 0.
     #[serde(default)]
     pub dry_run: bool,
     /// Idle timeout.
-    #[serde(default = "General::idle_timeout")]
     pub idle_timeout: u64,
     /// Client idle timeout.
-    #[serde(default = "General::default_client_idle_timeout")]
     pub client_idle_timeout: u64,
     /// Mirror queue size.
-    #[serde(default = "General::mirror_queue")]
     pub mirror_queue: usize,
     /// Mirror exposure
-    #[serde(default = "General::mirror_exposure")]
     pub mirror_exposure: f32,
     #[serde(default)]
     pub auth_type: AuthType,
@@ -512,10 +574,8 @@ pub struct General {
     #[serde(default)]
     pub pub_sub_channel_size: usize,
     /// Log client connections.
-    #[serde(default = "General::log_connections")]
     pub log_connections: bool,
     /// Log client disconnections.
-    #[serde(default = "General::log_disconnections")]
     pub log_disconnections: bool,
     /// Two-phase commit.
     #[serde(default)]
@@ -624,52 +684,96 @@ impl FromStr for ReadWriteStrategy {
 
 impl Default for General {
     fn default() -> Self {
+        // Load environment variables using envy
+        let env_config = envy::prefixed("PGDOG_")
+            .from_env::<GeneralEnvVars>()
+            .unwrap_or_default();
+
+        // Handle special cases that need manual processing
+
+        // broadcast_port defaults to port + 1 if not set
+        let port = env_config.port.unwrap_or(6432);
+        let broadcast_port = env::var("PGDOG_BROADCAST_PORT")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(port + 1);
+
+        // prepared_statements - private field
+        let prepared_statements = env_config
+            .prepared_statements
+            .unwrap_or(PreparedStatements::Extended);
+
+        // passthrough_auth - custom parsing with TODO
+        let passthrough_auth = if let Ok(auth) = env::var("PGDOG_PASSTHROUGH_AUTH") {
+            // TODO: figure out why toml::from_str doesn't work.
+            match auth.as_str() {
+                "enabled" => PassthoughAuth::Enabled,
+                "disabled" => PassthoughAuth::Disabled,
+                "enabled_plain" => PassthoughAuth::EnabledPlain,
+                _ => PassthoughAuth::default(),
+            }
+        } else {
+            PassthoughAuth::default()
+        };
+
         Self {
-            host: Self::host(),
-            port: Self::port(),
-            workers: Self::workers(),
-            default_pool_size: Self::default_pool_size(),
-            min_pool_size: Self::min_pool_size(),
-            pooler_mode: Self::pooler_mode(),
-            healthcheck_interval: Self::healthcheck_interval(),
-            idle_healthcheck_interval: Self::idle_healthcheck_interval(),
-            idle_healthcheck_delay: Self::idle_healthcheck_delay(),
-            healthcheck_timeout: Self::healthcheck_timeout(),
-            ban_timeout: Self::ban_timeout(),
-            rollback_timeout: Self::rollback_timeout(),
-            load_balancing_strategy: Self::load_balancing_strategy(),
-            read_write_strategy: Self::read_write_strategy(),
-            read_write_split: Self::read_write_split(),
-            tls_certificate: Self::tls_certificate(),
-            tls_private_key: Self::tls_private_key(),
-            tls_verify: Self::default_tls_verify(),
-            tls_server_ca_certificate: Self::tls_server_ca_certificate(),
-            shutdown_timeout: Self::default_shutdown_timeout(),
-            broadcast_address: Self::broadcast_address(),
-            broadcast_port: Self::broadcast_port(),
-            query_log: Self::query_log(),
-            openmetrics_port: Self::openmetrics_port(),
-            openmetrics_namespace: Self::openmetrics_namespace(),
-            prepared_statements: Self::prepared_statements(),
-            prepared_statements_limit: Self::prepared_statements_limit(),
-            query_cache_limit: Self::query_cache_limit(),
-            passthrough_auth: Self::default_passthrough_auth(),
-            connect_timeout: Self::default_connect_timeout(),
-            connect_attempt_delay: Self::default_connect_attempt_delay(),
-            connect_attempts: Self::connect_attempts(),
-            query_timeout: Self::default_query_timeout(),
-            checkout_timeout: Self::checkout_timeout(),
-            dry_run: Self::dry_run(),
-            idle_timeout: Self::idle_timeout(),
-            client_idle_timeout: Self::default_client_idle_timeout(),
-            mirror_queue: Self::mirror_queue(),
-            mirror_exposure: Self::mirror_exposure(),
-            auth_type: Self::auth_type(),
-            cross_shard_disabled: Self::cross_shard_disabled(),
-            dns_ttl: Self::default_dns_ttl(),
-            pub_sub_channel_size: Self::pub_sub_channel_size(),
-            log_connections: Self::log_connections(),
-            log_disconnections: Self::log_disconnections(),
+            host: env_config.host.unwrap_or_else(|| "0.0.0.0".to_string()),
+            port,
+            workers: env_config.workers.unwrap_or(2),
+            default_pool_size: env_config.default_pool_size.unwrap_or(10),
+            min_pool_size: env_config.min_pool_size.unwrap_or(1),
+            pooler_mode: env_config.pooler_mode.unwrap_or_default(),
+            healthcheck_interval: env_config.healthcheck_interval.unwrap_or(30_000),
+            idle_healthcheck_interval: env_config.idle_healthcheck_interval.unwrap_or(30_000),
+            idle_healthcheck_delay: env_config.idle_healthcheck_delay.unwrap_or(5_000),
+            healthcheck_timeout: env_config
+                .healthcheck_timeout
+                .unwrap_or(Duration::from_secs(5).as_millis() as u64),
+            ban_timeout: env_config
+                .ban_timeout
+                .unwrap_or(Duration::from_secs(300).as_millis() as u64),
+            rollback_timeout: env_config.rollback_timeout.unwrap_or(5_000),
+            load_balancing_strategy: env_config.load_balancing_strategy.unwrap_or_default(),
+            read_write_strategy: env_config.read_write_strategy.unwrap_or_default(),
+            read_write_split: env_config.read_write_split.unwrap_or_default(),
+            tls_certificate: env_config.tls_certificate,
+            tls_private_key: env_config.tls_private_key,
+            tls_verify: env_config.tls_verify.unwrap_or(TlsVerifyMode::Prefer),
+            tls_server_ca_certificate: env_config.tls_server_ca_certificate,
+            shutdown_timeout: env_config.shutdown_timeout.unwrap_or(60_000),
+            broadcast_address: env_config.broadcast_address,
+            broadcast_port,
+            query_log: env_config.query_log,
+            openmetrics_port: env_config.openmetrics_port,
+            openmetrics_namespace: env_config.openmetrics_namespace,
+            prepared_statements,
+            prepared_statements_limit: env_config.prepared_statements_limit.unwrap_or(usize::MAX),
+            query_cache_limit: env_config.query_cache_limit.unwrap_or(usize::MAX),
+            passthrough_auth,
+            connect_timeout: env_config.connect_timeout.unwrap_or(5_000),
+            connect_attempt_delay: env_config.connect_attempt_delay.unwrap_or(0),
+            connect_attempts: env_config.connect_attempts.unwrap_or(1),
+            query_timeout: env_config
+                .query_timeout
+                .unwrap_or(Duration::MAX.as_millis() as u64),
+            checkout_timeout: env_config
+                .checkout_timeout
+                .unwrap_or(Duration::from_secs(5).as_millis() as u64),
+            dry_run: env_config.dry_run.unwrap_or(false),
+            idle_timeout: env_config
+                .idle_timeout
+                .unwrap_or(Duration::from_secs(60).as_millis() as u64),
+            client_idle_timeout: env_config
+                .client_idle_timeout
+                .unwrap_or(Duration::MAX.as_millis() as u64),
+            mirror_queue: env_config.mirror_queue.unwrap_or(128),
+            mirror_exposure: env_config.mirror_exposure.unwrap_or(1.0),
+            auth_type: env_config.auth_type.unwrap_or_default(),
+            cross_shard_disabled: env_config.cross_shard_disabled.unwrap_or(false),
+            dns_ttl: env_config.dns_ttl,
+            pub_sub_channel_size: env_config.pub_sub_channel_size.unwrap_or(0),
+            log_connections: env_config.log_connections.unwrap_or(true),
+            log_disconnections: env_config.log_disconnections.unwrap_or(true),
             two_phase_commit: bool::default(),
             two_phase_commit_auto: None,
         }
@@ -677,104 +781,7 @@ impl Default for General {
 }
 
 impl General {
-    fn env_or_default<T: std::str::FromStr>(env_var: &str, default: T) -> T {
-        env::var(env_var)
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(default)
-    }
-
-    fn env_string_or_default(env_var: &str, default: &str) -> String {
-        env::var(env_var).unwrap_or_else(|_| default.to_string())
-    }
-
-    fn env_bool_or_default(env_var: &str, default: bool) -> bool {
-        env::var(env_var)
-            .ok()
-            .and_then(|v| match v.to_lowercase().as_str() {
-                "true" | "1" | "yes" | "on" => Some(true),
-                "false" | "0" | "no" | "off" => Some(false),
-                _ => None,
-            })
-            .unwrap_or(default)
-    }
-
-    fn env_option<T: std::str::FromStr>(env_var: &str) -> Option<T> {
-        env::var(env_var).ok().and_then(|v| v.parse().ok())
-    }
-
-    fn env_option_string(env_var: &str) -> Option<String> {
-        env::var(env_var).ok().filter(|s| !s.is_empty())
-    }
-
-    fn env_enum_or_default<T: std::str::FromStr + Default>(env_var: &str) -> T {
-        env::var(env_var)
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or_default()
-    }
-
-    fn host() -> String {
-        Self::env_string_or_default("PGDOG_HOST", "0.0.0.0")
-    }
-
-    fn port() -> u16 {
-        Self::env_or_default("PGDOG_PORT", 6432)
-    }
-
-    fn workers() -> usize {
-        Self::env_or_default("PGDOG_WORKERS", 2)
-    }
-
-    fn default_pool_size() -> usize {
-        Self::env_or_default("PGDOG_DEFAULT_POOL_SIZE", 10)
-    }
-
-    fn min_pool_size() -> usize {
-        Self::env_or_default("PGDOG_MIN_POOL_SIZE", 1)
-    }
-
-    fn healthcheck_interval() -> u64 {
-        Self::env_or_default("PGDOG_HEALTHCHECK_INTERVAL", 30_000)
-    }
-
-    fn idle_healthcheck_interval() -> u64 {
-        Self::env_or_default("PGDOG_IDLE_HEALTHCHECK_INTERVAL", 30_000)
-    }
-
-    fn idle_healthcheck_delay() -> u64 {
-        Self::env_or_default("PGDOG_IDLE_HEALTHCHECK_DELAY", 5_000)
-    }
-
-    fn ban_timeout() -> u64 {
-        Self::env_or_default(
-            "PGDOG_BAN_TIMEOUT",
-            Duration::from_secs(300).as_millis() as u64,
-        )
-    }
-
-    fn rollback_timeout() -> u64 {
-        Self::env_or_default("PGDOG_ROLLBACK_TIMEOUT", 5_000)
-    }
-
-    fn idle_timeout() -> u64 {
-        Self::env_or_default(
-            "PGDOG_IDLE_TIMEOUT",
-            Duration::from_secs(60).as_millis() as u64,
-        )
-    }
-
-    fn default_client_idle_timeout() -> u64 {
-        Self::env_or_default(
-            "PGDOG_CLIENT_IDLE_TIMEOUT",
-            Duration::MAX.as_millis() as u64,
-        )
-    }
-
-    fn default_query_timeout() -> u64 {
-        Self::env_or_default("PGDOG_QUERY_TIMEOUT", Duration::MAX.as_millis() as u64)
-    }
-
+    // Keep only the utility methods that are still used
     pub(crate) fn query_timeout(&self) -> Duration {
         Duration::from_millis(self.query_timeout)
     }
@@ -789,153 +796,6 @@ impl General {
 
     pub(crate) fn connect_attempt_delay(&self) -> Duration {
         Duration::from_millis(self.connect_attempt_delay)
-    }
-
-    fn load_balancing_strategy() -> LoadBalancingStrategy {
-        Self::env_enum_or_default("PGDOG_LOAD_BALANCING_STRATEGY")
-    }
-
-    fn default_tls_verify() -> TlsVerifyMode {
-        env::var("PGDOG_TLS_VERIFY")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(TlsVerifyMode::Prefer)
-    }
-
-    fn default_shutdown_timeout() -> u64 {
-        Self::env_or_default("PGDOG_SHUTDOWN_TIMEOUT", 60_000)
-    }
-
-    fn default_connect_timeout() -> u64 {
-        Self::env_or_default("PGDOG_CONNECT_TIMEOUT", 5_000)
-    }
-
-    fn default_connect_attempt_delay() -> u64 {
-        Self::env_or_default("PGDOG_CONNECT_ATTEMPT_DELAY", 0)
-    }
-
-    fn connect_attempts() -> u64 {
-        Self::env_or_default("PGDOG_CONNECT_ATTEMPTS", 1)
-    }
-
-    fn pooler_mode() -> PoolerMode {
-        Self::env_enum_or_default("PGDOG_POOLER_MODE")
-    }
-
-    fn read_write_strategy() -> ReadWriteStrategy {
-        Self::env_enum_or_default("PGDOG_READ_WRITE_STRATEGY")
-    }
-
-    fn read_write_split() -> ReadWriteSplit {
-        Self::env_enum_or_default("PGDOG_READ_WRITE_SPLIT")
-    }
-
-    fn prepared_statements() -> PreparedStatements {
-        Self::env_enum_or_default("PGDOG_PREPARED_STATEMENTS")
-    }
-
-    fn auth_type() -> AuthType {
-        Self::env_enum_or_default("PGDOG_AUTH_TYPE")
-    }
-
-    fn tls_certificate() -> Option<PathBuf> {
-        Self::env_option_string("PGDOG_TLS_CERTIFICATE").map(PathBuf::from)
-    }
-
-    fn tls_private_key() -> Option<PathBuf> {
-        Self::env_option_string("PGDOG_TLS_PRIVATE_KEY").map(PathBuf::from)
-    }
-
-    fn tls_server_ca_certificate() -> Option<PathBuf> {
-        Self::env_option_string("PGDOG_TLS_SERVER_CA_CERTIFICATE").map(PathBuf::from)
-    }
-
-    fn query_log() -> Option<PathBuf> {
-        Self::env_option_string("PGDOG_QUERY_LOG").map(PathBuf::from)
-    }
-
-    fn openmetrics_port() -> Option<u16> {
-        Self::env_option("PGDOG_OPENMETRICS_PORT")
-    }
-
-    fn openmetrics_namespace() -> Option<String> {
-        Self::env_option_string("PGDOG_OPENMETRICS_NAMESPACE")
-    }
-
-    fn default_dns_ttl() -> Option<u64> {
-        Self::env_option("PGDOG_DNS_TTL")
-    }
-
-    fn pub_sub_channel_size() -> usize {
-        Self::env_or_default("PGDOG_PUB_SUB_CHANNEL_SIZE", 0)
-    }
-
-    fn dry_run() -> bool {
-        Self::env_bool_or_default("PGDOG_DRY_RUN", false)
-    }
-
-    fn cross_shard_disabled() -> bool {
-        Self::env_bool_or_default("PGDOG_CROSS_SHARD_DISABLED", false)
-    }
-
-    fn broadcast_address() -> Option<Ipv4Addr> {
-        Self::env_option("PGDOG_BROADCAST_ADDRESS")
-    }
-
-    fn broadcast_port() -> u16 {
-        Self::env_or_default("PGDOG_BROADCAST_PORT", Self::port() + 1)
-    }
-
-    fn healthcheck_timeout() -> u64 {
-        Self::env_or_default(
-            "PGDOG_HEALTHCHECK_TIMEOUT",
-            Duration::from_secs(5).as_millis() as u64,
-        )
-    }
-
-    fn checkout_timeout() -> u64 {
-        Self::env_or_default(
-            "PGDOG_CHECKOUT_TIMEOUT",
-            Duration::from_secs(5).as_millis() as u64,
-        )
-    }
-
-    fn mirror_queue() -> usize {
-        Self::env_or_default("PGDOG_MIRROR_QUEUE", 128)
-    }
-
-    fn mirror_exposure() -> f32 {
-        Self::env_or_default("PGDOG_MIRROR_EXPOSURE", 1.0)
-    }
-
-    fn prepared_statements_limit() -> usize {
-        Self::env_or_default("PGDOG_PREPARED_STATEMENTS_LIMIT", usize::MAX)
-    }
-
-    fn query_cache_limit() -> usize {
-        Self::env_or_default("PGDOG_QUERY_CACHE_LIMIT", usize::MAX)
-    }
-
-    fn log_connections() -> bool {
-        Self::env_bool_or_default("PGDOG_LOG_CONNECTIONS", true)
-    }
-
-    fn log_disconnections() -> bool {
-        Self::env_bool_or_default("PGDOG_LOG_DISCONNECTIONS", true)
-    }
-
-    fn default_passthrough_auth() -> PassthoughAuth {
-        if let Ok(auth) = env::var("PGDOG_PASSTHROUGH_AUTH") {
-            // TODO: figure out why toml::from_str doesn't work.
-            match auth.as_str() {
-                "enabled" => PassthoughAuth::Enabled,
-                "disabled" => PassthoughAuth::Disabled,
-                "enabled_plain" => PassthoughAuth::EnabledPlain,
-                _ => PassthoughAuth::default(),
-            }
-        } else {
-            PassthoughAuth::default()
-        }
     }
 
     /// Get shutdown timeout as a duration.
@@ -1893,9 +1753,11 @@ exposure = 0.75
     #[test]
     fn test_env_workers() {
         env::set_var("PGDOG_WORKERS", "8");
-        assert_eq!(General::workers(), 8);
+        let general = General::default();
+        assert_eq!(general.workers, 8);
         env::remove_var("PGDOG_WORKERS");
-        assert_eq!(General::workers(), 2);
+        let general = General::default();
+        assert_eq!(general.workers, 2);
     }
 
     #[test]
@@ -1903,14 +1765,16 @@ exposure = 0.75
         env::set_var("PGDOG_DEFAULT_POOL_SIZE", "50");
         env::set_var("PGDOG_MIN_POOL_SIZE", "5");
 
-        assert_eq!(General::default_pool_size(), 50);
-        assert_eq!(General::min_pool_size(), 5);
+        let general = General::default();
+        assert_eq!(general.default_pool_size, 50);
+        assert_eq!(general.min_pool_size, 5);
 
         env::remove_var("PGDOG_DEFAULT_POOL_SIZE");
         env::remove_var("PGDOG_MIN_POOL_SIZE");
 
-        assert_eq!(General::default_pool_size(), 10);
-        assert_eq!(General::min_pool_size(), 1);
+        let general = General::default();
+        assert_eq!(general.default_pool_size, 10);
+        assert_eq!(general.min_pool_size, 1);
     }
 
     #[test]
@@ -1921,11 +1785,12 @@ exposure = 0.75
         env::set_var("PGDOG_CHECKOUT_TIMEOUT", "15000");
         env::set_var("PGDOG_IDLE_TIMEOUT", "120000");
 
-        assert_eq!(General::healthcheck_interval(), 60000);
-        assert_eq!(General::healthcheck_timeout(), 10000);
-        assert_eq!(General::default_connect_timeout(), 10000);
-        assert_eq!(General::checkout_timeout(), 15000);
-        assert_eq!(General::idle_timeout(), 120000);
+        let general = General::default();
+        assert_eq!(general.healthcheck_interval, 60000);
+        assert_eq!(general.healthcheck_timeout, 10000);
+        assert_eq!(general.connect_timeout, 10000);
+        assert_eq!(general.checkout_timeout, 15000);
+        assert_eq!(general.idle_timeout, 120000);
 
         env::remove_var("PGDOG_HEALTHCHECK_INTERVAL");
         env::remove_var("PGDOG_HEALTHCHECK_TIMEOUT");
@@ -1933,11 +1798,12 @@ exposure = 0.75
         env::remove_var("PGDOG_CHECKOUT_TIMEOUT");
         env::remove_var("PGDOG_IDLE_TIMEOUT");
 
-        assert_eq!(General::healthcheck_interval(), 30000);
-        assert_eq!(General::healthcheck_timeout(), 5000);
-        assert_eq!(General::default_connect_timeout(), 5000);
-        assert_eq!(General::checkout_timeout(), 5000);
-        assert_eq!(General::idle_timeout(), 60000);
+        let general = General::default();
+        assert_eq!(general.healthcheck_interval, 30000);
+        assert_eq!(general.healthcheck_timeout, 5000);
+        assert_eq!(general.connect_timeout, 5000);
+        assert_eq!(general.checkout_timeout, 5000);
+        assert_eq!(general.idle_timeout, 60000);
     }
 
     #[test]
@@ -1945,8 +1811,9 @@ exposure = 0.75
         env::set_var("PGDOG_WORKERS", "invalid");
         env::set_var("PGDOG_DEFAULT_POOL_SIZE", "not_a_number");
 
-        assert_eq!(General::workers(), 2);
-        assert_eq!(General::default_pool_size(), 10);
+        let general = General::default();
+        assert_eq!(general.workers, 2);
+        assert_eq!(general.default_pool_size, 10);
 
         env::remove_var("PGDOG_WORKERS");
         env::remove_var("PGDOG_DEFAULT_POOL_SIZE");
@@ -1958,71 +1825,81 @@ exposure = 0.75
         env::set_var("PGDOG_HOST", "192.168.1.1");
         env::set_var("PGDOG_PORT", "8432");
 
-        assert_eq!(General::host(), "192.168.1.1");
-        assert_eq!(General::port(), 8432);
+        let general = General::default();
+        assert_eq!(general.host, "192.168.1.1");
+        assert_eq!(general.port, 8432);
 
         env::remove_var("PGDOG_HOST");
         env::remove_var("PGDOG_PORT");
 
-        assert_eq!(General::host(), "0.0.0.0");
-        assert_eq!(General::port(), 6432);
+        let general = General::default();
+        assert_eq!(general.host, "0.0.0.0");
+        assert_eq!(general.port, 6432);
     }
 
     #[test]
     fn test_env_enum_fields() {
         // Test pooler mode
         env::set_var("PGDOG_POOLER_MODE", "session");
-        assert_eq!(General::pooler_mode(), PoolerMode::Session);
+        let general = General::default();
+        assert_eq!(general.pooler_mode, PoolerMode::Session);
         env::remove_var("PGDOG_POOLER_MODE");
-        assert_eq!(General::pooler_mode(), PoolerMode::Transaction);
+        let general = General::default();
+        assert_eq!(general.pooler_mode, PoolerMode::Transaction);
 
         // Test load balancing strategy
         env::set_var("PGDOG_LOAD_BALANCING_STRATEGY", "round_robin");
+        let general = General::default();
         assert_eq!(
-            General::load_balancing_strategy(),
+            general.load_balancing_strategy,
             LoadBalancingStrategy::RoundRobin
         );
         env::remove_var("PGDOG_LOAD_BALANCING_STRATEGY");
+        let general = General::default();
         assert_eq!(
-            General::load_balancing_strategy(),
+            general.load_balancing_strategy,
             LoadBalancingStrategy::Random
         );
 
         // Test read-write strategy
         env::set_var("PGDOG_READ_WRITE_STRATEGY", "aggressive");
-        assert_eq!(
-            General::read_write_strategy(),
-            ReadWriteStrategy::Aggressive
-        );
+        let general = General::default();
+        assert_eq!(general.read_write_strategy, ReadWriteStrategy::Aggressive);
         env::remove_var("PGDOG_READ_WRITE_STRATEGY");
-        assert_eq!(
-            General::read_write_strategy(),
-            ReadWriteStrategy::Conservative
-        );
+        let general = General::default();
+        assert_eq!(general.read_write_strategy, ReadWriteStrategy::Conservative);
 
         // Test read-write split
         env::set_var("PGDOG_READ_WRITE_SPLIT", "exclude_primary");
-        assert_eq!(General::read_write_split(), ReadWriteSplit::ExcludePrimary);
+        let general = General::default();
+        assert_eq!(general.read_write_split, ReadWriteSplit::ExcludePrimary);
         env::remove_var("PGDOG_READ_WRITE_SPLIT");
-        assert_eq!(General::read_write_split(), ReadWriteSplit::IncludePrimary);
+        let general = General::default();
+        assert_eq!(general.read_write_split, ReadWriteSplit::IncludePrimary);
 
         // Test TLS verify mode
         env::set_var("PGDOG_TLS_VERIFY", "verify_full");
-        assert_eq!(General::default_tls_verify(), TlsVerifyMode::VerifyFull);
+        let general = General::default();
+        assert_eq!(general.tls_verify, TlsVerifyMode::VerifyFull);
         env::remove_var("PGDOG_TLS_VERIFY");
-        assert_eq!(General::default_tls_verify(), TlsVerifyMode::Prefer);
+        let general = General::default();
+        assert_eq!(general.tls_verify, TlsVerifyMode::Prefer);
 
         // Test prepared statements
         env::set_var("PGDOG_PREPARED_STATEMENTS", "full");
-        assert_eq!(General::prepared_statements(), PreparedStatements::Full);
+        let general = General::default();
+        assert_eq!(general.prepared_statements, PreparedStatements::Full);
         env::remove_var("PGDOG_PREPARED_STATEMENTS");
-        assert_eq!(General::prepared_statements(), PreparedStatements::Extended);
+        let general = General::default();
+        assert_eq!(general.prepared_statements, PreparedStatements::Extended);
 
         // Test auth type
         env::set_var("PGDOG_AUTH_TYPE", "md5");
-        assert_eq!(General::auth_type(), AuthType::Md5);
+        let general = General::default();
+        assert_eq!(general.auth_type, AuthType::Md5);
         env::remove_var("PGDOG_AUTH_TYPE");
-        assert_eq!(General::auth_type(), AuthType::Scram);
+        let general = General::default();
+        assert_eq!(general.auth_type, AuthType::Scram);
     }
 
     #[test]
@@ -2036,14 +1913,15 @@ exposure = 0.75
         env::set_var("PGDOG_QUERY_TIMEOUT", "30000");
         env::set_var("PGDOG_CLIENT_IDLE_TIMEOUT", "3600000");
 
-        assert_eq!(General::idle_healthcheck_interval(), 45000);
-        assert_eq!(General::idle_healthcheck_delay(), 10000);
-        assert_eq!(General::ban_timeout(), 600000);
-        assert_eq!(General::rollback_timeout(), 10000);
-        assert_eq!(General::default_shutdown_timeout(), 120000);
-        assert_eq!(General::default_connect_attempt_delay(), 1000);
-        assert_eq!(General::default_query_timeout(), 30000);
-        assert_eq!(General::default_client_idle_timeout(), 3600000);
+        let general = General::default();
+        assert_eq!(general.idle_healthcheck_interval, 45000);
+        assert_eq!(general.idle_healthcheck_delay, 10000);
+        assert_eq!(general.ban_timeout, 600000);
+        assert_eq!(general.rollback_timeout, 10000);
+        assert_eq!(general.shutdown_timeout, 120000);
+        assert_eq!(general.connect_attempt_delay, 1000);
+        assert_eq!(general.query_timeout, 30000);
+        assert_eq!(general.client_idle_timeout, 3600000);
 
         env::remove_var("PGDOG_IDLE_HEALTHCHECK_INTERVAL");
         env::remove_var("PGDOG_IDLE_HEALTHCHECK_DELAY");
@@ -2054,12 +1932,13 @@ exposure = 0.75
         env::remove_var("PGDOG_QUERY_TIMEOUT");
         env::remove_var("PGDOG_CLIENT_IDLE_TIMEOUT");
 
-        assert_eq!(General::idle_healthcheck_interval(), 30000);
-        assert_eq!(General::idle_healthcheck_delay(), 5000);
-        assert_eq!(General::ban_timeout(), 300000);
-        assert_eq!(General::rollback_timeout(), 5000);
-        assert_eq!(General::default_shutdown_timeout(), 60000);
-        assert_eq!(General::default_connect_attempt_delay(), 0);
+        let general = General::default();
+        assert_eq!(general.idle_healthcheck_interval, 30000);
+        assert_eq!(general.idle_healthcheck_delay, 5000);
+        assert_eq!(general.ban_timeout, 300000);
+        assert_eq!(general.rollback_timeout, 5000);
+        assert_eq!(general.shutdown_timeout, 60000);
+        assert_eq!(general.connect_attempt_delay, 0);
     }
 
     #[test]
@@ -2069,20 +1948,21 @@ exposure = 0.75
         env::set_var("PGDOG_TLS_SERVER_CA_CERTIFICATE", "/path/to/ca.pem");
         env::set_var("PGDOG_QUERY_LOG", "/var/log/pgdog/queries.log");
 
+        let general = General::default();
         assert_eq!(
-            General::tls_certificate(),
+            general.tls_certificate,
             Some(PathBuf::from("/path/to/cert.pem"))
         );
         assert_eq!(
-            General::tls_private_key(),
+            general.tls_private_key,
             Some(PathBuf::from("/path/to/key.pem"))
         );
         assert_eq!(
-            General::tls_server_ca_certificate(),
+            general.tls_server_ca_certificate,
             Some(PathBuf::from("/path/to/ca.pem"))
         );
         assert_eq!(
-            General::query_log(),
+            general.query_log,
             Some(PathBuf::from("/var/log/pgdog/queries.log"))
         );
 
@@ -2091,10 +1971,11 @@ exposure = 0.75
         env::remove_var("PGDOG_TLS_SERVER_CA_CERTIFICATE");
         env::remove_var("PGDOG_QUERY_LOG");
 
-        assert_eq!(General::tls_certificate(), None);
-        assert_eq!(General::tls_private_key(), None);
-        assert_eq!(General::tls_server_ca_certificate(), None);
-        assert_eq!(General::query_log(), None);
+        let general = General::default();
+        assert_eq!(general.tls_certificate, None);
+        assert_eq!(general.tls_private_key, None);
+        assert_eq!(general.tls_server_ca_certificate, None);
+        assert_eq!(general.query_log, None);
     }
 
     #[test]
@@ -2109,15 +1990,16 @@ exposure = 0.75
         env::set_var("PGDOG_DNS_TTL", "60000");
         env::set_var("PGDOG_PUB_SUB_CHANNEL_SIZE", "100");
 
-        assert_eq!(General::broadcast_port(), 7432);
-        assert_eq!(General::openmetrics_port(), Some(9090));
-        assert_eq!(General::prepared_statements_limit(), 1000);
-        assert_eq!(General::query_cache_limit(), 500);
-        assert_eq!(General::connect_attempts(), 3);
-        assert_eq!(General::mirror_queue(), 256);
-        assert_eq!(General::mirror_exposure(), 0.5);
-        assert_eq!(General::default_dns_ttl(), Some(60000));
-        assert_eq!(General::pub_sub_channel_size(), 100);
+        let general = General::default();
+        assert_eq!(general.broadcast_port, 7432);
+        assert_eq!(general.openmetrics_port, Some(9090));
+        assert_eq!(general.prepared_statements_limit, 1000);
+        assert_eq!(general.query_cache_limit, 500);
+        assert_eq!(general.connect_attempts, 3);
+        assert_eq!(general.mirror_queue, 256);
+        assert_eq!(general.mirror_exposure, 0.5);
+        assert_eq!(general.dns_ttl, Some(60000));
+        assert_eq!(general.pub_sub_channel_size, 100);
 
         env::remove_var("PGDOG_BROADCAST_PORT");
         env::remove_var("PGDOG_OPENMETRICS_PORT");
@@ -2129,15 +2011,16 @@ exposure = 0.75
         env::remove_var("PGDOG_DNS_TTL");
         env::remove_var("PGDOG_PUB_SUB_CHANNEL_SIZE");
 
-        assert_eq!(General::broadcast_port(), General::port() + 1);
-        assert_eq!(General::openmetrics_port(), None);
-        assert_eq!(General::prepared_statements_limit(), usize::MAX);
-        assert_eq!(General::query_cache_limit(), usize::MAX);
-        assert_eq!(General::connect_attempts(), 1);
-        assert_eq!(General::mirror_queue(), 128);
-        assert_eq!(General::mirror_exposure(), 1.0);
-        assert_eq!(General::default_dns_ttl(), None);
-        assert_eq!(General::pub_sub_channel_size(), 0);
+        let general = General::default();
+        assert_eq!(general.broadcast_port, general.port + 1);
+        assert_eq!(general.openmetrics_port, None);
+        assert_eq!(general.prepared_statements_limit, usize::MAX);
+        assert_eq!(general.query_cache_limit, usize::MAX);
+        assert_eq!(general.connect_attempts, 1);
+        assert_eq!(general.mirror_queue, 128);
+        assert_eq!(general.mirror_exposure, 1.0);
+        assert_eq!(general.dns_ttl, None);
+        assert_eq!(general.pub_sub_channel_size, 0);
     }
 
     #[test]
@@ -2147,20 +2030,22 @@ exposure = 0.75
         env::set_var("PGDOG_LOG_CONNECTIONS", "false");
         env::set_var("PGDOG_LOG_DISCONNECTIONS", "0");
 
-        assert_eq!(General::dry_run(), true);
-        assert_eq!(General::cross_shard_disabled(), true);
-        assert_eq!(General::log_connections(), false);
-        assert_eq!(General::log_disconnections(), false);
+        let general = General::default();
+        assert_eq!(general.dry_run, true);
+        assert_eq!(general.cross_shard_disabled, true);
+        assert_eq!(general.log_connections, false);
+        assert_eq!(general.log_disconnections, false);
 
         env::remove_var("PGDOG_DRY_RUN");
         env::remove_var("PGDOG_CROSS_SHARD_DISABLED");
         env::remove_var("PGDOG_LOG_CONNECTIONS");
         env::remove_var("PGDOG_LOG_DISCONNECTIONS");
 
-        assert_eq!(General::dry_run(), false);
-        assert_eq!(General::cross_shard_disabled(), false);
-        assert_eq!(General::log_connections(), true);
-        assert_eq!(General::log_disconnections(), true);
+        let general = General::default();
+        assert_eq!(general.dry_run, false);
+        assert_eq!(general.cross_shard_disabled, false);
+        assert_eq!(general.log_connections, true);
+        assert_eq!(general.log_disconnections, true);
     }
 
     #[test]
@@ -2168,20 +2053,22 @@ exposure = 0.75
         env::set_var("PGDOG_BROADCAST_ADDRESS", "192.168.1.100");
         env::set_var("PGDOG_OPENMETRICS_NAMESPACE", "pgdog_metrics");
 
+        let general = General::default();
         assert_eq!(
-            General::broadcast_address(),
+            general.broadcast_address,
             Some("192.168.1.100".parse().unwrap())
         );
         assert_eq!(
-            General::openmetrics_namespace(),
+            general.openmetrics_namespace,
             Some("pgdog_metrics".to_string())
         );
 
         env::remove_var("PGDOG_BROADCAST_ADDRESS");
         env::remove_var("PGDOG_OPENMETRICS_NAMESPACE");
 
-        assert_eq!(General::broadcast_address(), None);
-        assert_eq!(General::openmetrics_namespace(), None);
+        let general = General::default();
+        assert_eq!(general.broadcast_address, None);
+        assert_eq!(general.openmetrics_namespace, None);
     }
 
     #[test]
@@ -2191,9 +2078,10 @@ exposure = 0.75
         env::set_var("PGDOG_TLS_VERIFY", "bad_verify");
 
         // Should fall back to defaults for invalid values
-        assert_eq!(General::pooler_mode(), PoolerMode::Transaction);
-        assert_eq!(General::auth_type(), AuthType::Scram);
-        assert_eq!(General::default_tls_verify(), TlsVerifyMode::Prefer);
+        let general = General::default();
+        assert_eq!(general.pooler_mode, PoolerMode::Transaction);
+        assert_eq!(general.auth_type, AuthType::Scram);
+        assert_eq!(general.tls_verify, TlsVerifyMode::Prefer);
 
         env::remove_var("PGDOG_POOLER_MODE");
         env::remove_var("PGDOG_AUTH_TYPE");
