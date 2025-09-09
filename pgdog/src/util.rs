@@ -1,6 +1,7 @@
 //! What's a project without a util module.
 
 use chrono::{DateTime, Local, Utc};
+use once_cell::sync::Lazy;
 use pgdog_plugin::comp;
 use rand::{distributions::Alphanumeric, Rng};
 use std::{ops::Deref, time::Duration};
@@ -73,6 +74,23 @@ pub fn random_string(n: usize) -> String {
         .collect()
 }
 
+// Generate a unique 8-character hex instance ID on first access
+static INSTANCE_ID: Lazy<String> = Lazy::new(|| {
+    let mut rng = rand::thread_rng();
+    (0..8)
+        .map(|_| {
+            let n: u8 = rng.gen_range(0..16);
+            format!("{:x}", n)
+        })
+        .collect()
+});
+
+/// Get the instance ID for this pgdog instance.
+/// This is generated once at startup and persists for the lifetime of the process.
+pub fn instance_id() -> &'static str {
+    &INSTANCE_ID
+}
+
 /// Escape PostgreSQL identifiers by doubling any embedded quotes.
 pub fn escape_identifier(s: &str) -> String {
     s.replace("\"", "\"\"")
@@ -131,5 +149,25 @@ mod test {
             escape_identifier("\"multiple\"quotes\""),
             "\"\"multiple\"\"quotes\"\""
         );
+    }
+
+    #[test]
+    fn test_instance_id_format() {
+        let id = instance_id();
+        assert_eq!(id.len(), 8);
+        // All characters should be valid hex digits (0-9, a-f)
+        assert!(id.chars().all(|c| c.is_ascii_hexdigit()));
+        // All alphabetic characters should be lowercase
+        assert!(id
+            .chars()
+            .filter(|c| c.is_alphabetic())
+            .all(|c| c.is_lowercase()));
+    }
+
+    #[test]
+    fn test_instance_id_consistency() {
+        let id1 = instance_id();
+        let id2 = instance_id();
+        assert_eq!(id1, id2); // Should be the same for lifetime of process
     }
 }
