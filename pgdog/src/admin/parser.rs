@@ -4,10 +4,10 @@ use super::{
     ban::Ban, maintenance_mode::MaintenanceMode, pause::Pause, prelude::Message, probe::Probe,
     reconnect::Reconnect, reload::Reload, reset_query_cache::ResetQueryCache, set::Set,
     setup_schema::SetupSchema, show_clients::ShowClients, show_config::ShowConfig,
-    show_lists::ShowLists, show_mirrors::ShowMirrors, show_peers::ShowPeers, show_pools::ShowPools,
-    show_prepared_statements::ShowPreparedStatements, show_query_cache::ShowQueryCache,
-    show_servers::ShowServers, show_stats::ShowStats, show_transactions::ShowTransactions,
-    show_version::ShowVersion, shutdown::Shutdown, Command, Error,
+    show_instance_id::ShowInstanceId, show_lists::ShowLists, show_mirrors::ShowMirrors,
+    show_peers::ShowPeers, show_pools::ShowPools, show_prepared_statements::ShowPreparedStatements,
+    show_query_cache::ShowQueryCache, show_servers::ShowServers, show_stats::ShowStats,
+    show_transactions::ShowTransactions, show_version::ShowVersion, shutdown::Shutdown, Command, Error,
 };
 
 use tracing::debug;
@@ -28,6 +28,7 @@ pub enum ParseResult {
     ShowTransactions(ShowTransactions),
     ShowMirrors(ShowMirrors),
     ShowVersion(ShowVersion),
+    ShowInstanceId(ShowInstanceId),
     SetupSchema(SetupSchema),
     Shutdown(Shutdown),
     ShowLists(ShowLists),
@@ -58,6 +59,7 @@ impl ParseResult {
             ShowTransactions(show_transactions) => show_transactions.execute().await,
             ShowMirrors(show_mirrors) => show_mirrors.execute().await,
             ShowVersion(show_version) => show_version.execute().await,
+            ShowInstanceId(show_instance_id) => show_instance_id.execute().await,
             SetupSchema(setup_schema) => setup_schema.execute().await,
             Shutdown(shutdown) => shutdown.execute().await,
             ShowLists(show_lists) => show_lists.execute().await,
@@ -88,6 +90,7 @@ impl ParseResult {
             ShowTransactions(show_transactions) => show_transactions.name(),
             ShowMirrors(show_mirrors) => show_mirrors.name(),
             ShowVersion(show_version) => show_version.name(),
+            ShowInstanceId(show_instance_id) => show_instance_id.name(),
             SetupSchema(setup_schema) => setup_schema.name(),
             Shutdown(shutdown) => shutdown.name(),
             ShowLists(show_lists) => show_lists.name(),
@@ -126,6 +129,7 @@ impl Parser {
                 "transactions" => ParseResult::ShowTransactions(ShowTransactions::parse(&sql)?),
                 "mirrors" => ParseResult::ShowMirrors(ShowMirrors::parse(&sql)?),
                 "version" => ParseResult::ShowVersion(ShowVersion::parse(&sql)?),
+                "instance_id" => ParseResult::ShowInstanceId(ShowInstanceId::parse(&sql)?),
                 "lists" => ParseResult::ShowLists(ShowLists::parse(&sql)?),
                 "prepared" => ParseResult::ShowPrepared(ShowPreparedStatements::parse(&sql)?),
                 command => {
