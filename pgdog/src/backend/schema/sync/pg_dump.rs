@@ -6,7 +6,7 @@ use pg_query::{
     protobuf::{AlterTableType, ConstrType, ParseResult},
     NodeEnum,
 };
-use tracing::{info, warn};
+use tracing::{info, trace, warn};
 
 use super::{progress::Progress, Error};
 use crate::{
@@ -133,6 +133,7 @@ impl PgDumpCommand {
         }
 
         let original = from_utf8(&output.stdout)?.to_string();
+        trace!("{}", original);
         let stmts = pg_query::parse(&original)?.protobuf;
 
         Ok(PgDumpOutput {
