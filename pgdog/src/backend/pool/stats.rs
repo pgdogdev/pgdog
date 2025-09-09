@@ -11,6 +11,7 @@ use std::{
 #[derive(Debug, Clone, Default, Copy)]
 pub struct Counts {
     pub xact_count: usize,
+    pub xact_2pc_count: usize,
     pub query_count: usize,
     pub server_assignment_count: usize,
     pub received: usize,
@@ -31,6 +32,7 @@ impl Sub for Counts {
     fn sub(self, rhs: Self) -> Self::Output {
         Self {
             xact_count: self.xact_count.saturating_sub(rhs.xact_count),
+            xact_2pc_count: self.xact_2pc_count.saturating_sub(rhs.xact_2pc_count),
             query_count: self.query_count.saturating_sub(rhs.query_count),
             server_assignment_count: self
                 .server_assignment_count
@@ -55,6 +57,7 @@ impl Div<usize> for Counts {
     fn div(self, rhs: usize) -> Self::Output {
         Self {
             xact_count: self.xact_count.saturating_div(rhs),
+            xact_2pc_count: self.xact_2pc_count.saturating_div(rhs),
             query_count: self.query_count.saturating_div(rhs),
             server_assignment_count: self.server_assignment_count.saturating_div(rhs),
             received: self.received.saturating_div(rhs),
@@ -77,6 +80,7 @@ impl Add<BackendCounts> for Counts {
     fn add(self, rhs: BackendCounts) -> Self::Output {
         Counts {
             xact_count: self.xact_count + rhs.transactions,
+            xact_2pc_count: self.xact_2pc_count + rhs.transactions_2pc,
             query_count: self.query_count + rhs.queries,
             server_assignment_count: self.server_assignment_count,
             received: self.received + rhs.bytes_received,
@@ -110,6 +114,7 @@ impl Add for Counts {
     fn add(self, rhs: Self) -> Self::Output {
         Counts {
             xact_count: self.xact_count.saturating_add(rhs.xact_count),
+            xact_2pc_count: self.xact_2pc_count.saturating_add(rhs.xact_2pc_count),
             query_count: self.query_count.saturating_add(rhs.query_count),
             server_assignment_count: self
                 .server_assignment_count

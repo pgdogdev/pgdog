@@ -73,7 +73,7 @@ impl TwoPc {
         let transaction = self.transaction();
         self.manager.done(&transaction).await?;
         self.transaction = None;
-        self.auto = true;
+        self.auto = false;
         Ok(())
     }
 

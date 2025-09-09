@@ -88,10 +88,13 @@ impl QueryEngine {
         if code == 'Z' {
             self.stats.query();
 
-            if self.two_pc.auto() {
+            let two_pc = if self.two_pc.auto() {
                 self.end_two_pc().await?;
                 message = ReadyForQuery::in_transaction(false).message()?;
-            }
+                true
+            } else {
+                false
+            };
 
             let in_transaction = message.in_transaction();
             if !in_transaction {
@@ -105,7 +108,7 @@ impl QueryEngine {
             self.stats.idle(context.in_transaction());
 
             if !context.in_transaction() {
-                self.stats.transaction();
+                self.stats.transaction(two_pc);
             }
         }
 
@@ -199,7 +202,7 @@ impl QueryEngine {
         let enabled = self
             .backend
             .cluster()
-            .map(|c| c.two_pc_enabled())
+            .map(|c| c.two_pc_auto_enabled())
             .unwrap_or_default();
 
         if enabled

@@ -285,7 +285,11 @@ impl Binding {
                         }
 
                         Err(err) => return Err(err),
-                        Ok(_) => (),
+                        Ok(_) => {
+                            if phase == TwoPcPhase::Phase2 {
+                                server.stats_mut().transaction_2pc();
+                            }
+                        }
                     }
                 }
 

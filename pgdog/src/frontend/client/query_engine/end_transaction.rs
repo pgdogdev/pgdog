@@ -38,14 +38,17 @@ impl QueryEngine {
         let cluster = self.backend.cluster()?;
 
         // 2pc is used only for writes and is not needed for rollbacks.
-        let two_pc = cluster.two_pc_enabled() && route.is_write() && !rollback;
+        let two_pc = cluster.two_pc_enabled()
+            && route.is_write()
+            && !rollback
+            && context.transaction().map(|t| t.write()).unwrap_or(false);
 
         if two_pc {
             self.end_two_pc().await?;
 
             // Update stats.
             self.stats.query();
-            self.stats.transaction();
+            self.stats.transaction(true);
 
             // Disconnect from servers.
             self.cleanup_backend(context);
