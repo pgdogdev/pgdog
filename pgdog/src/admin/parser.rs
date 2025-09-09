@@ -7,7 +7,8 @@ use super::{
     show_instance_id::ShowInstanceId, show_lists::ShowLists, show_mirrors::ShowMirrors,
     show_peers::ShowPeers, show_pools::ShowPools, show_prepared_statements::ShowPreparedStatements,
     show_query_cache::ShowQueryCache, show_servers::ShowServers, show_stats::ShowStats,
-    show_version::ShowVersion, shutdown::Shutdown, Command, Error,
+    show_transactions::ShowTransactions, show_version::ShowVersion, shutdown::Shutdown, Command,
+    Error,
 };
 
 use tracing::debug;
@@ -25,6 +26,7 @@ pub enum ParseResult {
     ShowQueryCache(ShowQueryCache),
     ResetQueryCache(ResetQueryCache),
     ShowStats(ShowStats),
+    ShowTransactions(ShowTransactions),
     ShowMirrors(ShowMirrors),
     ShowVersion(ShowVersion),
     ShowInstanceId(ShowInstanceId),
@@ -55,6 +57,7 @@ impl ParseResult {
             ShowQueryCache(show_query_cache) => show_query_cache.execute().await,
             ResetQueryCache(reset_query_cache) => reset_query_cache.execute().await,
             ShowStats(show_stats) => show_stats.execute().await,
+            ShowTransactions(show_transactions) => show_transactions.execute().await,
             ShowMirrors(show_mirrors) => show_mirrors.execute().await,
             ShowVersion(show_version) => show_version.execute().await,
             ShowInstanceId(show_instance_id) => show_instance_id.execute().await,
@@ -85,6 +88,7 @@ impl ParseResult {
             ShowQueryCache(show_query_cache) => show_query_cache.name(),
             ResetQueryCache(reset_query_cache) => reset_query_cache.name(),
             ShowStats(show_stats) => show_stats.name(),
+            ShowTransactions(show_transactions) => show_transactions.name(),
             ShowMirrors(show_mirrors) => show_mirrors.name(),
             ShowVersion(show_version) => show_version.name(),
             ShowInstanceId(show_instance_id) => show_instance_id.name(),
@@ -123,6 +127,7 @@ impl Parser {
                 "peers" => ParseResult::ShowPeers(ShowPeers::parse(&sql)?),
                 "query_cache" => ParseResult::ShowQueryCache(ShowQueryCache::parse(&sql)?),
                 "stats" => ParseResult::ShowStats(ShowStats::parse(&sql)?),
+                "transactions" => ParseResult::ShowTransactions(ShowTransactions::parse(&sql)?),
                 "mirrors" => ParseResult::ShowMirrors(ShowMirrors::parse(&sql)?),
                 "version" => ParseResult::ShowVersion(ShowVersion::parse(&sql)?),
                 "instance_id" => ParseResult::ShowInstanceId(ShowInstanceId::parse(&sql)?),

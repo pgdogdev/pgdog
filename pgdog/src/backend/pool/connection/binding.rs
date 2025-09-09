@@ -1,7 +1,7 @@
 //! Binding between frontend client and a connection on the backend.
 
 use crate::{
-    frontend::ClientRequest,
+    frontend::{client::query_engine::TwoPcPhase, ClientRequest},
     net::{parameter::Parameters, ProtocolMessage},
     state::State,
 };
@@ -51,7 +51,7 @@ impl Binding {
         self.disconnect();
     }
 
-    /// Are we connnected to a backend?
+    /// Are we connected to a backend?
     pub fn connected(&self) -> bool {
         match self {
             Binding::Direct(server) => server.is_some(),
@@ -241,22 +241,63 @@ impl Binding {
     }
 
     /// Execute a query on all servers.
-    pub async fn execute(&mut self, query: &str) -> Result<(), Error> {
+    pub async fn execute(&mut self, query: &str) -> Result<Vec<Message>, Error> {
+        let mut result = vec![];
         match self {
             Binding::Direct(Some(ref mut server)) => {
-                server.execute(query).await?;
+                result.extend(server.execute(query).await?);
             }
 
             Binding::MultiShard(ref mut servers, _) => {
                 for server in servers {
-                    server.execute(query).await?;
+                    result.extend(server.execute(query).await?);
                 }
             }
 
             _ => (),
         }
 
-        Ok(())
+        Ok(result)
+    }
+
+    /// Execute two-phase commit transaction control statements.
+    pub async fn two_pc(&mut self, name: &str, phase: TwoPcPhase) -> Result<(), Error> {
+        match self {
+            Binding::MultiShard(ref mut servers, _) => {
+                for (shard, server) in servers.into_iter().enumerate() {
+                    // Each shard has its own transaction name.
+                    // This is to make this work on sharded databases that use the same
+                    // database underneath.
+                    let name = format!("{}_{}", name, shard);
+
+                    let (query, skip_missing) = match phase {
+                        TwoPcPhase::Phase1 => (format!("PREPARE TRANSACTION '{}'", name), false),
+                        TwoPcPhase::Phase2 => (format!("COMMIT PREPARED '{}'", name), true),
+                        TwoPcPhase::Rollback => (format!("ROLLBACK PREPARED '{}'", name), true),
+                    };
+
+                    match server.execute(query).await {
+                        Err(Error::ExecutionError(err)) => {
+                            // Undefined object, transaction doesn't exist.
+                            if !(skip_missing && err.code == "42704") {
+                                return Err(Error::ExecutionError(err));
+                            }
+                        }
+
+                        Err(err) => return Err(err),
+                        Ok(_) => {
+                            if phase == TwoPcPhase::Phase2 {
+                                server.stats_mut().transaction_2pc();
+                            }
+                        }
+                    }
+                }
+
+                Ok(())
+            }
+
+            _ => Err(Error::TwoPcMultiShardOnly),
+        }
     }
 
     pub async fn link_client(&mut self, params: &Parameters) -> Result<usize, Error> {

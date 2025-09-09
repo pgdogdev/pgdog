@@ -3,7 +3,7 @@ use crate::net::{CommandComplete, NoticeResponse, Protocol, ReadyForQuery};
 use super::*;
 
 impl QueryEngine {
-    pub(super) async fn end_transaction(
+    pub(super) async fn end_not_connected(
         &mut self,
         context: &mut QueryEngineContext<'_>,
         rollback: bool,
@@ -28,6 +28,62 @@ impl QueryEngine {
 
         Ok(())
     }
+
+    pub(super) async fn end_connected(
+        &mut self,
+        context: &mut QueryEngineContext<'_>,
+        route: &Route,
+        rollback: bool,
+    ) -> Result<(), Error> {
+        let cluster = self.backend.cluster()?;
+
+        // 2pc is used only for writes and is not needed for rollbacks.
+        let two_pc = cluster.two_pc_enabled()
+            && route.is_write()
+            && !rollback
+            && context.transaction().map(|t| t.write()).unwrap_or(false);
+
+        if two_pc {
+            self.end_two_pc().await?;
+
+            // Update stats.
+            self.stats.query();
+            self.stats.transaction(true);
+
+            // Disconnect from servers.
+            self.cleanup_backend(context);
+
+            // Tell client we finished the transaction.
+            self.end_not_connected(context, false).await?;
+        } else {
+            self.execute(context, route).await?;
+        }
+
+        Ok(())
+    }
+
+    pub(super) async fn end_two_pc(&mut self) -> Result<(), Error> {
+        let cluster = self.backend.cluster()?;
+        let identifier = cluster.identifier();
+        let name = self.two_pc.transaction().to_string();
+
+        // If interrupted here, the transaction must be rolled back.
+        let _guard_phase_1 = self.two_pc.phase_one(&identifier).await?;
+        self.backend.two_pc(&name, TwoPcPhase::Phase1).await?;
+
+        debug!("[2pc] phase 1 complete");
+
+        // If interrupted here, the transaction must be committed.
+        let _guard_phase_2 = self.two_pc.phase_two(&identifier).await?;
+        self.backend.two_pc(&name, TwoPcPhase::Phase2).await?;
+
+        debug!("[2pc] phase 2 complete");
+
+        // Remove transaction from 2pc state manager.
+        self.two_pc.done().await?;
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -49,7 +105,7 @@ mod tests {
         let mut engine = QueryEngine::default();
         // state copied from client
         let mut context = QueryEngineContext::new(&mut client);
-        let result = engine.end_transaction(&mut context, false).await;
+        let result = engine.end_not_connected(&mut context, false).await;
         assert!(result.is_ok(), "end_transaction should succeed");
 
         assert_eq!(

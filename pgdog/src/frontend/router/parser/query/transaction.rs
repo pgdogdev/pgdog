@@ -22,8 +22,12 @@ impl QueryParser {
         }
 
         match stmt.kind() {
-            TransactionStmtKind::TransStmtCommit => Ok(Command::CommitTransaction { extended }),
-            TransactionStmtKind::TransStmtRollback => Ok(Command::RollbackTransaction { extended }),
+            TransactionStmtKind::TransStmtCommit => {
+                return Ok(Command::CommitTransaction { extended })
+            }
+            TransactionStmtKind::TransStmtRollback => {
+                return Ok(Command::RollbackTransaction { extended })
+            }
             TransactionStmtKind::TransStmtBegin | TransactionStmtKind::TransStmtStart => {
                 self.in_transaction = true;
                 let transaction_type = Self::transaction_type(&stmt.options).unwrap_or_default();
@@ -33,8 +37,17 @@ impl QueryParser {
                     extended,
                 });
             }
-            _ => Ok(Command::Query(Route::write(None))),
+            TransactionStmtKind::TransStmtPrepare
+            | TransactionStmtKind::TransStmtCommitPrepared
+            | TransactionStmtKind::TransStmtRollbackPrepared => {
+                if context.router_context.two_pc {
+                    return Err(Error::NoTwoPc);
+                }
+            }
+            _ => (),
         }
+
+        Ok(Command::Query(Route::write(None)))
     }
 
     #[inline]

@@ -113,6 +113,9 @@ pub enum Error {
 
     #[error("{0}")]
     MultiShard(#[from] crate::backend::pool::connection::multi_shard::Error),
+
+    #[error("2pc commit supported with multi-shard binding only")]
+    TwoPcMultiShardOnly,
 }
 
 impl From<crate::frontend::Error> for Error {

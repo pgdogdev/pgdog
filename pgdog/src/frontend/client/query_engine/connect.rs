@@ -92,7 +92,7 @@ impl QueryEngine {
         self.connect(context, &route).await
     }
 
-    pub(super) fn transaction_route(&self, route: &Route) -> Result<Route, Error> {
+    pub(super) fn transaction_route(&mut self, route: &Route) -> Result<Route, Error> {
         let cluster = self.backend.cluster()?;
 
         if cluster.shards().len() == 1 {

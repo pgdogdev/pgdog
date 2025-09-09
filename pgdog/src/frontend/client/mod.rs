@@ -59,6 +59,16 @@ pub enum TransactionType {
     ReadWrite,
 }
 
+impl TransactionType {
+    pub fn read_only(&self) -> bool {
+        matches!(self, Self::ReadOnly)
+    }
+
+    pub fn write(&self) -> bool {
+        !self.read_only()
+    }
+}
+
 impl MemoryUsage for Client {
     #[inline]
     fn memory_usage(&self) -> usize {

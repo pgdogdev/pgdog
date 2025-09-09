@@ -23,6 +23,14 @@ server_user = "pgdog"
 cross_shard_disabled = true
 
 [[users]]
+name = "pgdog_2pc"
+database = "pgdog_sharded"
+password = "pgdog"
+server_user = "pgdog"
+two_phase_commit = true
+min_pool_size = 0
+
+[[users]]
 name = "pgdog_migrator"
 database = "pgdog_sharded"
 password = "pgdog"

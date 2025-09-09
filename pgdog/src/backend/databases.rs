@@ -10,6 +10,7 @@ use parking_lot::{Mutex, RawMutex};
 use tracing::{debug, error, info, warn};
 
 use crate::config::PoolerMode;
+use crate::frontend::client::query_engine::two_pc::Manager;
 use crate::frontend::router::parser::Cache;
 use crate::frontend::router::sharding::Mapping;
 use crate::frontend::PreparedStatements;
@@ -71,6 +72,9 @@ pub fn init() {
 
     // Resize query cache
     Cache::resize(config.config.general.query_cache_limit);
+
+    // Start two-pc manager.
+    let _monitor = Manager::get();
 }
 
 /// Shutdown all databases.
@@ -130,7 +134,7 @@ pub(crate) fn add(mut user: crate::config::User) {
 }
 
 /// Database/user pair that identifies a database cluster pool.
-#[derive(Debug, PartialEq, Hash, Eq, Clone)]
+#[derive(Debug, PartialEq, Hash, Eq, Clone, Default)]
 pub struct User {
     /// User name.
     pub user: String,
@@ -343,7 +347,8 @@ impl Databases {
 
             if cluster.pooler_mode() == PoolerMode::Session && cluster.router_needed() {
                 warn!(
-                    r#"database "{}" requires transaction mode to route queries"#,
+                    r#"user "{}" for database "{}" requires transaction mode to route queries"#,
+                    cluster.user(),
                     cluster.name()
                 );
             }
