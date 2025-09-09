@@ -134,7 +134,7 @@ impl Server {
                 error!("server does not support TLS but it is required [{}]", addr,);
                 return Err(Error::TlsRequired);
             } else {
-                warn!(
+                debug!(
                     "server does not support TLS, continuing without encryption [{}]",
                     addr
                 );
