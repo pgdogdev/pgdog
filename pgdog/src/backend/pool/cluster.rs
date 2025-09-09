@@ -46,7 +46,7 @@ pub struct Cluster {
     schema_admin: bool,
     stats: Arc<Mutex<MirrorStats>>,
     cross_shard_disabled: bool,
-    two_pc: bool,
+    two_phase_commit: bool,
 }
 
 /// Sharding configuration from the cluster.
@@ -111,7 +111,7 @@ impl<'a> ClusterConfig<'a> {
             cross_shard_disabled: user
                 .cross_shard_disabled
                 .unwrap_or(general.cross_shard_disabled),
-            two_pc: user.two_pc.unwrap_or(general.two_pc),
+            two_pc: user.two_phase_commit.unwrap_or(general.two_phase_commit),
         }
     }
 }
@@ -156,7 +156,7 @@ impl Cluster {
             schema_admin,
             stats: Arc::new(Mutex::new(MirrorStats::default())),
             cross_shard_disabled,
-            two_pc: two_pc && shards.len() > 1,
+            two_phase_commit: two_pc && shards.len() > 1,
         }
     }
 
@@ -208,7 +208,7 @@ impl Cluster {
             schema_admin: self.schema_admin,
             stats: Arc::new(Mutex::new(MirrorStats::default())),
             cross_shard_disabled: self.cross_shard_disabled,
-            two_pc: self.two_pc,
+            two_phase_commit: self.two_phase_commit,
         }
     }
 
@@ -357,7 +357,7 @@ impl Cluster {
 
     /// Two-phase commit enabled.
     pub fn two_pc_enabled(&self) -> bool {
-        self.two_pc
+        self.two_phase_commit
     }
 
     /// Launch the connection pools.
