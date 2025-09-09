@@ -630,36 +630,39 @@ impl Default for General {
 }
 
 impl General {
+    fn env_or_default<T: std::str::FromStr>(env_var: &str, default: T) -> T {
+        env::var(env_var)
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(default)
+    }
+
+    fn env_string_or_default(env_var: &str, default: &str) -> String {
+        env::var(env_var).unwrap_or_else(|_| default.to_string())
+    }
+
     fn host() -> String {
-        if let Ok(host) = env::var("PGDOG_HOST") {
-            host
-        } else {
-            "0.0.0.0".into()
-        }
+        Self::env_string_or_default("PGDOG_HOST", "0.0.0.0")
     }
 
     fn port() -> u16 {
-        if let Ok(port) = env::var("PGDOG_PORT") {
-            port.parse().unwrap_or(6432)
-        } else {
-            6432
-        }
+        Self::env_or_default("PGDOG_PORT", 6432)
     }
 
     fn workers() -> usize {
-        2
+        Self::env_or_default("PGDOG_WORKERS", 2)
     }
 
     fn default_pool_size() -> usize {
-        10
+        Self::env_or_default("PGDOG_DEFAULT_POOL_SIZE", 10)
     }
 
     fn min_pool_size() -> usize {
-        1
+        Self::env_or_default("PGDOG_MIN_POOL_SIZE", 1)
     }
 
     fn healthcheck_interval() -> u64 {
-        30_000
+        Self::env_or_default("PGDOG_HEALTHCHECK_INTERVAL", 30_000)
     }
 
     fn idle_healthcheck_interval() -> u64 {
@@ -679,7 +682,10 @@ impl General {
     }
 
     fn idle_timeout() -> u64 {
-        Duration::from_secs(60).as_millis() as u64
+        Self::env_or_default(
+            "PGDOG_IDLE_TIMEOUT",
+            Duration::from_secs(60).as_millis() as u64,
+        )
     }
 
     fn default_client_idle_timeout() -> u64 {
@@ -719,7 +725,7 @@ impl General {
     }
 
     fn default_connect_timeout() -> u64 {
-        5_000
+        Self::env_or_default("PGDOG_CONNECT_TIMEOUT", 5_000)
     }
 
     fn default_connect_attempt_delay() -> u64 {
@@ -735,11 +741,17 @@ impl General {
     }
 
     fn healthcheck_timeout() -> u64 {
-        Duration::from_secs(5).as_millis() as u64
+        Self::env_or_default(
+            "PGDOG_HEALTHCHECK_TIMEOUT",
+            Duration::from_secs(5).as_millis() as u64,
+        )
     }
 
     fn checkout_timeout() -> u64 {
-        Duration::from_secs(5).as_millis() as u64
+        Self::env_or_default(
+            "PGDOG_CHECKOUT_TIMEOUT",
+            Duration::from_secs(5).as_millis() as u64,
+        )
     }
 
     fn mirror_queue() -> usize {
@@ -1675,6 +1687,84 @@ exposure = 0.75
         assert!(config
             .get_mirroring_config("source_db", "non_existent")
             .is_none());
+    }
+
+    #[test]
+    fn test_env_workers() {
+        env::set_var("PGDOG_WORKERS", "8");
+        assert_eq!(General::workers(), 8);
+        env::remove_var("PGDOG_WORKERS");
+        assert_eq!(General::workers(), 2);
+    }
+
+    #[test]
+    fn test_env_pool_sizes() {
+        env::set_var("PGDOG_DEFAULT_POOL_SIZE", "50");
+        env::set_var("PGDOG_MIN_POOL_SIZE", "5");
+
+        assert_eq!(General::default_pool_size(), 50);
+        assert_eq!(General::min_pool_size(), 5);
+
+        env::remove_var("PGDOG_DEFAULT_POOL_SIZE");
+        env::remove_var("PGDOG_MIN_POOL_SIZE");
+
+        assert_eq!(General::default_pool_size(), 10);
+        assert_eq!(General::min_pool_size(), 1);
+    }
+
+    #[test]
+    fn test_env_timeouts() {
+        env::set_var("PGDOG_HEALTHCHECK_INTERVAL", "60000");
+        env::set_var("PGDOG_HEALTHCHECK_TIMEOUT", "10000");
+        env::set_var("PGDOG_CONNECT_TIMEOUT", "10000");
+        env::set_var("PGDOG_CHECKOUT_TIMEOUT", "15000");
+        env::set_var("PGDOG_IDLE_TIMEOUT", "120000");
+
+        assert_eq!(General::healthcheck_interval(), 60000);
+        assert_eq!(General::healthcheck_timeout(), 10000);
+        assert_eq!(General::default_connect_timeout(), 10000);
+        assert_eq!(General::checkout_timeout(), 15000);
+        assert_eq!(General::idle_timeout(), 120000);
+
+        env::remove_var("PGDOG_HEALTHCHECK_INTERVAL");
+        env::remove_var("PGDOG_HEALTHCHECK_TIMEOUT");
+        env::remove_var("PGDOG_CONNECT_TIMEOUT");
+        env::remove_var("PGDOG_CHECKOUT_TIMEOUT");
+        env::remove_var("PGDOG_IDLE_TIMEOUT");
+
+        assert_eq!(General::healthcheck_interval(), 30000);
+        assert_eq!(General::healthcheck_timeout(), 5000);
+        assert_eq!(General::default_connect_timeout(), 5000);
+        assert_eq!(General::checkout_timeout(), 5000);
+        assert_eq!(General::idle_timeout(), 60000);
+    }
+
+    #[test]
+    fn test_env_invalid_values() {
+        env::set_var("PGDOG_WORKERS", "invalid");
+        env::set_var("PGDOG_DEFAULT_POOL_SIZE", "not_a_number");
+
+        assert_eq!(General::workers(), 2);
+        assert_eq!(General::default_pool_size(), 10);
+
+        env::remove_var("PGDOG_WORKERS");
+        env::remove_var("PGDOG_DEFAULT_POOL_SIZE");
+    }
+
+    #[test]
+    fn test_env_host_port() {
+        // Test existing env var functionality
+        env::set_var("PGDOG_HOST", "192.168.1.1");
+        env::set_var("PGDOG_PORT", "8432");
+
+        assert_eq!(General::host(), "192.168.1.1");
+        assert_eq!(General::port(), 8432);
+
+        env::remove_var("PGDOG_HOST");
+        env::remove_var("PGDOG_PORT");
+
+        assert_eq!(General::host(), "0.0.0.0");
+        assert_eq!(General::port(), 6432);
     }
 }
 
