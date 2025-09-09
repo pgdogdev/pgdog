@@ -14,6 +14,45 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func assertShowField(t *testing.T, query string, field string, value int64, user string, database string, shard int64, role string) {
+	expected_value := value
+
+	conn, err := pgx.Connect(context.Background(), "postgres://admin:pgdog@127.0.0.1:6432/admin")
+	if err != nil {
+		panic(err)
+	}
+	defer conn.Close(context.Background())
+
+	rows, err := conn.Query(context.Background(), query, pgx.QueryExecModeSimpleProtocol)
+	assert.NoError(t, err)
+	defer rows.Close()
+
+	for rows.Next() {
+		values, err := rows.Values()
+		if err != nil {
+			panic(err)
+		}
+
+		row_db := values[0].(string)
+		row_user := values[1].(string)
+		row_shard := values[4].(pgtype.Numeric)
+		row_role := values[5].(string)
+
+		if row_db == database && row_user == user && row_shard.Int.Int64() == shard && row_role == role {
+			for i, description := range rows.FieldDescriptions() {
+				if description.Name == field {
+					actual_value, err := values[i].(pgtype.Numeric).Int64Value()
+					assert.NoError(t, err)
+					assert.Equal(t, expected_value, actual_value.Int64, fmt.Sprintf("\"%s\" in %s is not %d", field, query, value))
+					return
+				}
+			}
+		}
+	}
+
+	panic(fmt.Sprintf("No %s column in %s", field, query))
+}
+
 func assertNoOutOfSync(t *testing.T) {
 	zero := pgtype.Numeric{
 		Int:   big.NewInt(0),
@@ -72,6 +111,17 @@ func connectAdmin() (*pgx.Conn, error) {
 
 func connectSharded() (*pgx.Conn, error) {
 	conn, err := pgx.Connect(context.Background(), "postgres://pgdog:pgdog@127.0.0.1:6432/pgdog_sharded")
+
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Can't connect: %v\n", err)
+		return nil, err
+	}
+
+	return conn, nil
+}
+
+func connectTwoPc() (*pgx.Conn, error) {
+	conn, err := pgx.Connect(context.Background(), "postgres://pgdog_2pc:pgdog@127.0.0.1:6432/pgdog_sharded")
 
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Can't connect: %v\n", err)
