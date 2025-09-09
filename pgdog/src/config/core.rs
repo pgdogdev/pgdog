@@ -303,3 +303,164 @@ impl Config {
         result
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{PoolerMode, PreparedStatements};
+    use std::time::Duration;
+
+    #[test]
+    fn test_basic() {
+        let source = r#"
+[general]
+host = "0.0.0.0"
+port = 6432
+default_pool_size = 15
+pooler_mode = "transaction"
+
+[[databases]]
+name = "production"
+role = "primary"
+host = "127.0.0.1"
+port = 5432
+database_name = "postgres"
+
+[tcp]
+keepalive = true
+interval = 5000
+time = 1000
+user_timeout = 1000
+retries = 5
+
+[[plugins]]
+name = "pgdog_routing"
+
+[multi_tenant]
+column = "tenant_id"
+"#;
+
+        let config: Config = toml::from_str(source).unwrap();
+        assert_eq!(config.databases[0].name, "production");
+        assert_eq!(config.plugins[0].name, "pgdog_routing");
+        assert!(config.tcp.keepalive());
+        assert_eq!(config.tcp.interval().unwrap(), Duration::from_millis(5000));
+        assert_eq!(
+            config.tcp.user_timeout().unwrap(),
+            Duration::from_millis(1000)
+        );
+        assert_eq!(config.tcp.time().unwrap(), Duration::from_millis(1000));
+        assert_eq!(config.tcp.retries().unwrap(), 5);
+        assert_eq!(config.multi_tenant.unwrap().column, "tenant_id");
+    }
+
+    #[test]
+    fn test_prepared_statements_disabled_in_session_mode() {
+        let mut config = ConfigAndUsers::default();
+
+        // Test transaction mode (default) - prepared statements should be enabled
+        config.config.general.pooler_mode = PoolerMode::Transaction;
+        config.config.general.prepared_statements = PreparedStatements::Extended;
+        assert!(
+            config.prepared_statements(),
+            "Prepared statements should be enabled in transaction mode"
+        );
+
+        // Test session mode - prepared statements should be disabled
+        config.config.general.pooler_mode = PoolerMode::Session;
+        config.config.general.prepared_statements = PreparedStatements::Extended;
+        assert!(
+            !config.prepared_statements(),
+            "Prepared statements should be disabled in session mode"
+        );
+
+        // Test session mode with full prepared statements - should still be disabled
+        config.config.general.pooler_mode = PoolerMode::Session;
+        config.config.general.prepared_statements = PreparedStatements::Full;
+        assert!(
+            !config.prepared_statements(),
+            "Prepared statements should be disabled in session mode even when set to Full"
+        );
+
+        // Test transaction mode with disabled prepared statements - should remain disabled
+        config.config.general.pooler_mode = PoolerMode::Transaction;
+        config.config.general.prepared_statements = PreparedStatements::Disabled;
+        assert!(!config.prepared_statements(), "Prepared statements should remain disabled when explicitly set to Disabled in transaction mode");
+    }
+
+    #[test]
+    fn test_mirroring_config() {
+        let source = r#"
+[general]
+host = "0.0.0.0"
+port = 6432
+mirror_queue = 128
+mirror_exposure = 1.0
+
+[[databases]]
+name = "source_db"
+host = "127.0.0.1"
+port = 5432
+
+[[databases]]
+name = "destination_db1"
+host = "127.0.0.1"
+port = 5433
+
+[[databases]]
+name = "destination_db2"
+host = "127.0.0.1"
+port = 5434
+
+[[mirroring]]
+source_db = "source_db"
+destination_db = "destination_db1"
+queue_length = 256
+exposure = 0.5
+
+[[mirroring]]
+source_db = "source_db"
+destination_db = "destination_db2"
+exposure = 0.75
+"#;
+
+        let config: Config = toml::from_str(source).unwrap();
+
+        // Verify we have 2 mirroring configurations
+        assert_eq!(config.mirroring.len(), 2);
+
+        // Check first mirroring config
+        assert_eq!(config.mirroring[0].source_db, "source_db");
+        assert_eq!(config.mirroring[0].destination_db, "destination_db1");
+        assert_eq!(config.mirroring[0].queue_length, Some(256));
+        assert_eq!(config.mirroring[0].exposure, Some(0.5));
+
+        // Check second mirroring config
+        assert_eq!(config.mirroring[1].source_db, "source_db");
+        assert_eq!(config.mirroring[1].destination_db, "destination_db2");
+        assert_eq!(config.mirroring[1].queue_length, None); // Should use global default
+        assert_eq!(config.mirroring[1].exposure, Some(0.75));
+
+        // Verify global defaults are still set
+        assert_eq!(config.general.mirror_queue, 128);
+        assert_eq!(config.general.mirror_exposure, 1.0);
+
+        // Test get_mirroring_config method
+        let mirror_config = config
+            .get_mirroring_config("source_db", "destination_db1")
+            .unwrap();
+        assert_eq!(mirror_config.queue_length, 256);
+        assert_eq!(mirror_config.exposure, 0.5);
+
+        let mirror_config2 = config
+            .get_mirroring_config("source_db", "destination_db2")
+            .unwrap();
+        assert_eq!(mirror_config2.queue_length, 128); // Uses global default
+        assert_eq!(mirror_config2.exposure, 0.75);
+
+        // Non-existent mirror config should return None
+        assert!(config
+            .get_mirroring_config("source_db", "non_existent")
+            .is_none());
+    }
+}

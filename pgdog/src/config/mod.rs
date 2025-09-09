@@ -15,9 +15,6 @@ pub mod sharding;
 pub mod url;
 pub mod users;
 
-#[cfg(test)]
-pub mod tests;
-
 // Re-export from error module
 pub use error::Error;
 
@@ -140,6 +137,59 @@ pub fn overrides(overrides: Overrides) {
     CONFIG.store(Arc::new(config));
 }
 
-// Re-export test utilities when in test mode
+// Test helper functions
 #[cfg(test)]
-pub use tests::test::{load_test, load_test_replicas};
+pub fn load_test() {
+    use crate::backend::databases::init;
+
+    let mut config = ConfigAndUsers::default();
+    config.config.databases = vec![Database {
+        name: "pgdog".into(),
+        host: "127.0.0.1".into(),
+        port: 5432,
+        ..Default::default()
+    }];
+    config.users.users = vec![User {
+        name: "pgdog".into(),
+        database: "pgdog".into(),
+        password: Some("pgdog".into()),
+        ..Default::default()
+    }];
+
+    set(config).unwrap();
+    init();
+}
+
+#[cfg(test)]
+pub fn load_test_replicas() {
+    use crate::backend::databases::init;
+
+    let mut config = ConfigAndUsers::default();
+    config.config.databases = vec![
+        Database {
+            name: "pgdog".into(),
+            host: "127.0.0.1".into(),
+            port: 5432,
+            role: Role::Primary,
+            ..Default::default()
+        },
+        Database {
+            name: "pgdog".into(),
+            host: "127.0.0.1".into(),
+            port: 5432,
+            role: Role::Replica,
+            read_only: Some(true),
+            ..Default::default()
+        },
+    ];
+    config.config.general.load_balancing_strategy = LoadBalancingStrategy::RoundRobin;
+    config.users.users = vec![User {
+        name: "pgdog".into(),
+        database: "pgdog".into(),
+        password: Some("pgdog".into()),
+        ..Default::default()
+    }];
+
+    set(config).unwrap();
+    init();
+}
