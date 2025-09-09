@@ -23,6 +23,7 @@ mod test;
 pub(super) struct TwoPc {
     transaction: Option<TwoPcTransaction>,
     manager: Manager,
+    auto: bool,
 }
 
 impl Default for TwoPc {
@@ -30,6 +31,7 @@ impl Default for TwoPc {
         Self {
             transaction: None,
             manager: Manager::get(),
+            auto: false,
         }
     }
 }
@@ -71,6 +73,15 @@ impl TwoPc {
         let transaction = self.transaction();
         self.manager.done(&transaction).await?;
         self.transaction = None;
+        self.auto = true;
         Ok(())
+    }
+
+    pub fn set_auto(&mut self) {
+        self.auto = true;
+    }
+
+    pub fn auto(&self) -> bool {
+        self.auto
     }
 }

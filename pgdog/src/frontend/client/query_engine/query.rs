@@ -2,7 +2,7 @@ use tokio::time::timeout;
 
 use crate::{
     frontend::client::TransactionType,
-    net::{Message, Protocol, ProtocolMessage},
+    net::{Message, Protocol, ProtocolMessage, Query, ReadyForQuery},
     state::State,
 };
 
@@ -17,6 +17,10 @@ impl QueryEngine {
         context: &mut QueryEngineContext<'_>,
         route: &Route,
     ) -> Result<(), Error> {
+        // Check if we need to do 2pc automatically
+        // for single-statement writes.
+        self.two_pc_check(context, route);
+
         // We need to run a query now.
         if let Some(begin_stmt) = self.begin_stmt.take() {
             // Connect to one shard if not sharded or to all shards
@@ -70,7 +74,7 @@ impl QueryEngine {
         self.streaming = message.streaming();
 
         let code = message.code();
-        let message = message.backend();
+        let mut message = message.backend();
         let has_more_messages = self.backend.has_more_messages();
 
         // Messages that we need to send to the client immediately.
@@ -83,6 +87,11 @@ impl QueryEngine {
         // ReadyForQuery (B)
         if code == 'Z' {
             self.stats.query();
+
+            if self.two_pc.auto() {
+                self.end_two_pc().await?;
+                message = ReadyForQuery::in_transaction(false).message()?;
+            }
 
             let in_transaction = message.in_transaction();
             if !in_transaction {
@@ -183,6 +192,24 @@ impl QueryEngine {
             Ok(false)
         } else {
             Ok(true)
+        }
+    }
+
+    fn two_pc_check(&mut self, context: &mut QueryEngineContext<'_>, route: &Route) {
+        let enabled = self
+            .backend
+            .cluster()
+            .map(|c| c.two_pc_enabled())
+            .unwrap_or_default();
+
+        if enabled
+            && route.should_2pc()
+            && self.begin_stmt.is_none()
+            && context.client_request.executable()
+        {
+            debug!("[2pc] enabling automatic transaction");
+            self.two_pc.set_auto();
+            self.begin_stmt = Some(BufferedQuery::Query(Query::new("BEGIN")));
         }
     }
 }

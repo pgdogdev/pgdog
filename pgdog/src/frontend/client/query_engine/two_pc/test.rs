@@ -5,6 +5,7 @@ use crate::{
     },
     config,
     frontend::router::{parser::Shard, Route},
+    logger,
     net::Protocol,
 };
 
@@ -76,6 +77,7 @@ async fn test_cleanup_transaction_phase_one() {
 #[tokio::test]
 async fn test_cleanup_transaction_phase_two() {
     config::test::load_test();
+    logger();
     let cluster = databases().all().iter().next().unwrap().1.clone();
 
     let mut two_pc = TwoPc::default();
