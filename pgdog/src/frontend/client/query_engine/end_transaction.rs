@@ -58,15 +58,15 @@ impl QueryEngine {
 
             self.two_pc.done().await?;
 
-            // Tell client we finished the transaction.
-            self.end_not_connected(context, false).await?;
-
             // Update stats.
             self.stats.query();
             self.stats.transaction();
 
             // Disconnect from servers.
             self.cleanup_backend(context);
+
+            // Tell client we finished the transaction.
+            self.end_not_connected(context, false).await?;
         } else {
             self.execute(context, route).await?;
         }
