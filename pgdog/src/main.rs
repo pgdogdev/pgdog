@@ -5,6 +5,7 @@ use pgdog::backend::databases;
 use pgdog::backend::pool::dns_cache::DnsCache;
 use pgdog::cli::{self, Commands};
 use pgdog::config::{self, config};
+use pgdog::frontend::client::query_engine::two_pc::Manager;
 use pgdog::frontend::listener::Listener;
 use pgdog::net;
 use pgdog::plugin;

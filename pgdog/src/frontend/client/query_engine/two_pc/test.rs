@@ -1,7 +1,3 @@
-use std::time::Duration;
-
-use tokio::time::sleep;
-
 use crate::{
     backend::{
         databases::databases,
@@ -46,7 +42,9 @@ async fn test_cleanup_transaction_phase_one() {
     conn.disconnect();
     drop(guard_1);
 
-    sleep(Duration::from_millis(100)).await;
+    // Shutdown manager cleanly.
+    Manager::get().shutdown().await;
+
     let transactions = Manager::get().transactions();
     assert!(transactions.is_empty());
 

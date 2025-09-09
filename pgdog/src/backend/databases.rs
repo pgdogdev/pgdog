@@ -10,6 +10,7 @@ use parking_lot::{Mutex, RawMutex};
 use tracing::{debug, error, info, warn};
 
 use crate::config::PoolerMode;
+use crate::frontend::client::query_engine::two_pc::Manager;
 use crate::frontend::router::parser::Cache;
 use crate::frontend::router::sharding::Mapping;
 use crate::frontend::PreparedStatements;
@@ -71,6 +72,9 @@ pub fn init() {
 
     // Resize query cache
     Cache::resize(config.config.general.query_cache_limit);
+
+    // Start two-pc manager.
+    let _monitor = Manager::get();
 }
 
 /// Shutdown all databases.

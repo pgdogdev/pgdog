@@ -3,11 +3,14 @@ use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use std::{
     collections::{HashMap, VecDeque},
-    sync::Arc,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
     time::Duration,
 };
 use tokio::{select, spawn, sync::Notify, time::interval};
-use tracing::{debug, error};
+use tracing::{debug, error, info};
 
 use crate::{
     backend::{
@@ -26,24 +29,29 @@ use crate::{
 use super::Error;
 
 static MANAGER: Lazy<Manager> = Lazy::new(Manager::init);
+static MAINTENANCE: Duration = Duration::from_millis(333);
 
 /// Two-phase commit transaction manager.
 #[derive(Debug, Clone)]
 pub struct Manager {
     inner: Arc<Mutex<Inner>>,
-    notify: Arc<Notify>,
+    notify: Arc<InnerNotify>,
 }
 
 impl Manager {
     /// Get transaction manager instance.
-    pub(crate) fn get() -> Self {
+    pub fn get() -> Self {
         MANAGER.clone()
     }
 
     fn init() -> Self {
         let manager = Self {
             inner: Arc::new(Mutex::new(Inner::default())),
-            notify: Arc::new(Notify::new()),
+            notify: Arc::new(InnerNotify {
+                notify: Notify::new(),
+                offline: AtomicBool::new(false),
+                done: Notify::new(),
+            }),
         };
 
         let monitor = manager.clone();
@@ -105,12 +113,12 @@ impl Manager {
 
         if exists {
             self.inner.lock().queue.push_back(guard.transaction);
-            self.notify.notify_one();
+            self.notify.notify.notify_one();
         }
     }
 
     async fn monitor(manager: Self) {
-        let mut interval = interval(Duration::from_millis(333));
+        let mut interval = interval(MAINTENANCE);
         let notify = manager.notify.clone();
 
         debug!("[2pc] monitor started");
@@ -120,11 +128,15 @@ impl Manager {
             // or manager told us to.
             select! {
                 _ = interval.tick() => (),
-                _ = notify.notified() => (),
+                _ = notify.notify.notified() => (),
             }
 
             let transaction = manager.inner.lock().queue.pop_front();
             if let Some(transaction) = transaction {
+                debug!(
+                    r#"[2pc] cleaning up transaction "{}""#,
+                    transaction.to_string()
+                );
                 if let Err(err) = manager.cleanup_phase(&transaction).await {
                     error!(
                         r#"[2pc] error cleaning up "{}" transaction: {}"#,
@@ -138,7 +150,11 @@ impl Manager {
                     manager.remove(&transaction).await;
                 }
 
-                notify.notify_one();
+                notify.notify.notify_one();
+            } else if notify.offline.load(Ordering::Relaxed) {
+                // No more transactions to cleanup.
+                notify.done.notify_waiters();
+                break;
             }
         }
     }
@@ -176,6 +192,17 @@ impl Manager {
 
         Ok(())
     }
+
+    /// Shutdown manager and wait for all transactions to be cleaned up.
+    pub async fn shutdown(&self) {
+        let waiter = self.notify.done.notified();
+        self.notify.offline.store(true, Ordering::Relaxed);
+        let transactions = self.inner.lock().queue.len();
+
+        info!("cleaning up {} two-phase transactions", transactions);
+
+        waiter.await;
+    }
 }
 
 #[derive(Debug, Default, Clone)]
@@ -188,4 +215,11 @@ pub struct TransactionInfo {
 struct Inner {
     transactions: HashMap<TwoPcTransaction, TransactionInfo>,
     queue: VecDeque<TwoPcTransaction>,
+}
+
+#[derive(Debug)]
+struct InnerNotify {
+    notify: Notify,
+    offline: AtomicBool,
+    done: Notify,
 }
