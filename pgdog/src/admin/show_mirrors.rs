@@ -32,9 +32,11 @@ impl Command for ShowMirrors {
 
         // Iterate through all clusters and create a row for each
         for (user, cluster) in databases().all() {
-            let stats = cluster.stats();
-            let stats = stats.lock();
-            let counts = stats.counts;
+            let counts = {
+                let stats = cluster.stats();
+                let stats = stats.lock();
+                stats.counts
+            };
 
             // Create a data row for this cluster
             let mut dr = DataRow::new();
