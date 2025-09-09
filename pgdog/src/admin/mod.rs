@@ -20,6 +20,7 @@ pub mod set;
 pub mod setup_schema;
 pub mod show_clients;
 pub mod show_config;
+pub mod show_instance_id;
 pub mod show_lists;
 pub mod show_mirrors;
 pub mod show_peers;
