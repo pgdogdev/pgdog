@@ -7,7 +7,8 @@ use super::{
     show_instance_id::ShowInstanceId, show_lists::ShowLists, show_mirrors::ShowMirrors,
     show_peers::ShowPeers, show_pools::ShowPools, show_prepared_statements::ShowPreparedStatements,
     show_query_cache::ShowQueryCache, show_servers::ShowServers, show_stats::ShowStats,
-    show_transactions::ShowTransactions, show_version::ShowVersion, shutdown::Shutdown, Command, Error,
+    show_transactions::ShowTransactions, show_version::ShowVersion, shutdown::Shutdown, Command,
+    Error,
 };
 
 use tracing::debug;
