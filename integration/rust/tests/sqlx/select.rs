@@ -60,13 +60,13 @@ async fn test_concurrent() {
                         "INSERT INTO rust_test_concurrent.sharded (id, value) VALUES ($1, $2) RETURNING *",
                     )
                     .bind(id)
-                    .bind(format!("value_{}", id))
+                    .bind(format!("value_{id}"))
                     .fetch_all(&conn)
                     .await
                     .unwrap();
                     assert_eq!(rows.len(), 1);
                     assert_eq!(rows[0].0, id);
-                    assert_eq!(rows[0].1, format!("value_{}", id));
+                    assert_eq!(rows[0].1, format!("value_{id}"));
 
                     sqlx::query("DELETE FROM rust_test_concurrent.sharded WHERE id = $1")
                         .bind(id)
@@ -99,14 +99,10 @@ async fn test_concurrent() {
 
     assert!(
         (direct_after - direct_before).abs() > 14_000,
-        "direct before {} should be within 14k of after {}",
-        direct_before,
-        direct_after
+        "direct before {direct_before} should be within 14k of after {direct_after}"
     );
     assert!(
         (cache_hits_after - cache_hits_before).abs() > 14_000,
-        "cache hits before {} should be within 14k of hits after {}",
-        cache_hits_before,
-        cache_hits_after
+        "cache hits before {cache_hits_before} should be within 14k of hits after {cache_hits_after}"
     );
 }

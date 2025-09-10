@@ -17,7 +17,7 @@ async fn per_stmt_routing() -> Result<(), Box<dyn std::error::Error>> {
     for i in 0..50 {
         sqlx::query("INSERT INTO per_stmt_routing (customer_id, value) VALUES ($1, $2)")
             .bind(i as i64)
-            .bind(format!("test_{}", i))
+            .bind(format!("test_{i}"))
             .execute(&sharded)
             .await?;
     }
@@ -47,7 +47,7 @@ async fn per_stmt_routing() -> Result<(), Box<dyn std::error::Error>> {
         // No duplicate key violations.
         sqlx::query("INSERT INTO per_stmt_routing (customer_id, value) VALUES ($1, $2)")
             .bind(i as i64)
-            .bind(format!("test_{}", i))
+            .bind(format!("test_{i}"))
             .execute(&mut *tx)
             .await?;
     }

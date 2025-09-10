@@ -49,8 +49,7 @@ async fn shard_consistency_validator() -> Result<(), Box<dyn std::error::Error>>
     // Check that the error message indicates schema inconsistency
     assert!(
         error_string.contains("inconsistent row descriptions between shards"),
-        "Expected error message to indicate row description inconsistency, got: {}",
-        error_string
+        "Expected error message to indicate row description inconsistency, got: {error_string}"
     );
 
     // Clean up
@@ -112,8 +111,7 @@ async fn shard_consistency_validator_column_names() -> Result<(), Box<dyn std::e
     // Check that the error indicates column name inconsistency
     assert!(
         error_string.contains("inconsistent column names between shards"),
-        "Expected error message to indicate column name inconsistency, got: {}",
-        error_string
+        "Expected error message to indicate column name inconsistency, got: {error_string}"
     );
 
     // Clean up
@@ -241,8 +239,7 @@ async fn shard_consistency_data_row_validator_prepared_statement()
     // Specifically check for DataRow count error (not RowDescription error)
     assert!(
         error_string.contains("inconsistent column count in data rows"),
-        "Expected error message to indicate DataRow count inconsistency, got: {}. This test should specifically trigger DataRow validation, not RowDescription validation.",
-        error_string
+        "Expected error message to indicate DataRow count inconsistency, got: {error_string}. This test should specifically trigger DataRow validation, not RowDescription validation."
     );
 
     // Clean up

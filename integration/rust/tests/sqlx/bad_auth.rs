@@ -8,16 +8,14 @@ async fn test_bad_auth() {
         for password in ["bad_password", "another_password", ""] {
             for db in ["random_db", "pgdog"] {
                 let err = PgConnection::connect(&format!(
-                    "postgres://{}:{}@127.0.0.1:6432/{}",
-                    user, password, db
+                    "postgres://{user}:{password}@127.0.0.1:6432/{db}"
                 ))
                 .await
                 .err()
                 .unwrap();
-                println!("{}", err);
+                println!("{err}");
                 assert!(err.to_string().contains(&format!(
-                    "user \"{}\" and database \"{}\" is wrong, or the database does not exist",
-                    user, db
+                    "user \"{user}\" and database \"{db}\" is wrong, or the database does not exist"
                 )));
             }
         }

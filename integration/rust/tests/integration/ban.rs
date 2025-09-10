@@ -18,11 +18,11 @@ async fn ban_unban(database: &str, ban: bool, replica: bool) {
 
     if !ban {
         admin
-            .execute(format!("UNBAN {}", id).as_str())
+            .execute(format!("UNBAN {id}").as_str())
             .await
             .unwrap();
     } else {
-        admin.execute(format!("BAN {}", id).as_str()).await.unwrap();
+        admin.execute(format!("BAN {id}").as_str()).await.unwrap();
     }
 }
 

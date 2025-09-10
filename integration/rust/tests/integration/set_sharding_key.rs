@@ -24,7 +24,7 @@ async fn test_single_sharding_function() {
         let result =
             sqlx::query("INSERT INTO test_single_sharding_function (id, value) VALUES ($1, $2)")
                 .bind(id as i64)
-                .bind(&format!("value_{}", id))
+                .bind(format!("value_{id}"))
                 .execute(&mut conn)
                 .await
                 .unwrap();
@@ -33,7 +33,7 @@ async fn test_single_sharding_function() {
 
     for id in 1..21 {
         conn.execute("BEGIN").await.unwrap();
-        conn.execute(format!("SET pgdog.sharding_key TO '{}'", id).as_str())
+        conn.execute(format!("SET pgdog.sharding_key TO '{id}'").as_str())
             .await
             .unwrap();
         let result: (i64,) =

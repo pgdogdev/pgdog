@@ -7,8 +7,7 @@ pub async fn connections_tokio() -> Vec<Client> {
     for db in ["pgdog", "pgdog_sharded"] {
         let (client, connection) = tokio_postgres::connect(
             &format!(
-                "host=127.0.0.1 user=pgdog dbname={} password=pgdog port=6432 options=-c%20search_path%3D$user,public%20-capplication_name%3Dtokio",
-                db
+                "host=127.0.0.1 user=pgdog dbname={db} password=pgdog port=6432 options=-c%20search_path%3D$user,public%20-capplication_name%3Dtokio"
             ),
             NoTls,
         )
@@ -17,7 +16,7 @@ pub async fn connections_tokio() -> Vec<Client> {
 
         tokio::spawn(async move {
             if let Err(e) = connection.await {
-                eprintln!("connection error: {}", e);
+                eprintln!("connection error: {e}");
             }
         });
 
@@ -33,8 +32,7 @@ pub async fn connections_sqlx() -> Vec<Pool<Postgres>> {
         let pool = PgPoolOptions::new()
             .max_connections(1)
             .connect(&format!(
-                "postgres://pgdog:pgdog@127.0.0.1:6432/{}?application_name=sqlx",
-                db
+                "postgres://pgdog:pgdog@127.0.0.1:6432/{db}?application_name=sqlx"
             ))
             .await
             .unwrap();
@@ -56,9 +54,8 @@ pub async fn backends(application_name: &str, pool: &Pool<Postgres>) -> Vec<Back
             "SELECT pid::INTEGER,
             backend_start::TEXT
         FROM pg_stat_activity
-        WHERE application_name = '{}'
-        ORDER BY backend_start",
-            application_name
+        WHERE application_name = '{application_name}'
+        ORDER BY backend_start"
         )
         .as_str(),
     )
@@ -90,7 +87,7 @@ pub async fn admin_tokio() -> Client {
 
     tokio::spawn(async move {
         if let Err(e) = connection.await {
-            eprintln!("connection error: {}", e);
+            eprintln!("connection error: {e}");
         }
     });
 

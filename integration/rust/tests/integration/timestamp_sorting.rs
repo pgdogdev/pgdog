@@ -78,8 +78,7 @@ async fn test_timestamp_sorting_across_shards() {
         assert_eq!(
             (id, name.as_str()),
             expected_order[i],
-            "Row {} has incorrect order",
-            i
+            "Row {i} has incorrect order"
         );
     }
 
@@ -96,8 +95,7 @@ async fn test_timestamp_sorting_across_shards() {
         assert_eq!(
             (id, name.as_str()),
             expected_order[9 - i],
-            "Row {} has incorrect ascending order",
-            i
+            "Row {i} has incorrect ascending order"
         );
     }
 

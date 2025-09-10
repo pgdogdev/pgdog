@@ -28,10 +28,10 @@ fn info(what: impl ToString) {
                 print!("\n  ");
                 counter = 0;
             } else {
-                print!("{}", c);
+                print!("{c}");
             }
         } else {
-            print!("{}", c);
+            print!("{c}");
         }
 
         counter += 1;
@@ -55,7 +55,7 @@ fn input() -> String {
 }
 
 fn command(info: &str, cmd: &mut Command) -> bool {
-    print!("{}", info);
+    print!("{info}");
     stdout().flush().unwrap();
 
     let status = cmd.status().unwrap();
@@ -102,7 +102,7 @@ fn config() {
 }
 
 fn check(what: &str) -> bool {
-    print!("  checking for {}...", what);
+    print!("  checking for {what}...");
 
     let ok = Command::new(what)
         .stdout(Stdio::null())
@@ -116,8 +116,7 @@ fn check(what: &str) -> bool {
         true
     } else {
         println!(
-            "❌\n\n  {} isn't installed! Please install it before proceeding.",
-            what,
+            "❌\n\n  {what} isn't installed! Please install it before proceeding.",
         );
         false
     }
@@ -199,7 +198,7 @@ sharded Postgres cluster.",
         }
 
         n => {
-            println!("Step {} doesn't exist. Try again?", n);
+            println!("Step {n} doesn't exist. Try again?");
         }
     }
 

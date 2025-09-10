@@ -240,6 +240,6 @@ mod test {
         let params = PdParameters::default();
         let params: Parameters = params.into();
 
-        println!("{:?}", params);
+        println!("{params:?}");
     }
 }

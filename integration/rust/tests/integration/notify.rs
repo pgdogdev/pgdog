@@ -19,7 +19,7 @@ async fn test_notify() {
             .unwrap();
 
         listener
-            .listen(format!("test_notify_{}", i).as_str())
+            .listen(format!("test_notify_{i}").as_str())
             .await
             .unwrap();
 

@@ -35,6 +35,6 @@ pub fn pg_query_version() {
         && let Some(pg_query) = dependencies.get("pg_query")
         && let Some(version) = pg_query.as_str()
     {
-        println!("cargo:rustc-env=PGDOG_PGQUERY_VERSION={}", version);
+        println!("cargo:rustc-env=PGDOG_PGQUERY_VERSION={version}");
     }
 }
