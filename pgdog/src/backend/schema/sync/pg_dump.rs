@@ -153,7 +153,7 @@ impl PgDumpCommand {
 
         Ok(PgDumpOutput {
             stmts,
-            original,
+            original: cleaned,
             table: self.table.clone(),
             schema: self.schema.clone(),
         })
