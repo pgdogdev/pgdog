@@ -33,14 +33,14 @@ pub fn human_duration(duration: Duration) -> String {
     let ms = duration.as_millis();
     let ms_fmt = |ms: u128, unit: u128, name: &str| -> String {
         if ms % unit > 0 {
-            format!("{}ms", ms)
+            format!("{ms}ms")
         } else {
             format!("{}{}", ms / unit, name)
         }
     };
 
     if ms < second {
-        format!("{}ms", ms)
+        format!("{ms}ms")
     } else if ms < minute {
         ms_fmt(ms, second, "s")
     } else if ms < hour {
@@ -80,7 +80,7 @@ static INSTANCE_ID: Lazy<String> = Lazy::new(|| {
     (0..8)
         .map(|_| {
             let n: u8 = rng.gen_range(0..16);
-            format!("{:x}", n)
+            format!("{n:x}")
         })
         .collect()
 });

@@ -109,6 +109,6 @@ mod test {
         let pool = pool();
         let mut conn = pool.get(&Request::default()).await.unwrap();
         let relations = Relation::load(&mut conn).await.unwrap();
-        println!("{:#?}", relations);
+        println!("{relations:#?}");
     }
 }

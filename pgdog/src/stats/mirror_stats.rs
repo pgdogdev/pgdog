@@ -159,7 +159,7 @@ impl OpenMetric for MirrorStatsMetric {
 impl std::fmt::Display for MirrorStatsMetrics {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for metric in MirrorStatsMetrics::load() {
-            writeln!(f, "{}", metric)?;
+            writeln!(f, "{metric}")?;
         }
         Ok(())
     }
@@ -323,7 +323,7 @@ mod tests {
                     ],
                     measurement: value.into(),
                 }],
-                help: format!("Test metric for {}", name),
+                help: format!("Test metric for {name}"),
                 metric_type: "counter".into(),
             };
 
@@ -331,14 +331,11 @@ mod tests {
             let rendered = metric.to_string();
             // The formatted output will have the metric name with labels and value
             let expected = format!(
-                r#"{}{{user="test_user",database="test_db"}} {}"#,
-                name, value
+                r#"{name}{{user="test_user",database="test_db"}} {value}"#
             );
             assert!(
                 rendered.contains(&expected),
-                "Expected: {}, Got: {}",
-                expected,
-                rendered
+                "Expected: {expected}, Got: {rendered}"
             );
         }
     }

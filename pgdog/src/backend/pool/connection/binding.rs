@@ -264,16 +264,16 @@ impl Binding {
     pub async fn two_pc(&mut self, name: &str, phase: TwoPcPhase) -> Result<(), Error> {
         match self {
             Binding::MultiShard(ref mut servers, _) => {
-                for (shard, server) in servers.into_iter().enumerate() {
+                for (shard, server) in servers.iter_mut().enumerate() {
                     // Each shard has its own transaction name.
                     // This is to make this work on sharded databases that use the same
                     // database underneath.
-                    let name = format!("{}_{}", name, shard);
+                    let name = format!("{name}_{shard}");
 
                     let (query, skip_missing) = match phase {
-                        TwoPcPhase::Phase1 => (format!("PREPARE TRANSACTION '{}'", name), false),
-                        TwoPcPhase::Phase2 => (format!("COMMIT PREPARED '{}'", name), true),
-                        TwoPcPhase::Rollback => (format!("ROLLBACK PREPARED '{}'", name), true),
+                        TwoPcPhase::Phase1 => (format!("PREPARE TRANSACTION '{name}'"), false),
+                        TwoPcPhase::Phase2 => (format!("COMMIT PREPARED '{name}'"), true),
+                        TwoPcPhase::Rollback => (format!("ROLLBACK PREPARED '{name}'"), true),
                     };
 
                     match server.execute(query).await {

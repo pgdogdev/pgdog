@@ -17,7 +17,7 @@ impl Display for Shard {
             "{}",
             match self {
                 Self::Direct(shard) => shard.to_string(),
-                Self::Multi(shards) => format!("{:?}", shards),
+                Self::Multi(shards) => format!("{shards:?}"),
                 Self::All => "all".into(),
             }
         )

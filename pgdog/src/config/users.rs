@@ -160,6 +160,6 @@ fn admin_password() -> String {
         password
     } else {
         let pw = random_string(12);
-        format!("_pgdog_{}", pw)
+        format!("_pgdog_{pw}")
     }
 }

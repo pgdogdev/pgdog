@@ -68,7 +68,7 @@ mod test {
 
         for q in 0..5 {
             cache
-                .parse(format!("SELECT $1::bigint, {}", q).as_str())
+                .parse(format!("SELECT $1::bigint, {q}").as_str())
                 .unwrap();
         }
 

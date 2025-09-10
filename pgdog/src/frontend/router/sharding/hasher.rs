@@ -38,7 +38,7 @@ impl Hasher {
         hasher.update(bytes);
         let hash = hasher.finalize();
 
-        let hex = format!("{:x}", hash);
+        let hex = format!("{hash:x}");
         let key = i64::from_str_radix(&hex[hex.len() - 8..], 16).unwrap();
 
         key as u64
@@ -61,7 +61,7 @@ mod test {
         for (id, expected) in ids.iter().zip(shards.iter()) {
             let hash = Hasher::Sha1.bigint(*id as i64);
             let shard = hash % 12;
-            assert_eq!(shard as u64, *expected as u64);
+            assert_eq!(shard, *expected as u64);
         }
     }
 }

@@ -33,10 +33,10 @@ enum Request {
 impl From<Request> for ProtocolMessage {
     fn from(val: Request) -> Self {
         match val {
-            Request::Unsubscribe(channel) => Query::new(format!("UNLISTEN \"{}\"", channel)).into(),
-            Request::Subscribe(channel) => Query::new(format!("LISTEN \"{}\"", channel)).into(),
+            Request::Unsubscribe(channel) => Query::new(format!("UNLISTEN \"{channel}\"")).into(),
+            Request::Subscribe(channel) => Query::new(format!("LISTEN \"{channel}\"")).into(),
             Request::Notify { channel, payload } => {
-                Query::new(format!("NOTIFY \"{}\", '{}'", channel, payload)).into()
+                Query::new(format!("NOTIFY \"{channel}\", '{payload}'")).into()
             }
         }
     }

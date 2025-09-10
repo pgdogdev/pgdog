@@ -54,7 +54,7 @@ pub async fn parallel_test_client() -> (TcpStream, Client) {
         Client::new_test(stream, addr)
     });
 
-    let conn = TcpStream::connect(&format!("127.0.0.1:{}", port))
+    let conn = TcpStream::connect(&format!("127.0.0.1:{port}"))
         .await
         .unwrap();
     let client = connect_handle.await.unwrap();
@@ -169,7 +169,7 @@ async fn test_multiple_async() {
 
     let mut buf = vec![];
     for i in 0..50 {
-        let q = Query::new(format!("SELECT {}::bigint AS one", i));
+        let q = Query::new(format!("SELECT {i}::bigint AS one"));
         buf.extend(&q.to_bytes().unwrap())
     }
 

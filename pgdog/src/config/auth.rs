@@ -41,7 +41,7 @@ impl FromStr for AuthType {
             "md5" => Ok(Self::Md5),
             "scram" => Ok(Self::Scram),
             "trust" => Ok(Self::Trust),
-            _ => Err(format!("Invalid auth type: {}", s)),
+            _ => Err(format!("Invalid auth type: {s}")),
         }
     }
 }

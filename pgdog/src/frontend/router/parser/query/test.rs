@@ -293,7 +293,7 @@ fn test_set() {
             Command::Query(route) => {
                 assert_eq!(route.is_read(), read_only);
             }
-            cmd => panic!("not a query: {:?}", cmd),
+            cmd => panic!("not a query: {cmd:?}"),
         }
     }
 }
@@ -516,5 +516,5 @@ fn test_any() {
 #[test]
 fn test_commit_prepared() {
     let stmt = pg_query::parse("COMMIT PREPARED 'test'").unwrap();
-    println!("{:?}", stmt);
+    println!("{stmt:?}");
 }

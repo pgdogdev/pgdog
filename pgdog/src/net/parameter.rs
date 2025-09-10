@@ -67,12 +67,12 @@ impl MemoryUsage for ParameterValue {
 impl Display for ParameterValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::String(s) => write!(f, "'{}'", s),
+            Self::String(s) => write!(f, "'{s}'"),
             Self::Tuple(t) => write!(
                 f,
                 "{}",
                 t.iter()
-                    .map(|s| format!("'{}'", s))
+                    .map(|s| format!("'{s}'"))
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
@@ -179,14 +179,14 @@ impl Parameters {
     pub fn set_queries(&self) -> Vec<Query> {
         self.params
             .iter()
-            .map(|(name, value)| Query::new(format!(r#"SET "{}" TO {}"#, name, value)))
+            .map(|(name, value)| Query::new(format!(r#"SET "{name}" TO {value}"#)))
             .collect()
     }
 
     pub fn reset_queries(&self) -> Vec<Query> {
         self.params
             .keys()
-            .map(|name| Query::new(format!(r#"RESET "{}""#, name)))
+            .map(|name| Query::new(format!(r#"RESET "{name}""#)))
             .collect()
     }
 

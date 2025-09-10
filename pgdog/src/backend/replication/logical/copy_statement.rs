@@ -45,7 +45,7 @@ impl CopyStatement {
             self.table,
             self.columns
                 .iter()
-                .map(|c| format!(r#""{}""#, c))
+                .map(|c| format!(r#""{c}""#))
                 .collect::<Vec<_>>()
                 .join(", "),
             if out { "TO STDOUT" } else { "FROM STDIN" }

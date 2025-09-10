@@ -335,7 +335,7 @@ impl Monitor {
                     error!(
                         "{}error connecting to server: {} [{}]",
                         if attempt > 0 {
-                            format!("[attempt {}] ", attempt)
+                            format!("[attempt {attempt}] ")
                         } else {
                             String::new()
                         },
@@ -349,7 +349,7 @@ impl Monitor {
                     error!(
                         "{}server connection timeout [{}]",
                         if attempt > 0 {
-                            format!("[attempt {}] ", attempt)
+                            format!("[attempt {attempt}] ")
                         } else {
                             String::new()
                         },

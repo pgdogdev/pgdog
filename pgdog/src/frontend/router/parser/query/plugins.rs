@@ -74,7 +74,7 @@ impl QueryParser {
                         "plugin \"{}\" returned route [{}, {}]",
                         plugin.name(),
                         match self.plugin_output.shard.as_ref() {
-                            Some(shard) => format!("shard={}", shard),
+                            Some(shard) => format!("shard={shard}"),
                             None => "shard=unknown".to_string(),
                         },
                         match self.plugin_output.read {

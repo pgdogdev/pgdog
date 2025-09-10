@@ -83,6 +83,6 @@ mod test {
     #[test]
     fn test_url() {
         let url = Url::parse("postgres://user:password@host:5432/name").unwrap();
-        println!("{:#?}", url);
+        println!("{url:#?}");
     }
 }

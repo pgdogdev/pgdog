@@ -36,8 +36,7 @@ impl From<crate::backend::Error> for Error {
         match value {
             crate::backend::Error::Net(net_err) => Self::Net(net_err),
             other => Self::Net(crate::net::Error::Io(std::io::Error::other(format!(
-                "{}",
-                other
+                "{other}"
             )))),
         }
     }

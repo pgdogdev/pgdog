@@ -125,7 +125,7 @@ impl Server {
                         error!("TLS handshake failed with {:?} [{}]", e, addr);
                         return Err(Error::Io(std::io::Error::new(
                             std::io::ErrorKind::ConnectionRefused,
-                            format!("TLS handshake failed: {}", e),
+                            format!("TLS handshake failed: {e}"),
                         )));
                     }
                 }
@@ -1063,8 +1063,8 @@ pub mod test {
         use crate::net::bind::Parameter;
 
         for i in 0..25 {
-            let name = format!("test_prepared_{}", i);
-            let parse = Parse::named(&name, format!("SELECT $1, 'test_{}'", name));
+            let name = format!("test_prepared_{i}");
+            let parse = Parse::named(&name, format!("SELECT $1, 'test_{name}'"));
             let (new, new_name) = PreparedStatements::global().lock().insert(&parse);
             let name = new_name;
             let parse = parse.rename(&name);
@@ -1210,7 +1210,7 @@ pub mod test {
     async fn test_bad_bind() {
         let mut server = test_server().await;
         for i in 0..25 {
-            let name = format!("test_{}", i);
+            let name = format!("test_{i}");
             let parse = Parse::named(&name, "SELECT $1");
             let describe = Describe::new_statement(&name);
             let bind = Bind::new_statement(&name);
@@ -1644,7 +1644,7 @@ pub mod test {
             if msg.code() == 'Z' {
                 break;
             }
-            println!("{:?}", msg);
+            println!("{msg:?}");
         }
     }
 
@@ -1722,7 +1722,7 @@ pub mod test {
         assert_eq!(changed, 0);
 
         for i in 0..25 {
-            let value = format!("apples_{}", i);
+            let value = format!("apples_{i}");
             params.insert("application_name", value);
 
             let changed = server.link_client(&params).await?;

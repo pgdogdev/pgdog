@@ -29,19 +29,19 @@ impl Command for ShowStats {
                 .into_iter()
                 .flat_map(|prefix| {
                     [
-                        Field::numeric(&format!("{}_xact_count", prefix)),
-                        Field::numeric(&format!("{}_xact_2pc_count", prefix)),
-                        Field::numeric(&format!("{}_query_count", prefix)),
-                        Field::numeric(&format!("{}_server_assignment_count", prefix)),
-                        Field::numeric(&format!("{}_received", prefix)),
-                        Field::numeric(&format!("{}_sent", prefix)),
-                        Field::numeric(&format!("{}_xact_time", prefix)),
-                        Field::numeric(&format!("{}_query_time", prefix)),
-                        Field::numeric(&format!("{}_wait_time", prefix)),
+                        Field::numeric(&format!("{prefix}_xact_count")),
+                        Field::numeric(&format!("{prefix}_xact_2pc_count")),
+                        Field::numeric(&format!("{prefix}_query_count")),
+                        Field::numeric(&format!("{prefix}_server_assignment_count")),
+                        Field::numeric(&format!("{prefix}_received")),
+                        Field::numeric(&format!("{prefix}_sent")),
+                        Field::numeric(&format!("{prefix}_xact_time")),
+                        Field::numeric(&format!("{prefix}_query_time")),
+                        Field::numeric(&format!("{prefix}_wait_time")),
                         // Field::numeric(&format!("{}_client_parse_count", prefix)),
-                        Field::numeric(&format!("{}_server_parse_count", prefix)),
-                        Field::numeric(&format!("{}_bind_count", prefix)),
-                        Field::numeric(&format!("{}_close_count", prefix)),
+                        Field::numeric(&format!("{prefix}_server_parse_count")),
+                        Field::numeric(&format!("{prefix}_bind_count")),
+                        Field::numeric(&format!("{prefix}_close_count")),
                     ]
                 })
                 .collect::<Vec<Field>>(),

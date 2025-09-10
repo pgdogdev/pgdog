@@ -271,7 +271,7 @@ mod test {
             parse_time += task.await.unwrap();
         }
 
-        println!("[bench_ast_cache]: parse time: {:?}", parse_time);
+        println!("[bench_ast_cache]: parse time: {parse_time:?}");
 
         // Simulate lock contention.
         let mut tasks = vec![];
@@ -295,12 +295,11 @@ mod test {
             cached_time += task.await.unwrap();
         }
 
-        println!("[bench_ast_cache]: cached time: {:?}", cached_time);
+        println!("[bench_ast_cache]: cached time: {cached_time:?}");
 
         let faster = parse_time.as_micros() as f64 / cached_time.as_micros() as f64;
         println!(
-            "[bench_ast_cache]: cached is {:.4} times faster than parsed",
-            faster
+            "[bench_ast_cache]: cached is {faster:.4} times faster than parsed"
         ); // 32x on my M1
 
         assert!(faster > 10.0);

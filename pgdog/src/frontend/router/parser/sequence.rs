@@ -68,8 +68,7 @@ impl<'a> Sequence<'a> {
         let column_name = format!("\"{}\"", escape_identifier(column.name));
 
         Ok(format!(
-            "SELECT setval('{}', COALESCE((SELECT MAX({}) FROM {}), 1), true);",
-            sequence_name, column_name, table_name
+            "SELECT setval('{sequence_name}', COALESCE((SELECT MAX({column_name}) FROM {table_name}), 1), true);"
         ))
     }
 }

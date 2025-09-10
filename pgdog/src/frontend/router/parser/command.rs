@@ -89,9 +89,9 @@ impl From<bool> for SetVal {
 impl std::fmt::Display for SetVal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            SetVal::String(s) => write!(f, "{}", s),
-            SetVal::Integer(i) => write!(f, "{}", i),
-            SetVal::Boolean(b) => write!(f, "{}", b),
+            SetVal::String(s) => write!(f, "{s}"),
+            SetVal::Integer(i) => write!(f, "{i}"),
+            SetVal::Boolean(b) => write!(f, "{b}"),
         }
     }
 }

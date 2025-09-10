@@ -9,7 +9,7 @@ impl QueryEngine {
         let bytes_sent = context
             .stream
             .error(
-                ErrorResponse::syntax(&format!("unknown command: {:?}", command)),
+                ErrorResponse::syntax(&format!("unknown command: {command:?}")),
                 context.in_transaction(),
             )
             .await?;

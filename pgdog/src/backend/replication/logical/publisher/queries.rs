@@ -34,7 +34,7 @@ impl PublicationTable {
         server: &mut Server,
     ) -> Result<Vec<PublicationTable>, Error> {
         Ok(server
-            .fetch_all(TABLES.replace("$1", &format!("'{}'", publication)))
+            .fetch_all(TABLES.replace("$1", &format!("'{publication}'")))
             .await?)
     }
 }

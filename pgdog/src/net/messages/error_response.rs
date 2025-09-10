@@ -40,8 +40,7 @@ impl ErrorResponse {
             severity: "FATAL".into(),
             code: "28000".into(),
             message: format!(
-                "password for user \"{}\" and database \"{}\" is wrong, or the database does not exist",
-                user, database
+                "password for user \"{user}\" and database \"{database}\" is wrong, or the database does not exist"
             ),
             detail: None,
             context: None,
@@ -144,7 +143,7 @@ impl Display for ErrorResponse {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}: {} {}", self.severity, self.code, self.message)?;
         if let Some(ref detail) = self.detail {
-            write!(f, "\n{}", detail)?
+            write!(f, "\n{detail}")?
         }
         Ok(())
     }

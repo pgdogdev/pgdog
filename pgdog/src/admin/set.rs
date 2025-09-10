@@ -117,7 +117,7 @@ impl Set {
     fn from_json<T: DeserializeOwned>(value: &str) -> serde_json::Result<T> {
         let value = match value {
             "true" | "false" => value.to_string(),
-            _ => format!(r#""{}""#, value),
+            _ => format!(r#""{value}""#),
         };
         serde_json::from_str::<T>(&value)
     }

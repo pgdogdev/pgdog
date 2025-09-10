@@ -46,16 +46,14 @@ mod test {
         for i in 0..25 {
             server
                 .execute(format!(
-                    "INSERT INTO publication_test_one (email) VALUES ('test_{}@test.com')",
-                    i
+                    "INSERT INTO publication_test_one (email) VALUES ('test_{i}@test.com')"
                 ))
                 .await
                 .unwrap();
 
             server
                 .execute(format!(
-                    "INSERT INTO publication_test_two (fk_id) VALUES ({})",
-                    i
+                    "INSERT INTO publication_test_two (fk_id) VALUES ({i})"
                 ))
                 .await
                 .unwrap();

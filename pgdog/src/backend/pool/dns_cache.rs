@@ -153,6 +153,23 @@ impl DnsCache {
 }
 
 // -------------------------------------------------------------------------------------------------
+// ------ DnsCache :: Test-specific methods --------------------------------------------------------
+
+impl DnsCache {
+    #[cfg(test)]
+    pub fn clear_cache_for_testing(&self) {
+        let mut cache = self.cache.write();
+        cache.clear();
+    }
+
+    #[cfg(test)]
+    pub fn get_cached_hostnames_for_testing(&self) -> Vec<String> {
+        let hostnames = self.hostnames.read();
+        hostnames.iter().cloned().collect()
+    }
+}
+
+// -------------------------------------------------------------------------------------------------
 // ------ DnsCache :: Tests ------------------------------------------------------------------------
 
 #[cfg(test)]
@@ -197,10 +214,10 @@ mod tests {
 
         for domain in domains {
             let result = timeout(Duration::from_secs(5), cache.resolve(domain)).await;
-            assert!(result.is_ok(), "Timeout resolving {}", domain);
+            assert!(result.is_ok(), "Timeout resolving {domain}");
 
             let ip_result = result.unwrap();
-            assert!(ip_result.is_ok(), "Failed to resolve {}", domain);
+            assert!(ip_result.is_ok(), "Failed to resolve {domain}");
         }
     }
 
@@ -237,9 +254,7 @@ mod tests {
         // Second call should be significantly faster (cached)
         assert!(
             second_duration < first_duration / 2,
-            "Second call should be much faster due to caching. First: {:?}, Second: {:?}",
-            first_duration,
-            second_duration
+            "Second call should be much faster due to caching. First: {first_duration:?}, Second: {second_duration:?}"
         );
     }
 
@@ -318,7 +333,7 @@ mod tests {
         let hostname = "ipv6.google.com"; // Known IPv6-only or dual-stack
 
         let ip = cache.resolve(hostname).await.unwrap();
-        assert!(ip.is_ipv6(), "Expected IPv6 address, got {}", ip);
+        assert!(ip.is_ipv6(), "Expected IPv6 address, got {ip}");
     }
 
     #[tokio::test]
@@ -336,23 +351,6 @@ mod tests {
 
         // Verify cache isn't polluted (no entry added on error)
         assert!(cache.get_cached_ip("invalid-host-xyz.invalid").is_none());
-    }
-}
-
-// -------------------------------------------------------------------------------------------------
-// ------ DnsCache :: Test-specific methods --------------------------------------------------------
-
-impl DnsCache {
-    #[cfg(test)]
-    pub fn clear_cache_for_testing(&self) {
-        let mut cache = self.cache.write();
-        cache.clear();
-    }
-
-    #[cfg(test)]
-    pub fn get_cached_hostnames_for_testing(&self) -> Vec<String> {
-        let hostnames = self.hostnames.read();
-        hostnames.iter().cloned().collect()
     }
 }
 

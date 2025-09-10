@@ -108,8 +108,7 @@ mod tests {
         for (i, expected) in expected_columns.iter().enumerate() {
             assert_eq!(
                 fields[i].name, *expected,
-                "Column {} should be named {}",
-                i, expected
+                "Column {i} should be named {expected}"
             );
         }
 
@@ -125,7 +124,7 @@ mod tests {
             // Just validate the counter values are integers (>= 0)
             for i in 2..7 {
                 let value = data_row.get_int(i, true).unwrap_or(0);
-                assert!(value >= 0, "Column {} should have non-negative value", i);
+                assert!(value >= 0, "Column {i} should have non-negative value");
             }
         }
     }

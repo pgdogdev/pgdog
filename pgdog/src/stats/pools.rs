@@ -379,7 +379,7 @@ impl Pools {
 impl std::fmt::Display for Pools {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for pool in &self.metrics {
-            writeln!(f, "{}", pool)?
+            writeln!(f, "{pool}")?
         }
 
         Ok(())

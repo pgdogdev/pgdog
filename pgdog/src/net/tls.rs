@@ -166,14 +166,14 @@ pub fn connector_with_verify_mode(
             .map_err(|e| {
                 Error::Io(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
-                    format!("Failed to read CA certificate file: {}", e),
+                    format!("Failed to read CA certificate file: {e}"),
                 ))
             })?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| {
                 Error::Io(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
-                    format!("Failed to parse CA certificates: {}", e),
+                    format!("Failed to parse CA certificates: {e}"),
                 ))
             })?;
 

@@ -58,11 +58,10 @@ impl Display for Item {
                 name,
             } => write!(
                 f,
-                "index \"{}\" on table \"{}\".\"{}\"",
-                name, schema, table
+                "index \"{name}\" on table \"{schema}\".\"{table}\""
             ),
 
-            Self::Table { schema, name } => write!(f, "table \"{}\".\"{}\"", schema, name),
+            Self::Table { schema, name } => write!(f, "table \"{schema}\".\"{name}\""),
             Self::Other { sql } => write!(f, "\"{}\"", no_comments(sql)),
         }
     }

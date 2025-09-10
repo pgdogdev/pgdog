@@ -189,7 +189,6 @@ mod test {
         let stats2 = Arc::new(Mutex::new(MirrorStats::default()));
         let mut handle = MirrorHandler::new(tx.clone(), 0.5, stats2);
         let dropped = (0..25)
-            .into_iter()
             .map(|_| handle.send(&vec![].into()) && handle.send(&vec![].into()) && handle.flush())
             .filter(|s| !s)
             .count();
@@ -197,13 +196,11 @@ mod test {
         assert_eq!(
             rx.len(),
             received,
-            "received more than should of with 50% exposure: {}",
-            received
+            "received more than should of with 50% exposure: {received}"
         );
         assert!(
             dropped <= 25 && dropped > 15,
-            "dropped should be somewhere near 50%, but actually is {}",
-            dropped
+            "dropped should be somewhere near 50%, but actually is {dropped}"
         );
     }
 

@@ -45,7 +45,7 @@ pub fn unescape(s: &str) -> String {
                 }
 
                 _ => {
-                    result.push(format!("'{}'", c));
+                    result.push(format!("'{c}'"));
                 }
             }
         } else if c == '\\' {

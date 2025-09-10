@@ -156,8 +156,7 @@ async fn test_shard_by_range() {
     let inserts = (0..99)
         .map(|i| {
             Query::new(format!(
-                "INSERT INTO test_shard_bigint_range (c) VALUES ({})",
-                i
+                "INSERT INTO test_shard_bigint_range (c) VALUES ({i})"
             ))
         })
         .collect::<Vec<_>>();
@@ -176,7 +175,6 @@ async fn test_shard_by_range() {
     table.data_type = DataType::Bigint;
     table.mapping = Mapping::new(
         &(0..3)
-            .into_iter()
             .map(|s| ShardedMapping {
                 kind: ShardedMappingKind::Range,
                 start: Some(FlexibleType::Integer(s * 33)),
@@ -188,7 +186,7 @@ async fn test_shard_by_range() {
     );
 
     for shard in 0..3 {
-        let table_name = format!("SELECT * FROM test_shard_bigint_range_{}", shard);
+        let table_name = format!("SELECT * FROM test_shard_bigint_range_{shard}");
         let values = server.fetch_all::<i64>(&table_name).await.unwrap();
         for value in values {
             let context = ContextBuilder::new(&table)
@@ -213,8 +211,7 @@ async fn test_shard_by_list() {
     let inserts = (0..30)
         .map(|i| {
             Query::new(format!(
-                "INSERT INTO test_shard_bigint_list (c) VALUES ({})",
-                i
+                "INSERT INTO test_shard_bigint_list (c) VALUES ({i})"
             ))
         })
         .collect::<Vec<_>>();
@@ -233,12 +230,10 @@ async fn test_shard_by_list() {
     table.data_type = DataType::Bigint;
     table.mapping = Mapping::new(
         &(0..3)
-            .into_iter()
             .map(|s| ShardedMapping {
                 kind: ShardedMappingKind::List,
                 values: (s * 10..((s + 1) * 10))
-                    .into_iter()
-                    .map(|v| FlexibleType::Integer(v))
+                    .map(FlexibleType::Integer)
                     .collect::<HashSet<_>>(),
                 shard: s as usize,
                 ..Default::default()
@@ -247,7 +242,7 @@ async fn test_shard_by_list() {
     );
 
     for shard in 0..3 {
-        let table_name = format!("SELECT * FROM test_shard_bigint_list_{}", shard);
+        let table_name = format!("SELECT * FROM test_shard_bigint_list_{shard}");
         let values = server.fetch_all::<i64>(&table_name).await.unwrap();
         for value in values {
             let context = ContextBuilder::new(&table)
@@ -294,24 +289,23 @@ async fn test_shard_by_uuid_list() {
     let mut insert_queries = Vec::new();
     for uuid in uuid_sets.clone().concat() {
         insert_queries.push(Query::new(format!(
-            "INSERT INTO test_shard_uuid_list (id) VALUES ('{}')",
-            uuid
+            "INSERT INTO test_shard_uuid_list (id) VALUES ('{uuid}')"
         )));
     }
 
     let ddl_queries = vec![
         Query::new("CREATE TABLE test_shard_uuid_list (id UUID) PARTITION BY LIST(id)"),
-        Query::new(&format!(
+        Query::new(format!(
             "CREATE TABLE test_shard_uuid_list_0 PARTITION OF test_shard_uuid_list FOR VALUES IN ({})",
-            shard_0_uuids.iter().map(|u| format!("'{}'", u)).collect::<Vec<_>>().join(", ")
+            shard_0_uuids.iter().map(|u| format!("'{u}'")).collect::<Vec<_>>().join(", ")
         )),
-        Query::new(&format!(
+        Query::new(format!(
             "CREATE TABLE test_shard_uuid_list_1 PARTITION OF test_shard_uuid_list FOR VALUES IN ({})",
-            shard_1_uuids.iter().map(|u| format!("'{}'", u)).collect::<Vec<_>>().join(", ")
+            shard_1_uuids.iter().map(|u| format!("'{u}'")).collect::<Vec<_>>().join(", ")
         )),
-        Query::new(&format!(
+        Query::new(format!(
             "CREATE TABLE test_shard_uuid_list_2 PARTITION OF test_shard_uuid_list FOR VALUES IN ({})",
-            shard_2_uuids.iter().map(|u| format!("'{}'", u)).collect::<Vec<_>>().join(", ")
+            shard_2_uuids.iter().map(|u| format!("'{u}'")).collect::<Vec<_>>().join(", ")
         )),
     ];
 
@@ -339,7 +333,7 @@ async fn test_shard_by_uuid_list() {
     );
 
     for shard in 0..3 {
-        let query = format!("SELECT * FROM test_shard_uuid_list_{}", shard);
+        let query = format!("SELECT * FROM test_shard_uuid_list_{shard}");
         let values = server.fetch_all::<String>(&query).await.unwrap();
 
         for value in values {

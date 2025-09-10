@@ -310,7 +310,7 @@ mod test {
 
         for (i, ts) in timestamps.iter().enumerate() {
             let mut dr = DataRow::new();
-            dr.add(ts.to_string()).add(format!("item_{}", i));
+            dr.add(ts.to_string()).add(format!("item_{i}"));
             buf.add(dr.message().unwrap()).unwrap();
         }
 

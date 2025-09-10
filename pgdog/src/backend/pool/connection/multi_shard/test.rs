@@ -20,7 +20,7 @@ fn test_inconsistent_row_descriptions() {
     assert!(result.is_err());
 
     if let Err(error) = result {
-        let error_str = format!("{}", error);
+        let error_str = format!("{error}");
         assert!(error_str.contains("inconsistent row descriptions"));
         assert!(error_str.contains("expected 2 columns, got 1 columns"));
     }
@@ -51,7 +51,7 @@ fn test_inconsistent_data_rows() {
     assert!(result.is_err());
 
     if let Err(error) = result {
-        let error_str = format!("{}", error);
+        let error_str = format!("{error}");
         assert!(error_str.contains("inconsistent column count in data rows"));
         assert!(error_str.contains("expected 2 columns, got 1 columns"));
     }

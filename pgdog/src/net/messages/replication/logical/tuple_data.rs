@@ -65,7 +65,7 @@ impl TupleData {
             .map(|s| s.to_sql())
             .collect::<Result<Vec<_>, Error>>()?
             .join(", ");
-        Ok(format!("({})", columns))
+        Ok(format!("({columns})"))
     }
 
     /// Create Bind message from this Tuple.

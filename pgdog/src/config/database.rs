@@ -18,7 +18,7 @@ impl FromStr for ReadWriteStrategy {
         match s.to_lowercase().as_str() {
             "conservative" => Ok(Self::Conservative),
             "aggressive" => Ok(Self::Aggressive),
-            _ => Err(format!("Invalid read-write strategy: {}", s)),
+            _ => Err(format!("Invalid read-write strategy: {s}")),
         }
     }
 }
@@ -36,11 +36,11 @@ impl FromStr for LoadBalancingStrategy {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().replace('_', "").replace('-', "").as_str() {
+        match s.to_lowercase().replace(['_', '-'], "").as_str() {
             "random" => Ok(Self::Random),
             "roundrobin" => Ok(Self::RoundRobin),
             "leastactiveconnections" => Ok(Self::LeastActiveConnections),
-            _ => Err(format!("Invalid load balancing strategy: {}", s)),
+            _ => Err(format!("Invalid load balancing strategy: {s}")),
         }
     }
 }
@@ -57,10 +57,10 @@ impl FromStr for ReadWriteSplit {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().replace('_', "").replace('-', "").as_str() {
+        match s.to_lowercase().replace(['_', '-'], "").as_str() {
             "includeprimary" => Ok(Self::IncludePrimary),
             "excludeprimary" => Ok(Self::ExcludePrimary),
-            _ => Err(format!("Invalid read-write split: {}", s)),
+            _ => Err(format!("Invalid read-write split: {s}")),
         }
     }
 }

@@ -111,7 +111,7 @@ mod tests {
 
         // Should succeed
         if let Err(ref error) = result {
-            println!("Error in test_two_pc_phase1_prepare: {:?}", error);
+            println!("Error in test_two_pc_phase1_prepare: {error:?}");
         }
         assert!(result.is_ok());
 

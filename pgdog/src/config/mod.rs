@@ -97,7 +97,7 @@ pub fn from_urls(urls: &[String]) -> Result<ConfigAndUsers, Error> {
 pub fn from_env() -> Result<ConfigAndUsers, Error> {
     let mut urls = vec![];
     let mut index = 1;
-    while let Ok(url) = env::var(format!("PGDOG_DATABASE_URL_{}", index)) {
+    while let Ok(url) = env::var(format!("PGDOG_DATABASE_URL_{index}")) {
         urls.push(url);
         index += 1;
     }

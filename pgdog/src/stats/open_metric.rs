@@ -66,7 +66,7 @@ impl Measurement {
             let labels = self
                 .labels
                 .iter()
-                .map(|(name, value)| format!("{}=\"{}\"", name, value))
+                .map(|(name, value)| format!("{name}=\"{value}\""))
                 .collect::<Vec<_>>();
             format!("{{{}}}", labels.join(","))
         };
@@ -75,7 +75,7 @@ impl Measurement {
             name,
             labels,
             match self.measurement {
-                MeasurementType::Float(f) => format!("{:.3}", f),
+                MeasurementType::Float(f) => format!("{f:.3}"),
                 MeasurementType::Integer(i) => i.to_string(),
                 MeasurementType::Millis(i) => i.to_string(),
             }
@@ -115,10 +115,10 @@ impl std::fmt::Display for Metric {
             .unwrap_or("");
         writeln!(f, "# TYPE {}{} {}", prefix, name, self.metric_type())?;
         if let Some(unit) = self.unit() {
-            writeln!(f, "# UNIT {}{} {}", prefix, name, unit)?;
+            writeln!(f, "# UNIT {prefix}{name} {unit}")?;
         }
         if let Some(help) = self.help() {
-            writeln!(f, "# HELP {}{} {}", prefix, name, help)?;
+            writeln!(f, "# HELP {prefix}{name} {help}")?;
         }
 
         for measurement in self.measurements() {

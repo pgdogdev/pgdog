@@ -41,7 +41,7 @@ async fn test_cleanup_transaction_phase_one() {
         .await
         .unwrap();
     // We have two-pc transactions.
-    assert!(two_pc.iter().find(|p| p.code() == 'D').is_some());
+    assert!(two_pc.iter().any(|p| p.code() == 'D'));
 
     // Simulate client disconnecting abruptly.
     conn.disconnect();
@@ -62,7 +62,7 @@ async fn test_cleanup_transaction_phase_one() {
         .await
         .unwrap();
     // No transactions.
-    assert!(two_pc.iter().find(|p| p.code() == 'D').is_none());
+    assert!(!two_pc.iter().any(|p| p.code() == 'D'));
     // Table wasn't committed.
     let table = conn
         .execute("SELECT * FROM test_cleanup_transaction_phase_one")
@@ -105,7 +105,7 @@ async fn test_cleanup_transaction_phase_two() {
         .await
         .unwrap();
     // We have two-pc transactions.
-    assert!(txns.iter().find(|p| p.code() == 'D').is_some());
+    assert!(txns.iter().any(|p| p.code() == 'D'));
 
     let guard_2 = two_pc.phase_two(&cluster.identifier()).await.unwrap();
     let info = Manager::get().transaction(&transaction).unwrap();
@@ -131,7 +131,7 @@ async fn test_cleanup_transaction_phase_two() {
         .await
         .unwrap();
     // No transactions.
-    assert!(two_pc.iter().find(|p| p.code() == 'D').is_none());
+    assert!(!two_pc.iter().any(|p| p.code() == 'D'));
     // Table was committed.
     let _table = conn
         .execute("SELECT * FROM test_cleanup_transaction_phase_two")

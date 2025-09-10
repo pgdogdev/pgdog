@@ -284,7 +284,7 @@ impl From<Option<SocketAddr>> for PeerAddr {
 impl std::fmt::Debug for PeerAddr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if let Some(addr) = &self.addr {
-            write!(f, "[{}]", addr)
+            write!(f, "[{addr}]")
         } else {
             write!(f, "")
         }

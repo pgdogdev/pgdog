@@ -424,7 +424,7 @@ mod test {
             let msg = server.read().await.unwrap();
             if msg.code() == 'E' {
                 let err = ErrorResponse::from_bytes(msg.to_bytes().unwrap()).unwrap();
-                panic!("{:?}", err);
+                panic!("{err:?}");
             }
 
             if msg.code() == 'D' {

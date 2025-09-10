@@ -245,8 +245,7 @@ impl fmt::Display for SessionError {
             SessionError::InvalidVariableName(name) => {
                 write!(
                     f,
-                    "invalid or disallowed session configuration parameter: {}",
-                    name
+                    "invalid or disallowed session configuration parameter: {name}"
                 )
             }
         }

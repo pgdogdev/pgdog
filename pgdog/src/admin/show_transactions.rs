@@ -33,8 +33,8 @@ impl Command for ShowTransactions {
 
             dr.add(&info.identifier.database)
                 .add(&info.identifier.user)
-                .add(&transaction.to_string())
-                .add(&info.phase.to_string());
+                .add(transaction.to_string())
+                .add(info.phase.to_string());
 
             messages.push(dr.message()?);
         }

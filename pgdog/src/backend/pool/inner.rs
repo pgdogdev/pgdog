@@ -453,24 +453,24 @@ impl ReplicaLag {
 
                 if minutes > 0 {
                     return if seconds > 0 {
-                        format!("{}m{}s", minutes, seconds)
+                        format!("{minutes}m{seconds}s")
                     } else {
-                        format!("{}m", minutes)
+                        format!("{minutes}m")
                     };
                 }
 
                 if total_secs > 0 {
-                    return format!("{}s", total_secs);
+                    return format!("{total_secs}s");
                 }
 
                 let millis = d.as_millis();
                 if millis > 0 {
-                    return format!("{}ms", millis);
+                    return format!("{millis}ms");
                 }
 
                 "<1ms".to_string()
             }
-            Self::Bytes(b) => format!("{}B", b),
+            Self::Bytes(b) => format!("{b}B"),
             Self::Unknown => "unknown".to_string(),
         }
     }
@@ -486,8 +486,8 @@ impl std::fmt::Display for ReplicaLag {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::NonApplicable => write!(f, "NonApplicable"),
-            Self::Duration(d) => write!(f, "Duration({:?})", d),
-            Self::Bytes(b) => write!(f, "Bytes({})", b),
+            Self::Duration(d) => write!(f, "Duration({d:?})"),
+            Self::Bytes(b) => write!(f, "Bytes({b})"),
             Self::Unknown => write!(f, "Unknown"),
         }
     }

@@ -9,7 +9,7 @@ use std::{collections::hash_map::HashMap, str::from_utf8};
 // Format the globally unique prepared statement
 // name based on the counter.
 fn global_name(counter: usize) -> String {
-    format!("__pgdog_{}", counter)
+    format!("__pgdog_{counter}")
 }
 
 #[derive(Debug, Clone)]
@@ -364,7 +364,7 @@ mod test {
         let mut names = vec![];
 
         for stmt in 0..25 {
-            let parse = Parse::named("__sqlx_1", format!("SELECT {}", stmt));
+            let parse = Parse::named("__sqlx_1", format!("SELECT {stmt}"));
             let (new, name) = cache.insert(&parse);
             assert!(new);
             names.push(name);

@@ -58,7 +58,7 @@ pub async fn server(port: u16) -> std::io::Result<()> {
                 .serve_connection(io, service_fn(metrics))
                 .await
             {
-                eprintln!("OpenMetrics endpoint error: {:?}", err);
+                eprintln!("OpenMetrics endpoint error: {err:?}");
             }
         });
     }

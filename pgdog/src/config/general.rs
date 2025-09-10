@@ -750,20 +750,20 @@ mod tests {
         env::set_var("PGDOG_LOG_CONNECTIONS", "false");
         env::set_var("PGDOG_LOG_DISCONNECTIONS", "0");
 
-        assert_eq!(General::dry_run(), true);
-        assert_eq!(General::cross_shard_disabled(), true);
-        assert_eq!(General::log_connections(), false);
-        assert_eq!(General::log_disconnections(), false);
+        assert!(General::dry_run());
+        assert!(General::cross_shard_disabled());
+        assert!(!General::log_connections());
+        assert!(!General::log_disconnections());
 
         env::remove_var("PGDOG_DRY_RUN");
         env::remove_var("PGDOG_CROSS_SHARD_DISABLED");
         env::remove_var("PGDOG_LOG_CONNECTIONS");
         env::remove_var("PGDOG_LOG_DISCONNECTIONS");
 
-        assert_eq!(General::dry_run(), false);
-        assert_eq!(General::cross_shard_disabled(), false);
-        assert_eq!(General::log_connections(), true);
-        assert_eq!(General::log_disconnections(), true);
+        assert!(!General::dry_run());
+        assert!(!General::cross_shard_disabled());
+        assert!(General::log_connections());
+        assert!(General::log_disconnections());
     }
 
     #[test]
@@ -816,7 +816,7 @@ mod tests {
         assert_eq!(general.workers, 8);
         assert_eq!(general.pooler_mode, PoolerMode::Session);
         assert_eq!(general.auth_type, AuthType::Trust);
-        assert_eq!(general.dry_run, true);
+        assert!(general.dry_run);
 
         env::remove_var("PGDOG_WORKERS");
         env::remove_var("PGDOG_POOLER_MODE");

@@ -46,7 +46,7 @@ impl<'a> Client<'a> {
         let first_pass = md5.compute();
 
         let mut md5 = Context::new();
-        md5.consume(format!("{:x}", first_pass));
+        md5.consume(format!("{first_pass:x}"));
         md5.consume(self.salt);
         let password = format!("md5{:x}", md5.compute());
 

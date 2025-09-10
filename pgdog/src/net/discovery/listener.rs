@@ -72,7 +72,7 @@ impl Listener {
 
     /// Run listener.
     pub async fn spawn(&self, address: Ipv4Addr, port: u16) -> Result<Self, Error> {
-        let socket = UdpSocket::bind(format!("0.0.0.0:{}", port)).await?;
+        let socket = UdpSocket::bind(format!("0.0.0.0:{port}")).await?;
         socket.join_multicast_v4(address, "0.0.0.0".parse::<Ipv4Addr>().unwrap())?;
         socket.multicast_loop_v4()?; // Won't work on IPv6, but nice for debugging.
 
@@ -103,7 +103,7 @@ impl Listener {
 
                 _ = interval.tick() => {
                     let healthcheck = Message::stats(self.id).to_bytes()?;
-                    socket.send_to(&healthcheck, format!("{}:{}", address, port)).await?;
+                    socket.send_to(&healthcheck, format!("{address}:{port}")).await?;
                     debug!("healtcheck");
                 }
             }

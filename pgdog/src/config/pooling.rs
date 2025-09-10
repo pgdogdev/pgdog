@@ -28,7 +28,7 @@ impl FromStr for PreparedStatements {
             "disabled" => Ok(Self::Disabled),
             "extended" => Ok(Self::Extended),
             "full" => Ok(Self::Full),
-            _ => Err(format!("Invalid prepared statements mode: {}", s)),
+            _ => Err(format!("Invalid prepared statements mode: {s}")),
         }
     }
 }
@@ -61,7 +61,7 @@ impl FromStr for PoolerMode {
         match s.to_lowercase().as_str() {
             "transaction" => Ok(Self::Transaction),
             "session" => Ok(Self::Session),
-            _ => Err(format!("Invalid pooler mode: {}", s)),
+            _ => Err(format!("Invalid pooler mode: {s}")),
         }
     }
 }
