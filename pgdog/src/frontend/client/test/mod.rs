@@ -10,11 +10,7 @@ use bytes::{Buf, BufMut, BytesMut};
 
 use crate::{
     backend::databases::databases,
-    config::{
-        config, set,
-        test::{load_test, load_test_replicas},
-        Role,
-    },
+    config::{config, load_test, load_test_replicas, set, Role},
     frontend::{
         client::{BufferEvent, QueryEngine},
         Client,

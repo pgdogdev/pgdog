@@ -209,7 +209,7 @@ mod test {
 
     #[tokio::test]
     async fn test_mirror() {
-        config::test::load_test();
+        config::load_test();
         let cluster = Cluster::new_test();
         cluster.launch();
         let mut mirror = Mirror::spawn("pgdog", &cluster, None).unwrap();
@@ -259,7 +259,7 @@ mod test {
 
     #[tokio::test]
     async fn test_mirror_stats_tracking() {
-        config::test::load_test();
+        config::load_test();
         let cluster = Cluster::new_test();
         cluster.launch();
 
