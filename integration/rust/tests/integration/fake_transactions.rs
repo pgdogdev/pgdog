@@ -78,10 +78,9 @@ async fn check_server_state(expected: &str, admin: Pool<Postgres>) -> bool {
         let database: String = client.get("database");
         let application_name: String = client.get("application_name");
 
-        if database.starts_with("shard_") && application_name == "test_fake_transactions"
-            && !ok {
-                ok = state == expected;
-            }
+        if database.starts_with("shard_") && application_name == "test_fake_transactions" && !ok {
+            ok = state == expected;
+        }
     }
 
     ok

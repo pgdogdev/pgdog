@@ -298,9 +298,7 @@ mod test {
         println!("[bench_ast_cache]: cached time: {cached_time:?}");
 
         let faster = parse_time.as_micros() as f64 / cached_time.as_micros() as f64;
-        println!(
-            "[bench_ast_cache]: cached is {faster:.4} times faster than parsed"
-        ); // 32x on my M1
+        println!("[bench_ast_cache]: cached is {faster:.4} times faster than parsed"); // 32x on my M1
 
         assert!(faster > 10.0);
     }

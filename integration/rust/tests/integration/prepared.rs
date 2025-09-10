@@ -99,9 +99,7 @@ async fn test_prepard_cache_eviction() {
 
     for _ in 0..10 {
         for id in 0..50 {
-            let query = format!(
-                "/* test_prepard_cache_eviction: {id} */ SELECT $1::bigint"
-            );
+            let query = format!("/* test_prepard_cache_eviction: {id} */ SELECT $1::bigint");
             for conn in &conns {
                 let row = sqlx::query(query.as_str())
                     .bind(id)

@@ -330,9 +330,7 @@ mod tests {
             let metric = Metric::new(metric);
             let rendered = metric.to_string();
             // The formatted output will have the metric name with labels and value
-            let expected = format!(
-                r#"{name}{{user="test_user",database="test_db"}} {value}"#
-            );
+            let expected = format!(r#"{name}{{user="test_user",database="test_db"}} {value}"#);
             assert!(
                 rendered.contains(&expected),
                 "Expected: {expected}, Got: {rendered}"

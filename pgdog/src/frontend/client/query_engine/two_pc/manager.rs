@@ -89,10 +89,7 @@ impl Manager {
     ) -> Result<TwoPcGuard, Error> {
         {
             let mut guard = self.inner.lock();
-            let entry = guard
-                .transactions
-                .entry(*transaction)
-                .or_default();
+            let entry = guard.transactions.entry(*transaction).or_default();
             entry.identifier = identifier.clone();
             entry.phase = phase;
         }

@@ -115,9 +115,7 @@ fn check(what: &str) -> bool {
         println!("✅");
         true
     } else {
-        println!(
-            "❌\n\n  {what} isn't installed! Please install it before proceeding.",
-        );
+        println!("❌\n\n  {what} isn't installed! Please install it before proceeding.",);
         false
     }
 }
