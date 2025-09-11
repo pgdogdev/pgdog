@@ -2,6 +2,7 @@
 pub mod auth;
 pub mod backend_key;
 pub mod bind;
+pub mod bind_complete;
 pub mod close;
 pub mod close_complete;
 pub mod command_complete;
@@ -34,6 +35,7 @@ pub mod terminate;
 pub use auth::{Authentication, Password};
 pub use backend_key::BackendKeyData;
 pub use bind::{Bind, Format, Parameter, ParameterWithFormat};
+pub use bind_complete::BindComplete;
 pub use close::Close;
 pub use close_complete::CloseComplete;
 pub use command_complete::CommandComplete;
@@ -132,7 +134,7 @@ impl std::fmt::Debug for Message {
                 Source::Backend => ParameterStatus::from_bytes(self.payload()).unwrap().fmt(f),
             },
             '1' => ParseComplete::from_bytes(self.payload()).unwrap().fmt(f),
-            '2' => f.debug_struct("BindComplete").finish(),
+            '2' => BindComplete::from_bytes(self.payload()).unwrap().fmt(f),
             '3' => f.debug_struct("CloseComplete").finish(),
             'E' => match self.source {
                 Source::Frontend => f.debug_struct("Execute").finish(),

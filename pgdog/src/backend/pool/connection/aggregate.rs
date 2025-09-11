@@ -147,12 +147,17 @@ impl<'a> Aggregates<'a> {
             //
             let mut row = DataRow::new();
             for (idx, datum) in grouping.columns {
-                row.insert(idx, datum.encode(self.decoder.format(idx))?);
+                row.insert(
+                    idx,
+                    datum.encode(self.decoder.format(idx))?,
+                    datum.is_null(),
+                );
             }
             for acc in accumulator {
                 row.insert(
                     acc.target.column(),
                     acc.datum.encode(self.decoder.format(acc.target.column()))?,
+                    acc.datum.is_null(),
                 );
             }
             rows.push_back(row);

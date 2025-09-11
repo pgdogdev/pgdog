@@ -99,8 +99,13 @@ impl Add for Datum {
 }
 
 impl Datum {
-    pub fn new(bytes: &[u8], data_type: DataType, encoding: Format) -> Result<Self, Error> {
-        if bytes.is_empty() {
+    pub fn new(
+        bytes: &[u8],
+        data_type: DataType,
+        encoding: Format,
+        null: bool,
+    ) -> Result<Self, Error> {
+        if null {
             return Ok(Datum::Null);
         }
 
@@ -132,7 +137,8 @@ impl Datum {
             Datum::Uuid(uuid) => uuid.encode(format),
             Datum::Text(s) => s.encode(format),
             Datum::Boolean(b) => b.encode(format),
-            _ => Err(Error::UnexpectedPayload),
+            Datum::Null => Ok(Bytes::new()),
+            _ => Err(Error::UnsupportedDataTypeForEncoding),
         }
     }
 }

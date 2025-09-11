@@ -124,6 +124,7 @@ class Transaction extends TestCase {
         ResultSet rs = st.executeQuery("SELECT COUNT(*) as count FROM sharded");
         rs.next();
         assert_equals(rs.getInt("count"), 0);
+        this.connection.rollback();
 
         st.execute("INSERT INTO sharded (id, value) VALUES (1, 'test1')");
         st.execute("INSERT INTO sharded (id, value) VALUES (2, 'test2')");
@@ -137,6 +138,7 @@ class Transaction extends TestCase {
         rs = st.executeQuery("SELECT COUNT(*) as count FROM sharded");
         rs.next();
         assert_equals(rs.getInt("count"), 0);
+        this.connection.rollback();
 
         st.execute("INSERT INTO sharded (id, value) VALUES (3, 'test3')");
         st.execute("INSERT INTO sharded (id, value) VALUES (4, 'test4')");
@@ -179,6 +181,7 @@ class TransactionPrepared extends TestCase {
         ResultSet rs = countStmt.executeQuery();
         rs.next();
         assert_equals(rs.getInt("count"), 0);
+        this.connection.rollback();
 
         // Insert records using prepared statements
         insertStmt.setInt(1, 1);
@@ -208,6 +211,7 @@ class TransactionPrepared extends TestCase {
         rs = countStmt.executeQuery();
         rs.next();
         assert_equals(rs.getInt("count"), 0);
+        this.connection.rollback();
 
         // Insert more records and commit
         insertStmt.setInt(1, 3);
@@ -224,6 +228,7 @@ class TransactionPrepared extends TestCase {
         rs = countStmt.executeQuery();
         rs.next();
         assert_equals(rs.getInt("count"), 2);
+        this.connection.rollback();
 
         // Verify committed records
         selectStmt.setInt(1, 3);
