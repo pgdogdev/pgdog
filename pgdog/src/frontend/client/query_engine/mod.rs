@@ -134,39 +134,35 @@ impl QueryEngine {
                 transaction_type,
                 extended,
             } => {
-                if *extended {
-                    // Transaction control goes to all shards.
-                    context.cross_shard_disabled = Some(false);
-                    self.execute(context, &route).await?;
-                } else {
-                    self.start_transaction(context, query.clone(), *transaction_type)
-                        .await?
-                }
+                self.start_transaction(context, query.clone(), *transaction_type, *extended)
+                    .await?
             }
             Command::CommitTransaction { extended } => {
                 self.set_route = None;
 
                 if self.backend.connected() || *extended {
+                    let extended = *extended;
                     let transaction_route = self.transaction_route(&route)?;
                     context.client_request.route = Some(transaction_route.clone());
                     context.cross_shard_disabled = Some(false);
-                    self.end_connected(context, &transaction_route, false)
+                    self.end_connected(context, &transaction_route, false, extended)
                         .await?;
                 } else {
-                    self.end_not_connected(context, false).await?
+                    self.end_not_connected(context, false, *extended).await?
                 }
             }
             Command::RollbackTransaction { extended } => {
                 self.set_route = None;
 
                 if self.backend.connected() || *extended {
+                    let extended = *extended;
                     let transaction_route = self.transaction_route(&route)?;
                     context.client_request.route = Some(transaction_route.clone());
                     context.cross_shard_disabled = Some(false);
-                    self.end_connected(context, &transaction_route, true)
+                    self.end_connected(context, &transaction_route, true, extended)
                         .await?;
                 } else {
-                    self.end_not_connected(context, true).await?
+                    self.end_not_connected(context, true, *extended).await?
                 }
             }
             Command::Query(_) => self.execute(context, &route).await?,

@@ -3,7 +3,10 @@
 use crate::net::Decoder;
 
 use super::{code, prelude::*, Datum, Format, FromDataType, Numeric, RowDescription};
-use std::ops::{Deref, DerefMut};
+use std::{
+    io::Read,
+    ops::{Deref, DerefMut},
+};
 
 #[derive(Debug, Clone, Eq, Hash, PartialEq)]
 pub struct Data {
@@ -150,11 +153,18 @@ impl DataRow {
 
     /// Insert column at index. If row is smaller than index,
     /// columns will be prefilled with NULLs.
-    pub fn insert(&mut self, index: usize, value: impl ToDataRowColumn) -> &mut Self {
+    pub fn insert(
+        &mut self,
+        index: usize,
+        value: impl ToDataRowColumn,
+        is_null: bool,
+    ) -> &mut Self {
         while self.columns.len() <= index {
             self.columns.push(Data::null());
         }
-        self.columns[index] = value.to_data_row_column();
+        let mut data = value.to_data_row_column();
+        data.is_null = is_null;
+        self.columns[index] = data;
         self
     }
 
@@ -202,10 +212,15 @@ impl DataRow {
         decoder: &'a Decoder,
     ) -> Result<Option<Column<'a>>, Error> {
         if let Some(field) = decoder.rd().field(index) {
-            if let Some(data) = self.column(index) {
+            if let Some(data) = self.columns.get(index) {
                 return Ok(Some(Column {
                     name: field.name.as_str(),
-                    value: Datum::new(&data, field.data_type(), decoder.format(index))?,
+                    value: Datum::new(
+                        &data.data,
+                        field.data_type(),
+                        decoder.format(index),
+                        data.is_null,
+                    )?,
                 }));
             }
         }
@@ -218,10 +233,10 @@ impl DataRow {
         let mut row = vec![];
 
         for (index, field) in rd.fields.iter().enumerate() {
-            if let Some(data) = self.column(index) {
+            if let Some(data) = self.columns.get(index) {
                 row.push(Column {
                     name: field.name.as_str(),
-                    value: Datum::new(&data, field.data_type(), field.format())?,
+                    value: Datum::new(&data.data, field.data_type(), field.format(), data.is_null)?,
                 });
             }
         }
@@ -302,7 +317,7 @@ mod test {
     #[test]
     fn test_insert() {
         let mut dr = DataRow::new();
-        dr.insert(4, "test");
+        dr.insert(4, "test", false);
         assert_eq!(dr.columns.len(), 5);
         assert_eq!(dr.get::<String>(4, Format::Text).unwrap(), "test");
         assert_eq!(dr.get::<String>(0, Format::Text).unwrap(), "");
