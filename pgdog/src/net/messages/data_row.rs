@@ -3,10 +3,7 @@
 use crate::net::Decoder;
 
 use super::{code, prelude::*, Datum, Format, FromDataType, Numeric, RowDescription};
-use std::{
-    io::Read,
-    ops::{Deref, DerefMut},
-};
+use std::ops::{Deref, DerefMut};
 
 #[derive(Debug, Clone, Eq, Hash, PartialEq)]
 pub struct Data {
