@@ -547,7 +547,6 @@ ALTER TABLE ONLY public.users
 
 \unrestrict nu6jB5ogH2xGMn2dB3dMyMbSZ2PsVDqB2IaWK6zZVjngeba0UrnmxMy6s63SwzR
 "#;
-        let clean = PgDumpCommand::clean(&dump);
         let _parse = pg_query::parse(&PgDumpCommand::clean(&dump)).unwrap();
     }
 }
