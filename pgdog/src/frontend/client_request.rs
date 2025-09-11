@@ -185,12 +185,20 @@ impl ClientRequest {
         for message in &self.messages {
             let code = message.code();
             match code {
-                'P' | 'B' | 'D' | 'C' | 'H' => {
+                'P' | 'B' | 'D' | 'C' => {
                     req.messages.push(message.clone());
                 }
 
+                'H' => {
+                    if let Some(message) = req.messages.last() {
+                        if message.code() != 'H' {
+                            req.messages.push(message.clone());
+                        }
+                    }
+                }
+
                 'E' | 'S' => {
-                    if code == 'S' {
+                    if matches!(code, 'S') {
                         if req.messages.is_empty() {
                             if let Some(last) = requests.last_mut() {
                                 last.messages.push(message.clone());
@@ -203,6 +211,7 @@ impl ClientRequest {
                     } else {
                         req.messages.push(message.clone());
                         req.messages.push(Flush.into());
+                        // println!("addong flush: {}", code);
                     }
 
                     if !req.messages.is_empty() {
@@ -275,10 +284,21 @@ mod test {
             ProtocolMessage::from(Parse::named("test", "SELECT 1")),
             Bind::new_statement("test").into(),
             Execute::new().into(),
+            ProtocolMessage::from(Parse::named("test_1", "SELECT 2")),
+            Bind::new_statement("test_1").into(),
+            Execute::new().into(),
             Flush.into(),
         ];
         let req = ClientRequest::from(messages);
         let splice = req.splice().unwrap();
-        assert!(splice.is_empty());
+        assert_eq!(splice.len(), 2);
+        assert_eq!(splice.get(0).unwrap().messages.last().unwrap().code(), 'H');
+        assert_eq!(
+            splice
+                .iter()
+                .map(|s| s.messages.iter().filter(|p| p.code() == 'H').count())
+                .sum::<usize>(),
+            2
+        );
     }
 }
