@@ -211,7 +211,6 @@ impl ClientRequest {
                     } else {
                         req.messages.push(message.clone());
                         req.messages.push(Flush.into());
-                        // println!("addong flush: {}", code);
                     }
 
                     if !req.messages.is_empty() {
