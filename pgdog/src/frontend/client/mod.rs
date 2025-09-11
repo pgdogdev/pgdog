@@ -395,7 +395,7 @@ impl Client {
         }
 
         // If client sent multiple requests, split them up and execute individually.
-        let spliced = self.client_request.splice()?;
+        let spliced = self.client_request.spliced()?;
         if spliced.is_empty() {
             let mut context = QueryEngineContext::new(self);
             query_engine.handle(&mut context).await?;
