@@ -185,7 +185,7 @@ impl ClientRequest {
         for message in &self.messages {
             let code = message.code();
             match code {
-                'P' | 'B' | 'D' | 'C' => {
+                'P' | 'B' | 'D' | 'C' | 'H' => {
                     req.messages.push(message.clone());
                 }
 
@@ -266,6 +266,14 @@ mod test {
             Bind::new_statement("test").into(),
             Execute::new().into(),
             Sync.into(),
+        ];
+        let req = ClientRequest::from(messages);
+        let splice = req.splice().unwrap();
+        assert!(splice.is_empty());
+
+        let messages = vec![
+            ProtocolMessage::from(Parse::named("test", "SELECT 1")),
+            Flush.into(),
         ];
         let req = ClientRequest::from(messages);
         let splice = req.splice().unwrap();
