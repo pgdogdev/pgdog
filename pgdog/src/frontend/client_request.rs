@@ -198,7 +198,7 @@ impl ClientRequest {
                 }
 
                 'E' | 'S' => {
-                    if matches!(code, 'S') {
+                    if code == 'S' {
                         if req.messages.is_empty() {
                             if let Some(last) = requests.last_mut() {
                                 last.messages.push(message.clone());
