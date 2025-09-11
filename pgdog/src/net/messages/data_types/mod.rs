@@ -31,7 +31,7 @@ pub trait FromDataType: Sized + PartialOrd + Ord + PartialEq {
     fn encode(&self, encoding: Format) -> Result<Bytes, Error>;
 }
 
-#[derive(Debug, Clone, PartialEq, PartialOrd)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Datum {
     /// BIGINT.
     Bigint(i64),
@@ -103,9 +103,55 @@ impl std::hash::Hash for Datum {
     }
 }
 
+impl PartialOrd for Datum {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
 impl Ord for Datum {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.partial_cmp(other).unwrap_or(std::cmp::Ordering::Equal)
+        use Datum::*;
+        match (self, other) {
+            (Bigint(a), Bigint(b)) => a.cmp(b),
+            (Integer(a), Integer(b)) => a.cmp(b),
+            (SmallInt(a), SmallInt(b)) => a.cmp(b),
+            (Interval(a), Interval(b)) => a.cmp(b),
+            (Text(a), Text(b)) => a.cmp(b),
+            (Timestamp(a), Timestamp(b)) => a.cmp(b),
+            (TimestampTz(a), TimestampTz(b)) => a.cmp(b),
+            (Uuid(a), Uuid(b)) => a.cmp(b),
+            (Numeric(a), Numeric(b)) => a.cmp(b),
+            (Float(a), Float(b)) => a.cmp(b),
+            (Double(a), Double(b)) => a.cmp(b),
+            (Vector(a), Vector(b)) => a.cmp(b),
+            (Unknown(a), Unknown(b)) => a.cmp(b),
+            (Boolean(a), Boolean(b)) => a.cmp(b),
+            (Null, Null) => std::cmp::Ordering::Equal,
+            // For different variants, compare by their variant index
+            _ => {
+                fn variant_index(datum: &Datum) -> u8 {
+                    match datum {
+                        Datum::Bigint(_) => 0,
+                        Datum::Integer(_) => 1,
+                        Datum::SmallInt(_) => 2,
+                        Datum::Interval(_) => 3,
+                        Datum::Text(_) => 4,
+                        Datum::Timestamp(_) => 5,
+                        Datum::TimestampTz(_) => 6,
+                        Datum::Uuid(_) => 7,
+                        Datum::Numeric(_) => 8,
+                        Datum::Float(_) => 9,
+                        Datum::Double(_) => 10,
+                        Datum::Vector(_) => 11,
+                        Datum::Unknown(_) => 12,
+                        Datum::Null => 13,
+                        Datum::Boolean(_) => 14,
+                    }
+                }
+                variant_index(self).cmp(&variant_index(other))
+            }
+        }
     }
 }
 

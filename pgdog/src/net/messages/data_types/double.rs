@@ -11,19 +11,19 @@ pub struct Double(pub f64);
 
 impl PartialOrd for Double {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        // PostgreSQL ordering: NaN is greater than all other values
-        match (self.0.is_nan(), other.0.is_nan()) {
-            (true, true) => Some(Ordering::Equal),
-            (true, false) => Some(Ordering::Greater),
-            (false, true) => Some(Ordering::Less),
-            (false, false) => self.0.partial_cmp(&other.0),
-        }
+        Some(self.cmp(other))
     }
 }
 
 impl Ord for Double {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.partial_cmp(other).unwrap_or(Ordering::Equal)
+        // PostgreSQL ordering: NaN is greater than all other values
+        match (self.0.is_nan(), other.0.is_nan()) {
+            (true, true) => Ordering::Equal,
+            (true, false) => Ordering::Greater,
+            (false, true) => Ordering::Less,
+            (false, false) => self.0.partial_cmp(&other.0).unwrap_or(Ordering::Equal),
+        }
     }
 }
 

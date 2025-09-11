@@ -264,7 +264,7 @@ impl Binding {
     pub async fn two_pc(&mut self, name: &str, phase: TwoPcPhase) -> Result<(), Error> {
         match self {
             Binding::MultiShard(ref mut servers, _) => {
-                for (shard, server) in servers.into_iter().enumerate() {
+                for (shard, server) in servers.iter_mut().enumerate() {
                     // Each shard has its own transaction name.
                     // This is to make this work on sharded databases that use the same
                     // database underneath.

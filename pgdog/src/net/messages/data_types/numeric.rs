@@ -184,22 +184,26 @@ impl FromDataType for Numeric {
                 };
 
                 // Process integer digits
-                for i in 0..integer_digit_count.min(digits.len()) {
-                    if i == 0 && digits[i] < 1000 && weight >= 0 {
+                for (i, digit) in digits
+                    .iter()
+                    .enumerate()
+                    .take(integer_digit_count.min(digits.len()))
+                {
+                    if i == 0 && *digit < 1000 && weight >= 0 {
                         // First digit, no leading zeros
-                        integer_str.push_str(&digits[i].to_string());
+                        integer_str.push_str(&digit.to_string());
                     } else {
                         // Subsequent digits or first digit >= 1000
                         if i == 0 && weight >= 0 {
-                            integer_str.push_str(&digits[i].to_string());
+                            integer_str.push_str(&digit.to_string());
                         } else {
-                            integer_str.push_str(&format!("{:04}", digits[i]));
+                            integer_str.push_str(&format!("{:04}", digit));
                         }
                     }
                 }
 
                 // Add trailing zeros for missing integer digits
-                if weight >= 0 && weight < i16::MAX {
+                if (0..i16::MAX).contains(&weight) {
                     let expected_integer_digits = (weight + 1) as usize;
                     for _ in digits.len()..expected_integer_digits {
                         integer_str.push_str("0000");
@@ -207,8 +211,8 @@ impl FromDataType for Numeric {
                 }
 
                 // Process fractional digits
-                for i in integer_digit_count..digits.len() {
-                    fractional_str.push_str(&format!("{:04}", digits[i]));
+                for digit in digits.iter().skip(integer_digit_count) {
+                    fractional_str.push_str(&format!("{:04}", digit));
                 }
 
                 // Build final result based on dscale
@@ -309,7 +313,7 @@ impl FromDataType for Numeric {
                     let mut pos = int_chars.len();
 
                     while pos > 0 {
-                        let start = if pos >= 4 { pos - 4 } else { 0 };
+                        let start = pos.saturating_sub(4);
                         let chunk: String = int_chars[start..pos].iter().collect();
                         let digit_value: i16 =
                             chunk.parse().map_err(|_| Error::UnexpectedPayload)?;

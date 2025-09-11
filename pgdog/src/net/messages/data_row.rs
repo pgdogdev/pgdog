@@ -3,7 +3,6 @@
 use crate::net::Decoder;
 
 use super::{code, prelude::*, Datum, Format, FromDataType, Numeric, RowDescription};
-use bytes::BytesMut;
 use rust_decimal::prelude::ToPrimitive;
 use std::ops::{Deref, DerefMut};
 
