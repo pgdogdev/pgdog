@@ -225,15 +225,20 @@ async def test_float_binary_roundtrip(conns):
             )
         
         rows = await conn.fetch(
-            "SELECT float4_val, float8_val FROM float_test ORDER BY id"
+            "SELECT id, float4_val, float8_val FROM float_test ORDER BY id"
         )
+        
+        print(f"\nRows retrieved: {len(rows)}, expected: {len(test_values)}")
+        for row in rows:
+            print(f"  id={row.get('id', 'NO_ID')}, float4={row['float4_val']}, float8={row['float8_val']}")
         
         # Only validate if we got the expected number of rows
         # (sharded tables in temporary schemas may have issues)
         if len(rows) == len(test_values):
             for i, row in enumerate(rows):
                 # These values should be exactly representable in binary
-                assert row['float4_val'] == test_values[i]
+                print(f"Comparing row {i}: float4={row['float4_val']} vs expected={test_values[i]}")
+                assert row['float4_val'] == test_values[i], f"Row {i}: {row['float4_val']} != {test_values[i]}"
                 assert row['float8_val'] == test_values[i]
         
         await conn.execute("DELETE FROM float_test")
