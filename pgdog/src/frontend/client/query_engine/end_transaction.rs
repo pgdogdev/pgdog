@@ -7,21 +7,28 @@ impl QueryEngine {
         &mut self,
         context: &mut QueryEngineContext<'_>,
         rollback: bool,
+        extended: bool,
     ) -> Result<(), Error> {
-        let cmd = if rollback {
-            CommandComplete::new_rollback()
+        let bytes_sent = if extended {
+            self.extended_transaction_reply(context, false, rollback)
+                .await?
         } else {
-            CommandComplete::new_commit()
-        };
-        let mut messages = if !context.in_transaction() {
-            vec![NoticeResponse::from(ErrorResponse::no_transaction()).message()?]
-        } else {
-            vec![]
-        };
-        messages.push(cmd.message()?.backend());
-        messages.push(ReadyForQuery::idle().message()?);
+            let cmd = if rollback {
+                CommandComplete::new_rollback()
+            } else {
+                CommandComplete::new_commit()
+            };
+            let mut messages = if !context.in_transaction() {
+                vec![NoticeResponse::from(ErrorResponse::no_transaction()).message()?]
+            } else {
+                vec![]
+            };
+            messages.push(cmd.message()?.backend());
+            messages.push(ReadyForQuery::idle().message()?);
 
-        let bytes_sent = context.stream.send_many(&messages).await?;
+            context.stream.send_many(&messages).await?
+        };
+
         self.stats.sent(bytes_sent);
         self.begin_stmt = None;
         context.transaction = None; // Clear transaction state
@@ -34,6 +41,7 @@ impl QueryEngine {
         context: &mut QueryEngineContext<'_>,
         route: &Route,
         rollback: bool,
+        extended: bool,
     ) -> Result<(), Error> {
         let cluster = self.backend.cluster()?;
 
@@ -54,7 +62,7 @@ impl QueryEngine {
             self.cleanup_backend(context);
 
             // Tell client we finished the transaction.
-            self.end_not_connected(context, false).await?;
+            self.end_not_connected(context, false, extended).await?;
         } else {
             self.execute(context, route).await?;
         }
@@ -105,7 +113,7 @@ mod tests {
         let mut engine = QueryEngine::default();
         // state copied from client
         let mut context = QueryEngineContext::new(&mut client);
-        let result = engine.end_not_connected(&mut context, false).await;
+        let result = engine.end_not_connected(&mut context, false, false).await;
         assert!(result.is_ok(), "end_transaction should succeed");
 
         assert_eq!(

@@ -28,7 +28,7 @@ impl CommandComplete {
             .command()
             .split(" ")
             .last()
-            .ok_or(Error::UnexpectedPayload)?
+            .ok_or(Error::CommandCompleteNoRows)?
             .parse()
             .ok())
     }
