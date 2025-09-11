@@ -1,4 +1,6 @@
 //! ClientRequest (messages buffer).
+use std::ops::{Deref, DerefMut};
+
 use lazy_static::lazy_static;
 
 use crate::{
@@ -174,58 +176,68 @@ impl ClientRequest {
     }
 
     /// Split request into multiple serviceable requests by the query engine.
-    pub fn splice(&self) -> Result<Vec<Self>, Error> {
-        let execs = self.messages.iter().filter(|m| m.code() == 'E').count();
-        if execs <= 1 {
+    pub fn spliced(&self) -> Result<Vec<Self>, Error> {
+        // Splice iff using extended protocol and it executes
+        // more than one statement.
+        let req_count = self.messages.iter().filter(|m| m.code() == 'E').count();
+        if req_count <= 1 {
             return Ok(vec![]);
         }
+
         let mut requests: Vec<Self> = vec![];
-        let mut req = Self::new();
+        let mut current_request = Self::new();
 
         for message in &self.messages {
             let code = message.code();
             match code {
+                // Parse, Bind, Describe, Close typically refer
+                // to the same statement.
+                //
+                // TODO: they don't actually have to.
                 'P' | 'B' | 'D' | 'C' => {
-                    req.messages.push(message.clone());
+                    current_request.push(message.clone());
                 }
 
+                // Flush typically indicates the end of the request.
+                // We use it for request separation so we're only adding
+                // it if we haven't already. We also don't want to send requests
+                // that contain Flush only since they will get stuck.
                 'H' => {
-                    if let Some(message) = req.messages.last() {
+                    if let Some(message) = current_request.last() {
                         if message.code() != 'H' {
-                            req.messages.push(message.clone());
+                            let message = message.clone();
+                            current_request.push(message);
                         }
                     }
                 }
 
-                'E' | 'S' => {
-                    if code == 'S' {
-                        if req.messages.is_empty() {
-                            if let Some(last) = requests.last_mut() {
-                                last.messages.push(message.clone());
-                            } else {
-                                req.messages.push(message.clone());
-                            }
-                        } else {
-                            req.messages.push(message.clone());
-                        }
-                    } else {
-                        req.messages.push(message.clone());
-                        req.messages.push(Flush.into());
-                    }
-
-                    if !req.messages.is_empty() {
-                        requests.push(req);
-                    }
-
-                    req = Self::new();
+                // Execute is the boundary between requests. Each request
+                // can go to different shard, hence the splice.
+                'E' => {
+                    current_request.messages.push(message.clone());
+                    current_request.messages.push(Flush.into());
+                    requests.push(std::mem::take(&mut current_request));
                 }
 
-                c => return Err(Error::UnexpectedMessage(c, 'S')),
+                // Sync typically is last. We place it with the last request
+                // to save on round trips.
+                'S' => {
+                    current_request.messages.push(message.clone());
+                    if current_request.len() == 1 {
+                        if let Some(last_request) = requests.last_mut() {
+                            last_request.extend(current_request.drain(..));
+                        }
+                    }
+                }
+
+                c => return Err(Error::UnexpectedMessage('S', c)),
             }
         }
 
-        if !req.messages.is_empty() {
-            requests.push(req);
+        // Collect any remaining messages that aren't followed
+        // by Flush or Sync.
+        if !current_request.is_empty() {
+            requests.push(current_request);
         }
 
         Ok(requests)
@@ -244,6 +256,20 @@ impl From<Vec<ProtocolMessage>> for ClientRequest {
             messages,
             route: None,
         }
+    }
+}
+
+impl Deref for ClientRequest {
+    type Target = Vec<ProtocolMessage>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.messages
+    }
+}
+
+impl DerefMut for ClientRequest {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.messages
     }
 }
 
@@ -266,8 +292,52 @@ mod test {
             Sync::new().into(),
         ];
         let req = ClientRequest::from(messages);
-        let splice = req.splice().unwrap();
+        let splice = req.spliced().unwrap();
         assert_eq!(splice.len(), 3);
+
+        // First slice should contain: Parse("start"), Bind("start"), Execute, Flush
+        let first_slice = &splice[0];
+        assert_eq!(first_slice.len(), 4);
+        assert_eq!(first_slice[0].code(), 'P'); // Parse
+        assert_eq!(first_slice[1].code(), 'B'); // Bind
+        assert_eq!(first_slice[2].code(), 'E'); // Execute
+        assert_eq!(first_slice[3].code(), 'H'); // Flush
+        if let ProtocolMessage::Parse(parse) = &first_slice[0] {
+            assert_eq!(parse.name(), "start");
+            assert_eq!(parse.query(), "BEGIN");
+        } else {
+            panic!("Expected Parse message");
+        }
+        if let ProtocolMessage::Bind(bind) = &first_slice[1] {
+            assert_eq!(bind.statement(), "start");
+        } else {
+            panic!("Expected Bind message");
+        }
+
+        // Second slice should contain: Parse("test"), Bind("test"), Execute, Flush
+        let second_slice = &splice[1];
+        assert_eq!(second_slice.len(), 4);
+        assert_eq!(second_slice[0].code(), 'P'); // Parse
+        assert_eq!(second_slice[1].code(), 'B'); // Bind
+        assert_eq!(second_slice[2].code(), 'E'); // Execute
+        assert_eq!(second_slice[3].code(), 'H'); // Flush
+        if let ProtocolMessage::Parse(parse) = &second_slice[0] {
+            assert_eq!(parse.name(), "test");
+            assert_eq!(parse.query(), "SELECT $1");
+        } else {
+            panic!("Expected Parse message");
+        }
+        if let ProtocolMessage::Bind(bind) = &second_slice[1] {
+            assert_eq!(bind.statement(), "test");
+        } else {
+            panic!("Expected Bind message");
+        }
+
+        // Third slice should contain: Describe("test"), Sync
+        let third_slice = &splice[2];
+        assert_eq!(third_slice.len(), 2);
+        assert_eq!(third_slice[0].code(), 'D'); // Describe
+        assert_eq!(third_slice[1].code(), 'S'); // Sync
 
         let messages = vec![
             ProtocolMessage::from(Parse::named("test", "SELECT $1")),
@@ -276,7 +346,7 @@ mod test {
             Sync.into(),
         ];
         let req = ClientRequest::from(messages);
-        let splice = req.splice().unwrap();
+        let splice = req.spliced().unwrap();
         assert!(splice.is_empty());
 
         let messages = vec![
@@ -289,8 +359,47 @@ mod test {
             Flush.into(),
         ];
         let req = ClientRequest::from(messages);
-        let splice = req.splice().unwrap();
+        let splice = req.spliced().unwrap();
         assert_eq!(splice.len(), 2);
+
+        // First slice: Parse("test"), Bind("test"), Execute, Flush
+        let first_slice = &splice[0];
+        assert_eq!(first_slice.len(), 4);
+        assert_eq!(first_slice[0].code(), 'P'); // Parse
+        assert_eq!(first_slice[1].code(), 'B'); // Bind
+        assert_eq!(first_slice[2].code(), 'E'); // Execute
+        assert_eq!(first_slice[3].code(), 'H'); // Flush
+        if let ProtocolMessage::Parse(parse) = &first_slice[0] {
+            assert_eq!(parse.name(), "test");
+            assert_eq!(parse.query(), "SELECT 1");
+        } else {
+            panic!("Expected Parse message");
+        }
+        if let ProtocolMessage::Bind(bind) = &first_slice[1] {
+            assert_eq!(bind.statement(), "test");
+        } else {
+            panic!("Expected Bind message");
+        }
+
+        // Second slice: Parse("test_1"), Bind("test_1"), Execute, Flush
+        let second_slice = &splice[1];
+        assert_eq!(second_slice.len(), 4);
+        assert_eq!(second_slice[0].code(), 'P'); // Parse
+        assert_eq!(second_slice[1].code(), 'B'); // Bind
+        assert_eq!(second_slice[2].code(), 'E'); // Execute
+        assert_eq!(second_slice[3].code(), 'H'); // Flush
+        if let ProtocolMessage::Parse(parse) = &second_slice[0] {
+            assert_eq!(parse.name(), "test_1");
+            assert_eq!(parse.query(), "SELECT 2");
+        } else {
+            panic!("Expected Parse message");
+        }
+        if let ProtocolMessage::Bind(bind) = &second_slice[1] {
+            assert_eq!(bind.statement(), "test_1");
+        } else {
+            panic!("Expected Bind message");
+        }
+
         assert_eq!(splice.get(0).unwrap().messages.last().unwrap().code(), 'H');
         assert_eq!(
             splice
