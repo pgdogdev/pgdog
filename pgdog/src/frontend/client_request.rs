@@ -203,10 +203,9 @@ impl ClientRequest {
                 // it if we haven't already. We also don't want to send requests
                 // that contain Flush only since they will get stuck.
                 'H' => {
-                    if let Some(message) = current_request.last() {
-                        if message.code() != 'H' {
-                            let message = message.clone();
-                            current_request.push(message);
+                    if let Some(last_message) = current_request.last() {
+                        if last_message.code() != 'H' {
+                            current_request.push(message.clone());
                         }
                     }
                 }
@@ -408,5 +407,38 @@ mod test {
                 .sum::<usize>(),
             2
         );
+
+        // Test Parse, Describe, Flush, Bind, Execute, Bind, Execute, Sync sequence
+        let messages = vec![
+            Parse::named("stmt", "SELECT $1").into(),
+            Describe::new_statement("stmt").into(),
+            Flush.into(),
+            Bind::new_statement("stmt").into(),
+            Execute::new().into(),
+            Bind::new_statement("stmt").into(),
+            Execute::new().into(),
+            Sync::new().into(),
+        ];
+        let req = ClientRequest::from(messages);
+        let splice = req.spliced().unwrap();
+        assert_eq!(splice.len(), 2);
+
+        // First slice should contain: Parse("stmt"), Describe("stmt"), Flush, Bind("stmt"), Execute, Flush
+        let first_slice = &splice[0];
+        assert_eq!(first_slice.len(), 6);
+        assert_eq!(first_slice[0].code(), 'P'); // Parse
+        assert_eq!(first_slice[1].code(), 'D'); // Describe
+        assert_eq!(first_slice[2].code(), 'H'); // Flush (should be the original Flush)
+        assert_eq!(first_slice[3].code(), 'B'); // Bind
+        assert_eq!(first_slice[4].code(), 'E'); // Execute
+        assert_eq!(first_slice[5].code(), 'H'); // Flush (added by splice logic)
+
+        // Second slice should contain: Bind("stmt"), Execute, Flush, Sync
+        let second_slice = &splice[1];
+        assert_eq!(second_slice.len(), 4);
+        assert_eq!(second_slice[0].code(), 'B'); // Bind
+        assert_eq!(second_slice[1].code(), 'E'); // Execute
+        assert_eq!(second_slice[2].code(), 'H'); // Flush
+        assert_eq!(second_slice[3].code(), 'S'); // Sync
     }
 }
