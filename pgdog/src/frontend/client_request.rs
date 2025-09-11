@@ -273,6 +273,8 @@ mod test {
 
         let messages = vec![
             ProtocolMessage::from(Parse::named("test", "SELECT 1")),
+            Bind::new_statement("test").into(),
+            Execute::new().into(),
             Flush.into(),
         ];
         let req = ClientRequest::from(messages);
