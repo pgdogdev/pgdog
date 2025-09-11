@@ -1,6 +1,6 @@
 [package]
 name = "pgdog"
-version = "0.1.0"
+version = "0.1.6"
 edition = "2021"
 description = "Modern PostgreSQL proxy, pooler and load balancer."
 authors = ["Lev Kokotov <lev.kokotov@gmail.com>"]
@@ -35,7 +35,7 @@ rustls-native-certs = "0.8"
 rustls-pki-types = "1"
 arc-swap = "1"
 toml = "0.8"
-pgdog-plugin = { path = "../pgdog-plugin", version = "0.1.7" }
+pgdog-plugin = { path = "../pgdog-plugin", version = "0.1.8" }
 tokio-util = { version = "0.7", features = ["rt"] }
 fnv = "1"
 scram = "0.6"
@@ -43,7 +43,7 @@ base64 = "0.22"
 md5 = "0.7"
 futures = "0.3"
 csv-core = "0.1"
-pg_query = "6"
+pg_query = "6.1.1"
 regex = "1"
 uuid = { version = "1", features = ["v4", "serde"] }
 url = "2"

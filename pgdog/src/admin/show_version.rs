@@ -1,3 +1,5 @@
+use crate::util::pgdog_version;
+
 use super::{
     prelude::{DataRow, Field, Protocol, RowDescription},
     *,
@@ -16,10 +18,8 @@ impl Command for ShowVersion {
     }
 
     async fn execute(&self) -> Result<Vec<Message>, Error> {
-        let version = env!("GIT_HASH");
-
         let mut dr = DataRow::new();
-        dr.add(format!("PgDog v{}", version));
+        dr.add(format!("PgDog {}", pgdog_version()));
 
         Ok(vec![
             RowDescription::new(&[Field::text("version")]).message()?,

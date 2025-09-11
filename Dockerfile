@@ -1,7 +1,7 @@
 FROM ubuntu:latest AS builder
 
 RUN apt update && \
-    apt install -y build-essential cmake clang curl pkg-config libssl-dev git
+    apt install -y build-essential cmake clang curl pkg-config libssl-dev git mold
 
 # Install Rust.
 RUN curl https://sh.rustup.rs -sSf | sh -s -- -y
@@ -17,7 +17,7 @@ RUN source ~/.cargo/env && \
 FROM ubuntu:latest
 ENV RUST_LOG=info
 RUN apt update && \
-    apt install -y ca-certificates && \
+    apt install -y ca-certificates postgresql-client && \
     update-ca-certificates
 
 COPY --from=builder /build/target/release/pgdog /usr/local/bin/pgdog

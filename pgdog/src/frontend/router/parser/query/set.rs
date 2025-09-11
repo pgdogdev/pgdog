@@ -15,45 +15,60 @@ impl QueryParser {
     ) -> Result<Command, Error> {
         match stmt.name.as_str() {
             "pgdog.shard" => {
-                let node = stmt
-                    .args
-                    .first()
-                    .ok_or(Error::SetShard)?
-                    .node
-                    .as_ref()
-                    .ok_or(Error::SetShard)?;
-                if let NodeEnum::AConst(AConst {
-                    val: Some(a_const::Val::Ival(Integer { ival })),
-                    ..
-                }) = node
-                {
-                    return Ok(Command::Query(
-                        Route::write(Some(*ival as usize)).set_read(context.read_only),
-                    ));
+                if self.in_transaction {
+                    let node = stmt
+                        .args
+                        .first()
+                        .ok_or(Error::SetShard)?
+                        .node
+                        .as_ref()
+                        .ok_or(Error::SetShard)?;
+                    if let NodeEnum::AConst(AConst {
+                        val: Some(a_const::Val::Ival(Integer { ival })),
+                        ..
+                    }) = node
+                    {
+                        return Ok(Command::SetRoute(
+                            Route::write(Some(*ival as usize)).set_read(context.read_only),
+                        ));
+                    }
+                } else {
+                    return Err(Error::RequiresTransaction);
                 }
             }
 
             "pgdog.sharding_key" => {
-                let node = stmt
-                    .args
-                    .first()
-                    .ok_or(Error::SetShard)?
-                    .node
-                    .as_ref()
-                    .ok_or(Error::SetShard)?;
+                if self.in_transaction {
+                    let node = stmt
+                        .args
+                        .first()
+                        .ok_or(Error::SetShard)?
+                        .node
+                        .as_ref()
+                        .ok_or(Error::SetShard)?;
 
-                if let NodeEnum::AConst(AConst {
-                    val: Some(Val::Sval(String { sval })),
-                    ..
-                }) = node
-                {
-                    let ctx = ContextBuilder::from_string(sval.as_str())?
-                        .shards(context.shards)
-                        .build()?;
-                    let shard = ctx.apply()?;
-                    return Ok(Command::Query(
-                        Route::write(shard).set_read(context.read_only),
-                    ));
+                    if let NodeEnum::AConst(AConst {
+                        val: Some(Val::Sval(String { sval })),
+                        ..
+                    }) = node
+                    {
+                        let shard = if context.sharding_schema.shards > 1 {
+                            let ctx = ContextBuilder::infer_from_from_and_config(
+                                sval.as_str(),
+                                &context.sharding_schema,
+                            )?
+                            .shards(context.shards)
+                            .build()?;
+                            ctx.apply()?
+                        } else {
+                            Shard::Direct(0)
+                        };
+                        return Ok(Command::SetRoute(
+                            Route::write(shard).set_read(context.read_only),
+                        ));
+                    }
+                } else {
+                    return Err(Error::RequiresTransaction);
                 }
             }
 

@@ -15,14 +15,23 @@ use crate::net::Parameters;
 
 macro_rules! command {
     ($query:expr) => {{
+        command!($query, false)
+    }};
+
+    ($query:expr, $in_transaction:expr) => {{
         let query = $query;
         let mut query_parser = QueryParser::default();
         let client_request = ClientRequest::from(vec![Query::new(query).into()]);
         let cluster = Cluster::new_test();
         let mut stmt = PreparedStatements::default();
         let params = Parameters::default();
+        let transaction = if $in_transaction {
+            Some(TransactionType::ReadWrite)
+        } else {
+            None
+        };
         let context =
-            RouterContext::new(&client_request, &cluster, &mut stmt, &params, None).unwrap();
+            RouterContext::new(&client_request, &cluster, &mut stmt, &params, transaction).unwrap();
         let command = query_parser.parse(context).unwrap().clone();
 
         (command, query_parser)
@@ -31,8 +40,12 @@ macro_rules! command {
 
 macro_rules! query {
     ($query:expr) => {{
+        query!($query, false)
+    }};
+
+    ($query:expr, $in_transaction:expr) => {{
         let query = $query;
-        let (command, _) = command!(query);
+        let (command, _) = command!(query, $in_transaction);
 
         match command {
             Command::Query(query) => query,
@@ -188,15 +201,21 @@ fn test_omni() {
 
 #[test]
 fn test_set() {
-    let route = query!(r#"SET "pgdog.shard" TO 1"#);
-    assert_eq!(route.shard(), &Shard::Direct(1));
-    let (_, qp) = command!(r#"SET "pgdog.shard" TO 1"#);
-    assert!(!qp.in_transaction);
+    let (command, _) = command!(r#"SET "pgdog.shard" TO 1"#, true);
+    match command {
+        Command::SetRoute(route) => assert_eq!(route.shard(), &Shard::Direct(1)),
+        _ => panic!("not a set route"),
+    }
+    let (_, qp) = command!(r#"SET "pgdog.shard" TO 1"#, true);
+    assert!(qp.in_transaction);
 
-    let route = query!(r#"SET "pgdog.sharding_key" TO '11'"#);
-    assert_eq!(route.shard(), &Shard::Direct(1));
-    let (_, qp) = command!(r#"SET "pgdog.sharding_key" TO '11'"#);
-    assert!(!qp.in_transaction);
+    let (command, _) = command!(r#"SET "pgdog.sharding_key" TO '11'"#, true);
+    match command {
+        Command::SetRoute(route) => assert_eq!(route.shard(), &Shard::Direct(1)),
+        _ => panic!("not a set route"),
+    }
+    let (_, qp) = command!(r#"SET "pgdog.sharding_key" TO '11'"#, true);
+    assert!(qp.in_transaction);
 
     for (command, qp) in [
         command!("SET TimeZone TO 'UTC'"),
@@ -333,7 +352,10 @@ fn test_insert_do_update() {
 #[test]
 fn test_begin_extended() {
     let command = query_parser!(QueryParser::default(), Parse::new_anonymous("BEGIN"), false);
-    assert!(matches!(command, Command::Query(_)));
+    match command {
+        Command::StartTransaction { extended, .. } => assert!(extended),
+        _ => panic!("not a transaction"),
+    }
 }
 
 #[test]
@@ -421,7 +443,7 @@ fn test_comment() {
     );
 
     match command {
-        Command::Query(query) => assert_eq!(query.shard(), &Shard::All), // Round-robin because it's only a parse
+        Command::Query(query) => assert_eq!(query.shard(), &Shard::Direct(0)), // Round-robin because it's only a parse
         _ => panic!("not a query"),
     }
 }
@@ -489,4 +511,10 @@ fn test_any() {
     );
 
     assert_eq!(route.shard(), &Shard::All);
+}
+
+#[test]
+fn test_commit_prepared() {
+    let stmt = pg_query::parse("COMMIT PREPARED 'test'").unwrap();
+    println!("{:?}", stmt);
 }

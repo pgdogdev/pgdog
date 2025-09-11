@@ -9,10 +9,10 @@ use pgdog::frontend::listener::Listener;
 use pgdog::net;
 use pgdog::plugin;
 use pgdog::stats;
+use pgdog::util::pgdog_version;
 use tokio::runtime::Builder;
 use tracing::info;
 
-use std::ops::Deref;
 use std::process::exit;
 
 #[cfg(not(target_env = "msvc"))]
@@ -60,16 +60,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         _ => (),
     }
 
-    info!(
-        "🐕 PgDog v{} ({})",
-        env!("GIT_HASH"),
-        pgdog_plugin::comp::rustc_version().deref()
-    );
+    info!("🐕 PgDog {}", pgdog_version());
     let config = config::load(&args.config, &args.users)?;
 
-    // Set database from --database-url arg.
+    // Get databases from environment or from --database-url args.
     let config = if let Some(database_urls) = args.database_url {
         config::from_urls(&database_urls)?
+    } else if let Ok(config) = config::from_env() {
+        info!(
+            "loaded {} databases from environment",
+            config.config.databases.len()
+        );
+        config
     } else {
         config
     };
@@ -146,6 +148,11 @@ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Erro
             if let Commands::SchemaSync { .. } = command {
                 info!("🔄 entering schema sync mode");
                 cli::schema_sync(command.clone()).await?;
+            }
+
+            if let Commands::Setup { database } = command {
+                info!("🔄 entering setup mode");
+                cli::setup(database).await?;
             }
         }
     }

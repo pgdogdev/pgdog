@@ -23,6 +23,8 @@ pub struct RouterContext<'a> {
     pub copy_mode: bool,
     /// Do we have an executable buffer?
     pub executable: bool,
+    /// Two-pc enabled
+    pub two_pc: bool,
 }
 
 impl<'a> RouterContext<'a> {
@@ -46,10 +48,15 @@ impl<'a> RouterContext<'a> {
             transaction,
             copy_mode,
             executable: buffer.executable(),
+            two_pc: cluster.two_pc_enabled(),
         })
     }
 
     pub fn in_transaction(&self) -> bool {
         self.transaction.is_some()
+    }
+
+    pub fn transaction(&self) -> &Option<TransactionType> {
+        &self.transaction
     }
 }

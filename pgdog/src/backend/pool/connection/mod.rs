@@ -5,7 +5,7 @@ use tokio::{select, time::sleep};
 use tracing::debug;
 
 use crate::{
-    admin::backend::Backend,
+    admin::server::AdminServer,
     backend::{
         databases::{self, databases},
         reload_notify, PubSubClient,
@@ -31,6 +31,8 @@ use std::{
 
 pub mod aggregate;
 pub mod binding;
+#[cfg(test)]
+pub mod binding_test;
 pub mod buffer;
 pub mod mirror;
 pub mod multi_shard;
@@ -63,9 +65,9 @@ impl Connection {
     ) -> Result<Self, Error> {
         let mut conn = Self {
             binding: if admin {
-                Binding::Admin(Backend::new())
+                Binding::Admin(AdminServer::new())
             } else {
-                Binding::Server(None)
+                Binding::Direct(None)
             },
             cluster: None,
             user: user.to_owned(),
@@ -86,7 +88,7 @@ impl Connection {
     /// Create a server connection if one doesn't exist already.
     pub(crate) async fn connect(&mut self, request: &Request, route: &Route) -> Result<(), Error> {
         let connect = match &self.binding {
-            Binding::Server(None) => true,
+            Binding::Direct(None) => true,
             Binding::MultiShard(shards, _) => shards.is_empty(),
             _ => false,
         };
@@ -95,6 +97,8 @@ impl Connection {
             match self.try_conn(request, route).await {
                 Ok(()) => (),
                 Err(Error::Pool(super::Error::Offline | super::Error::AllReplicasDown)) => {
+                    debug!("detected configuration reload, reloading cluster");
+
                     // Wait to reload pools until they are ready.
                     if let Some(wait) = reload_notify::ready() {
                         wait.await;
@@ -145,12 +149,12 @@ impl Connection {
             }
 
             match &mut self.binding {
-                Binding::Server(existing) => {
+                Binding::Direct(existing) => {
                     let _ = existing.replace(server);
                 }
 
                 Binding::MultiShard(_, _) => {
-                    self.binding = Binding::Server(Some(server));
+                    self.binding = Binding::Direct(Some(server));
                 }
 
                 _ => (),
@@ -299,7 +303,7 @@ impl Connection {
     /// Fetch the cluster from the global database store.
     pub(crate) fn reload(&mut self) -> Result<(), Error> {
         match self.binding {
-            Binding::Server(_) | Binding::MultiShard(_, _) => {
+            Binding::Direct(_) | Binding::MultiShard(_, _) => {
                 let user = (self.user.as_str(), self.database.as_str());
                 // Check passthrough auth.
                 if config().config.general.passthrough_auth() && !databases().exists(user) {
@@ -312,12 +316,16 @@ impl Connection {
                 let databases = databases();
                 let cluster = databases.cluster(user)?;
 
-                self.cluster = Some(cluster);
+                self.cluster = Some(cluster.clone());
+                let source_db = cluster.name();
                 self.mirrors = databases
                     .mirrors(user)?
                     .unwrap_or(&[])
                     .iter()
-                    .map(Mirror::spawn)
+                    .map(|dest_cluster| {
+                        let mirror_config = databases.mirror_config(source_db, dest_cluster.name());
+                        Mirror::spawn(source_db, dest_cluster, mirror_config)
+                    })
                     .collect::<Result<Vec<_>, Error>>()?;
                 debug!(
                     r#"database "{}" has {} mirrors"#,
@@ -360,7 +368,7 @@ impl Connection {
     /// Get connected servers addresses.
     pub(crate) fn addr(&mut self) -> Result<Vec<&Address>, Error> {
         Ok(match self.binding {
-            Binding::Server(Some(ref server)) => vec![server.addr()],
+            Binding::Direct(Some(ref server)) => vec![server.addr()],
             Binding::MultiShard(ref servers, _) => servers.iter().map(|s| s.addr()).collect(),
             _ => {
                 return Err(Error::NotConnected);
@@ -372,7 +380,7 @@ impl Connection {
     #[inline]
     fn server(&mut self) -> Result<&mut Guard, Error> {
         Ok(match self.binding {
-            Binding::Server(ref mut server) => server.as_mut().ok_or(Error::NotConnected)?,
+            Binding::Direct(ref mut server) => server.as_mut().ok_or(Error::NotConnected)?,
             Binding::MultiShard(ref mut servers, _) => {
                 servers.first_mut().ok_or(Error::NotConnected)?
             }

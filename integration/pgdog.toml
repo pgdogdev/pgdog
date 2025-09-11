@@ -14,6 +14,7 @@ prepared_statements_limit = 500
 # dns_ttl = 15_000
 query_cache_limit = 500
 pub_sub_channel_size = 4098
+two_phase_commit = false
 
 # ------------------------------------------------------------------------------
 # ----- Database :: pgdog ------------------------------------------------------
@@ -90,6 +91,58 @@ port = 5438
 role = "replica"
 database_name = "pgdog"
 read_only = true
+
+[[databases]]
+name = "single_sharded_list"
+host = "127.0.0.1"
+port = 5432
+database_name = "shard_0"
+shard = 0
+
+[[databases]]
+name = "single_sharded_list"
+host = "127.0.0.1"
+port = 5432
+database_name = "shard_1"
+shard = 1
+
+[[sharded_tables]]
+database = "single_sharded_list"
+column = "id"
+data_type = "bigint"
+
+[[sharded_tables]]
+database = "single_sharded_list"
+column = "user_id"
+data_type = "bigint"
+
+[[sharded_mappings]]
+database = "single_sharded_list"
+column = "id"
+kind = "list"
+values = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+shard = 0
+
+[[sharded_mappings]]
+database = "single_sharded_list"
+column = "id"
+kind = "list"
+values = [11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+shard = 1
+
+[[sharded_mappings]]
+database = "single_sharded_list"
+column = "user_id"
+kind = "list"
+values = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+shard = 0
+
+[[sharded_mappings]]
+database = "single_sharded_list"
+column = "user_id"
+kind = "list"
+values = [11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+shard = 1
 
 # ------------------------------------------------------------------------------
 # ----- Hash Sharded :: BIGINT -------------------------------------------------

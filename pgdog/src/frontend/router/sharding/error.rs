@@ -33,4 +33,10 @@ pub enum Error {
 
     #[error("range is overlapping or incorrect")]
     IncorrectRange,
+
+    #[error("config has more than one sharding function")]
+    MultipleShardingFunctions,
+
+    #[error("sharding key value isn't valid")]
+    InvalidValue,
 }

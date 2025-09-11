@@ -2,7 +2,7 @@ use tokio::time::timeout;
 
 use super::*;
 
-use tracing::error;
+use tracing::{error, trace};
 
 impl QueryEngine {
     /// Connect to backend, if necessary.
@@ -75,5 +75,30 @@ impl QueryEngine {
         self.comms.stats(self.stats);
 
         Ok(connected)
+    }
+
+    /// Connect to serve a transaction.
+    pub(super) async fn connect_transaction(
+        &mut self,
+        context: &mut QueryEngineContext<'_>,
+        route: &Route,
+    ) -> Result<bool, Error> {
+        debug!("connecting to backend(s) to serve transaction");
+
+        let route = self.transaction_route(route)?;
+
+        trace!("transaction routing to {:#?}", route);
+
+        self.connect(context, &route).await
+    }
+
+    pub(super) fn transaction_route(&mut self, route: &Route) -> Result<Route, Error> {
+        let cluster = self.backend.cluster()?;
+
+        if cluster.shards().len() == 1 {
+            Ok(Route::write(Shard::Direct(0)).set_read(route.is_read()))
+        } else {
+            Ok(Route::write(Shard::All).set_read(route.is_read()))
+        }
     }
 }

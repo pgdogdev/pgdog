@@ -13,6 +13,7 @@ jobs:
           override: true
       - name: Install CMake 3.31
         run: |
+          sudo apt update && sudo apt install mold -y
           sudo apt remove cmake
           sudo pip3 install cmake==3.31.6
           cmake --version
@@ -31,6 +32,7 @@ jobs:
           override: true
       - name: Install CMake 3.31
         run: |
+          sudo apt update && sudo apt install mold -y
           sudo apt remove cmake
           sudo pip3 install cmake==3.31.6
           cmake --version
@@ -54,8 +56,10 @@ jobs:
           sudo service postgresql start
           sudo -u postgres createuser --superuser --login $USER
           sudo -u postgres createdb $USER
+          sudo -u postgres psql -c 'ALTER SYSTEM SET max_prepared_transactions TO 1000;'
+          sudo service postgresql restart
           bash integration/setup.sh
-          sudo apt update && sudo apt install -y python3-virtualenv
+          sudo apt update && sudo apt install -y python3-virtualenv mold
           sudo gem install bundler
           sudo apt remove -y cmake
           sudo pip3 install cmake==3.31.6
@@ -69,7 +73,7 @@ jobs:
       - name: Run documentation tests
         run: cargo test --doc
   integration:
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rs/toolchain@v1
@@ -84,8 +88,11 @@ jobs:
           sudo service postgresql start
           sudo -u postgres createuser --superuser --login $USER
           sudo -u postgres createdb $USER
+          sudo -u postgres psql -c 'ALTER SYSTEM SET max_connections TO 1000;'
+          sudo -u postgres psql -c 'ALTER SYSTEM SET max_prepared_transactions TO 1000;'
+          sudo service postgresql restart
           bash integration/setup.sh
-          sudo apt update && sudo apt install -y python3-virtualenv
+          sudo apt update && sudo apt install -y python3-virtualenv mold
           sudo gem install bundler
           sudo apt remove -y cmake
           sudo pip3 install cmake==3.31.6

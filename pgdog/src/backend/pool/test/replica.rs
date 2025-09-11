@@ -12,6 +12,7 @@ fn replicas() -> Replicas {
             user: "pgdog".into(),
             password: "pgdog".into(),
             database_name: "pgdog".into(),
+            ..Default::default()
         },
         config: Config {
             max: 1,

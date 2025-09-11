@@ -120,3 +120,108 @@ func TestShardedRange(t *testing.T) {
 		}
 	}
 }
+
+func TestShardedTwoPc(t *testing.T) {
+	conn, err := connectTwoPc()
+	assert.NoError(t, err)
+	defer conn.Close(context.Background())
+
+	conn.Exec(context.Background(), "TRUNCATE TABLE sharded")
+	adminCommand(t, "RELOAD") // Clear stats
+	adminCommand(t, "SET two_phase_commit TO true")
+
+	assertShowField(t, "SHOW STATS", "total_xact_2pc_count", 0, "pgdog_2pc", "pgdog_sharded", 0, "primary")
+	assertShowField(t, "SHOW STATS", "total_xact_2pc_count", 0, "pgdog_2pc", "pgdog_sharded", 1, "primary")
+
+	for i := range 200 {
+		tx, err := conn.BeginTx(context.Background(), pgx.TxOptions{})
+		assert.NoError(t, err)
+
+		rows, err := tx.Query(
+			context.Background(),
+			"INSERT INTO sharded (id, value) VALUES ($1, $2) RETURNING *", int64(i), fmt.Sprintf("value_%d", i),
+		)
+
+		assert.NoError(t, err)
+		assert.True(t, rows.Next())
+		assert.False(t, rows.Next())
+		rows.Close()
+
+		err = tx.Commit(context.Background())
+		assert.NoError(t, err)
+	}
+
+	assertShowField(t, "SHOW STATS", "total_xact_2pc_count", 200, "pgdog_2pc", "pgdog_sharded", 0, "primary")
+	assertShowField(t, "SHOW STATS", "total_xact_2pc_count", 200, "pgdog_2pc", "pgdog_sharded", 1, "primary")
+	assertShowField(t, "SHOW STATS", "total_xact_count", 401, "pgdog_2pc", "pgdog_sharded", 0, "primary") // PREPARE, COMMIT for each transaction + TRUNCATE
+	assertShowField(t, "SHOW STATS", "total_xact_count", 401, "pgdog_2pc", "pgdog_sharded", 1, "primary")
+
+	for i := range 200 {
+		rows, err := conn.Query(
+			context.Background(),
+			"SELECT * FROM sharded WHERE id = $1", int64(i),
+		)
+		assert.NoError(t, err)
+		assert.True(t, rows.Next())
+		assert.False(t, rows.Next())
+		rows.Close()
+	}
+
+	conn.Exec(context.Background(), "TRUNCATE TABLE sharded")
+}
+
+func TestShardedTwoPcAuto(t *testing.T) {
+	conn, err := connectTwoPc()
+	assert.NoError(t, err)
+	defer conn.Close(context.Background())
+
+	conn.Exec(context.Background(), "TRUNCATE TABLE sharded_omni")
+	adminCommand(t, "RELOAD") // Clear stats
+	adminCommand(t, "SET two_phase_commit TO true")
+
+	assertShowField(t, "SHOW STATS", "total_xact_2pc_count", 0, "pgdog_2pc", "pgdog_sharded", 0, "primary")
+	assertShowField(t, "SHOW STATS", "total_xact_2pc_count", 0, "pgdog_2pc", "pgdog_sharded", 1, "primary")
+
+	for i := range 200 {
+		rows, err := conn.Query(context.Background(), "INSERT INTO sharded_omni (id, value) VALUES ($1, $2) RETURNING *", int64(i), fmt.Sprintf("value_%d", i))
+		assert.NoError(t, err)
+
+		// Returns 2 rows
+		assert.True(t, rows.Next())
+		assert.True(t, rows.Next())
+		assert.False(t, rows.Next())
+	}
+
+	// We automatically used 2pc.
+	assertShowField(t, "SHOW STATS", "total_xact_2pc_count", 200, "pgdog_2pc", "pgdog_sharded", 0, "primary")
+	assertShowField(t, "SHOW STATS", "total_xact_2pc_count", 200, "pgdog_2pc", "pgdog_sharded", 1, "primary")
+	conn.Exec(context.Background(), "TRUNCATE TABLE sharded_omni")
+}
+
+func TestShardedTwoPcAutoOff(t *testing.T) {
+	conn, err := connectTwoPc()
+	assert.NoError(t, err)
+	defer conn.Close(context.Background())
+
+	conn.Exec(context.Background(), "TRUNCATE TABLE sharded_omni")
+	adminCommand(t, "SET two_phase_commit TO true")
+	adminCommand(t, "SET two_phase_commit_auto TO false")
+
+	assertShowField(t, "SHOW STATS", "total_xact_2pc_count", 0, "pgdog_2pc", "pgdog_sharded", 0, "primary")
+	assertShowField(t, "SHOW STATS", "total_xact_2pc_count", 0, "pgdog_2pc", "pgdog_sharded", 1, "primary")
+
+	for i := range 200 {
+		rows, err := conn.Query(context.Background(), "INSERT INTO sharded_omni (id, value) VALUES ($1, $2) RETURNING *", int64(i), fmt.Sprintf("value_%d", i))
+		assert.NoError(t, err)
+
+		// Returns 2 rows
+		assert.True(t, rows.Next())
+		assert.True(t, rows.Next())
+		assert.False(t, rows.Next())
+	}
+
+	// We automatically used 2pc.
+	assertShowField(t, "SHOW STATS", "total_xact_2pc_count", 0, "pgdog_2pc", "pgdog_sharded", 0, "primary")
+	assertShowField(t, "SHOW STATS", "total_xact_2pc_count", 0, "pgdog_2pc", "pgdog_sharded", 1, "primary")
+	conn.Exec(context.Background(), "TRUNCATE TABLE sharded_omni")
+}

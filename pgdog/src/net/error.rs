@@ -25,6 +25,15 @@ pub enum Error {
     #[error("unexpected payload")]
     UnexpectedPayload,
 
+    #[error("data type not supported for encoding")]
+    UnsupportedDataTypeForEncoding,
+
+    #[error("CommandComplete contains no row counts")]
+    CommandCompleteNoRows,
+
+    #[error("unexpected replication meta message: {0}")]
+    UnexpectedReplicationMetaMessage(char),
+
     #[error("unsupported authentication: {0}")]
     UnsupportedAuthentication(i32),
 

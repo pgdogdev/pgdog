@@ -7,7 +7,7 @@ edition = "2024"
 crate-type = ["rlib", "cdylib"]
 
 [dependencies]
-pgdog-plugin = { version = "0.1.7", path = "../../pgdog-plugin" }
+pgdog-plugin = { version = "0.1.8", path = "../../pgdog-plugin" }
 once_cell = "1"
 parking_lot = "0.12"
 thiserror = "2"

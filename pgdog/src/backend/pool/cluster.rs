@@ -1,13 +1,13 @@
 //! A collection of replicas and a primary.
 
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use std::sync::Arc;
 use tokio::spawn;
 use tracing::{error, info};
 
 use crate::{
     backend::{
-        databases::databases,
+        databases::{databases, User as DatabaseUser},
         replication::{ReplicationConfig, ShardedColumn},
         Schema, ShardedTables,
     },
@@ -17,7 +17,7 @@ use crate::{
     net::{messages::BackendKeyData, Query},
 };
 
-use super::{Address, Config, Error, Guard, Request, Shard};
+use super::{Address, Config, Error, Guard, MirrorStats, Request, Shard};
 use crate::config::LoadBalancingStrategy;
 
 #[derive(Clone, Debug)]
@@ -33,18 +33,21 @@ pub struct PoolConfig {
 /// belonging to the same database cluster.
 #[derive(Clone, Default, Debug)]
 pub struct Cluster {
-    name: String,
+    identifier: Arc<DatabaseUser>,
     shards: Vec<Shard>,
-    user: String,
     password: String,
     pooler_mode: PoolerMode,
     sharded_tables: ShardedTables,
     replication_sharding: Option<String>,
-    mirror_of: Option<String>,
     schema: Arc<RwLock<Schema>>,
     multi_tenant: Option<MultiTenant>,
     rw_strategy: ReadWriteStrategy,
     rw_split: ReadWriteSplit,
+    schema_admin: bool,
+    stats: Arc<Mutex<MirrorStats>>,
+    cross_shard_disabled: bool,
+    two_phase_commit: bool,
+    two_phase_commit_auto: bool,
 }
 
 /// Sharding configuration from the cluster.
@@ -77,10 +80,13 @@ pub struct ClusterConfig<'a> {
     pub pooler_mode: PoolerMode,
     pub sharded_tables: ShardedTables,
     pub replication_sharding: Option<String>,
-    pub mirror_of: Option<&'a str>,
     pub multi_tenant: &'a Option<MultiTenant>,
     pub rw_strategy: ReadWriteStrategy,
     pub rw_split: ReadWriteSplit,
+    pub schema_admin: bool,
+    pub cross_shard_disabled: bool,
+    pub two_pc: bool,
+    pub two_pc_auto: bool,
 }
 
 impl<'a> ClusterConfig<'a> {
@@ -89,7 +95,6 @@ impl<'a> ClusterConfig<'a> {
         user: &'a User,
         shards: &'a [ClusterShardConfig],
         sharded_tables: ShardedTables,
-        mirror_of: Option<&'a str>,
         multi_tenant: &'a Option<MultiTenant>,
     ) -> Self {
         Self {
@@ -101,10 +106,17 @@ impl<'a> ClusterConfig<'a> {
             lb_strategy: general.load_balancing_strategy,
             shards,
             sharded_tables,
-            mirror_of,
             multi_tenant,
             rw_strategy: general.read_write_strategy,
             rw_split: general.read_write_split,
+            schema_admin: user.schema_admin,
+            cross_shard_disabled: user
+                .cross_shard_disabled
+                .unwrap_or(general.cross_shard_disabled),
+            two_pc: user.two_phase_commit.unwrap_or(general.two_phase_commit),
+            two_pc_auto: user
+                .two_phase_commit_auto
+                .unwrap_or(general.two_phase_commit_auto.unwrap_or(true)), // Enable by default.
         }
     }
 }
@@ -121,28 +133,37 @@ impl Cluster {
             pooler_mode,
             sharded_tables,
             replication_sharding,
-            mirror_of,
             multi_tenant,
             rw_strategy,
             rw_split,
+            schema_admin,
+            cross_shard_disabled,
+            two_pc,
+            two_pc_auto,
         } = config;
 
         Self {
+            identifier: Arc::new(DatabaseUser {
+                user: user.to_owned(),
+                database: name.to_owned(),
+            }),
             shards: shards
                 .iter()
                 .map(|config| Shard::new(&config.primary, &config.replicas, lb_strategy, rw_split))
                 .collect(),
-            name: name.to_owned(),
             password: password.to_owned(),
-            user: user.to_owned(),
             pooler_mode,
             sharded_tables,
             replication_sharding,
-            mirror_of: mirror_of.map(|s| s.to_owned()),
             schema: Arc::new(RwLock::new(Schema::default())),
             multi_tenant: multi_tenant.clone(),
             rw_strategy,
             rw_split,
+            schema_admin,
+            stats: Arc::new(Mutex::new(MirrorStats::default())),
+            cross_shard_disabled,
+            two_phase_commit: two_pc && shards.len() > 1,
+            two_phase_commit_auto: two_pc_auto && shards.len() > 1,
         }
     }
 
@@ -181,18 +202,21 @@ impl Cluster {
     /// and you expect to drop the current Cluster entirely.
     pub fn duplicate(&self) -> Self {
         Self {
+            identifier: self.identifier.clone(),
             shards: self.shards.iter().map(|s| s.duplicate()).collect(),
-            name: self.name.clone(),
-            user: self.user.clone(),
             password: self.password.clone(),
             pooler_mode: self.pooler_mode,
             sharded_tables: self.sharded_tables.clone(),
             replication_sharding: self.replication_sharding.clone(),
-            mirror_of: self.mirror_of.clone(),
             schema: self.schema.clone(),
             multi_tenant: self.multi_tenant.clone(),
             rw_strategy: self.rw_strategy,
             rw_split: self.rw_split,
+            schema_admin: self.schema_admin,
+            stats: Arc::new(Mutex::new(MirrorStats::default())),
+            cross_shard_disabled: self.cross_shard_disabled,
+            two_phase_commit: self.two_phase_commit,
+            two_phase_commit_auto: self.two_phase_commit_auto,
         }
     }
 
@@ -210,11 +234,6 @@ impl Cluster {
         &self.shards
     }
 
-    /// Mirrors getter.
-    pub fn mirror_of(&self) -> Option<&str> {
-        self.mirror_of.as_deref()
-    }
-
     /// Get the password the user should use to connect to the database.
     pub fn password(&self) -> &str {
         &self.password
@@ -222,12 +241,17 @@ impl Cluster {
 
     /// User name.
     pub fn user(&self) -> &str {
-        &self.user
+        &self.identifier.user
     }
 
     /// Cluster name (database name).
     pub fn name(&self) -> &str {
-        &self.name
+        &self.identifier.database
+    }
+
+    /// Get unique cluster identifier.
+    pub fn identifier(&self) -> Arc<DatabaseUser> {
+        self.identifier.clone()
     }
 
     /// Get pooler mode.
@@ -265,6 +289,20 @@ impl Cluster {
         }
 
         true
+    }
+
+    /// This database/user pair is responsible for schema management.
+    pub fn schema_admin(&self) -> bool {
+        self.schema_admin
+    }
+
+    /// Change schema owner attribute.
+    pub fn toggle_schema_admin(&mut self, owner: bool) {
+        self.schema_admin = owner;
+    }
+
+    pub fn stats(&self) -> Arc<Mutex<MirrorStats>> {
+        self.stats.clone()
     }
 
     /// We'll need the query router to figure out
@@ -320,6 +358,22 @@ impl Cluster {
         &self.rw_strategy
     }
 
+    /// Cross-shard queries disabled for this cluster.
+    pub fn cross_shard_disabled(&self) -> bool {
+        self.cross_shard_disabled
+    }
+
+    /// Two-phase commit enabled.
+    pub fn two_pc_enabled(&self) -> bool {
+        self.two_phase_commit
+    }
+
+    /// Two-phase commit transactions started automatically
+    /// for single-statement cross-shard writes.
+    pub fn two_pc_auto_enabled(&self) -> bool {
+        self.two_phase_commit_auto && self.two_pc_enabled()
+    }
+
     /// Launch the connection pools.
     pub(crate) fn launch(&self) {
         for shard in self.shards() {
@@ -359,6 +413,8 @@ impl Cluster {
 
 #[cfg(test)]
 mod test {
+    use std::sync::Arc;
+
     use crate::{
         backend::pool::{Address, Config, PoolConfig},
         backend::{Shard, ShardedTables},
@@ -368,7 +424,7 @@ mod test {
         },
     };
 
-    use super::Cluster;
+    use super::{Cluster, DatabaseUser};
 
     impl Cluster {
         pub fn new_test() -> Self {
@@ -414,8 +470,10 @@ mod test {
                         ReadWriteSplit::default(),
                     ),
                 ],
-                user: "pgdog".into(),
-                name: "pgdog".into(),
+                identifier: Arc::new(DatabaseUser {
+                    user: "pgdog".into(),
+                    database: "pgdog".into(),
+                }),
                 ..Default::default()
             }
         }

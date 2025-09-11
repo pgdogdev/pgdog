@@ -11,11 +11,12 @@ use tracing::{debug, enabled, error, info, trace, Level as LogLevel};
 
 use super::{ClientRequest, Comms, Error, PreparedStatements};
 use crate::auth::{md5, scram::Server};
+use crate::backend::maintenance_mode;
 use crate::backend::{
     databases,
     pool::{Connection, Request},
 };
-use crate::config::{self, AuthType};
+use crate::config::{self, config, AuthType};
 use crate::frontend::client::query_engine::{QueryEngine, QueryEngineContext};
 use crate::net::messages::{
     Authentication, BackendKeyData, ErrorResponse, FromBytes, Message, Password, Protocol,
@@ -25,6 +26,7 @@ use crate::net::ProtocolMessage;
 use crate::net::{parameter::Parameters, Stream};
 use crate::state::State;
 use crate::stats::memory::MemoryUsage;
+use crate::util::user_database_from_params;
 
 // pub mod counter;
 pub mod query_engine;
@@ -47,7 +49,6 @@ pub struct Client {
     timeouts: Timeouts,
     client_request: ClientRequest,
     stream_buffer: BytesMut,
-    cross_shard_disabled: bool,
     passthrough_password: Option<String>,
 }
 
@@ -56,6 +57,16 @@ pub enum TransactionType {
     ReadOnly,
     #[default]
     ReadWrite,
+}
+
+impl TransactionType {
+    pub fn read_only(&self) -> bool {
+        matches!(self, Self::ReadOnly)
+    }
+
+    pub fn write(&self) -> bool {
+        !self.read_only()
+    }
 }
 
 impl MemoryUsage for Client {
@@ -88,8 +99,7 @@ impl Client {
         addr: SocketAddr,
         mut comms: Comms,
     ) -> Result<(), Error> {
-        let user = params.get_default("user", "postgres");
-        let database = params.get_default("database", user);
+        let (user, database) = user_database_from_params(&params);
         let config = config::config();
 
         let admin = database == config.config.admin.name && config.config.admin.user == user;
@@ -202,7 +212,12 @@ impl Client {
         stream.send_flush(&ReadyForQuery::idle()).await?;
         comms.connect(&id, addr, &params);
 
-        info!("client connected [{}]", addr,);
+        if config.config.general.log_connections {
+            info!(
+                r#"client "{}" connected to database "{}" [{}]"#,
+                user, database, addr
+            );
+        }
 
         let mut client = Self {
             addr,
@@ -219,7 +234,7 @@ impl Client {
             client_request: ClientRequest::new(),
             stream_buffer: BytesMut::new(),
             shutdown: false,
-            cross_shard_disabled: false,
+
             passthrough_password,
         };
 
@@ -260,7 +275,6 @@ impl Client {
             client_request: ClientRequest::new(),
             stream_buffer: BytesMut::new(),
             shutdown: false,
-            cross_shard_disabled: false,
             passthrough_password: None,
         }
     }
@@ -273,13 +287,27 @@ impl Client {
     /// Run the client and log disconnect.
     async fn spawn_internal(&mut self) {
         match self.run().await {
-            Ok(_) => info!("client disconnected [{}]", self.addr),
+            Ok(_) => {
+                if config().config.general.log_disconnections {
+                    let (user, database) = user_database_from_params(&self.params);
+                    info!(
+                        r#"client "{}" disconnected from database "{}" [{}]"#,
+                        user, database, self.addr
+                    )
+                }
+            }
             Err(err) => {
                 let _ = self
                     .stream
                     .error(ErrorResponse::from_err(&err), false)
                     .await;
-                error!("client disconnected with error [{}]: {}", self.addr, err)
+                if config().config.general.log_disconnections {
+                    let (user, database) = user_database_from_params(&self.params);
+                    error!(
+                        r#"client "{}" disconnected from database "{}" with error [{}]: {}"#,
+                        user, database, self.addr, err
+                    )
+                }
             }
         }
     }
@@ -356,9 +384,33 @@ impl Client {
 
     /// Handle client messages.
     async fn client_messages(&mut self, query_engine: &mut QueryEngine) -> Result<(), Error> {
-        let mut context = QueryEngineContext::new(self);
-        query_engine.handle(&mut context).await?;
-        self.transaction = context.transaction();
+        // Check maintenance mode.
+        if !self.in_transaction() && !self.admin {
+            if let Some(waiter) = maintenance_mode::waiter() {
+                let state = query_engine.get_state();
+                query_engine.set_state(State::Waiting);
+                waiter.await;
+                query_engine.set_state(state);
+            }
+        }
+
+        // If client sent multiple requests, split them up and execute individually.
+        let spliced = self.client_request.spliced()?;
+        if spliced.is_empty() {
+            let mut context = QueryEngineContext::new(self);
+            query_engine.handle(&mut context).await?;
+            self.transaction = context.transaction();
+        } else {
+            let total = spliced.len();
+            let mut reqs = spliced.into_iter().enumerate();
+            while let Some((num, mut req)) = reqs.next() {
+                debug!("processing spliced request {}/{}", num + 1, total);
+                let mut context = QueryEngineContext::new(self).spliced(&mut req, reqs.len());
+                query_engine.handle(&mut context).await?;
+                self.transaction = context.transaction();
+            }
+        }
+
         Ok(())
     }
 
@@ -378,7 +430,6 @@ impl Client {
         self.prepared_statements.enabled = config.prepared_statements();
         self.prepared_statements.capacity = config.config.general.prepared_statements_limit;
         self.timeouts = Timeouts::from_config(&config.config.general);
-        self.cross_shard_disabled = config.config.general.cross_shard_disabled;
 
         while !self.client_request.full() {
             let idle_timeout = self

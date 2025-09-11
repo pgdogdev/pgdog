@@ -91,6 +91,18 @@ impl Command for Set {
                     .close_unused(config.config.general.prepared_statements_limit);
             }
 
+            "cross_shard_disabled" => {
+                config.config.general.cross_shard_disabled = Self::from_json(&self.value)?;
+            }
+
+            "two_phase_commit" => {
+                config.config.general.two_phase_commit = Self::from_json(&self.value)?;
+            }
+
+            "two_phase_commit_auto" => {
+                config.config.general.two_phase_commit_auto = Self::from_json(&self.value)?;
+            }
+
             _ => return Err(Error::Syntax),
         }
 
@@ -103,7 +115,11 @@ impl Command for Set {
 
 impl Set {
     fn from_json<T: DeserializeOwned>(value: &str) -> serde_json::Result<T> {
-        serde_json::from_str::<T>(&format!(r#""{}""#, value))
+        let value = match value {
+            "true" | "false" => value.to_string(),
+            _ => format!(r#""{}""#, value),
+        };
+        serde_json::from_str::<T>(&value)
     }
 }
 

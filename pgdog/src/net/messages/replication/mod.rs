@@ -33,7 +33,7 @@ impl FromBytes for ReplicationMeta {
             'h' => Self::HotStandbyFeedback(HotStandbyFeedback::from_bytes(bytes)?),
             'r' => Self::StatusUpdate(StatusUpdate::from_bytes(bytes)?),
             'k' => Self::KeepAlive(KeepAlive::from_bytes(bytes)?),
-            _ => return Err(Error::UnexpectedPayload),
+            c => return Err(Error::UnexpectedReplicationMetaMessage(c)),
         })
     }
 }

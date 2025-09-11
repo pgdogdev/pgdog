@@ -4,7 +4,7 @@ use std::fmt::Debug;
 
 use crate::net::messages::Vector;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum OrderBy {
     Asc(usize),
     Desc(usize),

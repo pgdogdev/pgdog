@@ -16,6 +16,8 @@ pub struct QueryEngineContext<'a> {
     pub(super) params: &'a mut Parameters,
     /// Request
     pub(super) client_request: &'a mut ClientRequest,
+    /// Request position in a splice.
+    pub(super) requests_left: usize,
     /// Client's socket to send responses to.
     pub(super) stream: &'a mut Stream,
     /// Client in transaction?
@@ -23,9 +25,11 @@ pub struct QueryEngineContext<'a> {
     /// Timeouts
     pub(super) timeouts: Timeouts,
     /// Cross shard  queries are disabled.
-    pub(super) cross_shard_disabled: bool,
+    pub(super) cross_shard_disabled: Option<bool>,
     /// Client memory usage.
     pub(super) memory_usage: usize,
+    /// Is the client an admin.
+    pub(super) admin: bool,
 }
 
 impl<'a> QueryEngineContext<'a> {
@@ -39,9 +43,17 @@ impl<'a> QueryEngineContext<'a> {
             stream: &mut client.stream,
             transaction: client.transaction,
             timeouts: client.timeouts,
-            cross_shard_disabled: client.cross_shard_disabled,
+            cross_shard_disabled: None,
             memory_usage,
+            admin: client.admin,
+            requests_left: 0,
         }
+    }
+
+    pub fn spliced(mut self, req: &'a mut ClientRequest, request_left: usize) -> Self {
+        self.client_request = req;
+        self.requests_left = request_left;
+        self
     }
 
     /// Create context from mirror.
@@ -53,8 +65,10 @@ impl<'a> QueryEngineContext<'a> {
             stream: &mut mirror.stream,
             transaction: mirror.transaction,
             timeouts: mirror.timeouts,
-            cross_shard_disabled: mirror.cross_shard_disabled,
+            cross_shard_disabled: None,
             memory_usage: 0,
+            admin: false,
+            requests_left: 0,
         }
     }
 

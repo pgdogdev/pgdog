@@ -2313,9 +2313,9 @@ dependencies = [
 
 [[package]]
 name = "pg_query"
-version = "6.1.0"
+version = "6.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f71c7c56dfe299ec6f98aa210aa23458be3b0610c485be60a5873c2f3627c40e"
+checksum = "6ca6fdb8f9d32182abf17328789f87f305dd8c8ce5bf48c5aa2b5cffc94e1c04"
 dependencies = [
  "bindgen 0.66.1",
  "cc",
@@ -2331,7 +2331,7 @@ dependencies = [
 
 [[package]]
 name = "pgdog"
-version = "0.1.0"
+version = "0.1.6"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -2401,7 +2401,7 @@ dependencies = [
 
 [[package]]
 name = "pgdog-plugin"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "bindgen 0.71.1",
  "libc",

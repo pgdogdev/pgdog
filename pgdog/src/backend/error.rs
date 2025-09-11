@@ -48,6 +48,9 @@ pub enum Error {
     #[error("no cluster connected")]
     NoCluster,
 
+    #[error("database \"{0}\" has no schema owner")]
+    NoSchemaOwner(String),
+
     #[error("{0}")]
     ScramAuth(#[from] crate::auth::scram::Error),
 
@@ -107,6 +110,12 @@ pub enum Error {
 
     #[error("{0}")]
     FrontendError(Box<crate::frontend::Error>),
+
+    #[error("{0}")]
+    MultiShard(#[from] crate::backend::pool::connection::multi_shard::Error),
+
+    #[error("2pc commit supported with multi-shard binding only")]
+    TwoPcMultiShardOnly,
 }
 
 impl From<crate::frontend::Error> for Error {

@@ -1,10 +1,14 @@
 pub mod auth;
 pub mod ban;
+pub mod cross_shard_disabled;
 pub mod distinct;
 pub mod fake_transactions;
 pub mod maintenance_mode;
 pub mod notify;
+pub mod per_stmt_routing;
 pub mod prepared;
 pub mod reload;
+pub mod set_sharding_key;
+pub mod shard_consistency;
 pub mod syntax_error;
 pub mod timestamp_sorting;

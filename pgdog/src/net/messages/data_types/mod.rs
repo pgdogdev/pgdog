@@ -159,8 +159,13 @@ impl Add for Datum {
 }
 
 impl Datum {
-    pub fn new(bytes: &[u8], data_type: DataType, encoding: Format) -> Result<Self, Error> {
-        if bytes.is_empty() {
+    pub fn new(
+        bytes: &[u8],
+        data_type: DataType,
+        encoding: Format,
+        null: bool,
+    ) -> Result<Self, Error> {
+        if null {
             return Ok(Datum::Null);
         }
 
@@ -195,7 +200,8 @@ impl Datum {
             Datum::Float(f) => f.encode(format),
             Datum::Double(d) => d.encode(format),
             Datum::Numeric(n) => n.encode(format),
-            _ => Err(Error::UnexpectedPayload),
+            Datum::Null => Ok(Bytes::new()),
+            _ => Err(Error::UnsupportedDataTypeForEncoding),
         }
     }
 }

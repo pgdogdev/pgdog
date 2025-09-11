@@ -2,6 +2,8 @@ name: package
 on:
   push:
     branches: ['main']
+  release:
+    types: [published]
   workflow_dispatch:
 
 env:
@@ -26,6 +28,9 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-tags: true
+          fetch-depth: 0
 
       - name: Prepare
         run: |
@@ -90,6 +95,19 @@ jobs:
       attestations: write
       id-token: write
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-tags: true
+          fetch-depth: 0
+
+      - name: Get short commit SHA
+        id: commit
+        run: |
+          COMMIT_SHA=$(git rev-parse --short HEAD)
+          echo "sha=$COMMIT_SHA" >> $GITHUB_OUTPUT
+          echo "Short commit SHA: $COMMIT_SHA"
+
       - name: Download digests
         uses: actions/download-artifact@v4
         with:
@@ -107,6 +125,17 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      - name: Check for git tag
+        id: tag
+        run: |
+          TAG=$(git describe --exact-match --tags HEAD 2>/dev/null || echo "")
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          if [ -n "$TAG" ]; then
+            echo "Git tag found: $TAG"
+          else
+            echo "No git tag found for current commit"
+          fi
+
       - name: Docker meta
         id: meta
         uses: docker/metadata-action@v5
@@ -117,7 +146,8 @@ jobs:
             type=ref,event=pr
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=sha,prefix={{branch}}-,format=short
+            type=raw,value=${{ steps.tag.outputs.tag }},enable=${{ steps.tag.outputs.tag != '' }}
+            type=raw,value=${{ steps.commit.outputs.sha }}
 
       - name: Create manifest list and push
         working-directory: ${{ runner.temp }}/digests
