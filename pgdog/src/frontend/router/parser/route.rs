@@ -55,6 +55,7 @@ pub struct Route {
     limit: Limit,
     lock_session: bool,
     distinct: Option<DistinctBy>,
+    maintenance: bool,
 }
 
 impl Display for Route {
@@ -148,6 +149,15 @@ impl Route {
         self
     }
 
+    pub fn set_maintenace(mut self) -> Self {
+        self.maintenance = true;
+        self
+    }
+
+    pub fn is_maintenance(&self) -> bool {
+        self.maintenance
+    }
+
     pub fn set_shard_raw_mut(&mut self, shard: &Shard) {
         self.shard = shard.clone();
     }
@@ -197,6 +207,6 @@ impl Route {
     }
 
     pub fn should_2pc(&self) -> bool {
-        self.is_cross_shard() && self.is_write()
+        self.is_cross_shard() && self.is_write() && !self.is_maintenance()
     }
 }

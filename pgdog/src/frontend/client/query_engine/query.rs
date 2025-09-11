@@ -209,6 +209,7 @@ impl QueryEngine {
             && route.should_2pc()
             && self.begin_stmt.is_none()
             && context.client_request.executable()
+            && !context.in_transaction()
         {
             debug!("[2pc] enabling automatic transaction");
             self.two_pc.set_auto();

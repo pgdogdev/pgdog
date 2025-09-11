@@ -255,6 +255,11 @@ impl QueryParser {
 
             Some(NodeEnum::ExplainStmt(ref stmt)) => self.explain(stmt, context),
 
+            // VACUUM.
+            Some(NodeEnum::VacuumRelation(_)) | Some(NodeEnum::VacuumStmt(_)) => {
+                Ok(Command::Query(Route::write(None).set_maintenace()))
+            }
+
             // All others are not handled.
             // They are sent to all shards concurrently.
             _ => Ok(Command::Query(Route::write(None))),
