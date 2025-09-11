@@ -99,6 +99,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-tags: true
+          fetch-depth: 0
 
       - name: Get short commit SHA
         id: commit
