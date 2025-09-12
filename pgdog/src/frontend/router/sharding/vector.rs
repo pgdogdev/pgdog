@@ -12,7 +12,7 @@ impl Distance<'_> {
         match self {
             Self::Euclidean(p, q) => {
                 assert_eq!(p.len(), q.len());
-                // No allocations! Work directly with the Float slices
+                // Avoids temporary array allocations by working directly with the Float slices
                 distance_simd_rust::euclidean_distance(p, q)
             }
         }
