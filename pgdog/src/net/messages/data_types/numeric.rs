@@ -1,10 +1,4 @@
-use std::{
-    cmp::Ordering,
-    fmt::Display,
-    hash::Hash,
-    ops::{Add, Deref, DerefMut},
-    str::FromStr,
-};
+use std::{cmp::Ordering, fmt::Display, hash::Hash, ops::Add, str::FromStr};
 
 use bytes::{Buf, BufMut, BytesMut};
 use rust_decimal::Decimal;
@@ -19,29 +13,59 @@ use crate::net::messages::data_row::Data;
 
 use super::*;
 
+/// Enum to represent different numeric values including NaN.
+#[derive(Copy, Clone, Debug)]
+enum NumericValue {
+    Number(Decimal),
+    NaN,
+}
+
 /// PostgreSQL NUMERIC type representation using exact decimal arithmetic.
 ///
 /// Note: rust_decimal has a maximum of 28 decimal digits of precision.
 /// Values exceeding this will return an error.
-/// TODO: Add NaN support - currently returns an error if NaN is encountered.
-#[derive(PartialEq, Copy, Clone, Debug)]
+/// Supports special NaN (Not-a-Number) value following PostgreSQL semantics.
+#[derive(Copy, Clone, Debug)]
 #[repr(C)]
 pub struct Numeric {
-    data: Decimal,
+    value: NumericValue,
 }
 
 impl Display for Numeric {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.data)
+        match self.value {
+            NumericValue::Number(n) => write!(f, "{}", n),
+            NumericValue::NaN => write!(f, "NaN"),
+        }
     }
 }
 
 impl Hash for Numeric {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        // Decimal provides a consistent hash implementation
-        self.data.hash(state);
+        match self.value {
+            NumericValue::Number(n) => {
+                0u8.hash(state); // Discriminant for Number
+                n.hash(state);
+            }
+            NumericValue::NaN => {
+                1u8.hash(state); // Discriminant for NaN
+            }
+        }
     }
 }
+
+impl PartialEq for Numeric {
+    fn eq(&self, other: &Self) -> bool {
+        match (&self.value, &other.value) {
+            (NumericValue::Number(a), NumericValue::Number(b)) => a == b,
+            // PostgreSQL treats NaN as equal to NaN for indexing purposes
+            (NumericValue::NaN, NumericValue::NaN) => true,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for Numeric {}
 
 impl PartialOrd for Numeric {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
@@ -51,23 +75,13 @@ impl PartialOrd for Numeric {
 
 impl Ord for Numeric {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.data.cmp(&other.data)
-    }
-}
-
-impl Eq for Numeric {}
-
-impl Deref for Numeric {
-    type Target = Decimal;
-
-    fn deref(&self) -> &Self::Target {
-        &self.data
-    }
-}
-
-impl DerefMut for Numeric {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.data
+        match (&self.value, &other.value) {
+            (NumericValue::Number(a), NumericValue::Number(b)) => a.cmp(b),
+            // PostgreSQL: NaN is greater than all non-NaN values
+            (NumericValue::NaN, NumericValue::NaN) => Ordering::Equal,
+            (NumericValue::NaN, _) => Ordering::Greater,
+            (_, NumericValue::NaN) => Ordering::Less,
+        }
     }
 }
 
@@ -75,8 +89,14 @@ impl Add for Numeric {
     type Output = Numeric;
 
     fn add(self, rhs: Self) -> Self::Output {
-        Numeric {
-            data: self.data + rhs.data,
+        match (self.value, rhs.value) {
+            (NumericValue::Number(a), NumericValue::Number(b)) => Numeric {
+                value: NumericValue::Number(a + b),
+            },
+            // Any operation with NaN yields NaN
+            _ => Numeric {
+                value: NumericValue::NaN,
+            },
         }
     }
 }
@@ -87,15 +107,15 @@ impl FromDataType for Numeric {
             Format::Text => {
                 let s = String::decode(bytes, encoding)?;
                 match Decimal::from_str(&s) {
-                    Ok(decimal) => Ok(Self { data: decimal }),
+                    Ok(decimal) => Ok(Self {
+                        value: NumericValue::Number(decimal),
+                    }),
                     Err(e) => {
                         // Check for special PostgreSQL values
                         match s.to_uppercase().as_str() {
-                            "NAN" => {
-                                // TODO: Add NaN support
-                                warn!("NaN values not supported (deferred feature)");
-                                Err(Error::UnexpectedPayload)
-                            }
+                            "NAN" => Ok(Self {
+                                value: NumericValue::NaN,
+                            }),
                             "INFINITY" | "+INFINITY" | "-INFINITY" => {
                                 warn!("Infinity values not supported");
                                 Err(Error::UnexpectedPayload)
@@ -127,10 +147,14 @@ impl FromDataType for Numeric {
                     0x0000 => false, // Positive
                     0x4000 => true,  // Negative
                     0xC000 => {
-                        // NaN - not supported yet
-                        // TODO: Add NaN support for binary format
-                        warn!("NaN values not supported in binary format (deferred feature)");
-                        return Err(Error::UnexpectedPayload);
+                        // NaN value - ndigits should be 0 for NaN
+                        if ndigits != 0 {
+                            warn!("Invalid NaN representation: ndigits should be 0");
+                            return Err(Error::UnexpectedPayload);
+                        }
+                        return Ok(Self {
+                            value: NumericValue::NaN,
+                        });
                     }
                     _ => {
                         // Invalid sign value
@@ -141,7 +165,7 @@ impl FromDataType for Numeric {
 
                 if ndigits == 0 {
                     return Ok(Self {
-                        data: Decimal::ZERO,
+                        value: NumericValue::Number(Decimal::ZERO),
                     });
                 }
 
@@ -277,96 +301,112 @@ impl FromDataType for Numeric {
                     warn!("Failed to parse '{}' as Decimal: {}", result, e);
                     Error::UnexpectedPayload
                 })?;
-                Ok(Self { data: decimal })
+                Ok(Self {
+                    value: NumericValue::Number(decimal),
+                })
             }
         }
     }
 
     fn encode(&self, encoding: Format) -> Result<Bytes, Error> {
         match encoding {
-            Format::Text => Ok(Bytes::copy_from_slice(self.data.to_string().as_bytes())),
-            Format::Binary => {
-                // Start with the simplest possible implementation
-                // Handle zero case
-                if self.data.is_zero() {
+            Format::Text => match self.value {
+                NumericValue::Number(n) => Ok(Bytes::copy_from_slice(n.to_string().as_bytes())),
+                NumericValue::NaN => Ok(Bytes::copy_from_slice(b"NaN")),
+            },
+            Format::Binary => match self.value {
+                NumericValue::NaN => {
+                    // NaN encoding: ndigits=0, weight=0, sign=0xC000, dscale=0
                     let mut buf = BytesMut::new();
                     buf.put_i16(0); // ndigits
                     buf.put_i16(0); // weight
-                    buf.put_u16(0); // sign (positive)
+                    buf.put_u16(0xC000); // NaN sign
                     buf.put_i16(0); // dscale
-                    return Ok(buf.freeze());
+                    Ok(buf.freeze())
                 }
-
-                // Handle all numbers (integers and decimals, positive and negative)
-                let is_negative = self.data.is_sign_negative();
-                let abs_decimal = self.data.abs();
-                let decimal_str = abs_decimal.to_string();
-
-                // Split into integer and fractional parts
-                let parts: Vec<&str> = decimal_str.split('.').collect();
-                let integer_part = parts[0];
-                let fractional_part = parts.get(1).unwrap_or(&"");
-                let dscale = fractional_part.len() as i16;
-
-                // PostgreSQL keeps integer and fractional parts separate
-                // Process them independently to match PostgreSQL's format
-
-                // Process integer part (right to left, in groups of 4)
-                let mut integer_digits = Vec::new();
-
-                if integer_part != "0" {
-                    let int_chars: Vec<char> = integer_part.chars().collect();
-                    let mut pos = int_chars.len();
-
-                    while pos > 0 {
-                        let start = pos.saturating_sub(4);
-                        let chunk: String = int_chars[start..pos].iter().collect();
-                        let digit_value: i16 =
-                            chunk.parse().map_err(|_| Error::UnexpectedPayload)?;
-                        integer_digits.insert(0, digit_value);
-                        pos = start;
+                NumericValue::Number(decimal) => {
+                    // Handle zero case
+                    if decimal.is_zero() {
+                        let mut buf = BytesMut::new();
+                        buf.put_i16(0); // ndigits
+                        buf.put_i16(0); // weight
+                        buf.put_u16(0); // sign (positive)
+                        buf.put_i16(0); // dscale
+                        return Ok(buf.freeze());
                     }
-                }
 
-                // Process fractional part (left to right, in groups of 4)
-                let mut fractional_digits = Vec::new();
-                if !fractional_part.is_empty() {
-                    let frac_chars: Vec<char> = fractional_part.chars().collect();
-                    let mut pos = 0;
+                    // Handle all numbers (integers and decimals, positive and negative)
+                    let is_negative = decimal.is_sign_negative();
+                    let abs_decimal = decimal.abs();
+                    let decimal_str = abs_decimal.to_string();
 
-                    while pos < frac_chars.len() {
-                        let end = std::cmp::min(pos + 4, frac_chars.len());
-                        let mut chunk: String = frac_chars[pos..end].iter().collect();
+                    // Split into integer and fractional parts
+                    let parts: Vec<&str> = decimal_str.split('.').collect();
+                    let integer_part = parts[0];
+                    let fractional_part = parts.get(1).unwrap_or(&"");
+                    let dscale = fractional_part.len() as i16;
 
-                        // Pad the last chunk with zeros if needed
-                        while chunk.len() < 4 {
-                            chunk.push('0');
+                    // PostgreSQL keeps integer and fractional parts separate
+                    // Process them independently to match PostgreSQL's format
+
+                    // Process integer part (right to left, in groups of 4)
+                    let mut integer_digits = Vec::new();
+
+                    if integer_part != "0" {
+                        let int_chars: Vec<char> = integer_part.chars().collect();
+                        let mut pos = int_chars.len();
+
+                        while pos > 0 {
+                            let start = pos.saturating_sub(4);
+                            let chunk: String = int_chars[start..pos].iter().collect();
+                            let digit_value: i16 =
+                                chunk.parse().map_err(|_| Error::UnexpectedPayload)?;
+                            integer_digits.insert(0, digit_value);
+                            pos = start;
                         }
-
-                        let digit_value: i16 =
-                            chunk.parse().map_err(|_| Error::UnexpectedPayload)?;
-                        fractional_digits.push(digit_value);
-                        pos = end;
                     }
-                }
 
-                // Calculate initial weight before optimization
-                let initial_weight = if integer_part == "0" || integer_part.is_empty() {
-                    // Pure fractional number - weight is negative
-                    -1
-                } else {
-                    // Based on number of integer digits
-                    integer_digits.len() as i16 - 1
-                };
+                    // Process fractional part (left to right, in groups of 4)
+                    let mut fractional_digits = Vec::new();
+                    if !fractional_part.is_empty() {
+                        let frac_chars: Vec<char> = fractional_part.chars().collect();
+                        let mut pos = 0;
 
-                // Combine integer and fractional parts
-                let mut digits = integer_digits;
-                digits.extend(fractional_digits.clone());
+                        while pos < frac_chars.len() {
+                            let end = std::cmp::min(pos + 4, frac_chars.len());
+                            let mut chunk: String = frac_chars[pos..end].iter().collect();
 
-                // PostgreSQL optimization: if we have no fractional part and integer part
-                // has trailing zeros, we can remove them and adjust the weight
-                let weight =
-                    if fractional_digits.is_empty() && !digits.is_empty() && initial_weight >= 0 {
+                            // Pad the last chunk with zeros if needed
+                            while chunk.len() < 4 {
+                                chunk.push('0');
+                            }
+
+                            let digit_value: i16 =
+                                chunk.parse().map_err(|_| Error::UnexpectedPayload)?;
+                            fractional_digits.push(digit_value);
+                            pos = end;
+                        }
+                    }
+
+                    // Calculate initial weight before optimization
+                    let initial_weight = if integer_part == "0" || integer_part.is_empty() {
+                        // Pure fractional number - weight is negative
+                        -1
+                    } else {
+                        // Based on number of integer digits
+                        integer_digits.len() as i16 - 1
+                    };
+
+                    // Combine integer and fractional parts
+                    let mut digits = integer_digits;
+                    digits.extend(fractional_digits.clone());
+
+                    // PostgreSQL optimization: if we have no fractional part and integer part
+                    // has trailing zeros, we can remove them and adjust the weight
+                    let weight = if fractional_digits.is_empty()
+                        && !digits.is_empty()
+                        && initial_weight >= 0
+                    {
                         // Count and remove trailing zero i16 values
                         let original_len = digits.len();
                         while digits.len() > 1 && digits.last() == Some(&0) {
@@ -380,26 +420,27 @@ impl FromDataType for Numeric {
                         initial_weight
                     };
 
-                if digits.is_empty() {
-                    digits.push(0);
+                    if digits.is_empty() {
+                        digits.push(0);
+                    }
+
+                    let mut buf = BytesMut::new();
+                    let ndigits = digits.len() as i16;
+                    let sign = if is_negative { 0x4000_u16 } else { 0_u16 };
+
+                    buf.put_i16(ndigits);
+                    buf.put_i16(weight);
+                    buf.put_u16(sign);
+                    buf.put_i16(dscale);
+
+                    // Write all digits
+                    for digit in digits {
+                        buf.put_i16(digit);
+                    }
+
+                    Ok(buf.freeze())
                 }
-
-                let mut buf = BytesMut::new();
-                let ndigits = digits.len() as i16;
-                let sign = if is_negative { 0x4000_u16 } else { 0_u16 };
-
-                buf.put_i16(ndigits);
-                buf.put_i16(weight);
-                buf.put_u16(sign);
-                buf.put_i16(dscale);
-
-                // Write all digits
-                for digit in digits {
-                    buf.put_i16(digit);
-                }
-
-                Ok(buf.freeze())
-            }
+            },
         }
     }
 }
@@ -413,7 +454,7 @@ impl ToDataRowColumn for Numeric {
 impl From<i32> for Numeric {
     fn from(value: i32) -> Self {
         Self {
-            data: Decimal::from(value),
+            value: NumericValue::Number(Decimal::from(value)),
         }
     }
 }
@@ -421,32 +462,85 @@ impl From<i32> for Numeric {
 impl From<i64> for Numeric {
     fn from(value: i64) -> Self {
         Self {
-            data: Decimal::from(value),
+            value: NumericValue::Number(Decimal::from(value)),
         }
     }
 }
 
 impl From<f32> for Numeric {
     fn from(value: f32) -> Self {
-        Self {
-            // Note: This may lose precision
-            data: Decimal::from_f32_retain(value).unwrap_or(Decimal::ZERO),
+        if value.is_nan() {
+            Self {
+                value: NumericValue::NaN,
+            }
+        } else {
+            Self {
+                // Note: This may lose precision
+                value: NumericValue::Number(
+                    Decimal::from_f32_retain(value).unwrap_or(Decimal::ZERO),
+                ),
+            }
         }
     }
 }
 
 impl From<f64> for Numeric {
     fn from(value: f64) -> Self {
-        Self {
-            // Note: This may lose precision
-            data: Decimal::from_f64_retain(value).unwrap_or(Decimal::ZERO),
+        if value.is_nan() {
+            Self {
+                value: NumericValue::NaN,
+            }
+        } else {
+            Self {
+                // Note: This may lose precision
+                value: NumericValue::Number(
+                    Decimal::from_f64_retain(value).unwrap_or(Decimal::ZERO),
+                ),
+            }
         }
     }
 }
 
 impl From<Decimal> for Numeric {
     fn from(value: Decimal) -> Self {
-        Self { data: value }
+        Self {
+            value: NumericValue::Number(value),
+        }
+    }
+}
+
+// Helper methods for Numeric
+impl Numeric {
+    /// Create a NaN Numeric value
+    pub fn nan() -> Self {
+        Self {
+            value: NumericValue::NaN,
+        }
+    }
+
+    /// Check if this is a NaN value
+    pub fn is_nan(&self) -> bool {
+        matches!(self.value, NumericValue::NaN)
+    }
+
+    /// Get the underlying Decimal value if not NaN
+    pub fn as_decimal(&self) -> Option<&Decimal> {
+        match &self.value {
+            NumericValue::Number(n) => Some(n),
+            NumericValue::NaN => None,
+        }
+    }
+
+    /// Convert to f64
+    pub fn to_f64(&self) -> Option<f64> {
+        match &self.value {
+            NumericValue::Number(n) => {
+                // Use rust_decimal's to_f64 method
+                use rust_decimal::prelude::ToPrimitive;
+                n.to_f64()
+            }
+            NumericValue::NaN => Some(f64::NAN),
+        }
     }
 }
 
@@ -463,9 +557,15 @@ impl<'de> Visitor<'de> for NumericVisitor {
     where
         E: de::Error,
     {
-        match Decimal::from_str(v) {
-            Ok(decimal) => Ok(Numeric { data: decimal }),
-            Err(_) => Err(de::Error::custom("failed to parse decimal")),
+        if v.eq_ignore_ascii_case("nan") {
+            Ok(Numeric::nan())
+        } else {
+            match Decimal::from_str(v) {
+                Ok(decimal) => Ok(Numeric {
+                    value: NumericValue::Number(decimal),
+                }),
+                Err(_) => Err(de::Error::custom("failed to parse decimal")),
+            }
         }
     }
 
@@ -473,9 +573,15 @@ impl<'de> Visitor<'de> for NumericVisitor {
     where
         E: de::Error,
     {
-        match Decimal::from_f64_retain(v) {
-            Some(decimal) => Ok(Numeric { data: decimal }),
-            None => Err(de::Error::custom("failed to convert f64 to decimal")),
+        if v.is_nan() {
+            Ok(Numeric::nan())
+        } else {
+            match Decimal::from_f64_retain(v) {
+                Some(decimal) => Ok(Numeric {
+                    value: NumericValue::Number(decimal),
+                }),
+                None => Err(de::Error::custom("failed to convert f64 to decimal")),
+            }
         }
     }
 
@@ -484,7 +590,7 @@ impl<'de> Visitor<'de> for NumericVisitor {
         E: de::Error,
     {
         Ok(Numeric {
-            data: Decimal::from(v),
+            value: NumericValue::Number(Decimal::from(v)),
         })
     }
 
@@ -493,7 +599,7 @@ impl<'de> Visitor<'de> for NumericVisitor {
         E: de::Error,
     {
         Ok(Numeric {
-            data: Decimal::from(v),
+            value: NumericValue::Number(Decimal::from(v)),
         })
     }
 }
@@ -513,7 +619,10 @@ impl Serialize for Numeric {
         S: serde::Serializer,
     {
         // Serialize as string to preserve precision
-        serializer.serialize_str(&self.data.to_string())
+        match self.value {
+            NumericValue::Number(n) => serializer.serialize_str(&n.to_string()),
+            NumericValue::NaN => serializer.serialize_str("NaN"),
+        }
     }
 }
 
@@ -750,7 +859,8 @@ mod tests {
         // The number should be 0.001 with trailing zeros to make 15 decimal places
         let expected = Decimal::from_str("0.001000000000000").unwrap();
         assert_eq!(
-            decoded.data, expected,
+            decoded.as_decimal(),
+            Some(&expected),
             "High dscale pure fractional mismatch"
         );
 
@@ -768,9 +878,124 @@ mod tests {
 
         let expected2 = Decimal::from_str("0.00001234000000000000").unwrap();
         assert_eq!(
-            decoded2.data, expected2,
+            decoded2.as_decimal(),
+            Some(&expected2),
             "Very high dscale pure fractional mismatch"
         );
+    }
+
+    #[test]
+    fn test_nan_support() {
+        // Test NaN text parsing
+        let nan_text = Numeric::decode(b"NaN", Format::Text).unwrap();
+        assert!(nan_text.is_nan());
+        assert_eq!(nan_text.to_string(), "NaN");
+
+        // Test case-insensitive NaN parsing
+        let nan_lower = Numeric::decode(b"nan", Format::Text).unwrap();
+        assert!(nan_lower.is_nan());
+        let nan_mixed = Numeric::decode(b"NaN", Format::Text).unwrap();
+        assert!(nan_mixed.is_nan());
+
+        // Test NaN binary encoding/decoding
+        let nan = Numeric::nan();
+        let encoded = nan.encode(Format::Binary).unwrap();
+
+        // Verify binary format: ndigits=0, weight=0, sign=0xC000, dscale=0
+        let mut reader = &encoded[..];
+        use bytes::Buf;
+        assert_eq!(reader.get_i16(), 0); // ndigits
+        assert_eq!(reader.get_i16(), 0); // weight
+        assert_eq!(reader.get_u16(), 0xC000); // NaN sign
+        assert_eq!(reader.get_i16(), 0); // dscale
+
+        // Test binary roundtrip
+        let decoded = Numeric::decode(&encoded, Format::Binary).unwrap();
+        assert!(decoded.is_nan());
+
+        // Test NaN text encoding
+        let nan_text_encoded = nan.encode(Format::Text).unwrap();
+        assert_eq!(&nan_text_encoded[..], b"NaN");
+    }
+
+    #[test]
+    fn test_nan_comparison() {
+        let nan1 = Numeric::nan();
+        let nan2 = Numeric::nan();
+        let num = Numeric::from(42);
+
+        // NaN equals NaN (for indexing)
+        assert_eq!(nan1, nan2);
+        assert_eq!(nan1, nan1);
+
+        // NaN not equal to number
+        assert_ne!(nan1, num);
+
+        // NaN is greater than all numbers (for sorting)
+        assert!(nan1 > num);
+        assert!(nan2 > num);
+        assert!(nan1 >= num);
+
+        // Number is less than NaN
+        assert!(num < nan1);
+        assert!(num <= nan1);
+
+        // Two NaNs are equal in ordering
+        assert_eq!(nan1.cmp(&nan2), Ordering::Equal);
+    }
+
+    #[test]
+    fn test_nan_arithmetic() {
+        let nan = Numeric::nan();
+        let num = Numeric::from(42);
+
+        // Any operation with NaN yields NaN
+        let result = nan + num;
+        assert!(result.is_nan());
+
+        let result = num + nan;
+        assert!(result.is_nan());
+
+        let result = nan + nan;
+        assert!(result.is_nan());
+    }
+
+    #[test]
+    fn test_nan_sorting() {
+        let mut values = vec![
+            Numeric::from(10),
+            Numeric::nan(),
+            Numeric::from(5),
+            Numeric::from(20),
+            Numeric::nan(),
+            Numeric::from(1),
+        ];
+
+        values.sort();
+
+        // Numbers should be sorted first, NaNs should be last
+        assert_eq!(values[0], Numeric::from(1));
+        assert_eq!(values[1], Numeric::from(5));
+        assert_eq!(values[2], Numeric::from(10));
+        assert_eq!(values[3], Numeric::from(20));
+        assert!(values[4].is_nan());
+        assert!(values[5].is_nan());
+    }
+
+    #[test]
+    fn test_nan_from_float() {
+        let nan_f32 = Numeric::from(f32::NAN);
+        assert!(nan_f32.is_nan());
+
+        let nan_f64 = Numeric::from(f64::NAN);
+        assert!(nan_f64.is_nan());
+
+        // Regular floats still work
+        let num_f32 = Numeric::from(3.14f32);
+        assert!(!num_f32.is_nan());
+
+        let num_f64 = Numeric::from(2.718281828f64);
+        assert!(!num_f64.is_nan());
     }
 
     #[test]
@@ -827,9 +1052,9 @@ mod tests {
 
             // Verify roundtrip
             assert_eq!(
-                original_numeric.data, decoded_numeric.data,
+                original_numeric, decoded_numeric,
                 "Roundtrip failed for {}: original={}, decoded={}",
-                test_value, original_numeric.data, decoded_numeric.data
+                test_value, original_numeric, decoded_numeric
             );
         }
     }
