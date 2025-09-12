@@ -89,10 +89,7 @@ impl Manager {
     ) -> Result<TwoPcGuard, Error> {
         {
             let mut guard = self.inner.lock();
-            let entry = guard
-                .transactions
-                .entry(transaction.clone())
-                .or_insert_with(TransactionInfo::default);
+            let entry = guard.transactions.entry(*transaction).or_default();
             entry.identifier = identifier.clone();
             entry.phase = phase;
         }
@@ -100,7 +97,7 @@ impl Manager {
         // TODO: Sync to durable backend.
 
         Ok(TwoPcGuard {
-            transaction: transaction.clone(),
+            transaction: *transaction,
             manager: Self::get(),
         })
     }

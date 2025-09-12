@@ -18,7 +18,7 @@ impl FromStr for TlsVerifyMode {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().replace('_', "").replace('-', "").as_str() {
+        match s.to_lowercase().replace(['_', '-'], "").as_str() {
             "disabled" => Ok(Self::Disabled),
             "prefer" => Ok(Self::Prefer),
             "verifyca" => Ok(Self::VerifyCa),

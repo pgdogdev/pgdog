@@ -42,7 +42,7 @@ impl MemoryUsage for Field {
 }
 
 impl Field {
-    /// Numeric field.
+    /// Numeric field (text format).
     pub fn numeric(name: &str) -> Self {
         Self {
             name: name.into(),
@@ -51,7 +51,20 @@ impl Field {
             type_oid: 1700,
             type_size: -1,
             type_modifier: -1,
-            format: 0, // We always use text format.
+            format: 0, // Use text format for NUMERIC.
+        }
+    }
+
+    /// Numeric field (binary format).
+    pub fn numeric_binary(name: &str) -> Self {
+        Self {
+            name: name.into(),
+            table_oid: 0,
+            column: 0,
+            type_oid: 1700,
+            type_size: -1,
+            type_modifier: -1,
+            format: 1, // Enable binary format for NUMERIC.
         }
     }
 
@@ -106,6 +119,58 @@ impl Field {
         }
     }
 
+    /// Float4/Real field (text format).
+    pub fn float(name: &str) -> Self {
+        Self {
+            name: name.into(),
+            table_oid: 0,
+            column: 0,
+            type_oid: 700, // PostgreSQL OID for float4/real
+            type_size: 4,
+            type_modifier: -1,
+            format: 0, // Text format
+        }
+    }
+
+    /// Float4/Real field (binary format).
+    pub fn float_binary(name: &str) -> Self {
+        Self {
+            name: name.into(),
+            table_oid: 0,
+            column: 0,
+            type_oid: 700, // PostgreSQL OID for float4/real
+            type_size: 4,
+            type_modifier: -1,
+            format: 1, // Binary format
+        }
+    }
+
+    /// Float8/Double Precision field (text format).
+    pub fn double(name: &str) -> Self {
+        Self {
+            name: name.into(),
+            table_oid: 0,
+            column: 0,
+            type_oid: 701, // PostgreSQL OID for float8/double precision
+            type_size: 8,
+            type_modifier: -1,
+            format: 0, // Text format
+        }
+    }
+
+    /// Float8/Double Precision field (binary format).
+    pub fn double_binary(name: &str) -> Self {
+        Self {
+            name: name.into(),
+            table_oid: 0,
+            column: 0,
+            type_oid: 701, // PostgreSQL OID for float8/double precision
+            type_size: 8,
+            type_modifier: -1,
+            format: 1, // Binary format
+        }
+    }
+
     /// Get the column data type.
     #[inline]
     pub fn data_type(&self) -> DataType {
@@ -121,6 +186,7 @@ impl Field {
             1114 => DataType::Timestamp,
             1184 => DataType::TimestampTz,
             1186 => DataType::Interval,
+            1700 => DataType::Numeric,
             2950 => DataType::Uuid,
             _ => DataType::Other(self.type_oid),
         }

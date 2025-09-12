@@ -1,23 +1,20 @@
-use crate::{
-    frontend::router::parser::Shard,
-    net::messages::{Numeric, Vector},
-};
+use crate::{frontend::router::parser::Shard, net::messages::Vector};
 
 pub enum Distance<'a> {
     Euclidean(&'a Vector, &'a Vector),
 }
 
 impl Distance<'_> {
-    pub fn distance(&self) -> f64 {
+    pub fn distance(&self) -> f32 {
         match self {
             // TODO: SIMD this.
             Self::Euclidean(p, q) => {
                 assert_eq!(p.len(), q.len());
                 p.iter()
                     .zip(q.iter())
-                    .map(|(p, q)| (**q - **p).powi(2))
-                    .sum::<f64>()
-                    .sqrt()
+                    .map(|(p, q)| (q.0 - p.0).powi(2))
+                    .sum::<f32>()
+                    .sqrt() as f32
             }
         }
     }
@@ -34,7 +31,11 @@ impl Centroids<'_> {
     pub fn shard(&self, vector: &Vector, shards: usize, probes: usize) -> Shard {
         let mut selected = vec![];
         let mut centroids = self.centroids.iter().enumerate().collect::<Vec<_>>();
-        centroids.sort_by_key(|(_, c)| Numeric::from(c.distance_l2(vector)));
+        centroids.sort_by(|(_, a), (_, b)| {
+            a.distance_l2(vector)
+                .partial_cmp(&b.distance_l2(vector))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         let centroids = centroids.into_iter().take(probes);
         for (i, _) in centroids {
             selected.push(i % shards);
