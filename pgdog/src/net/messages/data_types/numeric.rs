@@ -134,7 +134,7 @@ impl FromDataType for Numeric {
                     }
                     _ => {
                         // Invalid sign value
-                        warn!("Invalid numeric sign value: 0x{:04x}", sign);
+                        warn!("invalid numeric sign value: 0x{:04x}", sign);
                         return Err(Error::UnexpectedPayload);
                     }
                 };
