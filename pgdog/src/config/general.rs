@@ -437,7 +437,7 @@ impl General {
     }
 
     pub fn query_cache_limit() -> usize {
-        Self::env_or_default("PGDOG_QUERY_CACHE_LIMIT", usize::MAX)
+        Self::env_or_default("PGDOG_QUERY_CACHE_LIMIT", 50_000)
     }
 
     pub fn log_connections() -> bool {
