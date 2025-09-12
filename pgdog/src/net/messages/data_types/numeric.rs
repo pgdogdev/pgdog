@@ -117,11 +117,11 @@ impl FromDataType for Numeric {
                                 value: NumericValue::NaN,
                             }),
                             "INFINITY" | "+INFINITY" | "-INFINITY" => {
-                                warn!("Infinity values not supported");
+                                warn!("numeric infinity values not supported");
                                 Err(Error::UnexpectedPayload)
                             }
                             _ => {
-                                warn!("Failed to parse numeric: {}", e);
+                                warn!("failed to parse numeric: {}", e);
                                 Err(Error::NotFloat(e.to_string().parse::<f64>().unwrap_err()))
                             }
                         }
@@ -158,7 +158,7 @@ impl FromDataType for Numeric {
                     }
                     _ => {
                         // Invalid sign value
-                        warn!("Invalid numeric sign value: 0x{:04x}", sign);
+                        warn!("invalid numeric sign value: 0x{:04x}", sign);
                         return Err(Error::UnexpectedPayload);
                     }
                 };
@@ -298,7 +298,7 @@ impl FromDataType for Numeric {
                 }
 
                 let decimal = Decimal::from_str(&result).map_err(|e| {
-                    warn!("Failed to parse '{}' as Decimal: {}", result, e);
+                    warn!("failed to parse '{}' as Decimal: {}", result, e);
                     Error::UnexpectedPayload
                 })?;
                 Ok(Self {
