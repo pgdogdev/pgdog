@@ -2,7 +2,9 @@
 
 use crate::net::Decoder;
 
-use super::{code, prelude::*, Datum, Format, FromDataType, Numeric, RowDescription};
+use super::{
+    code, prelude::*, Datum, Double, Float, Format, FromDataType, Numeric, RowDescription,
+};
 use std::ops::{Deref, DerefMut};
 
 #[derive(Debug, Clone, Eq, Hash, PartialEq)]
@@ -187,8 +189,19 @@ impl DataRow {
 
     // Get float at index with text/binary encoding.
     pub fn get_float(&self, index: usize, text: bool) -> Option<f64> {
+        self.get::<Float>(index, if text { Format::Text } else { Format::Binary })
+            .map(|float| float.0 as f64)
+    }
+
+    // Get numeric at index with text/binary encoding.
+    pub fn get_numeric(&self, index: usize, text: bool) -> Option<Numeric> {
         self.get::<Numeric>(index, if text { Format::Text } else { Format::Binary })
-            .map(|numeric| *numeric.deref())
+    }
+
+    // Get double at index with text/binary encoding.
+    pub fn get_double(&self, index: usize, text: bool) -> Option<f64> {
+        self.get::<Double>(index, if text { Format::Text } else { Format::Binary })
+            .map(|double| double.0)
     }
 
     /// Get text value at index.

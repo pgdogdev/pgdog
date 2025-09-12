@@ -8,6 +8,6 @@ pub struct TwoPcGuard {
 
 impl Drop for TwoPcGuard {
     fn drop(&mut self) {
-        self.manager.return_guard(&self);
+        self.manager.return_guard(self);
     }
 }
