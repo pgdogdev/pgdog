@@ -3,7 +3,7 @@
 use crate::net::messages::{code, prelude::*};
 
 // ReadyForQuery (F).
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct ReadyForQuery {
     pub status: char,
 }

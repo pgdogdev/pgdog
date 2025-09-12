@@ -21,6 +21,10 @@ impl QueryEngine {
         // for single-statement writes.
         self.two_pc_check(context, route);
 
+        if !self.transaction_error_check(context).await? {
+            return Ok(());
+        }
+
         // We need to run a query now.
         if let Some(begin_stmt) = self.begin_stmt.take() {
             // Connect to one shard if not sharded or to all shards
@@ -88,6 +92,12 @@ impl QueryEngine {
         if code == 'Z' {
             self.stats.query();
 
+            // Check if transaction is aborted and clear notify buffer if so
+            if message.is_transaction_aborted() {
+                self.notify_buffer.clear();
+                context.transaction = Some(TransactionType::Error);
+            }
+
             let two_pc = if self.two_pc.auto() {
                 self.end_two_pc().await?;
                 message = ReadyForQuery::in_transaction(false).message()?;
@@ -95,11 +105,6 @@ impl QueryEngine {
             } else {
                 false
             };
-
-            // Check if transaction is aborted and clear notify buffer if so
-            if message.is_transaction_aborted() {
-                self.notify_buffer.clear();
-            }
 
             let in_transaction = message.in_transaction();
             if !in_transaction {
@@ -219,6 +224,26 @@ impl QueryEngine {
             debug!("[2pc] enabling automatic transaction");
             self.two_pc.set_auto();
             self.begin_stmt = Some(BufferedQuery::Query(Query::new("BEGIN")));
+        }
+    }
+
+    async fn transaction_error_check(
+        &mut self,
+        context: &mut QueryEngineContext<'_>,
+    ) -> Result<bool, Error> {
+        if context.in_error() && !context.rollback {
+            let bytes_sent = context
+                .stream
+                .error(
+                    ErrorResponse::in_failed_transaction(),
+                    context.in_transaction(),
+                )
+                .await?;
+            self.stats.sent(bytes_sent);
+
+            Ok(false)
+        } else {
+            Ok(true)
         }
     }
 }

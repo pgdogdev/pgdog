@@ -57,6 +57,7 @@ pub enum TransactionType {
     ReadOnly,
     #[default]
     ReadWrite,
+    Error,
 }
 
 impl TransactionType {
@@ -66,6 +67,10 @@ impl TransactionType {
 
     pub fn write(&self) -> bool {
         !self.read_only()
+    }
+
+    pub fn error(&self) -> bool {
+        matches!(self, Self::Error)
     }
 }
 

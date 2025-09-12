@@ -9,7 +9,7 @@ use crate::{
             command_complete::CommandComplete, DataRow, FromBytes, Message, Protocol,
             RowDescription, ToBytes,
         },
-        Decoder,
+        Decoder, ReadyForQuery,
     },
 };
 
@@ -38,6 +38,7 @@ struct Counters {
     close_complete: usize,
     bind_complete: usize,
     command_complete: Option<Message>,
+    ready_for_query_message: Option<ReadyForQuery>,
 }
 
 /// Multi-shard state.
@@ -94,8 +95,19 @@ impl MultiShard {
         match message.code() {
             'Z' => {
                 self.counters.ready_for_query += 1;
+                let rfq = ReadyForQuery::from_bytes(message.to_bytes()?)?;
+
+                // Save error state from one of the shards.
+                if rfq.is_transaction_aborted() {
+                    self.counters.ready_for_query_message = Some(rfq.clone());
+                }
+
                 forward = if self.counters.ready_for_query % self.shards == 0 {
-                    Some(message)
+                    if let Some(rfq) = self.counters.ready_for_query_message.take() {
+                        Some(rfq.message()?)
+                    } else {
+                        Some(message)
+                    }
                 } else {
                     None
                 };

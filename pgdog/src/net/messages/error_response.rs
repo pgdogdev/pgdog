@@ -138,6 +138,17 @@ impl ErrorResponse {
             ..Default::default()
         }
     }
+
+    pub fn in_failed_transaction() -> Self {
+        Self {
+            severity: "ERROR".into(),
+            code: "25P02".into(),
+            message:
+                "current transaction is aborted, commands ignored until end of transaction block"
+                    .into(),
+            ..Default::default()
+        }
+    }
 }
 
 impl Display for ErrorResponse {
