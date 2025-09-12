@@ -7,8 +7,11 @@ use crate::{
 };
 
 // pub mod context;
+#[cfg(test)]
+pub mod benchmark_simd;
 pub mod context;
 pub mod context_builder;
+pub mod distance_simd_rust;
 pub mod error;
 pub mod ffi;
 pub mod hasher;
