@@ -193,10 +193,12 @@ impl DataRow {
             .map(|float| float.0 as f64)
     }
 
+    // Get numeric at index with text/binary encoding.
     pub fn get_numeric(&self, index: usize, text: bool) -> Option<Numeric> {
         self.get::<Numeric>(index, if text { Format::Text } else { Format::Binary })
     }
 
+    // Get double at index with text/binary encoding.
     pub fn get_double(&self, index: usize, text: bool) -> Option<f64> {
         self.get::<Double>(index, if text { Format::Text } else { Format::Binary })
             .map(|double| double.0)
