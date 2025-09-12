@@ -52,3 +52,4 @@ CLAUDE.local.md
 # Ignore generated bindings
 pgdog-plugin/src/bindings.rs
 local/
+integration/log.txt

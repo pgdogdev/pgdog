@@ -228,22 +228,28 @@ impl FromDataType for Numeric {
                     result.push_str("0.");
 
                     // For negative weight, add leading zeros
+                    // Each negative weight unit represents 4 decimal places
                     let leading_zeros = ((-weight - 1) * 4) as usize;
                     for _ in 0..leading_zeros {
                         result.push('0');
                     }
 
-                    // Add the fractional part, but only dscale digits
-                    let all_fractional = format!("{}{}", "0".repeat(leading_zeros), fractional_str);
-                    if all_fractional.len() >= dscale as usize {
-                        result.push_str(&fractional_str[..dscale as usize]);
-                    } else {
-                        result.push_str(&fractional_str);
-                        // Pad if needed
-                        for _ in fractional_str.len()..(dscale as usize) {
+                    // We've added `leading_zeros` decimal places so far
+                    // We need `dscale` total decimal places
+                    // Calculate how many more we need from fractional_str
+                    let remaining_needed = (dscale as usize).saturating_sub(leading_zeros);
+
+                    if remaining_needed > 0 {
+                        // Add digits from fractional_str, up to remaining_needed
+                        let to_take = remaining_needed.min(fractional_str.len());
+                        result.push_str(&fractional_str[..to_take]);
+
+                        // Pad with zeros if we don't have enough digits
+                        for _ in to_take..remaining_needed {
                             result.push('0');
                         }
                     }
+                    // If remaining_needed is 0, we've already added enough leading zeros
                 } else {
                     // Mixed integer and fractional
                     if !integer_str.is_empty() {
@@ -717,6 +723,54 @@ mod tests {
         extreme_weight.extend_from_slice(&1i16.to_be_bytes()); // digit
         let _result = Numeric::decode(&extreme_weight, Format::Binary);
         // This will likely fail when trying to construct the string
+    }
+
+    #[test]
+    fn test_high_dscale_pure_fractional() {
+        // Test case that reproduces the panic: weight=-1, small fractional_str, large dscale
+        // This tests the fix for the bug where we tried to slice beyond fractional_str bounds
+
+        // Create a binary representation with:
+        // - ndigits = 1
+        // - weight = -1 (pure fractional, first digit at 10^-4 position)
+        // - sign = 0x0000 (positive)
+        // - dscale = 15 (want 15 decimal places)
+        // - digit = 10 (represents 0.0010)
+        let mut binary_data = Vec::new();
+        binary_data.extend_from_slice(&1i16.to_be_bytes()); // ndigits = 1
+        binary_data.extend_from_slice(&(-1i16).to_be_bytes()); // weight = -1
+        binary_data.extend_from_slice(&0x0000u16.to_be_bytes()); // sign = positive
+        binary_data.extend_from_slice(&15i16.to_be_bytes()); // dscale = 15
+        binary_data.extend_from_slice(&10i16.to_be_bytes()); // digit = 10
+
+        // This should decode to "0.001000000000000" (15 decimal places)
+        let decoded = Numeric::decode(&binary_data, Format::Binary)
+            .expect("Should decode high dscale pure fractional");
+
+        // The number should be 0.001 with trailing zeros to make 15 decimal places
+        let expected = Decimal::from_str("0.001000000000000").unwrap();
+        assert_eq!(
+            decoded.data, expected,
+            "High dscale pure fractional mismatch"
+        );
+
+        // Also test with even higher dscale
+        let mut binary_data2 = Vec::new();
+        binary_data2.extend_from_slice(&1i16.to_be_bytes()); // ndigits = 1
+        binary_data2.extend_from_slice(&(-2i16).to_be_bytes()); // weight = -2 (10^-8 position)
+        binary_data2.extend_from_slice(&0x0000u16.to_be_bytes()); // sign = positive
+        binary_data2.extend_from_slice(&20i16.to_be_bytes()); // dscale = 20
+        binary_data2.extend_from_slice(&1234i16.to_be_bytes()); // digit = 1234
+
+        // weight=-2 means 4 leading zeros, then 1234 -> "0.00001234" padded to 20 places
+        let decoded2 = Numeric::decode(&binary_data2, Format::Binary)
+            .expect("Should decode very high dscale pure fractional");
+
+        let expected2 = Decimal::from_str("0.00001234000000000000").unwrap();
+        assert_eq!(
+            decoded2.data, expected2,
+            "Very high dscale pure fractional mismatch"
+        );
     }
 
     #[test]
