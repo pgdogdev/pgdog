@@ -33,6 +33,10 @@ impl QueryEngine {
         self.begin_stmt = None;
         context.transaction = None; // Clear transaction state
 
+        if rollback {
+            self.notify_buffer.clear();
+        }
+
         Ok(())
     }
 
@@ -64,6 +68,9 @@ impl QueryEngine {
             // Tell client we finished the transaction.
             self.end_not_connected(context, false, extended).await?;
         } else {
+            if rollback {
+                self.notify_buffer.clear();
+            }
             self.execute(context, route).await?;
         }
 

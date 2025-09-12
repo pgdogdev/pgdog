@@ -15,6 +15,7 @@ pub mod context;
 pub mod deallocate;
 pub mod end_transaction;
 pub mod incomplete_requests;
+pub mod notify_buffer;
 pub mod pub_sub;
 pub mod query;
 pub mod route_query;
@@ -28,6 +29,7 @@ pub mod unknown_command;
 mod testing;
 
 pub use context::QueryEngineContext;
+use notify_buffer::NotifyBuffer;
 pub use two_pc::phase::TwoPcPhase;
 use two_pc::TwoPc;
 
@@ -43,6 +45,7 @@ pub struct QueryEngine {
     test_mode: bool,
     set_route: Option<Route>,
     two_pc: TwoPc,
+    notify_buffer: NotifyBuffer,
 }
 
 impl QueryEngine {
@@ -200,6 +203,7 @@ impl QueryEngine {
 
         if !context.in_transaction() {
             self.backend.mirror_flush();
+            self.flush_notify().await?;
         }
 
         self.update_stats(context);

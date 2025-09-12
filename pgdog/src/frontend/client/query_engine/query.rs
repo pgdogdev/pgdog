@@ -96,6 +96,11 @@ impl QueryEngine {
                 false
             };
 
+            // Check if transaction is aborted and clear notify buffer if so
+            if message.is_transaction_aborted() {
+                self.notify_buffer.clear();
+            }
+
             let in_transaction = message.in_transaction();
             if !in_transaction {
                 context.transaction = None;
