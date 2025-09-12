@@ -199,6 +199,16 @@ data_type = "bigint"
 primary = true
 
 # ------------------------------------------------------------------------------
+# ----- Hash Sharded :: Sort Test ----------------------------------------------
+
+[[sharded_tables]]
+database = "pgdog_sharded"
+name = "sort_test"
+column = "id"
+data_type = "bigint"
+primary = true
+
+# ------------------------------------------------------------------------------
 # ----- Hash Sharded :: UUID ---------------------------------------------------
 
 [[sharded_tables]]
