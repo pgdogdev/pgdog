@@ -24,6 +24,7 @@ VERY IMPORTANT:
 
 - Prefer to run individual tests with `cargo nextest run --test-threads=1 --no-fail-fast <name of the test here>`. This is much faster.
 - A local PostgreSQL server is required for some tests to pass. Ensure it is set up, and if necessary create a database called "pgdog", and create a user called "pgdog" with password "pgdog".
+- Focus on files in `./pgdog` and `./integration` - other files are LOWEST priority
 
 ## Test-Driven Development (TDD) - STRICT ENFORCEMENT
 - **MANDATORY WORKFLOW - NO EXCEPTIONS:**
