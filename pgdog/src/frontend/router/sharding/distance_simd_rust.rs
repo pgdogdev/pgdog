@@ -1,10 +1,19 @@
 use crate::net::messages::data_types::Float;
+use std::mem;
 
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
 
 #[cfg(target_arch = "aarch64")]
 use std::arch::aarch64::*;
+
+/// Helper function to convert Float slice to f32 slice
+/// SAFETY: Float is a newtype wrapper around f32, so the memory layout is identical
+#[inline(always)]
+unsafe fn float_slice_to_f32(floats: &[Float]) -> &[f32] {
+    // This is safe because Float is a transparent wrapper around f32
+    std::slice::from_raw_parts(floats.as_ptr() as *const f32, floats.len())
+}
 
 /// Scalar reference implementation - no allocations
 #[inline]
@@ -26,6 +35,10 @@ pub fn euclidean_distance_sse(p: &[Float], q: &[Float]) -> f32 {
     debug_assert_eq!(p.len(), q.len());
 
     unsafe {
+        // Convert Float slices to f32 slices to avoid temporary arrays
+        let p_f32 = float_slice_to_f32(p);
+        let q_f32 = float_slice_to_f32(q);
+
         let mut sum1 = _mm_setzero_ps();
         let mut sum2 = _mm_setzero_ps();
         let chunks = p.len() / 8; // Process 8 at a time (2 SSE vectors)
@@ -34,19 +47,15 @@ pub fn euclidean_distance_sse(p: &[Float], q: &[Float]) -> f32 {
         for i in 0..chunks {
             let idx = i * 8;
 
-            // First 4 floats - use temporary arrays for efficient loading
-            let p_tmp1 = [p[idx].0, p[idx + 1].0, p[idx + 2].0, p[idx + 3].0];
-            let q_tmp1 = [q[idx].0, q[idx + 1].0, q[idx + 2].0, q[idx + 3].0];
-            let p_vec1 = _mm_loadu_ps(p_tmp1.as_ptr());
-            let q_vec1 = _mm_loadu_ps(q_tmp1.as_ptr());
+            // First 4 floats - direct load from slice
+            let p_vec1 = _mm_loadu_ps(p_f32.as_ptr().add(idx));
+            let q_vec1 = _mm_loadu_ps(q_f32.as_ptr().add(idx));
             let diff1 = _mm_sub_ps(q_vec1, p_vec1);
             sum1 = _mm_add_ps(sum1, _mm_mul_ps(diff1, diff1));
 
             // Second 4 floats
-            let p_tmp2 = [p[idx + 4].0, p[idx + 5].0, p[idx + 6].0, p[idx + 7].0];
-            let q_tmp2 = [q[idx + 4].0, q[idx + 5].0, q[idx + 6].0, q[idx + 7].0];
-            let p_vec2 = _mm_loadu_ps(p_tmp2.as_ptr());
-            let q_vec2 = _mm_loadu_ps(q_tmp2.as_ptr());
+            let p_vec2 = _mm_loadu_ps(p_f32.as_ptr().add(idx + 4));
+            let q_vec2 = _mm_loadu_ps(q_f32.as_ptr().add(idx + 4));
             let diff2 = _mm_sub_ps(q_vec2, p_vec2);
             sum2 = _mm_add_ps(sum2, _mm_mul_ps(diff2, diff2));
         }
@@ -78,6 +87,10 @@ pub fn euclidean_distance_avx2(p: &[Float], q: &[Float]) -> f32 {
     debug_assert_eq!(p.len(), q.len());
 
     unsafe {
+        // Convert Float slices to f32 slices to avoid temporary arrays
+        let p_f32 = float_slice_to_f32(p);
+        let q_f32 = float_slice_to_f32(q);
+
         let mut sum1 = _mm256_setzero_ps();
         let mut sum2 = _mm256_setzero_ps();
         let chunks = p.len() / 16; // Process 16 at a time (2 AVX2 vectors)
@@ -86,29 +99,9 @@ pub fn euclidean_distance_avx2(p: &[Float], q: &[Float]) -> f32 {
         for i in 0..chunks {
             let idx = i * 16;
 
-            // First 8 floats - use temporary arrays for efficient loading
-            let p_tmp1 = [
-                p[idx].0,
-                p[idx + 1].0,
-                p[idx + 2].0,
-                p[idx + 3].0,
-                p[idx + 4].0,
-                p[idx + 5].0,
-                p[idx + 6].0,
-                p[idx + 7].0,
-            ];
-            let q_tmp1 = [
-                q[idx].0,
-                q[idx + 1].0,
-                q[idx + 2].0,
-                q[idx + 3].0,
-                q[idx + 4].0,
-                q[idx + 5].0,
-                q[idx + 6].0,
-                q[idx + 7].0,
-            ];
-            let p_vec1 = _mm256_loadu_ps(p_tmp1.as_ptr());
-            let q_vec1 = _mm256_loadu_ps(q_tmp1.as_ptr());
+            // First 8 floats - direct load from slice
+            let p_vec1 = _mm256_loadu_ps(p_f32.as_ptr().add(idx));
+            let q_vec1 = _mm256_loadu_ps(q_f32.as_ptr().add(idx));
             let diff1 = _mm256_sub_ps(q_vec1, p_vec1);
 
             #[cfg(target_feature = "fma")]
@@ -121,28 +114,8 @@ pub fn euclidean_distance_avx2(p: &[Float], q: &[Float]) -> f32 {
             }
 
             // Second 8 floats
-            let p_tmp2 = [
-                p[idx + 8].0,
-                p[idx + 9].0,
-                p[idx + 10].0,
-                p[idx + 11].0,
-                p[idx + 12].0,
-                p[idx + 13].0,
-                p[idx + 14].0,
-                p[idx + 15].0,
-            ];
-            let q_tmp2 = [
-                q[idx + 8].0,
-                q[idx + 9].0,
-                q[idx + 10].0,
-                q[idx + 11].0,
-                q[idx + 12].0,
-                q[idx + 13].0,
-                q[idx + 14].0,
-                q[idx + 15].0,
-            ];
-            let p_vec2 = _mm256_loadu_ps(p_tmp2.as_ptr());
-            let q_vec2 = _mm256_loadu_ps(q_tmp2.as_ptr());
+            let p_vec2 = _mm256_loadu_ps(p_f32.as_ptr().add(idx + 8));
+            let q_vec2 = _mm256_loadu_ps(q_f32.as_ptr().add(idx + 8));
             let diff2 = _mm256_sub_ps(q_vec2, p_vec2);
 
             #[cfg(target_feature = "fma")]
@@ -187,6 +160,10 @@ pub fn euclidean_distance_neon(p: &[Float], q: &[Float]) -> f32 {
     debug_assert_eq!(p.len(), q.len());
 
     unsafe {
+        // Convert Float slices to f32 slices to avoid temporary arrays
+        let p_f32 = float_slice_to_f32(p);
+        let q_f32 = float_slice_to_f32(q);
+
         let mut sum1 = vdupq_n_f32(0.0);
         let mut sum2 = vdupq_n_f32(0.0);
         let chunks = p.len() / 8; // Process 8 at a time (2 vectors)
@@ -195,17 +172,15 @@ pub fn euclidean_distance_neon(p: &[Float], q: &[Float]) -> f32 {
         for i in 0..chunks {
             let idx = i * 8;
 
-            // First 4 floats - direct load without temporary arrays
-            let p_vec1 = vld1q_f32([p[idx].0, p[idx + 1].0, p[idx + 2].0, p[idx + 3].0].as_ptr());
-            let q_vec1 = vld1q_f32([q[idx].0, q[idx + 1].0, q[idx + 2].0, q[idx + 3].0].as_ptr());
+            // First 4 floats - direct load from slice
+            let p_vec1 = vld1q_f32(p_f32.as_ptr().add(idx));
+            let q_vec1 = vld1q_f32(q_f32.as_ptr().add(idx));
             let diff1 = vsubq_f32(q_vec1, p_vec1);
             sum1 = vfmaq_f32(sum1, diff1, diff1);
 
             // Second 4 floats
-            let p_vec2 =
-                vld1q_f32([p[idx + 4].0, p[idx + 5].0, p[idx + 6].0, p[idx + 7].0].as_ptr());
-            let q_vec2 =
-                vld1q_f32([q[idx + 4].0, q[idx + 5].0, q[idx + 6].0, q[idx + 7].0].as_ptr());
+            let p_vec2 = vld1q_f32(p_f32.as_ptr().add(idx + 4));
+            let q_vec2 = vld1q_f32(q_f32.as_ptr().add(idx + 4));
             let diff2 = vsubq_f32(q_vec2, p_vec2);
             sum2 = vfmaq_f32(sum2, diff2, diff2);
         }
