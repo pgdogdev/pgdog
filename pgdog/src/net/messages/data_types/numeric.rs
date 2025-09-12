@@ -97,7 +97,7 @@ impl FromDataType for Numeric {
                                 Err(Error::UnexpectedPayload)
                             }
                             "INFINITY" | "+INFINITY" | "-INFINITY" => {
-                                warn!("Infinity values not supported");
+                                warn!("numeric infinity values not supported");
                                 Err(Error::UnexpectedPayload)
                             }
                             _ => {
