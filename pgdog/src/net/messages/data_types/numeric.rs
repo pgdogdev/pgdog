@@ -274,7 +274,7 @@ impl FromDataType for Numeric {
                 }
 
                 let decimal = Decimal::from_str(&result).map_err(|e| {
-                    warn!("Failed to parse '{}' as Decimal: {}", result, e);
+                    warn!("failed to parse '{}' as Decimal: {}", result, e);
                     Error::UnexpectedPayload
                 })?;
                 Ok(Self { data: decimal })
