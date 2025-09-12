@@ -91,14 +91,15 @@ impl QueryEngine {
         // ReadyForQuery (B)
         if code == 'Z' {
             self.stats.query();
+            let in_error = message.is_transaction_aborted();
 
             // Check if transaction is aborted and clear notify buffer if so
-            if message.is_transaction_aborted() {
+            if in_error {
                 self.notify_buffer.clear();
                 context.transaction = Some(TransactionType::Error);
             }
 
-            let two_pc = if self.two_pc.auto() {
+            let two_pc = if self.two_pc.auto() && !in_error {
                 self.end_two_pc().await?;
                 message = ReadyForQuery::in_transaction(false).message()?;
                 true

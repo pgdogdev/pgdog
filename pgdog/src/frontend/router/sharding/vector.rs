@@ -14,7 +14,7 @@ impl Distance<'_> {
                     .zip(q.iter())
                     .map(|(p, q)| (q.0 - p.0).powi(2))
                     .sum::<f32>()
-                    .sqrt() as f32
+                    .sqrt()
             }
         }
     }

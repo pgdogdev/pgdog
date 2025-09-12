@@ -99,7 +99,7 @@ impl MultiShard {
 
                 // Save error state from one of the shards.
                 if rfq.is_transaction_aborted() {
-                    self.counters.ready_for_query_message = Some(rfq.clone());
+                    self.counters.ready_for_query_message = Some(rfq);
                 }
 
                 forward = if self.counters.ready_for_query % self.shards == 0 {
