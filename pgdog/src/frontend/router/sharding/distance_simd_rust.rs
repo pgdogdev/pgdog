@@ -19,92 +19,47 @@ pub fn euclidean_distance_scalar(p: &[Float], q: &[Float]) -> f32 {
     sum.sqrt()
 }
 
-/// SIMD implementation for x86_64 with SSE
+/// SIMD implementation for x86_64 with SSE - optimized version
 #[cfg(all(target_arch = "x86_64", target_feature = "sse"))]
 #[inline]
 pub fn euclidean_distance_sse(p: &[Float], q: &[Float]) -> f32 {
     debug_assert_eq!(p.len(), q.len());
 
     unsafe {
-        let mut sum = _mm_setzero_ps();
-        let chunks = p.len() / 4;
+        let mut sum1 = _mm_setzero_ps();
+        let mut sum2 = _mm_setzero_ps();
+        let chunks = p.len() / 8; // Process 8 at a time (2 SSE vectors)
 
-        // Process 4 floats at a time
-        for i in 0..chunks {
-            let idx = i * 4;
-            let p_vec = _mm_set_ps(p[idx + 3].0, p[idx + 2].0, p[idx + 1].0, p[idx].0);
-            let q_vec = _mm_set_ps(q[idx + 3].0, q[idx + 2].0, q[idx + 1].0, q[idx].0);
-            let diff = _mm_sub_ps(q_vec, p_vec);
-            let squared = _mm_mul_ps(diff, diff);
-            sum = _mm_add_ps(sum, squared);
-        }
-
-        // Horizontal sum
-        let mut result = [0.0f32; 4];
-        _mm_storeu_ps(result.as_mut_ptr(), sum);
-        let mut total = result[0] + result[1] + result[2] + result[3];
-
-        // Handle remaining elements
-        for i in (chunks * 4)..p.len() {
-            let diff = q[i].0 - p[i].0;
-            total += diff * diff;
-        }
-
-        total.sqrt()
-    }
-}
-
-/// SIMD implementation for x86_64 with AVX2
-#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-#[inline]
-pub fn euclidean_distance_avx2(p: &[Float], q: &[Float]) -> f32 {
-    debug_assert_eq!(p.len(), q.len());
-
-    unsafe {
-        let mut sum = _mm256_setzero_ps();
-        let chunks = p.len() / 8;
-
-        // Process 8 floats at a time
+        // Unroll loop to process 8 floats per iteration
         for i in 0..chunks {
             let idx = i * 8;
-            let p_vec = _mm256_set_ps(
-                p[idx + 7].0,
-                p[idx + 6].0,
-                p[idx + 5].0,
-                p[idx + 4].0,
-                p[idx + 3].0,
-                p[idx + 2].0,
-                p[idx + 1].0,
-                p[idx].0,
-            );
-            let q_vec = _mm256_set_ps(
-                q[idx + 7].0,
-                q[idx + 6].0,
-                q[idx + 5].0,
-                q[idx + 4].0,
-                q[idx + 3].0,
-                q[idx + 2].0,
-                q[idx + 1].0,
-                q[idx].0,
-            );
-            let diff = _mm256_sub_ps(q_vec, p_vec);
 
-            // Use FMA if available
-            #[cfg(target_feature = "fma")]
-            {
-                sum = _mm256_fmadd_ps(diff, diff, sum);
-            }
-            #[cfg(not(target_feature = "fma"))]
-            {
-                let squared = _mm256_mul_ps(diff, diff);
-                sum = _mm256_add_ps(sum, squared);
-            }
+            // First 4 floats - use temporary arrays for efficient loading
+            let p_tmp1 = [p[idx].0, p[idx + 1].0, p[idx + 2].0, p[idx + 3].0];
+            let q_tmp1 = [q[idx].0, q[idx + 1].0, q[idx + 2].0, q[idx + 3].0];
+            let p_vec1 = _mm_loadu_ps(p_tmp1.as_ptr());
+            let q_vec1 = _mm_loadu_ps(q_tmp1.as_ptr());
+            let diff1 = _mm_sub_ps(q_vec1, p_vec1);
+            sum1 = _mm_add_ps(sum1, _mm_mul_ps(diff1, diff1));
+
+            // Second 4 floats
+            let p_tmp2 = [p[idx + 4].0, p[idx + 5].0, p[idx + 6].0, p[idx + 7].0];
+            let q_tmp2 = [q[idx + 4].0, q[idx + 5].0, q[idx + 6].0, q[idx + 7].0];
+            let p_vec2 = _mm_loadu_ps(p_tmp2.as_ptr());
+            let q_vec2 = _mm_loadu_ps(q_tmp2.as_ptr());
+            let diff2 = _mm_sub_ps(q_vec2, p_vec2);
+            sum2 = _mm_add_ps(sum2, _mm_mul_ps(diff2, diff2));
         }
 
-        // Horizontal sum
-        let mut result = [0.0f32; 8];
-        _mm256_storeu_ps(result.as_mut_ptr(), sum);
-        let mut total = result.iter().sum::<f32>();
+        // Combine accumulators
+        let sum = _mm_add_ps(sum1, sum2);
+
+        // More efficient horizontal sum using shuffles
+        let shuf = _mm_shuffle_ps(sum, sum, 0b01_00_11_10); // [2,3,0,1]
+        let sums = _mm_add_ps(sum, shuf);
+        let shuf = _mm_shuffle_ps(sums, sums, 0b10_11_00_01); // [1,0,3,2]
+        let result = _mm_add_ps(sums, shuf);
+        let mut total = _mm_cvtss_f32(result);
 
         // Handle remaining elements
         for i in (chunks * 8)..p.len() {
@@ -116,36 +71,155 @@ pub fn euclidean_distance_avx2(p: &[Float], q: &[Float]) -> f32 {
     }
 }
 
-/// SIMD implementation for ARM NEON
+/// SIMD implementation for x86_64 with AVX2 - optimized version
+#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+#[inline]
+pub fn euclidean_distance_avx2(p: &[Float], q: &[Float]) -> f32 {
+    debug_assert_eq!(p.len(), q.len());
+
+    unsafe {
+        let mut sum1 = _mm256_setzero_ps();
+        let mut sum2 = _mm256_setzero_ps();
+        let chunks = p.len() / 16; // Process 16 at a time (2 AVX2 vectors)
+
+        // Unroll loop to process 16 floats per iteration
+        for i in 0..chunks {
+            let idx = i * 16;
+
+            // First 8 floats - use temporary arrays for efficient loading
+            let p_tmp1 = [
+                p[idx].0,
+                p[idx + 1].0,
+                p[idx + 2].0,
+                p[idx + 3].0,
+                p[idx + 4].0,
+                p[idx + 5].0,
+                p[idx + 6].0,
+                p[idx + 7].0,
+            ];
+            let q_tmp1 = [
+                q[idx].0,
+                q[idx + 1].0,
+                q[idx + 2].0,
+                q[idx + 3].0,
+                q[idx + 4].0,
+                q[idx + 5].0,
+                q[idx + 6].0,
+                q[idx + 7].0,
+            ];
+            let p_vec1 = _mm256_loadu_ps(p_tmp1.as_ptr());
+            let q_vec1 = _mm256_loadu_ps(q_tmp1.as_ptr());
+            let diff1 = _mm256_sub_ps(q_vec1, p_vec1);
+
+            #[cfg(target_feature = "fma")]
+            {
+                sum1 = _mm256_fmadd_ps(diff1, diff1, sum1);
+            }
+            #[cfg(not(target_feature = "fma"))]
+            {
+                sum1 = _mm256_add_ps(sum1, _mm256_mul_ps(diff1, diff1));
+            }
+
+            // Second 8 floats
+            let p_tmp2 = [
+                p[idx + 8].0,
+                p[idx + 9].0,
+                p[idx + 10].0,
+                p[idx + 11].0,
+                p[idx + 12].0,
+                p[idx + 13].0,
+                p[idx + 14].0,
+                p[idx + 15].0,
+            ];
+            let q_tmp2 = [
+                q[idx + 8].0,
+                q[idx + 9].0,
+                q[idx + 10].0,
+                q[idx + 11].0,
+                q[idx + 12].0,
+                q[idx + 13].0,
+                q[idx + 14].0,
+                q[idx + 15].0,
+            ];
+            let p_vec2 = _mm256_loadu_ps(p_tmp2.as_ptr());
+            let q_vec2 = _mm256_loadu_ps(q_tmp2.as_ptr());
+            let diff2 = _mm256_sub_ps(q_vec2, p_vec2);
+
+            #[cfg(target_feature = "fma")]
+            {
+                sum2 = _mm256_fmadd_ps(diff2, diff2, sum2);
+            }
+            #[cfg(not(target_feature = "fma"))]
+            {
+                sum2 = _mm256_add_ps(sum2, _mm256_mul_ps(diff2, diff2));
+            }
+        }
+
+        // Combine accumulators
+        let sum = _mm256_add_ps(sum1, sum2);
+
+        // More efficient horizontal sum using extract and SSE
+        let high = _mm256_extractf128_ps(sum, 1);
+        let low = _mm256_castps256_ps128(sum);
+        let sum128 = _mm_add_ps(low, high);
+
+        // Use SSE horizontal sum (more efficient than storing to array)
+        let shuf = _mm_shuffle_ps(sum128, sum128, 0b01_00_11_10);
+        let sums = _mm_add_ps(sum128, shuf);
+        let shuf = _mm_shuffle_ps(sums, sums, 0b10_11_00_01);
+        let result = _mm_add_ps(sums, shuf);
+        let mut total = _mm_cvtss_f32(result);
+
+        // Handle remaining elements
+        for i in (chunks * 16)..p.len() {
+            let diff = q[i].0 - p[i].0;
+            total += diff * diff;
+        }
+
+        total.sqrt()
+    }
+}
+
+/// SIMD implementation for ARM NEON - optimized version
 #[cfg(target_arch = "aarch64")]
 #[inline]
 pub fn euclidean_distance_neon(p: &[Float], q: &[Float]) -> f32 {
     debug_assert_eq!(p.len(), q.len());
 
     unsafe {
-        let mut sum = vdupq_n_f32(0.0);
-        let chunks = p.len() / 4;
+        let mut sum1 = vdupq_n_f32(0.0);
+        let mut sum2 = vdupq_n_f32(0.0);
+        let chunks = p.len() / 8; // Process 8 at a time (2 vectors)
 
-        // Process 4 floats at a time
+        // Unroll loop to process 8 floats per iteration (2x4)
         for i in 0..chunks {
-            let idx = i * 4;
-            // Load 4 floats from p and q
-            let p_vals = [p[idx].0, p[idx + 1].0, p[idx + 2].0, p[idx + 3].0];
-            let q_vals = [q[idx].0, q[idx + 1].0, q[idx + 2].0, q[idx + 3].0];
+            let idx = i * 8;
 
-            let p_vec = vld1q_f32(p_vals.as_ptr());
-            let q_vec = vld1q_f32(q_vals.as_ptr());
-            let diff = vsubq_f32(q_vec, p_vec);
-            sum = vfmaq_f32(sum, diff, diff); // Fused multiply-add
+            // First 4 floats - direct load without temporary arrays
+            let p_vec1 = vld1q_f32([p[idx].0, p[idx + 1].0, p[idx + 2].0, p[idx + 3].0].as_ptr());
+            let q_vec1 = vld1q_f32([q[idx].0, q[idx + 1].0, q[idx + 2].0, q[idx + 3].0].as_ptr());
+            let diff1 = vsubq_f32(q_vec1, p_vec1);
+            sum1 = vfmaq_f32(sum1, diff1, diff1);
+
+            // Second 4 floats
+            let p_vec2 =
+                vld1q_f32([p[idx + 4].0, p[idx + 5].0, p[idx + 6].0, p[idx + 7].0].as_ptr());
+            let q_vec2 =
+                vld1q_f32([q[idx + 4].0, q[idx + 5].0, q[idx + 6].0, q[idx + 7].0].as_ptr());
+            let diff2 = vsubq_f32(q_vec2, p_vec2);
+            sum2 = vfmaq_f32(sum2, diff2, diff2);
         }
 
-        // Horizontal sum
-        let sum_pair = vadd_f32(vget_low_f32(sum), vget_high_f32(sum));
-        let sum_scalar = vpadd_f32(sum_pair, sum_pair);
-        let mut total = vget_lane_f32(sum_scalar, 0);
+        // Combine the two accumulators
+        let sum = vaddq_f32(sum1, sum2);
+
+        // Horizontal sum - more efficient version
+        let sum_pairs = vpaddq_f32(sum, sum);
+        let sum_final = vpaddq_f32(sum_pairs, sum_pairs);
+        let mut total = vgetq_lane_f32(sum_final, 0);
 
         // Handle remaining elements
-        for i in (chunks * 4)..p.len() {
+        for i in (chunks * 8)..p.len() {
             let diff = q[i].0 - p[i].0;
             total += diff * diff;
         }
