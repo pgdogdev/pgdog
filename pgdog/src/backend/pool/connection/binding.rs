@@ -6,6 +6,8 @@ use crate::{
     state::State,
 };
 
+use futures::future::join_all;
+
 use super::*;
 
 /// The server(s) the client is connected to.
@@ -131,6 +133,8 @@ impl Binding {
 
             Binding::MultiShard(servers, state) => {
                 let mut shards_sent = servers.len();
+                let mut futures = Vec::new();
+
                 for (shard, server) in servers.iter_mut().enumerate() {
                     let send = match client_request.route().shard() {
                         Shard::Direct(s) => {
@@ -145,8 +149,14 @@ impl Binding {
                     };
 
                     if send {
-                        server.send(client_request).await?;
+                        futures.push(server.send(client_request));
                     }
+                }
+
+                let results = join_all(futures).await;
+
+                for result in results {
+                    result?;
                 }
 
                 state.update(shards_sent, client_request.route());
@@ -249,8 +259,11 @@ impl Binding {
             }
 
             Binding::MultiShard(ref mut servers, _) => {
-                for server in servers {
-                    result.extend(server.execute(query).await?);
+                let futures = servers.iter_mut().map(|server| server.execute(query));
+                let results = join_all(futures).await;
+
+                for server_result in results {
+                    result.extend(server_result?);
                 }
             }
 
@@ -264,30 +277,44 @@ impl Binding {
     pub async fn two_pc(&mut self, name: &str, phase: TwoPcPhase) -> Result<(), Error> {
         match self {
             Binding::MultiShard(ref mut servers, _) => {
+                let skip_missing = match phase {
+                    TwoPcPhase::Phase1 => false,
+                    TwoPcPhase::Phase2 | TwoPcPhase::Rollback => true,
+                };
+
+                // Build futures for all servers
+                let mut futures = Vec::new();
                 for (shard, server) in servers.iter_mut().enumerate() {
                     // Each shard has its own transaction name.
                     // This is to make this work on sharded databases that use the same
                     // database underneath.
-                    let name = format!("{}_{}", name, shard);
+                    let shard_name = format!("{}_{}", name, shard);
 
-                    let (query, skip_missing) = match phase {
-                        TwoPcPhase::Phase1 => (format!("PREPARE TRANSACTION '{}'", name), false),
-                        TwoPcPhase::Phase2 => (format!("COMMIT PREPARED '{}'", name), true),
-                        TwoPcPhase::Rollback => (format!("ROLLBACK PREPARED '{}'", name), true),
+                    let query = match phase {
+                        TwoPcPhase::Phase1 => format!("PREPARE TRANSACTION '{}'", shard_name),
+                        TwoPcPhase::Phase2 => format!("COMMIT PREPARED '{}'", shard_name),
+                        TwoPcPhase::Rollback => format!("ROLLBACK PREPARED '{}'", shard_name),
                     };
 
-                    match server.execute(query).await {
+                    futures.push(server.execute(query));
+                }
+
+                // Execute all operations in parallel
+                let results = join_all(futures).await;
+
+                // Process results and handle errors
+                for (shard, result) in results.into_iter().enumerate() {
+                    match result {
                         Err(Error::ExecutionError(err)) => {
                             // Undefined object, transaction doesn't exist.
                             if !(skip_missing && err.code == "42704") {
                                 return Err(Error::ExecutionError(err));
                             }
                         }
-
                         Err(err) => return Err(err),
                         Ok(_) => {
                             if phase == TwoPcPhase::Phase2 {
-                                server.stats_mut().transaction_2pc();
+                                servers[shard].stats_mut().transaction_2pc();
                             }
                         }
                     }
@@ -304,9 +331,12 @@ impl Binding {
         match self {
             Binding::Direct(Some(ref mut server)) => server.link_client(params).await,
             Binding::MultiShard(ref mut servers, _) => {
+                let futures = servers.iter_mut().map(|server| server.link_client(params));
+                let results = join_all(futures).await;
+
                 let mut max = 0;
-                for server in servers {
-                    let synced = server.link_client(params).await?;
+                for result in results {
+                    let synced = result?;
                     if max < synced {
                         max = synced;
                     }

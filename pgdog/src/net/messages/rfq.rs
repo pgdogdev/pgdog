@@ -26,6 +26,10 @@ impl ReadyForQuery {
     pub fn error() -> Self {
         ReadyForQuery { status: 'E' }
     }
+
+    pub fn is_transaction_aborted(&self) -> bool {
+        self.status == 'E'
+    }
 }
 
 impl ToBytes for ReadyForQuery {
