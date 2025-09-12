@@ -1,5 +1,4 @@
 use crate::net::messages::data_types::Float;
-use std::mem;
 
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
