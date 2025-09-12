@@ -22,7 +22,14 @@ impl QueryEngine {
         payload: &str,
         shard: &Shard,
     ) -> Result<(), Error> {
-        self.backend.notify(channel, payload, shard.clone()).await?;
+        if context.in_transaction() {
+            // Buffer the NOTIFY command if we're in a transaction
+            self.notify_buffer
+                .add(channel.to_string(), payload.to_string(), shard.clone());
+        } else {
+            // Send immediately if not in transaction
+            self.backend.notify(channel, payload, shard.clone()).await?;
+        }
         self.command_complete(context, "NOTIFY").await?;
         Ok(())
     }
@@ -34,6 +41,15 @@ impl QueryEngine {
     ) -> Result<(), Error> {
         self.backend.unlisten(channel);
         self.command_complete(context, "UNLISTEN").await?;
+        Ok(())
+    }
+
+    pub(super) async fn flush_notify(&mut self) -> Result<(), Error> {
+        for notify_cmd in self.notify_buffer.drain() {
+            self.backend
+                .notify(&notify_cmd.channel, &notify_cmd.payload, notify_cmd.shard)
+                .await?;
+        }
         Ok(())
     }
 
