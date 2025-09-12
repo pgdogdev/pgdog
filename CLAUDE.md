@@ -19,10 +19,16 @@ VERY IMPORTANT:
   NEVER take the lazy way out
   ALWAYS work carefully and methodically through the steps of the process.
   NEVER use quick fixes. Always carefully work through the problem unless specifically asked.
+  ALWAYS Ask clarifying questions before implementing
+  ALWAYS Break large tasks into single-session chunks
 
 VERY IMPORTANT: you are to act as a detective, attempting to find ways to falsify the code or planning we've done by discovering gaps or inconsistencies. ONLY write code when it is absolutely required to pass tests, the build, or typecheck.
 
 VERY IMPORTANT: NEVER comment out code or skip tests unless specifically requested by the user
+
+## Principles
+- **Data first**: Define types before implementation
+- **Small Modules**: Try to keep files under 200 lines, unless required by implementation. NEVER allow files to exceed 1000 lines unless specifically instructed.
 
 # Workflow
 
