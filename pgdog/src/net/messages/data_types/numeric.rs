@@ -101,7 +101,7 @@ impl FromDataType for Numeric {
                                 Err(Error::UnexpectedPayload)
                             }
                             _ => {
-                                warn!("Failed to parse numeric: {}", e);
+                                warn!("failed to parse numeric: {}", e);
                                 Err(Error::NotFloat(e.to_string().parse::<f64>().unwrap_err()))
                             }
                         }
