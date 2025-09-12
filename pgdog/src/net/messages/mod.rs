@@ -238,6 +238,10 @@ impl Message {
     pub fn in_transaction(&self) -> bool {
         self.code() == 'Z' && matches!(self.payload[5] as char, 'T' | 'E')
     }
+
+    pub fn is_transaction_aborted(&self) -> bool {
+        self.code() == 'Z' && self.payload[5] as char == 'E'
+    }
 }
 
 /// Check that the message we received is what we expected.
