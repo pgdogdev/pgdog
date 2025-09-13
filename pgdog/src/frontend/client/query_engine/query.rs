@@ -2,7 +2,10 @@ use tokio::time::timeout;
 
 use crate::{
     frontend::client::TransactionType,
-    net::{Message, Protocol, ProtocolMessage, Query, ReadyForQuery},
+    net::{
+        FromBytes, Message, Protocol, ProtocolMessage, Query, ReadyForQuery, ToBytes,
+        TransactionState,
+    },
     state::State,
 };
 
@@ -17,6 +20,11 @@ impl QueryEngine {
         context: &mut QueryEngineContext<'_>,
         route: &Route,
     ) -> Result<(), Error> {
+        // Check that we're not in a transaction error state.
+        if !self.transaction_error_check(context, route).await? {
+            return Ok(());
+        }
+
         // Check if we need to do 2pc automatically
         // for single-statement writes.
         self.two_pc_check(context, route);
@@ -88,32 +96,49 @@ impl QueryEngine {
         if code == 'Z' {
             self.stats.query();
 
-            let two_pc = if self.two_pc.auto() {
-                self.end_two_pc().await?;
-                message = ReadyForQuery::in_transaction(false).message()?;
-                true
-            } else {
-                false
-            };
+            let mut two_pc_auto = false;
+            let state = ReadyForQuery::from_bytes(message.to_bytes()?)?.state()?;
 
-            // Check if transaction is aborted and clear notify buffer if so
-            if message.is_transaction_aborted() {
-                self.notify_buffer.clear();
+            match state {
+                TransactionState::Error => {
+                    context.transaction = Some(TransactionType::Error);
+                    if self.two_pc.auto() {
+                        self.end_two_pc(true).await?;
+                        // TODO: this records a 2pc transaction in client
+                        // stats anyway but not on the servers. Is this what we want?
+                        two_pc_auto = true;
+                    }
+                }
+
+                TransactionState::Idle => {
+                    context.transaction = None;
+                }
+
+                TransactionState::InTrasaction => {
+                    if self.two_pc.auto() {
+                        self.end_two_pc(false).await?;
+                        two_pc_auto = true;
+                    }
+                    if context.transaction.is_none() {
+                        // Query parser is disabled, so the server is responsible for telling us
+                        // we started a transaction.
+                        context.transaction = Some(TransactionType::ReadWrite);
+                    }
+                }
             }
 
-            let in_transaction = message.in_transaction();
-            if !in_transaction {
+            if two_pc_auto {
+                // In auto mode, 2pc transaction was started automatically
+                // without the client's knowledge. We need to return a regular RFQ
+                // message and close the transaction.
                 context.transaction = None;
-            } else if context.transaction.is_none() {
-                // Query parser is disabled, so the server is responsible for telling us
-                // we started a transaction.
-                context.transaction = Some(TransactionType::ReadWrite);
+                message = ReadyForQuery::in_transaction(false).message()?;
             }
 
             self.stats.idle(context.in_transaction());
 
             if !context.in_transaction() {
-                self.stats.transaction(two_pc);
+                self.stats.transaction(two_pc_auto);
             }
         }
 
@@ -219,6 +244,27 @@ impl QueryEngine {
             debug!("[2pc] enabling automatic transaction");
             self.two_pc.set_auto();
             self.begin_stmt = Some(BufferedQuery::Query(Query::new("BEGIN")));
+        }
+    }
+
+    async fn transaction_error_check(
+        &mut self,
+        context: &mut QueryEngineContext<'_>,
+        route: &Route,
+    ) -> Result<bool, Error> {
+        if context.in_error() && !context.rollback && route.is_cross_shard() {
+            let bytes_sent = context
+                .stream
+                .error(
+                    ErrorResponse::in_failed_transaction(),
+                    context.in_transaction(),
+                )
+                .await?;
+            self.stats.sent(bytes_sent);
+
+            Ok(false)
+        } else {
+            Ok(true)
         }
     }
 }

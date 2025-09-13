@@ -14,7 +14,7 @@ pub struct QueryEngineContext<'a> {
     pub(super) prepared_statements: &'a mut PreparedStatements,
     /// Client session parameters.
     pub(super) params: &'a mut Parameters,
-    /// Request
+    /// Request.
     pub(super) client_request: &'a mut ClientRequest,
     /// Request position in a splice.
     pub(super) requests_left: usize,
@@ -30,6 +30,8 @@ pub struct QueryEngineContext<'a> {
     pub(super) memory_usage: usize,
     /// Is the client an admin.
     pub(super) admin: bool,
+    /// Executing rollback statement.
+    pub(super) rollback: bool,
 }
 
 impl<'a> QueryEngineContext<'a> {
@@ -47,6 +49,7 @@ impl<'a> QueryEngineContext<'a> {
             memory_usage,
             admin: client.admin,
             requests_left: 0,
+            rollback: false,
         }
     }
 
@@ -69,6 +72,7 @@ impl<'a> QueryEngineContext<'a> {
             memory_usage: 0,
             admin: false,
             requests_left: 0,
+            rollback: false,
         }
     }
 
@@ -78,5 +82,9 @@ impl<'a> QueryEngineContext<'a> {
 
     pub fn in_transaction(&self) -> bool {
         self.transaction.is_some()
+    }
+
+    pub fn in_error(&self) -> bool {
+        self.transaction.map(|t| t.error()).unwrap_or_default()
     }
 }
