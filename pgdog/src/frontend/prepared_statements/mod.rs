@@ -64,15 +64,15 @@ impl PreparedStatements {
     }
 
     /// Maybe rewrite message.
-    pub fn maybe_rewrite(&mut self, message: ProtocolMessage) -> Result<ProtocolMessage, Error> {
+    pub fn maybe_rewrite(&mut self, message: &mut ProtocolMessage) -> Result<(), Error> {
         let mut rewrite = Rewrite::new(self);
-        let message = rewrite.rewrite(message)?;
-        Ok(message)
+        rewrite.rewrite(message)?;
+        Ok(())
     }
 
     /// Register prepared statement with the global cache.
-    pub fn insert(&mut self, parse: Parse) -> Parse {
-        let (_new, name) = { self.global.lock().insert(&parse) };
+    pub fn insert(&mut self, parse: &mut Parse) {
+        let (_new, name) = { self.global.lock().insert(parse) };
         let existed = self.local.insert(parse.name().to_owned(), name.clone());
         self.memory_used = self.memory_usage();
 
@@ -89,7 +89,7 @@ impl PreparedStatements {
     }
 
     /// Insert statement into the cache bypassing duplicate checks.
-    pub fn insert_anyway(&mut self, parse: Parse) -> Parse {
+    pub fn insert_anyway(&mut self, parse: &mut Parse) {
         let name = self.global.lock().insert_anyway(&parse);
         self.local.insert(parse.name().to_owned(), name.clone());
         self.memory_used = self.memory_usage();

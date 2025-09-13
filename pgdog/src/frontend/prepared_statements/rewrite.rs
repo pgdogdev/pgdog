@@ -19,42 +19,41 @@ impl<'a> Rewrite<'a> {
     }
 
     /// Rewrite a message if needed.
-    pub fn rewrite(&mut self, message: ProtocolMessage) -> Result<ProtocolMessage, Error> {
+    pub fn rewrite(&mut self, message: &mut ProtocolMessage) -> Result<(), Error> {
         match message {
-            ProtocolMessage::Bind(bind) => Ok(self.bind(bind)?.into()),
-            ProtocolMessage::Describe(describe) => Ok(self.describe(describe)?.into()),
-            ProtocolMessage::Parse(parse) => Ok(self.parse(parse)?.into()),
-            _ => Ok(message),
+            ProtocolMessage::Bind(ref mut bind) => Ok(self.bind(bind)?),
+            ProtocolMessage::Describe(ref mut describe) => Ok(self.describe(describe)?),
+            ProtocolMessage::Parse(ref mut parse) => Ok(self.parse(parse)?),
+            _ => Ok(()),
         }
     }
 
     /// Rewrite Parse message.
-    fn parse(&mut self, parse: Parse) -> Result<Parse, Error> {
-        let parse = self.statements.insert(parse);
-        Ok(parse)
+    fn parse(&mut self, parse: &mut Parse) -> Result<(), Error> {
+        self.statements.insert(parse);
+        Ok(())
     }
 
     /// Rerwrite Bind message.
-    fn bind(&mut self, bind: Bind) -> Result<Bind, Error> {
+    fn bind(&mut self, bind: &mut Bind) -> Result<(), Error> {
         let name = self.statements.name(bind.statement());
         if let Some(name) = name {
-            Ok(bind.rename(name))
-        } else {
-            Ok(bind)
+            bind.rename(name);
         }
+
+        Ok(())
     }
 
     /// Rewrite Describe message.
-    fn describe(&mut self, describe: Describe) -> Result<Describe, Error> {
+    fn describe(&mut self, describe: &mut Describe) -> Result<(), Error> {
         if describe.is_portal() {
-            Ok(describe)
+            Ok(())
         } else {
             let name = self.statements.name(describe.statement());
             if let Some(name) = name {
-                Ok(describe.rename(name))
-            } else {
-                Ok(describe)
+                describe.rename(name);
             }
+            Ok(())
         }
     }
 }
