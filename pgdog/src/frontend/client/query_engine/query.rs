@@ -96,20 +96,18 @@ impl QueryEngine {
         if code == 'Z' {
             self.stats.query();
 
-            let two_pc = if self.two_pc.auto() && !context.in_error() {
-                self.end_two_pc().await?;
-                message = ReadyForQuery::in_transaction(false).message()?;
-                true
-            } else {
-                false
-            };
-
-            let rfq = ReadyForQuery::from_bytes(message.to_bytes()?)?;
-            let state = rfq.state()?;
+            let mut two_pc_auto = false;
+            let state = ReadyForQuery::from_bytes(message.to_bytes()?)?.state()?;
 
             match state {
                 TransactionState::Error => {
                     context.transaction = Some(TransactionType::Error);
+                    if self.two_pc.auto() {
+                        self.end_two_pc(true).await?;
+                        // TODO: this records a 2pc transaction in client
+                        // stats anyway but not on the servers. Is this what we want?
+                        two_pc_auto = true;
+                    }
                 }
 
                 TransactionState::Idle => {
@@ -117,6 +115,10 @@ impl QueryEngine {
                 }
 
                 TransactionState::InTrasaction => {
+                    if self.two_pc.auto() {
+                        self.end_two_pc(false).await?;
+                        two_pc_auto = true;
+                    }
                     if context.transaction.is_none() {
                         // Query parser is disabled, so the server is responsible for telling us
                         // we started a transaction.
@@ -125,10 +127,18 @@ impl QueryEngine {
                 }
             }
 
+            if two_pc_auto {
+                // In auto mode, 2pc transaction was started automatically
+                // without the client's knowledge. We need to return a regular RFQ
+                // message and close the transaction.
+                context.transaction = None;
+                message = ReadyForQuery::in_transaction(false).message()?;
+            }
+
             self.stats.idle(context.in_transaction());
 
             if !context.in_transaction() {
-                self.stats.transaction(two_pc);
+                self.stats.transaction(two_pc_auto);
             }
         }
 

@@ -212,7 +212,7 @@ async fn shard_consistency_data_row_validator_prepared_statement()
         .await?;
 
     sharded
-        .execute("/* pgdog_shard: 1 */ CREATE VIEW datarow_view AS SELECT id, name, extra FROM shard_datarow_test") 
+        .execute("/* pgdog_shard: 1 */ CREATE VIEW datarow_view AS SELECT id, name, extra FROM shard_datarow_test")
         .await?;
 
     // Now prepare a statement against the views
@@ -269,9 +269,9 @@ async fn cross_shard_transaction_rollback_on_error() -> Result<(), Box<dyn std::
         .await
         .ok();
 
-    // Pre-create the table on shard 1 to cause a conflict
+    // Pre-create the table on shard 0 to cause a conflict
     sharded
-        .execute("/* pgdog_shard: 1 */ CREATE TABLE cross_shard_rollback_test (id BIGINT PRIMARY KEY, data TEXT)")
+        .execute("/* pgdog_shard: 0 */ CREATE TABLE cross_shard_rollback_test (id BIGINT PRIMARY KEY, data TEXT)")
         .await?;
 
     // Start a transaction that tries to create the table on both shards
@@ -308,7 +308,7 @@ async fn cross_shard_transaction_rollback_on_error() -> Result<(), Box<dyn std::
 
     // Verify that shard 0 doesn't have the table (rollback worked)
     let check_shard_0 = sharded
-        .execute("/* pgdog_shard: 0 */ SELECT * FROM cross_shard_rollback_test")
+        .execute("/* pgdog_shard: 1 */ SELECT * FROM cross_shard_rollback_test")
         .await;
 
     assert!(
@@ -318,17 +318,17 @@ async fn cross_shard_transaction_rollback_on_error() -> Result<(), Box<dyn std::
 
     // Verify that shard 1 still has the table (it existed before the transaction)
     let check_shard_1 = sharded
-        .execute("/* pgdog_shard: 1 */ SELECT * FROM cross_shard_rollback_test")
+        .execute("/* pgdog_shard: 0 */ SELECT * FROM cross_shard_rollback_test")
         .await;
 
     assert!(
         check_shard_1.is_ok(),
-        "Table should still exist on shard 1 (it was created before the transaction)"
+        "Table should still exist on shard 0 (it was created before the transaction)"
     );
 
     // Clean up
     sharded
-        .execute("/* pgdog_shard: 1 */ DROP TABLE IF EXISTS cross_shard_rollback_test")
+        .execute("/* pgdog_shard: 0 */ DROP TABLE IF EXISTS cross_shard_rollback_test")
         .await
         .ok();
 

@@ -75,7 +75,7 @@ impl QueryEngine {
             && context.transaction().map(|t| t.write()).unwrap_or(false);
 
         if two_pc {
-            self.end_two_pc().await?;
+            self.end_two_pc(false).await?;
 
             // Update stats.
             self.stats.query();
@@ -97,8 +97,14 @@ impl QueryEngine {
         Ok(())
     }
 
-    pub(super) async fn end_two_pc(&mut self) -> Result<(), Error> {
+    pub(super) async fn end_two_pc(&mut self, rollback: bool) -> Result<(), Error> {
         let cluster = self.backend.cluster()?;
+
+        if rollback {
+            self.backend.execute("ROLLBACK").await?;
+            return Ok(());
+        }
+
         let identifier = cluster.identifier();
         let name = self.two_pc.transaction().to_string();
 
