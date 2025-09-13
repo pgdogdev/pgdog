@@ -116,7 +116,7 @@ impl<'a> ClusterConfig<'a> {
             two_pc: user.two_phase_commit.unwrap_or(general.two_phase_commit),
             two_pc_auto: user
                 .two_phase_commit_auto
-                .unwrap_or(general.two_phase_commit_auto.unwrap_or(true)), // Enable by default.
+                .unwrap_or(general.two_phase_commit_auto.unwrap_or(false)), // Disable by default.
         }
     }
 }
