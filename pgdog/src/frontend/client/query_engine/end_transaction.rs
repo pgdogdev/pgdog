@@ -49,6 +49,25 @@ impl QueryEngine {
     ) -> Result<(), Error> {
         let cluster = self.backend.cluster()?;
 
+        // If we experienced an error and client
+        // tries to commit transaction anyway,
+        // we rollback to prevent cross-shard inconsistencies.
+        if context.in_error() && !rollback {
+            self.backend.execute("ROLLBACK").await?;
+
+            // Update stats.
+            self.stats.query();
+            self.stats.transaction(true);
+
+            // Disconnect from servers.
+            self.cleanup_backend(context);
+
+            // Tell client we finished the transaction.
+            self.end_not_connected(context, true, extended).await?;
+
+            return Ok(());
+        }
+
         // 2pc is used only for writes and is not needed for rollbacks.
         let two_pc = cluster.two_pc_enabled()
             && route.is_write()
@@ -56,7 +75,7 @@ impl QueryEngine {
             && context.transaction().map(|t| t.write()).unwrap_or(false);
 
         if two_pc {
-            self.end_two_pc().await?;
+            self.end_two_pc(false).await?;
 
             // Update stats.
             self.stats.query();
@@ -71,14 +90,21 @@ impl QueryEngine {
             if rollback {
                 self.notify_buffer.clear();
             }
+            context.rollback = rollback;
             self.execute(context, route).await?;
         }
 
         Ok(())
     }
 
-    pub(super) async fn end_two_pc(&mut self) -> Result<(), Error> {
+    pub(super) async fn end_two_pc(&mut self, rollback: bool) -> Result<(), Error> {
         let cluster = self.backend.cluster()?;
+
+        if rollback {
+            self.backend.execute("ROLLBACK").await?;
+            return Ok(());
+        }
+
         let identifier = cluster.identifier();
         let name = self.two_pc.transaction().to_string();
 

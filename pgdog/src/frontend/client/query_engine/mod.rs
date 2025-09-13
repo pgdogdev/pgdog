@@ -201,7 +201,10 @@ impl QueryEngine {
             command => self.unknown_command(context, command.clone()).await?,
         }
 
-        if !context.in_transaction() {
+        if context.in_error() {
+            self.backend.mirror_clear();
+            self.notify_buffer.clear();
+        } else if !context.in_transaction() {
             self.backend.mirror_flush();
             self.flush_notify().await?;
         }

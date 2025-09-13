@@ -114,3 +114,26 @@ fn test_rd_before_dr() {
     // Buffer is empty.
     assert!(multi_shard.message().is_none());
 }
+
+#[test]
+fn test_ready_for_query_error_preservation() {
+    let route = Route::default();
+    let mut multi_shard = MultiShard::new(2, &route);
+
+    // Create ReadyForQuery messages - one with transaction error, one normal
+    let rfq_error = ReadyForQuery::error();
+    let rfq_normal = ReadyForQuery::in_transaction(false);
+
+    // Forward first ReadyForQuery message with error state
+    let result = multi_shard.forward(rfq_error.message().unwrap()).unwrap();
+    assert!(result.is_none()); // Should not be forwarded yet (waiting for second shard)
+
+    // Forward second normal ReadyForQuery message
+    let result = multi_shard.forward(rfq_normal.message().unwrap()).unwrap();
+
+    // Should return the error message, not the normal one
+    assert!(result.is_some());
+    let returned_message = result.unwrap();
+    let returned_rfq = ReadyForQuery::from_bytes(returned_message.to_bytes().unwrap()).unwrap();
+    assert!(returned_rfq.is_transaction_aborted());
+}

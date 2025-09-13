@@ -55,6 +55,9 @@ pub enum Error {
     #[error("unknown tuple data identifier: {0}")]
     UnknownTupleDataIdentifier(char),
 
+    #[error("unknown transaction state identifier: {0}")]
+    UnknownTransactionStateIdentifier(char),
+
     #[error("eof")]
     Eof,
 

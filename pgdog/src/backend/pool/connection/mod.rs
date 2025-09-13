@@ -133,6 +133,13 @@ impl Connection {
         }
     }
 
+    /// Remove transaction from mirrors buffers.
+    pub fn mirror_clear(&mut self) {
+        for mirror in &mut self.mirrors {
+            mirror.clear();
+        }
+    }
+
     /// Try to get a connection for the given route.
     async fn try_conn(&mut self, request: &Request, route: &Route) -> Result<(), Error> {
         if let Shard::Direct(shard) = route.shard() {

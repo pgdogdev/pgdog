@@ -225,3 +225,55 @@ func TestShardedTwoPcAutoOff(t *testing.T) {
 	assertShowField(t, "SHOW STATS", "total_xact_2pc_count", 0, "pgdog_2pc", "pgdog_sharded", 1, "primary")
 	conn.Exec(context.Background(), "TRUNCATE TABLE sharded_omni")
 }
+
+func TestShardedTwoPcAutoError(t *testing.T) {
+	conn, err := connectTwoPc()
+	assert.NoError(t, err)
+	defer conn.Close(context.Background())
+
+	adminCommand(t, "RELOAD") // Clear stats
+	adminCommand(t, "SET two_phase_commit TO true")
+
+	assertShowField(t, "SHOW STATS", "total_xact_2pc_count", 0, "pgdog_2pc", "pgdog_sharded", 0, "primary")
+	assertShowField(t, "SHOW STATS", "total_xact_2pc_count", 0, "pgdog_2pc", "pgdog_sharded", 1, "primary")
+
+	// Attempt queries on non-existent table that would require 2PC (cross-shard)
+	for i := range 50 {
+		_, err := conn.Query(context.Background(), "INSERT INTO nonexistent_table_omni (id, value) VALUES ($1, $2) RETURNING *", int64(i), fmt.Sprintf("value_%d", i))
+		assert.Error(t, err) // Should fail with table doesn't exist error
+	}
+
+	// 2PC count should remain 0 since transactions failed before preparation
+	assertShowField(t, "SHOW STATS", "total_xact_2pc_count", 0, "pgdog_2pc", "pgdog_sharded", 0, "primary")
+	assertShowField(t, "SHOW STATS", "total_xact_2pc_count", 0, "pgdog_2pc", "pgdog_sharded", 1, "primary")
+}
+
+func TestShardedTwoPcAutoOnError(t *testing.T) {
+	conn, err := connectTwoPc()
+	assert.NoError(t, err)
+	defer conn.Close(context.Background())
+
+	adminCommand(t, "RELOAD") // Clear stats
+	adminCommand(t, "SET two_phase_commit TO true")
+	adminCommand(t, "SET two_phase_commit_auto TO true") // Explicitly enable auto 2PC
+
+	assertShowField(t, "SHOW STATS", "total_xact_2pc_count", 0, "pgdog_2pc", "pgdog_sharded", 0, "primary")
+	assertShowField(t, "SHOW STATS", "total_xact_2pc_count", 0, "pgdog_2pc", "pgdog_sharded", 1, "primary")
+
+	// Attempt explicit transaction with non-existent table that would require 2PC
+	for i := range 25 {
+		tx, err := conn.BeginTx(context.Background(), pgx.TxOptions{})
+		assert.NoError(t, err)
+
+		_, err = tx.Query(context.Background(), "INSERT INTO nonexistent_cross_shard_table (id, value) VALUES ($1, $2) RETURNING *", int64(i), fmt.Sprintf("value_%d", i))
+		assert.Error(t, err) // Should fail with table doesn't exist error
+
+		// Transaction should be rolled back due to error
+		err = tx.Rollback(context.Background())
+		assert.NoError(t, err)
+	}
+
+	// 2PC count should remain 0 since transactions failed and were rolled back
+	assertShowField(t, "SHOW STATS", "total_xact_2pc_count", 0, "pgdog_2pc", "pgdog_sharded", 0, "primary")
+	assertShowField(t, "SHOW STATS", "total_xact_2pc_count", 0, "pgdog_2pc", "pgdog_sharded", 1, "primary")
+}
