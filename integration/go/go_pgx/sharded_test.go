@@ -178,6 +178,7 @@ func TestShardedTwoPcAuto(t *testing.T) {
 	conn.Exec(context.Background(), "TRUNCATE TABLE sharded_omni")
 	adminCommand(t, "RELOAD") // Clear stats
 	adminCommand(t, "SET two_phase_commit TO true")
+	adminCommand(t, "SET two_phase_commit_auto TO true")
 
 	assertShowField(t, "SHOW STATS", "total_xact_2pc_count", 0, "pgdog_2pc", "pgdog_sharded", 0, "primary")
 	assertShowField(t, "SHOW STATS", "total_xact_2pc_count", 0, "pgdog_2pc", "pgdog_sharded", 1, "primary")
@@ -204,8 +205,8 @@ func TestShardedTwoPcAutoOff(t *testing.T) {
 	defer conn.Close(context.Background())
 
 	conn.Exec(context.Background(), "TRUNCATE TABLE sharded_omni")
+	adminCommand(t, "RELOAD")
 	adminCommand(t, "SET two_phase_commit TO true")
-	adminCommand(t, "SET two_phase_commit_auto TO false")
 
 	assertShowField(t, "SHOW STATS", "total_xact_2pc_count", 0, "pgdog_2pc", "pgdog_sharded", 0, "primary")
 	assertShowField(t, "SHOW STATS", "total_xact_2pc_count", 0, "pgdog_2pc", "pgdog_sharded", 1, "primary")
@@ -233,6 +234,7 @@ func TestShardedTwoPcAutoError(t *testing.T) {
 
 	adminCommand(t, "RELOAD") // Clear stats
 	adminCommand(t, "SET two_phase_commit TO true")
+	adminCommand(t, "SET two_phase_commit_auto TO true")
 
 	assertShowField(t, "SHOW STATS", "total_xact_2pc_count", 0, "pgdog_2pc", "pgdog_sharded", 0, "primary")
 	assertShowField(t, "SHOW STATS", "total_xact_2pc_count", 0, "pgdog_2pc", "pgdog_sharded", 1, "primary")
