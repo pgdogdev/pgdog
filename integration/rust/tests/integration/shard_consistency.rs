@@ -257,3 +257,80 @@ async fn shard_consistency_data_row_validator_prepared_statement()
 
     Ok(())
 }
+
+#[tokio::test]
+async fn cross_shard_transaction_rollback_on_error() -> Result<(), Box<dyn std::error::Error>> {
+    let conns = connections_sqlx().await;
+    let sharded = conns.get(1).cloned().unwrap();
+
+    // Clean up any existing test tables
+    sharded
+        .execute("DROP TABLE IF EXISTS cross_shard_rollback_test")
+        .await
+        .ok();
+
+    // Pre-create the table on shard 1 to cause a conflict
+    sharded
+        .execute("/* pgdog_shard: 1 */ CREATE TABLE cross_shard_rollback_test (id BIGINT PRIMARY KEY, data TEXT)")
+        .await?;
+
+    // Start a transaction that tries to create the table on both shards
+    // This should fail on shard 1 since the table already exists
+    let mut tx = sharded.begin().await?;
+
+    let result = tx
+        .execute("CREATE TABLE cross_shard_rollback_test (id BIGINT PRIMARY KEY, data TEXT)")
+        .await;
+
+    // The transaction should fail because shard 1 already has the table
+    assert!(
+        result.is_err(),
+        "Expected CREATE TABLE to fail because table already exists on shard 1"
+    );
+
+    let error = result.unwrap_err();
+    let error_string = error.to_string();
+
+    // Check that the error message indicates table already exists
+    assert!(
+        error_string.contains("relation") && error_string.contains("already exists"),
+        "Expected error message to indicate relation already exists, got: {}",
+        error_string
+    );
+
+    // Commit the transaction - pgdog should automatically rollback internally due to the error
+    // but the commit itself will succeed
+    let commit_result = tx.commit().await;
+    assert!(
+        commit_result.is_ok(),
+        "Commit should succeed, but pgdog should have performed rollback internally"
+    );
+
+    // Verify that shard 0 doesn't have the table (rollback worked)
+    let check_shard_0 = sharded
+        .execute("/* pgdog_shard: 0 */ SELECT * FROM cross_shard_rollback_test")
+        .await;
+
+    assert!(
+        check_shard_0.is_err(),
+        "Table should not exist on shard 0 after automatic rollback"
+    );
+
+    // Verify that shard 1 still has the table (it existed before the transaction)
+    let check_shard_1 = sharded
+        .execute("/* pgdog_shard: 1 */ SELECT * FROM cross_shard_rollback_test")
+        .await;
+
+    assert!(
+        check_shard_1.is_ok(),
+        "Table should still exist on shard 1 (it was created before the transaction)"
+    );
+
+    // Clean up
+    sharded
+        .execute("/* pgdog_shard: 1 */ DROP TABLE IF EXISTS cross_shard_rollback_test")
+        .await
+        .ok();
+
+    Ok(())
+}

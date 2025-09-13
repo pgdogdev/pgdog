@@ -2,6 +2,13 @@
 
 use crate::net::messages::{code, prelude::*};
 
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub enum TransactionState {
+    Idle,
+    Error,
+    InTrasaction,
+}
+
 // ReadyForQuery (F).
 #[derive(Debug, Clone, Copy)]
 pub struct ReadyForQuery {
@@ -29,6 +36,16 @@ impl ReadyForQuery {
 
     pub fn is_transaction_aborted(&self) -> bool {
         self.status == 'E'
+    }
+
+    /// Get transaction state.
+    pub fn state(&self) -> Result<TransactionState, Error> {
+        match self.status {
+            'E' => Ok(TransactionState::Error),
+            'T' => Ok(TransactionState::InTrasaction),
+            'I' => Ok(TransactionState::Idle),
+            c => Err(Error::UnknownTransactionStateIdentifier(c)),
+        }
     }
 }
 

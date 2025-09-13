@@ -58,7 +58,7 @@ pub use parse::Parse;
 pub use parse_complete::ParseComplete;
 pub use payload::Payload;
 pub use query::Query;
-pub use rfq::ReadyForQuery;
+pub use rfq::{ReadyForQuery, TransactionState};
 pub use row_description::{Field, RowDescription};
 pub use sync::Sync;
 pub use terminate::Terminate;

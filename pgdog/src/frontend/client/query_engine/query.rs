@@ -2,7 +2,10 @@ use tokio::time::timeout;
 
 use crate::{
     frontend::client::TransactionType,
-    net::{Message, Protocol, ProtocolMessage, Query, ReadyForQuery},
+    net::{
+        FromBytes, Message, Protocol, ProtocolMessage, Query, ReadyForQuery, ToBytes,
+        TransactionState,
+    },
     state::State,
 };
 
@@ -17,13 +20,14 @@ impl QueryEngine {
         context: &mut QueryEngineContext<'_>,
         route: &Route,
     ) -> Result<(), Error> {
-        // Check if we need to do 2pc automatically
-        // for single-statement writes.
-        self.two_pc_check(context, route);
-
+        // Check that we're not in a transaction error state.
         if !self.transaction_error_check(context).await? {
             return Ok(());
         }
+
+        // Check if we need to do 2pc automatically
+        // for single-statement writes.
+        self.two_pc_check(context, route);
 
         // We need to run a query now.
         if let Some(begin_stmt) = self.begin_stmt.take() {
@@ -91,30 +95,34 @@ impl QueryEngine {
         // ReadyForQuery (B)
         if code == 'Z' {
             self.stats.query();
-            let in_error = message.is_transaction_aborted();
+            let rfq = ReadyForQuery::from_bytes(message.to_bytes()?)?;
+            let state = rfq.state()?;
 
-            // Check if transaction is aborted and clear notify buffer if so
-            if in_error {
-                self.notify_buffer.clear();
-                context.transaction = Some(TransactionType::Error);
+            match state {
+                TransactionState::Error => {
+                    context.transaction = Some(TransactionType::Error);
+                }
+
+                TransactionState::Idle => {
+                    context.transaction = None;
+                }
+
+                TransactionState::InTrasaction => {
+                    if context.transaction.is_none() {
+                        // Query parser is disabled, so the server is responsible for telling us
+                        // we started a transaction.
+                        context.transaction = Some(TransactionType::ReadWrite);
+                    }
+                }
             }
 
-            let two_pc = if self.two_pc.auto() && !in_error {
+            let two_pc = if self.two_pc.auto() && !context.in_error() {
                 self.end_two_pc().await?;
                 message = ReadyForQuery::in_transaction(false).message()?;
                 true
             } else {
                 false
             };
-
-            let in_transaction = message.in_transaction();
-            if !in_transaction {
-                context.transaction = None;
-            } else if context.transaction.is_none() {
-                // Query parser is disabled, so the server is responsible for telling us
-                // we started a transaction.
-                context.transaction = Some(TransactionType::ReadWrite);
-            }
 
             self.stats.idle(context.in_transaction());
 

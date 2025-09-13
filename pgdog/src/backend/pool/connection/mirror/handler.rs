@@ -129,6 +129,13 @@ impl MirrorHandler {
         }
     }
 
+    /// Remove all messages from mirror buffer;
+    pub fn clear(&mut self) {
+        self.buffer.clear();
+        self.state = MirrorHandlerState::Idle;
+        debug!("mirror transaction cancelled");
+    }
+
     /// Increment the total request count.
     pub fn increment_total_count(&self) {
         let mut stats = self.stats.lock();
