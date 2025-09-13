@@ -95,6 +95,15 @@ impl QueryEngine {
         // ReadyForQuery (B)
         if code == 'Z' {
             self.stats.query();
+
+            let two_pc = if self.two_pc.auto() && !context.in_error() {
+                self.end_two_pc().await?;
+                message = ReadyForQuery::in_transaction(false).message()?;
+                true
+            } else {
+                false
+            };
+
             let rfq = ReadyForQuery::from_bytes(message.to_bytes()?)?;
             let state = rfq.state()?;
 
@@ -115,14 +124,6 @@ impl QueryEngine {
                     }
                 }
             }
-
-            let two_pc = if self.two_pc.auto() && !context.in_error() {
-                self.end_two_pc().await?;
-                message = ReadyForQuery::in_transaction(false).message()?;
-                true
-            } else {
-                false
-            };
 
             self.stats.idle(context.in_transaction());
 
