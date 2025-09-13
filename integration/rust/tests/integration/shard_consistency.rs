@@ -298,6 +298,37 @@ async fn cross_shard_transaction_rollback_on_error() -> Result<(), Box<dyn std::
         error_string
     );
 
+    // Try to execute additional queries after the error - they should all fail with
+    // "current transaction is aborted, commands ignored until end of transaction block"
+    let select_result = tx.execute("SELECT 1").await;
+    assert!(
+        select_result.is_err(),
+        "Expected SELECT to fail after transaction error"
+    );
+
+    let select_error = select_result.unwrap_err();
+    let select_error_string = select_error.to_string();
+    assert!(
+        select_error_string.contains("current transaction is aborted, commands ignored until end of transaction block"),
+        "Expected exact error message 'current transaction is aborted, commands ignored until end of transaction block', got: {}",
+        select_error_string
+    );
+
+    // Try another query - should also fail with same error
+    let insert_result = tx.execute("INSERT INTO some_nonexistent_table VALUES (1)").await;
+    assert!(
+        insert_result.is_err(),
+        "Expected INSERT to fail after transaction error"
+    );
+
+    let insert_error = insert_result.unwrap_err();
+    let insert_error_string = insert_error.to_string();
+    assert!(
+        insert_error_string.contains("current transaction is aborted, commands ignored until end of transaction block"),
+        "Expected exact error message 'current transaction is aborted, commands ignored until end of transaction block', got: {}",
+        insert_error_string
+    );
+
     // Commit the transaction - pgdog should automatically rollback internally due to the error
     // but the commit itself will succeed
     let commit_result = tx.commit().await;
