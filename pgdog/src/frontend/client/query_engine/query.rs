@@ -21,7 +21,7 @@ impl QueryEngine {
         route: &Route,
     ) -> Result<(), Error> {
         // Check that we're not in a transaction error state.
-        if !self.transaction_error_check(context).await? {
+        if !self.transaction_error_check(context, route).await? {
             return Ok(());
         }
 
@@ -239,8 +239,9 @@ impl QueryEngine {
     async fn transaction_error_check(
         &mut self,
         context: &mut QueryEngineContext<'_>,
+        route: &Route,
     ) -> Result<bool, Error> {
-        if context.in_error() && !context.rollback {
+        if context.in_error() && !context.rollback && route.is_cross_shard() {
             let bytes_sent = context
                 .stream
                 .error(
