@@ -2,7 +2,7 @@ use std::ops::Deref;
 
 use crate::net::{Parse, Query};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum BufferedQuery {
     Query(Query),
     Prepared(Parse),

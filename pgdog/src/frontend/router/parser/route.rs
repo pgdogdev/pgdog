@@ -1,5 +1,7 @@
 use std::fmt::Display;
 
+use crate::frontend::BufferedQuery;
+
 use super::{Aggregate, DistinctBy, FunctionBehavior, Limit, LockingBehavior, OrderBy};
 
 #[derive(Debug, Clone, PartialEq, PartialOrd, Ord, Eq, Hash, Default)]
@@ -44,6 +46,12 @@ impl From<Option<usize>> for Shard {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct Rewrite {
+    pub query: BufferedQuery,
+    pub added_columns: Vec<usize>,
+}
+
 /// Path a query should take and any transformations
 /// that should be applied along the way.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -56,6 +64,7 @@ pub struct Route {
     lock_session: bool,
     distinct: Option<DistinctBy>,
     maintenance: bool,
+    rewrite: Option<Rewrite>,
 }
 
 impl Display for Route {
@@ -168,6 +177,9 @@ impl Route {
 
     pub fn limit(&self) -> &Limit {
         &self.limit
+    }
+    pub fn rewrite(&self) -> &Option<Rewrite> {
+        &self.rewrite
     }
 
     pub fn set_read(mut self, read: bool) -> Self {

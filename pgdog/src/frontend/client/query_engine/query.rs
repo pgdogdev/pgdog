@@ -46,6 +46,15 @@ impl QueryEngine {
             }
         }
 
+        // Rewrite query.
+        if let Some(rewrite) = route.rewrite() {
+            match &rewrite.query {
+                BufferedQuery::Prepared(parse) => {}
+
+                BufferedQuery::Query(query) => {}
+            }
+        }
+
         self.backend
             .handle_client_request(context.client_request, &mut self.router, self.streaming)
             .await?;

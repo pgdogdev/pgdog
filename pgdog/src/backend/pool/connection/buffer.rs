@@ -8,7 +8,7 @@ use std::{
 use crate::{
     frontend::router::parser::{Aggregate, DistinctBy, DistinctColumn, OrderBy},
     net::{
-        messages::{DataRow, FromBytes, Message, Protocol, ToBytes, Vector},
+        messages::{DataRow, FromBytes, Message, ToBytes, Vector},
         Decoder,
     },
 };
@@ -190,9 +190,9 @@ impl Buffer {
     }
 
     /// Take messages from buffer.
-    pub(super) fn take(&mut self) -> Option<Message> {
+    pub(super) fn take(&mut self) -> Option<DataRow> {
         if self.full {
-            self.buffer.pop_front().and_then(|s| s.message().ok())
+            self.buffer.pop_front()
         } else {
             None
         }
@@ -211,7 +211,7 @@ impl Buffer {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::net::{Field, Format, RowDescription};
+    use crate::net::{Field, Format, Protocol, RowDescription};
 
     #[test]
     fn test_sort_buffer() {

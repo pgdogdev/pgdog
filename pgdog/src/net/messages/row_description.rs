@@ -192,6 +192,23 @@ impl RowDescription {
 
         true
     }
+
+    /// Remove fields from RowDescription at provided offsets.
+    pub fn remove_fields(self, offsets: &[usize]) -> Self {
+        let fields = self
+            .fields
+            .deref()
+            .clone()
+            .into_iter()
+            .enumerate()
+            .filter(|(idx, _)| offsets.contains(&idx))
+            .map(|(_, field)| field)
+            .collect::<Vec<_>>();
+
+        Self {
+            fields: Arc::new(fields),
+        }
+    }
 }
 
 impl Deref for RowDescription {

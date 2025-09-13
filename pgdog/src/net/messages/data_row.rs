@@ -180,6 +180,19 @@ impl DataRow {
         self.columns.get(index).cloned().map(|d| d.data)
     }
 
+    // Remove colums at specified offsets.
+    pub fn remove_columns(self, offsets: &[usize]) -> Self {
+        Self {
+            columns: self
+                .columns
+                .into_iter()
+                .enumerate()
+                .filter(|(idx, _)| offsets.contains(&idx))
+                .map(|(_, col)| col)
+                .collect(),
+        }
+    }
+
     /// Get integer at index with text/binary encoding.
     pub fn get_int(&self, index: usize, text: bool) -> Option<i64> {
         self.get::<i64>(index, if text { Format::Text } else { Format::Binary })

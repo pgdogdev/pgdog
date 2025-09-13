@@ -6,6 +6,8 @@ use crate::frontend::router::parser::Function;
 
 use super::Error;
 
+pub mod avg;
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct AggregateTarget {
     column: usize,
@@ -86,6 +88,11 @@ impl Aggregate {
                             "sum" => targets.push(AggregateTarget {
                                 column: idx,
                                 function: AggregateFunction::Max,
+                            }),
+
+                            "avg" => targets.push(AggregateTarget {
+                                column: idx,
+                                function: AggregateFunction::Avg,
                             }),
 
                             _ => {}

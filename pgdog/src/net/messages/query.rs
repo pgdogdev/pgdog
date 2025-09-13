@@ -6,7 +6,7 @@ use bytes::Bytes;
 use std::str::{from_utf8, from_utf8_unchecked};
 
 /// Query (F) message.
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct Query {
     /// Query string.
     pub payload: Bytes,

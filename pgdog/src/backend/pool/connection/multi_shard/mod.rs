@@ -156,7 +156,20 @@ impl MultiShard {
                 if self.counters.row_description == self.shards {
                     // Only send it to the client once all shards sent it,
                     // so we don't get early requests from clients.
-                    forward = Some(message);
+                    if let Some(added_columns) = self
+                        .route
+                        .rewrite()
+                        .as_ref()
+                        .map(|r| r.added_columns.as_slice())
+                    {
+                        forward = Some(
+                            RowDescription::from_bytes(message.to_bytes()?)?
+                                .remove_fields(added_columns)
+                                .message()?,
+                        );
+                    } else {
+                        forward = Some(message);
+                    }
                 }
             }
 
@@ -237,7 +250,16 @@ impl MultiShard {
     /// Multi-shard state is ready to send messages.
     pub(super) fn message(&mut self) -> Option<Message> {
         if let Some(data_row) = self.buffer.take() {
-            Some(data_row)
+            if let Some(added_columns) = self
+                .route
+                .rewrite()
+                .as_ref()
+                .map(|r| r.added_columns.as_slice())
+            {
+                data_row.remove_columns(added_columns).message().ok()
+            } else {
+                data_row.message().ok()
+            }
         } else {
             self.counters.command_complete.take()
         }
