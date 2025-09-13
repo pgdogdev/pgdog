@@ -153,17 +153,21 @@ impl Cache {
     pub fn record_normalized(&self, query: &str, route: &Route) -> Result<()> {
         let normalized = pg_query::normalize(query)?;
 
-        let mut guard = self.inner.lock();
-
-        if let Some(entry) = guard.queries.get(&normalized) {
-            entry.update_stats(route);
-            guard.stats.hits += 1;
-        } else {
-            let entry = CachedAst::new(parse(&normalized)?);
-            entry.update_stats(route);
-            guard.queries.put(normalized, entry);
-            guard.stats.misses += 1;
+        {
+            let mut guard = self.inner.lock();
+            if let Some(entry) = guard.queries.get(&normalized) {
+                entry.update_stats(route);
+                guard.stats.hits += 1;
+                return Ok(());
+            }
         }
+
+        let entry = CachedAst::new(parse(&normalized)?);
+        entry.update_stats(route);
+
+        let mut guard = self.inner.lock();
+        guard.queries.put(normalized, entry);
+        guard.stats.misses += 1;
 
         Ok(())
     }
