@@ -309,13 +309,17 @@ async fn cross_shard_transaction_rollback_on_error() -> Result<(), Box<dyn std::
     let select_error = select_result.unwrap_err();
     let select_error_string = select_error.to_string();
     assert!(
-        select_error_string.contains("current transaction is aborted, commands ignored until end of transaction block"),
+        select_error_string.contains(
+            "current transaction is aborted, commands ignored until end of transaction block"
+        ),
         "Expected exact error message 'current transaction is aborted, commands ignored until end of transaction block', got: {}",
         select_error_string
     );
 
     // Try another query - should also fail with same error
-    let insert_result = tx.execute("INSERT INTO some_nonexistent_table VALUES (1)").await;
+    let insert_result = tx
+        .execute("INSERT INTO some_nonexistent_table VALUES (1)")
+        .await;
     assert!(
         insert_result.is_err(),
         "Expected INSERT to fail after transaction error"
@@ -324,7 +328,9 @@ async fn cross_shard_transaction_rollback_on_error() -> Result<(), Box<dyn std::
     let insert_error = insert_result.unwrap_err();
     let insert_error_string = insert_error.to_string();
     assert!(
-        insert_error_string.contains("current transaction is aborted, commands ignored until end of transaction block"),
+        insert_error_string.contains(
+            "current transaction is aborted, commands ignored until end of transaction block"
+        ),
         "Expected exact error message 'current transaction is aborted, commands ignored until end of transaction block', got: {}",
         insert_error_string
     );
