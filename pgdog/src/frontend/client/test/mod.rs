@@ -665,3 +665,38 @@ async fn test_close_parse_same_name_global_cache() {
 
     conn.write_all(&buffer!({ Terminate })).await.unwrap();
 }
+
+#[tokio::test]
+async fn test_parse_describe_flush_bind_execute_close_sync() {
+    let (mut conn, mut client, _) = new_client!(false);
+
+    let handle = tokio::spawn(async move {
+        client.run().await.unwrap();
+    });
+
+    let mut buf = BytesMut::new();
+
+    buf.put(Parse::new_anonymous("SELECT 1").to_bytes().unwrap());
+    buf.put(Describe::new_statement("").to_bytes().unwrap());
+    buf.put(Flush.to_bytes().unwrap());
+
+    conn.write_all(&buf).await.unwrap();
+
+    let _ = read!(conn, ['1', 't', 'T']);
+
+    let mut buf = BytesMut::new();
+    buf.put(Bind::new_statement("").to_bytes().unwrap());
+    buf.put(Execute::new().to_bytes().unwrap());
+    buf.put(Close::named("").to_bytes().unwrap());
+    buf.put(Sync.to_bytes().unwrap());
+
+    conn.write_all(&buf).await.unwrap();
+
+    let _ = read!(conn, ['2', 'D', 'C', '3', 'Z']);
+
+    conn.write_all(&Terminate.to_bytes().unwrap())
+        .await
+        .unwrap();
+
+    handle.await.unwrap();
+}

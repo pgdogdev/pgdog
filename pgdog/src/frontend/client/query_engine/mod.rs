@@ -103,14 +103,14 @@ impl QueryEngine {
         self.stats
             .received(context.client_request.total_message_len());
 
+        // Rewrite prepared statements.
+        self.rewrite_extended(context)?;
+
         // Intercept commands we don't have to forward to a server.
         if self.intercept_incomplete(context).await? {
             self.update_stats(context);
             return Ok(());
         }
-
-        // Rewrite prepared statements.
-        self.rewrite_extended(context)?;
 
         // Route transaction to the right servers.
         if !self.route_transaction(context).await? {
