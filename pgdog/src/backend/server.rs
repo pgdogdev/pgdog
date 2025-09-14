@@ -1541,7 +1541,8 @@ pub mod test {
         let mut server = test_server().await;
 
         let mut prep = PreparedStatements::new();
-        let parse = prep.insert_anyway(Parse::named("test", "SELECT 1::bigint"));
+        let mut parse = Parse::named("test", "SELECT 1::bigint");
+        prep.insert_anyway(&mut parse);
         assert_eq!(parse.name(), "__pgdog_1");
 
         server

@@ -150,12 +150,12 @@ mod test {
         let mut statements = PreparedStatements::default();
         statements.capacity = 0;
 
-        let messages = vec![
-            Parse::named("__sqlx_1", "SELECT 1").into(),
-            Bind::new_statement("__sqlx_1").into(),
+        let mut messages = vec![
+            ProtocolMessage::from(Parse::named("__sqlx_1", "SELECT 1")),
+            ProtocolMessage::from(Bind::new_statement("__sqlx_1")),
         ];
 
-        for message in messages {
+        for message in &mut messages {
             statements.maybe_rewrite(message).unwrap();
         }
 
@@ -167,12 +167,12 @@ mod test {
         assert!(statements.local.is_empty());
         assert!(statements.global.lock().names().is_empty());
 
-        let messages = vec![
-            Parse::named("__sqlx_1", "SELECT 1").into(),
-            Bind::new_statement("__sqlx_1").into(),
+        let mut messages = vec![
+            ProtocolMessage::from(Parse::named("__sqlx_1", "SELECT 1")),
+            ProtocolMessage::from(Bind::new_statement("__sqlx_1")),
         ];
 
-        for message in messages {
+        for message in &mut messages {
             statements.maybe_rewrite(message).unwrap();
         }
 
@@ -189,13 +189,13 @@ mod test {
     fn test_counted_only_once_per_client() {
         let mut statements = PreparedStatements::default();
 
-        let messages = vec![
-            Parse::named("__sqlx_1", "SELECT 1").into(),
-            Bind::new_statement("__sqlx_1").into(),
-        ];
-
         for _ in 0..25 {
-            for message in messages.clone() {
+            let mut messages = vec![
+                ProtocolMessage::from(Parse::named("__sqlx_1", "SELECT 1")),
+                ProtocolMessage::from(Bind::new_statement("__sqlx_1")),
+            ];
+
+            for message in &mut messages {
                 statements.maybe_rewrite(message).unwrap();
             }
         }

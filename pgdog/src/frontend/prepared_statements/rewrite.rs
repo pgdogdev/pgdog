@@ -70,29 +70,24 @@ mod test {
         let mut statements = PreparedStatements::default();
         let mut rewrite = Rewrite::new(&mut statements);
         let parse = Parse::named("__sqlx_1", "SELECT * FROM users");
-        let parse =
-            Parse::from_bytes(rewrite.rewrite(parse.into()).unwrap().to_bytes().unwrap()).unwrap();
+        let mut parse = ProtocolMessage::from(parse);
+        rewrite.rewrite(&mut parse).unwrap();
+        let parse = Parse::from_bytes(parse.to_bytes().unwrap()).unwrap();
 
         assert!(!parse.anonymous());
         assert_eq!(parse.name(), "__pgdog_1");
         assert_eq!(parse.query(), "SELECT * FROM users");
 
         let bind = Bind::new_statement("__sqlx_1");
-
-        let bind =
-            Bind::from_bytes(rewrite.rewrite(bind.into()).unwrap().to_bytes().unwrap()).unwrap();
+        let mut bind_msg = ProtocolMessage::from(bind);
+        rewrite.rewrite(&mut bind_msg).unwrap();
+        let bind = Bind::from_bytes(bind_msg.to_bytes().unwrap()).unwrap();
         assert_eq!(bind.statement(), "__pgdog_1");
 
         let describe = Describe::new_statement("__sqlx_1");
-
-        let describe = Describe::from_bytes(
-            rewrite
-                .rewrite(describe.into())
-                .unwrap()
-                .to_bytes()
-                .unwrap(),
-        )
-        .unwrap();
+        let mut describe = ProtocolMessage::from(describe);
+        rewrite.rewrite(&mut describe).unwrap();
+        let describe = Describe::from_bytes(describe.to_bytes().unwrap()).unwrap();
         assert_eq!(describe.statement(), "__pgdog_1");
         assert_eq!(describe.kind(), 'S');
 
@@ -106,8 +101,9 @@ mod test {
         let mut rewrite = Rewrite::new(&mut statements);
 
         let parse = Parse::new_anonymous("SELECT * FROM users");
-        let parse =
-            Parse::from_bytes(rewrite.rewrite(parse.into()).unwrap().to_bytes().unwrap()).unwrap();
+        let mut parse = ProtocolMessage::from(parse);
+        rewrite.rewrite(&mut parse).unwrap();
+        let parse = Parse::from_bytes(parse.to_bytes().unwrap()).unwrap();
 
         assert!(!parse.anonymous());
         assert_eq!(parse.query(), "SELECT * FROM users");
