@@ -1,6 +1,8 @@
 use crate::backend::Server;
 
 use super::{Error, Guard, Pool, Request};
+use crate::backend::pool::WaiterHandle;
+use std::sync::atomic::Ordering;
 use tokio::{
     sync::oneshot::*,
     time::{timeout, Instant},
@@ -17,13 +19,23 @@ impl Waiting {
         let request = *request;
         let (tx, rx) = channel();
 
+        // Check online status under lock (brief)
         {
-            let mut guard = pool.lock();
+            let guard = pool.lock();
             if !guard.online {
                 return Err(Error::Offline);
             }
-            guard.waiting.push_back(Waiter { request, tx })
         }
+
+        // Lock-free send to waiting queue
+        let waiter = WaiterHandle { request, tx };
+        pool.inner()
+            .waiting_tx
+            .send(waiter)
+            .map_err(|_| Error::Offline)?;
+
+        // Update counter
+        pool.inner().waiting_count.fetch_add(1, Ordering::Relaxed);
 
         // Tell maintenance we are in line waiting for a connection.
         pool.comms().request.notify_one();
@@ -43,11 +55,17 @@ impl Waiting {
             }
 
             Err(_err) => {
+                // Decrement counter on timeout
+                self.pool
+                    .inner()
+                    .waiting_count
+                    .fetch_sub(1, Ordering::Relaxed);
+
                 let mut guard = self.pool.lock();
                 if !guard.banned() {
                     guard.maybe_ban(now, Error::CheckoutTimeout);
                 }
-                guard.remove_waiter(&self.request.id);
+                // No need to call remove_waiter - dropping rx removes from queue
                 Err(Error::CheckoutTimeout)
             }
 
@@ -57,10 +75,4 @@ impl Waiting {
             Ok(Err(_)) => Err(Error::CheckoutTimeout),
         }
     }
-}
-
-#[derive(Debug)]
-pub(super) struct Waiter {
-    pub(super) request: Request,
-    pub(super) tx: Sender<Result<Box<Server>, Error>>,
 }
