@@ -654,6 +654,11 @@ async fn test_close_parse_same_name_global_cache() {
     let (_, cached_stmt) = binding.statements().iter().next().unwrap();
     assert_eq!(cached_stmt.used, 1);
 
+    // Verify the SQL content in the global cache
+    let global_stmt_name = cached_stmt.name();
+    let cached_query = binding.query(&global_stmt_name).unwrap();
+    assert_eq!(cached_query, "SELECT $1");
+
     // Verify the client's local cache
     assert_eq!(client.prepared_statements.len_local(), 1);
     assert!(client.prepared_statements.name("test_stmt").is_some());
