@@ -16,6 +16,7 @@ pub mod deallocate;
 pub mod end_transaction;
 pub mod incomplete_requests;
 pub mod notify_buffer;
+pub mod prepared_statements;
 pub mod pub_sub;
 pub mod query;
 pub mod route_query;
@@ -107,6 +108,9 @@ impl QueryEngine {
             self.update_stats(context);
             return Ok(());
         }
+
+        // Rewrite prepared statements.
+        self.rewrite_extended(context)?;
 
         // Route transaction to the right servers.
         if !self.route_transaction(context).await? {

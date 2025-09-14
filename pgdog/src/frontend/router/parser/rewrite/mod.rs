@@ -42,8 +42,8 @@ impl<'a> Rewrite<'a> {
                         NodeEnum::PrepareStmt(ref mut stmt) => {
                             let statement = stmt.query.as_ref().ok_or(Error::EmptyQuery)?;
                             let statement = statement.deparse().map_err(|_| Error::EmptyQuery)?;
-                            let parse = Parse::named(&stmt.name, &statement);
-                            let parse = prepared_statements.insert_anyway(parse);
+                            let mut parse = Parse::named(&stmt.name, &statement);
+                            prepared_statements.insert_anyway(&mut parse);
                             stmt.name = parse.name().to_string();
                         }
 
