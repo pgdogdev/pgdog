@@ -177,10 +177,9 @@ impl Bind {
     }
 
     /// Rename this Bind message to a different prepared statement.
-    pub fn rename(mut self, name: impl ToString) -> Self {
+    pub fn rename(&mut self, name: impl ToString) {
         self.statement = Bytes::from(name.to_string() + "\0");
         self.original = None;
-        self
     }
 
     /// Is this Bind message anonymous?

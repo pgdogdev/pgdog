@@ -464,13 +464,7 @@ impl Client {
                 return Ok(BufferEvent::DisconnectGraceful);
             } else {
                 let message = ProtocolMessage::from_bytes(message.to_bytes()?)?;
-                if message.extended() && self.prepared_statements.enabled {
-                    self.client_request
-                        .messages
-                        .push(self.prepared_statements.maybe_rewrite(message)?);
-                } else {
-                    self.client_request.messages.push(message);
-                }
+                self.client_request.push(message);
             }
         }
 

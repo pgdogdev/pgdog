@@ -622,3 +622,46 @@ async fn test_prepared_syntax_error() {
 
     assert_eq!(stmts.lock().statements().iter().next().unwrap().1.used, 0);
 }
+
+#[tokio::test]
+async fn test_close_parse_same_name_global_cache() {
+    let (mut conn, mut client, mut engine) = new_client!(false);
+
+    // Send Close and Parse for the same name with Flush
+    conn.write_all(&buffer!(
+        { Close::named("test_stmt") },
+        { Parse::named("test_stmt", "SELECT $1") },
+        { Flush }
+    ))
+    .await
+    .unwrap();
+
+    client.buffer(State::Idle).await.unwrap();
+    client.client_messages(&mut engine).await.unwrap();
+
+    // Read responses
+    for c in ['3', '1'] {
+        let msg = engine.backend().read().await.unwrap();
+        assert_eq!(msg.code(), c);
+        client.server_message(&mut engine, msg).await.unwrap();
+    }
+    read!(conn, ['3', '1']);
+
+    // Verify the statement is registered correctly in the global cache
+    let global_cache = client.prepared_statements.global.clone();
+    assert_eq!(global_cache.lock().len(), 1);
+    let binding = global_cache.lock();
+    let (_, cached_stmt) = binding.statements().iter().next().unwrap();
+    assert_eq!(cached_stmt.used, 1);
+
+    // Verify the SQL content in the global cache
+    let global_stmt_name = cached_stmt.name();
+    let cached_query = binding.query(&global_stmt_name).unwrap();
+    assert_eq!(cached_query, "SELECT $1");
+
+    // Verify the client's local cache
+    assert_eq!(client.prepared_statements.len_local(), 1);
+    assert!(client.prepared_statements.name("test_stmt").is_some());
+
+    conn.write_all(&buffer!({ Terminate })).await.unwrap();
+}

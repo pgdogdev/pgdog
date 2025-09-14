@@ -89,10 +89,9 @@ impl Parse {
     }
 
     /// Rename the prepared statement with minimal allocations.
-    pub fn rename_fast(mut self, name: &str) -> Parse {
+    pub fn rename_fast(&mut self, name: &str) {
         self.name = Bytes::from(name.to_string() + "\0");
         self.original = None;
-        self
     }
 
     pub fn data_types(&self) -> DataTypesIter<'_> {
