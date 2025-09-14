@@ -1,7 +1,7 @@
 //! Rerwrite messages if using prepared statements.
 use crate::net::{
     messages::{Bind, Describe, Parse},
-    ProtocolMessage,
+    Close, ProtocolMessage,
 };
 
 use super::{Error, PreparedStatements};
@@ -24,6 +24,7 @@ impl<'a> Rewrite<'a> {
             ProtocolMessage::Bind(ref mut bind) => Ok(self.bind(bind)?),
             ProtocolMessage::Describe(ref mut describe) => Ok(self.describe(describe)?),
             ProtocolMessage::Parse(ref mut parse) => Ok(self.parse(parse)?),
+            ProtocolMessage::Close(ref close) => Ok(self.close(close)?),
             _ => Ok(()),
         }
     }
@@ -55,6 +56,12 @@ impl<'a> Rewrite<'a> {
             }
             Ok(())
         }
+    }
+
+    /// Handle Close message.
+    fn close(&mut self, close: &Close) -> Result<(), Error> {
+        self.statements.close(close.name());
+        Ok(())
     }
 }
 

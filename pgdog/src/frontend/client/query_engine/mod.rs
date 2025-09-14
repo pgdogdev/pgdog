@@ -213,7 +213,6 @@ impl QueryEngine {
             self.flush_notify().await?;
         }
 
-        self.handle_close(context)?;
         self.update_stats(context);
 
         Ok(())
