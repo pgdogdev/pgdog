@@ -27,7 +27,7 @@ impl ProtocolMessage {
         use ProtocolMessage::*;
         matches!(
             self,
-            Bind(_) | Parse(_) | Describe(_) | Execute(_) | Sync(_)
+            Bind(_) | Parse(_) | Describe(_) | Execute(_) | Sync(_) | Close(_)
         )
     }
 
