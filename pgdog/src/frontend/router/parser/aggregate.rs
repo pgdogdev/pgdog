@@ -85,7 +85,7 @@ impl Aggregate {
 
                             "sum" => targets.push(AggregateTarget {
                                 column: idx,
-                                function: AggregateFunction::Max,
+                                function: AggregateFunction::Sum,
                             }),
 
                             _ => {}
