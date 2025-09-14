@@ -1,129 +1,167 @@
 name: ci
 on:
-  push:
+    push:
 
 jobs:
-  fmt:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          override: true
-      - name: Install CMake 3.31
-        run: |
-          sudo apt update && sudo apt install mold -y
-          sudo apt remove cmake
-          sudo pip3 install cmake==3.31.6
-          cmake --version
-      - name: Format
-        run: cargo fmt --all -- --check
-      - name: Clippy
-        working-directory: pgdog
-        run: cargo clippy
-  build:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          override: true
-      - name: Install CMake 3.31
-        run: |
-          sudo apt update && sudo apt install mold -y
-          sudo apt remove cmake
-          sudo pip3 install cmake==3.31.6
-          cmake --version
-      - name: Build
-        run: cargo build
-      - name: Check release
-        run: cargo check --release
-  tests:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          override: true
-      - uses: useblacksmith/rust-cache@v3
-        with:
-          prefix-key: "v1" # Change this when updating tooling
-      - name: Setup PostgreSQL
-        run: |
-          sudo service postgresql start
-          sudo -u postgres createuser --superuser --login $USER
-          sudo -u postgres createdb $USER
-          sudo -u postgres psql -c 'ALTER SYSTEM SET max_prepared_transactions TO 1000;'
-          sudo service postgresql restart
-          bash integration/setup.sh
-          sudo apt update && sudo apt install -y python3-virtualenv mold
-          sudo gem install bundler
-          sudo apt remove -y cmake
-          sudo pip3 install cmake==3.31.6
-          cmake --version
-          cargo install cargo-nextest --version "0.9.78" --locked
-          bash integration/toxi/setup.sh
-      - name: Install test dependencies
-        run: cargo install cargo-nextest --version "0.9.78" --locked
-      - name: Run tests
-        run: cargo nextest run -E 'package(pgdog)' --no-fail-fast --test-threads=1
-      - name: Run documentation tests
-        run: cargo test --doc
-  integration:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          override: true
-      - uses: useblacksmith/rust-cache@v3
-        with:
-          prefix-key: release-1
-      - name: Setup dependencies
-        run: |
-          sudo service postgresql start
-          sudo -u postgres createuser --superuser --login $USER
-          sudo -u postgres createdb $USER
-          sudo -u postgres psql -c 'ALTER SYSTEM SET max_connections TO 1000;'
-          sudo -u postgres psql -c 'ALTER SYSTEM SET max_prepared_transactions TO 1000;'
-          sudo service postgresql restart
-          bash integration/setup.sh
-          sudo apt update && sudo apt install -y python3-virtualenv mold
-          sudo gem install bundler
-          sudo apt remove -y cmake
-          sudo pip3 install cmake==3.31.6
-          cmake --version
-          cargo install cargo-nextest --version "0.9.78" --locked
-          bash integration/toxi/setup.sh
-          sudo curl -SL https://github.com/docker/compose/releases/download/v2.36.1/docker-compose-linux-x86_64 -o /usr/local/bin/docker-compose
-          sudo chmod +x /usr/local/bin/docker-compose
-      - name: Build PgDog
-        run: cargo build --release
-      - name: Load balancer
-        run: bash integration/load_balancer/run.sh
-      - name: pgbench
-        run: bash integration/pgbench/run.sh
-      - name: Go
-        run: bash integration/go/run.sh
-      - name: JavaScript
-        run: bash integration/js/pg_tests/run.sh
-      - name: Toxi
-        run: bash integration/toxi/run.sh
-      - name: Python
-        run: bash integration/python/run.sh
-      - name: Ruby
-        run: bash integration/ruby/run.sh
-      - name: Java
-        run: bash integration/java/run.sh
-      - name: More complex stuff
-        run: bash integration/complex/run.sh
-      - name: Rust
-        run: bash integration/rust/run.sh
-      - name: Dry run
-        run: bash integration/dry_run/run.sh
-      # - name: Plugins
-      #   run: bash integration/plugins/run.sh
+    fmt:
+        runs-on: blacksmith-2vcpu-ubuntu-2404
+        steps:
+            - uses: actions/checkout@v4
+            - uses: actions-rs/toolchain@v1
+              with:
+                  toolchain: stable
+                  override: true
+            - name: Install CMake 3.31
+              run: |
+                  sudo apt update && sudo apt install mold -y
+                  sudo apt remove cmake
+                  sudo pip3 install cmake==3.31.6
+                  cmake --version
+            - name: Format
+              run: cargo fmt --all -- --check
+            - name: Clippy
+              working-directory: pgdog
+              run: cargo clippy
+    build:
+        runs-on: blacksmith-4vcpu-ubuntu-2404
+        steps:
+            - uses: actions/checkout@v4
+            - uses: actions-rs/toolchain@v1
+              with:
+                  toolchain: stable
+                  override: true
+            - uses: useblacksmith/rust-cache@v3
+              with:
+                  prefix-key: "v1-build"
+            - name: Install CMake 3.31
+              run: |
+                  sudo apt update && sudo apt install mold -y
+                  sudo apt remove cmake
+                  sudo pip3 install cmake==3.31.6
+                  cmake --version
+            - name: Build debug
+              run: cargo build
+            - name: Build release
+              run: cargo build --release
+            - name: Upload PgDog binary
+              uses: actions/upload-artifact@v4
+              with:
+                  name: pgdog-binary
+                  path: target/release/pgdog
+                  retention-days: 1
+    tests:
+        runs-on: blacksmith-2vcpu-ubuntu-2404
+        steps:
+            - uses: actions/checkout@v4
+            - uses: actions-rs/toolchain@v1
+              with:
+                  toolchain: stable
+                  override: true
+            - uses: useblacksmith/rust-cache@v3
+              with:
+                  prefix-key: "v1" # Change this when updating tooling
+            - name: Setup PostgreSQL
+              run: |
+                  sudo service postgresql start
+                  sudo -u postgres createuser --superuser --login $USER
+                  sudo -u postgres createdb $USER
+                  sudo -u postgres psql -c 'ALTER SYSTEM SET max_prepared_transactions TO 1000;'
+                  sudo service postgresql restart
+                  bash integration/setup.sh
+                  sudo apt update && sudo apt install -y python3-virtualenv mold
+                  sudo gem install bundler
+                  sudo apt remove -y cmake
+                  sudo pip3 install cmake==3.31.6
+                  cmake --version
+                  cargo install cargo-nextest --version "0.9.78" --locked
+                  bash integration/toxi/setup.sh
+            - name: Install test dependencies
+              run: cargo install cargo-nextest --version "0.9.78" --locked
+            - name: Run tests
+              run: cargo nextest run -E 'package(pgdog)' --no-fail-fast --test-threads=1
+            - name: Run documentation tests
+              run: cargo test --doc
+    integration:
+        runs-on: blacksmith-4vcpu-ubuntu-2404
+        needs: build
+        strategy:
+            fail-fast: false
+            matrix:
+                test:
+                    - load_balancer
+                    - pgbench
+                    - go
+                    - js
+                    - toxi
+                    - python
+                    - ruby
+                    - java
+                    - complex
+                    - rust
+                    - dry_run
+        steps:
+            - uses: actions/checkout@v4
+            - name: Download PgDog binary
+              uses: actions/download-artifact@v4
+              with:
+                  name: pgdog-binary
+                  path: target/release/
+            - name: Make PgDog executable
+              run: chmod +x target/release/pgdog
+            - name: Setup dependencies
+              run: |
+                  sudo service postgresql start
+                  sudo -u postgres createuser --superuser --login $USER
+                  sudo -u postgres createdb $USER
+                  sudo -u postgres psql -c 'ALTER SYSTEM SET max_connections TO 1000;'
+                  sudo -u postgres psql -c 'ALTER SYSTEM SET max_prepared_transactions TO 1000;'
+                  sudo service postgresql restart
+                  bash integration/setup.sh
+                  sudo apt update && sudo apt install -y python3-virtualenv mold
+                  sudo gem install bundler
+                  sudo apt remove -y cmake
+                  sudo pip3 install cmake==3.31.6
+                  cmake --version
+                  cargo install cargo-nextest --version "0.9.78" --locked
+                  bash integration/toxi/setup.sh
+                  sudo curl -SL https://github.com/docker/compose/releases/download/v2.36.1/docker-compose-linux-x86_64 -o /usr/local/bin/docker-compose
+                  sudo chmod +x /usr/local/bin/docker-compose
+            - name: Run integration test - ${{ matrix.test }}
+              run: |
+                  case "${{ matrix.test }}" in
+                    "load_balancer")
+                      bash integration/load_balancer/run.sh
+                      ;;
+                    "pgbench")
+                      bash integration/pgbench/run.sh
+                      ;;
+                    "go")
+                      bash integration/go/run.sh
+                      ;;
+                    "js")
+                      bash integration/js/pg_tests/run.sh
+                      ;;
+                    "toxi")
+                      bash integration/toxi/run.sh
+                      ;;
+                    "python")
+                      bash integration/python/run.sh
+                      ;;
+                    "ruby")
+                      bash integration/ruby/run.sh
+                      ;;
+                    "java")
+                      bash integration/java/run.sh
+                      ;;
+                    "complex")
+                      bash integration/complex/run.sh
+                      ;;
+                    "rust")
+                      bash integration/rust/run.sh
+                      ;;
+                    "dry_run")
+                      bash integration/dry_run/run.sh
+                      ;;
+                  esac
+            # - name: Plugins
+            #   run: bash integration/plugins/run.sh
