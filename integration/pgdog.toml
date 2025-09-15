@@ -15,6 +15,7 @@ prepared_statements_limit = 500
 query_cache_limit = 500
 pub_sub_channel_size = 4098
 two_phase_commit = false
+healthcheck_port = 8080
 
 # ------------------------------------------------------------------------------
 # ----- Database :: pgdog ------------------------------------------------------

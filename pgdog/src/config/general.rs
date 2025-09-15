@@ -41,6 +41,8 @@ pub struct General {
     /// Healthcheck timeout.
     #[serde(default = "General::healthcheck_timeout")]
     pub healthcheck_timeout: u64,
+    /// HTTP health check port.
+    pub healthcheck_port: Option<u16>,
     /// Maximum duration of a ban.
     #[serde(default = "General::ban_timeout")]
     pub ban_timeout: u64,
@@ -80,6 +82,7 @@ pub struct General {
     pub openmetrics_port: Option<u16>,
     /// OpenMetrics prefix.
     pub openmetrics_namespace: Option<String>,
+
     /// Prepared statatements support.
     #[serde(default)]
     pub prepared_statements: PreparedStatements,
@@ -159,6 +162,7 @@ impl Default for General {
             idle_healthcheck_interval: Self::idle_healthcheck_interval(),
             idle_healthcheck_delay: Self::idle_healthcheck_delay(),
             healthcheck_timeout: Self::healthcheck_timeout(),
+            healthcheck_port: Self::healthcheck_port(),
             ban_timeout: Self::ban_timeout(),
             rollback_timeout: Self::rollback_timeout(),
             load_balancing_strategy: Self::load_balancing_strategy(),
@@ -268,6 +272,10 @@ impl General {
 
     fn idle_healthcheck_delay() -> u64 {
         Self::env_or_default("PGDOG_IDLE_HEALTHCHECK_DELAY", 5_000)
+    }
+
+    fn healthcheck_port() -> Option<u16> {
+        Self::env_option("PGDOG_HEALTHCHECK_PORT")
     }
 
     fn ban_timeout() -> u64 {
