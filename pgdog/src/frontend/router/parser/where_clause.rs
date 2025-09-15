@@ -426,4 +426,45 @@ mod test {
             panic!("not a select");
         }
     }
+
+    #[test]
+    fn test_joins_with_multiple_tables() {
+        let query = "SELECT * FROM users u
+                     JOIN orders o ON u.id = o.user_id
+                     JOIN products p ON o.product_id = p.id
+                     JOIN categories c ON p.category_id = c.id
+                     WHERE u.tenant_id = $1 AND o.status = 'shipped' AND p.price > 100";
+        let ast = parse(query).unwrap();
+        let stmt = ast.protobuf.stmts.first().cloned().unwrap().stmt.unwrap();
+
+        if let Some(NodeEnum::SelectStmt(stmt)) = stmt.node {
+            let from_clause = FromClause::new(&stmt.from_clause);
+            let source = TablesSource::from(from_clause);
+            let where_ = WhereClause::new(&source, &stmt.where_clause).unwrap();
+
+            // Test that we can extract keys for the users table with alias 'u'
+            let keys = where_.keys(Some("users"), "tenant_id");
+            assert_eq!(keys.len(), 1);
+            assert_eq!(
+                keys[0],
+                Key::Parameter {
+                    pos: 0,
+                    array: false
+                }
+            );
+
+            // Test that we can extract keys for the orders table with alias 'o'
+            let status_keys = where_.keys(Some("orders"), "status");
+            assert_eq!(status_keys.len(), 1);
+            assert_eq!(
+                status_keys[0],
+                Key::Constant {
+                    value: "shipped".to_string(),
+                    array: false
+                }
+            );
+        } else {
+            panic!("not a select");
+        }
+    }
 }

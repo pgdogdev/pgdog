@@ -12,31 +12,38 @@ impl<'a> FromClause<'a> {
         Self { nodes }
     }
 
-    pub fn resolve_alias(&'a self, name: &str) -> Option<&'a str> {
+    pub fn resolve_alias(&'a self, name: &'a str) -> Option<&'a str> {
         for node in self.nodes {
             if let Some(ref node) = node.node {
-                match node {
-                    NodeEnum::JoinExpr(ref join) => {
-                        for arg in [&join.larg, &join.rarg].into_iter().flatten() {
-                            if let Some(NodeEnum::RangeVar(ref range_var)) = arg.node {
-                                let table = Table::from(range_var);
-                                if table.name_match(name) {
-                                    return Some(table.name);
-                                }
-                            }
-                        }
-                    }
-
-                    NodeEnum::RangeVar(ref range_var) => {
-                        let table = Table::from(range_var);
-                        if table.name_match(name) {
-                            return Some(table.name);
-                        }
-                    }
-
-                    _ => (),
+                if let Some(name) = self.resolve(name, node) {
+                    return Some(name);
                 }
             }
+        }
+
+        None
+    }
+
+    fn resolve(&'a self, name: &'a str, node: &'a NodeEnum) -> Option<&'a str> {
+        match node {
+            NodeEnum::JoinExpr(ref join) => {
+                for arg in [&join.larg, &join.rarg].into_iter().flatten() {
+                    if let Some(ref node) = arg.node {
+                        if let Some(name) = self.resolve(name, node) {
+                            return Some(name);
+                        }
+                    }
+                }
+            }
+
+            NodeEnum::RangeVar(ref range_var) => {
+                let table = Table::from(range_var);
+                if table.name_match(name) {
+                    return Some(table.name);
+                }
+            }
+
+            _ => (),
         }
 
         None
