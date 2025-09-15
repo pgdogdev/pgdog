@@ -13,6 +13,7 @@ use tracing::debug;
 pub mod connect;
 pub mod context;
 pub mod deallocate;
+pub mod discard;
 pub mod end_transaction;
 pub mod incomplete_requests;
 pub mod notify_buffer;
@@ -202,6 +203,7 @@ impl QueryEngine {
                 self.execute(context, &route).await?;
             }
             Command::Deallocate => self.deallocate(context).await?,
+            Command::Discard { extended } => self.discard(context, *extended).await?,
             command => self.unknown_command(context, command.clone()).await?,
         }
 
