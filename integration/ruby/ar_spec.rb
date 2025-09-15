@@ -164,22 +164,23 @@ describe 'active record' do
           Sharded.create value: "test_#{i}"
         end
 
-        records = []
-        10.times do
-          record = Sharded.where(value: 'test_0').first
-          records << record
-          expect(record.value).to eq('test_0')
+        5.times do |i|
+          record = Sharded.where(value: "test_#{i}").first
+          expect(record.value).to eq("test_#{i}")
         end
 
         ActiveRecord::Base.connection.execute 'DISCARD ALL'
 
-        # DISCARD is ignored
-        record = Sharded.where(value: 'test_1').first
-        expect(record.value).to eq('test_1')
+        5.times do |i|
+          record = Sharded.where(value: "test_#{i}").first
+          expect(record.value).to eq("test_#{i}")
+        end
 
         # Verify prepared stataments exist
         new_record = Sharded.create value: 'after_discard'
         expect(new_record.value).to eq('after_discard')
+        record = Sharded.where(value: 'after_discard').first
+        expect(record.value).to eq('after_discard')
 
         count = Sharded.count
         expect(count).to eq(6)

@@ -1,4 +1,3 @@
-
 require_relative 'rspec_helper'
 require 'pp'
 
@@ -54,7 +53,7 @@ xdescribe 'CRUD and Join for Customer and Order', type: :model do
       adapter: 'postgresql',
       host: '127.0.0.1',
       port: 6432,
-      database: "pgdog_sharded",
+      database: 'pgdog_sharded',
       password: 'pgdog',
       user: 'pgdog',
       prepared_statements: true

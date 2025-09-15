@@ -26,6 +26,5 @@ describe 'load balancer' do
         expect(transaction - 250 / 4).to be < 5
       end
     end
-
   end
 end

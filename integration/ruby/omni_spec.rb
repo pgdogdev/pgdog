@@ -1,11 +1,11 @@
 require_relative 'rspec_helper'
 
 class ShardedOmni < ActiveRecord::Base
-  self.table_name = "sharded_omni"
+  self.table_name = 'sharded_omni'
   self.primary_key = 'id'
 end
 
-describe "omnisharded tables" do
+describe 'omnisharded tables' do
   before do
     ActiveRecord::Base.establish_connection(
       adapter: 'postgresql',
@@ -14,14 +14,14 @@ describe "omnisharded tables" do
       database: 'pgdog_sharded',
       password: 'pgdog',
       user: 'pgdog',
-      prepared_statements: true,
+      prepared_statements: true
     )
-    ActiveRecord::Base.connection.execute "TRUNCATE TABLE sharded_omni"
+    ActiveRecord::Base.connection.execute 'TRUNCATE TABLE sharded_omni'
   end
 
-  it "can insert and select" do
+  it 'can insert and select' do
     25.times do |id|
-      res = ShardedOmni.create id: id, value: "test"
+      res = ShardedOmni.create id: id, value: 'test'
       expect(res.id).to eq(id)
 
       25.times do

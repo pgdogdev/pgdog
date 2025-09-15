@@ -37,8 +37,8 @@ def ensure_done
   end
   servers = conn.exec 'SHOW SERVERS'
   servers
-    .select do
-      |server| server["application_name"] != "PgDog Pub/Sub Listener"
+    .select do |server|
+      server['application_name'] != 'PgDog Pub/Sub Listener'
     end
     .each do |server|
       expect(server['state']).to eq('idle')
