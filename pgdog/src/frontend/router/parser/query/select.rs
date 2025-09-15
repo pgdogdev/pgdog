@@ -43,9 +43,9 @@ impl QueryParser {
         let order_by = Self::select_sort(&stmt.sort_clause, context.router_context.bind);
         let mut shards = HashSet::new();
         let from_clause = TablesSource::from(FromClause::new(&stmt.from_clause));
-        let the_table = Table::try_from(&stmt.from_clause).ok();
+        let where_clause = WhereClause::new(&from_clause, &stmt.where_clause);
 
-        if let Some(where_clause) = WhereClause::new(&from_clause, &stmt.where_clause) {
+        if let Some(ref where_clause) = where_clause {
             shards = Self::where_clause(
                 &context.sharding_schema,
                 &where_clause,
@@ -59,7 +59,7 @@ impl QueryParser {
                 for table in context.sharding_schema.tables.tables() {
                     if &table.column == column_name
                         && (table.name.is_none()
-                            || table.name.as_deref() == the_table.as_ref().map(|t| t.name))
+                            || table.name.as_deref() == from_clause.table_name())
                     {
                         let centroids = Centroids::from(&table.centroids);
                         shards.insert(centroids.shard(
@@ -81,7 +81,7 @@ impl QueryParser {
 
         let mut omni = false;
         if query.is_all_shards() {
-            if let Some(name) = the_table.as_ref().map(|t| t.name) {
+            if let Some(name) = from_clause.table_name() {
                 omni = context.sharding_schema.tables.omnishards().contains(name);
             }
         }
