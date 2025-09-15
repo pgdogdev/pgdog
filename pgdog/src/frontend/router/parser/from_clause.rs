@@ -17,19 +17,12 @@ impl<'a> FromClause<'a> {
             if let Some(ref node) = node.node {
                 match node {
                     NodeEnum::JoinExpr(ref join) => {
-                        for arg in [&join.larg, &join.rarg] {
-                            if let Some(arg) = arg {
-                                if let Some(ref node) = arg.node {
-                                    match node {
-                                        NodeEnum::RangeVar(range_var) => {
-                                            if let Ok(table) = Table::try_from(range_var) {
-                                                if table.name_match(name) {
-                                                    return Some(table.name);
-                                                }
-                                            }
-                                        }
-
-                                        _ => (),
+                        for arg in [&join.larg, &join.rarg].into_iter().flatten() {
+                            if let Some(ref node) = arg.node {
+                                if let NodeEnum::RangeVar(range_var) = node {
+                                    let table = Table::from(range_var);
+                                    if table.name_match(name) {
+                                        return Some(table.name);
                                     }
                                 }
                             }
@@ -37,10 +30,9 @@ impl<'a> FromClause<'a> {
                     }
 
                     NodeEnum::RangeVar(ref range_var) => {
-                        if let Ok(table) = Table::try_from(range_var) {
-                            if table.name_match(name) {
-                                return Some(table.name);
-                            }
+                        let table = Table::from(range_var);
+                        if table.name_match(name) {
+                            return Some(table.name);
                         }
                     }
 
@@ -54,14 +46,9 @@ impl<'a> FromClause<'a> {
 
     pub fn table_name(&'a self) -> Option<&'a str> {
         if let Some(node) = self.nodes.first() {
-            match node.node {
-                Some(NodeEnum::RangeVar(ref range_var)) => {
-                    if let Ok(table) = Table::try_from(range_var) {
-                        return Some(table.name);
-                    }
-                }
-
-                _ => (),
+            if let Some(NodeEnum::RangeVar(ref range_var)) = node.node {
+                let table = Table::from(range_var);
+                return Some(table.name);
             }
         }
 

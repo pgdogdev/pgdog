@@ -204,7 +204,7 @@ impl<'a> WhereClause<'a> {
                     let left = null_test
                         .arg
                         .as_ref()
-                        .and_then(|node| Self::parse(&source, node, array).pop());
+                        .and_then(|node| Self::parse(source, node, array).pop());
 
                     if let Some(Output::Column(c)) = left {
                         keys.push(Output::NullCheck(c));
@@ -221,7 +221,7 @@ impl<'a> WhereClause<'a> {
                 }
 
                 for arg in &expr.args {
-                    keys.extend(Self::parse(&source, arg, array));
+                    keys.extend(Self::parse(source, arg, array));
                 }
             }
 
@@ -241,8 +241,8 @@ impl<'a> WhereClause<'a> {
                 let array = matches!(kind, AExprKind::AexprOpAny);
                 if let Some(ref left) = expr.lexpr {
                     if let Some(ref right) = expr.rexpr {
-                        let left = Self::parse(&source, left, array);
-                        let right = Self::parse(&source, right, array);
+                        let left = Self::parse(source, left, array);
+                        let right = Self::parse(source, right, array);
 
                         keys.push(Output::Filter(left, right));
                     }
@@ -292,7 +292,7 @@ impl<'a> WhereClause<'a> {
 
             Some(NodeEnum::List(ref list)) => {
                 for node in &list.items {
-                    keys.extend(Self::parse(&source, node, array));
+                    keys.extend(Self::parse(source, node, array));
                 }
             }
 
