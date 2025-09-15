@@ -29,6 +29,9 @@ pub enum Command {
     Rewrite(String),
     Shards(usize),
     Deallocate,
+    Discard {
+        extended: bool,
+    },
     Listen {
         channel: String,
         shard: Shard,
