@@ -93,7 +93,6 @@ impl<'a> WhereClause<'a> {
         };
 
         let output = Self::parse(source, where_clause, false);
-        println!("{:#?}", output);
 
         Some(Self { output })
     }

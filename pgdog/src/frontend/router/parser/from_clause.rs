@@ -18,12 +18,10 @@ impl<'a> FromClause<'a> {
                 match node {
                     NodeEnum::JoinExpr(ref join) => {
                         for arg in [&join.larg, &join.rarg].into_iter().flatten() {
-                            if let Some(ref node) = arg.node {
-                                if let NodeEnum::RangeVar(range_var) = node {
-                                    let table = Table::from(range_var);
-                                    if table.name_match(name) {
-                                        return Some(table.name);
-                                    }
+                            if let Some(NodeEnum::RangeVar(ref range_var)) = arg.node {
+                                let table = Table::from(range_var);
+                                if table.name_match(name) {
+                                    return Some(table.name);
                                 }
                             }
                         }
