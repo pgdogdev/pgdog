@@ -6,10 +6,10 @@ use pgdog::backend::pool::dns_cache::DnsCache;
 use pgdog::cli::{self, Commands};
 use pgdog::config::{self, config};
 use pgdog::frontend::listener::Listener;
-use pgdog::net;
 use pgdog::plugin;
 use pgdog::stats;
 use pgdog::util::pgdog_version;
+use pgdog::{healthcheck, net};
 use tokio::runtime::Builder;
 use tracing::info;
 
@@ -116,6 +116,10 @@ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Erro
 
     if let Some(openmetrics_port) = general.openmetrics_port {
         tokio::spawn(async move { stats::http_server::server(openmetrics_port).await });
+    }
+
+    if let Some(healthcheck_port) = general.healthcheck_port {
+        tokio::spawn(async move { healthcheck::server(healthcheck_port).await });
     }
 
     let dns_cache_override_enabled = general.dns_ttl().is_some();

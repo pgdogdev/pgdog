@@ -6,7 +6,55 @@ use pg_query::{
 };
 use std::string::String;
 
+use crate::frontend::router::parser::{from_clause::FromClause, Table};
+
 use super::Key;
+
+#[derive(Copy, Clone)]
+pub enum TablesSource<'a> {
+    Table(Table<'a>),
+    FromClause(FromClause<'a>),
+}
+
+impl<'a> From<Table<'a>> for TablesSource<'a> {
+    fn from(value: Table<'a>) -> Self {
+        Self::Table(value)
+    }
+}
+
+impl<'a> From<FromClause<'a>> for TablesSource<'a> {
+    fn from(value: FromClause<'a>) -> Self {
+        Self::FromClause(value)
+    }
+}
+
+impl<'a> TablesSource<'a> {
+    pub fn resolve_alias(&'a self, name: &'a str) -> &'a str {
+        match self {
+            Self::Table(table) => {
+                if table.name_match(name) {
+                    table.name
+                } else {
+                    name
+                }
+            }
+            Self::FromClause(fc) => {
+                if let Some(name) = fc.resolve_alias(name) {
+                    name
+                } else {
+                    name
+                }
+            }
+        }
+    }
+
+    pub fn table_name(&'a self) -> Option<&'a str> {
+        match self {
+            Self::Table(table) => Some(table.name),
+            Self::FromClause(fc) => fc.table_name(),
+        }
+    }
+}
 
 #[derive(Debug)]
 pub struct Column<'a> {
@@ -37,14 +85,14 @@ impl<'a> WhereClause<'a> {
     /// Parse the `WHERE` clause of a statement and extract
     /// all possible sharding keys.
     pub fn new(
-        table_name: Option<&'a str>,
+        source: &'a TablesSource<'a>,
         where_clause: &'a Option<Box<Node>>,
     ) -> Option<WhereClause<'a>> {
         let Some(ref where_clause) = where_clause else {
             return None;
         };
 
-        let output = Self::parse(table_name, where_clause, false);
+        let output = Self::parse(source, where_clause, false);
 
         Some(Self { output })
     }
@@ -145,7 +193,7 @@ impl<'a> WhereClause<'a> {
         None
     }
 
-    fn parse(table_name: Option<&'a str>, node: &'a Node, array: bool) -> Vec<Output<'a>> {
+    fn parse(source: &'a TablesSource<'a>, node: &'a Node, array: bool) -> Vec<Output<'a>> {
         let mut keys = vec![];
 
         match node.node {
@@ -155,7 +203,7 @@ impl<'a> WhereClause<'a> {
                     let left = null_test
                         .arg
                         .as_ref()
-                        .and_then(|node| Self::parse(table_name, node, array).pop());
+                        .and_then(|node| Self::parse(source, node, array).pop());
 
                     if let Some(Output::Column(c)) = left {
                         keys.push(Output::NullCheck(c));
@@ -172,7 +220,7 @@ impl<'a> WhereClause<'a> {
                 }
 
                 for arg in &expr.args {
-                    keys.extend(Self::parse(table_name, arg, array));
+                    keys.extend(Self::parse(source, arg, array));
                 }
             }
 
@@ -192,8 +240,8 @@ impl<'a> WhereClause<'a> {
                 let array = matches!(kind, AExprKind::AexprOpAny);
                 if let Some(ref left) = expr.lexpr {
                     if let Some(ref right) = expr.rexpr {
-                        let left = Self::parse(table_name, left, array);
-                        let right = Self::parse(table_name, right, array);
+                        let left = Self::parse(source, left, array);
+                        let right = Self::parse(source, right, array);
 
                         keys.push(Output::Filter(left, right));
                     }
@@ -224,9 +272,9 @@ impl<'a> WhereClause<'a> {
                 let name = Self::string(column.fields.last());
                 let table = Self::string(column.fields.iter().rev().nth(1));
                 let table = if let Some(table) = table {
-                    Some(table)
+                    Some(source.resolve_alias(table))
                 } else {
-                    table_name
+                    source.table_name()
                 };
 
                 if let Some(name) = name {
@@ -243,13 +291,13 @@ impl<'a> WhereClause<'a> {
 
             Some(NodeEnum::List(ref list)) => {
                 for node in &list.items {
-                    keys.extend(Self::parse(table_name, node, array));
+                    keys.extend(Self::parse(source, node, array));
                 }
             }
 
             Some(NodeEnum::TypeCast(ref cast)) => {
                 if let Some(ref arg) = cast.arg {
-                    keys.extend(Self::parse(table_name, arg, array));
+                    keys.extend(Self::parse(source, arg, array));
                 }
             }
 
@@ -274,7 +322,9 @@ mod test {
         let stmt = ast.protobuf.stmts.first().cloned().unwrap().stmt.unwrap();
 
         if let Some(NodeEnum::SelectStmt(stmt)) = stmt.node {
-            let where_ = WhereClause::new(Some("sharded"), &stmt.where_clause).unwrap();
+            let from_clause = FromClause::new(&stmt.from_clause);
+            let source = TablesSource::from(from_clause);
+            let where_ = WhereClause::new(&source, &stmt.where_clause).unwrap();
             let mut keys = where_.keys(Some("sharded"), "id");
             assert_eq!(
                 keys.pop().unwrap(),
@@ -294,7 +344,9 @@ mod test {
         let stmt = ast.protobuf.stmts.first().cloned().unwrap().stmt.unwrap();
 
         if let Some(NodeEnum::SelectStmt(stmt)) = stmt.node {
-            let where_ = WhereClause::new(Some("users"), &stmt.where_clause).unwrap();
+            let from_clause = FromClause::new(&stmt.from_clause);
+            let source = TablesSource::from(from_clause);
+            let where_ = WhereClause::new(&source, &stmt.where_clause).unwrap();
             assert_eq!(
                 where_.keys(Some("users"), "tenant_id").pop(),
                 Some(Key::Null)
@@ -308,7 +360,9 @@ mod test {
         let stmt = ast.protobuf.stmts.first().cloned().unwrap().stmt.unwrap();
 
         if let Some(NodeEnum::SelectStmt(stmt)) = stmt.node {
-            let where_ = WhereClause::new(Some("users"), &stmt.where_clause).unwrap();
+            let from_clause = FromClause::new(&stmt.from_clause);
+            let source = TablesSource::from(from_clause);
+            let where_ = WhereClause::new(&source, &stmt.where_clause).unwrap();
             assert!(where_.keys(Some("users"), "tenant_id").is_empty());
         }
     }
@@ -320,7 +374,9 @@ mod test {
         let stmt = ast.protobuf.stmts.first().cloned().unwrap().stmt.unwrap();
 
         if let Some(NodeEnum::SelectStmt(stmt)) = stmt.node {
-            let where_ = WhereClause::new(Some("users"), &stmt.where_clause).unwrap();
+            let from_clause = FromClause::new(&stmt.from_clause);
+            let source = TablesSource::from(from_clause);
+            let where_ = WhereClause::new(&source, &stmt.where_clause).unwrap();
             let keys = where_.keys(Some("users"), "tenant_id");
             assert_eq!(keys.len(), 4);
         } else {
@@ -335,7 +391,9 @@ mod test {
         let stmt = ast.protobuf.stmts.first().cloned().unwrap().stmt.unwrap();
 
         if let Some(NodeEnum::SelectStmt(stmt)) = stmt.node {
-            let where_ = WhereClause::new(Some("users"), &stmt.where_clause).unwrap();
+            let from_clause = FromClause::new(&stmt.from_clause);
+            let source = TablesSource::from(from_clause);
+            let where_ = WhereClause::new(&source, &stmt.where_clause).unwrap();
             let keys = where_.keys(Some("users"), "tenant_id");
             assert_eq!(
                 keys[0],
@@ -353,13 +411,78 @@ mod test {
         let stmt = ast.protobuf.stmts.first().cloned().unwrap().stmt.unwrap();
 
         if let Some(NodeEnum::SelectStmt(stmt)) = stmt.node {
-            let where_ = WhereClause::new(Some("users"), &stmt.where_clause).unwrap();
+            let from_clause = FromClause::new(&stmt.from_clause);
+            let source = TablesSource::from(from_clause);
+            let where_ = WhereClause::new(&source, &stmt.where_clause).unwrap();
             let keys = where_.keys(Some("users"), "tenant_id");
             assert_eq!(
                 keys[0],
                 Key::Constant {
                     value: "{1, 2, 3}".to_string(),
                     array: true
+                },
+            );
+        } else {
+            panic!("not a select");
+        }
+    }
+
+    #[test]
+    fn test_joins_with_multiple_tables() {
+        let query = "SELECT * FROM users u
+                     JOIN orders o ON u.id = o.user_id
+                     JOIN products p ON o.product_id = p.id
+                     JOIN categories c ON p.category_id = c.id
+                     WHERE u.tenant_id = $1 AND o.status = 'shipped' AND p.price > 100";
+        let ast = parse(query).unwrap();
+        let stmt = ast.protobuf.stmts.first().cloned().unwrap().stmt.unwrap();
+
+        if let Some(NodeEnum::SelectStmt(stmt)) = stmt.node {
+            let from_clause = FromClause::new(&stmt.from_clause);
+            let source = TablesSource::from(from_clause);
+            let where_ = WhereClause::new(&source, &stmt.where_clause).unwrap();
+
+            // Test that we can extract keys for the users table with alias 'u'
+            let keys = where_.keys(Some("users"), "tenant_id");
+            assert_eq!(keys.len(), 1);
+            assert_eq!(
+                keys[0],
+                Key::Parameter {
+                    pos: 0,
+                    array: false
+                }
+            );
+
+            // Test that we can extract keys for the orders table with alias 'o'
+            let status_keys = where_.keys(Some("orders"), "status");
+            assert_eq!(status_keys.len(), 1);
+            assert_eq!(
+                status_keys[0],
+                Key::Constant {
+                    value: "shipped".to_string(),
+                    array: false
+                }
+            );
+        } else {
+            panic!("not a select");
+        }
+    }
+
+    #[test]
+    fn test_as_alias() {
+        let query = r#"SELECT "id", "email", "createdAt", "updatedAt" FROM "Users" AS "User" WHERE "User"."id" = 24 ORDER BY "User"."id" LIMIT 1;"#;
+        let ast = parse(query).unwrap();
+        let stmt = ast.protobuf.stmts.first().cloned().unwrap().stmt.unwrap();
+        if let Some(NodeEnum::SelectStmt(stmt)) = stmt.node {
+            let from_clause = FromClause::new(&stmt.from_clause);
+            let source = TablesSource::from(from_clause);
+            let where_ = WhereClause::new(&source, &stmt.where_clause).unwrap();
+            let keys = where_.keys(Some("Users"), "id");
+            assert_eq!(
+                keys[0],
+                Key::Constant {
+                    value: "24".to_string(),
+                    array: false
                 },
             );
         } else {

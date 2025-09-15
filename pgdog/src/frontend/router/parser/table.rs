@@ -11,6 +11,8 @@ pub struct Table<'a> {
     pub name: &'a str,
     /// Schema name, if specified.
     pub schema: Option<&'a str>,
+    /// Alias.
+    pub alias: Option<&'a str>,
 }
 
 /// Owned version of Table that owns its string data.
@@ -20,6 +22,8 @@ pub struct OwnedTable {
     pub name: String,
     /// Schema name, if specified.
     pub schema: Option<String>,
+    /// Alias.
+    pub alias: Option<String>,
 }
 
 impl Display for Table<'_> {
@@ -42,6 +46,10 @@ impl<'a> Table<'a> {
     pub fn to_owned(&self) -> OwnedTable {
         OwnedTable::from(*self)
     }
+
+    pub fn name_match(&self, name: &str) -> bool {
+        Some(name) == self.alias || name == self.name
+    }
 }
 
 impl Display for OwnedTable {
@@ -56,6 +64,7 @@ impl<'a> From<Table<'a>> for OwnedTable {
         Self {
             name: table.name.to_owned(),
             schema: table.schema.map(|s| s.to_owned()),
+            alias: table.alias.map(|s| s.to_owned()),
         }
     }
 }
@@ -65,6 +74,7 @@ impl<'a> From<&'a OwnedTable> for Table<'a> {
         Self {
             name: &owned.name,
             schema: owned.schema.as_deref(),
+            alias: owned.alias.as_deref(),
         }
     }
 }
@@ -85,30 +95,26 @@ impl<'a> TryFrom<&'a Vec<Node>> for Table<'a> {
     type Error = ();
 
     fn try_from(value: &'a Vec<Node>) -> Result<Self, Self::Error> {
-        let name = value
+        let table = value
             .first()
             .and_then(|node| {
                 node.node.as_ref().map(|node| match node {
-                    NodeEnum::RangeVar(var) => Some(if let Some(ref alias) = var.alias {
-                        alias.aliasname.as_str()
-                    } else {
-                        var.relname.as_str()
-                    }),
+                    NodeEnum::RangeVar(var) => Some(Table::from(var)),
                     _ => None,
                 })
             })
             .flatten()
             .ok_or(())?;
-        Ok(Self { name, schema: None })
+        Ok(table)
     }
 }
 
 impl<'a> From<&'a RangeVar> for Table<'a> {
     fn from(range_var: &'a RangeVar) -> Self {
-        let name = if let Some(ref alias) = range_var.alias {
-            alias.aliasname.as_str()
+        let (name, alias) = if let Some(ref alias) = range_var.alias {
+            (range_var.relname.as_str(), Some(alias.aliasname.as_str()))
         } else {
-            range_var.relname.as_str()
+            (range_var.relname.as_str(), None)
         };
         Self {
             name,
@@ -117,6 +123,7 @@ impl<'a> From<&'a RangeVar> for Table<'a> {
             } else {
                 None
             },
+            alias,
         }
     }
 }

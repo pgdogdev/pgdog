@@ -146,7 +146,8 @@ mod test {
                     insert.table(),
                     Some(Table {
                         name: "my_table",
-                        schema: None
+                        schema: None,
+                        alias: None,
                     })
                 );
                 assert_eq!(
