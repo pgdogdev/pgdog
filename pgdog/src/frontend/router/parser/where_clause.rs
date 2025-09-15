@@ -467,4 +467,26 @@ mod test {
             panic!("not a select");
         }
     }
+
+    #[test]
+    fn test_as_alias() {
+        let query = r#"SELECT "id", "email", "createdAt", "updatedAt" FROM "Users" AS "User" WHERE "User"."id" = 24 ORDER BY "User"."id" LIMIT 1;"#;
+        let ast = parse(query).unwrap();
+        let stmt = ast.protobuf.stmts.first().cloned().unwrap().stmt.unwrap();
+        if let Some(NodeEnum::SelectStmt(stmt)) = stmt.node {
+            let from_clause = FromClause::new(&stmt.from_clause);
+            let source = TablesSource::from(from_clause);
+            let where_ = WhereClause::new(&source, &stmt.where_clause).unwrap();
+            let keys = where_.keys(Some("Users"), "id");
+            assert_eq!(
+                keys[0],
+                Key::Constant {
+                    value: "24".to_string(),
+                    array: false
+                },
+            );
+        } else {
+            panic!("not a select");
+        }
+    }
 }

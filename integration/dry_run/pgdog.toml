@@ -10,6 +10,6 @@ password = "pgdog"
 
 [[sharded_tables]]
 database = "pgdog"
-name = "User"
+name = "Users"
 column = "id"
 data_type = "bigint"
