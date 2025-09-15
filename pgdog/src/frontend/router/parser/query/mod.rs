@@ -260,6 +260,12 @@ impl QueryParser {
                 Ok(Command::Query(Route::write(None).set_maintenace()))
             }
 
+            Some(NodeEnum::DiscardStmt { .. }) => {
+                return Ok(Command::Discard {
+                    extended: !context.query()?.simple(),
+                })
+            }
+
             // All others are not handled.
             // They are sent to all shards concurrently.
             _ => Ok(Command::Query(Route::write(None))),
