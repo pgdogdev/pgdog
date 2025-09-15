@@ -1,3 +1,5 @@
+use crate::frontend::router::parser::{from_clause::FromClause, where_clause::TablesSource};
+
 use super::*;
 
 impl QueryParser {
@@ -40,10 +42,10 @@ impl QueryParser {
 
         let order_by = Self::select_sort(&stmt.sort_clause, context.router_context.bind);
         let mut shards = HashSet::new();
+        let from_clause = TablesSource::from(FromClause::new(&stmt.from_clause));
         let the_table = Table::try_from(&stmt.from_clause).ok();
-        if let Some(where_clause) =
-            WhereClause::new(the_table.as_ref().map(|t| t.name), &stmt.where_clause)
-        {
+
+        if let Some(where_clause) = WhereClause::new(&from_clause, &stmt.where_clause) {
             shards = Self::where_clause(
                 &context.sharding_schema,
                 &where_clause,

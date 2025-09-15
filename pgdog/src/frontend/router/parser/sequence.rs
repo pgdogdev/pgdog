@@ -130,6 +130,7 @@ mod test {
         let table = Table {
             name: "my_seq",
             schema: Some("public"),
+            alias: None,
         };
         let sequence = Sequence::from(table);
 
@@ -141,6 +142,7 @@ mod test {
         let table = Table {
             name: "my_seq",
             schema: None,
+            alias: None,
         };
         let sequence = Sequence::from(table);
 
