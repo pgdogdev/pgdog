@@ -35,7 +35,7 @@ pub use healthcheck::Healtcheck;
 pub use mirror_stats::MirrorStats;
 use monitor::Monitor;
 pub use oids::Oids;
-pub use pool_impl::Pool;
+pub use pool_impl::{Pool, WaiterHandle};
 pub use replicas::Replicas;
 pub use request::Request;
 pub use shard::Shard;
@@ -47,7 +47,7 @@ use comms::Comms;
 use inner::Inner;
 use mapping::Mapping;
 use taken::Taken;
-use waiting::{Waiter, Waiting};
+use waiting::Waiting;
 
 #[cfg(test)]
 pub mod test;

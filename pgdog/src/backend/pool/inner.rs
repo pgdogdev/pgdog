@@ -1,14 +1,13 @@
 //! Pool internals synchronized with a mutex.
 
 use std::cmp::max;
-use std::collections::VecDeque;
 
 use crate::backend::{stats::Counts as BackendCounts, Server};
 use crate::net::messages::BackendKeyData;
 
 use tokio::time::Instant;
 
-use super::{Ban, Config, Error, Mapping, Oids, Pool, Request, Stats, Taken, Waiter};
+use super::{Ban, Config, Error, Mapping, Oids, Pool, Request, Stats, Taken};
 
 /// Pool internals protected by a mutex.
 #[derive(Default)]
@@ -20,8 +19,6 @@ pub(super) struct Inner {
     taken: Taken,
     /// Pool configuration.
     pub(super) config: Config,
-    /// Number of clients waiting for a connection.
-    pub(super) waiting: VecDeque<Waiter>,
     /// Pool ban status.
     pub(super) ban: Option<Ban>,
     /// Pool is online and available to clients.
@@ -54,7 +51,6 @@ impl std::fmt::Debug for Inner {
             .field("paused", &self.paused)
             .field("taken", &self.taken.len())
             .field("idle_connections", &self.idle_connections.len())
-            .field("waiting", &self.waiting.len())
             .field("online", &self.online)
             .finish()
     }
@@ -67,7 +63,6 @@ impl Inner {
             idle_connections: Vec::new(),
             taken: Taken::default(),
             config,
-            waiting: VecDeque::new(),
             ban: None,
             online: false,
             paused: false,
@@ -131,12 +126,11 @@ impl Inner {
 
     /// The pool should create more connections now.
     #[inline]
-    pub(super) fn should_create(&self) -> bool {
+    pub(super) fn should_create(&self, has_waiters: bool) -> bool {
         let below_min = self.total() < self.min();
         let below_max = self.total() < self.max();
         let maintain_min = below_min && below_max;
-        let client_needs =
-            below_max && !self.waiting.is_empty() && self.idle_connections.is_empty();
+        let client_needs = below_max && has_waiters && self.idle_connections.is_empty();
         let maintenance_on = self.online && !self.paused;
 
         !self.banned() && (client_needs || maintenance_on && maintain_min)
@@ -222,26 +216,26 @@ impl Inner {
         }
     }
 
-    /// Place connection back into the pool
-    /// or give it to a waiting client.
+    /// Store connection in idle pool.
     #[inline]
-    pub(super) fn put(&mut self, conn: Box<Server>, now: Instant) {
-        // Try to give it to a client that's been waiting, if any.
-        let id = *conn.id();
-        if let Some(waiter) = self.waiting.pop_front() {
-            if let Err(conn) = waiter.tx.send(Ok(conn)) {
-                self.idle_connections.push(conn.unwrap());
-            } else {
-                self.taken.take(&Mapping {
-                    server: id,
-                    client: waiter.request.id,
-                });
-                self.stats.counts.server_assignment_count += 1;
-                self.stats.counts.wait_time += now.duration_since(waiter.request.created_at);
-            }
-        } else {
-            self.idle_connections.push(conn);
-        }
+    pub(super) fn put_idle(&mut self, conn: Box<Server>) {
+        self.idle_connections.push(conn);
+    }
+
+    /// Update stats when connection is given to a waiter.
+    #[inline]
+    pub(super) fn record_waiter_assignment(
+        &mut self,
+        server_id: BackendKeyData,
+        client_id: BackendKeyData,
+        wait_time: tokio::time::Duration,
+    ) {
+        self.taken.take(&Mapping {
+            server: server_id,
+            client: client_id,
+        });
+        self.stats.counts.server_assignment_count += 1;
+        self.stats.counts.wait_time += wait_time;
     }
 
     #[inline]
@@ -283,6 +277,7 @@ impl Inner {
         let mut result = CheckInResult {
             banned: false,
             replenish: true,
+            server: None,
         };
 
         if let Some(ref moved) = self.moved {
@@ -335,9 +330,10 @@ impl Inner {
         }
 
         // Finally, if the server is ok,
-        // place the connection back into the idle list.
+        // return it so pool can give to waiters or put in idle list.
         if server.can_check_in() {
-            self.put(server, now);
+            // Return server for pool-level handling (waiters or idle)
+            result.server = Some(server);
         } else {
             self.out_of_sync += 1;
         }
@@ -345,24 +341,8 @@ impl Inner {
         result
     }
 
-    #[inline]
-    pub(super) fn remove_waiter(&mut self, id: &BackendKeyData) {
-        if let Some(waiter) = self.waiting.pop_front() {
-            if waiter.request.id != *id {
-                // Put me back.
-                self.waiting.push_front(waiter);
-
-                // Slow search, but we should be somewhere towards the front
-                // if the runtime is doing scheduling correctly.
-                for (i, waiter) in self.waiting.iter().enumerate() {
-                    if waiter.request.id == *id {
-                        self.waiting.remove(i);
-                        break;
-                    }
-                }
-            }
-        }
-    }
+    // Note: remove_waiter is no longer needed with lock-free channels.
+    // Dropping the receiver automatically removes from the queue.
 
     /// Ban the pool from serving traffic if that's allowed per configuration.
     #[inline]
@@ -375,8 +355,7 @@ impl Inner {
             };
             self.ban = Some(ban);
 
-            // Tell every waiting client that this pool is busted.
-            self.close_waiters(Error::Banned);
+            // Note: Waiters should be closed at the pool level
 
             // Clear the idle connection pool.
             self.idle_connections.clear();
@@ -387,12 +366,8 @@ impl Inner {
         }
     }
 
-    #[inline]
-    pub(super) fn close_waiters(&mut self, err: Error) {
-        for waiter in self.waiting.drain(..) {
-            let _ = waiter.tx.send(Err(err));
-        }
-    }
+    // Note: close_waiters is handled at the pool level with channels.
+    // This method is no longer needed in Inner.
 
     /// Remove the pool ban unless it' been manually banned.
     #[inline(always)]
@@ -425,10 +400,11 @@ impl Inner {
     }
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug)]
 pub(super) struct CheckInResult {
     pub(super) banned: bool,
     pub(super) replenish: bool,
+    pub(super) server: Option<Box<Server>>,
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -560,15 +536,16 @@ mod test {
         );
         assert_eq!(inner.total(), 0); // pool paused;
         inner.paused = false;
-        assert!(
-            !inner
-                .maybe_check_in(
-                    Box::new(Server::default()),
-                    Instant::now(),
-                    BackendCounts::default()
-                )
-                .banned
+        let result = inner.maybe_check_in(
+            Box::new(Server::default()),
+            Instant::now(),
+            BackendCounts::default(),
         );
+        assert!(!result.banned);
+        // Handle the returned server
+        if let Some(server) = result.server {
+            inner.put_idle(server);
+        }
         assert!(inner.idle() > 0);
         assert_eq!(inner.idle(), 1);
 
@@ -588,32 +565,30 @@ mod test {
         inner.ban = None;
 
         inner.config.max = 5;
-        inner.waiting.push_back(Waiter {
-            request: Request::default(),
-            tx: channel().0,
-        });
+        // Simulate having waiters
+        let has_waiters = true;
         assert_eq!(inner.config.min, 1);
         assert_eq!(inner.idle(), 0);
-        assert!(inner.should_create());
+        assert!(inner.should_create(has_waiters));
 
         inner.config.min = 2;
         assert_eq!(inner.config.max, 5);
         assert!(inner.total() < inner.min());
         assert!(inner.total() < inner.max());
         assert!(!inner.banned() && inner.online);
-        assert!(inner.should_create());
+        assert!(inner.should_create(has_waiters));
 
         inner.config.max = 1;
-        assert!(inner.should_create());
+        assert!(inner.should_create(has_waiters));
 
         inner.config.max = 3;
 
-        assert!(inner.should_create());
+        assert!(inner.should_create(has_waiters));
 
         inner.idle_connections.push(Box::new(Server::default()));
         inner.idle_connections.push(Box::new(Server::default()));
         inner.idle_connections.push(Box::new(Server::default()));
-        assert!(!inner.should_create());
+        assert!(!inner.should_create(has_waiters));
 
         // Close idle connections.
         inner.config.idle_timeout = Duration::from_millis(5_000); // 5 seconds.
@@ -634,7 +609,7 @@ mod test {
         inner.close_old(Instant::now() + Duration::from_secs(61));
         assert_eq!(inner.idle(), 0); // This ignores the min setting!
 
-        assert!(inner.should_create());
+        assert!(inner.should_create(false));
 
         assert_eq!(inner.total(), 0);
         inner.taken.take(&Mapping::default());

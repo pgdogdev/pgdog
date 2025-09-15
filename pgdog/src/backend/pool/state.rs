@@ -46,7 +46,6 @@ pub struct State {
 
 impl State {
     pub(super) fn get(pool: &Pool) -> Self {
-        let now = Instant::now();
         let guard = pool.lock();
 
         State {
@@ -57,19 +56,17 @@ impl State {
             empty: guard.idle() == 0,
             config: guard.config,
             paused: guard.paused,
-            waiting: guard.waiting.len(),
+            waiting: pool
+                .inner()
+                .waiting_count
+                .load(std::sync::atomic::Ordering::Relaxed),
             ban: guard.ban,
             banned: guard.ban.is_some(),
             errors: guard.errors,
             out_of_sync: guard.out_of_sync,
             re_synced: guard.re_synced,
             stats: guard.stats,
-            maxwait: guard
-                .waiting
-                .iter()
-                .next()
-                .map(|req| now.duration_since(req.request.created_at))
-                .unwrap_or(Duration::ZERO),
+            maxwait: Duration::ZERO, // TODO: Track max wait time differently with lock-free queue
             pooler_mode: guard.config().pooler_mode,
             replica_lag: guard.replica_lag,
         }

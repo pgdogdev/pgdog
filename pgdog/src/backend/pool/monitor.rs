@@ -32,6 +32,7 @@
 //! connections back to the idle pool in that amount of time, and new connections are no longer needed even
 //! if clients requested ones to be created ~100ms ago.
 
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use super::{Error, Guard, Healtcheck, Oids, Pool, Request};
@@ -77,17 +78,17 @@ impl Monitor {
 
         // Delay starting healthchecks to give
         // time for the pool to spin up.
-        let pool = self.pool.clone();
         let (delay, replication_mode) = {
-            let lock = pool.lock();
+            let lock = self.pool.lock();
             let config = lock.config();
             (config.idle_healthcheck_delay(), config.replication_mode)
         };
 
         if !replication_mode {
+            let pool_clone = self.pool.clone();
             spawn(async move {
                 sleep(delay).await;
-                Self::healthchecks(pool).await
+                Self::healthchecks(pool_clone).await
             });
         }
 
@@ -98,6 +99,7 @@ impl Monitor {
                 // A client is requesting a connection and no idle
                 // connections are available.
                 _ = comms.request.notified() => {
+                    let has_waiters = self.pool.inner().waiting_count.load(Ordering::Relaxed) > 0;
                     let (
                         should_create,
                         online,
@@ -106,11 +108,12 @@ impl Monitor {
                         let online = guard.online;
 
                         if !online {
-                            guard.close_waiters(Error::Offline);
+                            // Note: close_waiters is handled at pool level now
+                            self.pool.close_all_waiters(Error::Offline);
                         }
 
                         (
-                            guard.should_create(),
+                            guard.should_create(has_waiters),
                             guard.online,
                         )
                     };
@@ -198,13 +201,15 @@ impl Monitor {
                     let mut guard = pool.lock();
 
                     if !guard.online {
-                        guard.close_waiters(Error::Offline);
+                        drop(guard); // Release lock before calling pool method
+                        pool.close_all_waiters(Error::Offline);
                         break;
                     }
 
                     // If a client is waiting already,
                     // create it a connection.
-                    if guard.should_create() {
+                    let has_waiters = pool.inner().waiting_count.load(Ordering::Relaxed) > 0;
+                    if guard.should_create(has_waiters) {
                         comms.request.notify_one();
                     }
 
@@ -233,8 +238,7 @@ impl Monitor {
     async fn replenish(&self) -> bool {
         if let Ok(conn) = Self::create_connection(&self.pool).await {
             let server = Box::new(conn);
-            let mut guard = self.pool.lock();
-            guard.put(server, Instant::now());
+            self.pool.give_to_waiter_or_idle(server, Instant::now());
             true
         } else {
             false

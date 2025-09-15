@@ -2340,6 +2340,7 @@ dependencies = [
  "cc",
  "chrono",
  "clap",
+ "crossbeam-channel",
  "csv-core",
  "fnv",
  "futures",

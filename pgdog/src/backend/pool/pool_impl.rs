@@ -1,6 +1,6 @@
 //! Connection pool.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -21,6 +21,12 @@ use super::{
     State, Waiting,
 };
 
+/// Handle for a waiter in the lock-free queue
+pub struct WaiterHandle {
+    pub(super) request: Request,
+    pub(super) tx: tokio::sync::oneshot::Sender<Result<Box<Server>, Error>>,
+}
+
 static ID_COUNTER: Lazy<Arc<AtomicU64>> = Lazy::new(|| Arc::new(AtomicU64::new(0)));
 fn next_pool_id() -> u64 {
     ID_COUNTER.fetch_add(1, Ordering::SeqCst)
@@ -38,6 +44,10 @@ pub(crate) struct InnerSync {
     pub(super) inner: Mutex<Inner>,
     pub(super) id: u64,
     pub(super) config: Config,
+    // Lock-free waiting queue
+    pub(super) waiting_tx: crossbeam_channel::Sender<WaiterHandle>,
+    pub(super) waiting_rx: crossbeam_channel::Receiver<WaiterHandle>,
+    pub(super) waiting_count: Arc<AtomicUsize>,
 }
 
 impl std::fmt::Debug for Pool {
@@ -52,6 +62,7 @@ impl Pool {
     /// Create new connection pool.
     pub fn new(config: &PoolConfig) -> Self {
         let id = next_pool_id();
+        let (waiting_tx, waiting_rx) = crossbeam_channel::unbounded();
         Self {
             inner: Arc::new(InnerSync {
                 comms: Comms::new(),
@@ -59,6 +70,9 @@ impl Pool {
                 inner: Mutex::new(Inner::new(config.config, id)),
                 id,
                 config: config.config,
+                waiting_tx,
+                waiting_rx,
+                waiting_count: Arc::new(AtomicUsize::new(0)),
             }),
         }
     }
@@ -192,6 +206,63 @@ impl Pool {
         })
     }
 
+    /// Close all waiting clients with an error.
+    pub fn close_all_waiters(&self, err: Error) {
+        // Drain all waiters from the channel
+        while let Ok(waiter) = self.inner.waiting_rx.try_recv() {
+            let _ = waiter.tx.send(Err(err));
+            self.inner.waiting_count.fetch_sub(1, Ordering::Relaxed);
+        }
+    }
+
+    /// Try to give connection to a waiting client, or put it in idle pool.
+    pub fn give_to_waiter_or_idle(&self, mut conn: Box<Server>, now: Instant) {
+        let server_id = *conn.id();
+
+        // Try to find a waiter using lock-free channel
+        loop {
+            match self.inner.waiting_rx.try_recv() {
+                Ok(waiter) => {
+                    // Try to send connection to waiter
+                    match waiter.tx.send(Ok(conn)) {
+                        Ok(_) => {
+                            // Success! Update stats
+                            self.inner.waiting_count.fetch_sub(1, Ordering::Relaxed);
+
+                            let wait_time = now.duration_since(waiter.request.created_at);
+                            self.lock().record_waiter_assignment(
+                                server_id,
+                                waiter.request.id,
+                                wait_time,
+                            );
+                            return;
+                        }
+                        Err(Ok(returned_conn)) => {
+                            // Waiter died, get connection back and try next
+                            conn = returned_conn;
+                            self.inner.waiting_count.fetch_sub(1, Ordering::Relaxed);
+                        }
+                        Err(Err(_)) => {
+                            // Error sending, shouldn't happen
+                            self.inner.waiting_count.fetch_sub(1, Ordering::Relaxed);
+                            return;
+                        }
+                    }
+                }
+                Err(crossbeam_channel::TryRecvError::Empty) => {
+                    // No waiters, put in idle pool
+                    self.lock().put_idle(conn);
+                    return;
+                }
+                Err(crossbeam_channel::TryRecvError::Disconnected) => {
+                    // Channel disconnected, put in idle pool
+                    self.lock().put_idle(conn);
+                    return;
+                }
+            }
+        }
+    }
+
     /// Check the connection back into the pool.
     pub(super) fn checkin(&self, mut server: Box<Server>) {
         // Server is checked in right after transaction finished
@@ -206,8 +277,11 @@ impl Pool {
 
         // Check everything and maybe check the connection
         // into the idle pool.
-        let CheckInResult { banned, replenish } =
-            { self.lock().maybe_check_in(server, now, counts) };
+        let CheckInResult {
+            banned,
+            replenish,
+            server: returned_server,
+        } = { self.lock().maybe_check_in(server, now, counts) };
 
         if banned {
             error!(
@@ -215,6 +289,11 @@ impl Pool {
                 Error::ServerError,
                 self.addr()
             );
+        }
+
+        // If we got a server back, try to give it to a waiter or put in idle pool
+        if let Some(server) = returned_server {
+            self.give_to_waiter_or_idle(server, now);
         }
 
         // Notify maintenance that we need a new connection because
@@ -256,6 +335,8 @@ impl Pool {
 
         if banned {
             error!("pool banned explicitly: {} [{}]", reason, self.addr());
+            // Close all waiters when pool is banned
+            self.close_all_waiters(Error::Banned);
         }
     }
 
@@ -286,7 +367,6 @@ impl Pool {
     pub(crate) fn move_conns_to(&self, destination: &Pool) {
         // Ensure no deadlock.
         assert!(self.inner.id != destination.id());
-        let now = Instant::now();
 
         {
             let mut from_guard = self.lock();
@@ -295,7 +375,7 @@ impl Pool {
             from_guard.online = false;
             let (idle, taken) = from_guard.move_conns_to(destination);
             for server in idle {
-                to_guard.put(server, now);
+                to_guard.put_idle(server);
             }
             to_guard.set_taken(taken);
         }
@@ -339,7 +419,9 @@ impl Pool {
 
         guard.online = false;
         guard.dump_idle();
-        guard.close_waiters(Error::Offline);
+        drop(guard); // Release lock before calling pool method
+
+        self.close_all_waiters(Error::Offline);
         self.comms().shutdown.notify_waiters();
         self.comms().ready.notify_waiters();
     }
