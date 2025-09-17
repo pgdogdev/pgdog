@@ -1,3 +1,18 @@
 [target.x86_64-unknown-linux-gnu]
 linker = "/usr/bin/clang"
 rustflags = ["-C", "link-arg=--ld-path=/usr/bin/mold"]
+
+# Configuration for macOS to use MIT Kerberos from Homebrew
+[target.aarch64-apple-darwin]
+linker = "clang"
+rustflags = [
+    "-L", "/opt/homebrew/opt/krb5/lib",
+    "-C", "link-args=-Wl,-rpath,/opt/homebrew/opt/krb5/lib"
+]
+
+[target.x86_64-apple-darwin]
+linker = "clang"
+rustflags = [
+    "-L", "/opt/homebrew/opt/krb5/lib",
+    "-C", "link-args=-Wl,-rpath,/opt/homebrew/opt/krb5/lib"
+]

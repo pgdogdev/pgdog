@@ -191,8 +191,9 @@ impl Server {
                         }
 
                         Password::GssapiResponse { .. } => {
-                            error!("GSSAPI authentication not yet implemented");
-                            return Ok(false);
+                            // TODO: Implement GSSAPI response handling
+                            // This will be implemented in Phase 3
+                            panic!("GSSAPI response handling not implemented");
                         }
                     }
                 }

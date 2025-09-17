@@ -192,16 +192,14 @@ impl Server {
                             stream.send_flush(&client.response()).await?;
                         }
                         Authentication::Gssapi | Authentication::Sspi => {
-                            return Err(Error::Io(std::io::Error::new(
-                                std::io::ErrorKind::Unsupported,
-                                "GSSAPI authentication not yet implemented",
-                            )));
+                            // TODO: Implement GSSAPI authentication
+                            // This will be implemented in Phase 3
+                            panic!("GSSAPI authentication not implemented");
                         }
                         Authentication::GssapiContinue(_) => {
-                            return Err(Error::Io(std::io::Error::new(
-                                std::io::ErrorKind::Unsupported,
-                                "GSSAPI authentication not yet implemented",
-                            )));
+                            // TODO: Implement GSSAPI continuation
+                            // This will be implemented in Phase 3
+                            panic!("GSSAPI continuation not implemented");
                         }
                     }
                 }
