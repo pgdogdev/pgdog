@@ -20,11 +20,38 @@ pub struct Address {
     pub user: String,
     /// Password.
     pub password: String,
+    /// GSSAPI keytab path for backend authentication.
+    pub gssapi_keytab: Option<String>,
+    /// GSSAPI principal for backend authentication.
+    pub gssapi_principal: Option<String>,
 }
 
 impl Address {
     /// Create new address from config values.
     pub fn new(database: &Database, user: &User) -> Self {
+        let cfg = config();
+
+        // Determine GSSAPI settings (database-specific or global defaults)
+        let (gssapi_keytab, gssapi_principal) = if let Some(ref gssapi_config) = cfg.config.gssapi {
+            if gssapi_config.enabled {
+                let keytab = database.gssapi_keytab.clone().or_else(|| {
+                    gssapi_config
+                        .default_backend_keytab
+                        .as_ref()
+                        .map(|p| p.to_string_lossy().to_string())
+                });
+                let principal = database
+                    .gssapi_principal
+                    .clone()
+                    .or_else(|| gssapi_config.default_backend_principal.clone());
+                (keytab, principal)
+            } else {
+                (None, None)
+            }
+        } else {
+            (None, None)
+        };
+
         Address {
             host: database.host.clone(),
             port: database.port,
@@ -47,6 +74,8 @@ impl Address {
             } else {
                 user.password().to_string()
             },
+            gssapi_keytab,
+            gssapi_principal,
         }
     }
 
@@ -74,6 +103,8 @@ impl Address {
             user: "pgdog".into(),
             password: "pgdog".into(),
             database_name: "pgdog".into(),
+            gssapi_keytab: None,
+            gssapi_principal: None,
         }
     }
 }
@@ -100,6 +131,8 @@ impl TryFrom<Url> for Address {
             password,
             user,
             database_name,
+            gssapi_keytab: None,
+            gssapi_principal: None,
         })
     }
 }
@@ -107,6 +140,8 @@ impl TryFrom<Url> for Address {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::config::{set, ConfigAndUsers, GssapiConfig};
+    use std::path::PathBuf;
 
     #[test]
     fn test_defaults() {
@@ -153,5 +188,93 @@ mod test {
         assert_eq!(addr.database_name, "pgdb");
         assert_eq!(addr.user, "user");
         assert_eq!(addr.password, "password");
+        assert_eq!(addr.gssapi_keytab, None);
+        assert_eq!(addr.gssapi_principal, None);
+    }
+
+    #[test]
+    fn test_gssapi_config_in_address() {
+        // Set up config with GSSAPI
+        let mut config = ConfigAndUsers::default();
+        config.config.gssapi = Some(GssapiConfig {
+            enabled: true,
+            server_keytab: Some(PathBuf::from("/etc/pgdog/pgdog.keytab")),
+            default_backend_keytab: Some(PathBuf::from("/etc/pgdog/backend.keytab")),
+            default_backend_principal: Some("pgdog@REALM".to_string()),
+            ..Default::default()
+        });
+
+        // Database with specific GSSAPI settings
+        let database1 = Database {
+            name: "shard1".into(),
+            host: "pg1.example.com".into(),
+            port: 5432,
+            gssapi_keytab: Some("/etc/pgdog/shard1.keytab".into()),
+            gssapi_principal: Some("pgdog-shard1@REALM".into()),
+            ..Default::default()
+        };
+
+        // Database using defaults
+        let database2 = Database {
+            name: "shard2".into(),
+            host: "pg2.example.com".into(),
+            port: 5432,
+            ..Default::default()
+        };
+
+        let user = User {
+            name: "testuser".into(),
+            database: "shard1".into(),
+            ..Default::default()
+        };
+
+        // Store the config so Address::new can access it
+        set(config).unwrap();
+
+        // Test database with specific GSSAPI settings
+        let addr1 = Address::new(&database1, &user);
+        assert_eq!(addr1.gssapi_keytab, Some("/etc/pgdog/shard1.keytab".into()));
+        assert_eq!(addr1.gssapi_principal, Some("pgdog-shard1@REALM".into()));
+
+        // Test database using default GSSAPI settings
+        let addr2 = Address::new(&database2, &user);
+        assert_eq!(
+            addr2.gssapi_keytab,
+            Some("/etc/pgdog/backend.keytab".into())
+        );
+        assert_eq!(addr2.gssapi_principal, Some("pgdog@REALM".into()));
+    }
+
+    #[test]
+    fn test_gssapi_disabled() {
+        // Set up config with GSSAPI disabled
+        let mut config = ConfigAndUsers::default();
+        config.config.gssapi = Some(GssapiConfig {
+            enabled: false,
+            server_keytab: Some(PathBuf::from("/etc/pgdog/pgdog.keytab")),
+            default_backend_keytab: Some(PathBuf::from("/etc/pgdog/backend.keytab")),
+            ..Default::default()
+        });
+
+        let database = Database {
+            name: "test".into(),
+            host: "localhost".into(),
+            port: 5432,
+            gssapi_keytab: Some("/etc/pgdog/test.keytab".into()),
+            ..Default::default()
+        };
+
+        let user = User {
+            name: "testuser".into(),
+            database: "test".into(),
+            ..Default::default()
+        };
+
+        set(config).unwrap();
+
+        // When GSSAPI is disabled, keytab/principal should be None
+        let addr = Address::new(&database, &user);
+        assert_eq!(addr.gssapi_keytab, None);
+        assert_eq!(addr.gssapi_principal, None);
     }
 }

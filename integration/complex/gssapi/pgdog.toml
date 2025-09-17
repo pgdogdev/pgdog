@@ -1,0 +1,95 @@
+# Example PGDog configuration with GSSAPI authentication
+# This demonstrates both simple and per-server GSSAPI setups
+#
+# GSSAPI Authentication Flow:
+# 1. Clients authenticate to PGDog using GSSAPI (Kerberos)
+# 2. PGDog uses its own service credentials to authenticate to backend PostgreSQL servers
+# 3. Connection pooling is preserved since PGDog maintains the backend connections
+
+[general]
+host = "0.0.0.0"
+port = 6432
+workers = 2
+default_pool_size = 10
+min_pool_size = 1
+pooler_mode = "transaction"
+auth_type = "gssapi"  # Enable GSSAPI as the primary authentication method
+
+# Global GSSAPI configuration
+[gssapi]
+enabled = true
+
+# Frontend authentication (accepting client connections)
+# This keytab contains PGDog's service principal for accepting client connections
+server_keytab = "/etc/pgdog/pgdog.keytab"
+# Service principal name that clients will use to connect to PGDog
+# Format: service/hostname@REALM
+server_principal = "postgres/pgdog.example.com@EXAMPLE.COM"
+
+# Backend authentication defaults (connecting to PostgreSQL servers)
+# These can be overridden per-database for multi-server deployments
+default_backend_keytab = "/etc/pgdog/backend.keytab"
+default_backend_principal = "pgdog-service@EXAMPLE.COM"
+
+# Strip realm from client principals for username mapping
+# When true: alice@EXAMPLE.COM becomes "alice" in users.toml
+strip_realm = true
+
+# Ticket refresh interval in seconds (2 hours)
+# Kerberos tickets are refreshed before expiration
+ticket_refresh_interval = 7200
+
+# Fall back to password auth if GSSAPI fails
+# Useful during migration or for mixed environments
+fallback_enabled = false
+
+# Admin database configuration
+[admin]
+name = "admin"
+password = "admin"
+user = "admin"
+
+# Database using global GSSAPI defaults
+# This database inherits default_backend_keytab and default_backend_principal
+# from the [gssapi] section above
+[[databases]]
+name = "production"
+host = "pg1.example.com"
+port = 5432
+role = "primary"
+
+# Sharded database with specific GSSAPI configuration
+# Each shard can have its own service identity for fine-grained access control
+[[databases]]
+name = "shard1"
+host = "pg-shard1.example.com"
+port = 5432
+role = "primary"
+shard = 1
+# Override global GSSAPI settings for this specific server
+# Useful when different PostgreSQL servers require different service principals
+gssapi_keytab = "/etc/pgdog/shard1.keytab"
+gssapi_principal = "pgdog-shard1@EXAMPLE.COM"
+
+# Another sharded database with its own GSSAPI identity
+[[databases]]
+name = "shard2"
+host = "pg-shard2.example.com"
+port = 5432
+role = "primary"
+shard = 2
+# Each shard can have different credentials for security isolation
+gssapi_keytab = "/etc/pgdog/shard2.keytab"
+gssapi_principal = "pgdog-shard2@EXAMPLE.COM"
+
+# Mixed authentication example: Database using password authentication
+# Not all databases need to use GSSAPI - password auth can still be used
+[[databases]]
+name = "analytics"
+host = "pg-analytics.example.com"
+port = 5432
+role = "primary"
+# When no GSSAPI configuration is provided, falls back to password authentication
+# The credentials here override any user-specific settings in users.toml
+user = "analytics_user"
+password = "analytics_password"

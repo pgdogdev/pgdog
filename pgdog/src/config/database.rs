@@ -103,6 +103,10 @@ pub struct Database {
     pub idle_timeout: Option<u64>,
     /// Read-only mode.
     pub read_only: Option<bool>,
+    /// GSSAPI keytab for this specific backend server.
+    pub gssapi_keytab: Option<String>,
+    /// GSSAPI principal for this specific backend server.
+    pub gssapi_principal: Option<String>,
 }
 
 impl Database {
