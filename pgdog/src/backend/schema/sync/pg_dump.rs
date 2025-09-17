@@ -15,6 +15,7 @@ use crate::{
     backend::{
         pool::{Address, Request},
         replication::publisher::PublicationTable,
+        schema::sync::progress::Item,
         Cluster,
     },
     config::config,
@@ -81,16 +82,24 @@ impl PgDump {
             self.source.name()
         );
 
+        let progress = Progress::new(comparison.len());
+
         for table in comparison {
             let cmd = PgDumpCommand {
                 table: table.name.clone(),
                 schema: table.schema.clone(),
                 address: addr.clone(),
             };
+            progress.next(Item::TableDump {
+                schema: table.schema.clone(),
+                name: table.name.clone(),
+            });
 
             let dump = cmd.execute().await?;
             result.push(dump);
         }
+
+        progress.done();
 
         Ok(result)
     }
@@ -120,6 +129,7 @@ impl PgDumpCommand {
             .pg_dump_path
             .to_str()
             .unwrap_or("pg_dump");
+
         let output = Command::new(pg_dump_path)
             .arg("-t")
             .arg(&self.table)
