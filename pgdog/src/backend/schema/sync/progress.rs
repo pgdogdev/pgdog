@@ -19,6 +19,10 @@ pub enum Item {
         schema: String,
         name: String,
     },
+    TableDump {
+        schema: String,
+        name: String,
+    },
     // SequenceOwner {
     //     sequence: String,
     //     owner: String,
@@ -64,6 +68,7 @@ impl Display for Item {
 
             Self::Table { schema, name } => write!(f, "table \"{}\".\"{}\"", schema, name),
             Self::Other { sql } => write!(f, "\"{}\"", no_comments(sql)),
+            Self::TableDump { schema, name } => write!(f, "table \"{}\".\"{}\"", schema, name),
         }
     }
 }
@@ -74,6 +79,7 @@ impl Item {
             Self::Index { .. } => "creating",
             Self::Table { .. } => "creating",
             Self::Other { .. } => "executing",
+            Self::TableDump { .. } => "fetching schema for",
         }
     }
 }

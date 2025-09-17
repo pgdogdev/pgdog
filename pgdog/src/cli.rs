@@ -32,7 +32,7 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum Commands {
-    /// Run pgDog.
+    /// Start PgDog.
     Run {
         /// Size of the connection pool.
         #[arg(short, long)]
@@ -55,7 +55,7 @@ pub enum Commands {
         path: Option<PathBuf>,
     },
 
-    /// Check configuration.
+    /// Check configuration files for errors.
     Configcheck {
         /// Path to the configuration file.
         #[arg(short, long)]
@@ -90,7 +90,7 @@ pub enum Commands {
         replicate: bool,
     },
 
-    /// Schema synchronization between source and destination clusters.
+    /// Copy schema from source to destination cluster.
     SchemaSync {
         /// Source database name.
         #[arg(long)]
