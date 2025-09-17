@@ -1,15 +1,18 @@
 //! GSSAPI context wrapper for authentication negotiation
 
 use super::error::{GssapiError, Result};
+use std::path::Path;
+
+#[cfg(feature = "gssapi")]
 use libgssapi::{
     context::{ClientCtx, CtxFlags, SecurityContext},
     credential::{Cred, CredUsage},
     name::Name,
     oid::{OidSet, GSS_MECH_KRB5, GSS_NT_HOSTBASED_SERVICE},
 };
-use std::path::Path;
 
 /// Wrapper for GSSAPI security context
+#[cfg(feature = "gssapi")]
 pub struct GssapiContext {
     /// The underlying libgssapi context
     inner: ClientCtx,
@@ -19,6 +22,16 @@ pub struct GssapiContext {
     is_complete: bool,
 }
 
+/// Mock GSSAPI context for when the feature is disabled.
+#[cfg(not(feature = "gssapi"))]
+pub struct GssapiContext {
+    /// The target service principal
+    target_principal: String,
+    /// Whether the context is complete
+    is_complete: bool,
+}
+
+#[cfg(feature = "gssapi")]
 impl GssapiContext {
     /// Create a new initiator context (for connecting to a backend)
     pub fn new_initiator(
@@ -114,6 +127,52 @@ impl GssapiContext {
     }
 }
 
+#[cfg(not(feature = "gssapi"))]
+impl GssapiContext {
+    /// Create a new initiator context (mock version)
+    pub fn new_initiator(
+        _keytab: impl AsRef<Path>,
+        _principal: impl Into<String>,
+        target: impl Into<String>,
+    ) -> Result<Self> {
+        Ok(Self {
+            target_principal: target.into(),
+            is_complete: false,
+        })
+    }
+
+    /// Initiate the GSSAPI handshake (mock version)
+    pub fn initiate(&mut self) -> Result<Vec<u8>> {
+        Err(GssapiError::LibGssapi(
+            "GSSAPI support not compiled in".to_string(),
+        ))
+    }
+
+    /// Process a response token from the server (mock version)
+    pub fn process_response(&mut self, _token: &[u8]) -> Result<Option<Vec<u8>>> {
+        Err(GssapiError::LibGssapi(
+            "GSSAPI support not compiled in".to_string(),
+        ))
+    }
+
+    /// Check if the context establishment is complete
+    pub fn is_complete(&self) -> bool {
+        self.is_complete
+    }
+
+    /// Get the target principal
+    pub fn target_principal(&self) -> &str {
+        &self.target_principal
+    }
+
+    /// Get the authenticated client name (mock version)
+    pub fn client_name(&mut self) -> Result<String> {
+        Err(GssapiError::LibGssapi(
+            "GSSAPI support not compiled in".to_string(),
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -127,7 +186,10 @@ mod tests {
             "postgres/db.example.com@EXAMPLE.COM",
         );
 
-        // We expect this to fail without a real keytab
+        #[cfg(feature = "gssapi")]
         assert!(result.is_err());
+
+        #[cfg(not(feature = "gssapi"))]
+        assert!(result.is_ok());
     }
 }

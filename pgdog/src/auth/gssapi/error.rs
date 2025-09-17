@@ -75,6 +75,7 @@ impl From<std::io::Error> for GssapiError {
 }
 
 // Convert libgssapi errors when we implement the actual functionality
+#[cfg(feature = "gssapi")]
 impl From<libgssapi::error::Error> for GssapiError {
     fn from(err: libgssapi::error::Error) -> Self {
         Self::LibGssapi(err.to_string())

@@ -4,11 +4,13 @@ use super::error::Result;
 use super::ticket_cache::TicketCache;
 use dashmap::DashMap;
 use lazy_static::lazy_static;
-use libgssapi::credential::Cred;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::task::JoinHandle;
+
+#[cfg(feature = "gssapi")]
+use libgssapi::credential::Cred;
 
 lazy_static! {
     /// Global ticket manager instance
@@ -38,6 +40,7 @@ impl TicketManager {
     }
 
     /// Get or acquire a ticket for a server
+    #[cfg(feature = "gssapi")]
     pub fn get_ticket(
         &self,
         server: impl Into<String>,
@@ -66,6 +69,19 @@ impl TicketManager {
         self.start_refresh_task(server, cache);
 
         Ok(credential)
+    }
+
+    /// Get or acquire a ticket for a server (mock version)
+    #[cfg(not(feature = "gssapi"))]
+    pub fn get_ticket(
+        &self,
+        _server: impl Into<String>,
+        _keytab: impl AsRef<Path>,
+        _principal: impl Into<String>,
+    ) -> Result<()> {
+        Err(super::error::GssapiError::LibGssapi(
+            "GSSAPI support not compiled in".to_string(),
+        ))
     }
 
     /// Start a background refresh task for a cache

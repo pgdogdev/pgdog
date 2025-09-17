@@ -1,17 +1,19 @@
 //! Per-server Kerberos ticket cache
 
 use super::error::{GssapiError, Result};
+use parking_lot::RwLock;
+use std::path::PathBuf;
+use std::time::{Duration, Instant};
+
+#[cfg(feature = "gssapi")]
 use libgssapi::{
     credential::{Cred, CredUsage},
     name::Name,
     oid::{OidSet, GSS_MECH_KRB5, GSS_NT_KRB5_PRINCIPAL},
 };
-use parking_lot::RwLock;
-use std::path::PathBuf;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 /// Cache for a single server's Kerberos ticket
+#[cfg(feature = "gssapi")]
 pub struct TicketCache {
     /// The principal for this cache
     principal: String,
@@ -25,6 +27,20 @@ pub struct TicketCache {
     refresh_interval: Duration,
 }
 
+/// Mock ticket cache for when the feature is disabled
+#[cfg(not(feature = "gssapi"))]
+pub struct TicketCache {
+    /// The principal for this cache
+    principal: String,
+    /// Path to the keytab file
+    keytab_path: PathBuf,
+    /// When the ticket was last refreshed
+    last_refresh: RwLock<Instant>,
+    /// How often to refresh the ticket
+    refresh_interval: Duration,
+}
+
+#[cfg(feature = "gssapi")]
 impl TicketCache {
     /// Create a new ticket cache
     pub fn new(principal: impl Into<String>, keytab_path: impl Into<PathBuf>) -> Self {
@@ -132,6 +148,68 @@ impl TicketCache {
     }
 }
 
+#[cfg(not(feature = "gssapi"))]
+impl TicketCache {
+    /// Create a new ticket cache
+    pub fn new(principal: impl Into<String>, keytab_path: impl Into<PathBuf>) -> Self {
+        Self {
+            principal: principal.into(),
+            keytab_path: keytab_path.into(),
+            last_refresh: RwLock::new(Instant::now()),
+            refresh_interval: Duration::from_secs(14400), // 4 hours default
+        }
+    }
+
+    /// Set the refresh interval
+    pub fn set_refresh_interval(&mut self, interval: Duration) {
+        self.refresh_interval = interval;
+    }
+
+    /// Get the principal name
+    pub fn principal(&self) -> &str {
+        &self.principal
+    }
+
+    /// Get the keytab path
+    pub fn keytab_path(&self) -> &PathBuf {
+        &self.keytab_path
+    }
+
+    /// Acquire a ticket from the keytab (mock)
+    pub fn acquire_ticket(&self) -> Result<()> {
+        Err(GssapiError::LibGssapi(
+            "GSSAPI support not compiled in".to_string(),
+        ))
+    }
+
+    /// Get the cached credential (mock)
+    pub fn get_credential(&self) -> Result<()> {
+        Err(GssapiError::LibGssapi(
+            "GSSAPI support not compiled in".to_string(),
+        ))
+    }
+
+    /// Check if the ticket needs refresh
+    pub fn needs_refresh(&self) -> bool {
+        false
+    }
+
+    /// Get the last refresh time
+    pub fn last_refresh(&self) -> Instant {
+        *self.last_refresh.read()
+    }
+
+    /// Refresh the ticket (mock)
+    pub fn refresh(&self) -> Result<()> {
+        Err(GssapiError::LibGssapi(
+            "GSSAPI support not compiled in".to_string(),
+        ))
+    }
+
+    /// Clear the cached credential
+    pub fn clear(&self) {}
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -146,13 +224,27 @@ mod tests {
     #[test]
     fn test_missing_keytab_error() {
         let cache = TicketCache::new("test@REALM", "/nonexistent/keytab");
-        let result = cache.acquire_ticket();
-        assert!(result.is_err());
-        match result.unwrap_err() {
-            GssapiError::KeytabNotFound(path) => {
-                assert_eq!(path, PathBuf::from("/nonexistent/keytab"));
+        #[cfg(feature = "gssapi")]
+        {
+            let result = cache.acquire_ticket();
+            assert!(result.is_err());
+            match result.unwrap_err() {
+                GssapiError::KeytabNotFound(path) => {
+                    assert_eq!(path, PathBuf::from("/nonexistent/keytab"));
+                }
+                _ => panic!("Expected KeytabNotFound error"),
             }
-            _ => panic!("Expected KeytabNotFound error"),
+        }
+        #[cfg(not(feature = "gssapi"))]
+        {
+            let result = cache.acquire_ticket();
+            assert!(result.is_err());
+            match result.unwrap_err() {
+                GssapiError::LibGssapi(msg) => {
+                    assert!(msg.contains("not compiled"));
+                }
+                _ => panic!("Expected LibGssapi error"),
+            }
         }
     }
 

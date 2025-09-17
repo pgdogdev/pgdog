@@ -183,9 +183,106 @@ impl Client {
             (AuthType::Trust, _) => true,
 
             (AuthType::Gssapi, _) => {
-                // TODO: Implement GSSAPI authentication
-                // This will be implemented in Phase 3
-                panic!("GSSAPI authentication not implemented");
+                if let Some(gssapi_config) = config.config.gssapi.as_ref() {
+                    if !gssapi_config.is_configured() {
+                        error!("GSSAPI authentication requested but not properly configured");
+                        false
+                    } else {
+                        // Initialize the GSSAPI server context
+                        match crate::auth::gssapi::GssapiServer::new_acceptor(
+                            gssapi_config.server_keytab.as_ref().unwrap(),
+                            gssapi_config.server_principal.as_deref(),
+                        ) {
+                            Ok(server) => {
+                                let server = std::sync::Arc::new(tokio::sync::Mutex::new(server));
+
+                                // Send initial GSSAPI authentication request
+                                stream.send_flush(&Authentication::Gssapi).await?;
+
+                                // GSSAPI negotiation loop
+                                let mut auth_ok = false;
+                                loop {
+                                    // Read client token
+                                    let message = stream.read().await?;
+                                    let client_token =
+                                        match Password::from_bytes(message.to_bytes()?)? {
+                                            Password::GssapiResponse { data } => data,
+                                            _ => {
+                                                error!("Expected GSSAPI token from client");
+                                                break;
+                                            }
+                                        };
+
+                                    // Process token
+                                    let response = match crate::auth::gssapi::handle_gssapi_auth(
+                                        server.clone(),
+                                        client_token,
+                                    )
+                                    .await
+                                    {
+                                        Ok(response) => response,
+                                        Err(e) => {
+                                            error!("GSSAPI authentication failed: {}", e);
+                                            break;
+                                        }
+                                    };
+
+                                    if response.is_complete {
+                                        // Authentication successful
+                                        if let Some(principal) = response.principal {
+                                            // Apply realm stripping if configured
+                                            let extracted_user = if gssapi_config.strip_realm {
+                                                principal
+                                                    .split('@')
+                                                    .next()
+                                                    .unwrap_or(&principal)
+                                                    .to_string()
+                                            } else {
+                                                principal.clone()
+                                            };
+
+                                            // Verify the extracted user matches the requested user
+                                            if extracted_user == user {
+                                                auth_ok = true;
+                                                debug!(
+                                                    "GSSAPI authentication successful for principal: {}",
+                                                    principal
+                                                );
+                                            } else {
+                                                error!(
+                                                    "GSSAPI principal {} does not match requested user {}",
+                                                    extracted_user, user
+                                                );
+                                            }
+                                        }
+                                        break;
+                                    } else if let Some(token) = response.token {
+                                        // Send continuation token
+                                        stream
+                                            .send_flush(&Authentication::GssapiContinue(token))
+                                            .await?;
+                                    } else {
+                                        error!("GSSAPI negotiation error: no token in incomplete response");
+                                        break;
+                                    }
+                                }
+
+                                auth_ok
+                            }
+                            Err(e) => {
+                                error!("Failed to initialize GSSAPI server: {}", e);
+                                if gssapi_config.fallback_enabled {
+                                    // Fall back to next auth method
+                                    true // Will be handled by fallback logic
+                                } else {
+                                    false
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    false
+                }
             }
         };
 

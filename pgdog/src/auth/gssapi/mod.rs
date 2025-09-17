@@ -5,18 +5,52 @@
 
 pub mod context;
 pub mod error;
+pub mod server;
 pub mod ticket_cache;
 pub mod ticket_manager;
 
+#[cfg(test)]
+mod tests;
+
 pub use context::GssapiContext;
 pub use error::{GssapiError, Result};
+pub use server::GssapiServer;
 pub use ticket_cache::TicketCache;
 pub use ticket_manager::TicketManager;
 
+use std::sync::Arc;
+use tokio::sync::Mutex;
+
 /// Handle GSSAPI authentication from a client
-pub fn handle_gssapi_auth(_client_token: Vec<u8>) -> Result<GssapiResponse> {
-    // TODO: Implement
-    unimplemented!("handle_gssapi_auth not yet implemented")
+pub async fn handle_gssapi_auth(
+    server: Arc<Mutex<GssapiServer>>,
+    client_token: Vec<u8>,
+) -> Result<GssapiResponse> {
+    let mut server = server.lock().await;
+
+    match server.accept(&client_token)? {
+        Some(response_token) => {
+            // More negotiation needed
+            Ok(GssapiResponse {
+                is_complete: false,
+                token: Some(response_token),
+                principal: None,
+            })
+        }
+        None => {
+            // Authentication complete
+            let principal = server
+                .client_principal()
+                .ok_or_else(|| GssapiError::ContextError("No client principal found".to_string()))?
+                .to_string();
+
+            Ok(GssapiResponse {
+                is_complete: true,
+                token: None,
+                principal: Some(principal),
+            })
+        }
+    }
 }
 
 /// Response from GSSAPI authentication handling
