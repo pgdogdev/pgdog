@@ -191,6 +191,18 @@ impl Server {
                             let client = md5::Client::new_salt(&addr.user, &addr.password, &salt)?;
                             stream.send_flush(&client.response()).await?;
                         }
+                        Authentication::Gssapi | Authentication::Sspi => {
+                            return Err(Error::Io(std::io::Error::new(
+                                std::io::ErrorKind::Unsupported,
+                                "GSSAPI authentication not yet implemented",
+                            )));
+                        }
+                        Authentication::GssapiContinue(_) => {
+                            return Err(Error::Io(std::io::Error::new(
+                                std::io::ErrorKind::Unsupported,
+                                "GSSAPI authentication not yet implemented",
+                            )));
+                        }
                     }
                 }
 

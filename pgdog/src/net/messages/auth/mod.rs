@@ -24,6 +24,12 @@ pub enum Authentication {
     Md5(Bytes),
     /// AuthenticationCleartextPassword (B).
     ClearTextPassword,
+    /// AuthenticationGSS (B) - Code 7
+    Gssapi,
+    /// AuthenticationGSSContinue (B) - Code 8
+    GssapiContinue(Vec<u8>),
+    /// AuthenticationSSPI (B) - Code 9 (Windows)
+    Sspi,
 }
 
 impl Authentication {
@@ -49,6 +55,15 @@ impl FromBytes for Authentication {
                 bytes.copy_to_slice(&mut salt);
                 Ok(Authentication::Md5(Bytes::from(salt)))
             }
+            7 => Ok(Authentication::Gssapi),
+            8 => {
+                let mut data = Vec::new();
+                while bytes.has_remaining() {
+                    data.push(bytes.get_u8());
+                }
+                Ok(Authentication::GssapiContinue(data))
+            }
+            9 => Ok(Authentication::Sspi),
             10 => {
                 let mechanism = c_string_buf(&mut bytes);
                 Ok(Authentication::Sasl(mechanism))
@@ -116,6 +131,91 @@ impl ToBytes for Authentication {
 
                 Ok(payload.freeze())
             }
+
+            Authentication::Gssapi => {
+                payload.put_i32(7);
+                Ok(payload.freeze())
+            }
+
+            Authentication::GssapiContinue(data) => {
+                payload.put_i32(8);
+                payload.put(Bytes::from(data.clone()));
+                Ok(payload.freeze())
+            }
+
+            Authentication::Sspi => {
+                payload.put_i32(9);
+                Ok(payload.freeze())
+            }
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_gssapi_authentication() {
+        let auth = Authentication::Gssapi;
+        let bytes = auth.to_bytes().unwrap();
+        let auth = Authentication::from_bytes(bytes).unwrap();
+        match auth {
+            Authentication::Gssapi => (),
+            _ => panic!("Expected GSSAPI authentication"),
+        }
+    }
+
+    #[test]
+    fn test_gssapi_continue() {
+        let data = vec![1, 2, 3, 4, 5];
+        let auth = Authentication::GssapiContinue(data.clone());
+        let bytes = auth.to_bytes().unwrap();
+        let auth = Authentication::from_bytes(bytes).unwrap();
+        match auth {
+            Authentication::GssapiContinue(received_data) => {
+                assert_eq!(received_data, data);
+            }
+            _ => panic!("Expected GssapiContinue authentication"),
+        }
+    }
+
+    #[test]
+    fn test_sspi_authentication() {
+        let auth = Authentication::Sspi;
+        let bytes = auth.to_bytes().unwrap();
+        let auth = Authentication::from_bytes(bytes).unwrap();
+        match auth {
+            Authentication::Sspi => (),
+            _ => panic!("Expected SSPI authentication"),
+        }
+    }
+
+    #[test]
+    fn test_gssapi_message_codes() {
+        // Test that the correct protocol codes are used
+        let gssapi = Authentication::Gssapi;
+        let bytes = gssapi.to_bytes().unwrap();
+        // Check for code 7 after the message header
+        assert_eq!(bytes[5], 0); // First 3 bytes of i32(7) in big-endian
+        assert_eq!(bytes[6], 0);
+        assert_eq!(bytes[7], 0);
+        assert_eq!(bytes[8], 7);
+
+        let gssapi_continue = Authentication::GssapiContinue(vec![42]);
+        let bytes = gssapi_continue.to_bytes().unwrap();
+        // Check for code 8
+        assert_eq!(bytes[5], 0); // First 3 bytes of i32(8) in big-endian
+        assert_eq!(bytes[6], 0);
+        assert_eq!(bytes[7], 0);
+        assert_eq!(bytes[8], 8);
+
+        let sspi = Authentication::Sspi;
+        let bytes = sspi.to_bytes().unwrap();
+        // Check for code 9
+        assert_eq!(bytes[5], 0); // First 3 bytes of i32(9) in big-endian
+        assert_eq!(bytes[6], 0);
+        assert_eq!(bytes[7], 0);
+        assert_eq!(bytes[8], 9);
     }
 }

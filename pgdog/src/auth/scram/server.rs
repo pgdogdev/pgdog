@@ -189,6 +189,11 @@ impl Server {
                                 }
                             }
                         }
+
+                        Password::GssapiResponse { .. } => {
+                            error!("GSSAPI authentication not yet implemented");
+                            return Ok(false);
+                        }
                     }
                 }
 

@@ -13,6 +13,8 @@ pub enum Password {
     /// PasswordMessage (F) or SASLResponse (F)
     /// TODO: This requires a NULL byte at end. Need to rewrite this struct.
     PasswordMessage { response: String },
+    /// GSSResponse (F) - Also uses code 'p'
+    GssapiResponse { data: Vec<u8> },
 }
 
 impl Password {
@@ -30,10 +32,15 @@ impl Password {
         }
     }
 
+    pub fn gssapi_response(data: Vec<u8>) -> Self {
+        Self::GssapiResponse { data }
+    }
+
     pub fn password(&self) -> Option<&str> {
         match self {
             Password::SASLInitialResponse { .. } => None,
             Password::PasswordMessage { response } => Some(response),
+            Password::GssapiResponse { .. } => None,
         }
     }
 }
@@ -75,6 +82,10 @@ impl ToBytes for Password {
             Password::PasswordMessage { response } => {
                 payload.put(Bytes::copy_from_slice(response.as_bytes()));
             }
+
+            Password::GssapiResponse { data } => {
+                payload.put(Bytes::from(data.clone()));
+            }
         }
 
         Ok(payload.freeze())
@@ -84,5 +95,34 @@ impl ToBytes for Password {
 impl Protocol for Password {
     fn code(&self) -> char {
         'p'
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_gssapi_response() {
+        let data = vec![10, 20, 30, 40, 50];
+        let password = Password::gssapi_response(data.clone());
+        let bytes = password.to_bytes().unwrap();
+
+        // Verify the message starts with 'p' and contains our data
+        assert_eq!(bytes[0], b'p');
+
+        // The actual data should be at the end of the message
+        let _payload_len = bytes.len() - 5; // Skip 'p' and 4-byte length
+        let payload_start = 5;
+        let payload = &bytes[payload_start..];
+        assert_eq!(payload, &data[..]);
+    }
+
+    #[test]
+    fn test_gssapi_response_password_method() {
+        let data = vec![1, 2, 3];
+        let password = Password::gssapi_response(data);
+        // GssapiResponse should return None for password()
+        assert_eq!(password.password(), None);
     }
 }

@@ -17,6 +17,7 @@ pub enum AuthType {
     #[default]
     Scram,
     Trust,
+    Gssapi,
 }
 
 impl AuthType {
@@ -31,6 +32,10 @@ impl AuthType {
     pub fn trust(&self) -> bool {
         matches!(self, Self::Trust)
     }
+
+    pub fn gssapi(&self) -> bool {
+        matches!(self, Self::Gssapi)
+    }
 }
 
 impl FromStr for AuthType {
@@ -41,6 +46,7 @@ impl FromStr for AuthType {
             "md5" => Ok(Self::Md5),
             "scram" => Ok(Self::Scram),
             "trust" => Ok(Self::Trust),
+            "gssapi" => Ok(Self::Gssapi),
             _ => Err(format!("Invalid auth type: {}", s)),
         }
     }

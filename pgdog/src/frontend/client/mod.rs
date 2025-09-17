@@ -181,6 +181,13 @@ impl Client {
             }
 
             (AuthType::Trust, _) => true,
+
+            (AuthType::Gssapi, _) => {
+                // GSSAPI authentication not yet implemented
+                // For now, we reject GSSAPI authentication attempts
+                error!("GSSAPI authentication requested but not yet implemented");
+                false
+            }
         };
 
         if !auth_ok {
