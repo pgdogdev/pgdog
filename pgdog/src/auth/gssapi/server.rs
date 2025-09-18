@@ -139,7 +139,7 @@ impl GssapiServer {
                     match ctx.source_name() {
                         Ok(name) => {
                             let principal = name.to_string();
-                            tracing::info!(
+                            tracing::debug!(
                                 "Extracted client principal (with token): {}",
                                 principal
                             );
@@ -156,14 +156,14 @@ impl GssapiServer {
             }
             Ok(None) => {
                 // Context established successfully
-                tracing::info!("ctx.step returned None - GSSAPI context established successfully");
+                tracing::debug!("ctx.step returned None - GSSAPI context established successfully");
                 self.is_complete = true;
 
                 // Extract the client principal
                 match ctx.source_name() {
                     Ok(name) => {
                         let principal = name.to_string();
-                        tracing::info!("extracted client principal: {}", principal);
+                        tracing::debug!("extracted client principal: {}", principal);
                         self.client_principal = Some(principal);
                     }
                     Err(e) => {

@@ -127,7 +127,7 @@ impl TicketManager {
                 if cache.needs_refresh() {
                     match cache.refresh() {
                         Ok(()) => {
-                            tracing::info!("refreshed ticket for {}", server_clone);
+                            tracing::info!("[gssapi] refreshed ticket for \"{}\"", server_clone);
                         }
                         Err(e) => {
                             tracing::error!("failed to refresh ticket for {}: {}", server_clone, e);

@@ -44,7 +44,7 @@ pub async fn handle_gssapi_auth(
                     })?
                     .to_string();
 
-                tracing::info!(
+                tracing::debug!(
                     "Authentication complete (with final token), principal: {}",
                     principal
                 );
@@ -60,7 +60,7 @@ pub async fn handle_gssapi_auth(
                 Ok(response)
             } else {
                 // More negotiation needed
-                tracing::info!(
+                tracing::debug!(
                     "server.accept returned token of {} bytes - negotiation continues",
                     response_token.len()
                 );
@@ -77,13 +77,13 @@ pub async fn handle_gssapi_auth(
         }
         None => {
             // Authentication complete
-            tracing::info!("server.accept returned None - authentication complete");
+            tracing::debug!("server.accept returned None - authentication complete");
             let principal = server
                 .client_principal()
                 .ok_or_else(|| GssapiError::ContextError("No client principal found".to_string()))?
                 .to_string();
 
-            tracing::info!("successfully extracted principal: {}", principal);
+            tracing::debug!("successfully extracted principal: {}", principal);
             let response = GssapiResponse {
                 is_complete: true,
                 token: None,
