@@ -111,11 +111,11 @@ async fn test_backend_gssapi_negotiation_mock() {
     let principal = "pgdog@REALM";
     let target = "postgres/localhost";
 
-    let context = GssapiContext::new_initiator(keytab, principal, target);
+    let _context = GssapiContext::new_initiator(keytab, principal, target);
 
     #[cfg(not(feature = "gssapi"))]
     {
-        if let Ok(mut ctx) = context {
+        if let Ok(mut ctx) = _context {
             // Mock flow
             assert!(!ctx.is_complete());
 

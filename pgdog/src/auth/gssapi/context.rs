@@ -39,9 +39,14 @@ impl GssapiContext {
         principal: impl Into<String>,
         target: impl Into<String>,
     ) -> Result<Self> {
-        let _keytab = keytab.as_ref();
+        let keytab = keytab.as_ref();
         let principal = principal.into();
         let target_principal = target.into();
+
+        // Validate that the keytab file exists
+        if !keytab.exists() {
+            return Err(GssapiError::KeytabNotFound(keytab.to_path_buf()));
+        }
 
         // TicketManager has already set up the credential cache with KRB5CCNAME
         // We just need to acquire credentials from that cache
