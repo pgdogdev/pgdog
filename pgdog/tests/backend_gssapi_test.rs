@@ -70,23 +70,27 @@ fn test_backend_gssapi_target_principal() {
     assert_eq!(target, "postgres/192.168.1.1");
 }
 
-#[test]
-fn test_ticket_manager_for_backend() {
+#[tokio::test]
+async fn test_ticket_manager_for_backend() {
     // Test that TicketManager can handle backend server tickets
     let manager = TicketManager::global();
 
     // These will fail without real keytabs, but test the API
-    let ticket1 = manager.get_ticket(
-        "server1:5432",
-        "/etc/pgdog/server1.keytab",
-        "pgdog-server1@REALM",
-    );
+    let ticket1 = manager
+        .get_ticket(
+            "server1:5432",
+            "/etc/pgdog/server1.keytab",
+            "pgdog-server1@REALM",
+        )
+        .await;
 
-    let ticket2 = manager.get_ticket(
-        "server2:5432",
-        "/etc/pgdog/server2.keytab",
-        "pgdog-server2@REALM",
-    );
+    let ticket2 = manager
+        .get_ticket(
+            "server2:5432",
+            "/etc/pgdog/server2.keytab",
+            "pgdog-server2@REALM",
+        )
+        .await;
 
     // Both should fail without real keytabs
     assert!(ticket1.is_err());

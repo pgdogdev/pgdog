@@ -53,10 +53,10 @@ impl GssapiContext {
 
         // Create the desired mechanisms set
         let mut desired_mechs = OidSet::new()
-            .map_err(|e| GssapiError::LibGssapi(format!("Failed to create OidSet: {}", e)))?;
+            .map_err(|e| GssapiError::LibGssapi(format!("failed to create OidSet: {}", e)))?;
         desired_mechs
             .add(&GSS_MECH_KRB5)
-            .map_err(|e| GssapiError::LibGssapi(format!("Failed to add mechanism: {}", e)))?;
+            .map_err(|e| GssapiError::LibGssapi(format!("failed to add mechanism: {}", e)))?;
 
         // Acquire credentials from the cache that TicketManager populated
         // Pass None to use the default principal from the cache
@@ -67,7 +67,7 @@ impl GssapiContext {
             Some(&desired_mechs),
         )
         .map_err(|e| {
-            GssapiError::CredentialAcquisitionFailed(format!("Failed for {}: {}", principal, e))
+            GssapiError::CredentialAcquisitionFailed(format!("failed for {}: {}", principal, e))
         })?;
 
         // Parse target service principal (use KRB5_PRINCIPAL to avoid hostname canonicalization)
@@ -123,7 +123,7 @@ impl GssapiContext {
         self.inner
             .source_name()
             .map(|name| name.to_string())
-            .map_err(|e| GssapiError::ContextError(format!("Failed to get client name: {}", e)))
+            .map_err(|e| GssapiError::ContextError(format!("failed to get client name: {}", e)))
     }
 }
 

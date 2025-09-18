@@ -159,11 +159,9 @@ impl Server {
         stream.flush().await?;
 
         // Check if GSSAPI is configured for this server
-        let mut gssapi_context = if addr.gssapi_keytab.is_some() && addr.gssapi_principal.is_some()
+        let mut gssapi_context = if let (Some(keytab), Some(principal)) =
+            (&addr.gssapi_keytab, &addr.gssapi_principal)
         {
-            let keytab = addr.gssapi_keytab.as_ref().unwrap();
-            let principal = addr.gssapi_principal.as_ref().unwrap();
-
             // Use configured target principal if available, otherwise fallback to default format
             let target = if let Some(ref target_principal) = addr.gssapi_target_principal {
                 target_principal.clone()
@@ -180,10 +178,13 @@ impl Server {
             // Use TicketManager to set up a credential cache for this server
             // This ensures we use the correct principal for each backend connection
             let cache_key = format!("{}:{}", addr.host, addr.port);
-            match TicketManager::global().get_ticket(&cache_key, keytab, principal) {
+            match TicketManager::global()
+                .get_ticket(&cache_key, keytab, principal)
+                .await
+            {
                 Ok(()) => {
                     debug!(
-                        "Acquired ticket for {} using principal {}",
+                        "acquired ticket for {} using principal {}",
                         cache_key, principal
                     );
 
@@ -191,17 +192,17 @@ impl Server {
                     // that TicketManager set up with KRB5CCNAME
                     match GssapiContext::new_initiator(keytab, principal, &target) {
                         Ok(ctx) => {
-                            debug!("Initialized GSSAPI context for {} -> {}", principal, target);
+                            debug!("initialized GSSAPI context for {} -> {}", principal, target);
                             Some(ctx)
                         }
                         Err(e) => {
-                            warn!("Failed to initialize GSSAPI context: {}", e);
+                            warn!("failed to initialize GSSAPI context: {}", e);
                             None
                         }
                     }
                 }
                 Err(e) => {
-                    warn!("Failed to acquire ticket for {}: {}", cache_key, e);
+                    warn!("failed to acquire ticket for {}: {}", cache_key, e);
                     None
                 }
             }
@@ -263,10 +264,6 @@ impl Server {
                                 }
                             } else {
                                 // No GSSAPI configured, server requires it
-                                error!(
-                                    "Server requires GSSAPI but no keytab configured for {}",
-                                    addr.host
-                                );
                                 return Err(Error::ConnectionError(Box::new(
                                     ErrorResponse::auth(
                                         &addr.user,
@@ -277,7 +274,6 @@ impl Server {
                         }
                         Authentication::Sspi => {
                             // SSPI is Windows-specific GSSAPI variant
-                            error!("SSPI authentication not supported");
                             return Err(Error::ConnectionError(Box::new(ErrorResponse::auth(
                                 &addr.user,
                                 "SSPI authentication is not supported",
@@ -294,7 +290,6 @@ impl Server {
                                     Ok(None) => {
                                         // Authentication should be complete
                                         if !ctx.is_complete() {
-                                            error!("GSSAPI negotiation incomplete but no token to send");
                                             return Err(Error::ConnectionError(Box::new(
                                                 ErrorResponse::auth(
                                                     &addr.user,
@@ -305,14 +300,12 @@ impl Server {
                                         // Continue to wait for Authentication::Ok
                                     }
                                     Err(e) => {
-                                        error!("GSSAPI negotiation failed: {}", e);
                                         return Err(Error::ConnectionError(Box::new(
                                             ErrorResponse::from_err(&e),
                                         )));
                                     }
                                 }
                             } else {
-                                error!("Received GSSAPI continue without context");
                                 return Err(Error::ConnectionError(Box::new(ErrorResponse::auth(
                                     &addr.user,
                                     "Received GSSAPI continue without context",
