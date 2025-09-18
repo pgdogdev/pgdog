@@ -134,21 +134,14 @@ impl QueryParser {
             }
         }
 
-        // Parse hardcoded shard from a query comment.
-        if context.router_needed {
-            if let Some(query) = context.router_context.query.as_ref().map(|q| q.query()) {
-                let (shard, role) = super::comment::comment(query, &context.sharding_schema)?;
-                self.shard = shard;
-                self.write_override = role == Some(Role::Primary);
-            }
-        }
-
         let cache = Cache::get();
 
         // Get the AST from cache or parse the statement live.
         let statement = match context.query()? {
             // Only prepared statements (or just extended) are cached.
-            BufferedQuery::Prepared(query) => cache.parse(query.query()).map_err(Error::PgQuery)?,
+            BufferedQuery::Prepared(query) => {
+                cache.parse(query.query(), &context.sharding_schema)?
+            }
             // Don't cache simple queries.
             //
             // They contain parameter values, which makes the cache
@@ -157,10 +150,17 @@ impl QueryParser {
             // Make your clients use prepared statements
             // or at least send statements with placeholders using the
             // extended protocol.
-            BufferedQuery::Query(query) => cache
-                .parse_uncached(query.query())
-                .map_err(Error::PgQuery)?,
+            BufferedQuery::Query(query) => {
+                cache.parse_uncached(query.query(), &context.sharding_schema)?
+            }
         };
+
+        // Parse hardcoded shard from a query comment.
+        if context.router_needed {
+            let guard = statement.stats.lock();
+            self.shard = guard.shard.clone();
+            self.write_override = guard.role == Some(Role::Primary);
+        }
 
         debug!("{}", context.query()?.query());
         trace!("{:#?}", statement.ast());
@@ -355,9 +355,11 @@ impl QueryParser {
         if context.dry_run {
             // Record statement in cache with normalized parameters.
             if !statement.cached {
-                cache
-                    .record_normalized(context.query()?.query(), command.route())
-                    .map_err(Error::PgQuery)?;
+                cache.record_normalized(
+                    context.query()?.query(),
+                    command.route(),
+                    &context.sharding_schema,
+                )?;
             }
             Ok(command.dry_run())
         } else {

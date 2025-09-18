@@ -11,12 +11,34 @@ use parking_lot::Mutex;
 use std::sync::Arc;
 use tracing::debug;
 
+use crate::{
+    backend::ShardingSchema,
+    config::Role,
+    frontend::router::parser::{comment::comment, Shard},
+};
+
 use super::Route;
 
 static CACHE: Lazy<Cache> = Lazy::new(Cache::new);
 
-/// AST cache statistics.
-#[derive(Default, Debug, Copy, Clone)]
+/// AST cache statement info.
+#[derive(Default, Debug, Clone)]
+pub struct AstInfo {
+    /// Cache hits.
+    pub hits: usize,
+    /// Cache misses (new queries).
+    pub misses: usize,
+    /// Direct shard queries.
+    pub direct: usize,
+    /// Multi-shard queries.
+    pub multi: usize,
+    /// Shard number.
+    pub shard: Shard,
+    /// Role.
+    pub role: Option<Role>,
+}
+
+#[derive(Default, Debug, Clone, Copy)]
 pub struct Stats {
     /// Cache hits.
     pub hits: usize,
@@ -36,22 +58,27 @@ pub struct CachedAst {
     pub ast: Arc<ParseResult>,
     /// Statistics. Use a separate Mutex to avoid
     /// contention when updating them.
-    pub stats: Arc<Mutex<Stats>>,
+    pub stats: Arc<Mutex<AstInfo>>,
     /// Was this entry cached?
     pub cached: bool,
 }
 
 impl CachedAst {
     /// Create new cache entry from pg_query's AST.
-    fn new(ast: ParseResult) -> Self {
-        Self {
+    fn new(query: &str, schema: &ShardingSchema) -> std::result::Result<Self, super::Error> {
+        let ast = parse(query).map_err(super::Error::PgQuery)?;
+        let (shard, role) = comment(query, schema)?;
+
+        Ok(Self {
             cached: true,
             ast: Arc::new(ast),
-            stats: Arc::new(Mutex::new(Stats {
+            stats: Arc::new(Mutex::new(AstInfo {
                 hits: 1,
+                shard,
+                role,
                 ..Default::default()
             })),
-        }
+        })
     }
 
     /// Get the reference to the AST.
@@ -119,7 +146,11 @@ impl Cache {
     /// N.B. There is a race here that allows multiple threads to
     /// parse the same query. That's better imo than locking the data structure
     /// while we parse the query.
-    pub fn parse(&self, query: &str) -> Result<CachedAst> {
+    pub fn parse(
+        &self,
+        query: &str,
+        schema: &ShardingSchema,
+    ) -> std::result::Result<CachedAst, super::Error> {
         {
             let mut guard = self.inner.lock();
             let ast = guard.queries.get_mut(query).map(|entry| {
@@ -133,7 +164,7 @@ impl Cache {
         }
 
         // Parse query without holding lock.
-        let entry = CachedAst::new(parse(query)?);
+        let entry = CachedAst::new(query, schema)?;
 
         let mut guard = self.inner.lock();
         guard.queries.put(query.to_owned(), entry.clone());
@@ -143,15 +174,24 @@ impl Cache {
     }
 
     /// Parse a statement but do not store it in the cache.
-    pub fn parse_uncached(&self, query: &str) -> Result<CachedAst> {
-        let mut entry = CachedAst::new(parse(query)?);
+    pub fn parse_uncached(
+        &self,
+        query: &str,
+        schema: &ShardingSchema,
+    ) -> std::result::Result<CachedAst, super::Error> {
+        let mut entry = CachedAst::new(query, schema)?;
         entry.cached = false;
         Ok(entry)
     }
 
     /// Record a query sent over the simple protocol, while removing parameters.
-    pub fn record_normalized(&self, query: &str, route: &Route) -> Result<()> {
-        let normalized = pg_query::normalize(query)?;
+    pub fn record_normalized(
+        &self,
+        query: &str,
+        route: &Route,
+        schema: &ShardingSchema,
+    ) -> std::result::Result<(), super::Error> {
+        let normalized = pg_query::normalize(query).map_err(super::Error::PgQuery)?;
 
         {
             let mut guard = self.inner.lock();
@@ -162,7 +202,7 @@ impl Cache {
             }
         }
 
-        let entry = CachedAst::new(parse(&normalized)?);
+        let entry = CachedAst::new(query, schema)?;
         entry.update_stats(route);
 
         let mut guard = self.inner.lock();
@@ -189,7 +229,7 @@ impl Cache {
                     .iter()
                     .map(|c| c.1.stats.clone())
                     .collect::<Vec<_>>(),
-                guard.stats,
+                guard.stats.clone(),
             )
         };
         for stat in query_stats {
@@ -285,7 +325,9 @@ mod test {
                 let mut cached_time = Duration::ZERO;
                 for _ in 0..(times / threads) {
                     let start = Instant::now();
-                    Cache::get().parse(query).unwrap();
+                    Cache::get()
+                        .parse(query, &ShardingSchema::default())
+                        .unwrap();
                     cached_time += start.elapsed();
                 }
 
