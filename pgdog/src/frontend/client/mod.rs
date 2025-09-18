@@ -142,6 +142,8 @@ impl Client {
         };
 
         // Get server parameters and send them to the client.
+        debug!("Attempting Connection::new for user={}, database={}, admin={}, has_passthrough_password={}",
+               user, database, admin, passthrough_password.is_some());
         let mut conn = match Connection::new(user, database, admin, &passthrough_password) {
             Ok(conn) => conn,
             Err(_) => {
@@ -166,11 +168,18 @@ impl Client {
             .map(|g| g.is_configured())
             .unwrap_or(false);
 
+        debug!(
+            "GSSAPI authentication check: available={}, admin={}, user={}",
+            gssapi_available, admin, user
+        );
+
         // Try GSSAPI first if configured (regardless of auth_type setting)
         // This allows clients that support GSSAPI to use it when available
         let auth_ok = if gssapi_available && !admin {
+            debug!("Attempting GSSAPI authentication for user {}", user);
             match &config.config.gssapi {
                 Some(gssapi_config) if gssapi_config.is_configured() => {
+                    debug!("GSSAPI is configured, proceeding with authentication");
                     // Initialize the GSSAPI server context
                     match crate::auth::gssapi::GssapiServer::new_acceptor(
                         gssapi_config.server_keytab.as_ref().unwrap(),
@@ -180,14 +189,39 @@ impl Client {
                             let server = std::sync::Arc::new(tokio::sync::Mutex::new(server));
 
                             // Send initial GSSAPI authentication request
+                            debug!("Sending AuthenticationGssapi to client");
                             stream.send_flush(&Authentication::Gssapi).await?;
 
                             // GSSAPI negotiation loop
                             let mut auth_ok = false;
                             loop {
                                 // Read client token
-                                let message = stream.read().await?;
-                                let client_token = match Password::from_bytes(message.to_bytes()?)? {
+                                debug!("Waiting for client GSSAPI token");
+                                trace!(
+                                    "About to call stream.read() to get GSSAPI token from client"
+                                );
+                                let message = match tokio::time::timeout(
+                                    std::time::Duration::from_secs(5),
+                                    stream.read(),
+                                )
+                                .await
+                                {
+                                    Ok(Ok(msg)) => {
+                                        trace!("Successfully read message from client");
+                                        msg
+                                    }
+                                    Ok(Err(e)) => {
+                                        error!("Error reading GSSAPI token from client: {}", e);
+                                        break;
+                                    }
+                                    Err(_) => {
+                                        error!("Timeout reading GSSAPI token from client after 5 seconds");
+                                        break;
+                                    }
+                                };
+                                debug!("Received message from client: {:?}", message);
+                                let client_token = match Password::from_bytes(message.to_bytes()?)?
+                                {
                                     Password::GssapiResponse { data } => data,
                                     _ => {
                                         error!("Expected GSSAPI token from client");
@@ -202,7 +236,13 @@ impl Client {
                                 )
                                 .await
                                 {
-                                    Ok(response) => response,
+                                    Ok(response) => {
+                                        debug!("GSSAPI response: is_complete={}, has_principal={}, has_token={}",
+                                               response.is_complete,
+                                               response.principal.is_some(),
+                                               response.token.is_some());
+                                        response
+                                    }
                                     Err(e) => {
                                         error!("GSSAPI authentication failed: {}", e);
                                         break;
@@ -210,25 +250,45 @@ impl Client {
                                 };
 
                                 if response.is_complete {
+                                    debug!("GSSAPI response indicates authentication complete");
+
+                                    // Send final token if present
+                                    if let Some(token) = response.token {
+                                        debug!(
+                                            "Sending final GSSAPI token of {} bytes",
+                                            token.len()
+                                        );
+                                        stream
+                                            .send_flush(&Authentication::GssapiContinue(token))
+                                            .await?;
+                                    }
+
                                     // Authentication successful
                                     if let Some(principal) = response.principal {
+                                        debug!("Principal found: {}", principal);
                                         // Apply realm stripping if configured
                                         let extracted_user = if gssapi_config.strip_realm {
-                                            principal
+                                            let stripped = principal
                                                 .split('@')
                                                 .next()
                                                 .unwrap_or(&principal)
-                                                .to_string()
+                                                .to_string();
+                                            debug!(
+                                                "Stripped realm from {} to {}",
+                                                principal, stripped
+                                            );
+                                            stripped
                                         } else {
+                                            debug!("Not stripping realm from {}", principal);
                                             principal.clone()
                                         };
 
                                         // Verify the extracted user matches the requested user
                                         if extracted_user == user {
                                             auth_ok = true;
-                                            debug!(
-                                                "GSSAPI authentication successful for principal: {}",
-                                                principal
+                                            info!(
+                                                "GSSAPI authentication successful for principal: {} (matched user: {})",
+                                                principal, user
                                             );
                                         } else {
                                             error!(
@@ -236,15 +296,26 @@ impl Client {
                                                 extracted_user, user
                                             );
                                         }
+                                    } else {
+                                        error!("GSSAPI response marked complete but no principal provided");
                                     }
+                                    debug!("Breaking from GSSAPI negotiation loop (complete)");
                                     break;
                                 } else if let Some(token) = response.token {
                                     // Send continuation token
+                                    debug!(
+                                        "Sending GSSAPI continuation token of {} bytes",
+                                        token.len()
+                                    );
                                     stream
                                         .send_flush(&Authentication::GssapiContinue(token))
                                         .await?;
+                                    debug!("GSSAPI continuation token sent, waiting for next client token");
                                 } else {
-                                    error!("GSSAPI negotiation error: no token in incomplete response");
+                                    error!(
+                                        "GSSAPI negotiation error: no token in incomplete response"
+                                    );
+                                    debug!("Breaking from GSSAPI negotiation loop (error)");
                                     break;
                                 }
                             }
@@ -268,37 +339,60 @@ impl Client {
                         }
                     }
                 }
-                _ => None,
+                Some(gssapi_config) => {
+                    debug!(
+                        "GSSAPI config incomplete: enabled={}, server_keytab={:?}",
+                        gssapi_config.enabled, gssapi_config.server_keytab
+                    );
+                    None
+                }
+                None => {
+                    debug!("No GSSAPI configuration found");
+                    None
+                }
             }
         } else {
             None
         };
 
         // If GSSAPI wasn't tried or failed with fallback, use regular auth
-        let auth_ok = auth_ok.unwrap_or_else(|| match (auth_type, stream.is_tls()) {
-            // TODO: SCRAM doesn't work with TLS currently because of
-            // lack of support for channel binding in our scram library.
-            // Defaulting to MD5.
-            (AuthType::Scram, true) | (AuthType::Md5, _) => {
-                let md5 = md5::Client::new(user, password);
-                stream.send_flush(&md5.challenge()).await?;
-                let password = Password::from_bytes(stream.read().await?.to_bytes()?)?;
-                if let Password::PasswordMessage { response } = password {
-                    md5.check(&response)
-                } else {
+        debug!("GSSAPI auth result: {:?}", auth_ok);
+        let auth_ok = if let Some(gssapi_result) = auth_ok {
+            debug!("Using GSSAPI auth result: {}", gssapi_result);
+            gssapi_result
+        } else {
+            debug!("GSSAPI not used or failed with fallback, trying regular auth");
+            match (auth_type, stream.is_tls()) {
+                // TODO: SCRAM doesn't work with TLS currently because of
+                // lack of support for channel binding in our scram library.
+                // Defaulting to MD5.
+                (AuthType::Scram, true) | (AuthType::Md5, _) => {
+                    let md5 = md5::Client::new(user, password);
+                    stream.send_flush(&md5.challenge()).await?;
+                    let password = Password::from_bytes(stream.read().await?.to_bytes()?)?;
+                    if let Password::PasswordMessage { response } = password {
+                        md5.check(&response)
+                    } else {
+                        false
+                    }
+                }
+
+                (AuthType::Scram, false) => {
+                    stream.send_flush(&Authentication::scram()).await?;
+
+                    let scram = Server::new(password);
+                    let res = scram.handle(&mut stream).await;
+                    matches!(res, Ok(true))
+                }
+
+                (AuthType::Trust, _) => true,
+
+                (AuthType::Gssapi, _) => {
+                    // GSSAPI auth requested but not configured or already tried and failed
+                    error!("GSSAPI authentication requested but not available");
                     false
                 }
             }
-
-            (AuthType::Scram, false) => {
-                stream.send_flush(&Authentication::scram()).await?;
-
-                let scram = Server::new(password);
-                let res = scram.handle(&mut stream).await;
-                matches!(res, Ok(true))
-            }
-
-            (AuthType::Trust, _) => true,
         };
 
         if !auth_ok {

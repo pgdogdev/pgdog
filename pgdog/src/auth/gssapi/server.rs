@@ -89,7 +89,17 @@ impl GssapiServer {
 
     /// Process a token from the client.
     pub fn accept(&mut self, client_token: &[u8]) -> Result<Option<Vec<u8>>> {
+        tracing::debug!(
+            "GssapiServer::accept called with token of {} bytes",
+            client_token.len()
+        );
+        tracing::trace!(
+            "Token first 20 bytes: {:?}",
+            &client_token[..client_token.len().min(20)]
+        );
+
         if self.is_complete {
+            tracing::warn!("GssapiServer::accept called but context already complete");
             return Err(GssapiError::ContextError(
                 "Context already complete".to_string(),
             ));
@@ -97,27 +107,67 @@ impl GssapiServer {
 
         // Create or reuse the server context
         let mut ctx = match self.inner.take() {
-            Some(ctx) => ctx,
-            None => ServerCtx::new(Some(self.credential.as_ref().clone())),
+            Some(ctx) => {
+                tracing::debug!("Reusing existing server context");
+                ctx
+            }
+            None => {
+                tracing::debug!("Creating new server context");
+                ServerCtx::new(Some(self.credential.as_ref().clone()))
+            }
         };
 
         // Process the client token
+        tracing::debug!("Calling ctx.step with client token");
         match ctx.step(client_token) {
             Ok(Some(response)) => {
                 // More negotiation needed
+                tracing::debug!(
+                    "ctx.step returned response token of {} bytes - negotiation continues",
+                    response.len()
+                );
+                tracing::trace!(
+                    "Response token first 20 bytes: {:?}",
+                    &response[..response.len().min(20)]
+                );
+
+                // Check if context is actually established despite returning a token
+                if ctx.is_complete() {
+                    tracing::warn!("Context is complete but still returned a token - this might confuse the client");
+                    // Mark as complete and extract the principal
+                    self.is_complete = true;
+                    match ctx.source_name() {
+                        Ok(name) => {
+                            let principal = name.to_string();
+                            tracing::info!(
+                                "Extracted client principal (with token): {}",
+                                principal
+                            );
+                            self.client_principal = Some(principal);
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to get client principal: {}", e);
+                        }
+                    }
+                }
+
                 self.inner = Some(ctx);
                 Ok(Some(response.to_vec()))
             }
             Ok(None) => {
                 // Context established successfully
+                tracing::info!("ctx.step returned None - GSSAPI context established successfully");
                 self.is_complete = true;
 
                 // Extract the client principal
                 match ctx.source_name() {
                     Ok(name) => {
-                        self.client_principal = Some(name.to_string());
+                        let principal = name.to_string();
+                        tracing::info!("Extracted client principal: {}", principal);
+                        self.client_principal = Some(principal);
                     }
                     Err(e) => {
+                        tracing::error!("Failed to get client principal: {}", e);
                         return Err(GssapiError::ContextError(format!(
                             "Failed to get client principal: {}",
                             e
@@ -126,6 +176,7 @@ impl GssapiServer {
                 }
 
                 self.inner = Some(ctx);
+                tracing::debug!("GssapiServer::accept returning None (success)");
                 Ok(None)
             }
             Err(e) => Err(GssapiError::ContextError(format!(

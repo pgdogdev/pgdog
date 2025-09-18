@@ -49,6 +49,19 @@ impl FromBytes for Password {
     fn from_bytes(mut bytes: Bytes) -> Result<Self, Error> {
         code!(bytes, 'p');
         let _len = bytes.get_i32();
+
+        // Check if this looks like a GSSAPI token
+        // GSSAPI tokens typically start with ASN.1 tags like 0x60 (APPLICATION)
+        // or other ASN.1 constructed tags
+        if !bytes.is_empty() {
+            let first_byte = bytes[0];
+            if first_byte == 0x60 || first_byte == 0xa0 || first_byte == 0x6f {
+                // This appears to be a GSSAPI token, read it as binary data
+                let data = bytes.to_vec();
+                return Ok(Self::GssapiResponse { data });
+            }
+        }
+
         let content = c_string_buf(&mut bytes);
 
         if bytes.has_remaining() {

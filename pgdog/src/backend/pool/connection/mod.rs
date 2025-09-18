@@ -320,6 +320,18 @@ impl Connection {
                     }
                 }
 
+                // Check GSSAPI auth - if enabled and user doesn't exist, create a temporary user entry
+                let gssapi_enabled = config().config.gssapi.as_ref().map_or(false, |g| g.enabled);
+                if gssapi_enabled && !databases().exists(user) {
+                    debug!(
+                        "GSSAPI enabled and user {} not in databases, creating temporary entry",
+                        self.user
+                    );
+                    // Create a temporary user with no password for GSSAPI authentication
+                    let new_user = User::new(&self.user, "", &self.database);
+                    databases::add(new_user);
+                }
+
                 let databases = databases();
                 let cluster = databases.cluster(user)?;
 

@@ -26,29 +26,78 @@ pub async fn handle_gssapi_auth(
     server: Arc<Mutex<GssapiServer>>,
     client_token: Vec<u8>,
 ) -> Result<GssapiResponse> {
+    tracing::debug!(
+        "handle_gssapi_auth called with token of {} bytes",
+        client_token.len()
+    );
     let mut server = server.lock().await;
 
+    tracing::debug!("Calling server.accept()");
     match server.accept(&client_token)? {
         Some(response_token) => {
-            // More negotiation needed
-            Ok(GssapiResponse {
-                is_complete: false,
-                token: Some(response_token),
-                principal: None,
-            })
+            // Check if authentication is complete despite having a token
+            if server.is_complete() {
+                let principal = server
+                    .client_principal()
+                    .ok_or_else(|| {
+                        tracing::error!("Context complete but no principal found");
+                        GssapiError::ContextError("No client principal found".to_string())
+                    })?
+                    .to_string();
+
+                tracing::info!(
+                    "Authentication complete (with final token), principal: {}",
+                    principal
+                );
+                let response = GssapiResponse {
+                    is_complete: true,
+                    token: Some(response_token), // Send final token to client
+                    principal: Some(principal.clone()),
+                };
+                tracing::debug!(
+                    "Returning GssapiResponse: is_complete=true, has_token=true, principal={}",
+                    principal
+                );
+                Ok(response)
+            } else {
+                // More negotiation needed
+                tracing::info!(
+                    "server.accept returned token of {} bytes - negotiation continues",
+                    response_token.len()
+                );
+                let response = GssapiResponse {
+                    is_complete: false,
+                    token: Some(response_token),
+                    principal: None,
+                };
+                tracing::debug!(
+                    "Returning GssapiResponse: is_complete=false, has_token=true, principal=None"
+                );
+                Ok(response)
+            }
         }
         None => {
             // Authentication complete
+            tracing::info!("server.accept returned None - authentication complete");
             let principal = server
                 .client_principal()
-                .ok_or_else(|| GssapiError::ContextError("No client principal found".to_string()))?
+                .ok_or_else(|| {
+                    tracing::error!("No client principal found in completed context");
+                    GssapiError::ContextError("No client principal found".to_string())
+                })?
                 .to_string();
 
-            Ok(GssapiResponse {
+            tracing::info!("Successfully extracted principal: {}", principal);
+            let response = GssapiResponse {
                 is_complete: true,
                 token: None,
-                principal: Some(principal),
-            })
+                principal: Some(principal.clone()),
+            };
+            tracing::debug!(
+                "Returning GssapiResponse: is_complete=true, has_token=false, principal={}",
+                principal
+            );
+            Ok(response)
         }
     }
 }
