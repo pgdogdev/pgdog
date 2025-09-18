@@ -2,6 +2,8 @@
 
 use super::error::{GssapiError, Result};
 use std::path::Path;
+
+#[cfg(feature = "gssapi")]
 use std::sync::Arc;
 
 #[cfg(feature = "gssapi")]
