@@ -39,7 +39,7 @@ impl TicketManager {
     /// Get or acquire a ticket for a server
     /// Returns Ok(()) when the credential cache is ready to use
     #[cfg(feature = "gssapi")]
-    pub fn get_ticket(
+    pub async fn get_ticket(
         &self,
         server: impl Into<String>,
         keytab: impl AsRef<Path>,
@@ -63,15 +63,16 @@ impl TicketManager {
         std::env::set_var("KRB5CCNAME", &cache_path);
 
         // Use kinit to get a ticket from the keytab into the unique cache
-        let output = std::process::Command::new("kinit")
+        let output = tokio::process::Command::new("kinit")
             .arg("-kt")
             .arg(&keytab_path)
             .arg(&principal)
             .env("KRB5CCNAME", &cache_path)
             .env("KRB5_CONFIG", "/opt/homebrew/etc/krb5.conf")
             .output()
+            .await
             .map_err(|e| {
-                super::error::GssapiError::LibGssapi(format!("Failed to run kinit: {}", e))
+                super::error::GssapiError::LibGssapi(format!("failed to run kinit: {}", e))
             })?;
 
         if !output.status.success() {
@@ -99,7 +100,7 @@ impl TicketManager {
 
     /// Get or acquire a ticket for a server (mock version)
     #[cfg(not(feature = "gssapi"))]
-    pub fn get_ticket(
+    pub async fn get_ticket(
         &self,
         _server: impl Into<String>,
         _keytab: impl AsRef<Path>,
@@ -126,10 +127,10 @@ impl TicketManager {
                 if cache.needs_refresh() {
                     match cache.refresh() {
                         Ok(()) => {
-                            tracing::info!("Refreshed ticket for {}", server_clone);
+                            tracing::info!("[gssapi] refreshed ticket for \"{}\"", server_clone);
                         }
                         Err(e) => {
-                            tracing::error!("Failed to refresh ticket for {}: {}", server_clone, e);
+                            tracing::error!("failed to refresh ticket for {}: {}", server_clone, e);
                             // Continue trying - the old ticket might still be valid
                         }
                     }
@@ -219,12 +220,14 @@ mod tests {
         assert!(Arc::ptr_eq(&manager1, &manager2));
     }
 
-    #[test]
-    fn test_cache_management() {
+    #[tokio::test]
+    async fn test_cache_management() {
         let manager = TicketManager::new();
 
         // This will fail because the keytab doesn't exist, but it tests the structure
-        let result = manager.get_ticket("server1:5432", "/nonexistent/keytab", "test@REALM");
+        let result = manager
+            .get_ticket("server1:5432", "/nonexistent/keytab", "test@REALM")
+            .await;
         assert!(result.is_err());
 
         // Even though ticket acquisition failed, the cache should not be stored

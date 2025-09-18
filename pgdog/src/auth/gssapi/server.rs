@@ -2,6 +2,7 @@
 
 use super::error::{GssapiError, Result};
 use std::path::Path;
+#[cfg(feature = "gssapi")]
 use std::sync::Arc;
 
 #[cfg(feature = "gssapi")]
@@ -51,10 +52,10 @@ impl GssapiServer {
 
             // Create the desired mechanisms set
             let mut desired_mechs = OidSet::new()
-                .map_err(|e| GssapiError::LibGssapi(format!("Failed to create OidSet: {}", e)))?;
+                .map_err(|e| GssapiError::LibGssapi(format!("failed to create OidSet: {}", e)))?;
             desired_mechs
                 .add(&GSS_MECH_KRB5)
-                .map_err(|e| GssapiError::LibGssapi(format!("Failed to add mechanism: {}", e)))?;
+                .map_err(|e| GssapiError::LibGssapi(format!("failed to add mechanism: {}", e)))?;
 
             // Acquire credentials for the specified principal
             Cred::acquire(
@@ -65,7 +66,7 @@ impl GssapiServer {
             )
             .map_err(|e| {
                 GssapiError::CredentialAcquisitionFailed(format!(
-                    "Failed to acquire credentials for {}: {}",
+                    "failed to acquire credentials for {}: {}",
                     principal, e
                 ))
             })?
@@ -73,7 +74,7 @@ impl GssapiServer {
             // Use default service principal
             Cred::acquire(None, None, CredUsage::Accept, None).map_err(|e| {
                 GssapiError::CredentialAcquisitionFailed(format!(
-                    "Failed to acquire default credentials: {}",
+                    "failed to acquire default credentials: {}",
                     e
                 ))
             })?
@@ -101,24 +102,24 @@ impl GssapiServer {
         if self.is_complete {
             tracing::warn!("GssapiServer::accept called but context already complete");
             return Err(GssapiError::ContextError(
-                "Context already complete".to_string(),
+                "context already complete".to_string(),
             ));
         }
 
         // Create or reuse the server context
         let mut ctx = match self.inner.take() {
             Some(ctx) => {
-                tracing::debug!("Reusing existing server context");
+                tracing::debug!("reusing existing server context");
                 ctx
             }
             None => {
-                tracing::debug!("Creating new server context");
+                tracing::debug!("creating new server context");
                 ServerCtx::new(Some(self.credential.as_ref().clone()))
             }
         };
 
         // Process the client token
-        tracing::debug!("Calling ctx.step with client token");
+        tracing::debug!("calling ctx.step with client token");
         match ctx.step(client_token) {
             Ok(Some(response)) => {
                 // More negotiation needed
@@ -133,20 +134,20 @@ impl GssapiServer {
 
                 // Check if context is actually established despite returning a token
                 if ctx.is_complete() {
-                    tracing::warn!("Context is complete but still returned a token - this might confuse the client");
+                    tracing::warn!("context is complete but still returned a token - this might confuse the client");
                     // Mark as complete and extract the principal
                     self.is_complete = true;
                     match ctx.source_name() {
                         Ok(name) => {
                             let principal = name.to_string();
-                            tracing::info!(
+                            tracing::debug!(
                                 "Extracted client principal (with token): {}",
                                 principal
                             );
                             self.client_principal = Some(principal);
                         }
                         Err(e) => {
-                            tracing::error!("Failed to get client principal: {}", e);
+                            tracing::error!("failed to get client principal: {}", e);
                         }
                     }
                 }
@@ -156,20 +157,19 @@ impl GssapiServer {
             }
             Ok(None) => {
                 // Context established successfully
-                tracing::info!("ctx.step returned None - GSSAPI context established successfully");
+                tracing::debug!("ctx.step returned None - GSSAPI context established successfully");
                 self.is_complete = true;
 
                 // Extract the client principal
                 match ctx.source_name() {
                     Ok(name) => {
                         let principal = name.to_string();
-                        tracing::info!("Extracted client principal: {}", principal);
+                        tracing::debug!("extracted client principal: {}", principal);
                         self.client_principal = Some(principal);
                     }
                     Err(e) => {
-                        tracing::error!("Failed to get client principal: {}", e);
                         return Err(GssapiError::ContextError(format!(
-                            "Failed to get client principal: {}",
+                            "failed to get client principal: {}",
                             e
                         )));
                     }
