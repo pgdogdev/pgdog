@@ -3,6 +3,7 @@ use std::collections::HashSet;
 
 use crate::{
     backend::{databases::databases, ShardingSchema},
+    config::Role,
     frontend::{
         router::{
             context::RouterContext,
@@ -135,8 +136,10 @@ impl QueryParser {
 
         // Parse hardcoded shard from a query comment.
         if context.router_needed {
-            if let Some(BufferedQuery::Query(ref query)) = context.router_context.query {
-                self.shard = super::comment::shard(query.query(), &context.sharding_schema)?;
+            if let Some(query) = context.router_context.query.as_ref().map(|q| q.query()) {
+                let (shard, role) = super::comment::comment(query, &context.sharding_schema)?;
+                self.shard = shard;
+                self.write_override = role == Some(Role::Primary);
             }
         }
 
