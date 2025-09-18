@@ -3,6 +3,7 @@
 use super::error::{GssapiError, Result};
 use parking_lot::RwLock;
 use std::path::PathBuf;
+#[cfg(feature = "gssapi")]
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 

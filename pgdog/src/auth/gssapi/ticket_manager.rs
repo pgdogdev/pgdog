@@ -100,7 +100,7 @@ impl TicketManager {
 
     /// Get or acquire a ticket for a server (mock version)
     #[cfg(not(feature = "gssapi"))]
-    pub fn get_ticket(
+    pub async fn get_ticket(
         &self,
         _server: impl Into<String>,
         _keytab: impl AsRef<Path>,
