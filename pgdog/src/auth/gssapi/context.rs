@@ -8,7 +8,7 @@ use libgssapi::{
     context::{ClientCtx, CtxFlags, SecurityContext},
     credential::{Cred, CredUsage},
     name::Name,
-    oid::{OidSet, GSS_MECH_KRB5, GSS_NT_HOSTBASED_SERVICE},
+    oid::{OidSet, GSS_MECH_KRB5, GSS_NT_KRB5_PRINCIPAL},
 };
 
 /// Wrapper for GSSAPI security context
@@ -39,16 +39,12 @@ impl GssapiContext {
         principal: impl Into<String>,
         target: impl Into<String>,
     ) -> Result<Self> {
-        let keytab = keytab.as_ref();
+        let _keytab = keytab.as_ref();
         let principal = principal.into();
         let target_principal = target.into();
 
-        // Set the keytab
-        std::env::set_var("KRB5_CLIENT_KTNAME", keytab);
-
-        // Parse our principal
-        let our_name = Name::new(principal.as_bytes(), Some(&GSS_NT_HOSTBASED_SERVICE))
-            .map_err(|e| GssapiError::InvalidPrincipal(format!("{}: {}", principal, e)))?;
+        // TicketManager has already set up the credential cache with KRB5CCNAME
+        // We just need to acquire credentials from that cache
 
         // Create the desired mechanisms set
         let mut desired_mechs = OidSet::new()
@@ -57,9 +53,10 @@ impl GssapiContext {
             .add(&GSS_MECH_KRB5)
             .map_err(|e| GssapiError::LibGssapi(format!("Failed to add mechanism: {}", e)))?;
 
-        // Acquire credentials
+        // Acquire credentials from the cache that TicketManager populated
+        // Pass None to use the default principal from the cache
         let credential = Cred::acquire(
-            Some(&our_name),
+            None, // Use the principal from the cache that TicketManager set up
             None,
             CredUsage::Initiate,
             Some(&desired_mechs),
@@ -68,11 +65,9 @@ impl GssapiContext {
             GssapiError::CredentialAcquisitionFailed(format!("Failed for {}: {}", principal, e))
         })?;
 
-        // Parse target service principal
-        let target_name = Name::new(target_principal.as_bytes(), Some(&GSS_NT_HOSTBASED_SERVICE))
-            .map_err(|e| {
-            GssapiError::InvalidPrincipal(format!("{}: {}", target_principal, e))
-        })?;
+        // Parse target service principal (use KRB5_PRINCIPAL to avoid hostname canonicalization)
+        let target_name = Name::new(target_principal.as_bytes(), Some(&GSS_NT_KRB5_PRINCIPAL))
+            .map_err(|e| GssapiError::InvalidPrincipal(format!("{}: {}", target_principal, e)))?;
 
         // Create the client context
         let flags = CtxFlags::GSS_C_MUTUAL_FLAG | CtxFlags::GSS_C_SEQUENCE_FLAG;

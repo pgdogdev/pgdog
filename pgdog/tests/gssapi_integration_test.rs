@@ -155,8 +155,8 @@ fn test_ticket_manager_cleanup() {
     let manager = TicketManager::new();
 
     // Add some tickets
-    manager.get_ticket("server1:5432", "/etc/keytab1", "principal1@REALM");
-    manager.get_ticket("server2:5432", "/etc/keytab2", "principal2@REALM");
+    let _ = manager.get_ticket("server1:5432", "/etc/keytab1", "principal1@REALM");
+    let _ = manager.get_ticket("server2:5432", "/etc/keytab2", "principal2@REALM");
 
     assert_eq!(manager.cache_count(), 2);
 

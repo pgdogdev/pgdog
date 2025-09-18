@@ -24,6 +24,8 @@ pub struct Address {
     pub gssapi_keytab: Option<String>,
     /// GSSAPI principal for backend authentication.
     pub gssapi_principal: Option<String>,
+    /// GSSAPI target service principal (what we authenticate to).
+    pub gssapi_target_principal: Option<String>,
 }
 
 impl Address {
@@ -52,6 +54,27 @@ impl Address {
             (None, None)
         };
 
+        // Clean precedence resolution - no parsing needed
+        let username = if let Some(user) = database.user.clone() {
+            user
+        } else if let Some(user) = user.server_user.clone() {
+            user
+        } else {
+            user.name.clone()
+        };
+
+        // Target principal precedence: user > database > global default
+        let gssapi_target_principal = user
+            .gssapi_target_principal
+            .clone()
+            .or_else(|| database.gssapi_target_principal.clone())
+            .or_else(|| {
+                cfg.config
+                    .gssapi
+                    .as_ref()
+                    .and_then(|g| g.default_backend_target_principal.clone())
+            });
+
         Address {
             host: database.host.clone(),
             port: database.port,
@@ -60,13 +83,7 @@ impl Address {
             } else {
                 database.name.clone()
             },
-            user: if let Some(user) = database.user.clone() {
-                user
-            } else if let Some(user) = user.server_user.clone() {
-                user
-            } else {
-                user.name.clone()
-            },
+            user: username,
             password: if let Some(password) = database.password.clone() {
                 password
             } else if let Some(password) = user.server_password.clone() {
@@ -76,7 +93,13 @@ impl Address {
             },
             gssapi_keytab,
             gssapi_principal,
+            gssapi_target_principal,
         }
+    }
+
+    /// Check if this address has GSSAPI configuration.
+    pub fn has_gssapi(&self) -> bool {
+        self.gssapi_keytab.is_some() && self.gssapi_principal.is_some()
     }
 
     pub async fn addr(&self) -> Result<SocketAddr, Error> {
@@ -105,6 +128,7 @@ impl Address {
             database_name: "pgdog".into(),
             gssapi_keytab: None,
             gssapi_principal: None,
+            gssapi_target_principal: None,
         }
     }
 }
@@ -133,6 +157,7 @@ impl TryFrom<Url> for Address {
             database_name,
             gssapi_keytab: None,
             gssapi_principal: None,
+            gssapi_target_principal: None,
         })
     }
 }
@@ -190,6 +215,7 @@ mod test {
         assert_eq!(addr.password, "password");
         assert_eq!(addr.gssapi_keytab, None);
         assert_eq!(addr.gssapi_principal, None);
+        assert_eq!(addr.gssapi_target_principal, None);
     }
 
     #[test]
@@ -201,6 +227,7 @@ mod test {
             server_keytab: Some(PathBuf::from("/etc/pgdog/pgdog.keytab")),
             default_backend_keytab: Some(PathBuf::from("/etc/pgdog/backend.keytab")),
             default_backend_principal: Some("pgdog@REALM".to_string()),
+            default_backend_target_principal: Some("postgres/default@REALM".to_string()),
             ..Default::default()
         });
 
@@ -211,6 +238,7 @@ mod test {
             port: 5432,
             gssapi_keytab: Some("/etc/pgdog/shard1.keytab".into()),
             gssapi_principal: Some("pgdog-shard1@REALM".into()),
+            gssapi_target_principal: Some("postgres/shard1@REALM".into()),
             ..Default::default()
         };
 
@@ -235,6 +263,10 @@ mod test {
         let addr1 = Address::new(&database1, &user);
         assert_eq!(addr1.gssapi_keytab, Some("/etc/pgdog/shard1.keytab".into()));
         assert_eq!(addr1.gssapi_principal, Some("pgdog-shard1@REALM".into()));
+        assert_eq!(
+            addr1.gssapi_target_principal,
+            Some("postgres/shard1@REALM".into())
+        );
 
         // Test database using default GSSAPI settings
         let addr2 = Address::new(&database2, &user);
@@ -243,6 +275,10 @@ mod test {
             Some("/etc/pgdog/backend.keytab".into())
         );
         assert_eq!(addr2.gssapi_principal, Some("pgdog@REALM".into()));
+        assert_eq!(
+            addr2.gssapi_target_principal,
+            Some("postgres/default@REALM".into())
+        );
     }
 
     #[test]
@@ -272,9 +308,10 @@ mod test {
 
         set(config).unwrap();
 
-        // When GSSAPI is disabled, keytab/principal should be None
+        // When GSSAPI is disabled, keytab/principal/target_principal should be None
         let addr = Address::new(&database, &user);
         assert_eq!(addr.gssapi_keytab, None);
         assert_eq!(addr.gssapi_principal, None);
+        assert_eq!(addr.gssapi_target_principal, None);
     }
 }

@@ -9,9 +9,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::task::JoinHandle;
 
-#[cfg(feature = "gssapi")]
-use libgssapi::credential::Cred;
-
 lazy_static! {
     /// Global ticket manager instance
     static ref INSTANCE: Arc<TicketManager> = Arc::new(TicketManager::new());
@@ -40,27 +37,55 @@ impl TicketManager {
     }
 
     /// Get or acquire a ticket for a server
+    /// Returns Ok(()) when the credential cache is ready to use
     #[cfg(feature = "gssapi")]
     pub fn get_ticket(
         &self,
         server: impl Into<String>,
         keytab: impl AsRef<Path>,
         principal: impl Into<String>,
-    ) -> Result<Arc<Cred>> {
+    ) -> Result<()> {
         let server = server.into();
         let keytab_path = keytab.as_ref().to_path_buf();
         let principal = principal.into();
 
         // Check if we already have a cache for this server
-        if let Some(cache) = self.caches.get(&server) {
-            return cache.get_credential();
+        if self.caches.contains_key(&server) {
+            // Cache already exists and environment is set
+            return Ok(());
         }
 
-        // Create a new cache
-        let cache = Arc::new(TicketCache::new(principal, keytab_path));
+        // Create a unique credential cache file for this server connection
+        let cache_file = format!("/tmp/krb5cc_pgdog_{}", server.replace(":", "_"));
+        let cache_path = format!("FILE:{}", cache_file);
 
-        // Acquire the initial ticket
-        let credential = cache.acquire_ticket()?;
+        // Set the environment variable for this thread
+        std::env::set_var("KRB5CCNAME", &cache_path);
+
+        // Use kinit to get a ticket from the keytab into the unique cache
+        let output = std::process::Command::new("kinit")
+            .arg("-kt")
+            .arg(&keytab_path)
+            .arg(&principal)
+            .env("KRB5CCNAME", &cache_path)
+            .env("KRB5_CONFIG", "/opt/homebrew/etc/krb5.conf")
+            .output()
+            .map_err(|e| {
+                super::error::GssapiError::LibGssapi(format!("Failed to run kinit: {}", e))
+            })?;
+
+        if !output.status.success() {
+            return Err(super::error::GssapiError::CredentialAcquisitionFailed(
+                format!(
+                    "kinit failed for {}: {}",
+                    principal,
+                    String::from_utf8_lossy(&output.stderr)
+                ),
+            ));
+        }
+
+        // Create a new cache object for tracking (but don't acquire credentials - kinit already did that)
+        let cache = Arc::new(TicketCache::new(principal, keytab_path));
 
         // Store the cache
         self.caches.insert(server.clone(), cache.clone());
@@ -68,7 +93,8 @@ impl TicketManager {
         // Start background refresh task
         self.start_refresh_task(server, cache);
 
-        Ok(credential)
+        // Return success - the credential cache is now populated and KRB5CCNAME is set
+        Ok(())
     }
 
     /// Get or acquire a ticket for a server (mock version)
@@ -85,6 +111,7 @@ impl TicketManager {
     }
 
     /// Start a background refresh task for a cache
+    #[allow(dead_code)]
     fn start_refresh_task(&self, server: String, cache: Arc<TicketCache>) {
         let _refresh_tasks = self.refresh_tasks.clone();
         let server_clone = server.clone();

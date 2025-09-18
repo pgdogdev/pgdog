@@ -98,6 +98,8 @@ pub struct User {
     pub two_phase_commit: Option<bool>,
     /// Automatic transactions.
     pub two_phase_commit_auto: Option<bool>,
+    /// GSSAPI target service principal for this specific user.
+    pub gssapi_target_principal: Option<String>,
 }
 
 impl User {

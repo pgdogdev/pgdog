@@ -27,6 +27,10 @@ pub struct GssapiConfig {
     /// Can be overridden per-database.
     pub default_backend_principal: Option<String>,
 
+    /// Default target service principal for backend connections.
+    /// Can be overridden per-database or per-user.
+    pub default_backend_target_principal: Option<String>,
+
     /// Strip realm from client principals.
     /// If true: user@REALM -> user
     #[serde(default = "GssapiConfig::default_strip_realm")]
@@ -55,6 +59,7 @@ impl Default for GssapiConfig {
             server_principal: None,
             default_backend_keytab: None,
             default_backend_principal: None,
+            default_backend_target_principal: None,
             strip_realm: Self::default_strip_realm(),
             ticket_refresh_interval: Self::default_ticket_refresh_interval(),
             fallback_enabled: false,

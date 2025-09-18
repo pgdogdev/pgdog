@@ -107,6 +107,8 @@ pub struct Database {
     pub gssapi_keytab: Option<String>,
     /// GSSAPI principal for this specific backend server.
     pub gssapi_principal: Option<String>,
+    /// GSSAPI target service principal for this specific backend server.
+    pub gssapi_target_principal: Option<String>,
 }
 
 impl Database {

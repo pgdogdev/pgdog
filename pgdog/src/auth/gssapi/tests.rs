@@ -4,7 +4,6 @@
 mod tests {
     use super::super::*;
     use std::path::PathBuf;
-    use std::time::Duration;
 
     #[test]
     fn test_gssapi_response_creation() {

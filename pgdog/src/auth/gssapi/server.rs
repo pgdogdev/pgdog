@@ -2,13 +2,14 @@
 
 use super::error::{GssapiError, Result};
 use std::path::Path;
+use std::sync::Arc;
 
 #[cfg(feature = "gssapi")]
 use libgssapi::{
     context::{SecurityContext, ServerCtx},
     credential::{Cred, CredUsage},
     name::Name,
-    oid::{OidSet, GSS_MECH_KRB5, GSS_NT_HOSTBASED_SERVICE},
+    oid::{OidSet, GSS_MECH_KRB5, GSS_NT_KRB5_PRINCIPAL},
 };
 
 /// Server-side GSSAPI context for accepting client connections.
@@ -17,7 +18,7 @@ pub struct GssapiServer {
     /// The underlying libgssapi server context.
     inner: Option<ServerCtx>,
     /// Server credentials.
-    credential: Cred,
+    credential: Arc<Cred>,
     /// Whether the context establishment is complete.
     is_complete: bool,
     /// The authenticated client principal (once complete).
@@ -44,8 +45,8 @@ impl GssapiServer {
 
         // Create credentials for accepting
         let credential = if let Some(principal) = principal {
-            // Parse the service principal
-            let service_name = Name::new(principal.as_bytes(), Some(&GSS_NT_HOSTBASED_SERVICE))
+            // Parse the service principal (use KRB5_PRINCIPAL to avoid canonicalization)
+            let service_name = Name::new(principal.as_bytes(), Some(&GSS_NT_KRB5_PRINCIPAL))
                 .map_err(|e| GssapiError::InvalidPrincipal(format!("{}: {}", principal, e)))?;
 
             // Create the desired mechanisms set
@@ -80,7 +81,7 @@ impl GssapiServer {
 
         Ok(Self {
             inner: None,
-            credential,
+            credential: Arc::new(credential),
             is_complete: false,
             client_principal: None,
         })
@@ -95,19 +96,19 @@ impl GssapiServer {
         }
 
         // Create or reuse the server context
-        let ctx = match self.inner.take() {
+        let mut ctx = match self.inner.take() {
             Some(ctx) => ctx,
-            None => ServerCtx::new(self.credential.clone()),
+            None => ServerCtx::new(Some(self.credential.as_ref().clone())),
         };
 
         // Process the client token
         match ctx.step(client_token) {
-            Ok((ctx, Some(response))) => {
+            Ok(Some(response)) => {
                 // More negotiation needed
                 self.inner = Some(ctx);
                 Ok(Some(response.to_vec()))
             }
-            Ok((mut ctx, None)) => {
+            Ok(None) => {
                 // Context established successfully
                 self.is_complete = true;
 
@@ -124,6 +125,7 @@ impl GssapiServer {
                     }
                 }
 
+                self.inner = Some(ctx);
                 Ok(None)
             }
             Err(e) => Err(GssapiError::ContextError(format!(
