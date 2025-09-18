@@ -8,12 +8,27 @@
 use pgdog::auth::gssapi::{TicketCache, TicketManager};
 use std::path::PathBuf;
 
+/// Get the path to the test keytabs directory
+fn test_keytab_path(filename: &str) -> PathBuf {
+    // Use the CARGO_MANIFEST_DIR to find the project root, or fallback to relative path
+    let base_path = std::env::var("CARGO_MANIFEST_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("."));
+    base_path
+        .parent() // Go up from pgdog/ to project root
+        .unwrap_or(&base_path)
+        .join("integration")
+        .join("gssapi")
+        .join("keytabs")
+        .join(filename)
+}
+
 /// Test that TicketCache can acquire a credential from a keytab
 #[tokio::test]
 async fn test_ticket_cache_acquires_credential() {
-    // This test MUST FAIL initially because TicketCache doesn't exist yet
-    let keytab_path = PathBuf::from("/etc/pgdog/test.keytab");
-    let principal = "test@EXAMPLE.COM";
+    // Use test keytab from integration directory
+    let keytab_path = test_keytab_path("test.keytab");
+    let principal = "test@PGDOG.LOCAL";
 
     let cache = TicketCache::new(principal, keytab_path);
     let ticket = cache.acquire_ticket();
@@ -35,8 +50,8 @@ async fn test_ticket_manager_per_server_cache() {
     let ticket1 = manager
         .get_ticket(
             "server1:5432",
-            "/etc/pgdog/keytab1.keytab",
-            "principal1@REALM",
+            test_keytab_path("server1.keytab"),
+            "server1@PGDOG.LOCAL",
         )
         .await;
 
@@ -44,8 +59,8 @@ async fn test_ticket_manager_per_server_cache() {
     let ticket2 = manager
         .get_ticket(
             "server2:5432",
-            "/etc/pgdog/keytab2.keytab",
-            "principal2@REALM",
+            test_keytab_path("server2.keytab"),
+            "server2@PGDOG.LOCAL",
         )
         .await;
 
@@ -69,7 +84,7 @@ async fn test_gssapi_frontend_authentication() {
     use tokio::sync::Mutex;
 
     // This will fail without a real keytab
-    let server = GssapiServer::new_acceptor("/test.keytab", None);
+    let server = GssapiServer::new_acceptor(test_keytab_path("test.keytab"), None);
     if server.is_err() {
         // Expected to fail without real keytab
         return;
@@ -99,7 +114,11 @@ async fn test_ticket_refresh() {
     manager.set_refresh_interval(Duration::from_secs(1)); // Short interval for testing
 
     let ticket = manager
-        .get_ticket("server:5432", "/etc/pgdog/test.keytab", "test@REALM")
+        .get_ticket(
+            "server:5432",
+            test_keytab_path("test.keytab"),
+            "test@PGDOG.LOCAL",
+        )
         .await;
     assert!(ticket.is_ok());
 
@@ -121,9 +140,9 @@ fn test_backend_gssapi_context() {
     // This test demonstrates GssapiContext API
     use pgdog::auth::gssapi::GssapiContext;
 
-    let keytab = "/etc/pgdog/backend.keytab";
-    let principal = "pgdog@REALM";
-    let target = "postgres/db.example.com@REALM";
+    let keytab = test_keytab_path("backend.keytab");
+    let principal = "pgdog-test@PGDOG.LOCAL";
+    let target = "postgres/db.example.com@PGDOG.LOCAL";
 
     let context = GssapiContext::new_initiator(keytab, principal, target);
 
@@ -147,8 +166,8 @@ fn test_backend_gssapi_context() {
 /// Test error handling for missing keytab
 #[test]
 fn test_missing_keytab_error() {
-    // This test MUST FAIL initially (but in a controlled way)
-    let cache = TicketCache::new("test@REALM", PathBuf::from("/nonexistent/keytab"));
+    // Test with a truly non-existent keytab
+    let cache = TicketCache::new("test@PGDOG.LOCAL", PathBuf::from("/nonexistent/keytab"));
     let ticket = cache.acquire_ticket();
 
     assert!(ticket.is_err());
@@ -163,8 +182,16 @@ fn test_ticket_manager_cleanup() {
     let manager = TicketManager::new();
 
     // Add some tickets
-    let _ = manager.get_ticket("server1:5432", "/etc/keytab1", "principal1@REALM");
-    let _ = manager.get_ticket("server2:5432", "/etc/keytab2", "principal2@REALM");
+    let _ = manager.get_ticket(
+        "server1:5432",
+        test_keytab_path("keytab1.keytab"),
+        "principal1@REALM",
+    );
+    let _ = manager.get_ticket(
+        "server2:5432",
+        test_keytab_path("keytab2.keytab"),
+        "principal2@REALM",
+    );
 
     assert_eq!(manager.cache_count(), 2);
 

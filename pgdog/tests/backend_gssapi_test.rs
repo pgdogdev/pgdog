@@ -6,6 +6,22 @@
 
 use pgdog::auth::gssapi::{GssapiContext, TicketManager};
 use pgdog::backend::pool::Address;
+use std::path::PathBuf;
+
+/// Get the path to the test keytabs directory
+fn test_keytab_path(filename: &str) -> PathBuf {
+    // Use the CARGO_MANIFEST_DIR to find the project root, or fallback to relative path
+    let base_path = std::env::var("CARGO_MANIFEST_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("."));
+    base_path
+        .parent() // Go up from pgdog/ to project root
+        .unwrap_or(&base_path)
+        .join("integration")
+        .join("gssapi")
+        .join("keytabs")
+        .join(filename)
+}
 
 #[test]
 fn test_address_has_gssapi() {
@@ -23,7 +39,11 @@ fn test_address_has_gssapi() {
 
     assert!(!addr.has_gssapi());
 
-    addr.gssapi_keytab = Some("/etc/test.keytab".to_string());
+    addr.gssapi_keytab = Some(
+        test_keytab_path("test.keytab")
+            .to_string_lossy()
+            .to_string(),
+    );
     assert!(!addr.has_gssapi()); // Still need principal
 
     addr.gssapi_principal = Some("test@REALM".to_string());
@@ -33,8 +53,8 @@ fn test_address_has_gssapi() {
 #[test]
 fn test_gssapi_context_for_backend() {
     // Test creating a GSSAPI context for backend connection
-    let keytab = "/etc/pgdog/backend.keytab";
-    let principal = "pgdog@REALM";
+    let keytab = test_keytab_path("backend.keytab");
+    let principal = "pgdog-test@PGDOG.LOCAL";
     let target = "postgres/db.example.com";
 
     let context = GssapiContext::new_initiator(keytab, principal, target);
@@ -81,16 +101,16 @@ async fn test_ticket_manager_for_backend() {
     let ticket1 = manager
         .get_ticket(
             "server1:5432",
-            "/etc/pgdog/server1.keytab",
-            "pgdog-server1@REALM",
+            test_keytab_path("server1.keytab"),
+            "server1@PGDOG.LOCAL",
         )
         .await;
 
     let ticket2 = manager
         .get_ticket(
             "server2:5432",
-            "/etc/pgdog/server2.keytab",
-            "pgdog-server2@REALM",
+            test_keytab_path("server2.keytab"),
+            "server2@PGDOG.LOCAL",
         )
         .await;
 
@@ -113,8 +133,8 @@ async fn test_backend_gssapi_negotiation_mock() {
     // This test demonstrates the expected flow for backend GSSAPI
     // In a real scenario, this would connect to a PostgreSQL server with GSSAPI enabled
 
-    let keytab = "/etc/pgdog/backend.keytab";
-    let principal = "pgdog@REALM";
+    let keytab = test_keytab_path("backend.keytab");
+    let principal = "pgdog-test@PGDOG.LOCAL";
     let target = "postgres/localhost";
 
     let _context = GssapiContext::new_initiator(keytab, principal, target);
@@ -161,15 +181,14 @@ fn test_backend_gssapi_not_configured() {
 #[test]
 fn test_backend_gssapi_from_config() {
     use pgdog::config::GssapiConfig;
-    use std::path::PathBuf;
 
     let gssapi = GssapiConfig {
         enabled: true,
-        server_keytab: Some(PathBuf::from("/etc/pgdog/pgdog.keytab")),
-        server_principal: Some("pgdog@REALM".to_string()),
-        default_backend_keytab: Some(PathBuf::from("/etc/pgdog/backend.keytab")),
-        default_backend_principal: Some("pgdog-backend@REALM".to_string()),
-        default_backend_target_principal: Some("postgres/test@REALM".to_string()),
+        server_keytab: Some(test_keytab_path("test.keytab")),
+        server_principal: Some("pgdog-test@PGDOG.LOCAL".to_string()),
+        default_backend_keytab: Some(test_keytab_path("backend.keytab")),
+        default_backend_principal: Some("pgdog-backend@PGDOG.LOCAL".to_string()),
+        default_backend_target_principal: Some("postgres/test@PGDOG.LOCAL".to_string()),
         strip_realm: true,
         ticket_refresh_interval: 14400,
         fallback_enabled: false,

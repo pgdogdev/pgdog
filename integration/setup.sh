@@ -62,4 +62,14 @@ for bin in toxiproxy-server toxiproxy-cli; do
     fi
 done
 
+# Setup GSSAPI test keytabs if Kerberos is available or requested
+if command -v kadmin.local &> /dev/null || [ -x "/opt/homebrew/opt/krb5/sbin/kadmin.local" ] || [ -n "$SETUP_GSSAPI" ]; then
+    echo "Setting up GSSAPI test environment..."
+    if [ -x "${SCRIPT_DIR}/gssapi/setup_test_keytabs.sh" ]; then
+        bash "${SCRIPT_DIR}/gssapi/setup_test_keytabs.sh" || echo "GSSAPI setup failed (non-critical)"
+    fi
+else
+    echo "Skipping GSSAPI setup (Kerberos tools not found)"
+fi
+
 popd
