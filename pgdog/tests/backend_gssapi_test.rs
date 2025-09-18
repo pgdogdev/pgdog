@@ -2,6 +2,8 @@
 //!
 //! These tests verify that PGDog can authenticate to PostgreSQL servers using GSSAPI/Kerberos.
 
+#![cfg(feature = "gssapi")]
+
 use pgdog::auth::gssapi::{GssapiContext, TicketManager};
 use pgdog::backend::pool::Address;
 

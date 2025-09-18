@@ -3,6 +3,8 @@
 //! These tests are designed to fail initially as we implement the GSSAPI functionality.
 //! They demonstrate the expected API and behavior for GSSAPI authentication.
 
+#![cfg(feature = "gssapi")]
+
 use pgdog::auth::gssapi::{TicketCache, TicketManager};
 use std::path::PathBuf;
 

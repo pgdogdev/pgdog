@@ -36,10 +36,14 @@ jobs:
           sudo apt remove cmake
           sudo pip3 install cmake==3.31.6
           cmake --version
+      - name: Install Kerberos dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y libkrb5-dev krb5-user krb5-config libgssapi-krb5-2
       - name: Build
-        run: cargo build
+        run: cargo build --features gssapi
       - name: Check release
-        run: cargo check --release
+        run: cargo check --release --features gssapi
   tests:
     runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
@@ -51,6 +55,10 @@ jobs:
       - uses: useblacksmith/rust-cache@v3
         with:
           prefix-key: "v1" # Change this when updating tooling
+      - name: Install Kerberos dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y libkrb5-dev krb5-user krb5-config libgssapi-krb5-2
       - name: Setup PostgreSQL
         run: |
           sudo service postgresql start
@@ -59,7 +67,7 @@ jobs:
           sudo -u postgres psql -c 'ALTER SYSTEM SET max_prepared_transactions TO 1000;'
           sudo service postgresql restart
           bash integration/setup.sh
-          sudo apt update && sudo apt install -y python3-virtualenv mold
+          sudo apt install -y python3-virtualenv mold
           sudo gem install bundler
           sudo apt remove -y cmake
           sudo pip3 install cmake==3.31.6
@@ -68,10 +76,10 @@ jobs:
           bash integration/toxi/setup.sh
       - name: Install test dependencies
         run: cargo install cargo-nextest --version "0.9.78" --locked
-      - name: Run tests
-        run: cargo nextest run -E 'package(pgdog)' --no-fail-fast --test-threads=1
+      - name: Run tests with GSSAPI
+        run: cargo nextest run -E 'package(pgdog)' --no-fail-fast --test-threads=1 --features gssapi
       - name: Run documentation tests
-        run: cargo test --doc
+        run: cargo test --doc --features gssapi
   integration:
     runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
