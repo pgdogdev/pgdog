@@ -32,7 +32,7 @@ pub async fn handle_gssapi_auth(
     );
     let mut server = server.lock().await;
 
-    tracing::debug!("Calling server.accept()");
+    tracing::debug!("calling server.accept()");
     match server.accept(&client_token)? {
         Some(response_token) => {
             // Check if authentication is complete despite having a token
@@ -40,8 +40,7 @@ pub async fn handle_gssapi_auth(
                 let principal = server
                     .client_principal()
                     .ok_or_else(|| {
-                        tracing::error!("Context complete but no principal found");
-                        GssapiError::ContextError("No client principal found".to_string())
+                        GssapiError::ContextError("no client principal found".to_string())
                     })?
                     .to_string();
 
@@ -81,13 +80,10 @@ pub async fn handle_gssapi_auth(
             tracing::info!("server.accept returned None - authentication complete");
             let principal = server
                 .client_principal()
-                .ok_or_else(|| {
-                    tracing::error!("No client principal found in completed context");
-                    GssapiError::ContextError("No client principal found".to_string())
-                })?
+                .ok_or_else(|| GssapiError::ContextError("No client principal found".to_string()))?
                 .to_string();
 
-            tracing::info!("Successfully extracted principal: {}", principal);
+            tracing::info!("successfully extracted principal: {}", principal);
             let response = GssapiResponse {
                 is_complete: true,
                 token: None,

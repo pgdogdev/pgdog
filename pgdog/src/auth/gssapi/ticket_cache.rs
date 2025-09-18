@@ -85,10 +85,10 @@ impl TicketCache {
 
         // Create the desired mechanisms set
         let mut desired_mechs = OidSet::new()
-            .map_err(|e| GssapiError::LibGssapi(format!("Failed to create OidSet: {}", e)))?;
+            .map_err(|e| GssapiError::LibGssapi(format!("failed to create OidSet: {}", e)))?;
         desired_mechs
             .add(&GSS_MECH_KRB5)
-            .map_err(|e| GssapiError::LibGssapi(format!("Failed to add mechanism: {}", e)))?;
+            .map_err(|e| GssapiError::LibGssapi(format!("failed to add mechanism: {}", e)))?;
 
         // Acquire credentials from the keytab
         let credential = Cred::acquire(
@@ -99,7 +99,7 @@ impl TicketCache {
         )
         .map_err(|e| {
             GssapiError::CredentialAcquisitionFailed(format!(
-                "Failed for {}: {}",
+                "failed for {}: {}",
                 self.principal, e
             ))
         })?;

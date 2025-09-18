@@ -7,8 +7,8 @@ use pgdog::auth::gssapi::{TicketCache, TicketManager};
 use std::path::PathBuf;
 
 /// Test that TicketCache can acquire a credential from a keytab
-#[test]
-fn test_ticket_cache_acquires_credential() {
+#[tokio::test]
+async fn test_ticket_cache_acquires_credential() {
     // This test MUST FAIL initially because TicketCache doesn't exist yet
     let keytab_path = PathBuf::from("/etc/pgdog/test.keytab");
     let principal = "test@EXAMPLE.COM";
@@ -24,24 +24,28 @@ fn test_ticket_cache_acquires_credential() {
 }
 
 /// Test that TicketManager maintains per-server caches
-#[test]
-fn test_ticket_manager_per_server_cache() {
+#[tokio::test]
+async fn test_ticket_manager_per_server_cache() {
     // This test MUST FAIL initially because TicketManager doesn't exist yet
     let manager = TicketManager::new();
 
     // Get ticket for server1
-    let ticket1 = manager.get_ticket(
-        "server1:5432",
-        "/etc/pgdog/keytab1.keytab",
-        "principal1@REALM",
-    );
+    let ticket1 = manager
+        .get_ticket(
+            "server1:5432",
+            "/etc/pgdog/keytab1.keytab",
+            "principal1@REALM",
+        )
+        .await;
 
     // Get ticket for server2
-    let ticket2 = manager.get_ticket(
-        "server2:5432",
-        "/etc/pgdog/keytab2.keytab",
-        "principal2@REALM",
-    );
+    let ticket2 = manager
+        .get_ticket(
+            "server2:5432",
+            "/etc/pgdog/keytab2.keytab",
+            "principal2@REALM",
+        )
+        .await;
 
     assert!(ticket1.is_ok(), "Failed to get ticket for server1");
     assert!(ticket2.is_ok(), "Failed to get ticket for server2");
@@ -84,15 +88,17 @@ async fn test_gssapi_frontend_authentication() {
 }
 
 /// Test ticket refresh mechanism
-#[test]
-fn test_ticket_refresh() {
+#[tokio::test]
+async fn test_ticket_refresh() {
     // This test demonstrates ticket refresh
     use std::time::Duration;
 
     let manager = TicketManager::new();
     manager.set_refresh_interval(Duration::from_secs(1)); // Short interval for testing
 
-    let ticket = manager.get_ticket("server:5432", "/etc/pgdog/test.keytab", "test@REALM");
+    let ticket = manager
+        .get_ticket("server:5432", "/etc/pgdog/test.keytab", "test@REALM")
+        .await;
     assert!(ticket.is_ok());
 
     let initial_refresh_time = manager.get_last_refresh("server:5432");
