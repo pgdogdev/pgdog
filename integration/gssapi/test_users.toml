@@ -11,11 +11,21 @@ principal = "pgdog-test@PGDOG.LOCAL"
 strip_realm = true
 
 [[user]]
+name = "server1"
+principal = "server1@PGDOG.LOCAL"
+strip_realm = true
+
+[[user]]
+name = "server2"
+principal = "server2@PGDOG.LOCAL"
+strip_realm = true
+
+[[user]]
 name = "principal1"
-principal = "principal1@REALM"
+principal = "principal1@PGDOG.LOCAL"
 strip_realm = false
 
 [[user]]
 name = "principal2"
-principal = "principal2@REALM"
+principal = "principal2@PGDOG.LOCAL"
 strip_realm = false

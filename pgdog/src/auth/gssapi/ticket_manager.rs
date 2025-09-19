@@ -36,6 +36,29 @@ impl TicketManager {
         INSTANCE.clone()
     }
 
+    /// Get the appropriate krb5.conf path for the current system
+    fn get_krb5_config() -> Option<String> {
+        // First check if KRB5_CONFIG environment variable is set
+        if let Ok(config) = std::env::var("KRB5_CONFIG") {
+            return Some(config);
+        }
+
+        // Check common locations
+        let paths = vec![
+            "/etc/krb5.conf",              // Linux standard location
+            "/opt/homebrew/etc/krb5.conf", // macOS Homebrew location
+            "/usr/local/etc/krb5.conf",    // Alternative location
+        ];
+
+        for path in paths {
+            if std::path::Path::new(path).exists() {
+                return Some(path.to_string());
+            }
+        }
+
+        None
+    }
+
     /// Get or acquire a ticket for a server
     /// Returns Ok(()) when the credential cache is ready to use
     #[cfg(feature = "gssapi")]
@@ -63,17 +86,21 @@ impl TicketManager {
         std::env::set_var("KRB5CCNAME", &cache_path);
 
         // Use kinit to get a ticket from the keytab into the unique cache
-        let output = tokio::process::Command::new("kinit")
+        let mut command = tokio::process::Command::new("kinit");
+        command
             .arg("-kt")
             .arg(&keytab_path)
             .arg(&principal)
-            .env("KRB5CCNAME", &cache_path)
-            .env("KRB5_CONFIG", "/opt/homebrew/etc/krb5.conf")
-            .output()
-            .await
-            .map_err(|e| {
-                super::error::GssapiError::LibGssapi(format!("failed to run kinit: {}", e))
-            })?;
+            .env("KRB5CCNAME", &cache_path);
+
+        // Set KRB5_CONFIG if we can find it
+        if let Some(krb5_config) = Self::get_krb5_config() {
+            command.env("KRB5_CONFIG", krb5_config);
+        }
+
+        let output = command.output().await.map_err(|e| {
+            super::error::GssapiError::LibGssapi(format!("failed to run kinit: {}", e))
+        })?;
 
         if !output.status.success() {
             return Err(super::error::GssapiError::CredentialAcquisitionFailed(

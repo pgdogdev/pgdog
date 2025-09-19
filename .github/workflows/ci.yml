@@ -58,13 +58,15 @@ jobs:
       - name: Install Kerberos dependencies
         run: |
           sudo apt update
-          sudo DEBIAN_FRONTEND=noninteractive apt install -y libkrb5-dev krb5-user krb5-config libgssapi-krb5-2
+          sudo DEBIAN_FRONTEND=noninteractive apt install -y libkrb5-dev krb5-user krb5-config libgssapi-krb5-2 krb5-kdc krb5-admin-server
+      - name: Setup Kerberos and create test keytabs
+        run: |
+          # The unified script handles everything: KDC setup, service start, keytab creation
+          chmod +x integration/gssapi/setup_test_keytabs.sh
+          CI=true sudo -E bash integration/gssapi/setup_test_keytabs.sh
 
-          # Setup KDC for testing (skip in act - systemctl doesn't work in containers)
-          if [ -f "integration/gssapi/setup_ci_kdc.sh" ] && [ ! -f /.dockerenv ]; then
-            chmod +x integration/gssapi/setup_ci_kdc.sh
-            sudo bash integration/gssapi/setup_ci_kdc.sh || echo "KDC setup failed, will use mock keytabs"
-          fi
+          # Make keytabs readable by the test user
+          sudo chown -R $USER:$USER integration/gssapi/keytabs/
       - name: Setup PostgreSQL
         run: |
           sudo service postgresql start

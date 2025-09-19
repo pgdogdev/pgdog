@@ -1,58 +1,63 @@
 #!/bin/bash
 
-# Setup script for GSSAPI test keytabs
-# This creates real Kerberos keytabs for testing
+# Unified GSSAPI setup script - fully automated, headless, unattended
+# Works on both Linux and macOS without manual intervention
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 KEYTAB_DIR="${SCRIPT_DIR}/keytabs"
-
-# Test password for all principals
 TEST_PASSWORD="password"
-
-# Check if we're in CI environment
-if [ -z "$CI" ]; then
-    # GitHub Actions sets CI=true, but check for other indicators too
-    if [ -n "$GITHUB_ACTIONS" ] || [ -n "$JENKINS_HOME" ] || [ -n "$GITLAB_CI" ]; then
-        export CI=true
-    else
-        export CI=false
-    fi
-fi
-
-# Detect OS
 OS=$(uname -s)
+REALM="PGDOG.LOCAL"
+DOMAIN="pgdog.local"
+KDC_PASSWORD="admin123"
+SUCCESS_COUNT=0
+WARNING_COUNT=0
 
-echo "Setting up GSSAPI test keytabs in ${KEYTAB_DIR}"
+# Silent mode by default, verbose with DEBUG
+[ -n "$DEBUG" ] && set -x
 
-# Create keytab directory
-mkdir -p "${KEYTAB_DIR}"
-
-# Create mock keytabs for testing when KDC is not available
-create_mock_keytabs() {
-    echo "Creating mock keytabs for testing..."
-    for keytab in test pgdog-test server1 server2 principal1 principal2 backend keytab1 keytab2; do
-        keytab_file="${KEYTAB_DIR}/${keytab}.keytab"
-        echo "  Creating mock keytab: $keytab_file"
-        # Create a minimal valid keytab file structure
-        # Keytab format version (0x0502)
-        printf '\x05\x02' > "$keytab_file"
-        chmod 600 "$keytab_file"
-    done
-    echo "Mock keytabs created for CI testing"
+log() {
+    [ -n "$VERBOSE" ] && echo "$@" || true
 }
 
-# Find kadmin.local
-find_kadmin_local() {
-    if [ -x "/opt/homebrew/opt/krb5/sbin/kadmin.local" ]; then
-        echo "/opt/homebrew/opt/krb5/sbin/kadmin.local"
-    elif [ -x "/usr/sbin/kadmin.local" ]; then
-        echo "/usr/sbin/kadmin.local"
-    elif command -v kadmin.local &> /dev/null; then
-        command -v kadmin.local
-    else
-        echo ""
+error() {
+    echo "ERROR: $@" >&2
+}
+
+# Find tools based on OS
+find_tool() {
+    local tool=$1
+    if [ "$OS" = "Darwin" ]; then
+        # macOS paths
+        for path in "/opt/homebrew/opt/krb5/sbin/$tool" "/opt/homebrew/opt/krb5/bin/$tool" "/usr/local/opt/krb5/sbin/$tool" "/usr/local/opt/krb5/bin/$tool"; do
+            [ -x "$path" ] && echo "$path" && return 0
+        done
+    fi
+    # Standard paths
+    for path in "/usr/sbin/$tool" "/usr/bin/$tool" "/sbin/$tool" "/bin/$tool"; do
+        [ -x "$path" ] && echo "$path" && return 0
+    done
+    command -v "$tool" 2>/dev/null || echo ""
+}
+
+# Auto-install dependencies if missing
+ensure_dependencies() {
+    if [ "$OS" = "Darwin" ]; then
+        if ! command -v kinit &>/dev/null && ! [ -x "/opt/homebrew/opt/krb5/bin/kinit" ]; then
+            log "Installing Kerberos via Homebrew..."
+            brew install krb5 2>/dev/null || true
+        fi
+    elif [ "$OS" = "Linux" ]; then
+        if ! command -v kinit &>/dev/null; then
+            log "Installing Kerberos packages..."
+            if [ "$CI" = "true" ] || [ "$EUID" = "0" ]; then
+                export DEBIAN_FRONTEND=noninteractive
+                apt-get update &>/dev/null || true
+                apt-get install -y krb5-kdc krb5-admin-server krb5-user libkrb5-dev 2>/dev/null || true
+            fi
+        fi
     fi
 }
 
@@ -60,261 +65,392 @@ find_kadmin_local() {
 setup_kerberos_env() {
     if [ "$OS" = "Darwin" ]; then
         # macOS with Homebrew
-        if [ -f "/opt/homebrew/etc/krb5.conf" ]; then
-            export KRB5_CONFIG=/opt/homebrew/etc/krb5.conf
-            export KRB5_KDC_PROFILE=/opt/homebrew/etc/krb5kdc/kdc.conf
-            echo "Using Homebrew Kerberos configuration"
-            return 0
-        fi
-    elif [ "$OS" = "Linux" ]; then
-        # Linux - standard locations
-        if [ -f "/etc/krb5.conf" ]; then
-            export KRB5_CONFIG=/etc/krb5.conf
-            export KRB5_KDC_PROFILE=/etc/krb5kdc/kdc.conf
-            echo "Using system Kerberos configuration"
+        for dir in "/opt/homebrew/etc" "/usr/local/etc"; do
+            if [ -f "$dir/krb5.conf" ]; then
+                export KRB5_CONFIG="$dir/krb5.conf"
+                export KRB5_KDC_PROFILE="$dir/krb5kdc/kdc.conf"
+                return 0
+            fi
+        done
+        # Create default location if missing
+        export KRB5_CONFIG="/opt/homebrew/etc/krb5.conf"
+        export KRB5_KDC_PROFILE="/opt/homebrew/etc/krb5kdc/kdc.conf"
+    else
+        # Linux standard locations
+        export KRB5_CONFIG="/etc/krb5.conf"
+        export KRB5_KDC_PROFILE="/etc/krb5kdc/kdc.conf"
+    fi
+}
+
+# Create krb5.conf if missing
+create_krb5_conf() {
+    local config_file="$1"
+    local config_dir=$(dirname "$config_file")
+
+    [ -f "$config_file" ] && return 0
+
+    log "Creating Kerberos configuration at $config_file..."
+
+    # Create directory if needed
+    if [ "$EUID" = "0" ] || [ "$CI" = "true" ]; then
+        mkdir -p "$config_dir" 2>/dev/null || sudo mkdir -p "$config_dir"
+    else
+        sudo mkdir -p "$config_dir" 2>/dev/null || mkdir -p "$config_dir"
+    fi
+
+    # Write config
+    local config_content="[libdefaults]
+    default_realm = $REALM
+    dns_lookup_realm = false
+    dns_lookup_kdc = false
+    ticket_lifetime = 24h
+    renew_lifetime = 7d
+    forwardable = true
+
+[realms]
+    $REALM = {
+        kdc = localhost:88
+        admin_server = localhost:749
+        default_domain = $DOMAIN
+    }
+
+[domain_realm]
+    .$DOMAIN = $REALM
+    $DOMAIN = $REALM
+    localhost = $REALM
+
+[logging]
+    kdc = FILE:/var/log/krb5kdc.log
+    admin_server = FILE:/var/log/kadmin.log
+    default = FILE:/var/log/krb5lib.log"
+
+    if [ "$EUID" = "0" ] || [ "$CI" = "true" ]; then
+        echo "$config_content" > "$config_file" 2>/dev/null || echo "$config_content" | sudo tee "$config_file" > /dev/null
+    else
+        echo "$config_content" | sudo tee "$config_file" > /dev/null 2>/dev/null || echo "$config_content" > "$config_file"
+    fi
+}
+
+# Create kdc.conf if missing
+create_kdc_conf() {
+    local kdc_conf="$1"
+    local kdc_dir=$(dirname "$kdc_conf")
+
+    [ -f "$kdc_conf" ] && return 0
+
+    log "Creating KDC configuration at $kdc_conf..."
+
+    # Create directory
+    if [ "$EUID" = "0" ] || [ "$CI" = "true" ]; then
+        mkdir -p "$kdc_dir" 2>/dev/null || sudo mkdir -p "$kdc_dir"
+    else
+        sudo mkdir -p "$kdc_dir" 2>/dev/null || mkdir -p "$kdc_dir"
+    fi
+
+    # Write config
+    local kdc_content="[kdcdefaults]
+    kdc_ports = 88
+    kdc_tcp_ports = 88
+
+[realms]
+    $REALM = {
+        acl_file = $kdc_dir/kadm5.acl
+        database_name = /var/lib/krb5kdc/principal
+        key_stash_file = $kdc_dir/.k5.$REALM
+        max_renewable_life = 7d 0h 0m 0s
+        max_life = 1d 0h 0m 0s
+        master_key_type = aes256-cts-hmac-sha1-96
+        supported_enctypes = aes256-cts-hmac-sha1-96:normal aes128-cts-hmac-sha1-96:normal
+        default_principal_flags = +renewable, +forwardable
+    }
+
+[logging]
+    kdc = FILE:/var/log/krb5kdc.log
+    admin_server = FILE:/var/log/kadmin.log"
+
+    if [ "$EUID" = "0" ] || [ "$CI" = "true" ]; then
+        echo "$kdc_content" > "$kdc_conf" 2>/dev/null || echo "$kdc_content" | sudo tee "$kdc_conf" > /dev/null
+    else
+        echo "$kdc_content" | sudo tee "$kdc_conf" > /dev/null 2>/dev/null || echo "$kdc_content" > "$kdc_conf"
+    fi
+
+    # Create ACL file
+    local acl_file="$kdc_dir/kadm5.acl"
+    local acl_content="*/admin@$REALM *"
+
+    if [ "$EUID" = "0" ] || [ "$CI" = "true" ]; then
+        echo "$acl_content" > "$acl_file" 2>/dev/null || echo "$acl_content" | sudo tee "$acl_file" > /dev/null
+    else
+        echo "$acl_content" | sudo tee "$acl_file" > /dev/null 2>/dev/null || echo "$acl_content" > "$acl_file"
+    fi
+}
+
+# Initialize KDC database if needed
+initialize_kdc() {
+    local kdb5_util=$(find_tool "kdb5_util")
+    [ -z "$kdb5_util" ] && return 1
+
+    log "Initializing KDC database..."
+
+    # Check if database exists
+    local kadmin_local=$(find_tool "kadmin.local")
+    if [ -n "$kadmin_local" ]; then
+        if $kadmin_local -q "listprincs" 2>/dev/null | grep -q "krbtgt/$REALM@$REALM"; then
+            log "KDC database already exists"
             return 0
         fi
     fi
 
-    # No config found
-    echo "Warning: No Kerberos configuration found"
-    return 1
+    # Create database
+    if [ "$EUID" = "0" ] || [ "$CI" = "true" ]; then
+        $kdb5_util create -s -r $REALM -P $KDC_PASSWORD 2>/dev/null || sudo $kdb5_util create -s -r $REALM -P $KDC_PASSWORD 2>/dev/null
+    else
+        sudo $kdb5_util create -s -r $REALM -P $KDC_PASSWORD 2>/dev/null || $kdb5_util create -s -r $REALM -P $KDC_PASSWORD
+    fi
+
+    # Create admin principal
+    if [ -n "$kadmin_local" ]; then
+        $kadmin_local -q "addprinc -pw $KDC_PASSWORD admin/admin" 2>/dev/null || \
+        sudo $kadmin_local -q "addprinc -pw $KDC_PASSWORD admin/admin" 2>/dev/null || true
+    fi
+
+    return 0
+}
+
+# Start KDC services
+start_kdc_services() {
+    local krb5kdc=$(find_tool "krb5kdc")
+
+    if [ "$OS" = "Darwin" ]; then
+        # macOS: try brew services first
+        if command -v brew &>/dev/null; then
+            brew services restart krb5 2>/dev/null || true
+        fi
+        # Try direct launch if brew services failed
+        if [ -n "$krb5kdc" ] && ! pgrep -f krb5kdc >/dev/null; then
+            $krb5kdc 2>/dev/null &
+            sleep 1
+        fi
+    else
+        # Linux: try systemctl first
+        if command -v systemctl &>/dev/null; then
+            sudo systemctl restart krb5-kdc 2>/dev/null || true
+            sudo systemctl restart krb5-admin-server 2>/dev/null || true
+        elif command -v service &>/dev/null; then
+            sudo service krb5-kdc restart 2>/dev/null || true
+            sudo service krb5-admin-server restart 2>/dev/null || true
+        fi
+        # Try direct launch if services failed
+        if [ -n "$krb5kdc" ] && ! pgrep -f krb5kdc >/dev/null; then
+            if [ "$EUID" = "0" ] || [ "$CI" = "true" ]; then
+                $krb5kdc 2>/dev/null &
+            else
+                sudo $krb5kdc 2>/dev/null &
+            fi
+            sleep 1
+        fi
+    fi
 }
 
 # Check if KDC is running
 check_kdc_running() {
     local kadmin_local="$1"
+    [ -z "$kadmin_local" ] && return 1
 
-    echo "Checking if KDC is accessible..."
-    if $kadmin_local -q "listprincs" &>/dev/null; then
-        echo "✓ KDC is accessible"
+    if $kadmin_local -q "listprincs" 2>/dev/null | grep -q "krbtgt"; then
         return 0
-    else
-        echo "✗ KDC is not accessible"
-        return 1
     fi
+    return 1
 }
 
-# Get the realm from krb5.conf
-get_realm() {
-    if [ -n "$KRB5_CONFIG" ] && [ -f "$KRB5_CONFIG" ]; then
-        grep "default_realm" "$KRB5_CONFIG" | awk '{print $3}' | head -1
-    else
-        echo "PGDOG.LOCAL"  # Default fallback
-    fi
-}
-
-# Create a test principal
+# Create a principal with recovery
 create_principal() {
     local kadmin_local="$1"
     local principal="$2"
     local password="$3"
 
     # Check if principal exists
-    if $kadmin_local -q "getprinc $principal" 2>&1 | grep -q "does not exist"; then
-        # Principal doesn't exist, create it
-        echo "  Creating principal $principal..."
-        if $kadmin_local -q "addprinc -pw $password $principal" 2>&1 | grep -q "created"; then
-            echo "  ✓ Created principal $principal"
-        else
-            echo "  ✗ Failed to create principal $principal"
-            return 1
-        fi
-    else
-        echo "  Principal $principal already exists"
+    if ! $kadmin_local -q "getprinc $principal" 2>&1 | grep -q "does not exist"; then
+        log "  Principal $principal already exists"
+        return 0
     fi
-    return 0
+
+    # Create principal
+    log "  Creating principal $principal..."
+    if $kadmin_local -q "addprinc -pw $password $principal" 2>&1 | grep -q "created\|added"; then
+        log "  ✓ Created principal $principal"
+        return 0
+    fi
+
+    # Retry with sudo if needed
+    if sudo $kadmin_local -q "addprinc -pw $password $principal" 2>&1 | grep -q "created\|added"; then
+        log "  ✓ Created principal $principal"
+        return 0
+    fi
+
+    log "  Warning: Could not create principal $principal"
+    return 1
 }
 
-# Export principal to keytab
+# Export to keytab with recovery
 export_to_keytab() {
     local kadmin_local="$1"
     local principal="$2"
     local keytab_file="$3"
 
-    echo "  Exporting $principal to $keytab_file..."
+    log "  Exporting $principal to keytab..."
 
-    # Remove old keytab if exists
-    rm -f "$keytab_file"
+    rm -f "$keytab_file" 2>/dev/null || true
 
-    # Export to keytab (this changes the key)
-    local output=$($kadmin_local -q "ktadd -k $keytab_file $principal" 2>&1)
+    # Try export
+    local output=$($kadmin_local -q "ktadd -k $keytab_file $principal" 2>&1 || sudo $kadmin_local -q "ktadd -k $keytab_file $principal" 2>&1)
+
     if echo "$output" | grep -q "added to keytab"; then
-        echo "  ✓ Exported to keytab"
-        chmod 600 "$keytab_file"
+        chmod 600 "$keytab_file" 2>/dev/null || true
+        log "  ✓ Exported to keytab"
         return 0
-    else
-        echo "  ✗ Failed to export to keytab"
-        echo "    Error: $output"
-        return 1
     fi
+
+    log "  Warning: Could not export $principal to keytab"
+    return 1
 }
 
-# Verify keytab works
+# Verify keytab
 verify_keytab() {
     local keytab_file="$1"
     local principal="$2"
 
-    echo "  Verifying keytab for $principal..."
+    local kinit=$(find_tool "kinit")
+    local kdestroy=$(find_tool "kdestroy")
 
-    # Try to authenticate with keytab
-    if KRB5CCNAME=/tmp/krb5cc_test_$$ kinit -kt "$keytab_file" "$principal" &>/dev/null; then
-        echo "  ✓ Keytab verification successful"
-        # Clean up test ticket
-        KRB5CCNAME=/tmp/krb5cc_test_$$ kdestroy &>/dev/null || true
-        rm -f /tmp/krb5cc_test_$$
+    [ -z "$kinit" ] && return 1
+
+    log "  Verifying keytab for $principal..."
+
+    if KRB5_CONFIG="$KRB5_CONFIG" KRB5CCNAME=/tmp/krb5cc_test_$$ $kinit -kt "$keytab_file" "$principal" 2>/dev/null; then
+        log "  ✓ Keytab verification successful"
+        [ -n "$kdestroy" ] && KRB5_CONFIG="$KRB5_CONFIG" KRB5CCNAME=/tmp/krb5cc_test_$$ $kdestroy 2>/dev/null || true
+        rm -f /tmp/krb5cc_test_$$ 2>/dev/null || true
         return 0
-    else
-        echo "  ✗ Keytab verification failed"
-        return 1
     fi
+
+    log "  Warning: Keytab verification failed for $principal"
+    return 1
 }
 
-# Main setup
+# Main setup function
 main() {
-    echo "========================================="
-    echo "GSSAPI Test Keytab Setup"
-    echo "========================================="
+    log "========================================="
+    log "GSSAPI Automated Setup"
+    log "========================================="
 
-    # Setup environment
-    if ! setup_kerberos_env; then
-        echo "ERROR: Cannot find Kerberos configuration"
-        echo "For macOS: Install with 'brew install krb5'"
-        echo "For Linux: Install krb5-kdc and krb5-admin-server"
-        exit 1
-    fi
+    # Step 1: Install dependencies if missing
+    ensure_dependencies
 
-    # Find kadmin.local
-    KADMIN_LOCAL=$(find_kadmin_local)
+    # Step 2: Setup environment
+    setup_kerberos_env
+
+    # Step 3: Create configs if missing
+    create_krb5_conf "$KRB5_CONFIG"
+    create_kdc_conf "$KRB5_KDC_PROFILE"
+
+    # Step 4: Find required tools
+    KADMIN_LOCAL=$(find_tool "kadmin.local")
     if [ -z "$KADMIN_LOCAL" ]; then
-        echo "ERROR: kadmin.local not found"
-        echo "This script requires local access to the KDC"
+        error "kadmin.local not found - cannot manage Kerberos principals"
         exit 1
     fi
-    echo "Using kadmin.local: $KADMIN_LOCAL"
 
-    # Check KDC is running
-    if ! check_kdc_running "$KADMIN_LOCAL"; then
-        echo "ERROR: Cannot connect to KDC"
-        echo "Please ensure the KDC is running and accessible"
+    # Step 5: Initialize KDC if needed
+    initialize_kdc
 
-        if [ "$CI" = "true" ]; then
-            echo "In CI environment - attempting to setup minimal KDC..."
+    # Step 6: Start KDC services
+    start_kdc_services
+    sleep 2
 
-            # Try to run the CI KDC setup script if it exists
-            CI_KDC_SCRIPT="${SCRIPT_DIR}/setup_ci_kdc.sh"
-            if [ -f "$CI_KDC_SCRIPT" ]; then
-                echo "Running CI KDC setup script..."
-                # CI KDC setup requires sudo
-                if sudo bash "$CI_KDC_SCRIPT"; then
-                    echo "CI KDC setup successful, retrying..."
-                    # Re-setup environment and retry
-                    setup_kerberos_env
-                    KADMIN_LOCAL=$(find_kadmin_local)
-                    if [ -n "$KADMIN_LOCAL" ] && check_kdc_running "$KADMIN_LOCAL"; then
-                        echo "KDC is now accessible, continuing with keytab creation..."
-                        # Don't exit, continue with the main flow
-                    else
-                        echo "KDC still not accessible after setup"
-                        echo "Creating mock keytabs as fallback..."
-                        create_mock_keytabs
-                        exit 0
-                    fi
-                else
-                    echo "CI KDC setup failed"
-                    echo "Creating mock keytabs as fallback..."
-                    create_mock_keytabs
-                    exit 0
+    # Step 7: Verify KDC is running, retry if needed
+    if [ -n "$KADMIN_LOCAL" ]; then
+        if ! check_kdc_running "$KADMIN_LOCAL"; then
+            log "KDC not responding, attempting restart..."
+            start_kdc_services
+            sleep 3
+
+            if ! check_kdc_running "$KADMIN_LOCAL"; then
+                log "KDC still not responding, reinitializing..."
+                initialize_kdc
+                start_kdc_services
+                sleep 3
+
+                if ! check_kdc_running "$KADMIN_LOCAL"; then
+                    error "KDC failed to start after multiple attempts"
+                    exit 1
                 fi
-            else
-                echo "No CI KDC setup script found"
-                echo "Creating mock keytabs as fallback..."
-                create_mock_keytabs
-                exit 0
             fi
-        else
-            echo "Not in CI environment. Please ensure KDC is running locally."
-            echo "For macOS: brew services start krb5"
-            echo "For Linux: sudo systemctl start krb5-kdc"
-            exit 1
         fi
     fi
 
-    # Get realm
-    REALM=$(get_realm)
-    echo "Using Kerberos realm: $REALM"
+    # Step 8: Create keytab directory
+    mkdir -p "${KEYTAB_DIR}"
 
-    echo ""
-    echo "Creating test principals and keytabs..."
-    echo "-----------------------------------------"
-
-    # Define principals to create
-    # Using REALM for consistency with existing setup
+    # Step 9: Define principals
     declare -a principals=(
         "test@$REALM"
         "pgdog-test@$REALM"
         "server1@$REALM"
         "server2@$REALM"
+        "principal1@$REALM"
+        "principal2@$REALM"
     )
 
-    # Also create generic test principals
-    principals+=("principal1@$REALM" "principal2@$REALM")
+    # Step 10: Create principals and keytabs
+    if [ -n "$KADMIN_LOCAL" ]; then
+        for principal in "${principals[@]}"; do
+            base_name=$(echo "$principal" | cut -d'@' -f1)
+            keytab_file="${KEYTAB_DIR}/${base_name}.keytab"
 
-    # Create principals and keytabs
-    for principal in "${principals[@]}"; do
-        # Extract base name for keytab file
-        base_name=$(echo "$principal" | cut -d'@' -f1)
-        keytab_file="${KEYTAB_DIR}/${base_name}.keytab"
+            log ""
+            log "Processing $principal:"
 
-        echo ""
-        echo "Processing $principal:"
-
-        # Create principal
-        if ! create_principal "$KADMIN_LOCAL" "$principal" "$TEST_PASSWORD"; then
-            echo "WARNING: Failed to create principal $principal"
-            continue
-        fi
-
-        # Export to keytab
-        if ! export_to_keytab "$KADMIN_LOCAL" "$principal" "$keytab_file"; then
-            echo "WARNING: Failed to export $principal to keytab"
-            continue
-        fi
-
-        # Verify keytab
-        if ! verify_keytab "$keytab_file" "$principal"; then
-            echo "WARNING: Keytab verification failed for $principal"
-        fi
-    done
-
-    # Create additional keytabs that tests expect
-    echo ""
-    echo "Creating additional test keytabs..."
-
-    # backend.keytab - copy from pgdog-test
-    if [ -f "${KEYTAB_DIR}/pgdog-test.keytab" ]; then
-        cp "${KEYTAB_DIR}/pgdog-test.keytab" "${KEYTAB_DIR}/backend.keytab"
-        echo "  Created backend.keytab (copy of pgdog-test.keytab)"
+            if create_principal "$KADMIN_LOCAL" "$principal" "$TEST_PASSWORD"; then
+                if export_to_keytab "$KADMIN_LOCAL" "$principal" "$keytab_file"; then
+                    SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+                    # Verification is optional - tests will verify keytabs work
+                    verify_keytab "$keytab_file" "$principal" || true
+                else
+                    WARNING_COUNT=$((WARNING_COUNT + 1))
+                fi
+            else
+                WARNING_COUNT=$((WARNING_COUNT + 1))
+            fi
+        done
     fi
 
-    # keytab1.keytab and keytab2.keytab - copies for generic testing
+    # Step 11: Create additional keytabs
+    log ""
+    log "Creating additional test keytabs..."
+
+    if [ -f "${KEYTAB_DIR}/pgdog-test.keytab" ]; then
+        cp "${KEYTAB_DIR}/pgdog-test.keytab" "${KEYTAB_DIR}/backend.keytab"
+        log "  Created backend.keytab"
+    fi
+
     if [ -f "${KEYTAB_DIR}/principal1.keytab" ]; then
         cp "${KEYTAB_DIR}/principal1.keytab" "${KEYTAB_DIR}/keytab1.keytab"
-        echo "  Created keytab1.keytab"
+        log "  Created keytab1.keytab"
     elif [ -f "${KEYTAB_DIR}/server1.keytab" ]; then
         cp "${KEYTAB_DIR}/server1.keytab" "${KEYTAB_DIR}/keytab1.keytab"
-        echo "  Created keytab1.keytab (copy of server1.keytab)"
+        log "  Created keytab1.keytab"
     fi
 
     if [ -f "${KEYTAB_DIR}/principal2.keytab" ]; then
         cp "${KEYTAB_DIR}/principal2.keytab" "${KEYTAB_DIR}/keytab2.keytab"
-        echo "  Created keytab2.keytab"
+        log "  Created keytab2.keytab"
     elif [ -f "${KEYTAB_DIR}/server2.keytab" ]; then
         cp "${KEYTAB_DIR}/server2.keytab" "${KEYTAB_DIR}/keytab2.keytab"
-        echo "  Created keytab2.keytab (copy of server2.keytab)"
+        log "  Created keytab2.keytab"
     fi
 
-    # Create test users configuration file
+    # Step 12: Create test users configuration
     cat > "${SCRIPT_DIR}/test_users.toml" << EOF
 # Test users for GSSAPI authentication testing
 
@@ -349,22 +485,23 @@ principal = "principal2@$REALM"
 strip_realm = false
 EOF
 
-    echo ""
-    echo "========================================="
-    echo "GSSAPI test setup complete!"
-    echo "========================================="
-    echo "Keytabs created in: ${KEYTAB_DIR}"
-    echo "Test users config: ${SCRIPT_DIR}/test_users.toml"
-    echo ""
+    # Count total keytabs created
+    KEYTAB_COUNT=$(ls "${KEYTAB_DIR}/"*.keytab 2>/dev/null | wc -l)
 
-    # List created keytabs
-    echo "Created keytabs:"
-    ls -la "${KEYTAB_DIR}/"*.keytab 2>/dev/null || echo "No keytabs found"
-
-    echo ""
-    echo "Note: These keytabs use real Kerberos credentials."
-    echo "      They can be used for actual GSSAPI authentication testing."
+    # Output final status
+    if [ "$KEYTAB_COUNT" -gt 0 ]; then
+        if [ "$WARNING_COUNT" -eq 0 ]; then
+            echo "✓ GSSAPI setup successful: $KEYTAB_COUNT keytabs created in ${KEYTAB_DIR}"
+            exit 0
+        else
+            echo "⚠ GSSAPI setup completed with warnings: $KEYTAB_COUNT keytabs created, $WARNING_COUNT operations failed"
+            exit 0
+        fi
+    else
+        error "GSSAPI setup failed: No keytabs created"
+        exit 1
+    fi
 }
 
-# Run main function
+# Run main
 main "$@"
