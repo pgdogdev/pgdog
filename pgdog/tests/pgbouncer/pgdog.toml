@@ -1,8 +1,10 @@
 [general]
-prepared_statements = "disabled"
 workers = 2
 min_pool_size = 0
 
 [[databases]]
 name = "pgdog"
 host = "127.0.0.1"
+
+[admin]
+password = "admin"
