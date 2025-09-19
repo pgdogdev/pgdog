@@ -21,23 +21,6 @@ use super::Route;
 
 static CACHE: Lazy<Cache> = Lazy::new(Cache::new);
 
-/// AST cache statement info.
-#[derive(Default, Debug, Clone)]
-pub struct AstInfo {
-    /// Cache hits.
-    pub hits: usize,
-    /// Cache misses (new queries).
-    pub misses: usize,
-    /// Direct shard queries.
-    pub direct: usize,
-    /// Multi-shard queries.
-    pub multi: usize,
-    /// Shard number.
-    pub shard: Shard,
-    /// Role.
-    pub role: Option<Role>,
-}
-
 #[derive(Default, Debug, Clone, Copy)]
 pub struct Stats {
     /// Cache hits.
@@ -58,9 +41,13 @@ pub struct CachedAst {
     pub ast: Arc<ParseResult>,
     /// Statistics. Use a separate Mutex to avoid
     /// contention when updating them.
-    pub stats: Arc<Mutex<AstInfo>>,
+    pub stats: Arc<Mutex<Stats>>,
     /// Was this entry cached?
     pub cached: bool,
+    /// Shard.
+    pub shard: Shard,
+    /// Role.
+    pub role: Option<Role>,
 }
 
 impl CachedAst {
@@ -72,10 +59,10 @@ impl CachedAst {
         Ok(Self {
             cached: true,
             ast: Arc::new(ast),
-            stats: Arc::new(Mutex::new(AstInfo {
+            shard,
+            role,
+            stats: Arc::new(Mutex::new(Stats {
                 hits: 1,
-                shard,
-                role,
                 ..Default::default()
             })),
         })

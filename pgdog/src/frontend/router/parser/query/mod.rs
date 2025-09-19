@@ -157,9 +157,10 @@ impl QueryParser {
 
         // Parse hardcoded shard from a query comment.
         if context.router_needed {
-            let guard = statement.stats.lock();
-            self.shard = guard.shard.clone();
-            self.write_override = guard.role == Some(Role::Primary);
+            self.shard = statement.shard.clone();
+            if let Some(role) = statement.role {
+                self.write_override = role == Role::Primary;
+            }
         }
 
         debug!("{}", context.query()?.query());
