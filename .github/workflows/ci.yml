@@ -63,7 +63,7 @@ jobs:
         run: |
           # The unified script handles everything: KDC setup, service start, keytab creation
           chmod +x integration/gssapi/setup_test_keytabs.sh
-          CI=true sudo -E bash integration/gssapi/setup_test_keytabs.sh
+          CI=true VERBOSE=1 sudo -E bash integration/gssapi/setup_test_keytabs.sh
 
           # Make keytabs readable by the test user
           sudo chown -R $USER:$USER integration/gssapi/keytabs/
