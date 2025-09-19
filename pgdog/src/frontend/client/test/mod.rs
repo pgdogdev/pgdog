@@ -613,14 +613,14 @@ async fn test_prepared_syntax_error() {
 
     let stmts = client.prepared_statements.global.clone();
 
-    assert_eq!(stmts.lock().statements().iter().next().unwrap().1.used, 1);
+    assert_eq!(stmts.read().statements().iter().next().unwrap().1.used, 1);
 
     conn.write_all(&buffer!({ Terminate })).await.unwrap();
     let event = client.buffer(State::Idle).await.unwrap();
     assert_eq!(event, BufferEvent::DisconnectGraceful);
     drop(client);
 
-    assert_eq!(stmts.lock().statements().iter().next().unwrap().1.used, 0);
+    assert_eq!(stmts.read().statements().iter().next().unwrap().1.used, 0);
 }
 
 #[tokio::test]
@@ -649,8 +649,8 @@ async fn test_close_parse_same_name_global_cache() {
 
     // Verify the statement is registered correctly in the global cache
     let global_cache = client.prepared_statements.global.clone();
-    assert_eq!(global_cache.lock().len(), 1);
-    let binding = global_cache.lock();
+    assert_eq!(global_cache.read().len(), 1);
+    let binding = global_cache.write();
     let (_, cached_stmt) = binding.statements().iter().next().unwrap();
     assert_eq!(cached_stmt.used, 1);
 

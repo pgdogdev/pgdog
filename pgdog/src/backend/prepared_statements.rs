@@ -1,7 +1,7 @@
 use lru::LruCache;
 use std::{collections::VecDeque, sync::Arc};
 
-use parking_lot::Mutex;
+use parking_lot::RwLock;
 
 use crate::{
     frontend::{self, prepared_statements::GlobalCache},
@@ -33,7 +33,7 @@ pub enum HandleResult {
 /// currently prepared on the server connection.
 #[derive(Debug)]
 pub struct PreparedStatements {
-    global_cache: Arc<Mutex<GlobalCache>>,
+    global_cache: Arc<RwLock<GlobalCache>>,
     local_cache: LruCache<String, ()>,
     state: ProtocolState,
     // Prepared statements being prepared now on the connection.
@@ -51,7 +51,7 @@ impl MemoryUsage for PreparedStatements {
             + self.parses.memory_usage()
             + self.describes.memory_usage()
             + self.capacity.memory_usage()
-            + std::mem::size_of::<Arc<Mutex<GlobalCache>>>()
+            + std::mem::size_of::<Arc<RwLock<GlobalCache>>>()
             + self.state.memory_usage()
     }
 }
@@ -295,20 +295,20 @@ impl PreparedStatements {
     /// Get the Parse message stored in the global prepared statements
     /// cache for this statement.
     pub(crate) fn parse(&self, name: &str) -> Option<Parse> {
-        self.global_cache.lock().parse(name)
+        self.global_cache.read().parse(name)
     }
 
     /// Get the globally stored RowDescription for this prepared statement,
     /// if any.
     pub fn row_description(&self, name: &str) -> Option<RowDescription> {
-        self.global_cache.lock().row_description(name)
+        self.global_cache.read().row_description(name)
     }
 
     /// Handle a Describe message, storing the RowDescription for the
     /// statement in the global cache.
     fn add_row_description(&self, name: &str, row_description: &RowDescription) {
         self.global_cache
-            .lock()
+            .write()
             .insert_row_description(name, row_description);
     }
 

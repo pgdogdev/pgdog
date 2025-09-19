@@ -65,4 +65,7 @@ pub enum Error {
 
     #[error("two-phase transaction control statements are not allowed when two-phase is enabled")]
     NoTwoPc,
+
+    #[error("regex error")]
+    RegexError,
 }

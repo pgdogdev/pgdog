@@ -3,6 +3,7 @@ use std::collections::HashSet;
 
 use crate::{
     backend::{databases::databases, ShardingSchema},
+    config::Role,
     frontend::{
         router::{
             context::RouterContext,
@@ -133,19 +134,14 @@ impl QueryParser {
             }
         }
 
-        // Parse hardcoded shard from a query comment.
-        if context.router_needed {
-            if let Some(BufferedQuery::Query(ref query)) = context.router_context.query {
-                self.shard = super::comment::shard(query.query(), &context.sharding_schema)?;
-            }
-        }
-
         let cache = Cache::get();
 
         // Get the AST from cache or parse the statement live.
         let statement = match context.query()? {
             // Only prepared statements (or just extended) are cached.
-            BufferedQuery::Prepared(query) => cache.parse(query.query()).map_err(Error::PgQuery)?,
+            BufferedQuery::Prepared(query) => {
+                cache.parse(query.query(), &context.sharding_schema)?
+            }
             // Don't cache simple queries.
             //
             // They contain parameter values, which makes the cache
@@ -154,10 +150,18 @@ impl QueryParser {
             // Make your clients use prepared statements
             // or at least send statements with placeholders using the
             // extended protocol.
-            BufferedQuery::Query(query) => cache
-                .parse_uncached(query.query())
-                .map_err(Error::PgQuery)?,
+            BufferedQuery::Query(query) => {
+                cache.parse_uncached(query.query(), &context.sharding_schema)?
+            }
         };
+
+        // Parse hardcoded shard from a query comment.
+        if context.router_needed {
+            self.shard = statement.shard.clone();
+            if let Some(role) = statement.role {
+                self.write_override = role == Role::Primary;
+            }
+        }
 
         debug!("{}", context.query()?.query());
         trace!("{:#?}", statement.ast());
@@ -352,9 +356,11 @@ impl QueryParser {
         if context.dry_run {
             // Record statement in cache with normalized parameters.
             if !statement.cached {
-                cache
-                    .record_normalized(context.query()?.query(), command.route())
-                    .map_err(Error::PgQuery)?;
+                cache.record_normalized(
+                    context.query()?.query(),
+                    command.route(),
+                    &context.sharding_schema,
+                )?;
             }
             Ok(command.dry_run())
         } else {
