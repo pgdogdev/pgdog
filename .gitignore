@@ -46,6 +46,7 @@ perf.data.old
 /pgdog.toml
 /users.toml
 CLAUDE.local.md
+AGENTS.md
 .claude/plans/
 .claude/completed_plans/
 
