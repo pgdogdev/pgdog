@@ -10,6 +10,7 @@ from sqlalchemy.orm import mapped_column
 import pytest_asyncio
 import pytest
 from sqlalchemy.sql.expression import delete
+from globals import admin
 
 
 class Base(AsyncAttrs, DeclarativeBase):
@@ -128,6 +129,7 @@ async def test_with_errors(engines):
 async def test_reads_writes(engines):
     normal_engine, normal = engines[0]  # Not sharded
     reads = set()
+    admin().cursor().execute("SET read_write_split TO 'exclude_primary'")
 
     for i in range(50):
         email = f"test-{i}@test.com"
@@ -150,12 +152,8 @@ async def test_reads_writes(engines):
             rows = result.fetchone()
             reads.add(rows[0])
             await session.commit()
-    if len(reads) == 1:
-        assert list(reads) == ['on']
-    else:
-        assert len(reads) == 2
-        reads = sorted(list(reads))
-        assert reads == ['off', 'on']
+    assert list(reads) == ["on"]
+    admin().cursor().execute("RELOAD")
 
 
 @pytest.mark.asyncio
