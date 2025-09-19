@@ -1,8 +1,12 @@
 [general]
-prepared_statements = "disabled"
+prepared_statements = "extended"
 workers = 2
 min_pool_size = 0
+pooler_mode = "session"
 
 [[databases]]
 name = "pgdog"
 host = "127.0.0.1"
+
+[admin]
+password = "admin"
