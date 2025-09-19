@@ -52,6 +52,13 @@ fn test_address_has_gssapi() {
 
 #[test]
 fn test_gssapi_context_for_backend() {
+    // Check if keytab exists
+    let keytab = test_keytab_path("backend.keytab");
+    assert!(
+        keytab.exists(),
+        "Test keytab not found at {:?}. Please run: bash integration/gssapi/setup_test_keytabs.sh",
+        keytab
+    );
     // Test creating a GSSAPI context for backend connection
     let keytab = test_keytab_path("backend.keytab");
     let principal = "pgdog-test@PGDOG.LOCAL";
@@ -94,6 +101,13 @@ fn test_backend_gssapi_target_principal() {
 
 #[tokio::test]
 async fn test_ticket_manager_for_backend() {
+    // Check if keytabs exist
+    let keytab1 = test_keytab_path("server1.keytab");
+    let keytab2 = test_keytab_path("server2.keytab");
+    assert!(
+        keytab1.exists() && keytab2.exists(),
+        "Test keytabs not found. Please run: bash integration/gssapi/setup_test_keytabs.sh"
+    );
     // Test that TicketManager can handle backend server tickets
     let manager = TicketManager::global();
 
@@ -130,6 +144,13 @@ async fn test_ticket_manager_for_backend() {
 /// Mock test for GSSAPI negotiation flow
 #[tokio::test]
 async fn test_backend_gssapi_negotiation_mock() {
+    // Check if keytab exists
+    let keytab = test_keytab_path("backend.keytab");
+    assert!(
+        keytab.exists(),
+        "Test keytab not found at {:?}. Please run: bash integration/gssapi/setup_test_keytabs.sh",
+        keytab
+    );
     // This test demonstrates the expected flow for backend GSSAPI
     // In a real scenario, this would connect to a PostgreSQL server with GSSAPI enabled
 

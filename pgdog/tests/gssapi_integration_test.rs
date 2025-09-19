@@ -28,6 +28,13 @@ fn test_keytab_path(filename: &str) -> PathBuf {
 async fn test_ticket_cache_acquires_credential() {
     // Use test keytab from integration directory
     let keytab_path = test_keytab_path("test.keytab");
+
+    // Fail with helpful message if keytab doesn't exist
+    assert!(
+        keytab_path.exists(),
+        "Test keytab not found at {:?}. Please run: bash integration/gssapi/setup_test_keytabs.sh",
+        keytab_path
+    );
     let principal = "test@PGDOG.LOCAL";
 
     let cache = TicketCache::new(principal, keytab_path);
@@ -43,6 +50,13 @@ async fn test_ticket_cache_acquires_credential() {
 /// Test that TicketManager maintains per-server caches
 #[tokio::test]
 async fn test_ticket_manager_per_server_cache() {
+    // Check if keytabs exist
+    let keytab1 = test_keytab_path("server1.keytab");
+    let keytab2 = test_keytab_path("server2.keytab");
+    assert!(
+        keytab1.exists() && keytab2.exists(),
+        "Test keytabs not found. Please run: bash integration/gssapi/setup_test_keytabs.sh"
+    );
     // This test MUST FAIL initially because TicketManager doesn't exist yet
     let manager = TicketManager::new();
 
@@ -78,6 +92,13 @@ async fn test_ticket_manager_per_server_cache() {
 /// Test GSSAPI frontend authentication flow
 #[tokio::test]
 async fn test_gssapi_frontend_authentication() {
+    // Check if keytab exists
+    let keytab = test_keytab_path("test.keytab");
+    assert!(
+        keytab.exists(),
+        "Test keytab not found at {:?}. Please run: bash integration/gssapi/setup_test_keytabs.sh",
+        keytab
+    );
     // This test demonstrates the async API
     use pgdog::auth::gssapi::{handle_gssapi_auth, GssapiServer};
     use std::sync::Arc;
@@ -107,6 +128,13 @@ async fn test_gssapi_frontend_authentication() {
 /// Test ticket refresh mechanism
 #[tokio::test]
 async fn test_ticket_refresh() {
+    // Check if keytab exists
+    let keytab = test_keytab_path("test.keytab");
+    assert!(
+        keytab.exists(),
+        "Test keytab not found at {:?}. Please run: bash integration/gssapi/setup_test_keytabs.sh",
+        keytab
+    );
     // This test demonstrates ticket refresh
     use std::time::Duration;
 
@@ -137,6 +165,13 @@ async fn test_ticket_refresh() {
 /// Test GSSAPI context creation for backend connection
 #[test]
 fn test_backend_gssapi_context() {
+    // Check if keytab exists
+    let keytab = test_keytab_path("backend.keytab");
+    assert!(
+        keytab.exists(),
+        "Test keytab not found at {:?}. Please run: bash integration/gssapi/setup_test_keytabs.sh",
+        keytab
+    );
     // This test demonstrates GssapiContext API
     use pgdog::auth::gssapi::GssapiContext;
 
@@ -178,6 +213,13 @@ fn test_missing_keytab_error() {
 /// Test cleanup of ticket caches on shutdown
 #[test]
 fn test_ticket_manager_cleanup() {
+    // Check if keytabs exist
+    let keytab1 = test_keytab_path("keytab1.keytab");
+    let keytab2 = test_keytab_path("keytab2.keytab");
+    assert!(
+        keytab1.exists() && keytab2.exists(),
+        "Test keytabs not found. Please run: bash integration/gssapi/setup_test_keytabs.sh"
+    );
     // This test MUST FAIL initially
     let manager = TicketManager::new();
 
