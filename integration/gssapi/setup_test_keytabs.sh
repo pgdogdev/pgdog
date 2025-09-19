@@ -69,17 +69,24 @@ setup_kerberos_env() {
             if [ -f "$dir/krb5.conf" ]; then
                 export KRB5_CONFIG="$dir/krb5.conf"
                 export KRB5_KDC_PROFILE="$dir/krb5kdc/kdc.conf"
+                log "macOS: Found existing config at $dir/krb5.conf"
                 return 0
             fi
         done
         # Create default location if missing
         export KRB5_CONFIG="/opt/homebrew/etc/krb5.conf"
         export KRB5_KDC_PROFILE="/opt/homebrew/etc/krb5kdc/kdc.conf"
+        log "macOS: Using default config location $KRB5_CONFIG"
     else
         # Linux standard locations
         export KRB5_CONFIG="/etc/krb5.conf"
         export KRB5_KDC_PROFILE="/etc/krb5kdc/kdc.conf"
+        log "Linux: Using standard config location $KRB5_CONFIG"
     fi
+
+    # Export globally for all commands
+    log "Environment: KRB5_CONFIG=$KRB5_CONFIG"
+    log "Environment: KRB5_KDC_PROFILE=$KRB5_KDC_PROFILE"
 }
 
 # Create krb5.conf if missing
@@ -87,7 +94,14 @@ create_krb5_conf() {
     local config_file="$1"
     local config_dir=$(dirname "$config_file")
 
-    [ -f "$config_file" ] && return 0
+    # In CI mode, always recreate the config to avoid conflicts
+    if [ "$CI" = "true" ] && [ -f "$config_file" ]; then
+        log "CI mode: Backing up existing $config_file to ${config_file}.bak"
+        sudo mv "$config_file" "${config_file}.bak" 2>/dev/null || true
+    elif [ -f "$config_file" ] && [ "$CI" != "true" ]; then
+        log "Using existing Kerberos configuration at $config_file"
+        return 0
+    fi
 
     log "Creating Kerberos configuration at $config_file..."
 
@@ -136,7 +150,14 @@ create_kdc_conf() {
     local kdc_conf="$1"
     local kdc_dir=$(dirname "$kdc_conf")
 
-    [ -f "$kdc_conf" ] && return 0
+    # In CI mode, always recreate the config
+    if [ "$CI" = "true" ] && [ -f "$kdc_conf" ]; then
+        log "CI mode: Backing up existing $kdc_conf to ${kdc_conf}.bak"
+        sudo mv "$kdc_conf" "${kdc_conf}.bak" 2>/dev/null || true
+    elif [ -f "$kdc_conf" ] && [ "$CI" != "true" ]; then
+        log "Using existing KDC configuration at $kdc_conf"
+        return 0
+    fi
 
     log "Creating KDC configuration at $kdc_conf..."
 
@@ -195,23 +216,53 @@ initialize_kdc() {
     # Check if database exists
     local kadmin_local=$(find_tool "kadmin.local")
     if [ -n "$kadmin_local" ]; then
-        if $kadmin_local -q "listprincs" 2>/dev/null | grep -q "krbtgt/$REALM@$REALM"; then
-            log "KDC database already exists"
-            return 0
+        if [ -n "$VERBOSE" ]; then
+            local check_output=$(KRB5_CONFIG="$KRB5_CONFIG" $kadmin_local -q "listprincs" 2>&1)
+            if echo "$check_output" | grep -q "krbtgt/$REALM@$REALM"; then
+                log "KDC database already exists"
+                return 0
+            else
+                log "KDC database check output: $check_output"
+            fi
+        else
+            if KRB5_CONFIG="$KRB5_CONFIG" $kadmin_local -q "listprincs" 2>/dev/null | grep -q "krbtgt/$REALM@$REALM"; then
+                log "KDC database already exists"
+                return 0
+            fi
         fi
     fi
 
     # Create database
-    if [ "$EUID" = "0" ] || [ "$CI" = "true" ]; then
-        $kdb5_util create -s -r $REALM -P $KDC_PASSWORD 2>/dev/null || sudo $kdb5_util create -s -r $REALM -P $KDC_PASSWORD 2>/dev/null
+    log "Creating KDC database for realm $REALM..."
+    local create_cmd="KRB5_CONFIG=\"$KRB5_CONFIG\" $kdb5_util create -s -r $REALM -P $KDC_PASSWORD"
+
+    if [ -n "$VERBOSE" ]; then
+        local output
+        if [ "$EUID" = "0" ] || [ "$CI" = "true" ]; then
+            output=$(eval $create_cmd 2>&1) || output=$(sudo -E sh -c "$create_cmd" 2>&1)
+        else
+            output=$(sudo -E sh -c "$create_cmd" 2>&1) || output=$(eval $create_cmd 2>&1)
+        fi
+        log "kdb5_util output: $output"
     else
-        sudo $kdb5_util create -s -r $REALM -P $KDC_PASSWORD 2>/dev/null || $kdb5_util create -s -r $REALM -P $KDC_PASSWORD
+        if [ "$EUID" = "0" ] || [ "$CI" = "true" ]; then
+            eval $create_cmd 2>/dev/null || sudo -E sh -c "$create_cmd" 2>/dev/null
+        else
+            sudo -E sh -c "$create_cmd" 2>/dev/null || eval $create_cmd 2>/dev/null
+        fi
     fi
 
     # Create admin principal
     if [ -n "$kadmin_local" ]; then
-        $kadmin_local -q "addprinc -pw $KDC_PASSWORD admin/admin" 2>/dev/null || \
-        sudo $kadmin_local -q "addprinc -pw $KDC_PASSWORD admin/admin" 2>/dev/null || true
+        log "Creating admin principal..."
+        if [ -n "$VERBOSE" ]; then
+            local admin_output=$(KRB5_CONFIG="$KRB5_CONFIG" $kadmin_local -q "addprinc -pw $KDC_PASSWORD admin/admin" 2>&1) || \
+            admin_output=$(sudo -E sh -c "KRB5_CONFIG=\"$KRB5_CONFIG\" $kadmin_local -q 'addprinc -pw $KDC_PASSWORD admin/admin'" 2>&1)
+            log "Admin principal creation: $admin_output"
+        else
+            KRB5_CONFIG="$KRB5_CONFIG" $kadmin_local -q "addprinc -pw $KDC_PASSWORD admin/admin" 2>/dev/null || \
+            sudo -E sh -c "KRB5_CONFIG=\"$KRB5_CONFIG\" $kadmin_local -q 'addprinc -pw $KDC_PASSWORD admin/admin'" 2>/dev/null || true
+        fi
     fi
 
     return 0
@@ -220,6 +271,9 @@ initialize_kdc() {
 # Start KDC services
 start_kdc_services() {
     local krb5kdc=$(find_tool "krb5kdc")
+
+    log "Starting KDC services..."
+    log "Current KDC processes: $(pgrep -f krb5kdc 2>/dev/null | wc -l) running"
 
     if [ "$OS" = "Darwin" ]; then
         # macOS: try brew services first
@@ -250,6 +304,16 @@ start_kdc_services() {
             sleep 1
         fi
     fi
+
+    # Check if services started
+    sleep 1
+    log "KDC processes after start: $(pgrep -f krb5kdc 2>/dev/null | wc -l) running"
+
+    if command -v netstat &>/dev/null; then
+        log "KDC listening on port 88: $(netstat -ln 2>/dev/null | grep ':88 ' | wc -l) listeners"
+    elif command -v ss &>/dev/null; then
+        log "KDC listening on port 88: $(ss -ln 2>/dev/null | grep ':88 ' | wc -l) listeners"
+    fi
 }
 
 # Check if KDC is running
@@ -257,8 +321,16 @@ check_kdc_running() {
     local kadmin_local="$1"
     [ -z "$kadmin_local" ] && return 1
 
-    if $kadmin_local -q "listprincs" 2>/dev/null | grep -q "krbtgt"; then
-        return 0
+    if [ -n "$VERBOSE" ]; then
+        local check_output=$(KRB5_CONFIG="$KRB5_CONFIG" $kadmin_local -q "listprincs" 2>&1)
+        log "KDC check output: $check_output"
+        if echo "$check_output" | grep -q "krbtgt"; then
+            return 0
+        fi
+    else
+        if KRB5_CONFIG="$KRB5_CONFIG" $kadmin_local -q "listprincs" 2>/dev/null | grep -q "krbtgt"; then
+            return 0
+        fi
     fi
     return 1
 }
@@ -270,20 +342,20 @@ create_principal() {
     local password="$3"
 
     # Check if principal exists
-    if ! $kadmin_local -q "getprinc $principal" 2>&1 | grep -q "does not exist"; then
+    if ! KRB5_CONFIG="$KRB5_CONFIG" $kadmin_local -q "getprinc $principal" 2>&1 | grep -q "does not exist"; then
         log "  Principal $principal already exists"
         return 0
     fi
 
     # Create principal
     log "  Creating principal $principal..."
-    if $kadmin_local -q "addprinc -pw $password $principal" 2>&1 | grep -q "created\|added"; then
+    if KRB5_CONFIG="$KRB5_CONFIG" $kadmin_local -q "addprinc -pw $password $principal" 2>&1 | grep -q "created\|added"; then
         log "  ✓ Created principal $principal"
         return 0
     fi
 
     # Retry with sudo if needed
-    if sudo $kadmin_local -q "addprinc -pw $password $principal" 2>&1 | grep -q "created\|added"; then
+    if sudo -E sh -c "KRB5_CONFIG=\"$KRB5_CONFIG\" $kadmin_local -q 'addprinc -pw $password $principal'" 2>&1 | grep -q "created\|added"; then
         log "  ✓ Created principal $principal"
         return 0
     fi
@@ -303,7 +375,8 @@ export_to_keytab() {
     rm -f "$keytab_file" 2>/dev/null || true
 
     # Try export
-    local output=$($kadmin_local -q "ktadd -k $keytab_file $principal" 2>&1 || sudo $kadmin_local -q "ktadd -k $keytab_file $principal" 2>&1)
+    local output=$(KRB5_CONFIG="$KRB5_CONFIG" $kadmin_local -q "ktadd -k $keytab_file $principal" 2>&1 || \
+                   sudo -E sh -c "KRB5_CONFIG=\"$KRB5_CONFIG\" $kadmin_local -q 'ktadd -k $keytab_file $principal'" 2>&1)
 
     if echo "$output" | grep -q "added to keytab"; then
         chmod 600 "$keytab_file" 2>/dev/null || true
@@ -312,6 +385,9 @@ export_to_keytab() {
     fi
 
     log "  Warning: Could not export $principal to keytab"
+    if [ -n "$VERBOSE" ]; then
+        log "  Export output: $output"
+    fi
     return 1
 }
 
@@ -354,12 +430,25 @@ main() {
     create_krb5_conf "$KRB5_CONFIG"
     create_kdc_conf "$KRB5_KDC_PROFILE"
 
+    # Show config content in verbose mode for debugging
+    if [ -n "$VERBOSE" ] && [ -f "$KRB5_CONFIG" ]; then
+        log "Content of $KRB5_CONFIG:"
+        log "$(head -20 "$KRB5_CONFIG" | sed 's/^/  /')"
+    fi
+
     # Step 4: Find required tools
     KADMIN_LOCAL=$(find_tool "kadmin.local")
     if [ -z "$KADMIN_LOCAL" ]; then
         error "kadmin.local not found - cannot manage Kerberos principals"
         exit 1
     fi
+    log "Found kadmin.local at: $KADMIN_LOCAL"
+
+    KDB5_UTIL=$(find_tool "kdb5_util")
+    log "Found kdb5_util at: ${KDB5_UTIL:-not found}"
+
+    KINIT=$(find_tool "kinit")
+    log "Found kinit at: ${KINIT:-not found}"
 
     # Step 5: Initialize KDC if needed
     initialize_kdc
