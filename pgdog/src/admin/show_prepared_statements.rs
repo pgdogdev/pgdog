@@ -16,7 +16,7 @@ impl Command for ShowPreparedStatements {
     }
 
     async fn execute(&self) -> Result<Vec<Message>, Error> {
-        let statements = PreparedStatements::global().lock().clone();
+        let statements = PreparedStatements::global().read().clone();
         let mut messages = vec![RowDescription::new(&[
             Field::text("name"),
             Field::text("statement"),

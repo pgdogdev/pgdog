@@ -3,6 +3,7 @@ use pg_query::{protobuf::Token, scan};
 use regex::Regex;
 
 use crate::backend::ShardingSchema;
+use crate::config::database::Role;
 use crate::frontend::router::sharding::ContextBuilder;
 
 use super::super::parser::Shard;
@@ -12,6 +13,7 @@ static SHARD: Lazy<Regex> = Lazy::new(|| Regex::new(r#"pgdog_shard: *([0-9]+)"#)
 static SHARDING_KEY: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r#"pgdog_sharding_key: *(?:"([^"]*)"|'([^']*)'|([0-9a-zA-Z-]+))"#).unwrap()
 });
+static ROLE: Lazy<Regex> = Lazy::new(|| Regex::new(r#"pgdog_role: *(primary|replica)"#).unwrap());
 
 fn get_matched_value<'a>(caps: &'a regex::Captures<'a>) -> Option<&'a str> {
     caps.get(1)
@@ -27,34 +29,47 @@ fn get_matched_value<'a>(caps: &'a regex::Captures<'a>) -> Option<&'a str> {
 ///
 /// See [`SHARD`] and [`SHARDING_KEY`] for the style of comment we expect.
 ///
-pub fn shard(query: &str, schema: &ShardingSchema) -> Result<Shard, Error> {
+pub fn comment(query: &str, schema: &ShardingSchema) -> Result<(Shard, Option<Role>), Error> {
     let tokens = scan(query).map_err(Error::PgQuery)?;
+    let mut role = None;
 
     for token in tokens.tokens.iter() {
         if token.token == Token::CComment as i32 {
             let comment = &query[token.start as usize..token.end as usize];
+            if let Some(cap) = ROLE.captures(comment) {
+                if let Some(r) = cap.get(1) {
+                    match r.as_str() {
+                        "primary" => role = Some(Role::Primary),
+                        "replica" => role = Some(Role::Replica),
+                        _ => return Err(Error::RegexError),
+                    }
+                }
+            }
             if let Some(cap) = SHARDING_KEY.captures(comment) {
                 if let Some(sharding_key) = get_matched_value(&cap) {
                     let ctx = ContextBuilder::infer_from_from_and_config(sharding_key, schema)?
                         .shards(schema.shards)
                         .build()?;
-                    return Ok(ctx.apply()?);
+                    return Ok((ctx.apply()?, role));
                 }
             }
             if let Some(cap) = SHARD.captures(comment) {
                 if let Some(shard) = cap.get(1) {
-                    return Ok(shard
-                        .as_str()
-                        .parse::<usize>()
-                        .ok()
-                        .map(Shard::Direct)
-                        .unwrap_or(Shard::All));
+                    return Ok((
+                        shard
+                            .as_str()
+                            .parse::<usize>()
+                            .ok()
+                            .map(Shard::Direct)
+                            .unwrap_or(Shard::All),
+                        role,
+                    ));
                 }
             }
         }
     }
 
-    Ok(Shard::All)
+    Ok((Shard::All, role))
 }
 
 #[cfg(test)]
@@ -122,5 +137,76 @@ mod tests {
         let caps = SHARDING_KEY.captures(comment);
         assert!(caps.is_some());
         assert_eq!(get_matched_value(&caps.unwrap()).unwrap(), "abc-123");
+    }
+
+    #[test]
+    fn test_primary_role_detection() {
+        use crate::backend::ShardedTables;
+
+        let schema = ShardingSchema {
+            shards: 2,
+            tables: ShardedTables::new(vec![], vec![]),
+        };
+
+        let query = "SELECT * FROM users /* pgdog_role: primary */";
+        let result = comment(query, &schema).unwrap();
+        assert_eq!(result.1, Some(Role::Primary));
+    }
+
+    #[test]
+    fn test_role_and_shard_detection() {
+        use crate::backend::ShardedTables;
+
+        let schema = ShardingSchema {
+            shards: 3,
+            tables: ShardedTables::new(vec![], vec![]),
+        };
+
+        let query = "SELECT * FROM users /* pgdog_role: replica pgdog_shard: 2 */";
+        let result = comment(query, &schema).unwrap();
+        assert_eq!(result.0, Shard::Direct(2));
+        assert_eq!(result.1, Some(Role::Replica));
+    }
+
+    #[test]
+    fn test_replica_role_detection() {
+        use crate::backend::ShardedTables;
+
+        let schema = ShardingSchema {
+            shards: 2,
+            tables: ShardedTables::new(vec![], vec![]),
+        };
+
+        let query = "SELECT * FROM users /* pgdog_role: replica */";
+        let result = comment(query, &schema).unwrap();
+        assert_eq!(result.1, Some(Role::Replica));
+    }
+
+    #[test]
+    fn test_invalid_role_detection() {
+        use crate::backend::ShardedTables;
+
+        let schema = ShardingSchema {
+            shards: 2,
+            tables: ShardedTables::new(vec![], vec![]),
+        };
+
+        let query = "SELECT * FROM users /* pgdog_role: invalid */";
+        let result = comment(query, &schema).unwrap();
+        assert_eq!(result.1, None);
+    }
+
+    #[test]
+    fn test_no_role_comment() {
+        use crate::backend::ShardedTables;
+
+        let schema = ShardingSchema {
+            shards: 2,
+            tables: ShardedTables::new(vec![], vec![]),
+        };
+
+        let query = "SELECT * FROM users";
+        let result = comment(query, &schema).unwrap();
+        assert_eq!(result.1, None);
     }
 }

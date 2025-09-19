@@ -258,7 +258,7 @@ impl MultiShard {
             Context::Bind(bind) => {
                 if self.decoder.rd().fields.is_empty() && !bind.anonymous() {
                     if let Some(rd) = PreparedStatements::global()
-                        .lock()
+                        .read()
                         .row_description(bind.statement())
                     {
                         self.decoder.row_description(&rd);

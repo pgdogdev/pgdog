@@ -1065,7 +1065,7 @@ pub mod test {
         for i in 0..25 {
             let name = format!("test_prepared_{}", i);
             let parse = Parse::named(&name, format!("SELECT $1, 'test_{}'", name));
-            let (new, new_name) = PreparedStatements::global().lock().insert(&parse);
+            let (new, new_name) = PreparedStatements::global().write().insert(&parse);
             let name = new_name;
             let parse = parse.rename(&name);
             assert!(new);
@@ -1146,7 +1146,7 @@ pub mod test {
         use crate::net::bind::Parameter;
         let global = PreparedStatements::global();
         let parse = Parse::named("random_name", "SELECT $1");
-        let (new, name) = global.lock().insert(&parse);
+        let (new, name) = global.write().insert(&parse);
         assert!(new);
         let parse = parse.rename(&name);
         assert_eq!(parse.name(), "__pgdog_1");

@@ -43,7 +43,7 @@ impl Command for ShowQueryCache {
                 continue;
             }
             let mut data_row = DataRow::new();
-            let stats = { *query.1.stats.lock() };
+            let stats = { query.1.stats.lock().clone() };
             data_row
                 .add(query.0)
                 .add(stats.hits)
@@ -58,7 +58,10 @@ impl Command for ShowQueryCache {
 
 #[cfg(test)]
 mod test {
-    use crate::net::{FromBytes, ToBytes};
+    use crate::{
+        backend::ShardingSchema,
+        net::{FromBytes, ToBytes},
+    };
 
     use super::*;
 
@@ -68,7 +71,10 @@ mod test {
 
         for q in 0..5 {
             cache
-                .parse(format!("SELECT $1::bigint, {}", q).as_str())
+                .parse(
+                    format!("SELECT $1::bigint, {}", q).as_str(),
+                    &ShardingSchema::default(),
+                )
                 .unwrap();
         }
 

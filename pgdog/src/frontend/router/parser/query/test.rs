@@ -428,6 +428,10 @@ WHERE t2.account = (
 
 #[test]
 fn test_comment() {
+    let query = "/* pgdog_role: primary */ SELECT 1";
+    let route = query!(query);
+    assert!(route.is_write());
+
     let query = "/* pgdog_shard: 1234 */ SELECT 1234";
     let route = query!(query);
     assert_eq!(route.shard(), &Shard::Direct(1234));
@@ -443,7 +447,7 @@ fn test_comment() {
     );
 
     match command {
-        Command::Query(query) => assert_eq!(query.shard(), &Shard::Direct(0)), // Round-robin because it's only a parse
+        Command::Query(query) => assert_eq!(query.shard(), &Shard::Direct(1)), // Round-robin because it's only a parse
         _ => panic!("not a query"),
     }
 }

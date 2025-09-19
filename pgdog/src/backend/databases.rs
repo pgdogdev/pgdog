@@ -92,7 +92,7 @@ pub fn reload() -> Result<(), Error> {
 
     // Remove any unused prepared statements.
     PreparedStatements::global()
-        .lock()
+        .write()
         .close_unused(new_config.config.general.prepared_statements_limit);
 
     // Resize query cache

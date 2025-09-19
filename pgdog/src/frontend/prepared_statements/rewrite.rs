@@ -99,7 +99,7 @@ mod test {
         assert_eq!(describe.kind(), 'S');
 
         assert_eq!(statements.len_local(), 1);
-        assert_eq!(statements.global.lock().len(), 1);
+        assert_eq!(statements.global.read().len(), 1);
     }
 
     #[test]
@@ -116,6 +116,6 @@ mod test {
         assert_eq!(parse.query(), "SELECT * FROM users");
 
         assert_eq!(statements.len_local(), 1);
-        assert_eq!(statements.global.lock().len(), 1);
+        assert_eq!(statements.global.read().len(), 1);
     }
 }
