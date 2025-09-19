@@ -16,6 +16,49 @@ Contributions are welcome. If you see a bug, feel free to submit a PR with a fix
 5. Launch pgdog configured for integration: `bash integration/dev-server.sh`.
 6. Run the tests `cargo nextest run --test-threads=1`. If a test fails, try running it directly.
 
+## Building with GSSAPI/Kerberos Support
+
+PgDog supports GSSAPI/Kerberos authentication as an optional feature. To build and test with GSSAPI support:
+
+### macOS
+
+1. Install MIT Kerberos via Homebrew:
+   ```bash
+   brew install krb5
+   ```
+
+2. Set the required environment variables:
+   ```bash
+   export PKG_CONFIG_PATH="/opt/homebrew/opt/krb5/lib/pkgconfig"
+   export LIBGSSAPI_SYS_USE_PKG_CONFIG=1
+   ```
+
+3. Build with the GSSAPI feature:
+   ```bash
+   cargo build --features gssapi
+   ```
+
+4. Run tests with GSSAPI enabled:
+   ```bash
+   cargo nextest run --test-threads=1 --features gssapi
+   ```
+
+### Linux
+
+On most Linux distributions, the system GSSAPI libraries should work without additional configuration:
+```bash
+cargo build --features gssapi
+cargo nextest run --test-threads=1 --features gssapi
+```
+
+### Testing Notes
+
+- The test suite is designed to work with or without the GSSAPI feature enabled
+- Standard test users (`pgdog`, `pgdog-backend`) use password authentication
+- GSSAPI test users have a `-gss` suffix (e.g., `alice-gss`, `bob-gss`, `pgdog-backend-gss`)
+- GSSAPI-specific integration tests will only run when the feature is enabled
+- If you need to test actual GSSAPI authentication, you'll need to configure PostgreSQL's `pg_hba.conf` and set up a Kerberos environment (KDC, keytabs, etc.)
+
 ## Coding
 
 1. Please format your code with `cargo fmt`.

@@ -62,4 +62,21 @@ for bin in toxiproxy-server toxiproxy-cli; do
     fi
 done
 
+# Setup GSSAPI test keytabs - always run in CI or when requested
+if [ "$CI" = "true" ] || [ -n "$SETUP_GSSAPI" ] || command -v kadmin.local &> /dev/null || [ -x "/opt/homebrew/opt/krb5/sbin/kadmin.local" ]; then
+    echo "Setting up GSSAPI test environment..."
+    # Make the script executable if it exists
+    if [ -f "${SCRIPT_DIR}/gssapi/setup_test_keytabs.sh" ]; then
+        chmod +x "${SCRIPT_DIR}/gssapi/setup_test_keytabs.sh"
+        bash "${SCRIPT_DIR}/gssapi/setup_test_keytabs.sh" || echo "GSSAPI setup completed (some errors expected)"
+    else
+        echo "Warning: GSSAPI setup script not found at ${SCRIPT_DIR}/gssapi/setup_test_keytabs.sh"
+        # Create the directory structure at least
+        mkdir -p "${SCRIPT_DIR}/gssapi/keytabs"
+        echo "Created ${SCRIPT_DIR}/gssapi/keytabs directory"
+    fi
+else
+    echo "Skipping GSSAPI setup (not in CI and Kerberos tools not found)"
+fi
+
 popd

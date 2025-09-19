@@ -1,0 +1,21 @@
+# Test users for GSSAPI authentication testing
+
+[[user]]
+name = "test"
+principal = "test@PGDOG.LOCAL"
+strip_realm = true
+
+[[user]]
+name = "pgdog-test"
+principal = "pgdog-test@PGDOG.LOCAL"
+strip_realm = true
+
+[[user]]
+name = "principal1"
+principal = "principal1@REALM"
+strip_realm = false
+
+[[user]]
+name = "principal2"
+principal = "principal2@REALM"
+strip_realm = false

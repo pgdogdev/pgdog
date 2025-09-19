@@ -96,4 +96,10 @@ pub enum Error {
 
     #[error("not a boolean")]
     NotBoolean,
+
+    #[error("GSSAPI authentication failed")]
+    GssapiAuthFailed,
+
+    #[error("GSSAPI context initialization failed: {0}")]
+    GssapiInitFailed(String),
 }

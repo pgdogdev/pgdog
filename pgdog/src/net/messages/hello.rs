@@ -21,6 +21,8 @@ use super::{super::Parameter, FromBytes, Payload, Protocol, ToBytes};
 pub enum Startup {
     /// SSLRequest (F)
     Ssl,
+    /// GSSENCRequest (F)
+    Gssapi,
     /// StartupMessage (F)
     Startup { params: Parameters },
     /// CancelRequet (F)
@@ -38,6 +40,8 @@ impl Startup {
         match code {
             // SSLRequest (F)
             80877103 => Ok(Startup::Ssl),
+            // GSSENCRequest (F)
+            80877104 => Ok(Startup::Gssapi),
             // StartupMessage (F)
             196608 => {
                 let mut params = Parameters::default();
@@ -91,7 +95,7 @@ impl Startup {
     /// If no such parameter exists, `None` is returned.
     pub fn parameter(&self, name: &str) -> Option<&str> {
         match self {
-            Startup::Ssl | Startup::Cancel { .. } => None,
+            Startup::Ssl | Startup::Gssapi | Startup::Cancel { .. } => None,
             Startup::Startup { params } => params.get(name).and_then(|s| s.as_str()),
         }
     }
@@ -127,6 +131,15 @@ impl super::ToBytes for Startup {
 
                 buf.put_i32(8);
                 buf.put_i32(80877103);
+
+                Ok(buf.freeze())
+            }
+
+            Startup::Gssapi => {
+                let mut buf = BytesMut::new();
+
+                buf.put_i32(8);
+                buf.put_i32(80877104);
 
                 Ok(buf.freeze())
             }
@@ -173,6 +186,13 @@ pub enum SslReply {
     No,
 }
 
+/// Reply to a GSSENCRequest (F) message.
+#[derive(Debug, PartialEq)]
+pub enum GssapiReply {
+    Yes,
+    No,
+}
+
 impl ToBytes for SslReply {
     fn to_bytes(&self) -> Result<bytes::Bytes, Error> {
         Ok(match self {
@@ -210,6 +230,48 @@ impl FromBytes for SslReply {
         match answer {
             'S' => Ok(SslReply::Yes),
             'N' => Ok(SslReply::No),
+            answer => Err(Error::UnexpectedSslReply(answer)),
+        }
+    }
+}
+
+impl ToBytes for GssapiReply {
+    fn to_bytes(&self) -> Result<bytes::Bytes, Error> {
+        Ok(match self {
+            GssapiReply::Yes => Bytes::from("G"),
+            GssapiReply::No => Bytes::from("N"),
+        })
+    }
+}
+
+impl std::fmt::Display for GssapiReply {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                Self::Yes => "G",
+                Self::No => "N",
+            }
+        )
+    }
+}
+
+impl Protocol for GssapiReply {
+    fn code(&self) -> char {
+        match self {
+            GssapiReply::Yes => 'G',
+            GssapiReply::No => 'N',
+        }
+    }
+}
+
+impl FromBytes for GssapiReply {
+    fn from_bytes(mut bytes: Bytes) -> Result<Self, Error> {
+        let answer = bytes.get_u8() as char;
+        match answer {
+            'G' => Ok(GssapiReply::Yes),
+            'N' => Ok(GssapiReply::No),
             answer => Err(Error::UnexpectedSslReply(answer)),
         }
     }

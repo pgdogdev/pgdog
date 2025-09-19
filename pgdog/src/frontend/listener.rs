@@ -8,7 +8,10 @@ use crate::backend::databases::{databases, reload, shutdown};
 use crate::config::config;
 use crate::frontend::client::query_engine::two_pc::Manager;
 use crate::net::messages::BackendKeyData;
-use crate::net::messages::{hello::SslReply, Startup};
+use crate::net::messages::{
+    hello::{GssapiReply, SslReply},
+    Startup,
+};
 use crate::net::{self, tls::acceptor};
 use crate::net::{tweak, Stream};
 use crate::sighup::Sighup;
@@ -167,6 +170,12 @@ impl Listener {
                     } else {
                         stream.send_flush(&SslReply::No).await?;
                     }
+                }
+
+                Startup::Gssapi => {
+                    // For now, we don't support GSSAPI encryption, only authentication
+                    // Send 'N' to indicate we don't support GSSAPI encryption
+                    stream.send_flush(&GssapiReply::No).await?;
                 }
 
                 Startup::Startup { params } => {

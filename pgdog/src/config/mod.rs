@@ -7,6 +7,7 @@ pub mod core;
 pub mod database;
 pub mod error;
 pub mod general;
+pub mod gssapi;
 pub mod networking;
 pub mod overrides;
 pub mod pooling;
@@ -50,6 +51,9 @@ pub use sharding::{
 
 // Re-export from replication module
 pub use replication::{MirrorConfig, Mirroring, ReplicaLag, Replication};
+
+// Re-export from gssapi module
+pub use gssapi::GssapiConfig;
 
 use parking_lot::Mutex;
 use std::sync::Arc;

@@ -1,0 +1,56 @@
+# Users configuration for GSSAPI authentication
+#
+# Important: When using GSSAPI authentication:
+# - User names should match the Kerberos principals (after realm stripping if enabled)
+# - Passwords in users.toml are ignored for GSSAPI-authenticated users
+# - PGDog uses its own service credentials to connect to backend PostgreSQL servers
+# - The server_user/server_password fields control backend database authentication
+
+[[users]]
+# GSSAPI-authenticated user example
+# Client authenticates as alice@EXAMPLE.COM via Kerberos
+# If strip_realm = true in pgdog.toml, the principal becomes "alice"
+name = "alice"
+database = "production"
+# No password field needed - GSSAPI handles client authentication
+# The server_user is the PostgreSQL user that PGDog connects as
+server_user = "app_user"
+# Connection pool settings
+pool_size = 20
+min_pool_size = 2
+
+[[users]]
+# GSSAPI user connecting to shard1
+# bob@EXAMPLE.COM -> "bob" (with strip_realm = true)
+name = "bob"
+database = "shard1"
+# PGDog will use shard1's specific keytab to connect as app_user
+server_user = "app_user"
+pool_size = 15
+
+[[users]]
+# GSSAPI user connecting to shard2
+name = "charlie"
+database = "shard2"
+# PGDog will use shard2's specific keytab to connect as app_user
+server_user = "app_user"
+pool_size = 15
+
+[[users]]
+# Mixed authentication example: Password-authenticated user
+# This user connects to the analytics database which doesn't use GSSAPI
+name = "analyst"
+database = "analytics"
+# Client authenticates to PGDog with this password
+password = "analyst_password"
+# PGDog connects to PostgreSQL with these credentials
+server_user = "analytics_user"
+server_password = "analytics_password"
+pool_size = 10
+
+[[users]]
+# Admin user for PGDog administration
+# Uses password authentication regardless of GSSAPI settings
+name = "admin"
+database = "admin"
+password = "admin"

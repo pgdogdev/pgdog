@@ -7,6 +7,7 @@ use tracing::{info, warn};
 use super::database::Database;
 use super::error::Error;
 use super::general::General;
+use super::gssapi::GssapiConfig;
 use super::networking::{MultiTenant, Tcp};
 use super::pooling::{PoolerMode, Stats};
 use super::replication::{MirrorConfig, Mirroring, ReplicaLag, Replication};
@@ -162,6 +163,10 @@ pub struct Config {
     /// Mirroring configurations.
     #[serde(default)]
     pub mirroring: Vec<Mirroring>,
+
+    /// GSSAPI authentication configuration.
+    #[serde(default)]
+    pub gssapi: Option<GssapiConfig>,
 }
 
 impl Config {
@@ -462,5 +467,97 @@ exposure = 0.75
         assert!(config
             .get_mirroring_config("source_db", "non_existent")
             .is_none());
+    }
+
+    #[test]
+    fn test_gssapi_config_in_main_config() {
+        let source = r#"
+[general]
+host = "0.0.0.0"
+port = 6432
+auth_type = "gssapi"
+
+[gssapi]
+enabled = true
+server_keytab = "/etc/pgdog/pgdog.keytab"
+server_principal = "postgres/pgdog.example.com@EXAMPLE.COM"
+default_backend_keytab = "/etc/pgdog/backend.keytab"
+default_backend_principal = "pgdog@EXAMPLE.COM"
+strip_realm = true
+ticket_refresh_interval = 7200
+fallback_enabled = false
+
+[[databases]]
+name = "production"
+host = "pg1.example.com"
+port = 5432
+
+[[databases]]
+name = "shard1"
+host = "pg-shard1.example.com"
+port = 5432
+gssapi_keytab = "/etc/pgdog/shard1.keytab"
+gssapi_principal = "pgdog-shard1@EXAMPLE.COM"
+"#;
+
+        let config: Config = toml::from_str(source).unwrap();
+
+        // Verify GSSAPI config is loaded
+        assert!(config.gssapi.is_some());
+        let gssapi_config = config.gssapi.as_ref().unwrap();
+        assert!(gssapi_config.enabled);
+        assert_eq!(
+            gssapi_config.server_keytab,
+            Some(PathBuf::from("/etc/pgdog/pgdog.keytab"))
+        );
+        assert_eq!(
+            gssapi_config.server_principal,
+            Some("postgres/pgdog.example.com@EXAMPLE.COM".to_string())
+        );
+        assert_eq!(
+            gssapi_config.default_backend_keytab,
+            Some(PathBuf::from("/etc/pgdog/backend.keytab"))
+        );
+        assert_eq!(
+            gssapi_config.default_backend_principal,
+            Some("pgdog@EXAMPLE.COM".to_string())
+        );
+        assert!(gssapi_config.strip_realm);
+        assert_eq!(gssapi_config.ticket_refresh_interval, 7200);
+        assert!(!gssapi_config.fallback_enabled);
+
+        // Verify database GSSAPI configs
+        assert_eq!(config.databases[0].name, "production");
+        assert!(config.databases[0].gssapi_keytab.is_none());
+        assert!(config.databases[0].gssapi_principal.is_none());
+
+        assert_eq!(config.databases[1].name, "shard1");
+        assert_eq!(
+            config.databases[1].gssapi_keytab,
+            Some("/etc/pgdog/shard1.keytab".to_string())
+        );
+        assert_eq!(
+            config.databases[1].gssapi_principal,
+            Some("pgdog-shard1@EXAMPLE.COM".to_string())
+        );
+    }
+
+    #[test]
+    fn test_config_without_gssapi() {
+        let source = r#"
+[general]
+host = "0.0.0.0"
+port = 6432
+
+[[databases]]
+name = "production"
+host = "127.0.0.1"
+port = 5432
+"#;
+
+        let config: Config = toml::from_str(source).unwrap();
+        assert!(config.gssapi.is_none());
+        assert!(config.databases[0].gssapi_keytab.is_none());
+        assert!(config.databases[0].gssapi_principal.is_none());
     }
 }

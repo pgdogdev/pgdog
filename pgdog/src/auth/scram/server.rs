@@ -189,6 +189,12 @@ impl Server {
                                 }
                             }
                         }
+
+                        Password::GssapiResponse { .. } => {
+                            // TODO: Implement GSSAPI response handling
+                            // This will be implemented in Phase 3
+                            panic!("GSSAPI response handling not implemented");
+                        }
                     }
                 }
 

@@ -12,8 +12,9 @@ default-run = "pgdog"
 
 
 [features]
+default = []
 tui = ["ratatui"]
-# default = ["tui"]
+gssapi = ["libgssapi"]
 
 
 [dependencies]
@@ -60,6 +61,11 @@ indexmap = "2.9"
 lru = "0.16"
 hickory-resolver = "0.25.2"
 lazy_static = "1"
+dashmap = "5.5"
+
+[dependencies.libgssapi]
+version = "0.9.1"
+optional = true
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 tikv-jemallocator = "0.6"

@@ -20,8 +20,7 @@ fn replicas() -> Replicas {
             ..Default::default()
         },
     };
-    let mut two = one.clone();
-    two.address.host = "localhost".into();
+    let two = one.clone(); // Keep replicas identical - they both point to same PostgreSQL
     let replicas = Replicas::new(&[one, two], LoadBalancingStrategy::Random);
     replicas.pools().iter().for_each(|p| p.launch());
     replicas
