@@ -48,9 +48,6 @@ impl GssapiContext {
             return Err(GssapiError::KeytabNotFound(keytab.to_path_buf()));
         }
 
-        // TicketManager has already set up the credential cache with KRB5CCNAME
-        // We just need to acquire credentials from that cache
-
         // Create the desired mechanisms set
         let mut desired_mechs = OidSet::new()
             .map_err(|e| GssapiError::LibGssapi(format!("failed to create OidSet: {}", e)))?;
@@ -58,17 +55,41 @@ impl GssapiContext {
             .add(&GSS_MECH_KRB5)
             .map_err(|e| GssapiError::LibGssapi(format!("failed to add mechanism: {}", e)))?;
 
-        // Acquire credentials from the cache that TicketManager populated
-        // Pass None to use the default principal from the cache
-        let credential = Cred::acquire(
-            None, // Use the principal from the cache that TicketManager set up
+        // Try to acquire credentials from cache first, then fall back to keytab
+        let credential = match Cred::acquire(
+            None, // Try default principal from cache
             None,
             CredUsage::Initiate,
             Some(&desired_mechs),
-        )
-        .map_err(|e| {
-            GssapiError::CredentialAcquisitionFailed(format!("failed for {}: {}", principal, e))
-        })?;
+        ) {
+            Ok(cred) => cred,
+            Err(cache_err) => {
+                // Cache failed, try acquiring from keytab
+                // Set the keytab path for client use
+                std::env::set_var("KRB5_CLIENT_KTNAME", keytab.to_string_lossy().as_ref());
+
+                // Parse the principal name
+                let principal_name = Name::new(principal.as_bytes(), Some(&GSS_NT_KRB5_PRINCIPAL))
+                    .map_err(|e| GssapiError::InvalidPrincipal(format!("{}: {}", principal, e)))?;
+
+                // Acquire credentials using the keytab
+                Cred::acquire(
+                    Some(&principal_name),
+                    None,
+                    CredUsage::Initiate,
+                    Some(&desired_mechs),
+                )
+                .map_err(|e| {
+                    GssapiError::CredentialAcquisitionFailed(format!(
+                        "failed for {} using keytab {}: {} (cache error: {})",
+                        principal,
+                        keytab.display(),
+                        e,
+                        cache_err
+                    ))
+                })?
+            }
+        };
 
         // Parse target service principal (use KRB5_PRINCIPAL to avoid hostname canonicalization)
         let target_name = Name::new(target_principal.as_bytes(), Some(&GSS_NT_KRB5_PRINCIPAL))
