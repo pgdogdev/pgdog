@@ -90,7 +90,7 @@ impl PreparedStatements {
 
     /// Insert statement into the cache bypassing duplicate checks.
     pub fn insert_anyway(&mut self, parse: &mut Parse) {
-        let name = self.global.write().insert_anyway(parse);
+        let name = { self.global.write().insert_anyway(parse) };
         self.local.insert(parse.name().to_owned(), name.clone());
         self.memory_used = self.memory_usage();
         parse.rename_fast(&name)
@@ -114,7 +114,9 @@ impl PreparedStatements {
     /// Remove prepared statement from local cache.
     pub fn close(&mut self, name: &str) {
         if let Some(global_name) = self.local.remove(name) {
-            self.global.write().close(&global_name, self.capacity);
+            {
+                self.global.write().close(&global_name, self.capacity);
+            }
             self.memory_used = self.memory_usage();
         }
     }
