@@ -55,22 +55,32 @@ impl GssapiContext {
             .add(&GSS_MECH_KRB5)
             .map_err(|e| GssapiError::LibGssapi(format!("failed to add mechanism: {}", e)))?;
 
-        // Try to acquire credentials from cache first, then fall back to keytab
+        // Parse the principal name first so we can try to acquire for the specific principal
+        let principal_name = Name::new(principal.as_bytes(), Some(&GSS_NT_KRB5_PRINCIPAL))
+            .map_err(|e| GssapiError::InvalidPrincipal(format!("{}: {}", principal, e)))?;
+
+        // Try to acquire credentials for the specific principal
+        // This helps avoid "Principal in credential cache does not match desired name" errors
         let credential = match Cred::acquire(
-            None, // Try default principal from cache
+            Some(&principal_name), // Try specific principal first
             None,
             CredUsage::Initiate,
             Some(&desired_mechs),
         ) {
             Ok(cred) => cred,
             Err(cache_err) => {
-                // Cache failed, try acquiring from keytab
+                // If cache acquisition fails (including principal mismatch),
+                // try acquiring from keytab with a fresh cache
                 // Set the keytab path for client use
                 std::env::set_var("KRB5_CLIENT_KTNAME", keytab.to_string_lossy().as_ref());
 
-                // Parse the principal name
-                let principal_name = Name::new(principal.as_bytes(), Some(&GSS_NT_KRB5_PRINCIPAL))
-                    .map_err(|e| GssapiError::InvalidPrincipal(format!("{}: {}", principal, e)))?;
+                // Set a unique cache to avoid conflicts
+                let cache_file = format!(
+                    "/tmp/krb5cc_pgdog_context_{}_{}",
+                    principal.replace(['@', '.', '/'], "_"),
+                    std::process::id()
+                );
+                std::env::set_var("KRB5CCNAME", format!("FILE:{}", cache_file));
 
                 // Acquire credentials using the keytab
                 Cred::acquire(
@@ -81,7 +91,7 @@ impl GssapiContext {
                 )
                 .map_err(|e| {
                     GssapiError::CredentialAcquisitionFailed(format!(
-                        "failed for {} using keytab {}: {} (cache error: {})",
+                        "failed for {} using keytab {}: {} (initial error: {})",
                         principal,
                         keytab.display(),
                         e,

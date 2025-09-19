@@ -152,7 +152,7 @@ impl TicketManager {
                 interval.tick().await;
 
                 if cache.needs_refresh() {
-                    match cache.refresh() {
+                    match cache.refresh().await {
                         Ok(()) => {
                             tracing::info!("[gssapi] refreshed ticket for \"{}\"", server_clone);
                         }

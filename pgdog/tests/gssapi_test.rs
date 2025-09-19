@@ -97,12 +97,12 @@ async fn test_ticket_cache_acquires_credential() {
 
     let principal = "test@PGDOG.LOCAL";
     let cache = TicketCache::new(principal, keytab_path);
-    let ticket = cache.acquire_ticket();
+    let ticket = cache.acquire_ticket().await;
 
     assert!(
         ticket.is_ok(),
         "Failed to acquire ticket: {:?}",
-        ticket.err()
+        ticket.as_ref().err()
     );
 }
 
@@ -159,10 +159,10 @@ async fn test_frontend_authentication() {
     assert!(result.is_err(), "Should fail with invalid token");
 }
 
-#[test]
-fn test_missing_keytab_error() {
+#[tokio::test]
+async fn test_missing_keytab_error() {
     let cache = TicketCache::new("test@PGDOG.LOCAL", PathBuf::from("/nonexistent/keytab"));
-    let ticket = cache.acquire_ticket();
+    let ticket = cache.acquire_ticket().await;
 
     assert!(ticket.is_err());
     let err = ticket.unwrap_err();

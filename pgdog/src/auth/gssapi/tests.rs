@@ -95,14 +95,14 @@ mod tests {
     }
 
     #[cfg(not(feature = "gssapi"))]
-    #[test]
-    fn test_mock_ticket_cache() {
+    #[tokio::test]
+    async fn test_mock_ticket_cache() {
         let cache = TicketCache::new("test@REALM", PathBuf::from("/etc/test.keytab"));
         assert_eq!(cache.principal(), "test@REALM");
         assert_eq!(cache.keytab_path(), &PathBuf::from("/etc/test.keytab"));
         assert!(!cache.needs_refresh());
 
-        let result = cache.acquire_ticket();
+        let result = cache.acquire_ticket().await;
         assert!(result.is_err());
     }
 
