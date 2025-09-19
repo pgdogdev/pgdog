@@ -9,6 +9,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::task::JoinHandle;
 
+#[cfg(feature = "gssapi")]
+use super::credential_provider::PrincipalLocks;
+
 lazy_static! {
     /// Global ticket manager instance
     static ref INSTANCE: Arc<TicketManager> = Arc::new(TicketManager::new());
@@ -20,6 +23,9 @@ pub struct TicketManager {
     caches: Arc<DashMap<String, Arc<TicketCache>>>,
     /// Background refresh tasks
     refresh_tasks: Arc<DashMap<String, JoinHandle<()>>>,
+    #[cfg(feature = "gssapi")]
+    // Per-principal acquisition locks
+    principal_locks: PrincipalLocks,
 }
 
 impl TicketManager {
@@ -28,6 +34,8 @@ impl TicketManager {
         Self {
             caches: Arc::new(DashMap::new()),
             refresh_tasks: Arc::new(DashMap::new()),
+            #[cfg(feature = "gssapi")]
+            principal_locks: PrincipalLocks::new(),
         }
     }
 
@@ -37,6 +45,7 @@ impl TicketManager {
     }
 
     /// Get the appropriate krb5.conf path for the current system
+    #[cfg(feature = "gssapi")]
     fn get_krb5_config() -> Option<String> {
         // First check if KRB5_CONFIG environment variable is set
         if let Ok(config) = std::env::var("KRB5_CONFIG") {
@@ -72,57 +81,35 @@ impl TicketManager {
         let keytab_path = keytab.as_ref().to_path_buf();
         let principal = principal.into();
 
-        // Check if we already have a cache for this server
         if self.caches.contains_key(&server) {
-            // Cache already exists and environment is set
             return Ok(());
         }
 
-        // Create a unique credential cache file for this server connection
-        let cache_file = format!("/tmp/krb5cc_pgdog_{}", server.replace(":", "_"));
-        let cache_path = format!("FILE:{}", cache_file);
+        let caches = Arc::clone(&self.caches);
+        let manager = self;
+        let server_clone = server.clone();
+        let principal_clone = principal.clone();
+        let krb5_config = Self::get_krb5_config();
 
-        // Set the environment variable for this thread
-        std::env::set_var("KRB5CCNAME", &cache_path);
+        self.principal_locks
+            .with_principal(&principal, || async move {
+                if caches.contains_key(&server_clone) {
+                    return Ok(());
+                }
 
-        // Use kinit to get a ticket from the keytab into the unique cache
-        let mut command = tokio::process::Command::new("kinit");
-        command
-            .arg("-kt")
-            .arg(&keytab_path)
-            .arg(&principal)
-            .env("KRB5CCNAME", &cache_path);
+                let cache = Arc::new(TicketCache::new(
+                    principal_clone.clone(),
+                    keytab_path.clone(),
+                    krb5_config.clone(),
+                ));
 
-        // Set KRB5_CONFIG if we can find it
-        if let Some(krb5_config) = Self::get_krb5_config() {
-            command.env("KRB5_CONFIG", krb5_config);
-        }
+                cache.get_credential().await.map(|_| ())?;
 
-        let output = command.output().await.map_err(|e| {
-            super::error::GssapiError::LibGssapi(format!("failed to run kinit: {}", e))
-        })?;
-
-        if !output.status.success() {
-            return Err(super::error::GssapiError::CredentialAcquisitionFailed(
-                format!(
-                    "kinit failed for {}: {}",
-                    principal,
-                    String::from_utf8_lossy(&output.stderr)
-                ),
-            ));
-        }
-
-        // Create a new cache object for tracking (but don't acquire credentials - kinit already did that)
-        let cache = Arc::new(TicketCache::new(principal, keytab_path));
-
-        // Store the cache
-        self.caches.insert(server.clone(), cache.clone());
-
-        // Start background refresh task
-        self.start_refresh_task(server, cache);
-
-        // Return success - the credential cache is now populated and KRB5CCNAME is set
-        Ok(())
+                caches.insert(server_clone.clone(), cache.clone());
+                manager.start_refresh_task(server_clone, cache);
+                Ok(())
+            })
+            .await
     }
 
     /// Get or acquire a ticket for a server (mock version)
@@ -141,7 +128,6 @@ impl TicketManager {
     /// Start a background refresh task for a cache
     #[allow(dead_code)]
     fn start_refresh_task(&self, server: String, cache: Arc<TicketCache>) {
-        let _refresh_tasks = self.refresh_tasks.clone();
         let server_clone = server.clone();
 
         let task = tokio::spawn(async move {
@@ -259,6 +245,49 @@ mod tests {
 
         // Even though ticket acquisition failed, the cache should not be stored
         assert_eq!(manager.cache_count(), 0);
+    }
+
+    #[cfg(feature = "gssapi")]
+    #[tokio::test]
+    async fn test_get_ticket_restores_env_on_error() {
+        struct EnvGuard {
+            key: &'static str,
+            original: Option<String>,
+        }
+
+        impl EnvGuard {
+            fn new(key: &'static str, replacement: &str) -> Self {
+                let original = std::env::var(key).ok();
+                std::env::set_var(key, replacement);
+                Self { key, original }
+            }
+        }
+
+        impl Drop for EnvGuard {
+            fn drop(&mut self) {
+                match self.original.as_ref() {
+                    Some(value) => std::env::set_var(self.key, value),
+                    None => std::env::remove_var(self.key),
+                }
+            }
+        }
+
+        let guard = EnvGuard::new("KRB5CCNAME", "FILE:pgdog-test-original");
+
+        let manager = TicketManager::new();
+        let result = manager
+            .get_ticket(
+                "testhost:5432",
+                "/definitely/missing.keytab",
+                "missing@REALM",
+            )
+            .await;
+        assert!(result.is_err());
+
+        let current = std::env::var("KRB5CCNAME").expect("env var should exist");
+        assert_eq!(current, "FILE:pgdog-test-original");
+
+        drop(guard);
     }
 
     #[test]

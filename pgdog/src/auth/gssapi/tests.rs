@@ -97,7 +97,7 @@ mod tests {
     #[cfg(not(feature = "gssapi"))]
     #[tokio::test]
     async fn test_mock_ticket_cache() {
-        let cache = TicketCache::new("test@REALM", PathBuf::from("/etc/test.keytab"));
+        let cache = TicketCache::new("test@REALM", PathBuf::from("/etc/test.keytab"), None);
         assert_eq!(cache.principal(), "test@REALM");
         assert_eq!(cache.keytab_path(), &PathBuf::from("/etc/test.keytab"));
         assert!(!cache.needs_refresh());

@@ -40,46 +40,49 @@ pub struct GssapiServer {
 impl GssapiServer {
     /// Create a new acceptor context.
     pub fn new_acceptor(keytab: impl AsRef<Path>, principal: Option<&str>) -> Result<Self> {
-        let keytab = keytab.as_ref();
+        let keytab = keytab.as_ref().to_path_buf();
 
-        // Set the keytab for the server
-        std::env::set_var("KRB5_KTNAME", keytab);
+        let credential = super::with_acceptor_lock(|| {
+            let guard = super::ScopedEnv::set([(
+                "KRB5_KTNAME",
+                Some(keytab.to_string_lossy().into_owned()),
+            )]);
 
-        // Create credentials for accepting
-        let credential = if let Some(principal) = principal {
-            // Parse the service principal (use KRB5_PRINCIPAL to avoid canonicalization)
-            let service_name = Name::new(principal.as_bytes(), Some(&GSS_NT_KRB5_PRINCIPAL))
-                .map_err(|e| GssapiError::InvalidPrincipal(format!("{}: {}", principal, e)))?;
+            let result = if let Some(principal) = principal {
+                let service_name = Name::new(principal.as_bytes(), Some(&GSS_NT_KRB5_PRINCIPAL))
+                    .map_err(|e| GssapiError::InvalidPrincipal(format!("{}: {}", principal, e)))?;
 
-            // Create the desired mechanisms set
-            let mut desired_mechs = OidSet::new()
-                .map_err(|e| GssapiError::LibGssapi(format!("failed to create OidSet: {}", e)))?;
-            desired_mechs
-                .add(&GSS_MECH_KRB5)
-                .map_err(|e| GssapiError::LibGssapi(format!("failed to add mechanism: {}", e)))?;
+                let mut desired_mechs = OidSet::new().map_err(|e| {
+                    GssapiError::LibGssapi(format!("failed to create OidSet: {}", e))
+                })?;
+                desired_mechs.add(&GSS_MECH_KRB5).map_err(|e| {
+                    GssapiError::LibGssapi(format!("failed to add mechanism: {}", e))
+                })?;
 
-            // Acquire credentials for the specified principal
-            Cred::acquire(
-                Some(&service_name),
-                None,
-                CredUsage::Accept,
-                Some(&desired_mechs),
-            )
-            .map_err(|e| {
-                GssapiError::CredentialAcquisitionFailed(format!(
-                    "failed to acquire credentials for {}: {}",
-                    principal, e
-                ))
-            })?
-        } else {
-            // Use default service principal
-            Cred::acquire(None, None, CredUsage::Accept, None).map_err(|e| {
-                GssapiError::CredentialAcquisitionFailed(format!(
-                    "failed to acquire default credentials: {}",
-                    e
-                ))
-            })?
-        };
+                Cred::acquire(
+                    Some(&service_name),
+                    None,
+                    CredUsage::Accept,
+                    Some(&desired_mechs),
+                )
+                .map_err(|e| {
+                    GssapiError::CredentialAcquisitionFailed(format!(
+                        "failed to acquire credentials for {}: {}",
+                        principal, e
+                    ))
+                })
+            } else {
+                Cred::acquire(None, None, CredUsage::Accept, None).map_err(|e| {
+                    GssapiError::CredentialAcquisitionFailed(format!(
+                        "failed to acquire default credentials: {}",
+                        e
+                    ))
+                })
+            };
+
+            drop(guard);
+            result
+        })?;
 
         Ok(Self {
             inner: None,
@@ -94,10 +97,6 @@ impl GssapiServer {
         tracing::debug!(
             "GssapiServer::accept called with token of {} bytes",
             client_token.len()
-        );
-        tracing::trace!(
-            "Token first 20 bytes: {:?}",
-            &client_token[..client_token.len().min(20)]
         );
 
         if self.is_complete {
@@ -127,10 +126,6 @@ impl GssapiServer {
                 tracing::debug!(
                     "ctx.step returned response token of {} bytes - negotiation continues",
                     response.len()
-                );
-                tracing::trace!(
-                    "Response token first 20 bytes: {:?}",
-                    &response[..response.len().min(20)]
                 );
 
                 // Check if context is actually established despite returning a token
@@ -239,5 +234,22 @@ mod tests {
 
         // We expect this to fail without a real keytab or when feature is disabled
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_server_env_not_leaked_on_error() {
+        const KEY: &str = "KRB5_KTNAME";
+        let original = std::env::var(KEY).ok();
+        std::env::remove_var(KEY);
+
+        let _ = GssapiServer::new_acceptor("/missing/keytab", Some("postgres/test@REALM"));
+
+        let after = std::env::var(KEY);
+        assert!(after.is_err(), "{} should not remain set", KEY);
+
+        match original {
+            Some(value) => std::env::set_var(KEY, value),
+            None => std::env::remove_var(KEY),
+        }
     }
 }

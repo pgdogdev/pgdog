@@ -4,7 +4,9 @@
 //! frontend (client to PGDog) and backend (PGDog to PostgreSQL) connections.
 
 pub mod context;
+mod credential_provider;
 pub mod error;
+mod scoped_env;
 pub mod server;
 pub mod ticket_cache;
 pub mod ticket_manager;
@@ -13,7 +15,9 @@ pub mod ticket_manager;
 mod tests;
 
 pub use context::GssapiContext;
+pub use credential_provider::{with_acceptor_lock, PrincipalLocks};
 pub use error::{GssapiError, Result};
+pub use scoped_env::ScopedEnv;
 pub use server::GssapiServer;
 pub use ticket_cache::TicketCache;
 pub use ticket_manager::TicketManager;

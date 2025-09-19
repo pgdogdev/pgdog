@@ -71,19 +71,21 @@ impl GssapiContext {
             Err(cache_err) => {
                 // If cache acquisition fails (including principal mismatch),
                 // try acquiring from keytab with a fresh cache
-                // Set the keytab path for client use
-                std::env::set_var("KRB5_CLIENT_KTNAME", keytab.to_string_lossy().as_ref());
-
-                // Set a unique cache to avoid conflicts
-                let cache_file = format!(
-                    "/tmp/krb5cc_pgdog_context_{}_{}",
+                // Set scoped environment so we don't leak global state.
+                let cache_uri = format!(
+                    "FILE:/tmp/krb5cc_pgdog_context_{}_{}",
                     principal.replace(['@', '.', '/'], "_"),
                     std::process::id()
                 );
-                std::env::set_var("KRB5CCNAME", format!("FILE:{}", cache_file));
+                let guard = crate::auth::gssapi::ScopedEnv::set([
+                    (
+                        "KRB5_CLIENT_KTNAME",
+                        Some(keytab.to_string_lossy().into_owned()),
+                    ),
+                    ("KRB5CCNAME", Some(cache_uri)),
+                ]);
 
-                // Acquire credentials using the keytab
-                Cred::acquire(
+                let result = Cred::acquire(
                     Some(&principal_name),
                     None,
                     CredUsage::Initiate,
@@ -97,7 +99,9 @@ impl GssapiContext {
                         e,
                         cache_err
                     ))
-                })?
+                });
+                drop(guard);
+                result?
             }
         };
 

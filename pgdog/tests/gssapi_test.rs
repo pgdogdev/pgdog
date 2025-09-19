@@ -96,7 +96,7 @@ async fn test_ticket_cache_acquires_credential() {
     );
 
     let principal = "test@PGDOG.LOCAL";
-    let cache = TicketCache::new(principal, keytab_path);
+    let cache = TicketCache::new(principal, keytab_path, None);
     let ticket = cache.acquire_ticket().await;
 
     assert!(
@@ -161,7 +161,11 @@ async fn test_frontend_authentication() {
 
 #[tokio::test]
 async fn test_missing_keytab_error() {
-    let cache = TicketCache::new("test@PGDOG.LOCAL", PathBuf::from("/nonexistent/keytab"));
+    let cache = TicketCache::new(
+        "test@PGDOG.LOCAL",
+        PathBuf::from("/nonexistent/keytab"),
+        None,
+    );
     let ticket = cache.acquire_ticket().await;
 
     assert!(ticket.is_err());

@@ -55,3 +55,4 @@ pgdog-plugin/src/bindings.rs
 local/
 integration/log.txt
 integration/gssapi/keytabs/*.keytab
+pgdog/docs/*.md

@@ -4,17 +4,23 @@ use super::error::{GssapiError, Result};
 use parking_lot::RwLock;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
-use tokio::task::spawn_blocking;
-use tokio::time::timeout;
 
 #[cfg(feature = "gssapi")]
-use std::sync::Arc;
+use crate::auth::gssapi::ScopedEnv;
 
 #[cfg(feature = "gssapi")]
-use libgssapi::{
-    credential::{Cred, CredUsage},
-    name::Name,
-    oid::{OidSet, GSS_MECH_KRB5, GSS_NT_KRB5_PRINCIPAL},
+use std::fs;
+
+#[cfg(feature = "gssapi")]
+use {
+    libgssapi::{
+        credential::{Cred, CredUsage},
+        name::Name,
+        oid::{OidSet, GSS_MECH_KRB5, GSS_NT_KRB5_PRINCIPAL},
+    },
+    std::sync::Arc,
+    tokio::task::spawn_blocking,
+    uuid::Uuid,
 };
 
 /// Cache for a single server's Kerberos ticket
@@ -24,6 +30,10 @@ pub struct TicketCache {
     principal: String,
     /// Path to the keytab file
     keytab_path: PathBuf,
+    /// Credential cache backing file
+    cache_file: parking_lot::Mutex<Option<Arc<CacheFile>>>,
+    /// Optional krb5 configuration path to set while acquiring
+    krb5_config: Option<String>,
     /// The acquired credential (if any)
     credential: RwLock<Option<Arc<Cred>>>,
     /// When the ticket was last refreshed
@@ -48,10 +58,16 @@ pub struct TicketCache {
 #[cfg(feature = "gssapi")]
 impl TicketCache {
     /// Create a new ticket cache
-    pub fn new(principal: impl Into<String>, keytab_path: impl Into<PathBuf>) -> Self {
+    pub fn new(
+        principal: impl Into<String>,
+        keytab_path: impl Into<PathBuf>,
+        krb5_config: Option<String>,
+    ) -> Self {
         Self {
             principal: principal.into(),
             keytab_path: keytab_path.into(),
+            cache_file: parking_lot::Mutex::new(None),
+            krb5_config,
             credential: RwLock::new(None),
             last_refresh: RwLock::new(Instant::now()),
             refresh_interval: Duration::from_secs(14400), // 4 hours default
@@ -80,134 +96,83 @@ impl TicketCache {
             return Err(GssapiError::KeytabNotFound(self.keytab_path.clone()));
         }
 
-        // Create a unique credential cache for this principal to avoid conflicts
-        // This prevents "Principal in credential cache does not match desired name" errors
-        // when the environment has a cache with a different principal
-        let cache_file = format!(
-            "/tmp/krb5cc_pgdog_{}_{}",
-            self.principal.replace(['@', '.', '/'], "_"),
-            std::process::id()
-        );
-        let cache_path = format!("FILE:{}", cache_file);
-
-        // Clone values needed in the async task
-        let principal = self.principal.clone();
-        let keytab_path = self.keytab_path.clone();
-
-        // Use kinit to acquire the ticket with proper timeout
-        // This avoids the blocking issue with libgssapi's Cred::acquire
-        let kinit_result = timeout(Duration::from_secs(5), async {
-            let mut command = tokio::process::Command::new("kinit");
-            command
-                .arg("-kt")
-                .arg(&keytab_path)
-                .arg(&principal)
-                .env("KRB5CCNAME", &cache_path)
-                .kill_on_drop(true); // Important: kill the process if we drop the handle
-
-            // Try to find and set KRB5_CONFIG if available
-            for path in &["/opt/homebrew/etc/krb5.conf", "/etc/krb5.conf"] {
-                if tokio::fs::metadata(path).await.is_ok() {
-                    command.env("KRB5_CONFIG", path);
-                    break;
+        let cache_file = {
+            let mut guard = self.cache_file.lock();
+            if guard.is_none() {
+                match CacheFile::new(&self.principal) {
+                    Ok(file) => {
+                        guard.replace(Arc::new(file));
+                    }
+                    Err(e) => {
+                        return Err(GssapiError::CredentialAcquisitionFailed(format!(
+                            "failed to prepare credential cache for {}: {}",
+                            self.principal, e
+                        )));
+                    }
                 }
             }
-
-            command.output().await
-        })
-        .await;
-
-        let credential = match kinit_result {
-            Ok(Ok(output)) if output.status.success() => {
-                // kinit succeeded, now acquire the credential from the cache
-                // Set up the environment
-                std::env::set_var("KRB5CCNAME", &cache_path);
-                std::env::set_var("KRB5_CLIENT_KTNAME", &keytab_path);
-
-                // Use spawn_blocking but with the credential already in cache
-                // This should be fast and not block
-                timeout(
-                    Duration::from_millis(500), // Much shorter timeout since creds should be in cache
-                    spawn_blocking(move || -> std::result::Result<Cred, GssapiError> {
-                        // Parse the principal name
-                        let name = Name::new(principal.as_bytes(), Some(&GSS_NT_KRB5_PRINCIPAL))
-                            .map_err(|e| {
-                                GssapiError::InvalidPrincipal(format!("{}: {}", principal, e))
-                            })?;
-
-                        // Create the desired mechanisms set
-                        let mut desired_mechs = OidSet::new().map_err(|e| {
-                            GssapiError::LibGssapi(format!("failed to create OidSet: {}", e))
-                        })?;
-                        desired_mechs.add(&GSS_MECH_KRB5).map_err(|e| {
-                            GssapiError::LibGssapi(format!("failed to add mechanism: {}", e))
-                        })?;
-
-                        // Acquire credentials from the cache that kinit populated
-                        Cred::acquire(Some(&name), None, CredUsage::Initiate, Some(&desired_mechs))
-                            .map_err(|e| {
-                                GssapiError::CredentialAcquisitionFailed(format!(
-                                    "failed to acquire from cache for {}: {}",
-                                    principal, e
-                                ))
-                            })
-                    }),
-                )
-                .await
-            }
-            Ok(Ok(output)) => {
-                // kinit failed - return error immediately without trying libgssapi
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                return Err(GssapiError::CredentialAcquisitionFailed(format!(
-                    "kinit failed for {}: {}",
-                    self.principal, stderr
-                )));
-            }
-            Ok(Err(e)) => {
-                // Failed to run kinit
-                return Err(GssapiError::CredentialAcquisitionFailed(format!(
-                    "failed to run kinit for {}: {}",
-                    self.principal, e
-                )));
-            }
-            Err(_) => {
-                // Timeout expired
-                return Err(GssapiError::CredentialAcquisitionFailed(format!(
-                    "kinit timed out after 5 seconds for {}",
-                    self.principal
-                )));
-            }
+            guard.as_ref().unwrap().clone()
         };
 
-        match credential {
-            Ok(Ok(Ok(cred))) => {
-                // Successfully acquired credential from cache
-                let cred_arc: Arc<Cred> = Arc::new(cred);
+        let principal = self.principal.clone();
+        let keytab_path = self.keytab_path.clone();
+        let cache_uri = cache_file.uri();
 
-                // Store the credential
+        let krb5_config = self.krb5_config.clone();
+
+        let acquire = spawn_blocking(move || -> Result<Cred> {
+            let mut overrides: Vec<(&'static str, Option<String>)> = vec![
+                ("KRB5CCNAME", Some(cache_uri.clone())),
+                (
+                    "KRB5_CLIENT_KTNAME",
+                    Some(keytab_path.to_string_lossy().into_owned()),
+                ),
+            ];
+
+            if let Some(config) = &krb5_config {
+                overrides.push(("KRB5_CONFIG", Some(config.clone())));
+            }
+
+            let guard = ScopedEnv::set(overrides);
+
+            let name = Name::new(principal.as_bytes(), Some(&GSS_NT_KRB5_PRINCIPAL))
+                .map_err(|e| GssapiError::InvalidPrincipal(format!("{}: {}", principal, e)))?;
+
+            let mut desired_mechs = OidSet::new()
+                .map_err(|e| GssapiError::LibGssapi(format!("failed to create OidSet: {}", e)))?;
+
+            desired_mechs
+                .add(&GSS_MECH_KRB5)
+                .map_err(|e| GssapiError::LibGssapi(format!("failed to add mechanism: {}", e)))?;
+
+            Cred::acquire(Some(&name), None, CredUsage::Initiate, Some(&desired_mechs))
+                .map_err(|e| {
+                    GssapiError::CredentialAcquisitionFailed(format!(
+                        "credential acquisition failed for {}: {}",
+                        principal, e
+                    ))
+                })
+                .map(|cred| {
+                    drop(guard);
+                    cred
+                })
+        })
+        .await
+        .map_err(|_| {
+            GssapiError::CredentialAcquisitionFailed(format!(
+                "credential acquisition task panicked for {}",
+                self.principal
+            ))
+        })?;
+
+        match acquire {
+            Ok(cred) => {
+                let cred_arc: Arc<Cred> = Arc::new(cred);
                 *self.credential.write() = Some(cred_arc.clone());
                 *self.last_refresh.write() = Instant::now();
-
                 Ok(cred_arc)
             }
-            Ok(Ok(Err(e))) => {
-                // Failed to acquire from cache
-                Err(e)
-            }
-            Ok(Err(_)) => {
-                // spawn_blocking task panicked
-                Err(GssapiError::CredentialAcquisitionFailed(format!(
-                    "credential acquisition task panicked for {}",
-                    self.principal
-                )))
-            }
-            Err(_) => {
-                // Timeout on credential acquisition from cache
-                Err(GssapiError::CredentialAcquisitionFailed(format!(
-                    "failed to acquire credentials from cache (timed out) for {}",
-                    self.principal
-                )))
-            }
+            Err(err) => Err(err),
         }
     }
 
@@ -244,13 +209,96 @@ impl TicketCache {
     /// Clear the cached credential
     pub fn clear(&self) {
         *self.credential.write() = None;
+        self.ensure_cache_removed();
+    }
+
+    fn ensure_cache_removed(&self) {
+        if let Some(cache) = self.cache_file.lock().take() {
+            cache.cleanup();
+        }
+    }
+}
+
+#[cfg(feature = "gssapi")]
+impl Drop for TicketCache {
+    fn drop(&mut self) {
+        self.ensure_cache_removed();
+    }
+}
+
+#[cfg(feature = "gssapi")]
+#[derive(Debug)]
+struct CacheFile {
+    path: PathBuf,
+}
+
+#[cfg(feature = "gssapi")]
+impl CacheFile {
+    fn new(principal: &str) -> std::io::Result<Self> {
+        let sanitized: String = principal
+            .chars()
+            .map(|ch| match ch {
+                'A'..='Z' | 'a'..='z' | '0'..='9' => ch,
+                _ => '_',
+            })
+            .collect();
+
+        let filename = format!("krb5cc_pgdog_{}_{}", sanitized, Uuid::new_v4());
+        let path = std::env::temp_dir().join(filename);
+
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            let _ = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(&path)?;
+        }
+
+        #[cfg(not(unix))]
+        {
+            let _ = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(&path)?;
+        }
+
+        Ok(Self { path })
+    }
+
+    fn uri(&self) -> String {
+        format!("FILE:{}", self.path.display())
+    }
+
+    fn cleanup(&self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
+#[cfg(feature = "gssapi")]
+impl Drop for CacheFile {
+    fn drop(&mut self) {
+        self.cleanup();
     }
 }
 
 #[cfg(not(feature = "gssapi"))]
 impl TicketCache {
     /// Create a new ticket cache
-    pub fn new(principal: impl Into<String>, keytab_path: impl Into<PathBuf>) -> Self {
+    pub fn new(
+        principal: impl Into<String>,
+        keytab_path: impl Into<PathBuf>,
+        _krb5_config: Option<String>,
+    ) -> Self {
         Self {
             principal: principal.into(),
             keytab_path: keytab_path.into(),
@@ -315,14 +363,14 @@ mod tests {
 
     #[test]
     fn test_ticket_cache_creation() {
-        let cache = TicketCache::new("test@EXAMPLE.COM", "/etc/test.keytab");
+        let cache = TicketCache::new("test@EXAMPLE.COM", "/etc/test.keytab", None);
         assert_eq!(cache.principal(), "test@EXAMPLE.COM");
         assert_eq!(cache.keytab_path(), &PathBuf::from("/etc/test.keytab"));
     }
 
     #[tokio::test]
     async fn test_missing_keytab_error() {
-        let cache = TicketCache::new("test@REALM", "/nonexistent/keytab");
+        let cache = TicketCache::new("test@REALM", "/nonexistent/keytab", None);
         #[cfg(feature = "gssapi")]
         {
             let result = cache.acquire_ticket().await;
@@ -349,7 +397,7 @@ mod tests {
 
     #[test]
     fn test_refresh_interval() {
-        let mut cache = TicketCache::new("test@REALM", "/etc/test.keytab");
+        let mut cache = TicketCache::new("test@REALM", "/etc/test.keytab", None);
         cache.set_refresh_interval(Duration::from_secs(3600));
         assert!(!cache.needs_refresh()); // Just created, doesn't need refresh
     }
