@@ -139,9 +139,7 @@ impl QueryParser {
         // Get the AST from cache or parse the statement live.
         let statement = match context.query()? {
             // Only prepared statements (or just extended) are cached.
-            BufferedQuery::Prepared(query) => {
-                cache.parse(query.query(), &context.sharding_schema)?
-            }
+            BufferedQuery::Prepared(parse) => cache.parse(parse, &context.sharding_schema)?,
             // Don't cache simple queries.
             //
             // They contain parameter values, which makes the cache

@@ -15,6 +15,7 @@ use crate::{
     backend::ShardingSchema,
     config::Role,
     frontend::router::parser::{comment::comment, Shard},
+    net::Parse,
 };
 
 use super::Route;
@@ -135,12 +136,12 @@ impl Cache {
     /// while we parse the query.
     pub fn parse(
         &self,
-        query: &str,
+        parse: &Parse,
         schema: &ShardingSchema,
     ) -> std::result::Result<CachedAst, super::Error> {
         {
             let mut guard = self.inner.lock();
-            let ast = guard.queries.get_mut(query).map(|entry| {
+            let ast = guard.queries.get_mut(parse.name()).map(|entry| {
                 entry.stats.lock().hits += 1; // No contention on this.
                 entry.clone()
             });
@@ -151,10 +152,10 @@ impl Cache {
         }
 
         // Parse query without holding lock.
-        let entry = CachedAst::new(query, schema)?;
+        let entry = CachedAst::new(parse.query(), schema)?;
 
         let mut guard = self.inner.lock();
-        guard.queries.put(query.to_owned(), entry.clone());
+        guard.queries.put(parse.name().to_owned(), entry.clone());
         guard.stats.misses += 1;
 
         Ok(entry)
@@ -258,7 +259,9 @@ mod test {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn bench_ast_cache() {
-        let query = "SELECT
+        let query = Parse::named(
+            "test",
+            "SELECT
             u.username,
             p.product_name,
             SUM(oi.quantity * oi.price) AS total_revenue,
@@ -277,18 +280,20 @@ mod test {
         GROUP BY u.username, p.product_name
         HAVING COUNT(DISTINCT c.country) > 2
         ORDER BY total_revenue DESC;
-";
+",
+        );
 
         let times = 10_000;
         let threads = 5;
 
         let mut tasks = vec![];
         for _ in 0..threads {
+            let query = query.clone();
             let handle = spawn(async move {
                 let mut parse_time = Duration::ZERO;
                 for _ in 0..(times / threads) {
                     let start = Instant::now();
-                    parse(query).unwrap();
+                    parse(query.query()).unwrap();
                     parse_time += start.elapsed();
                 }
 
@@ -308,12 +313,13 @@ mod test {
         let mut tasks = vec![];
 
         for _ in 0..threads {
+            let query = query.clone();
             let handle = spawn(async move {
                 let mut cached_time = Duration::ZERO;
                 for _ in 0..(times / threads) {
                     let start = Instant::now();
                     Cache::get()
-                        .parse(query, &ShardingSchema::default())
+                        .parse(&query, &ShardingSchema::default())
                         .unwrap();
                     cached_time += start.elapsed();
                 }

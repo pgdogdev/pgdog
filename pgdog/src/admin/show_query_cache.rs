@@ -1,6 +1,6 @@
 //! SHOW QUERY CACHE;
 
-use crate::frontend::router::parser::Cache;
+use crate::{backend::PreparedStatements, frontend::router::parser::Cache};
 
 use super::prelude::*;
 
@@ -28,6 +28,7 @@ impl Command for ShowQueryCache {
 
     async fn execute(&self) -> Result<Vec<Message>, Error> {
         let mut queries: Vec<_> = Cache::queries().into_iter().collect();
+        let prep_cache = PreparedStatements::new();
         let mut messages = vec![RowDescription::new(&[
             Field::text("query"),
             Field::numeric("hits"),
@@ -44,12 +45,15 @@ impl Command for ShowQueryCache {
             }
             let mut data_row = DataRow::new();
             let stats = { query.1.stats.lock().clone() };
-            data_row
-                .add(query.0)
-                .add(stats.hits)
-                .add(stats.direct)
-                .add(stats.multi);
-            messages.push(data_row.message()?);
+            let query = prep_cache.parse(&query.0);
+            if let Some(query) = query {
+                data_row
+                    .add(query.query())
+                    .add(stats.hits)
+                    .add(stats.direct)
+                    .add(stats.multi);
+                messages.push(data_row.message()?);
+            }
         }
 
         Ok(messages)
@@ -58,9 +62,10 @@ impl Command for ShowQueryCache {
 
 #[cfg(test)]
 mod test {
+    use crate::frontend::PreparedStatements;
     use crate::{
         backend::ShardingSchema,
-        net::{FromBytes, ToBytes},
+        net::{FromBytes, Parse, ToBytes},
     };
 
     use super::*;
@@ -68,14 +73,15 @@ mod test {
     #[tokio::test]
     async fn test_show_query_cache() {
         let cache = Cache::get();
+        let mut prep = PreparedStatements::new();
 
         for q in 0..5 {
-            cache
-                .parse(
-                    format!("SELECT $1::bigint, {}", q).as_str(),
-                    &ShardingSchema::default(),
-                )
-                .unwrap();
+            let mut parse = Parse::named(
+                format!("test_{}", q),
+                format!("SELECT $1::bigint, {}", q).as_str(),
+            );
+            prep.insert(&mut parse);
+            cache.parse(&parse, &ShardingSchema::default()).unwrap();
         }
 
         let show = ShowQueryCache {
