@@ -191,15 +191,16 @@ impl QueryParser {
         // We don't expect clients to send multiple queries. If they do
         // only the first one is used for routing.
         //
-        let root = statement
-            .ast()
-            .protobuf
-            .stmts
-            .first()
-            .ok_or(Error::EmptyQuery)?
-            .stmt
-            .as_ref()
-            .ok_or(Error::EmptyQuery)?;
+        let root = statement.ast().protobuf.stmts.first();
+
+        let root = if let Some(root) = root {
+            root.stmt.as_ref().ok_or(Error::EmptyQuery)?
+        } else {
+            // Send empty query to any shard.
+            return Ok(Command::Query(Route::read(Shard::Direct(
+                round_robin::next() % context.shards,
+            ))));
+        };
 
         let mut command = match root.node {
             // SET statements -> return immediately.

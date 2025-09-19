@@ -1,4 +1,3 @@
-use crate::net::{EmptyQueryResponse, ReadyForQuery};
 use tracing::{error, trace};
 
 use super::*;
@@ -31,24 +30,15 @@ impl QueryEngine {
                 );
             }
             Err(err) => {
-                if err.empty_query() {
-                    let mut bytes_sent = context.stream.send(&EmptyQueryResponse).await?;
-                    bytes_sent += context
-                        .stream
-                        .send_flush(&ReadyForQuery::in_transaction(context.in_transaction()))
-                        .await?;
-                    self.stats.sent(bytes_sent);
-                } else {
-                    error!("{:?} [{:?}]", err, context.stream.peer_addr());
-                    let bytes_sent = context
-                        .stream
-                        .error(
-                            ErrorResponse::syntax(err.to_string().as_str()),
-                            context.in_transaction(),
-                        )
-                        .await?;
-                    self.stats.sent(bytes_sent);
-                }
+                error!("{:?} [{:?}]", err, context.stream.peer_addr());
+                let bytes_sent = context
+                    .stream
+                    .error(
+                        ErrorResponse::syntax(err.to_string().as_str()),
+                        context.in_transaction(),
+                    )
+                    .await?;
+                self.stats.sent(bytes_sent);
                 return Ok(false);
             }
         }
