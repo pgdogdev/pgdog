@@ -87,7 +87,7 @@ impl Command for Set {
             "prepared_statements_limit" => {
                 config.config.general.prepared_statements_limit = self.value.parse()?;
                 PreparedStatements::global()
-                    .lock()
+                    .write()
                     .close_unused(config.config.general.prepared_statements_limit);
             }
 

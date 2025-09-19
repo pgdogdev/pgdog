@@ -87,7 +87,7 @@ impl ClientRequest {
                 ProtocolMessage::Bind(bind) => {
                     if !bind.anonymous() {
                         return Ok(PreparedStatements::global()
-                            .lock()
+                            .read()
                             .parse(bind.statement())
                             .map(BufferedQuery::Prepared));
                     }
@@ -95,7 +95,7 @@ impl ClientRequest {
                 ProtocolMessage::Describe(describe) => {
                     if !describe.anonymous() {
                         return Ok(PreparedStatements::global()
-                            .lock()
+                            .read()
                             .parse(describe.statement())
                             .map(BufferedQuery::Prepared));
                     }

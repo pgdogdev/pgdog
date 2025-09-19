@@ -26,7 +26,7 @@ impl QueryCache {
     pub(crate) fn load() -> Self {
         let (prepared_statements, prepared_statements_memory) = {
             let global = PreparedStatements::global();
-            let guard = global.lock();
+            let guard = global.read();
             (guard.len(), guard.memory_usage())
         };
 

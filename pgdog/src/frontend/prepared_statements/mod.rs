@@ -3,7 +3,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use once_cell::sync::Lazy;
-use parking_lot::Mutex;
+use parking_lot::RwLock;
 
 use crate::{
     net::{Parse, ProtocolMessage},
@@ -23,7 +23,7 @@ static CACHE: Lazy<PreparedStatements> = Lazy::new(PreparedStatements::default);
 
 #[derive(Clone, Debug)]
 pub struct PreparedStatements {
-    pub(super) global: Arc<Mutex<GlobalCache>>,
+    pub(super) global: Arc<RwLock<GlobalCache>>,
     pub(super) local: HashMap<String, String>,
     pub(super) enabled: bool,
     pub(super) capacity: usize,
@@ -36,14 +36,14 @@ impl MemoryUsage for PreparedStatements {
         self.local.memory_usage()
             + self.enabled.memory_usage()
             + self.capacity.memory_usage()
-            + std::mem::size_of::<Arc<Mutex<GlobalCache>>>()
+            + std::mem::size_of::<Arc<RwLock<GlobalCache>>>()
     }
 }
 
 impl Default for PreparedStatements {
     fn default() -> Self {
         Self {
-            global: Arc::new(Mutex::new(GlobalCache::default())),
+            global: Arc::new(RwLock::new(GlobalCache::default())),
             local: HashMap::default(),
             enabled: true,
             capacity: usize::MAX,
@@ -59,7 +59,7 @@ impl PreparedStatements {
     }
 
     /// Get global cache.
-    pub fn global() -> Arc<Mutex<GlobalCache>> {
+    pub fn global() -> Arc<RwLock<GlobalCache>> {
         Self::new().global.clone()
     }
 
@@ -72,7 +72,7 @@ impl PreparedStatements {
 
     /// Register prepared statement with the global cache.
     pub fn insert(&mut self, parse: &mut Parse) {
-        let (_new, name) = { self.global.lock().insert(parse) };
+        let (_new, name) = { self.global.write().insert(parse) };
         let existed = self.local.insert(parse.name().to_owned(), name.clone());
         self.memory_used = self.memory_usage();
 
@@ -81,7 +81,7 @@ impl PreparedStatements {
         // condition which happens very infrequently, so we optimize for the happy path.
         if existed.is_some() {
             {
-                self.global.lock().decrement(&name);
+                self.global.write().decrement(&name);
             }
         }
 
@@ -90,7 +90,7 @@ impl PreparedStatements {
 
     /// Insert statement into the cache bypassing duplicate checks.
     pub fn insert_anyway(&mut self, parse: &mut Parse) {
-        let name = self.global.lock().insert_anyway(parse);
+        let name = self.global.write().insert_anyway(parse);
         self.local.insert(parse.name().to_owned(), name.clone());
         self.memory_used = self.memory_usage();
         parse.rename_fast(&name)
@@ -114,7 +114,7 @@ impl PreparedStatements {
     /// Remove prepared statement from local cache.
     pub fn close(&mut self, name: &str) {
         if let Some(global_name) = self.local.remove(name) {
-            self.global.lock().close(&global_name, self.capacity);
+            self.global.write().close(&global_name, self.capacity);
             self.memory_used = self.memory_usage();
         }
     }
@@ -122,7 +122,7 @@ impl PreparedStatements {
     /// Close all prepared statements on this client.
     pub fn close_all(&mut self) {
         if !self.local.is_empty() {
-            let mut global = self.global.lock();
+            let mut global = self.global.write();
 
             for global_name in self.local.values() {
                 global.close(global_name, self.capacity);
@@ -160,12 +160,12 @@ mod test {
         }
 
         assert_eq!(statements.local.len(), 1);
-        assert_eq!(statements.global.lock().names().len(), 1);
+        assert_eq!(statements.global.read().names().len(), 1);
 
         statements.close_all();
 
         assert!(statements.local.is_empty());
-        assert!(statements.global.lock().names().is_empty());
+        assert!(statements.global.read().names().is_empty());
 
         let mut messages = vec![
             ProtocolMessage::from(Parse::named("__sqlx_1", "SELECT 1")),
@@ -177,12 +177,12 @@ mod test {
         }
 
         assert_eq!(statements.local.len(), 1);
-        assert_eq!(statements.global.lock().names().len(), 1);
+        assert_eq!(statements.global.read().names().len(), 1);
 
         statements.close("__sqlx_1");
 
         assert!(statements.local.is_empty());
-        assert!(statements.global.lock().names().is_empty());
+        assert!(statements.global.read().names().is_empty());
     }
 
     #[test]
@@ -203,7 +203,7 @@ mod test {
         assert_eq!(
             statements
                 .global
-                .lock()
+                .read()
                 .statements()
                 .iter()
                 .next()
@@ -218,7 +218,7 @@ mod test {
         assert_eq!(
             statements
                 .global
-                .lock()
+                .read()
                 .statements()
                 .iter()
                 .next()
