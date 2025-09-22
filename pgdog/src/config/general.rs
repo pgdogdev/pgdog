@@ -118,6 +118,9 @@ pub struct General {
     /// Client idle timeout.
     #[serde(default = "General::default_client_idle_timeout")]
     pub client_idle_timeout: u64,
+    /// Server lifetime.
+    #[serde(default = "General::server_lifetime")]
+    pub server_lifetime: u64,
     /// Mirror queue size.
     #[serde(default = "General::mirror_queue")]
     pub mirror_queue: usize,
@@ -200,6 +203,7 @@ impl Default for General {
             log_disconnections: Self::log_disconnections(),
             two_phase_commit: bool::default(),
             two_phase_commit_auto: None,
+            server_lifetime: Self::server_lifetime(),
         }
     }
 }
@@ -454,6 +458,13 @@ impl General {
 
     pub fn log_disconnections() -> bool {
         Self::env_bool_or_default("PGDOG_LOG_DISCONNECTIONS", true)
+    }
+
+    pub fn server_lifetime() -> u64 {
+        Self::env_or_default(
+            "PGDOG_SERVER_LIFETIME",
+            Duration::from_secs(3600 * 24).as_millis() as u64,
+        )
     }
 
     fn default_passthrough_auth() -> PassthoughAuth {

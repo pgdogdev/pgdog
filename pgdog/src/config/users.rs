@@ -98,6 +98,8 @@ pub struct User {
     pub two_phase_commit: Option<bool>,
     /// Automatic transactions.
     pub two_phase_commit_auto: Option<bool>,
+    /// Server lifetime.
+    pub server_lifetime: Option<u64>,
 }
 
 impl User {

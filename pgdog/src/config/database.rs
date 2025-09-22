@@ -103,6 +103,8 @@ pub struct Database {
     pub idle_timeout: Option<u64>,
     /// Read-only mode.
     pub read_only: Option<bool>,
+    /// Server lifetime.
+    pub server_lifetime: Option<u64>,
 }
 
 impl Database {
