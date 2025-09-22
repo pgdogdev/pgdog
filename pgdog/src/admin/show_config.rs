@@ -58,6 +58,7 @@ fn pretty_value(name: &str, value: &serde_json::Value) -> Result<String, serde_j
         || name.contains("_interval")
         || name.contains("_delay")
         || name.contains("_time")
+        || name.contains("_lifetime")
     {
         match s.parse::<u64>() {
             Ok(v) => human_duration(Duration::from_millis(v)),
