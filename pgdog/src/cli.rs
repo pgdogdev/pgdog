@@ -56,14 +56,7 @@ pub enum Commands {
     },
 
     /// Check configuration files for errors.
-    Configcheck {
-        /// Path to the configuration file.
-        #[arg(short, long)]
-        config: Option<PathBuf>,
-        /// Path to the users.toml file.
-        #[arg(short, long)]
-        users: Option<PathBuf>,
-    },
+    Configcheck,
 
     /// Copy data from source to destination cluster
     /// using logical replication.
