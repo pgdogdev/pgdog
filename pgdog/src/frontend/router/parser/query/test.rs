@@ -545,3 +545,20 @@ fn test_dry_run_simple() {
     assert_eq!(stmt.stats.lock().multi, 0);
     assert_eq!(command.route().shard(), &Shard::Direct(0));
 }
+
+#[test]
+fn test_set_comments() {
+    let command = query_parser!(
+        QueryParser::default(),
+        Query::new("/* pgdog_sharding_key: 1234 */ SET statement_timeout TO 1"),
+        true
+    );
+    assert_eq!(command.route().shard(), &Shard::Direct(0));
+
+    let command = query_parser!(
+        QueryParser::default(),
+        Query::new("SET statement_timeout TO 1"),
+        true
+    );
+    assert_eq!(command.route().shard(), &Shard::All);
+}

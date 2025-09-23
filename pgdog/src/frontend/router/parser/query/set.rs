@@ -121,8 +121,14 @@ impl QueryParser {
             }
         }
 
+        let shard = if let Shard::Direct(_) = self.shard {
+            self.shard.clone()
+        } else {
+            Shard::All
+        };
+
         Ok(Command::Query(
-            Route::write(Shard::All).set_read(context.read_only),
+            Route::write(shard).set_read(context.read_only),
         ))
     }
 }
