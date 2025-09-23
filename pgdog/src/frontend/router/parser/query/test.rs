@@ -554,4 +554,11 @@ fn test_set_comments() {
         true
     );
     assert_eq!(command.route().shard(), &Shard::Direct(0));
+
+    let command = query_parser!(
+        QueryParser::default(),
+        Query::new("SET statement_timeout TO 1"),
+        true
+    );
+    assert_eq!(command.route().shard(), &Shard::All);
 }
