@@ -156,7 +156,7 @@ impl QueryParser {
         };
 
         // Parse hardcoded shard from a query comment.
-        if context.router_needed {
+        if context.router_needed || context.dry_run {
             self.shard = statement.shard.clone();
             if let Some(role) = statement.role {
                 self.write_override = role == Role::Primary;
@@ -164,7 +164,7 @@ impl QueryParser {
         }
 
         debug!("{}", context.query()?.query());
-        trace!("{:#?}", statement.ast());
+        trace!("{:#?}", statement);
 
         let rewrite = Rewrite::new(statement.ast());
         if rewrite.needs_rewrite() {
