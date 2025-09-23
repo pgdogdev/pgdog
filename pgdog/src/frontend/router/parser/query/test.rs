@@ -1,4 +1,7 @@
+use std::ops::Deref;
+
 use crate::{
+    config::{self, config},
     frontend::client::TransactionType,
     net::{
         messages::{parse::Parse, Parameter},
@@ -521,4 +524,24 @@ fn test_any() {
 fn test_commit_prepared() {
     let stmt = pg_query::parse("COMMIT PREPARED 'test'").unwrap();
     println!("{:?}", stmt);
+}
+
+#[test]
+fn test_dry_run_simple() {
+    let mut config = config().deref().clone();
+    config.config.general.dry_run = true;
+    config::set(config).unwrap();
+
+    let cluster = Cluster::new_test_single_shard();
+    let command = query_parser!(
+        QueryParser::default(),
+        Query::new("/* pgdog_sharding_key: 1234 */ SELECT * FROM sharded"),
+        false,
+        cluster
+    );
+    let cache = Cache::queries();
+    let stmt = cache.values().next().unwrap();
+    assert_eq!(stmt.stats.lock().direct, 1);
+    assert_eq!(stmt.stats.lock().multi, 0);
+    assert_eq!(command.route().shard(), &Shard::Direct(0));
 }
