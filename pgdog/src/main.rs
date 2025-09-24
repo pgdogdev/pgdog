@@ -11,7 +11,7 @@ use pgdog::stats;
 use pgdog::util::pgdog_version;
 use pgdog::{healthcheck, net};
 use tokio::runtime::Builder;
-use tracing::info;
+use tracing::{error, info};
 
 use std::process::exit;
 use std::process::Command;
@@ -56,11 +56,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         Some(Commands::Configcheck { config, users }) => {
             if let Err(e) = pgdog::cli::config_check(config, users) {
-                eprintln!("Configuration error: {}", e);
+                error!("Configuration error: {}", e);
                 exit(1);
             }
 
-            println!("✅ Configuration valid");
+            info!("✅ Configuration valid");
             exit(0);
         }
 
