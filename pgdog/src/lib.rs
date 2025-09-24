@@ -12,6 +12,7 @@ pub mod healthcheck;
 pub mod net;
 pub mod plugin;
 pub mod sighup;
+pub mod sigusr;
 pub mod state;
 pub mod stats;
 #[cfg(feature = "tui")]
