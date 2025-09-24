@@ -11,9 +11,10 @@ use pgdog::stats;
 use pgdog::util::pgdog_version;
 use pgdog::{healthcheck, net};
 use tokio::runtime::Builder;
-use tracing::{error, info};
+use tracing::info;
 
 use std::process::exit;
+use std::process::Command;
 
 #[cfg(not(target_env = "msvc"))]
 use tikv_jemallocator::Jemalloc;
@@ -35,13 +36,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             exit(0);
         }
 
-        Some(Commands::Configcheck) => {
-            if let Err(e) = config::load(&args.config, &args.users) {
-                error!("{}", e);
+        Some(Commands::Psql {
+            ref database,
+            ref user,
+        }) => {
+            #[cfg(unix)]
+            {
+                let _output = Command::new("psql")
+                    .args([
+                        "--dbname",
+                        &database.clone().expect("Database argument expected"),
+                        "--user",
+                        &user.clone().expect("User argument expected"),
+                    ])
+                    .spawn()?
+                    .wait();
+            }
+        }
+
+        Some(Commands::Configcheck { config, users }) => {
+            if let Err(e) = pgdog::cli::config_check(config, users) {
+                eprintln!("Configuration error: {}", e);
                 exit(1);
             }
 
-            info!("✅ config valid");
+            println!("✅ Configuration valid");
             exit(0);
         }
 
