@@ -1,9 +1,10 @@
 //! Context passed to and from the plugins.
 
-use std::ops::Deref;
+use std::{fmt::Debug, ops::Deref};
 
 use crate::{
-    bindings::PdRouterContext, parameters::Parameters, PdParameters, PdRoute, PdStatement,
+    bindings::PdRouterContext, error_response::ErrorResponse, parameters::Parameters,
+    PdErrorResponse, PdParameters, PdRoute, PdStatement,
 };
 
 /// PostgreSQL statement, parsed by [`pg_query`].
@@ -449,6 +450,7 @@ impl Route {
             ffi: PdRoute {
                 shard: shard.into(),
                 read_write: read_write.into(),
+                error_response: PdErrorResponse::none(),
             },
         }
     }
@@ -462,6 +464,7 @@ impl Route {
             ffi: PdRoute {
                 shard: -2,
                 read_write: 2,
+                error_response: PdErrorResponse::none(),
             },
         }
     }
@@ -473,7 +476,49 @@ impl Route {
             ffi: PdRoute {
                 shard: -3,
                 read_write: 2,
+                error_response: PdErrorResponse::none(),
             },
         }
+    }
+
+    /// Block the query from being sent to a database and return the provided error message.
+    ///
+    /// # Arguments
+    ///
+    /// * `error`: Error response to return to the client.
+    ///
+    pub fn error(error: ErrorResponse) -> Route {
+        Self {
+            ffi: PdRoute {
+                shard: -3,
+                read_write: 2,
+                error_response: error.into(),
+            },
+        }
+    }
+
+    /// Get the error set by the plugin on the route, if any.
+    pub fn get_error(&self) -> Option<ErrorResponse> {
+        if self.error_response.is_none() {
+            None
+        } else {
+            Some(ErrorResponse::from(self.ffi.error_response))
+        }
+    }
+}
+
+impl Debug for Route {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Route")
+            .field("shard", &self.ffi.shard)
+            .field("read_write", &self.ffi.read_write)
+            .finish()
+    }
+}
+
+impl Drop for Route {
+    fn drop(&mut self) {
+        use crate::error_response::ErrorResponse;
+        let _error: ErrorResponse = self.ffi.error_response.into();
     }
 }

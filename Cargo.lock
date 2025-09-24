@@ -2385,6 +2385,7 @@ dependencies = [
  "rustls-native-certs",
  "rustls-pki-types",
  "scram",
+ "semver",
  "serde",
  "serde_json",
  "sha1",
@@ -2422,7 +2423,7 @@ dependencies = [
 
 [[package]]
 name = "pgdog-plugin"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "bindgen 0.71.1",
  "libc",

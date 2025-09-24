@@ -167,6 +167,7 @@ pub mod bindings;
 pub mod ast;
 pub mod comp;
 pub mod context;
+pub mod error_response;
 pub mod parameters;
 pub mod plugin;
 pub mod prelude;
@@ -174,6 +175,7 @@ pub mod string;
 
 pub use bindings::*;
 pub use context::*;
+pub use error_response::*;
 pub use plugin::*;
 
 pub use libloading;

@@ -49,6 +49,10 @@ impl QueryParser {
 
         for plugin in plugins {
             if let Some(route) = plugin.route(context) {
+                let route: pgdog_plugin::Route = route.into();
+                if let Some(error) = route.get_error() {
+                    return Err(Error::ErrorResponse(error.into()));
+                }
                 match route.shard.try_into() {
                     Ok(shard) => match shard {
                         PdShard::All => self.plugin_output.shard = Some(Shard::All),
