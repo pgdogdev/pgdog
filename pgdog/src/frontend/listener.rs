@@ -1,9 +1,4 @@
 //! Connection listener. Handles all client connections.
-use std::io::ErrorKind;
-use std::net::SocketAddr;
-use std::sync::Arc;
-use std::ffi::CString;
-use std::env::current_exe;
 use crate::backend::databases::{databases, reload, shutdown};
 use crate::config::config;
 use crate::frontend::client::query_engine::two_pc::Manager;
@@ -13,12 +8,17 @@ use crate::net::{self, tls::acceptor};
 use crate::net::{tweak, Stream};
 use crate::sighup::Sighup;
 use crate::sigusr::Sigusr;
+use nix::unistd::execv;
+use std::env::current_exe;
+use std::ffi::CString;
+use std::io::ErrorKind;
+use std::net::SocketAddr;
+use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::signal::ctrl_c;
 use tokio::sync::Notify;
 use tokio::time::timeout;
 use tokio::{select, spawn};
-use nix::unistd::execv;
 use tracing::{error, info, warn};
 
 use super::{
@@ -40,7 +40,7 @@ impl Listener {
             addr: addr.to_string(),
             shutdown: Arc::new(Notify::new()),
             // path to executable
-            // environment 
+            // environment
             // command-line parameters
         }
     }
@@ -87,7 +87,7 @@ impl Listener {
                     self.start_shutdown();
                 }
 
-                _ = sigusr.listen() => 
+                _ = sigusr.listen() =>
                 {
                     info!("Hot-patching signal received");
                     match current_exe()
@@ -117,7 +117,7 @@ impl Listener {
         }
 
         Ok(())
-    }    
+    }
     /// Shutdown this listener.
     pub fn shutdown(&self) {
         self.shutdown.notify_one();
@@ -133,7 +133,7 @@ impl Listener {
             shutdown();
         });
     }
-    
+
     async fn execute_shutdown(&self) {
         let shutdown_timeout = config().config.general.shutdown_timeout();
 
