@@ -39,9 +39,6 @@ impl Listener {
         Self {
             addr: addr.to_string(),
             shutdown: Arc::new(Notify::new()),
-            // path to executable
-            // environment
-            // command-line parameters
         }
     }
 
