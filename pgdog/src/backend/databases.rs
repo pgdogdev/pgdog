@@ -370,19 +370,20 @@ pub(crate) fn new_pool(
     if let Some(shards) = shards {
         let mut shard_configs = vec![];
         for user_databases in shards {
+            let has_single_replica = user_databases.len() == 1;
             let primary = user_databases
                 .iter()
                 .find(|d| d.role == Role::Primary)
                 .map(|primary| PoolConfig {
                     address: Address::new(primary, user),
-                    config: Config::new(general, primary, user),
+                    config: Config::new(general, primary, user, has_single_replica),
                 });
             let replicas = user_databases
                 .iter()
                 .filter(|d| d.role == Role::Replica)
                 .map(|replica| PoolConfig {
                     address: Address::new(replica, user),
-                    config: Config::new(general, replica, user),
+                    config: Config::new(general, replica, user, has_single_replica),
                 })
                 .collect::<Vec<_>>();
 

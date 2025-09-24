@@ -139,7 +139,7 @@ impl Config {
     }
 
     /// Create from database/user configuration.
-    pub fn new(general: &General, database: &Database, user: &User) -> Self {
+    pub fn new(general: &General, database: &Database, user: &User, is_only_replica: bool) -> Self {
         Config {
             min: database
                 .min_pool_size
@@ -182,6 +182,7 @@ impl Config {
                 .read_only
                 .unwrap_or(user.read_only.unwrap_or_default()),
             prepared_statements_limit: general.prepared_statements_limit,
+            bannable: !is_only_replica,
             ..Default::default()
         }
     }
