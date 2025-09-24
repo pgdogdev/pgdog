@@ -1,6 +1,6 @@
 [package]
 name = "pgdog"
-version = "0.1.7"
+version = "0.1.700"
 edition = "2021"
 description = "Modern PostgreSQL proxy, pooler and load balancer."
 authors = ["Lev Kokotov <lev.kokotov@gmail.com>"]
@@ -23,6 +23,8 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "std"] }
 parking_lot = "0.12"
 thiserror = "2"
+libc = "0.2"
+nix = {version = "0.30.1", features = ["process"]}
 bytes = "1"
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }

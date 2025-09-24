@@ -1,9 +1,9 @@
 //! Connection listener. Handles all client connections.
-
 use std::io::ErrorKind;
 use std::net::SocketAddr;
 use std::sync::Arc;
-
+use std::ffi::CString;
+use std::env::current_exe;
 use crate::backend::databases::{databases, reload, shutdown};
 use crate::config::config;
 use crate::frontend::client::query_engine::two_pc::Manager;
@@ -12,12 +12,13 @@ use crate::net::messages::{hello::SslReply, Startup};
 use crate::net::{self, tls::acceptor};
 use crate::net::{tweak, Stream};
 use crate::sighup::Sighup;
+use crate::sigusr::Sigusr;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::signal::ctrl_c;
 use tokio::sync::Notify;
 use tokio::time::timeout;
 use tokio::{select, spawn};
-
+use nix::unistd::execv;
 use tracing::{error, info, warn};
 
 use super::{
@@ -38,20 +39,24 @@ impl Listener {
         Self {
             addr: addr.to_string(),
             shutdown: Arc::new(Notify::new()),
+            // path to executable
+            // environment 
+            // command-line parameters
         }
     }
 
     /// Listen for client connections and handle them.
+    #[allow(unreachable_code)]
     pub async fn listen(&mut self) -> Result<(), Error> {
         info!("🐕 PgDog listening on {}", self.addr);
         let listener = TcpListener::bind(&self.addr).await?;
         let comms = comms();
         let shutdown_signal = comms.shutting_down();
         let mut sighup = Sighup::new()?;
+        let mut sigusr = Sigusr::new()?;
 
         loop {
             let comms = comms.clone();
-
             select! {
                 connection = listener.accept() => {
                    let (stream, addr) = connection?;
@@ -82,6 +87,23 @@ impl Listener {
                     self.start_shutdown();
                 }
 
+                _ = sigusr.listen() => 
+                {
+                    info!("Hot-patching signal received");
+                    match current_exe()
+                    {
+                        Ok(path) => {
+                            info!("Hot-loading from {}",path.display());
+                            let program = CString::new(path.into_os_string().into_encoded_bytes()).unwrap();
+                            let args: Vec<CString> = vec![];
+                            execv(&program, &args).expect("execv failed");
+                        }
+                        Err(e) => {
+                            error!("Failed to get executable path: {}", e);
+                        }
+                    }
+                }
+
                 _ = sighup.listen() => {
                     if let Err(err) = reload() {
                         error!("configuration reload error: {}", err);
@@ -95,8 +117,7 @@ impl Listener {
         }
 
         Ok(())
-    }
-
+    }    
     /// Shutdown this listener.
     pub fn shutdown(&self) {
         self.shutdown.notify_one();
@@ -112,7 +133,7 @@ impl Listener {
             shutdown();
         });
     }
-
+    
     async fn execute_shutdown(&self) {
         let shutdown_timeout = config().config.general.shutdown_timeout();
 
