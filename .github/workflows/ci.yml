@@ -48,6 +48,7 @@ jobs:
         with:
           toolchain: stable
           override: true
+          components: llvm-tools-preview
       - uses: useblacksmith/rust-cache@v3
         with:
           prefix-key: "v1" # Change this when updating tooling
@@ -68,10 +69,24 @@ jobs:
           bash integration/toxi/setup.sh
       - name: Install test dependencies
         run: cargo install cargo-nextest --version "0.9.78" --locked
-      - name: Run tests
-        run: cargo nextest run -E 'package(pgdog)' --no-fail-fast --test-threads=1
+      - name: Install coverage tooling
+        run: cargo install cargo-llvm-cov --locked --version "0.6.10"
+      - name: Run tests with coverage
+        env:
+          RUSTFLAGS: "-C link-dead-code"
+        run: |
+          cargo llvm-cov clean --workspace
+          cargo llvm-cov nextest --lcov --output-path lcov.info --no-fail-fast --test-threads=1 --filter-expr "package(pgdog)"
       - name: Run documentation tests
         run: cargo test --doc
+      # Requires CODECOV_TOKEN secret for upload
+      - uses: codecov/codecov-action@v4
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+        with:
+          files: lcov.info
+          flags: unit
+          fail_ci_if_error: true
   integration:
     runs-on: blacksmith-4vcpu-ubuntu-2404
     env:
@@ -155,46 +170,4 @@ jobs:
         with:
           files: integration.lcov
           flags: integration
-          fail_ci_if_error: true
-  coverage:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          override: true
-          components: llvm-tools-preview
-      - uses: useblacksmith/rust-cache@v3
-        with:
-          prefix-key: coverage-1
-      - name: Setup PostgreSQL
-        run: |
-          sudo service postgresql start
-          sudo -u postgres createuser --superuser --login $USER
-          sudo -u postgres createdb $USER
-          sudo -u postgres psql -c 'ALTER SYSTEM SET max_prepared_transactions TO 1000;'
-          sudo service postgresql restart
-          bash integration/setup.sh
-          sudo apt update && sudo apt install -y python3-virtualenv mold
-          sudo gem install bundler
-          sudo apt remove -y cmake
-          sudo pip3 install cmake==3.31.6
-          cmake --version
-          cargo install cargo-nextest --version "0.9.78" --locked
-          bash integration/toxi/setup.sh
-      - name: Install coverage tooling
-        run: cargo install cargo-llvm-cov --locked --version "0.6.10"
-      - name: Generate coverage report
-        env:
-          RUSTFLAGS: "-C link-dead-code"
-        run: |
-          cargo llvm-cov clean --workspace
-          cargo llvm-cov nextest --lcov --output-path lcov.info --no-fail-fast --test-threads=1 --filter-expr "package(pgdog)"
-      # Requires CODECOV_TOKEN secret for upload
-      - uses: codecov/codecov-action@v4
-        env:
-          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
-        with:
-          files: lcov.info
           fail_ci_if_error: true
