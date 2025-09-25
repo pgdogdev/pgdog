@@ -336,6 +336,1027 @@ class TransactionDirectShard extends TestCase {
     }
 }
 
+class ManualRoutingShardNumber extends TestCase {
+
+    ManualRoutingShardNumber() throws Exception {
+        super("pgdog_no_cross_shard", "pgdog_sharded");
+    }
+
+    public void before() throws Exception {
+        Statement setup = this.connection.createStatement();
+        setup.execute("/* pgdog_shard: 0 */ TRUNCATE TABLE sharded");
+        setup.execute("/* pgdog_shard: 1 */ TRUNCATE TABLE sharded");
+    }
+
+    void run() throws Exception {
+        Statement st = this.connection.createStatement();
+
+        // Test routing to shard 0 using pgdog_shard comment with RETURNING
+        ResultSet rs = st.executeQuery(
+            "/* pgdog_shard: 0 */ INSERT INTO sharded (id, value) VALUES (100, 'shard0_test') RETURNING *"
+        );
+        int rows = 0;
+        while (rs.next()) {
+            rows++;
+            assert_equals(rs.getInt("id"), 100);
+            assert_equals(rs.getString("value"), "shard0_test");
+        }
+        assert_equals(rows, 1);
+
+        // Test routing to shard 1 using pgdog_shard comment with RETURNING
+        rs = st.executeQuery(
+            "/* pgdog_shard: 1 */ INSERT INTO sharded (id, value) VALUES (200, 'shard1_test') RETURNING *"
+        );
+        rows = 0;
+        while (rs.next()) {
+            rows++;
+            assert_equals(rs.getInt("id"), 200);
+            assert_equals(rs.getString("value"), "shard1_test");
+        }
+        assert_equals(rows, 1);
+
+        // Verify data was inserted into correct shards
+        rs = st.executeQuery(
+            "/* pgdog_shard: 0 */ SELECT COUNT(*) as count FROM sharded"
+        );
+        rs.next();
+        assert_equals(rs.getInt("count"), 1);
+
+        rs = st.executeQuery(
+            "/* pgdog_shard: 1 */ SELECT COUNT(*) as count FROM sharded"
+        );
+        rs.next();
+        assert_equals(rs.getInt("count"), 1);
+
+        // Verify specific data from each shard
+        rs = st.executeQuery(
+            "/* pgdog_shard: 0 */ SELECT id, value FROM sharded WHERE id = 100"
+        );
+        rs.next();
+        assert_equals(rs.getInt("id"), 100);
+        assert_equals(rs.getString("value"), "shard0_test");
+
+        rs = st.executeQuery(
+            "/* pgdog_shard: 1 */ SELECT id, value FROM sharded WHERE id = 200"
+        );
+        rs.next();
+        assert_equals(rs.getInt("id"), 200);
+        assert_equals(rs.getString("value"), "shard1_test");
+
+        // Test updates with RETURNING
+        rs = st.executeQuery(
+            "/* pgdog_shard: 0 */ UPDATE sharded SET value = 'updated_shard0_test' WHERE id = 100 RETURNING *"
+        );
+        rows = 0;
+        while (rs.next()) {
+            rows++;
+            assert_equals(rs.getInt("id"), 100);
+            assert_equals(rs.getString("value"), "updated_shard0_test");
+        }
+        assert_equals(rows, 1);
+
+        rs = st.executeQuery(
+            "/* pgdog_shard: 1 */ UPDATE sharded SET value = 'updated_shard1_test' WHERE id = 200 RETURNING *"
+        );
+        rows = 0;
+        while (rs.next()) {
+            rows++;
+            assert_equals(rs.getInt("id"), 200);
+            assert_equals(rs.getString("value"), "updated_shard1_test");
+        }
+        assert_equals(rows, 1);
+
+        // Verify updates took effect
+        rs = st.executeQuery(
+            "/* pgdog_shard: 0 */ SELECT value FROM sharded WHERE id = 100"
+        );
+        rs.next();
+        assert_equals(rs.getString("value"), "updated_shard0_test");
+
+        rs = st.executeQuery(
+            "/* pgdog_shard: 1 */ SELECT value FROM sharded WHERE id = 200"
+        );
+        rs.next();
+        assert_equals(rs.getString("value"), "updated_shard1_test");
+
+        // Clean up with RETURNING
+        rs = st.executeQuery(
+            "/* pgdog_shard: 0 */ DELETE FROM sharded WHERE id = 100 RETURNING *"
+        );
+        rows = 0;
+        while (rs.next()) {
+            rows++;
+            assert_equals(rs.getInt("id"), 100);
+            assert_equals(rs.getString("value"), "updated_shard0_test");
+        }
+        assert_equals(rows, 1);
+
+        rs = st.executeQuery(
+            "/* pgdog_shard: 1 */ DELETE FROM sharded WHERE id = 200 RETURNING *"
+        );
+        rows = 0;
+        while (rs.next()) {
+            rows++;
+            assert_equals(rs.getInt("id"), 200);
+            assert_equals(rs.getString("value"), "updated_shard1_test");
+        }
+        assert_equals(rows, 1);
+    }
+}
+
+class ManualRoutingShardNumberPrepared extends TestCase {
+
+    ManualRoutingShardNumberPrepared() throws Exception {
+        super("pgdog_no_cross_shard", "pgdog_sharded");
+    }
+
+    public void before() throws Exception {
+        Statement setup = this.connection.createStatement();
+        setup.execute("/* pgdog_shard: 0 */ TRUNCATE TABLE sharded");
+        setup.execute("/* pgdog_shard: 1 */ TRUNCATE TABLE sharded");
+    }
+
+    void run() throws Exception {
+        // Test prepared statement with manual shard routing using pgdog_shard comment
+        PreparedStatement insertStmt0 = this.connection.prepareStatement(
+            "/* pgdog_shard: 0 */ INSERT INTO sharded (id, value) VALUES (?, ?) RETURNING *"
+        );
+        PreparedStatement insertStmt1 = this.connection.prepareStatement(
+            "/* pgdog_shard: 1 */ INSERT INTO sharded (id, value) VALUES (?, ?) RETURNING *"
+        );
+        PreparedStatement selectStmt0 = this.connection.prepareStatement(
+            "/* pgdog_shard: 0 */ SELECT id, value FROM sharded WHERE id = ?"
+        );
+        PreparedStatement selectStmt1 = this.connection.prepareStatement(
+            "/* pgdog_shard: 1 */ SELECT id, value FROM sharded WHERE id = ?"
+        );
+        PreparedStatement countStmt0 = this.connection.prepareStatement(
+            "/* pgdog_shard: 0 */ SELECT COUNT(*) as count FROM sharded"
+        );
+        PreparedStatement countStmt1 = this.connection.prepareStatement(
+            "/* pgdog_shard: 1 */ SELECT COUNT(*) as count FROM sharded"
+        );
+
+        // Insert data into shard 0 using prepared statement with RETURNING
+        insertStmt0.setInt(1, 300);
+        insertStmt0.setString(2, "shard0_prepared");
+        ResultSet rs = insertStmt0.executeQuery();
+        int rows = 0;
+        while (rs.next()) {
+            rows++;
+            assert_equals(rs.getInt("id"), 300);
+            assert_equals(rs.getString("value"), "shard0_prepared");
+        }
+        assert_equals(rows, 1);
+
+        // Insert data into shard 1 using prepared statement with RETURNING
+        insertStmt1.setInt(1, 400);
+        insertStmt1.setString(2, "shard1_prepared");
+        rs = insertStmt1.executeQuery();
+        rows = 0;
+        while (rs.next()) {
+            rows++;
+            assert_equals(rs.getInt("id"), 400);
+            assert_equals(rs.getString("value"), "shard1_prepared");
+        }
+        assert_equals(rows, 1);
+
+        // Verify counts per shard
+        rs = countStmt0.executeQuery();
+        rs.next();
+        assert_equals(rs.getInt("count"), 1);
+
+        rs = countStmt1.executeQuery();
+        rs.next();
+        assert_equals(rs.getInt("count"), 1);
+
+        // Verify specific data from each shard using prepared statements
+        selectStmt0.setInt(1, 300);
+        rs = selectStmt0.executeQuery();
+        rs.next();
+        assert_equals(rs.getInt("id"), 300);
+        assert_equals(rs.getString("value"), "shard0_prepared");
+
+        selectStmt1.setInt(1, 400);
+        rs = selectStmt1.executeQuery();
+        rs.next();
+        assert_equals(rs.getInt("id"), 400);
+        assert_equals(rs.getString("value"), "shard1_prepared");
+
+        // Test update using prepared statements with manual routing and RETURNING
+        PreparedStatement updateStmt0 = this.connection.prepareStatement(
+            "/* pgdog_shard: 0 */ UPDATE sharded SET value = ? WHERE id = ? RETURNING *"
+        );
+        PreparedStatement updateStmt1 = this.connection.prepareStatement(
+            "/* pgdog_shard: 1 */ UPDATE sharded SET value = ? WHERE id = ? RETURNING *"
+        );
+
+        updateStmt0.setString(1, "updated_shard0_prepared");
+        updateStmt0.setInt(2, 300);
+        rs = updateStmt0.executeQuery();
+        rows = 0;
+        while (rs.next()) {
+            rows++;
+            assert_equals(rs.getInt("id"), 300);
+            assert_equals(rs.getString("value"), "updated_shard0_prepared");
+        }
+        assert_equals(rows, 1);
+
+        updateStmt1.setString(1, "updated_shard1_prepared");
+        updateStmt1.setInt(2, 400);
+        rs = updateStmt1.executeQuery();
+        rows = 0;
+        while (rs.next()) {
+            rows++;
+            assert_equals(rs.getInt("id"), 400);
+            assert_equals(rs.getString("value"), "updated_shard1_prepared");
+        }
+        assert_equals(rows, 1);
+
+        // Verify updates with regular SELECT
+        selectStmt0.setInt(1, 300);
+        rs = selectStmt0.executeQuery();
+        rs.next();
+        assert_equals(rs.getString("value"), "updated_shard0_prepared");
+
+        selectStmt1.setInt(1, 400);
+        rs = selectStmt1.executeQuery();
+        rs.next();
+        assert_equals(rs.getString("value"), "updated_shard1_prepared");
+
+        // Clean up using prepared statements with RETURNING
+        PreparedStatement deleteStmt0 = this.connection.prepareStatement(
+            "/* pgdog_shard: 0 */ DELETE FROM sharded WHERE id = ? RETURNING *"
+        );
+        PreparedStatement deleteStmt1 = this.connection.prepareStatement(
+            "/* pgdog_shard: 1 */ DELETE FROM sharded WHERE id = ? RETURNING *"
+        );
+
+        deleteStmt0.setInt(1, 300);
+        rs = deleteStmt0.executeQuery();
+        rows = 0;
+        while (rs.next()) {
+            rows++;
+            assert_equals(rs.getInt("id"), 300);
+            assert_equals(rs.getString("value"), "updated_shard0_prepared");
+        }
+        assert_equals(rows, 1);
+
+        deleteStmt1.setInt(1, 400);
+        rs = deleteStmt1.executeQuery();
+        rows = 0;
+        while (rs.next()) {
+            rows++;
+            assert_equals(rs.getInt("id"), 400);
+            assert_equals(rs.getString("value"), "updated_shard1_prepared");
+        }
+        assert_equals(rows, 1);
+
+        // Verify cleanup
+        rs = countStmt0.executeQuery();
+        rs.next();
+        assert_equals(rs.getInt("count"), 0);
+
+        rs = countStmt1.executeQuery();
+        rs.next();
+        assert_equals(rs.getInt("count"), 0);
+    }
+}
+
+class ManualRoutingShardNumberManualCommit extends TestCase {
+
+    ManualRoutingShardNumberManualCommit() throws Exception {
+        super("pgdog_no_cross_shard", "pgdog_sharded");
+    }
+
+    public void before() throws Exception {
+        Statement setup = this.connection.createStatement();
+        setup.execute("/* pgdog_shard: 0 */ TRUNCATE TABLE sharded");
+        setup.execute("/* pgdog_shard: 1 */ TRUNCATE TABLE sharded");
+    }
+
+    void run() throws Exception {
+        // Explicitly disable autocommit for manual transaction control
+        this.connection.setAutoCommit(false);
+
+        Statement st = this.connection.createStatement();
+
+        // Test routing to shard 0 using pgdog_shard comment with RETURNING
+        ResultSet rs = st.executeQuery(
+            "/* pgdog_shard: 0 */ INSERT INTO sharded (id, value) VALUES (500, 'shard0_manual_commit') RETURNING *"
+        );
+        int rows = 0;
+        while (rs.next()) {
+            rows++;
+            assert_equals(rs.getInt("id"), 500);
+            assert_equals(rs.getString("value"), "shard0_manual_commit");
+        }
+        assert_equals(rows, 1);
+
+        // Manually commit the transaction
+        this.connection.commit();
+
+        // Test routing to shard 1 using pgdog_shard comment with RETURNING
+        rs = st.executeQuery(
+            "/* pgdog_shard: 1 */ INSERT INTO sharded (id, value) VALUES (600, 'shard1_manual_commit') RETURNING *"
+        );
+        rows = 0;
+        while (rs.next()) {
+            rows++;
+            assert_equals(rs.getInt("id"), 600);
+            assert_equals(rs.getString("value"), "shard1_manual_commit");
+        }
+        assert_equals(rows, 1);
+
+        // Manually commit the transaction
+        this.connection.commit();
+
+        // Verify data was inserted and committed to correct shards
+        rs = st.executeQuery(
+            "/* pgdog_shard: 0 */ SELECT COUNT(*) as count FROM sharded"
+        );
+        rs.next();
+        assert_equals(rs.getInt("count"), 1);
+
+        rs = st.executeQuery(
+            "/* pgdog_shard: 1 */ SELECT COUNT(*) as count FROM sharded"
+        );
+        rs.next();
+        assert_equals(rs.getInt("count"), 1);
+
+        // Test updates with RETURNING and manual commit
+        rs = st.executeQuery(
+            "/* pgdog_shard: 0 */ UPDATE sharded SET value = 'updated_shard0_manual_commit' WHERE id = 500 RETURNING *"
+        );
+        rows = 0;
+        while (rs.next()) {
+            rows++;
+            assert_equals(rs.getInt("id"), 500);
+            assert_equals(
+                rs.getString("value"),
+                "updated_shard0_manual_commit"
+            );
+        }
+        assert_equals(rows, 1);
+
+        // Manually commit the update
+        this.connection.commit();
+
+        rs = st.executeQuery(
+            "/* pgdog_shard: 1 */ UPDATE sharded SET value = 'updated_shard1_manual_commit' WHERE id = 600 RETURNING *"
+        );
+        rows = 0;
+        while (rs.next()) {
+            rows++;
+            assert_equals(rs.getInt("id"), 600);
+            assert_equals(
+                rs.getString("value"),
+                "updated_shard1_manual_commit"
+            );
+        }
+        assert_equals(rows, 1);
+
+        // Manually commit the update
+        this.connection.commit();
+
+        // Verify updates took effect
+        rs = st.executeQuery(
+            "/* pgdog_shard: 0 */ SELECT value FROM sharded WHERE id = 500"
+        );
+        rs.next();
+        assert_equals(rs.getString("value"), "updated_shard0_manual_commit");
+
+        rs = st.executeQuery(
+            "/* pgdog_shard: 1 */ SELECT value FROM sharded WHERE id = 600"
+        );
+        rs.next();
+        assert_equals(rs.getString("value"), "updated_shard1_manual_commit");
+
+        // Clean up with RETURNING and manual commit
+        rs = st.executeQuery(
+            "/* pgdog_shard: 0 */ DELETE FROM sharded WHERE id = 500 RETURNING *"
+        );
+        rows = 0;
+        while (rs.next()) {
+            rows++;
+            assert_equals(rs.getInt("id"), 500);
+            assert_equals(
+                rs.getString("value"),
+                "updated_shard0_manual_commit"
+            );
+        }
+        assert_equals(rows, 1);
+
+        // Manually commit the delete
+        this.connection.commit();
+
+        rs = st.executeQuery(
+            "/* pgdog_shard: 1 */ DELETE FROM sharded WHERE id = 600 RETURNING *"
+        );
+        rows = 0;
+        while (rs.next()) {
+            rows++;
+            assert_equals(rs.getInt("id"), 600);
+            assert_equals(
+                rs.getString("value"),
+                "updated_shard1_manual_commit"
+            );
+        }
+        assert_equals(rows, 1);
+
+        // Manually commit the delete
+        this.connection.commit();
+
+        // Restore autocommit mode
+        this.connection.setAutoCommit(true);
+    }
+}
+
+class ManualRoutingShardNumberPreparedManualCommit extends TestCase {
+
+    ManualRoutingShardNumberPreparedManualCommit() throws Exception {
+        super("pgdog_no_cross_shard", "pgdog_sharded");
+    }
+
+    public void before() throws Exception {
+        Statement setup = this.connection.createStatement();
+        setup.execute("/* pgdog_shard: 0 */ TRUNCATE TABLE sharded");
+        setup.execute("/* pgdog_shard: 1 */ TRUNCATE TABLE sharded");
+    }
+
+    void run() throws Exception {
+        // Explicitly disable autocommit for manual transaction control
+        this.connection.setAutoCommit(false);
+
+        // Test prepared statement with manual shard routing using pgdog_shard comment
+        PreparedStatement insertStmt0 = this.connection.prepareStatement(
+            "/* pgdog_shard: 0 */ INSERT INTO sharded (id, value) VALUES (?, ?) RETURNING *"
+        );
+        PreparedStatement insertStmt1 = this.connection.prepareStatement(
+            "/* pgdog_shard: 1 */ INSERT INTO sharded (id, value) VALUES (?, ?) RETURNING *"
+        );
+        PreparedStatement selectStmt0 = this.connection.prepareStatement(
+            "/* pgdog_shard: 0 */ SELECT id, value FROM sharded WHERE id = ?"
+        );
+        PreparedStatement selectStmt1 = this.connection.prepareStatement(
+            "/* pgdog_shard: 1 */ SELECT id, value FROM sharded WHERE id = ?"
+        );
+        PreparedStatement countStmt0 = this.connection.prepareStatement(
+            "/* pgdog_shard: 0 */ SELECT COUNT(*) as count FROM sharded"
+        );
+        PreparedStatement countStmt1 = this.connection.prepareStatement(
+            "/* pgdog_shard: 1 */ SELECT COUNT(*) as count FROM sharded"
+        );
+
+        // Insert data into shard 0 using prepared statement with RETURNING
+        insertStmt0.setInt(1, 700);
+        insertStmt0.setString(2, "shard0_prepared_manual_commit");
+        ResultSet rs = insertStmt0.executeQuery();
+        int rows = 0;
+        while (rs.next()) {
+            rows++;
+            assert_equals(rs.getInt("id"), 700);
+            assert_equals(
+                rs.getString("value"),
+                "shard0_prepared_manual_commit"
+            );
+        }
+        assert_equals(rows, 1);
+
+        // Manually commit the insert
+        this.connection.commit();
+
+        // Insert data into shard 1 using prepared statement with RETURNING
+        insertStmt1.setInt(1, 800);
+        insertStmt1.setString(2, "shard1_prepared_manual_commit");
+        rs = insertStmt1.executeQuery();
+        rows = 0;
+        while (rs.next()) {
+            rows++;
+            assert_equals(rs.getInt("id"), 800);
+            assert_equals(
+                rs.getString("value"),
+                "shard1_prepared_manual_commit"
+            );
+        }
+        assert_equals(rows, 1);
+
+        // Manually commit the insert
+        this.connection.commit();
+
+        // Verify counts per shard (data should be committed)
+        rs = countStmt0.executeQuery();
+        rs.next();
+        assert_equals(rs.getInt("count"), 1);
+
+        rs = countStmt1.executeQuery();
+        rs.next();
+        assert_equals(rs.getInt("count"), 1);
+
+        // Test update using prepared statements with manual routing and RETURNING
+        PreparedStatement updateStmt0 = this.connection.prepareStatement(
+            "/* pgdog_shard: 0 */ UPDATE sharded SET value = ? WHERE id = ? RETURNING *"
+        );
+        PreparedStatement updateStmt1 = this.connection.prepareStatement(
+            "/* pgdog_shard: 1 */ UPDATE sharded SET value = ? WHERE id = ? RETURNING *"
+        );
+
+        updateStmt0.setString(1, "updated_shard0_prepared_manual_commit");
+        updateStmt0.setInt(2, 700);
+        rs = updateStmt0.executeQuery();
+        rows = 0;
+        while (rs.next()) {
+            rows++;
+            assert_equals(rs.getInt("id"), 700);
+            assert_equals(
+                rs.getString("value"),
+                "updated_shard0_prepared_manual_commit"
+            );
+        }
+        assert_equals(rows, 1);
+
+        // Manually commit the update
+        this.connection.commit();
+
+        updateStmt1.setString(1, "updated_shard1_prepared_manual_commit");
+        updateStmt1.setInt(2, 800);
+        rs = updateStmt1.executeQuery();
+        rows = 0;
+        while (rs.next()) {
+            rows++;
+            assert_equals(rs.getInt("id"), 800);
+            assert_equals(
+                rs.getString("value"),
+                "updated_shard1_prepared_manual_commit"
+            );
+        }
+        assert_equals(rows, 1);
+
+        // Manually commit the update
+        this.connection.commit();
+
+        // Verify updates with regular SELECT (should be committed)
+        selectStmt0.setInt(1, 700);
+        rs = selectStmt0.executeQuery();
+        rs.next();
+        assert_equals(
+            rs.getString("value"),
+            "updated_shard0_prepared_manual_commit"
+        );
+
+        selectStmt1.setInt(1, 800);
+        rs = selectStmt1.executeQuery();
+        rs.next();
+        assert_equals(
+            rs.getString("value"),
+            "updated_shard1_prepared_manual_commit"
+        );
+
+        // Clean up using prepared statements with RETURNING
+        PreparedStatement deleteStmt0 = this.connection.prepareStatement(
+            "/* pgdog_shard: 0 */ DELETE FROM sharded WHERE id = ? RETURNING *"
+        );
+        PreparedStatement deleteStmt1 = this.connection.prepareStatement(
+            "/* pgdog_shard: 1 */ DELETE FROM sharded WHERE id = ? RETURNING *"
+        );
+
+        deleteStmt0.setInt(1, 700);
+        rs = deleteStmt0.executeQuery();
+        rows = 0;
+        while (rs.next()) {
+            rows++;
+            assert_equals(rs.getInt("id"), 700);
+            assert_equals(
+                rs.getString("value"),
+                "updated_shard0_prepared_manual_commit"
+            );
+        }
+        assert_equals(rows, 1);
+
+        // Manually commit the delete
+        this.connection.commit();
+
+        deleteStmt1.setInt(1, 800);
+        rs = deleteStmt1.executeQuery();
+        rows = 0;
+        while (rs.next()) {
+            rows++;
+            assert_equals(rs.getInt("id"), 800);
+            assert_equals(
+                rs.getString("value"),
+                "updated_shard1_prepared_manual_commit"
+            );
+        }
+        assert_equals(rows, 1);
+
+        // Manually commit the delete
+        this.connection.commit();
+
+        // Verify cleanup (should be permanently deleted)
+        rs = countStmt0.executeQuery();
+        rs.next();
+        assert_equals(rs.getInt("count"), 0);
+
+        rs = countStmt1.executeQuery();
+        rs.next();
+        assert_equals(rs.getInt("count"), 0);
+
+        // Restore autocommit mode
+        this.connection.setAutoCommit(true);
+    }
+}
+
+class ManualRoutingShardingKey extends TestCase {
+
+    ManualRoutingShardingKey() throws Exception {
+        super("pgdog_no_cross_shard", "single_sharded_list");
+    }
+
+    public void before() throws Exception {
+        Statement setup = this.connection.createStatement();
+        setup.execute("/* pgdog_shard: 0 */ TRUNCATE TABLE sharded");
+        setup.execute("/* pgdog_shard: 1 */ TRUNCATE TABLE sharded");
+    }
+
+    void run() throws Exception {
+        Statement st = this.connection.createStatement();
+
+        // Test routing using pgdog_sharding_key comment with integer keys 0-20
+        // Use sharding key 5 (matches id 5)
+        ResultSet rs = st.executeQuery(
+            "/* pgdog_sharding_key: 5 */ INSERT INTO sharded (id, value) VALUES (5, 'key5_test') RETURNING *"
+        );
+        int rows = 0;
+        while (rs.next()) {
+            rows++;
+            assert_equals(rs.getInt("id"), 5);
+            assert_equals(rs.getString("value"), "key5_test");
+        }
+        assert_equals(rows, 1);
+
+        // Use sharding key 15 (matches id 15)
+        rs = st.executeQuery(
+            "/* pgdog_sharding_key: 15 */ INSERT INTO sharded (id, value) VALUES (15, 'key15_test') RETURNING *"
+        );
+        rows = 0;
+        while (rs.next()) {
+            rows++;
+            assert_equals(rs.getInt("id"), 15);
+            assert_equals(rs.getString("value"), "key15_test");
+        }
+        assert_equals(rows, 1);
+
+        // Verify data using same sharding keys
+        rs = st.executeQuery(
+            "/* pgdog_sharding_key: 5 */ SELECT id, value FROM sharded WHERE id = 5"
+        );
+        rs.next();
+        assert_equals(rs.getInt("id"), 5);
+        assert_equals(rs.getString("value"), "key5_test");
+
+        rs = st.executeQuery(
+            "/* pgdog_sharding_key: 15 */ SELECT id, value FROM sharded WHERE id = 15"
+        );
+        rs.next();
+        assert_equals(rs.getInt("id"), 15);
+        assert_equals(rs.getString("value"), "key15_test");
+
+        // Test updates with sharding key routing and RETURNING
+        rs = st.executeQuery(
+            "/* pgdog_sharding_key: 5 */ UPDATE sharded SET value = 'updated_key5' WHERE id = 5 RETURNING *"
+        );
+        rows = 0;
+        while (rs.next()) {
+            rows++;
+            assert_equals(rs.getInt("id"), 5);
+            assert_equals(rs.getString("value"), "updated_key5");
+        }
+        assert_equals(rows, 1);
+
+        rs = st.executeQuery(
+            "/* pgdog_sharding_key: 15 */ UPDATE sharded SET value = 'updated_key15' WHERE id = 15 RETURNING *"
+        );
+        rows = 0;
+        while (rs.next()) {
+            rows++;
+            assert_equals(rs.getInt("id"), 15);
+            assert_equals(rs.getString("value"), "updated_key15");
+        }
+        assert_equals(rows, 1);
+
+        // Verify updates with SELECT
+        rs = st.executeQuery(
+            "/* pgdog_sharding_key: 5 */ SELECT value FROM sharded WHERE id = 5"
+        );
+        rs.next();
+        assert_equals(rs.getString("value"), "updated_key5");
+
+        rs = st.executeQuery(
+            "/* pgdog_sharding_key: 15 */ SELECT value FROM sharded WHERE id = 15"
+        );
+        rs.next();
+        assert_equals(rs.getString("value"), "updated_key15");
+
+        // Clean up with RETURNING
+        rs = st.executeQuery(
+            "/* pgdog_sharding_key: 5 */ DELETE FROM sharded WHERE id = 5 RETURNING *"
+        );
+        rows = 0;
+        while (rs.next()) {
+            rows++;
+            assert_equals(rs.getInt("id"), 5);
+            assert_equals(rs.getString("value"), "updated_key5");
+        }
+        assert_equals(rows, 1);
+
+        rs = st.executeQuery(
+            "/* pgdog_sharding_key: 15 */ DELETE FROM sharded WHERE id = 15 RETURNING *"
+        );
+        rows = 0;
+        while (rs.next()) {
+            rows++;
+            assert_equals(rs.getInt("id"), 15);
+            assert_equals(rs.getString("value"), "updated_key15");
+        }
+        assert_equals(rows, 1);
+    }
+}
+
+class ManualRoutingShardingKeyPrepared extends TestCase {
+
+    ManualRoutingShardingKeyPrepared() throws Exception {
+        super("pgdog_no_cross_shard", "single_sharded_list");
+    }
+
+    public void before() throws Exception {
+        Statement setup = this.connection.createStatement();
+        setup.execute("/* pgdog_shard: 0 */ TRUNCATE TABLE sharded");
+        setup.execute("/* pgdog_shard: 1 */ TRUNCATE TABLE sharded");
+    }
+
+    void run() throws Exception {
+        // Test prepared statement with manual sharding key routing
+        PreparedStatement insertStmt5 = this.connection.prepareStatement(
+            "/* pgdog_sharding_key: 5 */ INSERT INTO sharded (id, value) VALUES (?, ?) RETURNING *"
+        );
+        PreparedStatement insertStmt15 = this.connection.prepareStatement(
+            "/* pgdog_sharding_key: 15 */ INSERT INTO sharded (id, value) VALUES (?, ?) RETURNING *"
+        );
+        PreparedStatement selectStmt5 = this.connection.prepareStatement(
+            "/* pgdog_sharding_key: 5 */ SELECT id, value FROM sharded WHERE id = ?"
+        );
+        PreparedStatement selectStmt15 = this.connection.prepareStatement(
+            "/* pgdog_sharding_key: 15 */ SELECT id, value FROM sharded WHERE id = ?"
+        );
+
+        // Insert data using sharding key 5 with prepared statement
+        insertStmt5.setInt(1, 5);
+        insertStmt5.setString(2, "key5_prepared");
+        ResultSet rs = insertStmt5.executeQuery();
+        int rows = 0;
+        while (rs.next()) {
+            rows++;
+            assert_equals(rs.getInt("id"), 5);
+            assert_equals(rs.getString("value"), "key5_prepared");
+        }
+        assert_equals(rows, 1);
+
+        // Insert data using sharding key 15 with prepared statement
+        insertStmt15.setInt(1, 15);
+        insertStmt15.setString(2, "key15_prepared");
+        rs = insertStmt15.executeQuery();
+        rows = 0;
+        while (rs.next()) {
+            rows++;
+            assert_equals(rs.getInt("id"), 15);
+            assert_equals(rs.getString("value"), "key15_prepared");
+        }
+        assert_equals(rows, 1);
+
+        // Verify data using same sharding keys with prepared statements
+        selectStmt5.setInt(1, 5);
+        rs = selectStmt5.executeQuery();
+        rs.next();
+        assert_equals(rs.getInt("id"), 5);
+        assert_equals(rs.getString("value"), "key5_prepared");
+
+        selectStmt15.setInt(1, 15);
+        rs = selectStmt15.executeQuery();
+        rs.next();
+        assert_equals(rs.getInt("id"), 15);
+        assert_equals(rs.getString("value"), "key15_prepared");
+
+        // Test updates with prepared statements and RETURNING
+        PreparedStatement updateStmt5 = this.connection.prepareStatement(
+            "/* pgdog_sharding_key: 5 */ UPDATE sharded SET value = ? WHERE id = ? RETURNING *"
+        );
+        PreparedStatement updateStmt15 = this.connection.prepareStatement(
+            "/* pgdog_sharding_key: 15 */ UPDATE sharded SET value = ? WHERE id = ? RETURNING *"
+        );
+
+        updateStmt5.setString(1, "updated_key5_prepared");
+        updateStmt5.setInt(2, 5);
+        rs = updateStmt5.executeQuery();
+        rows = 0;
+        while (rs.next()) {
+            rows++;
+            assert_equals(rs.getInt("id"), 5);
+            assert_equals(rs.getString("value"), "updated_key5_prepared");
+        }
+        assert_equals(rows, 1);
+
+        updateStmt15.setString(1, "updated_key15_prepared");
+        updateStmt15.setInt(2, 15);
+        rs = updateStmt15.executeQuery();
+        rows = 0;
+        while (rs.next()) {
+            rows++;
+            assert_equals(rs.getInt("id"), 15);
+            assert_equals(rs.getString("value"), "updated_key15_prepared");
+        }
+        assert_equals(rows, 1);
+
+        // Verify updates with SELECT
+        selectStmt5.setInt(1, 5);
+        rs = selectStmt5.executeQuery();
+        rs.next();
+        assert_equals(rs.getString("value"), "updated_key5_prepared");
+
+        selectStmt15.setInt(1, 15);
+        rs = selectStmt15.executeQuery();
+        rs.next();
+        assert_equals(rs.getString("value"), "updated_key15_prepared");
+
+        // Clean up with prepared statements and RETURNING
+        PreparedStatement deleteStmt5 = this.connection.prepareStatement(
+            "/* pgdog_sharding_key: 5 */ DELETE FROM sharded WHERE id = ? RETURNING *"
+        );
+        PreparedStatement deleteStmt15 = this.connection.prepareStatement(
+            "/* pgdog_sharding_key: 15 */ DELETE FROM sharded WHERE id = ? RETURNING *"
+        );
+
+        deleteStmt5.setInt(1, 5);
+        rs = deleteStmt5.executeQuery();
+        rows = 0;
+        while (rs.next()) {
+            rows++;
+            assert_equals(rs.getInt("id"), 5);
+            assert_equals(rs.getString("value"), "updated_key5_prepared");
+        }
+        assert_equals(rows, 1);
+
+        deleteStmt15.setInt(1, 15);
+        rs = deleteStmt15.executeQuery();
+        rows = 0;
+        while (rs.next()) {
+            rows++;
+            assert_equals(rs.getInt("id"), 15);
+            assert_equals(rs.getString("value"), "updated_key15_prepared");
+        }
+        assert_equals(rows, 1);
+    }
+}
+
+class ManualRoutingShardingKeyManualCommit extends TestCase {
+
+    ManualRoutingShardingKeyManualCommit() throws Exception {
+        super("pgdog_no_cross_shard", "single_sharded_list");
+    }
+
+    public void before() throws Exception {
+        Statement setup = this.connection.createStatement();
+        setup.execute("/* pgdog_shard: 0 */ TRUNCATE TABLE sharded");
+        setup.execute("/* pgdog_shard: 1 */ TRUNCATE TABLE sharded");
+    }
+
+    void run() throws Exception {
+        // Explicitly disable autocommit for manual transaction control
+        this.connection.setAutoCommit(false);
+
+        Statement st = this.connection.createStatement();
+
+        // Test routing using pgdog_sharding_key comment with integer keys 0-20 and manual commits
+        // Use sharding key 5 (matches id 5)
+        ResultSet rs = st.executeQuery(
+            "/* pgdog_sharding_key: 5 */ INSERT INTO sharded (id, value) VALUES (5, 'key5_manual_commit') RETURNING *"
+        );
+        int rows = 0;
+        while (rs.next()) {
+            rows++;
+            assert_equals(rs.getInt("id"), 5);
+            assert_equals(rs.getString("value"), "key5_manual_commit");
+        }
+        assert_equals(rows, 1);
+
+        // Manually commit the insert
+        this.connection.commit();
+
+        // Use sharding key 15 (matches id 15)
+        rs = st.executeQuery(
+            "/* pgdog_sharding_key: 15 */ INSERT INTO sharded (id, value) VALUES (15, 'key15_manual_commit') RETURNING *"
+        );
+        rows = 0;
+        while (rs.next()) {
+            rows++;
+            assert_equals(rs.getInt("id"), 15);
+            assert_equals(rs.getString("value"), "key15_manual_commit");
+        }
+        assert_equals(rows, 1);
+
+        // Manually commit the insert
+        this.connection.commit();
+
+        // Verify data using same sharding keys
+        rs = st.executeQuery(
+            "/* pgdog_sharding_key: 5 */ SELECT id, value FROM sharded WHERE id = 5"
+        );
+        rs.next();
+        assert_equals(rs.getInt("id"), 5);
+        assert_equals(rs.getString("value"), "key5_manual_commit");
+
+        rs = st.executeQuery(
+            "/* pgdog_sharding_key: 15 */ SELECT id, value FROM sharded WHERE id = 15"
+        );
+        rs.next();
+        assert_equals(rs.getInt("id"), 15);
+        assert_equals(rs.getString("value"), "key15_manual_commit");
+
+        // Test updates with sharding key routing and RETURNING
+        rs = st.executeQuery(
+            "/* pgdog_sharding_key: 5 */ UPDATE sharded SET value = 'updated_key5_manual_commit' WHERE id = 5 RETURNING *"
+        );
+        rows = 0;
+        while (rs.next()) {
+            rows++;
+            assert_equals(rs.getInt("id"), 5);
+            assert_equals(rs.getString("value"), "updated_key5_manual_commit");
+        }
+        assert_equals(rows, 1);
+
+        // Manually commit the update
+        this.connection.commit();
+
+        rs = st.executeQuery(
+            "/* pgdog_sharding_key: 15 */ UPDATE sharded SET value = 'updated_key15_manual_commit' WHERE id = 15 RETURNING *"
+        );
+        rows = 0;
+        while (rs.next()) {
+            rows++;
+            assert_equals(rs.getInt("id"), 15);
+            assert_equals(rs.getString("value"), "updated_key15_manual_commit");
+        }
+        assert_equals(rows, 1);
+
+        // Manually commit the update
+        this.connection.commit();
+
+        // Verify updates with SELECT
+        rs = st.executeQuery(
+            "/* pgdog_sharding_key: 5 */ SELECT value FROM sharded WHERE id = 5"
+        );
+        rs.next();
+        assert_equals(rs.getString("value"), "updated_key5_manual_commit");
+
+        rs = st.executeQuery(
+            "/* pgdog_sharding_key: 15 */ SELECT value FROM sharded WHERE id = 15"
+        );
+        rs.next();
+        assert_equals(rs.getString("value"), "updated_key15_manual_commit");
+
+        // Clean up with RETURNING and manual commits
+        rs = st.executeQuery(
+            "/* pgdog_sharding_key: 5 */ DELETE FROM sharded WHERE id = 5 RETURNING *"
+        );
+        rows = 0;
+        while (rs.next()) {
+            rows++;
+            assert_equals(rs.getInt("id"), 5);
+            assert_equals(rs.getString("value"), "updated_key5_manual_commit");
+        }
+        assert_equals(rows, 1);
+
+        // Manually commit the delete
+        this.connection.commit();
+
+        rs = st.executeQuery(
+            "/* pgdog_sharding_key: 15 */ DELETE FROM sharded WHERE id = 15 RETURNING *"
+        );
+        rows = 0;
+        while (rs.next()) {
+            rows++;
+            assert_equals(rs.getInt("id"), 15);
+            assert_equals(rs.getString("value"), "updated_key15_manual_commit");
+        }
+        assert_equals(rows, 1);
+
+        // Manually commit the delete
+        this.connection.commit();
+
+        // Restore autocommit mode
+        this.connection.setAutoCommit(true);
+    }
+}
+
 class Pgdog {
 
     public static Connection connect() throws Exception {
@@ -356,5 +1377,12 @@ class Pgdog {
         new TransactionPrepared("pgdog").execute();
         new TransactionPrepared("pgdog_sharded").execute();
         new TransactionDirectShard().execute();
+        new ManualRoutingShardNumber().execute();
+        new ManualRoutingShardNumberPrepared().execute();
+        new ManualRoutingShardNumberManualCommit().execute();
+        new ManualRoutingShardNumberPreparedManualCommit().execute();
+        new ManualRoutingShardingKey().execute();
+        new ManualRoutingShardingKeyPrepared().execute();
+        new ManualRoutingShardingKeyManualCommit().execute();
     }
 }
