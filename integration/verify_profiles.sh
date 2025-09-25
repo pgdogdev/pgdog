@@ -39,9 +39,11 @@ CONFIG_PATH_FILE="${COMMON_DIR}/pgdog.config"
 PID_FILE="${COMMON_DIR}/pgdog.pid"
 RESTART_CONFIG=""
 RESTART_REQUIRED=0
+ORIGINAL_CONFIG=""
 
 if [ -f "${CONFIG_PATH_FILE}" ]; then
     RESTART_CONFIG=$(cat "${CONFIG_PATH_FILE}")
+    ORIGINAL_CONFIG="${RESTART_CONFIG}"
 fi
 
 if [ -f "${PID_FILE}" ]; then
@@ -126,6 +128,11 @@ echo "${LCOV_HASH}" > "${LCOV_SNAPSHOT}"
 echo "LCOV report captured at ${REPORT_PATH}"
 
 if [ ${RESTART_REQUIRED} -eq 1 ] && [ -n "${RESTART_CONFIG}" ]; then
+    echo "Restarting PgDog with config '${RESTART_CONFIG}'"
     run_pgdog "${RESTART_CONFIG}"
+    CURRENT_CONFIG=$(cat "${CONFIG_PATH_FILE}" 2>/dev/null || echo "")
+    if [ -n "${ORIGINAL_CONFIG}" ] && [ "${CURRENT_CONFIG}" != "${ORIGINAL_CONFIG}" ]; then
+        echo "Warning: PgDog restarted with different config: '${CURRENT_CONFIG}'" >&2
+    fi
     wait_for_pgdog
 fi

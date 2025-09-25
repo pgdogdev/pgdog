@@ -10,6 +10,9 @@ export PGHOST=127.0.0.1
 export PGDATABASE=postgres
 export PGPASSWORD=postgres
 
+echo "[load_balancer] Using PGDOG_BIN=${PGDOG_BIN}"
+echo "[load_balancer] LLVM_PROFILE_FILE=${LLVM_PROFILE_FILE}"
+
 docker-compose up -d
 
 echo "Waiting for Postgres to be ready"
