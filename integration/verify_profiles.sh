@@ -2,10 +2,11 @@
 set -euo pipefail
 
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+REPO_ROOT=$( cd -- "${SCRIPT_DIR}/.." &> /dev/null && pwd )
 source "${SCRIPT_DIR}/common.sh"
 
 LABEL="${1:-suite}"
-PROFILES_DIR="target/llvm-cov-target/profiles"
+PROFILES_DIR="${REPO_ROOT}/target/llvm-cov-target/profiles"
 SNAPSHOT_FILE="${PROFILES_DIR}/.last_snapshot"
 
 if [ ! -d "${PROFILES_DIR}" ]; then
