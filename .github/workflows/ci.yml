@@ -136,8 +136,6 @@ jobs:
           fi
           echo "Using instrumented binary at $BIN_PATH"
           echo "PGDOG_BIN=$(realpath "$BIN_PATH")" >> "$GITHUB_ENV"
-      - name: Build PgDog
-        run: cargo build --release
       - name: Load balancer
         run: bash integration/load_balancer/run.sh
       - name: pgbench
