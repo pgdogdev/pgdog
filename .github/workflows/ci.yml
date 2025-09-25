@@ -126,9 +126,10 @@ jobs:
           RUSTFLAGS: "-C link-dead-code"
         run: |
           cargo llvm-cov clean --workspace
-          cargo llvm-cov --no-report --release --package pgdog --bin pgdog
           mkdir -p target/llvm-cov-target/profiles
-          BIN_PATH=$(find target/llvm-cov-target -path '*/release/pgdog' -type f -perm -111 | head -n 1)
+          cargo llvm-cov run --no-report --release --package pgdog --bin pgdog -- --help
+          rm -f target/llvm-cov-target/profiles/*.profraw
+          BIN_PATH=$(find target/llvm-cov-target -type f -path '*/release/pgdog' | head -n 1)
           if [ -z "$BIN_PATH" ]; then
             echo "Instrumented PgDog binary not found" >&2
             exit 1
