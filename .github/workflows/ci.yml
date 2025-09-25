@@ -127,3 +127,42 @@ jobs:
         run: bash integration/dry_run/run.sh
       # - name: Plugins
       #   run: bash integration/plugins/run.sh
+  coverage:
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+          components: llvm-tools-preview
+      - uses: useblacksmith/rust-cache@v3
+        with:
+          prefix-key: coverage-1
+      - name: Setup PostgreSQL
+        run: |
+          sudo service postgresql start
+          sudo -u postgres createuser --superuser --login $USER
+          sudo -u postgres createdb $USER
+          sudo -u postgres psql -c 'ALTER SYSTEM SET max_prepared_transactions TO 1000;'
+          sudo service postgresql restart
+          bash integration/setup.sh
+          sudo apt update && sudo apt install -y python3-virtualenv mold
+          sudo gem install bundler
+          sudo apt remove -y cmake
+          sudo pip3 install cmake==3.31.6
+          cmake --version
+          cargo install cargo-nextest --version "0.9.78" --locked
+          bash integration/toxi/setup.sh
+      - name: Install coverage tooling
+        run: cargo install cargo-llvm-cov --locked --version "0.6.10"
+      - name: Generate coverage report
+        run: |
+          cargo llvm-cov clean --workspace
+          cargo llvm-cov nextest --lcov --output-path lcov.info -- --no-fail-fast --test-threads=1 -E 'package(pgdog)'
+      # Requires CODECOV_TOKEN secret for upload
+      - uses: codecov/codecov-action@v4
+        with:
+          files: lcov.info
+          fail_ci_if_error: true
+          token: ${{ secrets.CODECOV_TOKEN }}
