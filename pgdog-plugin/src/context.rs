@@ -518,7 +518,6 @@ impl Debug for Route {
 
 impl Drop for Route {
     fn drop(&mut self) {
-        use crate::error_response::ErrorResponse;
-        let _error: ErrorResponse = self.ffi.error_response.into();
+        unsafe { self.ffi.error_response.deallocate() };
     }
 }

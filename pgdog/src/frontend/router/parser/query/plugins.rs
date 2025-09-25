@@ -49,6 +49,8 @@ impl QueryParser {
 
         for plugin in plugins {
             if let Some(route) = plugin.route(context) {
+                // SAFETY: This can be acquired only once. If you drop
+                // the route, it'll deallocate the error.
                 let route: pgdog_plugin::Route = route.into();
                 if let Some(error) = route.get_error() {
                     return Err(Error::ErrorResponse(error.into()));
