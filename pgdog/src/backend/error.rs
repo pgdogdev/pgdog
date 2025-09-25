@@ -116,6 +116,9 @@ pub enum Error {
 
     #[error("2pc commit supported with multi-shard binding only")]
     TwoPcMultiShardOnly,
+
+    #[error("unsupported aggregation {function}: {reason}")]
+    UnsupportedAggregation { function: String, reason: String },
 }
 
 impl From<crate::frontend::Error> for Error {
