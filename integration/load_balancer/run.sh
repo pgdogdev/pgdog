@@ -24,12 +24,20 @@ done
 
 
 pushd ${SCRIPT_DIR}/../../
-cargo build --release
+REPO_ROOT=$(pwd)
 popd
+
+PGDOG_BIN_PATH="${PGDOG_BIN:-}"
+if [ -z "${PGDOG_BIN_PATH}" ]; then
+    pushd ${REPO_ROOT}
+    cargo build --release
+    PGDOG_BIN_PATH="$(pwd)/target/release/pgdog"
+    popd
+fi
 
 sleep 2
 
-cargo run --release -- \
+"${PGDOG_BIN_PATH}" \
     --config ${SCRIPT_DIR}/pgdog.toml \
     --users ${SCRIPT_DIR}/users.toml &
 

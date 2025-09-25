@@ -16,12 +16,14 @@ function wait_for_pgdog() {
 function run_pgdog() {
     # We expect all test scripts to define $SCRIPT_DIR.
     pushd ${COMMON_DIR}/../
-    # Testing in release is faster
-    # and a more reliable test of what happens
-    # in prod.
-    cargo build --release
     local config_path=${1:-"integration"}
-    target/release/pgdog \
+    local binary="${PGDOG_BIN:-}"
+    if [ -z "${binary}" ]; then
+        # Testing in release is faster and mirrors production.
+        cargo build --release
+        binary="target/release/pgdog"
+    fi
+    "${binary}" \
         --config ${config_path}/pgdog.toml \
         --users ${config_path}/users.toml \
         > ${COMMON_DIR}/log.txt &
