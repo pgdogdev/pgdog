@@ -240,6 +240,34 @@ impl RowDescription {
         None
     }
 
+    /// Return a new row description without the specified columns (0-based indexes).
+    pub fn drop_columns(&self, drop: &[usize]) -> Self {
+        if drop.is_empty() {
+            return self.clone();
+        }
+
+        let mut indices = drop.to_vec();
+        indices.sort_unstable();
+        indices.dedup();
+
+        let fields = self
+            .fields
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, field)| {
+                if indices.binary_search(&idx).is_ok() {
+                    None
+                } else {
+                    Some(field.clone())
+                }
+            })
+            .collect();
+
+        Self {
+            fields: Arc::new(fields),
+        }
+    }
+
     /// Check if the two row descriptions are materially the same.
     pub fn equivalent(&self, other: &RowDescription) -> bool {
         if self.fields.len() != other.fields.len() {
