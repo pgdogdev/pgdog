@@ -7,8 +7,11 @@ use tokio_rustls::rustls;
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("{0}")]
+    #[error("io: {0}")]
     Io(#[from] std::io::Error),
+
+    #[error("connection closed by peer")]
+    UnexpectedEof,
 
     #[error("unsupported startup request: {0}")]
     UnsupportedStartup(i32),
@@ -57,9 +60,6 @@ pub enum Error {
 
     #[error("unknown transaction state identifier: {0}")]
     UnknownTransactionStateIdentifier(char),
-
-    #[error("eof")]
-    Eof,
 
     #[error("not text encoding")]
     NotTextEncoding,
