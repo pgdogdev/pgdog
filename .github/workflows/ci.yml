@@ -75,7 +75,6 @@ jobs:
   integration:
     runs-on: blacksmith-4vcpu-ubuntu-2404
     env:
-      PGDOG_BIN: ${{ github.workspace }}/target/llvm-cov-target/release/pgdog
       LLVM_PROFILE_FILE: ${{ github.workspace }}/target/llvm-cov-target/profiles/pgdog-%p-%m.profraw
     steps:
       - uses: actions/checkout@v4
@@ -114,6 +113,13 @@ jobs:
           cargo llvm-cov clean --workspace
           cargo llvm-cov --no-report --release --package pgdog --bin pgdog
           mkdir -p target/llvm-cov-target/profiles
+          BIN_PATH=$(find target/llvm-cov-target -path '*/release/pgdog' -type f -perm -111 | head -n 1)
+          if [ -z "$BIN_PATH" ]; then
+            echo "Instrumented PgDog binary not found" >&2
+            exit 1
+          fi
+          echo "Using instrumented binary at $BIN_PATH"
+          echo "PGDOG_BIN=$(realpath "$BIN_PATH")" >> "$GITHUB_ENV"
       - name: Build PgDog
         run: cargo build --release
       - name: Load balancer
