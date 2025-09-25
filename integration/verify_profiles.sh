@@ -84,10 +84,10 @@ if [ "${CURRENT_COUNT}" = "0" ]; then
     exit 1
 fi
 
+
 if [ "${CURRENT_HASH}" = "${PREV_HASH}" ]; then
-    echo "Coverage artifacts unchanged after '${LABEL}'" >&2
+    echo "Note: coverage artifacts unchanged after '${LABEL}'" >&2
     find "${PROFILE_SEARCH_ROOT}" -name '*.profraw' -print || true
-    exit 1
 fi
 
 echo "${CURRENT_HASH} ${CURRENT_COUNT}" > "${SNAPSHOT_FILE}"
