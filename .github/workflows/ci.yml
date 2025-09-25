@@ -157,12 +157,15 @@ jobs:
       - name: Install coverage tooling
         run: cargo install cargo-llvm-cov --locked --version "0.6.10"
       - name: Generate coverage report
+        env:
+          RUSTFLAGS: "-C link-dead-code"
         run: |
           cargo llvm-cov clean --workspace
           cargo llvm-cov nextest --lcov --output-path lcov.info --no-fail-fast --test-threads=1 --filter-expr "package(pgdog)"
       # Requires CODECOV_TOKEN secret for upload
       - uses: codecov/codecov-action@v4
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
         with:
           files: lcov.info
           fail_ci_if_error: true
-          token: ${{ secrets.CODECOV_TOKEN }}
