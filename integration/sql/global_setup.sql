@@ -1,0 +1,2 @@
+-- Global setup executed before every SQL regression scenario.
+-- Add shared fixture prep (e.g., CREATE SCHEMA) as needed.
