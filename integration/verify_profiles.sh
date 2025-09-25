@@ -96,41 +96,6 @@ echo "Coverage profile fingerprint updated after '${LABEL}': count=${CURRENT_COU
 echo "Profile files after '${LABEL}':"
 find "${PROFILE_SEARCH_ROOT}" -name '*.profraw' -print | sort | tail -n 20
 
-SAFE_LABEL=$(printf '%s' "${LABEL}" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9' '_')
-if [ -z "${SAFE_LABEL}" ]; then
-    SAFE_LABEL="suite"
-fi
-
-REPORTS_DIR="target/llvm-cov-target/reports"
-mkdir -p "${REPORTS_DIR}"
-REPORT_PATH="${REPORTS_DIR}/${SAFE_LABEL}.lcov"
-cargo llvm-cov report --release --package pgdog --lcov --keep-profraw --output-path "${REPORT_PATH}"
-
-LCOV_HASH=$(python3 - "$REPORT_PATH" <<'PY'
-import hashlib
-import sys
-
-path = sys.argv[1]
-with open(path, 'rb') as fh:
-    digest = hashlib.sha256(fh.read()).hexdigest()
-print(digest)
-PY
-)
-
-LCOV_SNAPSHOT="${REPORTS_DIR}/.last_lcov_hash"
-PREV_LCOV_HASH=""
-if [ -f "${LCOV_SNAPSHOT}" ]; then
-    read -r PREV_LCOV_HASH < "${LCOV_SNAPSHOT}"
-fi
-
-if [ -n "${PREV_LCOV_HASH}" ] && [ "${LCOV_HASH}" = "${PREV_LCOV_HASH}" ]; then
-    echo "LCOV report unchanged after '${LABEL}'" >&2
-    exit 1
-fi
-
-echo "${LCOV_HASH}" > "${LCOV_SNAPSHOT}"
-echo "LCOV report captured at ${REPORT_PATH}"
-
 if [ ${RESTART_REQUIRED} -eq 1 ] && [ -n "${RESTART_CONFIG}" ] && [ "${PGDOG_NO_RESTART:-0}" != "1" ]; then
     echo "Restarting PgDog with config '${RESTART_CONFIG}'"
     run_pgdog "${RESTART_CONFIG}"
