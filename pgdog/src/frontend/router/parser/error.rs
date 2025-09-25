@@ -2,7 +2,7 @@
 
 use thiserror::Error;
 
-use crate::frontend::router::sharding;
+use crate::{frontend::router::sharding, net::ErrorResponse};
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -68,4 +68,7 @@ pub enum Error {
 
     #[error("regex error")]
     RegexError,
+
+    #[error("{0}")]
+    ErrorResponse(ErrorResponse),
 }

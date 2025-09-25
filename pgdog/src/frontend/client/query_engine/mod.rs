@@ -114,7 +114,7 @@ impl QueryEngine {
         }
 
         // Route transaction to the right servers.
-        if !self.route_transaction(context).await? {
+        if !self.route_query(context).await? {
             self.update_stats(context);
             debug!("transaction has nowhere to go");
             return Ok(());

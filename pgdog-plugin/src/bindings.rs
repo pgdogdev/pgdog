@@ -308,6 +308,37 @@ const _: () = {
     ["Offset of field: PdRouterContext::params"]
         [::std::mem::offset_of!(PdRouterContext, params) - 40usize];
 };
+#[doc = " ErrorResponse."]
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct PdErrorResponse {
+    pub severity: *const ::std::os::raw::c_char,
+    pub code: *const ::std::os::raw::c_char,
+    pub message: *const ::std::os::raw::c_char,
+    pub detail: *const ::std::os::raw::c_char,
+    pub context: *const ::std::os::raw::c_char,
+    pub file: *const ::std::os::raw::c_char,
+    pub routine: *const ::std::os::raw::c_char,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of PdErrorResponse"][::std::mem::size_of::<PdErrorResponse>() - 56usize];
+    ["Alignment of PdErrorResponse"][::std::mem::align_of::<PdErrorResponse>() - 8usize];
+    ["Offset of field: PdErrorResponse::severity"]
+        [::std::mem::offset_of!(PdErrorResponse, severity) - 0usize];
+    ["Offset of field: PdErrorResponse::code"]
+        [::std::mem::offset_of!(PdErrorResponse, code) - 8usize];
+    ["Offset of field: PdErrorResponse::message"]
+        [::std::mem::offset_of!(PdErrorResponse, message) - 16usize];
+    ["Offset of field: PdErrorResponse::detail"]
+        [::std::mem::offset_of!(PdErrorResponse, detail) - 24usize];
+    ["Offset of field: PdErrorResponse::context"]
+        [::std::mem::offset_of!(PdErrorResponse, context) - 32usize];
+    ["Offset of field: PdErrorResponse::file"]
+        [::std::mem::offset_of!(PdErrorResponse, file) - 40usize];
+    ["Offset of field: PdErrorResponse::routine"]
+        [::std::mem::offset_of!(PdErrorResponse, routine) - 48usize];
+};
 #[doc = " Routing decision returned by the plugin."]
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -316,11 +347,15 @@ pub struct PdRoute {
     pub shard: i64,
     #[doc = " Is the query a read and should go to a replica?\n\n `1` for `true`, `0` for `false`, `2` for unknown, this setting is ignored."]
     pub read_write: u8,
+    #[doc = " Specific error response to return, if blocking query."]
+    pub error_response: PdErrorResponse,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
-    ["Size of PdRoute"][::std::mem::size_of::<PdRoute>() - 16usize];
+    ["Size of PdRoute"][::std::mem::size_of::<PdRoute>() - 72usize];
     ["Alignment of PdRoute"][::std::mem::align_of::<PdRoute>() - 8usize];
     ["Offset of field: PdRoute::shard"][::std::mem::offset_of!(PdRoute, shard) - 0usize];
     ["Offset of field: PdRoute::read_write"][::std::mem::offset_of!(PdRoute, read_write) - 8usize];
+    ["Offset of field: PdRoute::error_response"]
+        [::std::mem::offset_of!(PdRoute, error_response) - 16usize];
 };

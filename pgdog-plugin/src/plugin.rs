@@ -32,6 +32,8 @@ pub struct Plugin<'a> {
     rustc_version: Option<Symbol<'a, unsafe extern "C" fn(*mut PdStr)>>,
     /// Plugin version.
     plugin_version: Option<Symbol<'a, unsafe extern "C" fn(*mut PdStr)>>,
+    /// Library version.
+    lib_version: Option<Symbol<'a, unsafe extern "C" fn(*mut PdStr)>>,
 }
 
 impl<'a> Plugin<'a> {
@@ -73,6 +75,7 @@ impl<'a> Plugin<'a> {
         let route = unsafe { library.get(b"pgdog_route\0") }.ok();
         let rustc_version = unsafe { library.get(b"pgdog_rustc_version\0") }.ok();
         let plugin_version = unsafe { library.get(b"pgdog_plugin_version\0") }.ok();
+        let lib_version = unsafe { library.get(b"pgdog_plugin_lib_version\0") }.ok();
 
         Self {
             name: name.to_owned(),
@@ -81,6 +84,7 @@ impl<'a> Plugin<'a> {
             route,
             rustc_version,
             plugin_version,
+            lib_version,
         }
     }
 
@@ -145,6 +149,15 @@ impl<'a> Plugin<'a> {
     pub fn version(&self) -> Option<PdStr> {
         let mut output = PdStr::default();
         self.plugin_version.as_ref().map(|func| unsafe {
+            func(&mut output as *mut PdStr);
+            output
+        })
+    }
+
+    /// `pgdog-plugin` version used by the plugin.
+    pub fn lib_version(&self) -> Option<PdStr> {
+        let mut output = PdStr::default();
+        self.lib_version.as_ref().map(|func| unsafe {
             func(&mut output as *mut PdStr);
             output
         })
