@@ -163,7 +163,7 @@ jobs:
       # - name: Plugins
       #   run: bash integration/plugins/run.sh
       - name: Generate integration coverage report
-        run: cargo llvm-cov report --lcov --output-path integration.lcov
+        run: cargo llvm-cov report --release --lcov --output-path integration.lcov
       # Requires CODECOV_TOKEN secret for upload
       - uses: codecov/codecov-action@v4
         env:
