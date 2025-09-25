@@ -159,7 +159,7 @@ jobs:
       - name: Generate coverage report
         run: |
           cargo llvm-cov clean --workspace
-          cargo llvm-cov nextest --lcov --output-path lcov.info -- --no-fail-fast --test-threads=1 -E 'package(pgdog)'
+          cargo llvm-cov nextest --lcov --output-path lcov.info --no-fail-fast --test-threads=1 --filter-expr "package(pgdog)"
       # Requires CODECOV_TOKEN secret for upload
       - uses: codecov/codecov-action@v4
         with:
