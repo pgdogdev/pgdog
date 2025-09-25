@@ -37,5 +37,7 @@ popd
 
 stop_pgdog
 
+PGDOG_NO_RESTART=1 bash ${SCRIPT_DIR}/../verify_profiles.sh load_balancer
+
 docker-compose down
 popd

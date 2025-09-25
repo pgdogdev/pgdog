@@ -140,8 +140,6 @@ jobs:
           echo "PGDOG_BIN=$(realpath "$BIN_PATH")" >> "$GITHUB_ENV"
       - name: Load balancer
         run: bash integration/load_balancer/run.sh
-      - name: Verify coverage (load_balancer)
-        run: bash integration/verify_profiles.sh load_balancer
       - name: pgbench
         run: bash integration/pgbench/run.sh
       - name: Verify coverage (pgbench)

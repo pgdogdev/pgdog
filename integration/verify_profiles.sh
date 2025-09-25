@@ -127,7 +127,7 @@ fi
 echo "${LCOV_HASH}" > "${LCOV_SNAPSHOT}"
 echo "LCOV report captured at ${REPORT_PATH}"
 
-if [ ${RESTART_REQUIRED} -eq 1 ] && [ -n "${RESTART_CONFIG}" ]; then
+if [ ${RESTART_REQUIRED} -eq 1 ] && [ -n "${RESTART_CONFIG}" ] && [ "${PGDOG_NO_RESTART:-0}" != "1" ]; then
     echo "Restarting PgDog with config '${RESTART_CONFIG}'"
     run_pgdog "${RESTART_CONFIG}"
     CURRENT_CONFIG=$(cat "${CONFIG_PATH_FILE}" 2>/dev/null || echo "")

@@ -59,19 +59,7 @@ function stop_pgdog() {
     if [ -f "${pid_file}" ]; then
         local pid=$(cat "${pid_file}")
         if [ -n "${pid}" ] && kill -0 "${pid}" 2> /dev/null; then
-            kill -USR2 "${pid}" 2> /dev/null || true
-            sleep 1
-            if kill -0 "${pid}" 2> /dev/null; then
-                kill -INT "${pid}" 2> /dev/null || true
-            fi
-            local waited=0
-            while kill -0 "${pid}" 2> /dev/null && [ ${waited} -lt 15 ]; do
-                sleep 1
-                waited=$((waited + 1))
-            done
-            if kill -0 "${pid}" 2> /dev/null; then
-                kill -TERM "${pid}" 2> /dev/null || true
-            fi
+            kill -TERM "${pid}" 2> /dev/null || true
             local waited=0
             while kill -0 "${pid}" 2> /dev/null && [ ${waited} -lt 30 ]; do
                 sleep 1
