@@ -1357,6 +1357,262 @@ class ManualRoutingShardingKeyManualCommit extends TestCase {
     }
 }
 
+class ManualRoutingSetShardingKey extends TestCase {
+
+    ManualRoutingSetShardingKey() throws Exception {
+        super("pgdog_no_cross_shard", "single_sharded_list");
+    }
+
+    public void before() throws Exception {
+        Statement setup = this.connection.createStatement();
+        setup.execute("/* pgdog_shard: 0 */ TRUNCATE TABLE sharded");
+        setup.execute("/* pgdog_shard: 1 */ TRUNCATE TABLE sharded");
+    }
+
+    void run() throws Exception {
+        this.connection.setAutoCommit(false);
+
+        Statement st = this.connection.createStatement();
+
+        // Transaction 1: Test simple statement with SET pgdog.sharding_key
+        st.execute("SET pgdog.sharding_key TO '5'");
+        ResultSet rs = st.executeQuery(
+            "INSERT INTO sharded (id, value) VALUES (5, 'set_key5_simple') RETURNING *"
+        );
+        int rows = 0;
+        while (rs.next()) {
+            rows++;
+            assert_equals(rs.getInt("id"), 5);
+            assert_equals(rs.getString("value"), "set_key5_simple");
+        }
+        assert_equals(rows, 1);
+
+        // Verify data with simple statement using same key
+        rs = st.executeQuery("SELECT id, value FROM sharded WHERE id = 5");
+        rs.next();
+        assert_equals(rs.getInt("id"), 5);
+        assert_equals(rs.getString("value"), "set_key5_simple");
+
+        this.connection.commit();
+
+        // Transaction 2: Test prepared statement with SET pgdog.sharding_key
+        st.execute("SET pgdog.sharding_key TO '15'");
+        PreparedStatement insertStmt = this.connection.prepareStatement(
+            "INSERT INTO sharded (id, value) VALUES (?, ?) RETURNING *"
+        );
+        insertStmt.setInt(1, 15);
+        insertStmt.setString(2, "set_key15_prepared");
+        rs = insertStmt.executeQuery();
+        rows = 0;
+        while (rs.next()) {
+            rows++;
+            assert_equals(rs.getInt("id"), 15);
+            assert_equals(rs.getString("value"), "set_key15_prepared");
+        }
+        assert_equals(rows, 1);
+
+        // Verify data with prepared statement
+        PreparedStatement selectStmt = this.connection.prepareStatement(
+            "SELECT id, value FROM sharded WHERE id = ?"
+        );
+        selectStmt.setInt(1, 15);
+        rs = selectStmt.executeQuery();
+        rs.next();
+        assert_equals(rs.getInt("id"), 15);
+        assert_equals(rs.getString("value"), "set_key15_prepared");
+
+        this.connection.commit();
+
+        // Transaction 3: Test update with simple statement
+        st.execute("SET pgdog.sharding_key TO '5'");
+        rs = st.executeQuery(
+            "UPDATE sharded SET value = 'updated_set_key5_simple' WHERE id = 5 RETURNING *"
+        );
+        rows = 0;
+        while (rs.next()) {
+            rows++;
+            assert_equals(rs.getInt("id"), 5);
+            assert_equals(rs.getString("value"), "updated_set_key5_simple");
+        }
+        assert_equals(rows, 1);
+
+        this.connection.commit();
+
+        // Transaction 4: Test update with prepared statement
+        st.execute("SET pgdog.sharding_key TO '15'");
+        PreparedStatement updateStmt = this.connection.prepareStatement(
+            "UPDATE sharded SET value = ? WHERE id = ? RETURNING *"
+        );
+        updateStmt.setString(1, "updated_set_key15_prepared");
+        updateStmt.setInt(2, 15);
+        rs = updateStmt.executeQuery();
+        rows = 0;
+        while (rs.next()) {
+            rows++;
+            assert_equals(rs.getInt("id"), 15);
+            assert_equals(rs.getString("value"), "updated_set_key15_prepared");
+        }
+        assert_equals(rows, 1);
+
+        this.connection.commit();
+
+        // Transaction 5: Verify updates took effect
+        st.execute("SET pgdog.sharding_key TO '5'");
+        rs = st.executeQuery("SELECT value FROM sharded WHERE id = 5");
+        rs.next();
+        assert_equals(rs.getString("value"), "updated_set_key5_simple");
+
+        this.connection.commit();
+
+        // Transaction 6: Verify second update took effect
+        st.execute("SET pgdog.sharding_key TO '15'");
+        rs = st.executeQuery("SELECT value FROM sharded WHERE id = 15");
+        rs.next();
+        assert_equals(rs.getString("value"), "updated_set_key15_prepared");
+
+        this.connection.commit();
+
+        // Transaction 7: Clean up with simple statement
+        st.execute("SET pgdog.sharding_key TO '5'");
+        rs = st.executeQuery(
+            "DELETE FROM sharded WHERE id = 5 RETURNING *"
+        );
+        rows = 0;
+        while (rs.next()) {
+            rows++;
+            assert_equals(rs.getInt("id"), 5);
+            assert_equals(rs.getString("value"), "updated_set_key5_simple");
+        }
+        assert_equals(rows, 1);
+
+        this.connection.commit();
+
+        // Transaction 8: Clean up with prepared statement
+        st.execute("SET pgdog.sharding_key TO '15'");
+        PreparedStatement deleteStmt = this.connection.prepareStatement(
+            "DELETE FROM sharded WHERE id = ? RETURNING *"
+        );
+        deleteStmt.setInt(1, 15);
+        rs = deleteStmt.executeQuery();
+        rows = 0;
+        while (rs.next()) {
+            rows++;
+            assert_equals(rs.getInt("id"), 15);
+            assert_equals(rs.getString("value"), "updated_set_key15_prepared");
+        }
+        assert_equals(rows, 1);
+
+        this.connection.commit();
+
+        // Transaction 9: Test queries without sharding key in WHERE clause - using SET for routing
+        st.execute("SET pgdog.sharding_key TO '5'");
+
+        // Insert data on shard for key 5
+        st.execute("INSERT INTO sharded (id, value) VALUES (25, 'no_key_test_shard5')");
+
+        // Query without sharding key - should only find data on the shard we're routed to
+        rs = st.executeQuery("SELECT id, value FROM sharded WHERE value LIKE '%no_key_test%'");
+        rows = 0;
+        while (rs.next()) {
+            rows++;
+            assert_equals(rs.getInt("id"), 25);
+            assert_equals(rs.getString("value"), "no_key_test_shard5");
+        }
+        assert_equals(rows, 1);
+
+        this.connection.commit();
+
+        // Transaction 10: Insert on different shard and verify isolation
+        st.execute("SET pgdog.sharding_key TO '15'");
+
+        // Insert different data on shard for key 15
+        st.execute("INSERT INTO sharded (id, value) VALUES (35, 'no_key_test_shard15')");
+
+        // Query without sharding key - should only find data on current shard
+        rs = st.executeQuery("SELECT id, value FROM sharded WHERE value LIKE '%no_key_test%'");
+        rows = 0;
+        while (rs.next()) {
+            rows++;
+            assert_equals(rs.getInt("id"), 35);
+            assert_equals(rs.getString("value"), "no_key_test_shard15");
+        }
+        assert_equals(rows, 1);
+
+        this.connection.commit();
+
+        // Transaction 11: Test prepared statement without sharding key in WHERE
+        st.execute("SET pgdog.sharding_key TO '5'");
+
+        PreparedStatement countByValueStmt = this.connection.prepareStatement(
+            "SELECT COUNT(*) as count FROM sharded WHERE value LIKE ?"
+        );
+        countByValueStmt.setString(1, "%no_key_test%");
+        rs = countByValueStmt.executeQuery();
+        rs.next();
+        assert_equals(rs.getInt("count"), 1); // Should only see data from shard 5
+
+        PreparedStatement selectByValueStmt = this.connection.prepareStatement(
+            "SELECT id, value FROM sharded WHERE value = ?"
+        );
+        selectByValueStmt.setString(1, "no_key_test_shard5");
+        rs = selectByValueStmt.executeQuery();
+        rs.next();
+        assert_equals(rs.getInt("id"), 25);
+        assert_equals(rs.getString("value"), "no_key_test_shard5");
+
+        this.connection.commit();
+
+        // Transaction 12: Switch shard and verify different data with prepared statement
+        st.execute("SET pgdog.sharding_key TO '15'");
+
+        countByValueStmt.setString(1, "%no_key_test%");
+        rs = countByValueStmt.executeQuery();
+        rs.next();
+        assert_equals(rs.getInt("count"), 1); // Should only see data from shard 15
+
+        selectByValueStmt.setString(1, "no_key_test_shard15");
+        rs = selectByValueStmt.executeQuery();
+        rs.next();
+        assert_equals(rs.getInt("id"), 35);
+        assert_equals(rs.getString("value"), "no_key_test_shard15");
+
+        this.connection.commit();
+
+        // Transaction 13: Clean up test data from shard 5
+        st.execute("SET pgdog.sharding_key TO '5'");
+        rs = st.executeQuery(
+            "DELETE FROM sharded WHERE value = 'no_key_test_shard5' RETURNING *"
+        );
+        rows = 0;
+        while (rs.next()) {
+            rows++;
+            assert_equals(rs.getInt("id"), 25);
+            assert_equals(rs.getString("value"), "no_key_test_shard5");
+        }
+        assert_equals(rows, 1);
+
+        this.connection.commit();
+
+        // Transaction 14: Clean up test data from shard 15
+        st.execute("SET pgdog.sharding_key TO '15'");
+        PreparedStatement deleteByValueStmt = this.connection.prepareStatement(
+            "DELETE FROM sharded WHERE value = ? RETURNING *"
+        );
+        deleteByValueStmt.setString(1, "no_key_test_shard15");
+        rs = deleteByValueStmt.executeQuery();
+        rows = 0;
+        while (rs.next()) {
+            rows++;
+            assert_equals(rs.getInt("id"), 35);
+            assert_equals(rs.getString("value"), "no_key_test_shard15");
+        }
+        assert_equals(rows, 1);
+
+        this.connection.commit();
+        this.connection.setAutoCommit(true);
+    }
+}
+
 class Pgdog {
 
     public static Connection connect() throws Exception {
@@ -1384,5 +1640,6 @@ class Pgdog {
         new ManualRoutingShardingKey().execute();
         new ManualRoutingShardingKeyPrepared().execute();
         new ManualRoutingShardingKeyManualCommit().execute();
+        new ManualRoutingSetShardingKey().execute();
     }
 }
