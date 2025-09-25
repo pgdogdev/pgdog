@@ -27,13 +27,40 @@ function run_pgdog() {
         --config ${config_path}/pgdog.toml \
         --users ${config_path}/users.toml \
         > ${COMMON_DIR}/log.txt &
+    echo $! > ${COMMON_DIR}/pgdog.pid
+    if [ -z "${PGDOG_STOP_TRAP:-}" ]; then
+        trap stop_pgdog EXIT
+        export PGDOG_STOP_TRAP=1
+    fi
     popd
 }
 
 function stop_pgdog() {
-    killall -TERM pgdog 2> /dev/null || true
-    cat ${COMMON_DIR}/log.txt
-    rm ${COMMON_DIR}/log.txt
+    local pid_file="${COMMON_DIR}/pgdog.pid"
+    if [ -f "${pid_file}" ]; then
+        local pid=$(cat "${pid_file}")
+        if [ -n "${pid}" ] && kill -0 "${pid}" 2> /dev/null; then
+            kill -TERM "${pid}" 2> /dev/null || true
+            local waited=0
+            while kill -0 "${pid}" 2> /dev/null && [ ${waited} -lt 30 ]; do
+                sleep 1
+                waited=$((waited + 1))
+            done
+        fi
+        rm -f "${pid_file}"
+    else
+        killall -TERM pgdog 2> /dev/null || true
+        local waited=0
+        while pgrep -x pgdog > /dev/null && [ ${waited} -lt 30 ]; do
+            sleep 1
+            waited=$((waited + 1))
+        done
+    fi
+    sleep 1
+    if [ -f ${COMMON_DIR}/log.txt ]; then
+        cat ${COMMON_DIR}/log.txt
+        rm ${COMMON_DIR}/log.txt
+    fi
 }
 
 function start_toxi() {
