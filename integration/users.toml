@@ -54,3 +54,11 @@ password = "pgdog"
 name = "pgdog"
 database = "single_sharded_list"
 password = "pgdog"
+
+[[users]]
+name = "pgdog_no_cross_shard"
+database = "single_sharded_list"
+password = "pgdog"
+server_user = "pgdog"
+cross_shard_disabled = true
+min_pool_size = 0
