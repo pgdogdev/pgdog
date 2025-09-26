@@ -54,9 +54,6 @@ function run_pgdog() {
 }
 
 function stop_pgdog() {
-    if [ "${PGDOG_KEEP_RUNNING:-0}" = "1" ]; then
-        return
-    fi
     local pid_file="${COMMON_DIR}/pgdog.pid"
     local config_file="${COMMON_DIR}/pgdog.config"
     if [ -f "${pid_file}" ]; then
