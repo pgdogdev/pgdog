@@ -312,7 +312,7 @@ fn multiply_for_average(value: &Datum, count: &Datum) -> Option<Datum> {
             Some(Datum::Float(Float((float.0 as f64 * multiplier) as f32)))
         }
         Datum::Numeric(numeric) => {
-            let decimal = numeric.as_decimal()?.to_owned();
+            let decimal = numeric.as_decimal()?;
             let product = decimal * Decimal::from_i128_with_scale(multiplier_i128, 0);
             Some(Datum::Numeric(Numeric::from(product)))
         }
