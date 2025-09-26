@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Sequence, Tuple
@@ -8,7 +9,6 @@ from typing import Dict, Iterable, List, Sequence, Tuple
 import psycopg
 import psycopg.rows
 import sqlparse
-import yaml
 
 
 @dataclass(frozen=True)
@@ -31,14 +31,6 @@ class ConnectionConfig:
 
 
 @dataclass(frozen=True)
-class PairConfig:
-    name: str
-    baseline: str
-    candidate: str
-    tags: frozenset[str]
-
-
-@dataclass(frozen=True)
 class CaseDefinition:
     id: str
     description: str
@@ -47,12 +39,8 @@ class CaseDefinition:
     teardown: Path | None
     tags: frozenset[str]
     transactional: bool
-
-
-@dataclass(frozen=True)
-class CasePair:
-    case: CaseDefinition
-    pair: PairConfig
+    only_targets: Tuple[str, ...]
+    skip_targets: frozenset[str]
 
 
 @dataclass
@@ -70,6 +58,8 @@ class CaseMetadata:
     description: str
     tags: frozenset[str]
     transactional: bool
+    only_targets: Tuple[str, ...]
+    skip_targets: frozenset[str]
 
 
 class TypeRegistry:
@@ -100,22 +90,81 @@ class TypeRegistry:
 @dataclass(frozen=True)
 class SuiteConfig:
     root: Path
-    targets: dict[str, ConnectionConfig]
-    pairs: List[PairConfig]
+    targets: Tuple[ConnectionConfig, ...]
+    target_index: Dict[str, ConnectionConfig]
     cases: List[CaseDefinition]
     global_setup: Path | None
     global_teardown: Path | None
 
     def lookup_target(self, name: str) -> ConnectionConfig:
         try:
-            return self.targets[name]
+            return self.target_index[name]
         except KeyError as exc:
             raise KeyError(f"unknown connection target '{name}'") from exc
 
+    def targets_for_case(self, case: CaseDefinition) -> List[ConnectionConfig]:
+        if case.only_targets:
+            missing = [name for name in case.only_targets if name not in self.target_index]
+            if missing:
+                raise KeyError(
+                    f"case '{case.id}' references unknown targets: {', '.join(missing)}"
+                )
+            ordered = [self.target_index[name] for name in case.only_targets]
+        else:
+            ordered = list(self.targets)
+        filtered = [cfg for cfg in ordered if cfg.name not in case.skip_targets]
+        if not filtered:
+            raise ValueError(f"case '{case.id}' has no remaining targets to execute")
+        return filtered
 
-def load_suite(root: Path | None = None) -> SuiteConfig:
+
+DEFAULT_TARGETS: Tuple[ConnectionConfig, ...] = (
+    ConnectionConfig(
+        name="postgres_standard_text",
+        dsn="postgresql://pgdog:pgdog@127.0.0.1:5432/pgdog",
+        format="text",
+        tags=frozenset({"standard"}),
+    ),
+    ConnectionConfig(
+        name="postgres_standard_binary",
+        dsn="postgresql://pgdog:pgdog@127.0.0.1:5432/pgdog",
+        format="binary",
+        tags=frozenset({"standard"}),
+    ),
+    ConnectionConfig(
+        name="pgdog_standard_text",
+        dsn="postgresql://pgdog:pgdog@127.0.0.1:6432/pgdog",
+        format="text",
+        tags=frozenset({"standard"}),
+    ),
+    ConnectionConfig(
+        name="pgdog_standard_binary",
+        dsn="postgresql://pgdog:pgdog@127.0.0.1:6432/pgdog",
+        format="binary",
+        tags=frozenset({"standard"}),
+    ),
+    ConnectionConfig(
+        name="pgdog_sharded_text",
+        dsn="postgresql://pgdog:pgdog@127.0.0.1:6432/pgdog_sharded",
+        format="text",
+        tags=frozenset({"sharded"}),
+    ),
+    ConnectionConfig(
+        name="pgdog_sharded_binary",
+        dsn="postgresql://pgdog:pgdog@127.0.0.1:6432/pgdog_sharded",
+        format="binary",
+        tags=frozenset({"sharded"}),
+    ),
+)
+
+
+def load_suite(
+    root: Path | None = None,
+    targets: Sequence[ConnectionConfig] | None = None,
+) -> SuiteConfig:
     root = root or Path(__file__).resolve().parent
-    config = _load_config(root / "config.yaml")
+    target_list = tuple(targets or DEFAULT_TARGETS)
+    target_index = {cfg.name: cfg for cfg in target_list}
     cases = discover_cases(root / "cases")
     global_setup = root / "global_setup.sql"
     if not global_setup.exists():
@@ -125,35 +174,12 @@ def load_suite(root: Path | None = None) -> SuiteConfig:
         global_teardown = None
     return SuiteConfig(
         root=root,
-        targets=config["targets"],
-        pairs=config["pairs"],
+        targets=target_list,
+        target_index=target_index,
         cases=cases,
         global_setup=global_setup,
         global_teardown=global_teardown,
     )
-
-
-def _load_config(path: Path) -> dict:
-    data = yaml.safe_load(path.read_text())
-    targets = {
-        name: ConnectionConfig(
-            name=name,
-            dsn=body["dsn"],
-            format=body.get("format", "text"),
-            tags=frozenset(body.get("tags", []) or []),
-        )
-        for name, body in (data.get("targets") or {}).items()
-    }
-    pairs = [
-        PairConfig(
-            name=item["name"],
-            baseline=item["baseline"],
-            candidate=item["candidate"],
-            tags=frozenset(item.get("tags", []) or []),
-        )
-        for item in data.get("pairs", [])
-    ]
-    return {"targets": targets, "pairs": pairs}
 
 
 def discover_cases(cases_dir: Path) -> List[CaseDefinition]:
@@ -184,25 +210,19 @@ def discover_cases(cases_dir: Path) -> List[CaseDefinition]:
                 teardown=sections.get("teardown"),
                 tags=metadata.tags,
                 transactional=metadata.transactional,
+                only_targets=metadata.only_targets,
+                skip_targets=metadata.skip_targets,
             )
         )
     return cases
-
-
-def build_matrix(suite: SuiteConfig) -> List[CasePair]:
-    matrix: List[CasePair] = []
-    for case in suite.cases:
-        for pair in suite.pairs:
-            if pair.tags and not pair.tags.issubset(case.tags):
-                continue
-            matrix.append(CasePair(case=case, pair=pair))
-    return matrix
 
 
 def parse_case_metadata(path: Path) -> CaseMetadata:
     tags: List[str] = []
     description = ""
     transactional = True
+    only_targets: List[str] = []
+    skip_targets: List[str] = []
     for line in path.read_text().splitlines():
         stripped = line.strip()
         if not stripped:
@@ -215,20 +235,29 @@ def parse_case_metadata(path: Path) -> CaseMetadata:
         key, value = (part.strip() for part in body.split(":", 1))
         key_lower = key.lower()
         if key_lower == "tags":
-            cleaned = value.replace(",", " ")
-            tokens = [token.strip().lower() for token in cleaned.split() if token.strip()]
+            tokens = [token.lower() for token in _split_metadata_tokens(value)]
             tags = tokens
         elif key_lower == "description":
             description = value
         elif key_lower == "transactional":
             transactional = value.lower() not in {"false", "0", "no"}
+        elif key_lower == "only-targets":
+            only_targets = _split_metadata_tokens(value)
+        elif key_lower == "skip-targets":
+            skip_targets = _split_metadata_tokens(value)
     if not tags:
         tags = ["standard"]
-    return CaseMetadata(description=description, tags=frozenset(tags), transactional=transactional)
+    return CaseMetadata(
+        description=description,
+        tags=frozenset(tags),
+        transactional=transactional,
+        only_targets=tuple(only_targets),
+        skip_targets=frozenset(skip_targets),
+    )
 
 
 def strip_metadata_header(text: str) -> str:
-    metadata_keys = {"tags", "description", "transactional"}
+    metadata_keys = {"tags", "description", "transactional", "only-targets", "skip-targets"}
     lines = text.splitlines()
     index = 0
     while index < len(lines):
@@ -253,6 +282,11 @@ def parse_sql_file(path: Path) -> List[str]:
     return statements
 
 
+def _split_metadata_tokens(value: str) -> List[str]:
+    cleaned = value.replace(",", " ")
+    return [token.strip() for token in cleaned.split() if token.strip()]
+
+
 def execute_sql_file(target: ConnectionConfig, path: Path | None) -> None:
     if path is None:
         return
@@ -274,20 +308,32 @@ def execute_sql_file(target: ConnectionConfig, path: Path | None) -> None:
 def run_case(
     suite: SuiteConfig,
     case: CaseDefinition,
-    baseline_cfg: ConnectionConfig,
-    candidate_cfg: ConnectionConfig,
 ) -> None:
-    if suite.global_setup:
-        execute_sql_file(baseline_cfg, suite.global_setup)
-    execute_sql_file(baseline_cfg, case.setup)
-    baseline_results = _collect_results(case, baseline_cfg)
-    candidate_results = _collect_results(case, candidate_cfg)
+    targets = suite.targets_for_case(case)
+    setup_targets = _unique_setup_targets(targets)
     try:
-        _assert_equal(case, baseline_cfg, candidate_cfg, baseline_results, candidate_results)
+        for cfg in setup_targets:
+            if suite.global_setup:
+                execute_sql_file(cfg, suite.global_setup)
+            execute_sql_file(cfg, case.setup)
+
+        results: Dict[str, List[StatementResult]] = {}
+        for cfg in targets:
+            results[cfg.name] = _collect_results(case, cfg)
+
+        _assert_all_equal(case, targets, results)
     finally:
-        execute_sql_file(baseline_cfg, case.teardown)
-        if suite.global_teardown:
-            execute_sql_file(baseline_cfg, suite.global_teardown)
+        for cfg in reversed(setup_targets):
+            execute_sql_file(cfg, case.teardown)
+            if suite.global_teardown:
+                execute_sql_file(cfg, suite.global_teardown)
+
+
+def _unique_setup_targets(targets: Sequence[ConnectionConfig]) -> List[ConnectionConfig]:
+    unique: OrderedDict[str, ConnectionConfig] = OrderedDict()
+    for cfg in targets:
+        unique.setdefault(cfg.dsn, cfg)
+    return list(unique.values())
 
 
 def _collect_results(case: CaseDefinition, cfg: ConnectionConfig) -> List[StatementResult]:
@@ -331,7 +377,19 @@ def _collect_results(case: CaseDefinition, cfg: ConnectionConfig) -> List[Statem
         conn.close()
 
 
-def _assert_equal(
+def _assert_all_equal(
+    case: CaseDefinition,
+    ordered_targets: Sequence[ConnectionConfig],
+    results: Dict[str, Sequence[StatementResult]],
+) -> None:
+    baseline_cfg = ordered_targets[0]
+    baseline_results = results[baseline_cfg.name]
+    for candidate_cfg in ordered_targets[1:]:
+        candidate_results = results[candidate_cfg.name]
+        _assert_pair_equal(case, baseline_cfg, candidate_cfg, baseline_results, candidate_results)
+
+
+def _assert_pair_equal(
     case: CaseDefinition,
     baseline_cfg: ConnectionConfig,
     candidate_cfg: ConnectionConfig,
@@ -374,10 +432,8 @@ def _assert_equal(
 
 __all__ = [
     "CaseDefinition",
-    "CasePair",
     "ConnectionConfig",
     "SuiteConfig",
-    "build_matrix",
     "load_suite",
     "run_case",
 ]
