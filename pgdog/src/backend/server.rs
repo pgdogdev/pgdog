@@ -417,6 +417,7 @@ impl Server {
                 let cmd = CommandComplete::from_bytes(message.to_bytes()?)?;
                 match cmd.command() {
                     "PREPARE" | "DEALLOCATE" => self.sync_prepared = true,
+                    "DEALLOCATE ALL" | "DISCARD ALL" => self.prepared_statements.clear(),
                     "RESET" => self.client_params.clear(), // Someone reset params, we're gonna need to re-sync.
                     _ => (),
                 }
@@ -1973,5 +1974,83 @@ pub mod test {
                 assert_eq!(msg.code(), c);
             }
         }
+    }
+
+    #[tokio::test]
+    async fn test_deallocate_all_clears_cache() {
+        let mut server = test_server().await;
+
+        server
+            .send(
+                &vec![
+                    Parse::named("__pgdog_1", "SELECT $1::bigint").into(),
+                    Parse::named("__pgdog_2", "SELECT 123").into(),
+                    Parse::named("__pgdog_3", "SELECT 1234").into(),
+                    Parse::named("__pgdog_4", "SELECT 12345").into(),
+                    Flush.into(),
+                ]
+                .into(),
+            )
+            .await
+            .unwrap();
+
+        for _ in 0..4 {
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), '1');
+        }
+
+        assert_eq!(server.prepared_statements.len(), 4);
+
+        server
+            .send(&vec![Query::new("DEALLOCATE ALL").into(), Sync.into()].into())
+            .await
+            .unwrap();
+
+        for c in ['C', 'Z', 'Z'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), c);
+        }
+
+        assert_eq!(server.prepared_statements.len(), 0);
+        assert!(server.done());
+    }
+
+    #[tokio::test]
+    async fn test_discard_all_clears_cache() {
+        let mut server = test_server().await;
+
+        server
+            .send(
+                &vec![
+                    Parse::named("__pgdog_1", "SELECT $1::bigint").into(),
+                    Parse::named("__pgdog_2", "SELECT 123").into(),
+                    Parse::named("__pgdog_3", "SELECT 1234").into(),
+                    Parse::named("__pgdog_4", "SELECT 12345").into(),
+                    Flush.into(),
+                ]
+                .into(),
+            )
+            .await
+            .unwrap();
+
+        for _ in 0..4 {
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), '1');
+        }
+
+        assert_eq!(server.prepared_statements.len(), 4);
+
+        server
+            .send(&vec![Query::new("DISCARD ALL").into(), Sync.into()].into())
+            .await
+            .unwrap();
+
+        for c in ['C', 'Z', 'Z'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), c);
+        }
+
+        assert_eq!(server.prepared_statements.len(), 0);
+        assert!(server.done());
     }
 }
