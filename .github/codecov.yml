@@ -1,0 +1,48 @@
+codecov:
+  notify:
+    wait_for_ci: true
+    after_n_builds: 1
+  require_ci_to_pass: true
+  disable_default_path_fixes: false
+
+comment:
+  layout: "reach,diff,flags,tree"
+  behavior: default
+  require_changes: true
+  show_carryforward_flags: true
+
+coverage:
+  precision: 2
+  round: down
+  range: 60..90
+  status:
+    project:
+      default:
+        informational: true
+        target: auto
+        threshold: 1
+        base: auto
+    patch:
+      default:
+        informational: true
+        target: 80
+        threshold: 5
+        base: auto
+    changes: false
+
+flags:
+  unit:
+    paths:
+      - pgdog
+    carryforward: true
+  integration:
+    paths:
+      - integration
+    carryforward: false
+
+ignore:
+  - "**/tests/**"
+  - "**/examples/**"
+  - integration/python/venv
+
+slack_app: true
