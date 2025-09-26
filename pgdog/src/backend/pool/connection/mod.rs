@@ -308,10 +308,10 @@ impl Connection {
     }
 
     async fn ensure_guard_in_sync(server: &mut Guard) -> Result<(), Error> {
-        if server.needs_drain() {
+        if server.needs_drain() || server.extended_pipeline_pending() {
             server.drain().await;
 
-            if server.needs_drain() {
+            if server.needs_drain() || server.extended_pipeline_pending() {
                 server.stats_mut().state(State::Error);
                 return Err(Error::NotInSync);
             }

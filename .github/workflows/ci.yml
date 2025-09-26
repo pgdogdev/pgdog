@@ -150,10 +150,6 @@ jobs:
         env:
           PGDOG_KEEP_RUNNING: 1
         run: bash integration/js/pg_tests/run.sh
-      - name: Python
-        env:
-          PGDOG_KEEP_RUNNING: 1
-        run: bash integration/python/run.sh
       - name: Ruby
         env:
           PGDOG_KEEP_RUNNING: 1
@@ -176,6 +172,8 @@ jobs:
         run: bash integration/rust/run.sh
       - name: Stop shared PgDog
         run: bash -lc 'source integration/common.sh; stop_pgdog'
+      - name: Python
+        run: bash integration/python/run.sh
       - name: Load balancer
         run: bash integration/load_balancer/run.sh
       - name: More complex stuff
