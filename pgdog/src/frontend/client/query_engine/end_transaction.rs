@@ -53,6 +53,7 @@ impl QueryEngine {
         // tries to commit transaction anyway,
         // we rollback to prevent cross-shard inconsistencies.
         if context.in_error() && !rollback {
+            self.backend.ensure_in_sync().await?;
             self.backend.execute("ROLLBACK").await?;
 
             // Update stats.
@@ -88,6 +89,7 @@ impl QueryEngine {
             self.end_not_connected(context, false, extended).await?;
         } else {
             if rollback {
+                self.backend.ensure_in_sync().await?;
                 self.notify_buffer.clear();
             }
             context.rollback = rollback;

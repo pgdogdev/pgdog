@@ -307,6 +307,39 @@ impl Connection {
         Ok(())
     }
 
+    async fn ensure_guard_in_sync(server: &mut Guard) -> Result<(), Error> {
+        if server.needs_drain() {
+            server.drain().await;
+
+            if server.needs_drain() {
+                server.stats_mut().state(State::Error);
+                return Err(Error::NotInSync);
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Make sure the underlying server connections are ready to accept more work.
+    ///
+    /// This is primarily useful after errors where the extended query pipeline may
+    /// still have pending messages that need to be drained before issuing recovery
+    /// statements such as `ROLLBACK`.
+    pub async fn ensure_in_sync(&mut self) -> Result<(), Error> {
+        match &mut self.binding {
+            Binding::Direct(Some(server)) => Self::ensure_guard_in_sync(server).await,
+
+            Binding::MultiShard(servers, _) => {
+                for server in servers.iter_mut() {
+                    Self::ensure_guard_in_sync(server).await?;
+                }
+                Ok(())
+            }
+
+            _ => Ok(()),
+        }
+    }
+
     /// Fetch the cluster from the global database store.
     pub(crate) fn reload(&mut self) -> Result<(), Error> {
         match self.binding {
