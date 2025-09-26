@@ -1,6 +1,7 @@
 use super::{Aggregate, AggregateFunction, HelperMapping, RewriteOutput, RewritePlan};
 use pg_query::protobuf::{FuncCall, Node, ResTarget, String as PgString};
 use pg_query::{NodeEnum, ParseResult};
+use tracing::debug;
 
 /// Query rewrite engine. Currently supports injecting helper aggregates for AVG.
 #[derive(Default)]
@@ -15,7 +16,10 @@ impl RewriteEngine {
     pub fn rewrite_select(&self, sql: &str, aggregate: &Aggregate) -> RewriteOutput {
         match pg_query::parse(sql) {
             Ok(parsed) => self.rewrite_parsed(parsed, aggregate, sql),
-            Err(_) => RewriteOutput::new(sql.to_string(), RewritePlan::new()),
+            Err(err) => {
+                debug!("rewrite failed to parse SELECT: {}", err);
+                RewriteOutput::new(sql.to_string(), RewritePlan::new())
+            }
         }
     }
 
@@ -63,7 +67,7 @@ impl RewriteEngine {
             let Some(original_value) = res_target.val.as_ref() else {
                 continue;
             };
-            let Some(NodeEnum::FuncCall(func_call)) = original_value.node.as_ref() else {
+            let Some(func_call) = Self::extract_func_call(original_value) else {
                 continue;
             };
 
@@ -101,6 +105,29 @@ impl RewriteEngine {
 
         let rewritten_sql = ast.deparse().unwrap_or_else(|_| original_sql.to_string());
         RewriteOutput::new(rewritten_sql, plan)
+    }
+
+    fn extract_func_call(node: &Node) -> Option<&FuncCall> {
+        match node.node.as_ref()? {
+            NodeEnum::FuncCall(func) => Some(func),
+            NodeEnum::TypeCast(cast) => cast
+                .arg
+                .as_deref()
+                .and_then(|inner| Self::extract_func_call(inner)),
+            NodeEnum::CollateClause(collate) => collate
+                .arg
+                .as_deref()
+                .and_then(|inner| Self::extract_func_call(inner)),
+            NodeEnum::CoerceToDomain(coerce) => coerce
+                .arg
+                .as_deref()
+                .and_then(|inner| Self::extract_func_call(inner)),
+            NodeEnum::ResTarget(res) => res
+                .val
+                .as_deref()
+                .and_then(|inner| Self::extract_func_call(inner)),
+            _ => None,
+        }
     }
 
     fn build_count_func(original: &FuncCall, distinct: bool) -> FuncCall {
@@ -164,6 +191,36 @@ mod tests {
         assert_eq!(helper.helper_column, 1);
         assert_eq!(helper.expr_id, 0);
         assert!(!helper.distinct);
+
+        let parsed = pg_query::parse(&output.sql).unwrap();
+        let stmt = match parsed
+            .protobuf
+            .stmts
+            .first()
+            .and_then(|stmt| stmt.stmt.as_ref())
+        {
+            Some(raw) => match raw.node.as_ref().unwrap() {
+                NodeEnum::SelectStmt(select) => select,
+                _ => panic!("not select"),
+            },
+            None => panic!("empty"),
+        };
+        let aggregate = Aggregate::parse(stmt).unwrap();
+        assert_eq!(aggregate.targets().len(), 2);
+        assert!(aggregate
+            .targets()
+            .iter()
+            .any(|target| matches!(target.function(), AggregateFunction::Count)));
+    }
+
+    #[test]
+    fn rewrite_engine_handles_avg_with_casts() {
+        let output = rewrite("SELECT AVG(amount)::numeric::bigint::real FROM sharded");
+        assert_eq!(output.plan.drop_columns(), &[1]);
+        assert_eq!(output.plan.helpers().len(), 1);
+        let helper = &output.plan.helpers()[0];
+        assert_eq!(helper.avg_column, 0);
+        assert_eq!(helper.helper_column, 1);
 
         let parsed = pg_query::parse(&output.sql).unwrap();
         let stmt = match parsed
