@@ -6,7 +6,7 @@ This directory hosts the pure-SQL regression harness used to ensure PgDog matche
 
 - `cases/` – numbered SQL scenarios using the `00x_slug_(setup|case|teardown).sql` convention.
 - `global_setup.sql` / `global_teardown.sql` – optional hooks that run before/after every case.
-- `lib.py` – harness logic plus in-code definitions for the six comparison targets.
+- `lib.py` – harness logic plus in-code definitions for the six comparison targets (DSNs disable GSS encryption so PgDog can proxy them).
 - `run.sh` / `dev.sh` – integration entrypoints matching the other language suites.
 - `test_sql_regression.py` – pytest runner that executes every case against all registered targets.
 

@@ -118,40 +118,45 @@ class SuiteConfig:
         return filtered
 
 
+STANDARD_DSN = "postgresql://pgdog:pgdog@127.0.0.1:5432/pgdog?gssencmode=disable"
+PGDOG_DSN = "postgresql://pgdog:pgdog@127.0.0.1:6432/pgdog?gssencmode=disable"
+SHARDED_DSN = "postgresql://pgdog:pgdog@127.0.0.1:6432/pgdog_sharded?gssencmode=disable"
+
+
 DEFAULT_TARGETS: Tuple[ConnectionConfig, ...] = (
     ConnectionConfig(
         name="postgres_standard_text",
-        dsn="postgresql://pgdog:pgdog@127.0.0.1:5432/pgdog",
+        dsn=STANDARD_DSN,
         format="text",
         tags=frozenset({"standard"}),
     ),
     ConnectionConfig(
         name="postgres_standard_binary",
-        dsn="postgresql://pgdog:pgdog@127.0.0.1:5432/pgdog",
+        dsn=STANDARD_DSN,
         format="binary",
         tags=frozenset({"standard"}),
     ),
     ConnectionConfig(
         name="pgdog_standard_text",
-        dsn="postgresql://pgdog:pgdog@127.0.0.1:6432/pgdog",
+        dsn=PGDOG_DSN,
         format="text",
         tags=frozenset({"standard"}),
     ),
     ConnectionConfig(
         name="pgdog_standard_binary",
-        dsn="postgresql://pgdog:pgdog@127.0.0.1:6432/pgdog",
+        dsn=PGDOG_DSN,
         format="binary",
         tags=frozenset({"standard"}),
     ),
     ConnectionConfig(
         name="pgdog_sharded_text",
-        dsn="postgresql://pgdog:pgdog@127.0.0.1:6432/pgdog_sharded",
+        dsn=SHARDED_DSN,
         format="text",
         tags=frozenset({"sharded"}),
     ),
     ConnectionConfig(
         name="pgdog_sharded_binary",
-        dsn="postgresql://pgdog:pgdog@127.0.0.1:6432/pgdog_sharded",
+        dsn=SHARDED_DSN,
         format="binary",
         tags=frozenset({"sharded"}),
     ),
@@ -296,11 +301,11 @@ def execute_sql_file(target: ConnectionConfig, path: Path | None) -> None:
     if not statements:
         return
     conn = target.connect()
+    conn.autocommit = True
     try:
         with conn.cursor() as cur:
             for stmt in statements:
                 cur.execute(stmt)
-        conn.commit()
     finally:
         conn.close()
 
