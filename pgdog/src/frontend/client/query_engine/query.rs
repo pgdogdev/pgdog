@@ -21,7 +21,7 @@ impl QueryEngine {
         route: &Route,
     ) -> Result<(), Error> {
         // Check that we're not in a transaction error state.
-        if !self.transaction_error_check(context, route).await? {
+        if !self.transaction_error_check(context).await? {
             return Ok(());
         }
 
@@ -45,6 +45,20 @@ impl QueryEngine {
         // Check we can run this query.
         if !self.cross_shard_check(context, route).await? {
             return Ok(());
+        }
+
+        if let Some(sql) = route.rewritten_sql() {
+            match context.client_request.rewrite(sql) {
+                Ok(()) => (),
+                Err(crate::net::Error::OnlySimpleForRewrites) => {
+                    context.client_request.rewrite_prepared(
+                        sql,
+                        context.prepared_statements,
+                        route.rewrite_plan(),
+                    );
+                }
+                Err(err) => return Err(err.into()),
+            }
         }
 
         // Set response format.
@@ -250,9 +264,8 @@ impl QueryEngine {
     async fn transaction_error_check(
         &mut self,
         context: &mut QueryEngineContext<'_>,
-        route: &Route,
     ) -> Result<bool, Error> {
-        if context.in_error() && !context.rollback && route.is_cross_shard() {
+        if context.in_error() && !context.rollback && context.client_request.executable() {
             let bytes_sent = context
                 .stream
                 .error(

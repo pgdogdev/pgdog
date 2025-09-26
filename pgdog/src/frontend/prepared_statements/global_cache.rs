@@ -1,6 +1,7 @@
 use bytes::Bytes;
 
 use crate::{
+    frontend::router::parser::RewritePlan,
     net::messages::{Parse, RowDescription},
     stats::memory::MemoryUsage,
 };
@@ -17,6 +18,7 @@ pub struct Statement {
     parse: Parse,
     row_description: Option<RowDescription>,
     version: usize,
+    rewrite_plan: Option<RewritePlan>,
 }
 
 impl MemoryUsage for Statement {
@@ -28,6 +30,8 @@ impl MemoryUsage for Statement {
             } else {
                 0
             }
+            // Rewrite plans are small; treat as zero-cost for now.
+            + 0
     }
 }
 
@@ -163,6 +167,7 @@ impl GlobalCache {
                     parse,
                     row_description: None,
                     version: 0,
+                    rewrite_plan: None,
                 },
             );
 
@@ -199,6 +204,7 @@ impl GlobalCache {
                 parse,
                 row_description: None,
                 version: self.versions,
+                rewrite_plan: None,
             },
         );
 
@@ -213,6 +219,39 @@ impl GlobalCache {
                 entry.row_description = Some(row_description.clone());
             }
         }
+    }
+
+    pub fn update_query(&mut self, name: &str, sql: &str) -> bool {
+        if let Some(statement) = self.names.get_mut(name) {
+            let old_key = statement.cache_key();
+            let cached = self.statements.remove(&old_key);
+            statement.parse.set_query(sql);
+            let new_key = statement.cache_key();
+            if let Some(entry) = cached {
+                self.statements.insert(new_key, entry);
+            }
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn set_rewrite_plan(&mut self, name: &str, plan: RewritePlan) {
+        if let Some(statement) = self.names.get_mut(name) {
+            statement.rewrite_plan = Some(plan);
+        }
+    }
+
+    pub fn rewrite_plan(&self, name: &str) -> Option<RewritePlan> {
+        self.names.get(name).and_then(|s| s.rewrite_plan.clone())
+    }
+
+    #[cfg(test)]
+    pub fn reset(&mut self) {
+        self.statements.clear();
+        self.names.clear();
+        self.counter = 0;
+        self.versions = 0;
     }
 
     /// Get the query string stored in the global cache

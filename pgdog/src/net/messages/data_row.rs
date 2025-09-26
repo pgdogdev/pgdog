@@ -167,6 +167,36 @@ impl DataRow {
         self
     }
 
+    /// Drop columns by 0-based index, ignoring indexes out of bounds.
+    pub fn drop_columns(&mut self, drop: &[usize]) {
+        if drop.is_empty() {
+            return;
+        }
+
+        let mut indices = drop.to_vec();
+        indices.sort_unstable();
+        indices.dedup();
+
+        if indices.is_empty() {
+            return;
+        }
+
+        let mut dropped = indices.into_iter().peekable();
+        let mut retained = Vec::with_capacity(self.columns.len());
+
+        for (idx, column) in self.columns.drain(..).enumerate() {
+            match dropped.peek() {
+                Some(&drop_idx) if drop_idx == idx => {
+                    dropped.next();
+                }
+                _ => retained.push(column),
+            }
+        }
+
+        // Any remaining indexes are beyond the current column count; ignore.
+        self.columns = retained;
+    }
+
     /// Create data row from columns.
     pub fn from_columns(columns: Vec<impl ToDataRowColumn>) -> Self {
         let mut dr = Self::new();
@@ -359,5 +389,19 @@ mod test {
         );
 
         assert_eq!(dr, deserialized);
+    }
+
+    #[test]
+    fn test_drop_columns() {
+        let mut dr = DataRow::new();
+        dr.add("a");
+        dr.add("b");
+        dr.add("c");
+
+        dr.drop_columns(&[1, 5]);
+
+        assert_eq!(dr.len(), 2);
+        assert_eq!(dr.get::<String>(0, Format::Text).unwrap(), "a");
+        assert_eq!(dr.get::<String>(1, Format::Text).unwrap(), "c");
     }
 }
