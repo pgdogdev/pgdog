@@ -6,7 +6,7 @@ use std::{
 };
 
 use crate::{
-    frontend::router::parser::{Aggregate, DistinctBy, DistinctColumn, OrderBy},
+    frontend::router::parser::{Aggregate, DistinctBy, DistinctColumn, OrderBy, RewritePlan},
     net::{
         messages::{DataRow, FromBytes, Message, Protocol, ToBytes, Vector},
         Decoder,
@@ -136,22 +136,40 @@ impl Buffer {
         &mut self,
         aggregate: &Aggregate,
         decoder: &Decoder,
+        plan: &RewritePlan,
     ) -> Result<(), super::Error> {
         let buffer: VecDeque<DataRow> = std::mem::take(&mut self.buffer);
-        if aggregate.is_empty() {
-            self.buffer = buffer;
+        let mut rows = if aggregate.is_empty() {
+            buffer
         } else {
-            let aggregates = Aggregates::new(&buffer, decoder, aggregate);
+            let aggregates = Aggregates::new(&buffer, decoder, aggregate, plan);
             let result = aggregates.aggregate()?;
 
-            if !result.is_empty() {
-                self.buffer = result;
+            if result.is_empty() {
+                buffer
             } else {
-                self.buffer = buffer;
+                result
             }
-        }
+        };
+
+        Self::drop_helper_columns(&mut rows, plan);
+        self.buffer = rows;
 
         Ok(())
+    }
+
+    fn drop_helper_columns(rows: &mut VecDeque<DataRow>, plan: &RewritePlan) {
+        if plan.drop_columns().is_empty() {
+            return;
+        }
+
+        let mut drop = plan.drop_columns().to_vec();
+        drop.sort_unstable();
+        drop.dedup();
+
+        for row in rows.iter_mut() {
+            row.drop_columns(&drop);
+        }
     }
 
     pub(super) fn distinct(&mut self, distinct: &Option<DistinctBy>, decoder: &Decoder) {
@@ -256,7 +274,8 @@ mod test {
             buf.add(dr.message().unwrap()).unwrap();
         }
 
-        buf.aggregate(&agg, &Decoder::from(&rd)).unwrap();
+        buf.aggregate(&agg, &Decoder::from(&rd), &RewritePlan::new())
+            .unwrap();
         buf.full();
 
         assert_eq!(buf.len(), 1);
@@ -282,7 +301,8 @@ mod test {
             }
         }
 
-        buf.aggregate(&agg, &Decoder::from(&rd)).unwrap();
+        buf.aggregate(&agg, &Decoder::from(&rd), &RewritePlan::new())
+            .unwrap();
         buf.full();
 
         assert_eq!(buf.len(), 2);

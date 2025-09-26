@@ -4,6 +4,7 @@ use std::ops::{Deref, DerefMut};
 use lazy_static::lazy_static;
 
 use crate::{
+    frontend::router::parser::RewritePlan,
     net::{
         messages::{Bind, CopyData, Protocol, Query},
         Error, Flush, ProtocolMessage,
@@ -165,6 +166,30 @@ impl ClientRequest {
         self.messages.clear();
         self.messages.push(Query::new(query).into());
         Ok(())
+    }
+
+    /// Rewrite prepared statement SQL before sending it to the backend.
+    pub fn rewrite_prepared(
+        &mut self,
+        query: &str,
+        prepared: &mut PreparedStatements,
+        plan: &RewritePlan,
+    ) -> bool {
+        let mut updated = false;
+
+        for message in self.messages.iter_mut() {
+            if let ProtocolMessage::Parse(parse) = message {
+                parse.set_query(query);
+                let name = parse.name().to_owned();
+                let _ = prepared.update_query(&name, query);
+                if !plan.is_noop() {
+                    prepared.set_rewrite_plan(&name, plan.clone());
+                }
+                updated = true;
+            }
+        }
+
+        updated
     }
 
     /// Get the route for this client request.
