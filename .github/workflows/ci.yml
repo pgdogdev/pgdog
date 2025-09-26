@@ -87,10 +87,10 @@ jobs:
           files: lcov.info
           flags: unit
           fail_ci_if_error: true
-  integration-build:
+  integration:
     runs-on: blacksmith-4vcpu-ubuntu-2404
     env:
-      LLVM_PROFILE_FILE: ${{ github.workspace }}/target/llvm-cov-target/profiles/build-%p-%m.profraw
+      LLVM_PROFILE_FILE: ${{ github.workspace }}/target/llvm-cov-target/profiles/pgdog-%p-%m.profraw
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rs/toolchain@v1
@@ -115,6 +115,7 @@ jobs:
           sudo apt remove -y cmake
           sudo pip3 install cmake==3.31.6
           cmake --version
+          cargo install cargo-nextest --version "0.9.78" --locked
           bash integration/toxi/setup.sh
           sudo curl -SL https://github.com/docker/compose/releases/download/v2.36.1/docker-compose-linux-x86_64 -o /usr/local/bin/docker-compose
           sudo chmod +x /usr/local/bin/docker-compose
@@ -136,142 +137,59 @@ jobs:
             exit 1
           fi
           echo "Using instrumented binary at $BIN_PATH"
-      - name: Package instrumented target
-        run: |
-          tar -C target -czf instrumented-target.tar.gz llvm-cov-target
-      - uses: actions/upload-artifact@v4
-        with:
-          name: instrumented-target
-          path: instrumented-target.tar.gz
-  integration-suites:
-    name: integration (${{ matrix.name }})
-    runs-on: blacksmith-4vcpu-ubuntu-2404
-    needs: integration-build
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: pgbench
-            script: integration/pgbench/run.sh
-          - name: go
-            script: integration/go/run.sh
-          - name: javascript
-            script: integration/js/pg_tests/run.sh
-          - name: python
-            script: integration/python/run.sh
-          - name: ruby
-            script: integration/ruby/run.sh
-          - name: java
-            script: integration/java/run.sh
-          - name: sql
-            script: integration/sql/run.sh
-          - name: toxi
-            script: integration/toxi/run.sh
-          - name: rust
-            script: integration/rust/run.sh
-          - name: load_balancer
-            script: integration/load_balancer/run.sh
-          - name: complex
-            script: integration/complex/run.sh
-          - name: dry_run
-            script: integration/dry_run/run.sh
-    env:
-      LLVM_PROFILE_FILE: ${{ github.workspace }}/target/llvm-cov-target/profiles/${{ matrix.name }}-%p-%m.profraw
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          override: true
-          components: llvm-tools-preview
-      - uses: useblacksmith/rust-cache@v3
-        with:
-          prefix-key: release-1
-      - name: Setup dependencies
-        run: |
-          sudo service postgresql start
-          sudo -u postgres createuser --superuser --login $USER
-          sudo -u postgres createdb $USER
-          sudo -u postgres psql -c 'ALTER SYSTEM SET max_connections TO 1000;'
-          sudo -u postgres psql -c 'ALTER SYSTEM SET max_prepared_transactions TO 1000;'
-          sudo service postgresql restart
-          bash integration/setup.sh
-          sudo apt update && sudo apt install -y python3-virtualenv mold
-          sudo gem install bundler
-          sudo apt remove -y cmake
-          sudo pip3 install cmake==3.31.6
-          cmake --version
-          bash integration/toxi/setup.sh
-          sudo curl -SL https://github.com/docker/compose/releases/download/v2.36.1/docker-compose-linux-x86_64 -o /usr/local/bin/docker-compose
-          sudo chmod +x /usr/local/bin/docker-compose
-      - name: Install cargo-nextest
-        if: matrix.name == 'rust'
-        run: cargo install cargo-nextest --version "0.9.78" --locked
-      - name: Download instrumented target
-        uses: actions/download-artifact@v4
-        with:
-          name: instrumented-target
-          path: instrumented-target
-      - name: Prepare instrumented binary
-        run: |
-          mkdir -p target
-          tar -xzf instrumented-target/instrumented-target.tar.gz -C target
-          BIN_PATH=$(find target/llvm-cov-target -type f -path '*/release/pgdog' | head -n 1)
-          if [ -z "$BIN_PATH" ]; then
-            echo "Instrumented PgDog binary not found" >&2
-            exit 1
-          fi
-          mkdir -p target/llvm-cov-target/profiles
-          rm -f target/llvm-cov-target/profiles/*.profraw
           echo "PGDOG_BIN=$(realpath "$BIN_PATH")" >> "$GITHUB_ENV"
-      - name: Run suite
-        run: bash ${{ matrix.script }}
-      - name: Package coverage profiles
-        if: always()
+      - name: pgbench
+        env:
+          PGDOG_KEEP_RUNNING: 1
+        run: bash integration/pgbench/run.sh
+      - name: Go
+        env:
+          PGDOG_KEEP_RUNNING: 1
+        run: bash integration/go/run.sh
+      - name: JavaScript
+        env:
+          PGDOG_KEEP_RUNNING: 1
+        run: bash integration/js/pg_tests/run.sh
+      - name: Python
+        env:
+          PGDOG_KEEP_RUNNING: 1
+        run: bash integration/python/run.sh
+      - name: Ruby
+        env:
+          PGDOG_KEEP_RUNNING: 1
+        run: bash integration/ruby/run.sh
+      - name: Java
+        env:
+          PGDOG_KEEP_RUNNING: 1
+        run: bash integration/java/run.sh
+      - name: SQL
+        env:
+          PGDOG_KEEP_RUNNING: 1
+        run: bash integration/sql/run.sh
+      - name: Toxi
+        env:
+          PGDOG_KEEP_RUNNING: 1
+        run: bash integration/toxi/run.sh
+      - name: Rust
+        env:
+          PGDOG_KEEP_RUNNING: 1
+        run: bash integration/rust/run.sh
+      - name: Stop shared PgDog
+        run: bash -lc 'source integration/common.sh; stop_pgdog'
+      - name: Load balancer
+        run: bash integration/load_balancer/run.sh
+      - name: More complex stuff
+        run: bash integration/complex/run.sh
+      - name: Dry run
+        run: bash integration/dry_run/run.sh
+      # - name: Plugins
+      #   run: bash integration/plugins/run.sh
+      - name: Ensure PgDog stopped
         run: |
-          tar -C target/llvm-cov-target -czf coverage-${{ matrix.name }}.tar.gz profiles
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: coverage-${{ matrix.name }}
-          path: coverage-${{ matrix.name }}.tar.gz
-  integration-report:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
-    needs:
-      - integration-build
-      - integration-suites
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          override: true
-          components: llvm-tools-preview
-      - uses: useblacksmith/rust-cache@v3
-        with:
-          prefix-key: release-1
-      - name: Install coverage tooling
-        run: cargo install cargo-llvm-cov --locked --version "0.6.10"
-      - name: Download instrumented target
-        uses: actions/download-artifact@v4
-        with:
-          name: instrumented-target
-          path: instrumented-target
-      - name: Extract instrumented target
-        run: |
-          mkdir -p target
-          tar -xzf instrumented-target/instrumented-target.tar.gz -C target
-      - name: Download coverage profiles
-        uses: actions/download-artifact@v4
-        with:
-          pattern: coverage-*
-          path: coverage
-      - name: Merge coverage profiles
-        run: |
-          mkdir -p target/llvm-cov-target/profiles
-          find coverage -name '*.tar.gz' -print0 | while IFS= read -r -d '' archive; do
-            tar -xzf "$archive" -C target/llvm-cov-target
-          done
+          if pgrep -x pgdog > /dev/null; then
+            killall -TERM pgdog
+            sleep 5
+          fi
       - name: Generate integration coverage report
         run: cargo llvm-cov report --release --package pgdog --lcov --output-path integration.lcov
       # Requires CODECOV_TOKEN secret for upload
