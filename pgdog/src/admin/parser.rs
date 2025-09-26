@@ -165,3 +165,26 @@ impl Parser {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{Error, ParseResult, Parser};
+
+    #[test]
+    fn parses_show_clients_command() {
+        let result = Parser::parse("SHOW CLIENTS;");
+        assert!(matches!(result, Ok(ParseResult::ShowClients(_))));
+    }
+
+    #[test]
+    fn parses_reset_query_cache_command() {
+        let result = Parser::parse("RESET QUERY_CACHE");
+        assert!(matches!(result, Ok(ParseResult::ResetQueryCache(_))));
+    }
+
+    #[test]
+    fn rejects_unknown_admin_command() {
+        let result = Parser::parse("FOO BAR");
+        assert!(matches!(result, Err(Error::Syntax)));
+    }
+}

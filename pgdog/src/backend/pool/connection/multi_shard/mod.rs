@@ -129,7 +129,11 @@ impl MultiShard {
 
                     if !self.buffer.is_empty() {
                         self.buffer
-                            .aggregate(self.route.aggregate(), &self.decoder)
+                            .aggregate(
+                                self.route.aggregate(),
+                                &self.decoder,
+                                self.route.rewrite_plan(),
+                            )
                             .map_err(Error::from)?;
 
                         self.buffer.sort(self.route.order_by(), &self.decoder);
@@ -165,7 +169,13 @@ impl MultiShard {
                 if self.counters.row_description == self.shards {
                     // Only send it to the client once all shards sent it,
                     // so we don't get early requests from clients.
-                    forward = Some(message);
+                    let plan = self.route.rewrite_plan();
+                    if plan.drop_columns().is_empty() {
+                        forward = Some(message);
+                    } else {
+                        let client_rd = rd.drop_columns(plan.drop_columns());
+                        forward = Some(client_rd.message()?);
+                    }
                 }
             }
 
