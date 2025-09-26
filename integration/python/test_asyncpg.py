@@ -139,6 +139,32 @@ async def test_insert_allshard(conns):
 
 
 @pytest.mark.asyncio
+async def test_bigint_binary(conns):
+    big_value = 1 << 62
+    for conn in conns:
+        await conn.execute("DROP TABLE IF EXISTS binary_bigint")
+        await conn.execute("CREATE TABLE binary_bigint (id BIGINT)")
+        await conn.execute("INSERT INTO binary_bigint (id) VALUES($1)", big_value)
+        row = await conn.fetchrow("SELECT id FROM binary_bigint")
+        assert row["id"] == big_value
+        await conn.execute("DROP TABLE binary_bigint")
+    no_out_of_sync()
+
+
+@pytest.mark.asyncio
+async def test_int_array_binary(conns):
+    values = [1, 2, 3]
+    for conn in conns:
+        await conn.execute("DROP TABLE IF EXISTS binary_array")
+        await conn.execute("CREATE TABLE binary_array (vals INT[])")
+        await conn.execute("INSERT INTO binary_array (vals) VALUES($1)", values)
+        row = await conn.fetchrow("SELECT vals FROM binary_array")
+        assert row["vals"] == values
+        await conn.execute("DROP TABLE binary_array")
+    no_out_of_sync()
+
+
+@pytest.mark.asyncio
 async def test_direct_shard(conns):
     conn = conns[1]
     try:
