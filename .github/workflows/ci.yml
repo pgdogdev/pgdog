@@ -138,48 +138,14 @@ jobs:
           fi
           echo "Using instrumented binary at $BIN_PATH"
           echo "PGDOG_BIN=$(realpath "$BIN_PATH")" >> "$GITHUB_ENV"
+      - name: Integration suites (shared PgDog)
+        run: bash integration/ci_shared_suites.sh
       - name: Load balancer
         run: bash integration/load_balancer/run.sh
-      - name: pgbench
-        run: bash integration/pgbench/run.sh
-      - name: Verify coverage (pgbench)
-        run: bash integration/verify_profiles.sh pgbench
-      - name: Go
-        run: bash integration/go/run.sh
-      - name: Verify coverage (go)
-        run: bash integration/verify_profiles.sh go
-      - name: JavaScript
-        run: bash integration/js/pg_tests/run.sh
-      - name: Verify coverage (javascript)
-        run: bash integration/verify_profiles.sh javascript
-      - name: Toxi
-        run: bash integration/toxi/run.sh
-      - name: Verify coverage (toxi)
-        run: bash integration/verify_profiles.sh toxi
-      - name: Python
-        run: bash integration/python/run.sh
-      - name: Verify coverage (python)
-        run: bash integration/verify_profiles.sh python
-      - name: Ruby
-        run: bash integration/ruby/run.sh
-      - name: Verify coverage (ruby)
-        run: bash integration/verify_profiles.sh ruby
-      - name: Java
-        run: bash integration/java/run.sh
-      - name: Verify coverage (java)
-        run: bash integration/verify_profiles.sh java
       - name: More complex stuff
         run: bash integration/complex/run.sh
-      - name: Verify coverage (complex)
-        run: bash integration/verify_profiles.sh complex
-      - name: Rust
-        run: bash integration/rust/run.sh
-      - name: Verify coverage (rust)
-        run: bash integration/verify_profiles.sh rust
       - name: Dry run
         run: bash integration/dry_run/run.sh
-      - name: Verify coverage (dry_run)
-        run: bash integration/verify_profiles.sh dry_run
       # - name: Plugins
       #   run: bash integration/plugins/run.sh
       - name: Ensure PgDog stopped
