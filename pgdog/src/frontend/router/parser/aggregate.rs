@@ -2,7 +2,7 @@ use pg_query::protobuf::Integer;
 use pg_query::protobuf::{a_const::Val, SelectStmt};
 use pg_query::NodeEnum;
 
-use crate::frontend::router::parser::Function;
+use crate::frontend::router::parser::{ExpressionRegistry, Function};
 
 use super::Error;
 
@@ -10,6 +10,8 @@ use super::Error;
 pub struct AggregateTarget {
     column: usize,
     function: AggregateFunction,
+    expr_id: usize,
+    distinct: bool,
 }
 
 impl AggregateTarget {
@@ -19,6 +21,14 @@ impl AggregateTarget {
 
     pub fn column(&self) -> usize {
         self.column
+    }
+
+    pub fn expr_id(&self) -> usize {
+        self.expr_id
+    }
+
+    pub fn is_distinct(&self) -> bool {
+        self.distinct
     }
 }
 
@@ -41,6 +51,7 @@ impl Aggregate {
     /// Figure out what aggregates are present and which ones PgDog supports.
     pub fn parse(stmt: &SelectStmt) -> Result<Self, Error> {
         let mut targets = vec![];
+        let mut registry = ExpressionRegistry::new();
         let group_by = stmt
             .group_clause
             .iter()
@@ -61,34 +72,34 @@ impl Aggregate {
             if let Some(NodeEnum::ResTarget(ref res)) = &node.node {
                 if let Some(node) = &res.val {
                     if let Ok(func) = Function::try_from(node.as_ref()) {
-                        match func.name {
-                            "count" => {
-                                targets.push(AggregateTarget {
-                                    column: idx,
-                                    function: AggregateFunction::Count,
-                                });
-                            }
+                        let function = match func.name {
+                            "count" => Some(AggregateFunction::Count),
+                            "max" => Some(AggregateFunction::Max),
+                            "min" => Some(AggregateFunction::Min),
+                            "sum" => Some(AggregateFunction::Sum),
+                            "avg" => Some(AggregateFunction::Avg),
+                            _ => None,
+                        };
 
-                            "max" => {
-                                targets.push(AggregateTarget {
-                                    column: idx,
-                                    function: AggregateFunction::Max,
-                                });
-                            }
+                        if let Some(function) = function {
+                            let (expr_id, distinct) = match node.node.as_ref() {
+                                Some(NodeEnum::FuncCall(func)) => {
+                                    let arg_id = func
+                                        .args
+                                        .first()
+                                        .map(|arg| registry.intern(arg))
+                                        .unwrap_or_else(|| registry.intern(node.as_ref()));
+                                    (arg_id, func.agg_distinct)
+                                }
+                                _ => (registry.intern(node.as_ref()), false),
+                            };
 
-                            "min" => {
-                                targets.push(AggregateTarget {
-                                    column: idx,
-                                    function: AggregateFunction::Min,
-                                });
-                            }
-
-                            "sum" => targets.push(AggregateTarget {
+                            targets.push(AggregateTarget {
                                 column: idx,
-                                function: AggregateFunction::Sum,
-                            }),
-
-                            _ => {}
+                                function,
+                                expr_id,
+                                distinct,
+                            });
                         }
                     }
                 }
@@ -111,6 +122,8 @@ impl Aggregate {
             targets: vec![AggregateTarget {
                 function: AggregateFunction::Count,
                 column,
+                expr_id: 0,
+                distinct: false,
             }],
             group_by: vec![],
         }
@@ -121,6 +134,8 @@ impl Aggregate {
             targets: vec![AggregateTarget {
                 function: AggregateFunction::Count,
                 column,
+                expr_id: 0,
+                distinct: false,
             }],
             group_by: group_by.to_vec(),
         }
@@ -157,6 +172,81 @@ mod test {
                 );
             }
 
+            _ => panic!("not a select"),
+        }
+    }
+
+    #[test]
+    fn test_parse_avg_count_expr_id_matches() {
+        let query = pg_query::parse("SELECT COUNT(price), AVG(price) FROM menu")
+            .unwrap()
+            .protobuf
+            .stmts
+            .first()
+            .cloned()
+            .unwrap();
+        match query.stmt.unwrap().node.unwrap() {
+            NodeEnum::SelectStmt(stmt) => {
+                let aggr = Aggregate::parse(&stmt).unwrap();
+                assert_eq!(aggr.targets().len(), 2);
+                let count = &aggr.targets()[0];
+                let avg = &aggr.targets()[1];
+                assert!(matches!(count.function(), AggregateFunction::Count));
+                assert!(matches!(avg.function(), AggregateFunction::Avg));
+                assert_eq!(count.expr_id(), avg.expr_id());
+                assert!(!count.is_distinct());
+                assert!(!avg.is_distinct());
+            }
+            _ => panic!("not a select"),
+        }
+    }
+
+    #[test]
+    fn test_parse_avg_count_expr_id_differs() {
+        let query = pg_query::parse("SELECT COUNT(price), AVG(cost) FROM menu")
+            .unwrap()
+            .protobuf
+            .stmts
+            .first()
+            .cloned()
+            .unwrap();
+        match query.stmt.unwrap().node.unwrap() {
+            NodeEnum::SelectStmt(stmt) => {
+                let aggr = Aggregate::parse(&stmt).unwrap();
+                assert_eq!(aggr.targets().len(), 2);
+                let count = &aggr.targets()[0];
+                let avg = &aggr.targets()[1];
+                assert!(matches!(count.function(), AggregateFunction::Count));
+                assert!(matches!(avg.function(), AggregateFunction::Avg));
+                assert_ne!(count.expr_id(), avg.expr_id());
+                assert!(!count.is_distinct());
+                assert!(!avg.is_distinct());
+            }
+            _ => panic!("not a select"),
+        }
+    }
+
+    #[test]
+    fn test_parse_distinct_count_not_matching_avg() {
+        let query = pg_query::parse("SELECT COUNT(DISTINCT price), AVG(price) FROM menu")
+            .unwrap()
+            .protobuf
+            .stmts
+            .first()
+            .cloned()
+            .unwrap();
+        match query.stmt.unwrap().node.unwrap() {
+            NodeEnum::SelectStmt(stmt) => {
+                let aggr = Aggregate::parse(&stmt).unwrap();
+                assert_eq!(aggr.targets().len(), 2);
+                let count = &aggr.targets()[0];
+                let avg = &aggr.targets()[1];
+                assert!(matches!(count.function(), AggregateFunction::Count));
+                assert!(matches!(avg.function(), AggregateFunction::Avg));
+                assert!(count.is_distinct());
+                assert!(!avg.is_distinct());
+                assert_eq!(count.expr_id(), avg.expr_id());
+            }
             _ => panic!("not a select"),
         }
     }

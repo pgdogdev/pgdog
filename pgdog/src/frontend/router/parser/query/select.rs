@@ -13,7 +13,7 @@ impl QueryParser {
     pub(super) fn select(
         &mut self,
         stmt: &SelectStmt,
-        context: &QueryParserContext,
+        context: &mut QueryParserContext,
     ) -> Result<Command, Error> {
         let cte_writes = Self::cte_writes(stmt);
         let mut writes = Self::functions(stmt)?;
@@ -88,6 +88,34 @@ impl QueryParser {
 
         if omni {
             query.set_shard_mut(round_robin::next() % context.shards);
+        }
+
+        if let Some(buffered_query) = context.router_context.query.as_ref() {
+            let rewrite =
+                RewriteEngine::new().rewrite_select(buffered_query.query(), query.aggregate());
+            if !rewrite.plan.is_noop() {
+                if let BufferedQuery::Prepared(parse) = buffered_query {
+                    let name = parse.name().to_owned();
+                    {
+                        let prepared = context.prepared_statements();
+                        prepared.set_rewrite_plan(&name, rewrite.plan.clone());
+                        prepared.update_query(&name, &rewrite.sql);
+                    }
+                }
+                query.set_rewrite(rewrite.plan, rewrite.sql);
+            } else if let BufferedQuery::Prepared(parse) = buffered_query {
+                let name = parse.name().to_owned();
+                let stored_plan = {
+                    let prepared = context.prepared_statements();
+                    prepared.rewrite_plan(&name)
+                };
+                if let Some(plan) = stored_plan {
+                    if !plan.is_noop() {
+                        query.clear_rewrite();
+                        *query.rewrite_plan_mut() = plan;
+                    }
+                }
+            }
         }
 
         Ok(Command::Query(query.set_write(writes)))
