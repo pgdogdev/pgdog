@@ -527,9 +527,9 @@ impl Server {
         self.sync_prepared
     }
 
-    /// Connection was left with an unfinished query.
+    /// Connection was left with an unfinished query or an out-of-sync extended pipeline.
     pub fn needs_drain(&self) -> bool {
-        !self.in_sync()
+        !self.in_sync() || !self.prepared_statements.done()
     }
 
     /// Close the connection, don't do any recovery.
