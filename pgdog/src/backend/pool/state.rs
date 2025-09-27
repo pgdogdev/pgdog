@@ -3,7 +3,7 @@ use std::time::Duration;
 use crate::config::PoolerMode;
 use tokio::time::Instant;
 
-use super::{inner::ReplicaLag, Ban, Config, Pool, Stats};
+use super::{inner::ReplicaLag, Config, Pool, Stats};
 
 /// Pool state.
 #[derive(Debug)]
@@ -24,10 +24,6 @@ pub struct State {
     pub paused: bool,
     /// Number of clients waiting for a connection.
     pub waiting: usize,
-    /// Pool ban.
-    pub ban: Option<Ban>,
-    /// Pool is banned.
-    pub banned: bool,
     /// Errors.
     pub errors: usize,
     /// Out of sync
@@ -58,8 +54,6 @@ impl State {
             config: guard.config,
             paused: guard.paused,
             waiting: guard.waiting.len(),
-            ban: guard.ban,
-            banned: guard.ban.is_some(),
             errors: guard.errors,
             out_of_sync: guard.out_of_sync,
             re_synced: guard.re_synced,

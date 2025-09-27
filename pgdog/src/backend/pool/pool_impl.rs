@@ -7,7 +7,7 @@ use std::time::Duration;
 use once_cell::sync::Lazy;
 use parking_lot::{lock_api::MutexGuard, Mutex, RawMutex};
 use tokio::time::Instant;
-use tracing::{error, info};
+use tracing::error;
 
 use crate::backend::{Server, ServerOptions};
 use crate::config::PoolerMode;
@@ -96,7 +96,7 @@ impl Pool {
     }
 
     /// Get a connection from the pool.
-    async fn get_internal(&self, request: &Request, unban: bool) -> Result<Guard, Error> {
+    async fn get_internal(&self, request: &Request, ignore_errors: bool) -> Result<Guard, Error> {
         let pool = self.clone();
 
         // Fast path, idle connection probably available.
@@ -111,15 +111,10 @@ impl Pool {
                 return Err(Error::Offline);
             }
 
-            // Try this only once. If the pool still
-            // has an error after a checkout attempt,
-            // return error.
-            if unban && guard.banned() {
-                guard.maybe_unban();
-            }
-
-            if guard.banned() {
-                return Err(Error::Banned);
+            // We got a bad server back, indicating the database
+            // is in trouble. Tell caller that this pool had a problem.
+            if guard.server_error && !ignore_errors {
+                return Err(Error::ServerError);
             }
 
             let conn = guard.take(request);
@@ -177,7 +172,8 @@ impl Pool {
 
         if let Err(err) = healthcheck.healthcheck().await {
             drop(conn);
-            self.ban(Error::HealthcheckError);
+            let mut guard = self.lock();
+            guard.server_error = true;
             return Err(err);
         }
 
@@ -206,15 +202,13 @@ impl Pool {
 
         // Check everything and maybe check the connection
         // into the idle pool.
-        let CheckInResult { banned, replenish } =
-            { self.lock().maybe_check_in(server, now, counts) };
+        let CheckInResult {
+            server_error,
+            replenish,
+        } = { self.lock().maybe_check_in(server, now, counts) };
 
-        if banned {
-            error!(
-                "pool banned on check in: {} [{}]",
-                Error::ServerError,
-                self.addr()
-            );
+        if server_error {
+            error!("pool checked in broken server connection [{}]", self.addr());
         }
 
         // Notify maintenance that we need a new connection because
@@ -238,40 +232,20 @@ impl Pool {
         Ok(())
     }
 
-    /// Is this pool banned?
-    pub fn banned(&self) -> bool {
-        self.lock().banned()
+    /// This pool is down?
+    pub fn server_error(&self) -> bool {
+        self.lock().server_error()
+    }
+
+    /// Bring pool back online after error.
+    pub fn clear_server_error(&self) {
+        self.lock().server_error = false;
     }
 
     /// Pool is available to serve connections.
     pub fn available(&self) -> bool {
         let guard = self.lock();
         !guard.paused && guard.online
-    }
-
-    /// Ban this connection pool from serving traffic.
-    pub fn ban(&self, reason: Error) {
-        let now = Instant::now();
-        let banned = self.lock().maybe_ban(now, reason);
-
-        if banned {
-            error!("pool banned explicitly: {} [{}]", reason, self.addr());
-        }
-    }
-
-    /// Unban this pool from serving traffic, unless manually banned.
-    #[allow(dead_code)]
-    pub fn maybe_unban(&self) {
-        let unbanned = self.lock().maybe_unban();
-        if unbanned {
-            info!("pool unbanned [{}]", self.addr());
-        }
-    }
-
-    pub fn unban(&self) {
-        if self.lock().unban() {
-            info!("pool unbanned [{}]", self.addr());
-        }
     }
 
     /// Connection pool unique identifier.
@@ -322,7 +296,7 @@ impl Pool {
         {
             let mut guard = self.lock();
             guard.paused = false;
-            guard.ban = None;
+            guard.server_error = false;
         }
 
         self.comms().ready.notify_waiters();

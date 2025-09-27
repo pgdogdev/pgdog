@@ -122,7 +122,8 @@ impl Monitor {
                     if should_create {
                         let ok = self.replenish().await;
                         if !ok {
-                            self.pool.ban(Error::ServerError);
+                            let mut guard = self.pool.lock();
+                            guard.server_error = true;
                         }
                     }
                 }
@@ -147,7 +148,6 @@ impl Monitor {
         debug!("healthchecks running [{}]", pool.addr());
 
         loop {
-            let mut unbanned = false;
             select! {
                 _ = tick.tick() => {
                     {
@@ -167,16 +167,12 @@ impl Monitor {
 
                     // If the server is okay, remove the ban if it had one.
                     if let Ok(true) = Self::healthcheck(&pool).await {
-                        unbanned = pool.lock().maybe_unban();
+
                     }
                 }
 
 
                 _ = comms.shutdown.notified() => break,
-            }
-
-            if unbanned {
-                info!("pool unbanned due to healtcheck [{}]", pool.addr());
             }
         }
 
@@ -215,11 +211,6 @@ impl Monitor {
 
                     guard.close_idle(now);
                     guard.close_old(now);
-                    let unbanned = guard.check_ban(now);
-
-                    if unbanned {
-                        info!("pool unbanned due to maintenance [{}]", pool.addr());
-                    }
                 }
 
                 _ = comms.shutdown.notified() => break,
@@ -259,7 +250,7 @@ impl Monitor {
     async fn healthcheck(pool: &Pool) -> Result<bool, Error> {
         let conn = {
             let mut guard = pool.lock();
-            if !guard.online || guard.banned() {
+            if !guard.online {
                 return Ok(false);
             }
             guard.take(&Request::default())
@@ -378,9 +369,5 @@ mod test {
         let pool = pool();
         let ok = Monitor::healthcheck(&pool).await.unwrap();
         assert!(ok);
-
-        pool.ban(Error::ManualBan);
-        let ok = Monitor::healthcheck(&pool).await.unwrap();
-        assert!(!ok);
     }
 }

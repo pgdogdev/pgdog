@@ -42,7 +42,6 @@ pub use shard::Shard;
 pub use state::State;
 pub use stats::Stats;
 
-use ban::Ban;
 use comms::Comms;
 use inner::Inner;
 use mapping::Mapping;

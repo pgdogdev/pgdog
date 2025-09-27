@@ -22,7 +22,7 @@ fn replicas() -> Replicas {
     };
     let mut two = one.clone();
     two.address.host = "localhost".into();
-    let replicas = Replicas::new(&[one, two], LoadBalancingStrategy::Random);
+    let replicas = Replicas::new(&None, &[one, two], LoadBalancingStrategy::Random);
     replicas.pools().iter().for_each(|p| p.launch());
     replicas
 }
@@ -33,18 +33,18 @@ async fn test_replicas() {
 
     for pool in 0..2 {
         let mut tasks = vec![];
-        replicas.pools[pool].ban(Error::CheckoutTimeout);
+        replicas.replica_pools[pool].ban(Error::CheckoutTimeout);
 
         for _ in 0..10000 {
             let replicas = replicas.clone();
             let other = if pool == 0 { 1 } else { 0 };
             tasks.push(spawn(async move {
-                assert!(replicas.pools[pool].banned());
-                assert!(!replicas.pools[other].banned());
-                let conn = replicas.get(&Request::default(), &None).await.unwrap();
-                assert_eq!(conn.addr(), replicas.pools[other].addr());
-                assert!(replicas.pools[pool].banned());
-                assert!(!replicas.pools[other].banned());
+                assert!(replicas.replica_pools[pool].server_error());
+                assert!(!replicas.replica_pools[other].server_error());
+                let conn = replicas.get(&Request::default(), false).await.unwrap();
+                assert_eq!(conn.addr(), replicas.replica_pools[other].addr());
+                assert!(replicas.replica_pools[pool].server_error());
+                assert!(!replicas.replica_pools[other].server_error());
             }));
         }
 
@@ -52,14 +52,20 @@ async fn test_replicas() {
             task.await.unwrap();
         }
 
-        replicas.pools[pool].maybe_unban();
+        replicas.replica_pools[pool].maybe_unban();
     }
 
-    replicas.pools[0].ban(Error::CheckoutTimeout);
-    replicas.pools[1].ban(Error::CheckoutTimeout);
+    replicas.replica_pools[0].ban(Error::CheckoutTimeout);
+    replicas.replica_pools[1].ban(Error::CheckoutTimeout);
 
     // All replicas banned, unban everyone.
-    assert!(replicas.pools.iter().all(|pool| pool.banned()));
-    replicas.get(&Request::default(), &None).await.unwrap();
-    assert!(replicas.pools.iter().all(|pool| !pool.banned()));
+    assert!(replicas
+        .replica_pools
+        .iter()
+        .all(|pool| pool.server_error()));
+    replicas.get(&Request::default(), false).await.unwrap();
+    assert!(replicas
+        .replica_pools
+        .iter()
+        .all(|pool| !pool.server_error()));
 }

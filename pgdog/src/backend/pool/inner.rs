@@ -8,7 +8,7 @@ use crate::net::messages::BackendKeyData;
 
 use tokio::time::Instant;
 
-use super::{Ban, Config, Error, Mapping, Oids, Pool, Request, Stats, Taken, Waiter};
+use super::{Config, Error, Mapping, Oids, Pool, Request, Stats, Taken, Waiter};
 
 /// Pool internals protected by a mutex.
 #[derive(Default)]
@@ -22,8 +22,6 @@ pub(super) struct Inner {
     pub(super) config: Config,
     /// Number of clients waiting for a connection.
     pub(super) waiting: VecDeque<Waiter>,
-    /// Pool ban status.
-    pub(super) ban: Option<Ban>,
     /// Pool is online and available to clients.
     pub(super) online: bool,
     /// Pool is paused.
@@ -46,6 +44,8 @@ pub(super) struct Inner {
     moved: Option<Pool>,
     id: u64,
     pub(super) replica_lag: ReplicaLag,
+    /// Server connection experienced error on check-in.
+    pub(super) server_error: bool,
 }
 
 impl std::fmt::Debug for Inner {
@@ -68,7 +68,6 @@ impl Inner {
             taken: Taken::default(),
             config,
             waiting: VecDeque::new(),
-            ban: None,
             online: false,
             paused: false,
             force_close: 0,
@@ -80,6 +79,7 @@ impl Inner {
             moved: None,
             id,
             replica_lag: ReplicaLag::default(),
+            server_error: false,
         }
     }
     /// Total number of connections managed by the pool.
@@ -139,26 +139,9 @@ impl Inner {
             below_max && !self.waiting.is_empty() && self.idle_connections.is_empty();
         let maintenance_on = self.online && !self.paused;
 
-        !self.banned() && (client_needs || maintenance_on && maintain_min)
-    }
-
-    /// Check if the pool ban should be removed.
-    #[inline]
-    pub(super) fn check_ban(&mut self, now: Instant) -> bool {
-        if self.ban.is_none() {
-            return false;
-        }
-
-        let mut unbanned = false;
-        if let Some(ban) = self.ban.take() {
-            if !ban.expired(now) {
-                self.ban = Some(ban);
-            } else {
-                unbanned = true;
-            }
-        }
-
-        unbanned
+        // Clients from banned pools won't be able to request connections
+        // unless it's a primary.
+        client_needs || maintenance_on && maintain_min && !self.server_error
     }
 
     /// Close connections that have exceeded the max age.
@@ -281,7 +264,7 @@ impl Inner {
         stats: BackendCounts,
     ) -> CheckInResult {
         let mut result = CheckInResult {
-            banned: false,
+            server_error: false,
             replenish: true,
         };
 
@@ -302,7 +285,12 @@ impl Inner {
         // Ban the pool from serving more clients.
         if server.error() {
             self.errors += 1;
-            result.banned = self.maybe_ban(now, Error::ServerError);
+
+            if !self.server_error {
+                result.server_error = true;
+                self.server_error = true;
+            }
+
             return result;
         }
 
@@ -364,29 +352,6 @@ impl Inner {
         }
     }
 
-    /// Ban the pool from serving traffic if that's allowed per configuration.
-    #[inline]
-    pub fn maybe_ban(&mut self, now: Instant, reason: Error) -> bool {
-        if self.config.bannable || reason == Error::ManualBan {
-            let ban = Ban {
-                created_at: now,
-                reason,
-                ban_timeout: self.config.ban_timeout(),
-            };
-            self.ban = Some(ban);
-
-            // Tell every waiting client that this pool is busted.
-            self.close_waiters(Error::Banned);
-
-            // Clear the idle connection pool.
-            self.idle_connections.clear();
-
-            true
-        } else {
-            false
-        }
-    }
-
     #[inline]
     pub(super) fn close_waiters(&mut self, err: Error) {
         for waiter in self.waiting.drain(..) {
@@ -394,40 +359,15 @@ impl Inner {
         }
     }
 
-    /// Remove the pool ban unless it' been manually banned.
     #[inline(always)]
-    pub fn maybe_unban(&mut self) -> bool {
-        let mut unbanned = false;
-        if let Some(ban) = self.ban.take() {
-            if ban.reason == Error::ManualBan {
-                self.ban = Some(ban);
-            } else {
-                unbanned = true;
-            }
-        }
-
-        unbanned
-    }
-
-    pub fn unban(&mut self) -> bool {
-        self.ban.take().is_some()
-    }
-
-    #[inline(always)]
-    pub fn banned(&self) -> bool {
-        self.ban.is_some()
-    }
-
-    #[inline(always)]
-    #[allow(dead_code)]
-    pub fn manually_banned(&self) -> bool {
-        self.ban.map(|ban| ban.manual()).unwrap_or(false)
+    pub fn server_error(&self) -> bool {
+        self.server_error
     }
 }
 
 #[derive(Debug, Copy, Clone)]
 pub(super) struct CheckInResult {
-    pub(super) banned: bool,
+    pub(super) server_error: bool,
     pub(super) replenish: bool,
 }
 
@@ -511,7 +451,7 @@ mod test {
         let mut inner = Inner::default();
 
         // Defaults.
-        assert!(!inner.banned());
+        assert!(!inner.server_error());
         assert_eq!(inner.idle(), 0);
         assert!(!inner.online);
         assert!(!inner.paused);
@@ -521,34 +461,13 @@ mod test {
         inner.idle_connections.push(Box::new(Server::default()));
         assert_eq!(inner.idle(), 3);
 
-        // The ban list. bans clear idle connections.
-        let banned = inner.maybe_ban(Instant::now(), Error::CheckoutTimeout);
-        assert!(banned);
-        assert_eq!(inner.idle(), 0);
-
-        let unbanned = inner.check_ban(Instant::now() + Duration::from_secs(100));
-        assert!(!unbanned);
-        assert!(inner.banned());
-        let unbanned = inner.check_ban(Instant::now() + Duration::from_secs(301));
-        assert!(unbanned);
-        assert!(!inner.banned());
-        let unbanned = inner.maybe_unban();
-        assert!(!unbanned);
-        assert!(!inner.banned());
-        let banned = inner.maybe_ban(Instant::now(), Error::ManualBan);
-        assert!(banned);
-        assert!(!inner.maybe_unban());
-        assert!(inner.banned());
-        let banned = inner.maybe_ban(Instant::now(), Error::ServerError);
-        assert!(banned);
-
         // Testing check-in server.
         let result = inner.maybe_check_in(
             Box::new(Server::default()),
             Instant::now(),
             BackendCounts::default(),
         );
-        assert!(!result.banned);
+        assert!(!result.server_error);
         assert_eq!(inner.idle(), 0); // pool offline
 
         inner.online = true;
@@ -567,7 +486,7 @@ mod test {
                     Instant::now(),
                     BackendCounts::default()
                 )
-                .banned
+                .server_error
         );
         assert!(inner.idle() > 0);
         assert_eq!(inner.idle(), 1);
@@ -582,10 +501,9 @@ mod test {
         assert_eq!(inner.checked_out(), 1);
 
         let result = inner.maybe_check_in(server, Instant::now(), BackendCounts::default());
-        assert!(result.banned);
-        assert_eq!(inner.ban.unwrap().reason, Error::ServerError);
+        assert!(result.server_error);
         assert!(inner.taken.is_empty());
-        inner.ban = None;
+        inner.server_error = false;
 
         inner.config.max = 5;
         inner.waiting.push_back(Waiter {
@@ -600,7 +518,7 @@ mod test {
         assert_eq!(inner.config.max, 5);
         assert!(inner.total() < inner.min());
         assert!(inner.total() < inner.max());
-        assert!(!inner.banned() && inner.online);
+        assert!(!inner.server_error() && inner.online);
         assert!(inner.should_create());
 
         inner.config.max = 1;
@@ -649,7 +567,7 @@ mod test {
             BackendCounts::default(),
         );
 
-        assert!(!result.banned);
+        assert!(!result.server_error);
         // Not checked in because of max age.
         assert_eq!(inner.total(), 0);
     }

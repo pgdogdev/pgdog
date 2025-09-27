@@ -8,6 +8,7 @@ use tokio::time::{interval, sleep};
 use tokio::{join, select, spawn, sync::Notify};
 use tracing::{debug, error};
 
+use crate::backend::pool::replicas::ban::Ban;
 use crate::backend::PubSubListener;
 use crate::config::{config, LoadBalancingStrategy, ReadWriteSplit, Role};
 use crate::net::messages::BackendKeyData;
@@ -16,15 +17,27 @@ use crate::net::NotificationResponse;
 use super::inner::ReplicaLag;
 use super::{Error, Guard, Pool, PoolConfig, Replicas, Request};
 
-// -------------------------------------------------------------------------------------------------
-// ----- Public Interface --------------------------------------------------------------------------
+pub mod monitor;
+use monitor::*;
 
+/// Connection pools for a single database shard.
+///
+/// Includes a primary and replicas.
 #[derive(Clone, Debug)]
 pub struct Shard {
     inner: Arc<ShardInner>,
 }
 
 impl Shard {
+    /// Create new shard connection pools from configuration.
+    ///
+    /// # Arguments
+    ///
+    /// * `primary`: Primary configuration, if any. Primary databases are optional.
+    /// * `replica`: List of replica database configurations.
+    /// * `lb_strategy`: Query load balancing strategy, e.g., random, round robin, etc.
+    /// * `rw_split`: Read/write traffic splitting strategy.
+    ///
     pub fn new(
         primary: &Option<PoolConfig>,
         replicas: &[PoolConfig],
@@ -36,7 +49,7 @@ impl Shard {
         }
     }
 
-    /// Get connection to primary database.
+    /// Get connection to the primary database.
     pub async fn primary(&self, request: &Request) -> Result<Guard, Error> {
         self.primary
             .as_ref()
@@ -57,12 +70,12 @@ impl Shard {
         } else {
             use ReadWriteSplit::*;
 
-            let primary = match self.rw_split {
-                IncludePrimary => &self.primary,
-                ExcludePrimary => &None,
+            let primary_reads = match self.rw_split {
+                IncludePrimary => true,
+                ExcludePrimary => false,
             };
 
-            self.replicas.get(request, primary).await
+            self.replicas.get(request, primary_reads).await
         }
     }
 
@@ -75,6 +88,10 @@ impl Shard {
         }
     }
 
+    /// Move connections from this shard to another shard, preserving them.
+    ///
+    /// This is done during configuration reloading, if no significant changes are made to
+    /// the configuration.
     pub fn move_conns_to(&self, destination: &Shard) {
         if let Some(ref primary) = self.primary {
             if let Some(ref other) = destination.primary {
@@ -85,6 +102,8 @@ impl Shard {
         self.replicas.move_conns_to(&destination.replicas);
     }
 
+    /// Checks if the connection pools from this shard are compatible
+    /// with the other shard. If yes, they can be moved without closing them.
     pub(crate) fn can_move_conns_to(&self, other: &Shard) -> bool {
         if let Some(ref primary) = self.primary {
             if let Some(ref other) = other.primary {
@@ -153,14 +172,25 @@ impl Shard {
         }
     }
 
+    /// Returns true if the shard has a primary database.
     pub fn has_primary(&self) -> bool {
         self.primary.is_some()
     }
 
+    /// Returns true if the shard has any replica databases.
     pub fn has_replicas(&self) -> bool {
         !self.replicas.is_empty()
     }
 
+    /// Request a query to be cancelled on any of the servers in the connection pools
+    /// in this shard.
+    ///
+    /// # Arguments
+    ///
+    /// * `id`: Client unique identifier. Clients can execute one query at a time.
+    ///
+    /// If these connection pools aren't running the query sent by this client, this is a no-op.
+    ///
     pub async fn cancel(&self, id: &BackendKeyData) -> Result<(), super::super::Error> {
         if let Some(ref primary) = self.primary {
             primary.cancel(id).await?;
@@ -170,6 +200,7 @@ impl Shard {
         Ok(())
     }
 
+    /// Get all connection pools.
     pub fn pools(&self) -> Vec<Pool> {
         self.pools_with_roles()
             .into_iter()
@@ -177,6 +208,7 @@ impl Shard {
             .collect()
     }
 
+    /// Get all connection pools along with their roles (i.e., primary or replica).
     pub fn pools_with_roles(&self) -> Vec<(Role, Pool)> {
         let mut pools = vec![];
         if let Some(primary) = self.primary.clone() {
@@ -191,6 +223,11 @@ impl Shard {
         );
 
         pools
+    }
+
+    /// Get all connection pools with bans and their role in the shard.
+    pub fn pools_with_roles_and_bans(&self) -> Vec<(Role, Ban, Pool)> {
+        self.replicas.pools_with_roles_and_bans()
     }
 
     /// Shutdown every pool.
@@ -215,9 +252,8 @@ impl Deref for Shard {
     }
 }
 
-// -------------------------------------------------------------------------------------------------
-// ----- Private Implementation --------------------------------------------------------------------
-
+/// Shard connection pools
+/// and internal state.
 #[derive(Default, Debug)]
 pub struct ShardInner {
     primary: Option<Pool>,
@@ -235,7 +271,7 @@ impl ShardInner {
         rw_split: ReadWriteSplit,
     ) -> Self {
         let primary = primary.as_ref().map(Pool::new);
-        let replicas = Replicas::new(replicas, lb_strategy);
+        let replicas = Replicas::new(&primary, replicas, lb_strategy);
         let comms = ShardComms {
             shutdown: Notify::new(),
         };
@@ -254,180 +290,6 @@ impl ShardInner {
         }
     }
 }
-
-// -------------------------------------------------------------------------------------------------
-// ----- Comms -------------------------------------------------------------------------------------
-
-#[derive(Debug)]
-struct ShardComms {
-    pub shutdown: Notify,
-}
-
-impl Default for ShardComms {
-    fn default() -> Self {
-        Self {
-            shutdown: Notify::new(),
-        }
-    }
-}
-
-// -------------------------------------------------------------------------------------------------
-// ----- Monitoring --------------------------------------------------------------------------------
-
-struct ShardMonitor {}
-
-impl ShardMonitor {
-    pub fn run(shard: &Shard) {
-        let shard = shard.clone();
-        spawn(async move { Self::monitor_replicas(shard).await });
-    }
-}
-
-impl ShardMonitor {
-    async fn monitor_replicas(shard: Shard) {
-        let cfg_handle = config();
-        let Some(rl_config) = cfg_handle.config.replica_lag.as_ref() else {
-            return;
-        };
-
-        let mut tick = interval(rl_config.check_interval);
-
-        debug!("replica monitoring running");
-        let comms = shard.comms();
-
-        loop {
-            select! {
-                _ = tick.tick() => {
-                    Self::process_replicas(&shard, rl_config.max_age).await;
-                }
-                _ = comms.shutdown.notified() => break,
-            }
-        }
-
-        debug!("replica monitoring stopped");
-    }
-
-    async fn process_replicas(shard: &Shard, max_age: Duration) {
-        let Some(primary) = shard.primary.as_ref() else {
-            return;
-        };
-
-        primary.set_replica_lag(ReplicaLag::NonApplicable);
-
-        let lsn_metrics = match collect_lsn_metrics(primary, max_age).await {
-            Some(m) => m,
-            None => {
-                error!("failed to collect LSN metrics");
-                return;
-            }
-        };
-
-        for replica in shard.replicas.pools() {
-            Self::process_single_replica(
-                replica,
-                lsn_metrics.max_lsn,
-                lsn_metrics.average_bytes_per_sec,
-                max_age,
-            )
-            .await;
-        }
-    }
-
-    // TODO -> [process_single_replica]
-    // - The current query logic prevents pools from executing any query once banned.
-    // - This includes running their own LSN queries.
-    // - For this reason, we cannot ban replicas for lagging just yet
-    // - For now, we simply tracing::error!() it for now.
-    // - It's sensible to ban replicas from making user queries when it's lagging too much, but...
-    //   unexposed PgDog admin queries should be allowed on "banned" replicas.
-    // - TLDR; We need a way to distinguish between user and admin queries, and let admin...
-    //   queries run on "banned" replicas.
-
-    async fn process_single_replica(
-        replica: &Pool,
-        primary_lsn: u64,
-        lsn_throughput: f64,
-        _max_age: Duration, // used to make banning decisions when it's supported later
-    ) {
-        if replica.banned() {
-            replica.set_replica_lag(ReplicaLag::Unknown);
-            return;
-        };
-
-        let replay_lsn = match replica.wal_replay_lsn().await {
-            Ok(lsn) => lsn,
-            Err(e) => {
-                error!("replica {} LSN query failed: {}", replica.id(), e);
-                return;
-            }
-        };
-
-        let bytes_behind = primary_lsn.saturating_sub(replay_lsn);
-
-        let mut lag = ReplicaLag::Bytes(bytes_behind);
-        if lsn_throughput > 0.0 {
-            let duration = Duration::from_secs_f64(bytes_behind as f64 / lsn_throughput);
-            lag = ReplicaLag::Duration(duration);
-        }
-        if bytes_behind == 0 {
-            lag = ReplicaLag::Duration(Duration::ZERO);
-        }
-
-        replica.set_replica_lag(lag);
-    }
-}
-
-// -------------------------------------------------------------------------------------------------
-// ----- Utils :: Primary LSN Metrics --------------------------------------------------------------
-
-struct LsnMetrics {
-    pub average_bytes_per_sec: f64,
-    pub max_lsn: u64,
-}
-
-/// Sample WAL LSN at 0, half, and full window; compute avg rate and max LSN.
-async fn collect_lsn_metrics(primary: &Pool, window: Duration) -> Option<LsnMetrics> {
-    if window.is_zero() {
-        return None;
-    }
-
-    let half_window = window / 2;
-    let half_window_in_seconds = half_window.as_secs_f64();
-
-    // fire three futures at once
-    let f0 = primary.wal_flush_lsn();
-    let f1 = async {
-        sleep(half_window).await;
-        primary.wal_flush_lsn().await
-    };
-    let f2 = async {
-        sleep(window).await;
-        primary.wal_flush_lsn().await
-    };
-
-    // collect results concurrently
-    let (r0, r1, r2) = join!(f0, f1, f2);
-
-    let lsn_initial = r0.ok()?;
-    let lsn_half = r1.ok()?;
-    let lsn_full = r2.ok()?;
-
-    let rate1 = (lsn_half.saturating_sub(lsn_initial)) as f64 / half_window_in_seconds;
-    let rate2 = (lsn_full.saturating_sub(lsn_half)) as f64 / half_window_in_seconds;
-    let average_rate = (rate1 + rate2) / 2.0;
-
-    let max_lsn = lsn_initial.max(lsn_half).max(lsn_full);
-
-    let metrics = LsnMetrics {
-        average_bytes_per_sec: average_rate,
-        max_lsn,
-    };
-
-    Some(metrics)
-}
-
-// -------------------------------------------------------------------------------------------------
-// ----- Tests -------------------------------------------------------------------------------------
 
 #[cfg(test)]
 mod test {
@@ -460,7 +322,7 @@ mod test {
         shard.launch();
 
         for _ in 0..25 {
-            let replica_id = shard.replicas.pools[0].id();
+            let replica_id = shard.replicas.replica_pools[0].id();
 
             let conn = shard.replica(&Request::default()).await.unwrap();
             assert_eq!(conn.pool.id(), replica_id);
@@ -502,6 +364,3 @@ mod test {
         assert_eq!(ids.len(), 2);
     }
 }
-
-// -------------------------------------------------------------------------------------------------
-// -------------------------------------------------------------------------------------------------

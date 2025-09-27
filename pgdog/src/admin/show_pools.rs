@@ -46,7 +46,7 @@ impl Command for ShowPools {
         let mut messages = vec![rd.message()?];
         for (user, cluster) in databases().all() {
             for (shard_num, shard) in cluster.shards().iter().enumerate() {
-                for (role, pool) in shard.pools_with_roles() {
+                for (role, ban, pool) in shard.pools_with_roles_and_bans() {
                     let mut row = DataRow::new();
                     let state = pool.state();
                     let maxwait = state.maxwait.as_secs() as i64;
@@ -67,7 +67,7 @@ impl Command for ShowPools {
                         .add(maxwait_us)
                         .add(state.pooler_mode.to_string())
                         .add(state.paused)
-                        .add(state.banned)
+                        .add(ban.banned())
                         .add(state.errors)
                         .add(state.re_synced)
                         .add(state.out_of_sync)

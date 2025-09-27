@@ -148,17 +148,7 @@ async fn test_concurrency_with_gas() {
 
 #[tokio::test]
 async fn test_bans() {
-    let pool = pool();
-    let mut config = *pool.lock().config();
-    config.checkout_timeout = Duration::from_millis(100);
-    pool.update_config(config);
-
-    pool.ban(Error::CheckoutTimeout);
-    assert!(pool.banned());
-
-    // Will timeout getting a connection from a banned pool.
-    let conn = pool.get(&Request::default()).await;
-    assert!(conn.is_err());
+    todo!()
 }
 
 #[tokio::test]
@@ -168,7 +158,7 @@ async fn test_offline() {
 
     pool.shutdown();
     assert!(!pool.lock().online);
-    assert!(!pool.banned());
+    assert!(!pool.server_error());
 
     // Cannot get a connection from the pool.
     let err = pool.get(&Request::default()).await;
@@ -190,7 +180,6 @@ async fn test_pause() {
     pool.get(&Request::default())
         .await
         .expect_err("checkout timeout");
-    pool.maybe_unban();
     drop(hold);
     // Make sure we're not blocked still.
     drop(pool.get(&Request::default()).await.unwrap());

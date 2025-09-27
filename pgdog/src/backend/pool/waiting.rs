@@ -44,15 +44,12 @@ impl Waiting {
 
             Err(_err) => {
                 let mut guard = self.pool.lock();
-                if !guard.banned() {
-                    guard.maybe_ban(now, Error::CheckoutTimeout);
-                }
                 guard.remove_waiter(&self.request.id);
                 Err(Error::CheckoutTimeout)
             }
 
             // Should not be possible.
-            // This means someone removed my waiter from the wait queue,
+            // This means someone else removed my waiter from the wait queue,
             // indicating a bug in the pool.
             Ok(Err(_)) => Err(Error::CheckoutTimeout),
         }
