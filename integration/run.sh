@@ -5,4 +5,5 @@ pushd ${SCRIPT_DIR}
 bash python/run.sh
 bash ruby/run.sh
 bash java/run.sh
+bash sql/run.sh
 popd
