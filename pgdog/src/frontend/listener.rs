@@ -169,6 +169,11 @@ impl Listener {
                     }
                 }
 
+                Startup::GssEnc => {
+                    // GSS encryption is not yet supported; reject and wait for a normal startup.
+                    stream.send_flush(&SslReply::No).await?;
+                }
+
                 Startup::Startup { params } => {
                     Client::spawn(stream, params, addr, comms).await?;
                     break;
