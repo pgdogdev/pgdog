@@ -99,6 +99,24 @@ impl Relation {
 }
 
 #[cfg(test)]
+impl Relation {
+    pub(crate) fn test_table(schema: &str, name: &str, columns: HashMap<String, Column>) -> Self {
+        Self {
+            schema: schema.into(),
+            name: name.into(),
+            type_: "table".into(),
+            owner: String::new(),
+            persistence: String::new(),
+            access_method: String::new(),
+            size: 0,
+            description: String::new(),
+            oid: 0,
+            columns,
+        }
+    }
+}
+
+#[cfg(test)]
 mod test {
     use crate::backend::pool::{test::pool, Request};
 

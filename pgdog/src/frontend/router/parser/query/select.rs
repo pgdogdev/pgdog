@@ -48,7 +48,7 @@ impl QueryParser {
         if let Some(ref where_clause) = where_clause {
             shards = Self::where_clause(
                 &context.sharding_schema,
-                &where_clause,
+                where_clause,
                 context.router_context.bind,
             )?;
         }

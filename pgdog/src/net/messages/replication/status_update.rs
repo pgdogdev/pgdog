@@ -110,4 +110,29 @@ mod test {
             _ => panic!("not a status update"),
         }
     }
+
+    #[test]
+    fn status_update_from_keepalive_inherits_wal_end() {
+        let keepalive = KeepAlive {
+            wal_end: 123,
+            system_clock: 456,
+            reply: 0,
+        };
+
+        let update: StatusUpdate = keepalive.into();
+        assert_eq!(update.last_written, 123);
+        assert_eq!(update.last_flushed, 123);
+        assert_eq!(update.last_applied, 123);
+        assert_eq!(update.reply, 0);
+    }
+
+    #[test]
+    fn status_update_new_reply_sets_reply_flag() {
+        let lsn = Lsn::from_i64(999);
+        let update = StatusUpdate::new_reply(lsn);
+        assert_eq!(update.last_written, 999);
+        assert_eq!(update.last_flushed, 999);
+        assert_eq!(update.last_applied, 999);
+        assert_eq!(update.reply, 1);
+    }
 }

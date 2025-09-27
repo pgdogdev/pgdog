@@ -8,6 +8,7 @@ Run `cargo check` for a quick type pass, and `cargo build` to compile local bina
 
 ## Coding Style & Naming Conventions
 Follow Rust conventions: modules and functions in `snake_case`, types in `UpperCamelCase`, constants in `SCREAMING_SNAKE_CASE`. Keep modules under ~200 lines unless justified. Format with `cargo fmt` and lint using `cargo clippy --all-targets --all-features` before posting a PR.
+Prefer keeping `#[cfg(test)]` blocks at the end of a file; only place `#[cfg(test)]` imports directly beneath normal imports when that keeps the module tidy.
 
 ## Testing Guidelines
 Adhere to TDD—write the failing test first, implement minimally, then refactor. Co-locate unit tests with their crates, reserving heavier scenarios for `integration/` against the prepared-transaction Postgres stack. Invoke `cargo nextest run --test-threads=1 <test>` for focused iterations; gate Kerberos coverage behind `--features gssapi`. Do **not** run `cargo test`; Nextest with a single-thread budget is the required harness.

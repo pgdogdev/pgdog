@@ -30,8 +30,6 @@ impl MemoryUsage for Statement {
             } else {
                 0
             }
-            // Rewrite plans are small; treat as zero-cost for now.
-            + 0
     }
 }
 
