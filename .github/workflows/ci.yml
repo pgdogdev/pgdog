@@ -139,36 +139,20 @@ jobs:
           echo "Using instrumented binary at $BIN_PATH"
           echo "PGDOG_BIN=$(realpath "$BIN_PATH")" >> "$GITHUB_ENV"
       - name: pgbench
-        env:
-          PGDOG_KEEP_RUNNING: 1
         run: bash integration/pgbench/run.sh
       - name: Go
-        env:
-          PGDOG_KEEP_RUNNING: 1
         run: bash integration/go/run.sh
       - name: JavaScript
-        env:
-          PGDOG_KEEP_RUNNING: 1
         run: bash integration/js/pg_tests/run.sh
       - name: Ruby
-        env:
-          PGDOG_KEEP_RUNNING: 1
         run: bash integration/ruby/run.sh
       - name: Java
-        env:
-          PGDOG_KEEP_RUNNING: 1
         run: bash integration/java/run.sh
       - name: SQL
-        env:
-          PGDOG_KEEP_RUNNING: 1
         run: bash integration/sql/run.sh
       - name: Toxi
-        env:
-          PGDOG_KEEP_RUNNING: 1
         run: bash integration/toxi/run.sh
       - name: Rust
-        env:
-          PGDOG_KEEP_RUNNING: 1
         run: bash integration/rust/run.sh
       - name: Stop shared PgDog
         run: bash -lc 'source integration/common.sh; stop_pgdog'
