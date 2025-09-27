@@ -9,7 +9,7 @@ pub struct RewriteEngine;
 
 impl RewriteEngine {
     pub fn new() -> Self {
-        Self::default()
+        Self
     }
 
     /// Rewrite a SELECT query, adding helper aggregates when necessary.
