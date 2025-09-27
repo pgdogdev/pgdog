@@ -124,7 +124,11 @@ impl MultiShard {
                 };
                 self.counters.command_complete_count += 1;
 
-                if self.counters.command_complete_count.is_multiple_of(self.shards) {
+                if self
+                    .counters
+                    .command_complete_count
+                    .is_multiple_of(self.shards)
+                {
                     self.buffer.full();
 
                     if !self.buffer.is_empty() {
@@ -181,7 +185,11 @@ impl MultiShard {
 
             'I' => {
                 self.counters.empty_query_response += 1;
-                if self.counters.empty_query_response.is_multiple_of(self.shards) {
+                if self
+                    .counters
+                    .empty_query_response
+                    .is_multiple_of(self.shards)
+                {
                     forward = Some(message);
                 }
             }
@@ -193,7 +201,9 @@ impl MultiShard {
                     self.validator.validate_data_row(&data_row)?;
                 }
 
-                if !self.should_buffer() && self.counters.row_description.is_multiple_of(self.shards) {
+                if !self.should_buffer()
+                    && self.counters.row_description.is_multiple_of(self.shards)
+                {
                     forward = Some(message);
                 } else {
                     self.buffer.add(message).map_err(Error::from)?;
@@ -238,7 +248,11 @@ impl MultiShard {
 
             't' => {
                 self.counters.parameter_description += 1;
-                if self.counters.parameter_description.is_multiple_of(self.shards) {
+                if self
+                    .counters
+                    .parameter_description
+                    .is_multiple_of(self.shards)
+                {
                     forward = Some(message);
                 }
             }
