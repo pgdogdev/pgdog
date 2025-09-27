@@ -24,17 +24,18 @@ use monitor::*;
 #[cfg(test)]
 mod test;
 
-/// Replica target containing pool and ban state.
+/// Read query load balancer target.
 #[derive(Clone, Debug)]
-pub struct ReplicaTarget {
+pub struct ReadTarget {
     pub pool: Pool,
     pub ban: Ban,
+    pub role: Role,
 }
 
-impl ReplicaTarget {
-    fn new(pool: Pool) -> Self {
+impl ReadTarget {
+    pub(super) fn new(pool: Pool, role: Role) -> Self {
         let ban = Ban::new(&pool);
-        Self { pool, ban }
+        Self { pool, ban, role }
     }
 }
 
@@ -42,9 +43,9 @@ impl ReplicaTarget {
 #[derive(Clone, Default, Debug)]
 pub struct Replicas {
     /// Replica targets (pools with ban state).
-    pub(super) replicas: Vec<ReplicaTarget>,
+    pub(super) replicas: Vec<ReadTarget>,
     /// Primary target (pool with ban state).
-    pub(super) primary: Option<ReplicaTarget>,
+    pub(super) primary: Option<ReadTarget>,
     /// Checkout timeout.
     pub(super) checkout_timeout: Duration,
     /// Round robin atomic counter.
@@ -72,12 +73,12 @@ impl Replicas {
 
         let replicas: Vec<_> = addrs
             .iter()
-            .map(|config| ReplicaTarget::new(Pool::new(config)))
+            .map(|config| ReadTarget::new(Pool::new(config), Role::Replica))
             .collect();
 
         let primary_target = primary
             .as_ref()
-            .map(|pool| ReplicaTarget::new(pool.clone()));
+            .map(|pool| ReadTarget::new(pool.clone(), Role::Primary));
 
         Self {
             primary: primary_target,
@@ -135,17 +136,14 @@ impl Replicas {
     }
 
     /// Create new identical replica pool.
-    pub fn duplicate(&self) -> Replicas {
+    pub(super) fn duplicate(&self) -> Replicas {
         Self {
             replicas: self
                 .replicas
                 .iter()
-                .map(|target| ReplicaTarget::new(target.pool.duplicate()))
+                .map(|target| ReadTarget::new(target.pool.duplicate(), Role::Replica))
                 .collect(),
-            primary: self
-                .primary
-                .as_ref()
-                .map(|target| ReplicaTarget::new(target.pool.duplicate())),
+            primary: None,
             checkout_timeout: self.checkout_timeout,
             round_robin: Arc::new(AtomicUsize::new(0)),
             lb_strategy: self.lb_strategy,
@@ -184,16 +182,17 @@ impl Replicas {
     }
 
     async fn get_internal(&self, request: &Request) -> Result<Guard, Error> {
-        let mut candidates: Vec<&ReplicaTarget> = self.replicas.iter().collect();
+        use LoadBalancingStrategy::*;
+        use ReadWriteSplit::*;
 
-        let primary_reads = self.rw_split == ReadWriteSplit::IncludePrimary;
+        let mut candidates: Vec<&ReadTarget> = self.replicas.iter().collect();
+
+        let primary_reads = self.rw_split == IncludePrimary;
         if primary_reads {
             if let Some(ref primary) = self.primary {
                 candidates.push(primary);
             }
         }
-
-        use LoadBalancingStrategy::*;
 
         match self.lb_strategy {
             Random => candidates.shuffle(&mut rand::thread_rng()),
@@ -215,7 +214,9 @@ impl Replicas {
             }
             match target.pool.get(request).await {
                 Ok(conn) => return Ok(conn),
-                Err(Error::Offline) => continue,
+                Err(Error::Offline) => {
+                    continue;
+                }
                 Err(err) => {
                     // Only ban a candidate pool if there are more than one
                     // and we have alternates.

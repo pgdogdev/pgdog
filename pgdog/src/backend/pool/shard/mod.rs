@@ -9,6 +9,7 @@ use tokio::{join, select, spawn, sync::Notify};
 use tracing::{debug, error};
 
 use crate::backend::pool::replicas::ban::Ban;
+use crate::backend::pool::replicas::ReadTarget;
 use crate::backend::PubSubListener;
 use crate::config::{config, LoadBalancingStrategy, ReadWriteSplit, Role};
 use crate::net::messages::BackendKeyData;
@@ -145,11 +146,14 @@ impl Shard {
             None
         };
 
+        let mut replicas = self.inner.replicas.duplicate();
+        replicas.primary = primary.clone().map(|p| ReadTarget::new(p, Role::Primary));
+
         Self {
             inner: Arc::new(ShardInner {
                 primary,
                 pub_sub,
-                replicas: self.inner.replicas.duplicate(),
+                replicas,
                 rw_split: self.inner.rw_split,
                 comms: ShardComms::default(), // Create new comms instead of duplicating
             }),

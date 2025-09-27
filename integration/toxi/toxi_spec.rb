@@ -138,30 +138,54 @@ describe 'tcp' do
     end
 
     describe 'both down' do
+
       it 'unbans all pools' do
-        25.times do
+        rw_config = admin.exec('SHOW CONFIG').select do |config|
+          config['name'] == 'read_write_split'
+        end[0]['value']
+        expect(rw_config).to eq('include_primary')
+
+        def banned
+          failover = admin.exec('SHOW POOLS').select do |pool|
+            pool['database'] == 'failover'
+          end
+          banned = failover.select { |item| item['banned'] == 't' }
+          return banned.size
+        end
+
+        25.times do |i|
           Toxiproxy[:primary].toxic(:reset_peer).apply do
             Toxiproxy[:replica].toxic(:reset_peer).apply do
               Toxiproxy[:replica2].toxic(:reset_peer).apply do
                 Toxiproxy[:replica3].toxic(:reset_peer).apply do
-                  8.times do
+                  4.times do
+                    conn.exec_params 'SELECT $1::bigint', [1]
+                  rescue StandardError => e
+                    puts e
+                  end
+
+                  expect(banned).to eq(0)
+
+                  3.times do
+                    conn.exec_params 'SELECT $1::bigint', [1]
+                  rescue StandardError, Timeout::ExitException => e
+                    puts e
+                  end
+
+                  expect(banned).to eq(3)
+
+                  begin
                     conn.exec_params 'SELECT $1::bigint', [1]
                   rescue StandardError
                   end
-                  puts admin.exec('SHOW POOLS').select { |p| p['database'] == 'failover'}
-                  banned = admin.exec('SHOW POOLS').select do |pool|
-                    pool['database'] == 'failover'
-                  end.select { |item| item['banned'] == 't' }
-                  expect(banned.size).to eq(4)
+
+                  expect(banned).to eq(0)
                 end
               end
             end
           end
           conn.exec 'SELECT $1::bigint', [25]
-          banned = admin.exec('SHOW POOLS').select do |pool|
-            pool['database'] == 'failover'
-          end.select { |item| item['banned'] == 't' }
-          expect(banned.size).to eq(0)
+          expect(banned).to eq(0)
         end
       end
     end

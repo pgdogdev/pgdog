@@ -2,7 +2,7 @@ use super::*;
 use parking_lot::RwLock;
 use std::time::Instant;
 
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 /// Load balancer target ban.
 #[derive(Clone, Debug)]
@@ -34,6 +34,8 @@ impl Ban {
     pub fn unban(&self) {
         self.inner.write().ban = None;
         self.pool.clear_server_error();
+
+        warn!("resuming read queries [{}]", self.pool.addr());
     }
 
     /// Get reference to the connection pool.
@@ -95,7 +97,7 @@ impl Ban {
         };
         drop(guard);
         if unbanned {
-            info!("resuming read queries [{}]", self.pool.addr());
+            warn!("resuming read queries [{}]", self.pool.addr());
         }
         unbanned
     }
