@@ -532,11 +532,6 @@ impl Server {
         !self.in_sync()
     }
 
-    /// Extended query pipeline still has pending state that must be drained or resynchronized.
-    pub fn extended_pipeline_pending(&self) -> bool {
-        !self.prepared_statements.done()
-    }
-
     /// Close the connection, don't do any recovery.
     pub fn force_close(&self) -> bool {
         self.stats.state == State::ForceClose
