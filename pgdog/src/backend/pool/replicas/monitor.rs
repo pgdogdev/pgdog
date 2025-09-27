@@ -3,7 +3,7 @@ use std::time::Instant;
 use super::*;
 
 use tokio::{select, spawn, time::interval};
-use tracing::{debug, info};
+use tracing::debug;
 
 static MAINTENANCE: Duration = Duration::from_millis(333);
 
@@ -27,9 +27,15 @@ impl Monitor {
     async fn run(&self) {
         let mut interval = interval(MAINTENANCE);
 
-        let mut bans = self.replicas.replica_bans.clone();
-        if let Some(primary_ban) = self.replicas.primary_read_ban.clone() {
-            bans.push(primary_ban);
+        let mut bans: Vec<Ban> = self
+            .replicas
+            .replicas
+            .iter()
+            .map(|target| target.ban.clone())
+            .collect();
+
+        if let Some(ref primary) = self.replicas.primary {
+            bans.push(primary.ban.clone());
         }
 
         debug!("replicas monitor running");
@@ -38,10 +44,10 @@ impl Monitor {
             select! {
                 _ = interval.tick() => {
                     let now = Instant::now();
+
                     for ban in &bans {
-                        if ban.unban_if_expired(now) {
-                            info!("pool ban expired, resuming read queries [{}]", ban.pool().addr());
-                        }
+                        // Clear expired bans.
+                        ban.unban_if_expired(now);
                     }
                 }
 

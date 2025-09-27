@@ -16,8 +16,6 @@ use crate::state::State;
 
 use super::*;
 
-mod replica;
-
 pub fn pool() -> Pool {
     let config = Config {
         max: 1,
@@ -144,11 +142,6 @@ async fn test_concurrency_with_gas() {
     tracker.wait().await;
 
     assert_eq!(pool.lock().total(), 10);
-}
-
-#[tokio::test]
-async fn test_bans() {
-    todo!()
 }
 
 #[tokio::test]

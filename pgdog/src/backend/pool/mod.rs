@@ -1,7 +1,6 @@
 //! Manage connections to the servers.
 
 pub mod address;
-pub mod ban;
 pub mod cleanup;
 pub mod cluster;
 pub mod comms;

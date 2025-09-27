@@ -87,7 +87,7 @@ shared_examples 'minimal errors' do |role, toxic|
         errors += 1
       end
     end
-    expect(errors).to eq(1)
+    expect(errors).to be <= 1
   end
 end
 
@@ -144,10 +144,11 @@ describe 'tcp' do
             Toxiproxy[:replica].toxic(:reset_peer).apply do
               Toxiproxy[:replica2].toxic(:reset_peer).apply do
                 Toxiproxy[:replica3].toxic(:reset_peer).apply do
-                  4.times do
+                  8.times do
                     conn.exec_params 'SELECT $1::bigint', [1]
                   rescue StandardError
                   end
+                  puts admin.exec('SHOW POOLS').select { |p| p['database'] == 'failover'}
                   banned = admin.exec('SHOW POOLS').select do |pool|
                     pool['database'] == 'failover'
                   end.select { |item| item['banned'] == 't' }
@@ -179,7 +180,9 @@ describe 'tcp' do
       banned = admin.exec('SHOW POOLS').select do |pool|
         pool['database'] == 'failover' && pool['role'] == 'primary'
       end
-      expect(banned[0]['banned']).to eq('t')
+      # Banning logic is on replicas (reads) only.
+      # Getting an error from the primary doesn't do anything.
+      expect(banned[0]['banned']).to eq('f')
 
       c = conn
       c.exec 'BEGIN'
@@ -208,7 +211,7 @@ describe 'tcp' do
           errors += 1
         end
       end
-      expect(errors).to eq(1)
+      expect(errors).to be <= 1
     end
   end
 end

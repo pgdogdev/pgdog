@@ -2,6 +2,8 @@ use super::*;
 use parking_lot::RwLock;
 use std::time::Instant;
 
+use tracing::{error, info};
+
 /// Load balancer target ban.
 #[derive(Clone, Debug)]
 pub struct Ban {
@@ -34,24 +36,42 @@ impl Ban {
         self.pool.clear_server_error();
     }
 
+    /// Get reference to the connection pool.
     pub fn pool(&self) -> &Pool {
         &self.pool
+    }
+
+    /// Ban pool if its reporting a server error.
+    pub fn ban_if_server_error(&self) -> bool {
+        if self.pool.lock().server_error {
+            let ban_timeout = self.pool.config().ban_timeout;
+            self.ban(Error::ServerError, ban_timeout);
+            true
+        } else {
+            false
+        }
     }
 
     /// Ban the database for the ban_timeout duration.
     pub fn ban(&self, error: Error, ban_timeout: Duration) -> bool {
         let created_at = Instant::now();
-        let mut guard = self.inner.write();
+        let mut guard = self.inner.upgradable_read();
 
         if guard.ban.is_none() {
-            guard.ban = Some(BanEntry {
-                created_at,
-                error,
-                ban_timeout,
+            guard.with_upgraded(|guard| {
+                guard.ban = Some(BanEntry {
+                    created_at,
+                    error,
+                    ban_timeout,
+                });
             });
-            let mut guard = self.pool.lock();
-            guard.server_error = true;
-            guard.dump_idle();
+
+            {
+                let mut guard = self.pool.lock();
+                guard.server_error = true;
+                guard.dump_idle();
+            }
+            error!("read queries banned: {} [{}]", error, self.pool.addr());
             true
         } else {
             false
@@ -61,16 +81,23 @@ impl Ban {
     /// Remove ban if it has expired.
     pub(super) fn unban_if_expired(&self, now: Instant) -> bool {
         let mut guard = self.inner.upgradable_read();
-        if guard.ban.as_ref().map(|b| b.expired(now)).unwrap_or(false) {
+        let unbanned = if guard.ban.as_ref().map(|b| b.expired(now)).unwrap_or(false) {
             guard.with_upgraded(|guard| {
                 guard.ban = None;
+                // Allow traffic into the pool only once the
+                // ban is cleared.
+                self.pool.clear_server_error();
             });
 
-            self.pool.clear_server_error();
             true
         } else {
             false
+        };
+        drop(guard);
+        if unbanned {
+            info!("resuming read queries [{}]", self.pool.addr());
         }
+        unbanned
     }
 }
 

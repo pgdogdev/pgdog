@@ -68,14 +68,7 @@ impl Shard {
                 .get(request)
                 .await
         } else {
-            use ReadWriteSplit::*;
-
-            let primary_reads = match self.rw_split {
-                IncludePrimary => true,
-                ExcludePrimary => false,
-            };
-
-            self.replicas.get(request, primary_reads).await
+            self.replicas.get(request).await
         }
     }
 
@@ -165,7 +158,10 @@ impl Shard {
 
     /// Bring every pool online.
     pub fn launch(&self) {
-        self.pools().iter().for_each(|pool| pool.launch());
+        if let Some(ref primary) = self.primary {
+            primary.launch();
+        }
+        self.replicas.launch();
         ShardMonitor::run(self);
         if let Some(ref listener) = self.pub_sub {
             listener.launch();
@@ -218,7 +214,7 @@ impl Shard {
         pools.extend(
             self.replicas
                 .pools()
-                .iter()
+                .into_iter()
                 .map(|p| (Role::Replica, p.clone())),
         );
 
@@ -230,13 +226,14 @@ impl Shard {
         self.replicas.pools_with_roles_and_bans()
     }
 
-    /// Shutdown every pool.
+    /// Shutdown every pool and maintenance task in this shard.
     pub fn shutdown(&self) {
         self.comms.shutdown.notify_waiters();
-        self.pools().iter().for_each(|pool| pool.shutdown());
+        self.primary.as_ref().map(|pool| pool.shutdown());
         if let Some(ref listener) = self.pub_sub {
             listener.shutdown();
         }
+        self.replicas.shutdown();
     }
 
     fn comms(&self) -> &ShardComms {
@@ -271,7 +268,7 @@ impl ShardInner {
         rw_split: ReadWriteSplit,
     ) -> Self {
         let primary = primary.as_ref().map(Pool::new);
-        let replicas = Replicas::new(&primary, replicas, lb_strategy);
+        let replicas = Replicas::new(&primary, replicas, lb_strategy, rw_split);
         let comms = ShardComms {
             shutdown: Notify::new(),
         };
@@ -322,7 +319,7 @@ mod test {
         shard.launch();
 
         for _ in 0..25 {
-            let replica_id = shard.replicas.replica_pools[0].id();
+            let replica_id = shard.replicas.replicas[0].pool.id();
 
             let conn = shard.replica(&Request::default()).await.unwrap();
             assert_eq!(conn.pool.id(), replica_id);

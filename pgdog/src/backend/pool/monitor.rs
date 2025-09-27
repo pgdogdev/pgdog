@@ -165,9 +165,8 @@ impl Monitor {
 
                     }
 
-                    // If the server is okay, remove the ban if it had one.
-                    if let Ok(true) = Self::healthcheck(&pool).await {
-
+                    if Self::healthcheck(&pool).await.is_err() {
+                        pool.lock().server_error = true;
                     }
                 }
 
