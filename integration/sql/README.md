@@ -39,3 +39,15 @@ Metadata lives in SQL comments at the top of the `*_case.sql` file:
 ```
 
 Tags are informative only. Use `skip-targets` to drop one or more target names, or `only-targets` to pin a case to a specific subset (order-sensitive). Set `transactional: false` when the statements must commit.
+Leverage `skip-targets` when a type lacks a stable binary representation in PgDog yet (for example, some network and MAC formats still return raw byte buffers in binary mode).
+
+## Setup & Teardown Conventions
+
+PgDog’s sharding layer relies on deterministic routing, so the SQL fixtures follow a couple of important rules:
+
+- Reuse the canonical `sql_regression_samples` table name. Every setup script should `DROP TABLE IF EXISTS sql_regression_samples;` and recreate it with the columns needed for that case, and the teardown should drop it again.
+- Keep the routing key consistent: declare `id BIGINT PRIMARY KEY` as the leading column so PgDog can hash rows to a single shard.
+- Issue one-row `INSERT` statements and always spell out the full column list. PgDog only routes single-row inserts where the target columns are explicit, so avoid `INSERT ... VALUES (...), (...);` or omitting the column list.
+- When multiple value types are needed, keep using standalone `INSERT` statements per row; PgDog fan-out happens per statement and this keeps behaviour consistent across sharded and non-sharded targets.
+
+Following these conventions keeps the harness sharding-friendly and ensures new cases behave the same through PgDog as they do against PostgreSQL directly.
