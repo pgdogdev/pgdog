@@ -246,6 +246,33 @@ end = 200
 shard = 1
 
 # ------------------------------------------------------------------------------
+# ----- SQL Regression Samples -------------------------------------------------
+
+[[sharded_tables]]
+database = "pgdog_sharded"
+name = "sql_regression_samples"
+column = "id"
+data_type = "bigint"
+
+[[sharded_mappings]]
+database = "pgdog_sharded"
+table = "sql_regression_samples"
+column = "id"
+kind = "range"
+start = 0
+end = 100
+shard = 0
+
+[[sharded_mappings]]
+database = "pgdog_sharded"
+table = "sql_regression_samples"
+column = "id"
+kind = "range"
+start = 100
+end = 200
+shard = 1
+
+# ------------------------------------------------------------------------------
 # ----- Range Sharded :: BIGINT ------------------------------------------------
 
 [[sharded_tables]]
