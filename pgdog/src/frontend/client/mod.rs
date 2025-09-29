@@ -200,8 +200,13 @@ impl Client {
             Ok(params) => params,
             Err(err) => {
                 if err.no_server() {
-                    error!("connection pool is down");
-                    stream.fatal(ErrorResponse::connection()).await?;
+                    error!(
+                        "aborting new client connection, connection pool is down [{}]",
+                        addr
+                    );
+                    stream
+                        .fatal(ErrorResponse::connection(user, database))
+                        .await?;
                     return Ok(());
                 } else {
                     return Err(err.into());

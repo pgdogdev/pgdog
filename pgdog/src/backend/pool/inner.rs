@@ -44,8 +44,6 @@ pub(super) struct Inner {
     moved: Option<Pool>,
     id: u64,
     pub(super) replica_lag: ReplicaLag,
-    /// Server connection experienced error on check-in.
-    pub(super) server_error: bool,
 }
 
 impl std::fmt::Debug for Inner {
@@ -79,7 +77,6 @@ impl Inner {
             moved: None,
             id,
             replica_lag: ReplicaLag::default(),
-            server_error: false,
         }
     }
     /// Total number of connections managed by the pool.
@@ -141,7 +138,7 @@ impl Inner {
 
         // Clients from banned pools won't be able to request connections
         // unless it's a primary.
-        client_needs || maintenance_on && maintain_min && !self.server_error
+        client_needs || maintenance_on && maintain_min
     }
 
     /// Close connections that have exceeded the max age.
@@ -285,11 +282,7 @@ impl Inner {
         // Ban the pool from serving more clients.
         if server.error() {
             self.errors += 1;
-
-            if !self.server_error {
-                result.server_error = true;
-                self.server_error = true;
-            }
+            result.server_error = true;
 
             return result;
         }
@@ -357,11 +350,6 @@ impl Inner {
         for waiter in self.waiting.drain(..) {
             let _ = waiter.tx.send(Err(err));
         }
-    }
-
-    #[inline(always)]
-    pub fn server_error(&self) -> bool {
-        self.server_error
     }
 }
 
@@ -446,7 +434,6 @@ mod test {
     fn test_default_state() {
         let inner = Inner::default();
 
-        assert!(!inner.server_error());
         assert_eq!(inner.idle(), 0);
         assert_eq!(inner.checked_out(), 0);
         assert_eq!(inner.total(), 0);
@@ -517,9 +504,8 @@ mod test {
         assert_eq!(inner.checked_out(), 1);
 
         let result = inner.maybe_check_in(server, Instant::now(), BackendCounts::default());
-
         assert!(result.server_error);
-        assert!(inner.server_error());
+
         assert!(inner.taken.is_empty()); // Error server removed from taken
         assert_eq!(inner.idle(), 0); // Error server not added to idle
     }
@@ -570,17 +556,6 @@ mod test {
         assert_eq!(inner.checked_out(), 1);
         assert_eq!(inner.total(), inner.config.max);
         assert!(!inner.should_create());
-    }
-
-    #[test]
-    fn test_should_not_create_with_server_error() {
-        let mut inner = Inner::default();
-        inner.online = true;
-        inner.server_error = true;
-        inner.config.min = 2;
-
-        assert!(inner.total() < inner.min());
-        assert!(!inner.should_create()); // Server error prevents creation
     }
 
     #[test]
@@ -659,13 +634,12 @@ mod test {
         inner.config.max_age = Duration::from_millis(60_000);
 
         let server = Box::new(Server::default());
-        let result = inner.maybe_check_in(
+        let _result = inner.maybe_check_in(
             server,
             Instant::now() + Duration::from_secs(61), // Exceeds max age
             BackendCounts::default(),
         );
 
-        assert!(!result.server_error);
         assert_eq!(inner.total(), 0); // Connection not added due to max age
     }
 

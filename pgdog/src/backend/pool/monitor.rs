@@ -122,8 +122,7 @@ impl Monitor {
                     if should_create {
                         let ok = self.replenish().await;
                         if !ok {
-                            let mut guard = self.pool.lock();
-                            guard.server_error = true;
+                            self.pool.inner().health.toggle(false);
                         }
                     }
                 }
@@ -166,7 +165,9 @@ impl Monitor {
                     }
 
                     if Self::healthcheck(&pool).await.is_err() {
-                        pool.lock().server_error = true;
+                        pool.inner().health.toggle(false);
+                    } else {
+                        pool.inner().health.toggle(true);
                     }
                 }
 

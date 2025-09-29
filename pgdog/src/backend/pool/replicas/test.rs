@@ -41,27 +41,6 @@ fn setup_test_replicas() -> Replicas {
 }
 
 #[tokio::test]
-async fn test_replica_ban_when_single_pool_has_server_error() {
-    let replicas = setup_test_replicas();
-    let _request = Request::default();
-
-    // Simulate server error on first pool
-    {
-        let mut guard = replicas.pools()[0].lock();
-        guard.server_error = true;
-    }
-
-    // Ban should be triggered when trying to get connection from first pool
-    let ban = &replicas.replicas[0].ban;
-    ban.ban(Error::ServerError, Duration::from_millis(100));
-
-    assert!(ban.banned());
-    assert!(replicas.pools()[0].server_error());
-
-    replicas.shutdown();
-}
-
-#[tokio::test]
 async fn test_replica_ban_recovery_after_timeout() {
     let replicas = setup_test_replicas();
 
@@ -70,7 +49,6 @@ async fn test_replica_ban_recovery_after_timeout() {
     ban.ban(Error::ServerError, Duration::from_millis(50));
 
     assert!(ban.banned());
-    assert!(replicas.pools()[0].server_error());
 
     // Wait for ban to expire
     sleep(Duration::from_millis(60)).await;
@@ -81,7 +59,6 @@ async fn test_replica_ban_recovery_after_timeout() {
 
     assert!(unbanned);
     assert!(!ban.banned());
-    assert!(!replicas.pools()[0].server_error());
 
     replicas.shutdown();
 }
@@ -95,13 +72,11 @@ async fn test_replica_manual_unban() {
     ban.ban(Error::ServerError, Duration::from_millis(1000));
 
     assert!(ban.banned());
-    assert!(replicas.pools()[0].server_error());
 
     // Manually unban
     ban.unban();
 
     assert!(!ban.banned());
-    assert!(!replicas.pools()[0].server_error());
 
     replicas.shutdown();
 }
@@ -135,7 +110,6 @@ async fn test_multiple_replica_banning() {
         ban.ban(Error::ServerError, Duration::from_millis(100));
 
         assert!(ban.banned());
-        assert!(replicas.pools()[i].server_error());
     }
 
     // Both should be banned
@@ -211,7 +185,6 @@ async fn test_primary_pool_banning() {
     primary_ban.ban(Error::ServerError, Duration::from_millis(100));
 
     assert!(primary_ban.banned());
-    assert!(replicas.primary.as_ref().unwrap().pool.server_error());
 
     // Check pools with roles includes primary
     let pools_info = replicas.pools_with_roles_and_bans();
@@ -280,7 +253,6 @@ async fn test_replica_ban_clears_idle_connections() {
 
     // Verify the ban was applied
     assert!(ban.banned());
-    assert!(replicas.pools()[0].server_error());
 
     // Verify that idle connections were cleared
     let idle_after = replicas.pools()[0].lock().idle();
@@ -301,7 +273,6 @@ async fn test_monitor_automatic_ban_expiration() {
     ban.ban(Error::ServerError, Duration::from_millis(100));
 
     assert!(ban.banned());
-    assert!(replicas.pools()[0].server_error());
 
     // Wait longer than the ban timeout to allow monitor to process
     // The monitor runs every 333ms, so we wait for at least one cycle
@@ -328,7 +299,7 @@ async fn test_read_write_split_exclude_primary() {
 
     let replica_configs = [
         create_test_pool_config("localhost", 5432),
-        create_test_pool_config("127.0.0.1", 5433),
+        create_test_pool_config("127.0.0.1", 5432),
     ];
 
     let replicas = Replicas::new(
@@ -343,7 +314,7 @@ async fn test_read_write_split_exclude_primary() {
 
     // Try getting connections multiple times and verify primary is never used
     let mut replica_ids = HashSet::new();
-    for _ in 0..10 {
+    for _ in 0..100 {
         let conn = replicas.get(&request).await.unwrap();
         replica_ids.insert(conn.pool.id());
     }
@@ -402,7 +373,7 @@ async fn test_read_write_split_exclude_primary_no_primary() {
     // Test exclude primary setting when no primary exists
     let replica_configs = [
         create_test_pool_config("localhost", 5432),
-        create_test_pool_config("127.0.0.1", 5433),
+        create_test_pool_config("127.0.0.1", 5432),
     ];
 
     let replicas = Replicas::new(
@@ -432,7 +403,7 @@ async fn test_read_write_split_include_primary_no_primary() {
     // Test include primary setting when no primary exists
     let replica_configs = [
         create_test_pool_config("localhost", 5432),
-        create_test_pool_config("127.0.0.1", 5433),
+        create_test_pool_config("127.0.0.1", 5432),
     ];
 
     let replicas = Replicas::new(
@@ -548,7 +519,7 @@ async fn test_read_write_split_exclude_primary_with_round_robin() {
 
     let replica_configs = [
         create_test_pool_config("localhost", 5432),
-        create_test_pool_config("127.0.0.1", 5433),
+        create_test_pool_config("127.0.0.1", 5432),
     ];
 
     let replicas = Replicas::new(
@@ -579,9 +550,11 @@ async fn test_read_write_split_exclude_primary_with_round_robin() {
     // Verify round-robin pattern: each pool should be different from the previous one
     for i in 1..pool_sequence.len() {
         assert_ne!(
-            pool_sequence[i], pool_sequence[i - 1],
+            pool_sequence[i],
+            pool_sequence[i - 1],
             "Round-robin pattern broken: consecutive pools are the same at positions {} and {}",
-            i - 1, i
+            i - 1,
+            i
         );
     }
 

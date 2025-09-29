@@ -45,6 +45,7 @@ impl Waiting {
             Err(_err) => {
                 let mut guard = self.pool.lock();
                 guard.remove_waiter(&self.request.id);
+                self.pool.inner().health.toggle(false);
                 Err(Error::CheckoutTimeout)
             }
 

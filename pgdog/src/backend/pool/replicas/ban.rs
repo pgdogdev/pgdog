@@ -2,7 +2,7 @@ use super::*;
 use parking_lot::RwLock;
 use std::time::Instant;
 
-use tracing::{error, info, warn};
+use tracing::{error, warn};
 
 /// Load balancer target ban.
 #[derive(Clone, Debug)]
@@ -32,10 +32,13 @@ impl Ban {
 
     /// Unban the database.
     pub fn unban(&self) {
-        self.inner.write().ban = None;
-        self.pool.clear_server_error();
-
-        warn!("resuming read queries [{}]", self.pool.addr());
+        let mut guard = self.inner.upgradable_read();
+        if guard.ban.is_some() {
+            guard.with_upgraded(|guard| {
+                guard.ban = None;
+            });
+            warn!("resuming read queries [{}]", self.pool.addr());
+        }
     }
 
     /// Get reference to the connection pool.
@@ -44,11 +47,9 @@ impl Ban {
     }
 
     /// Ban pool if its reporting a server error.
-    pub fn ban_if_server_error(&self) -> bool {
-        if self.pool.lock().server_error {
-            let ban_timeout = self.pool.config().ban_timeout;
-            self.ban(Error::ServerError, ban_timeout);
-            true
+    pub fn ban_if_unhealthy(&self) -> bool {
+        if !self.pool.inner().health.healthy() {
+            self.ban(Error::ServerError, self.pool.config().ban_timeout)
         } else {
             false
         }
@@ -66,13 +67,9 @@ impl Ban {
                     error,
                     ban_timeout,
                 });
+                self.pool.lock().dump_idle();
             });
-
-            {
-                let mut guard = self.pool.lock();
-                guard.server_error = true;
-                guard.dump_idle();
-            }
+            drop(guard);
             error!("read queries banned: {} [{}]", error, self.pool.addr());
             true
         } else {
@@ -86,9 +83,6 @@ impl Ban {
         let unbanned = if guard.ban.as_ref().map(|b| b.expired(now)).unwrap_or(false) {
             guard.with_upgraded(|guard| {
                 guard.ban = None;
-                // Allow traffic into the pool only once the
-                // ban is cleared.
-                self.pool.clear_server_error();
             });
 
             true

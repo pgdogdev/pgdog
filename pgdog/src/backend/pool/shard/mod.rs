@@ -55,7 +55,7 @@ impl Shard {
         self.primary
             .as_ref()
             .ok_or(Error::NoPrimary)?
-            .get_forced(request)
+            .get(request)
             .await
     }
 

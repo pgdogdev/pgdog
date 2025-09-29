@@ -18,8 +18,10 @@ use super::{Error, Guard, Pool, PoolConfig, Request};
 
 pub mod ban;
 pub mod monitor;
+pub mod target_health;
 use ban::Ban;
 use monitor::*;
+pub use target_health::*;
 
 #[cfg(test)]
 mod test;
@@ -30,12 +32,18 @@ pub struct ReadTarget {
     pub pool: Pool,
     pub ban: Ban,
     pub role: Role,
+    pub health: TargetHealth,
 }
 
 impl ReadTarget {
     pub(super) fn new(pool: Pool, role: Role) -> Self {
         let ban = Ban::new(&pool);
-        Self { pool, ban, role }
+        Self {
+            ban,
+            role,
+            health: pool.inner().health.clone(),
+            pool,
+        }
     }
 }
 
@@ -52,8 +60,8 @@ pub struct Replicas {
     pub(super) round_robin: Arc<AtomicUsize>,
     /// Chosen load balancing strategy.
     pub(super) lb_strategy: LoadBalancingStrategy,
-    /// Shutdown notification.
-    pub(super) shutdown: Arc<Notify>,
+    /// Maintenance. notification.
+    pub(super) maintenance: Arc<Notify>,
     /// Read/write split.
     pub(super) rw_split: ReadWriteSplit,
 }
@@ -86,7 +94,7 @@ impl Replicas {
             checkout_timeout,
             round_robin: Arc::new(AtomicUsize::new(0)),
             lb_strategy,
-            shutdown: Arc::new(Notify::new()),
+            maintenance: Arc::new(Notify::new()),
             rw_split,
         }
     }
@@ -147,7 +155,7 @@ impl Replicas {
             checkout_timeout: self.checkout_timeout,
             round_robin: Arc::new(AtomicUsize::new(0)),
             lb_strategy: self.lb_strategy,
-            shutdown: Arc::new(Notify::new()),
+            maintenance: Arc::new(Notify::new()),
             rw_split: self.rw_split,
         }
     }
@@ -208,6 +216,10 @@ impl Replicas {
             }
         }
 
+        // Only ban a candidate pool if there are more than one
+        // and we have alternates.
+        let bannable = candidates.len() > 1;
+
         for target in &candidates {
             if target.ban.banned() {
                 continue;
@@ -218,20 +230,14 @@ impl Replicas {
                     continue;
                 }
                 Err(err) => {
-                    // Only ban a candidate pool if there are more than one
-                    // and we have alternates.
-                    if candidates.len() > 1 {
-                        let ban_timeout = target.pool.config().ban_timeout;
-                        target.ban.ban(err, ban_timeout);
+                    if bannable {
+                        target.ban.ban(err, target.pool.config().ban_timeout);
                     }
                 }
             }
         }
 
-        // Unban all targets if all are banned.
-        if candidates.iter().all(|target| target.ban.banned()) {
-            candidates.iter().for_each(|target| target.ban.unban());
-        }
+        candidates.iter().for_each(|target| target.ban.unban());
 
         Err(Error::AllReplicasDown)
     }
@@ -240,9 +246,10 @@ impl Replicas {
     ///
     /// N.B. The primary pool is managed by `super::Shard`.
     pub fn shutdown(&self) {
-        self.shutdown.notify_waiters();
         for target in &self.replicas {
             target.pool.shutdown();
         }
+
+        self.maintenance.notify_waiters();
     }
 }

@@ -59,4 +59,10 @@ pub enum Error {
 
     #[error("pub/sub disabled")]
     PubSubDisabled,
+
+    #[error("pool {0} has no health target")]
+    PoolNoHealthTarget(u64),
+
+    #[error("pool is not healthy")]
+    PoolUnhealthy,
 }

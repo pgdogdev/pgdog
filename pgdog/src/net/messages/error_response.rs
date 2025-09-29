@@ -78,11 +78,15 @@ impl ErrorResponse {
     }
 
     /// Connection error.
-    pub fn connection() -> ErrorResponse {
+    pub fn connection(user: &str, database: &str) -> ErrorResponse {
         ErrorResponse {
             severity: "ERROR".into(),
             code: "58000".into(),
-            message: "connection pool is down".into(),
+            message: format!(
+                r#"connection pool for user "{}" and database "{}" is down"#,
+                user, database
+            )
+            .into(),
             detail: None,
             context: None,
             file: None,

@@ -17,8 +17,8 @@ use crate::net::Parameter;
 use super::inner::CheckInResult;
 use super::inner::ReplicaLag;
 use super::{
-    Address, Comms, Config, Error, Guard, Healtcheck, Inner, Monitor, Oids, PoolConfig, Request,
-    State, Waiting,
+    replicas::TargetHealth, Address, Comms, Config, Error, Guard, Healtcheck, Inner, Monitor, Oids,
+    PoolConfig, Request, State, Waiting,
 };
 
 static ID_COUNTER: Lazy<Arc<AtomicU64>> = Lazy::new(|| Arc::new(AtomicU64::new(0)));
@@ -38,6 +38,7 @@ pub(crate) struct InnerSync {
     pub(super) inner: Mutex<Inner>,
     pub(super) id: u64,
     pub(super) config: Config,
+    pub(super) health: TargetHealth,
 }
 
 impl std::fmt::Debug for Pool {
@@ -59,6 +60,7 @@ impl Pool {
                 inner: Mutex::new(Inner::new(config.config, id)),
                 id,
                 config: config.config,
+                health: TargetHealth::new(id),
             }),
         }
     }
@@ -78,6 +80,10 @@ impl Pool {
         &self.inner
     }
 
+    pub fn healthy(&self) -> bool {
+        self.inner.health.healthy()
+    }
+
     /// Launch the maintenance loop, bringing the pool online.
     pub fn launch(&self) {
         let mut guard = self.lock();
@@ -87,16 +93,12 @@ impl Pool {
         }
     }
 
-    pub async fn get_forced(&self, request: &Request) -> Result<Guard, Error> {
-        self.get_internal(request, true).await
-    }
-
     pub async fn get(&self, request: &Request) -> Result<Guard, Error> {
-        self.get_internal(request, false).await
+        self.get_internal(request).await
     }
 
     /// Get a connection from the pool.
-    async fn get_internal(&self, request: &Request, ignore_errors: bool) -> Result<Guard, Error> {
+    async fn get_internal(&self, request: &Request) -> Result<Guard, Error> {
         let pool = self.clone();
 
         // Fast path, idle connection probably available.
@@ -109,12 +111,6 @@ impl Pool {
 
             if !guard.online {
                 return Err(Error::Offline);
-            }
-
-            // We got a bad server back, indicating the database
-            // is in trouble. Tell caller that this pool had a problem.
-            if guard.server_error && !ignore_errors {
-                return Err(Error::ServerError);
             }
 
             let conn = guard.take(request);
@@ -172,9 +168,10 @@ impl Pool {
 
         if let Err(err) = healthcheck.healthcheck().await {
             drop(conn);
-            let mut guard = self.lock();
-            guard.server_error = true;
+            self.inner.health.toggle(false);
             return Err(err);
+        } else if !self.inner.health.healthy() {
+            self.inner.health.toggle(true);
         }
 
         Ok(conn)
@@ -209,6 +206,7 @@ impl Pool {
 
         if server_error {
             error!("pool checked in broken server connection [{}]", self.addr());
+            self.inner.health.toggle(false);
         }
 
         // Notify maintenance that we need a new connection because
@@ -230,16 +228,6 @@ impl Pool {
         }
 
         Ok(())
-    }
-
-    /// This pool is down?
-    pub fn server_error(&self) -> bool {
-        self.lock().server_error()
-    }
-
-    /// Bring pool back online after error.
-    pub fn clear_server_error(&self) {
-        self.lock().server_error = false;
     }
 
     /// Pool is available to serve connections.
@@ -296,7 +284,6 @@ impl Pool {
         {
             let mut guard = self.lock();
             guard.paused = false;
-            guard.server_error = false;
         }
 
         self.comms().ready.notify_waiters();

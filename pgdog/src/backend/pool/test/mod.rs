@@ -151,7 +151,6 @@ async fn test_offline() {
 
     pool.shutdown();
     assert!(!pool.lock().online);
-    assert!(!pool.server_error());
 
     // Cannot get a connection from the pool.
     let err = pool.get(&Request::default()).await;

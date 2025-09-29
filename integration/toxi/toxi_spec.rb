@@ -168,7 +168,7 @@ describe 'tcp' do
 
                   3.times do
                     conn.exec_params 'SELECT $1::bigint', [1]
-                  rescue StandardError, Timeout::ExitException => e
+                  rescue StandardError => e
                     puts e
                   end
 

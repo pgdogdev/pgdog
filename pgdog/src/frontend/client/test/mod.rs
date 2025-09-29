@@ -526,6 +526,8 @@ async fn test_transaction_state() {
 
 #[tokio::test]
 async fn test_close_parse() {
+    crate::logger();
+
     let (mut conn, mut client, mut engine) = new_client!(true);
 
     conn.write_all(&buffer!({ Close::named("test") }, { Sync }))

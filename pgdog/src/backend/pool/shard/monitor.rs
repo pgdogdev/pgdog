@@ -94,7 +94,7 @@ impl ShardMonitor {
         lsn_throughput: f64,
         _max_age: Duration, // used to make banning decisions when it's supported later
     ) {
-        if replica.server_error() {
+        if !replica.inner().health.healthy() {
             replica.set_replica_lag(ReplicaLag::Unknown);
             return;
         };

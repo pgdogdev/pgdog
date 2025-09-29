@@ -27,6 +27,11 @@ impl Monitor {
     async fn run(&self) {
         let mut interval = interval(MAINTENANCE);
 
+        let mut targets: Vec<_> = self.replicas.replicas.clone();
+        if let Some(primary) = self.replicas.primary.clone() {
+            targets.push(primary);
+        }
+
         let mut bans: Vec<Ban> = self
             .replicas
             .replicas
@@ -41,17 +46,48 @@ impl Monitor {
         debug!("replicas monitor running");
 
         loop {
+            let mut check_offline = false;
+
             select! {
-                _ = interval.tick() => {
-                    let now = Instant::now();
-
-                    for ban in &bans {
-                        // Clear expired bans.
-                        ban.unban_if_expired(now);
-                    }
+                _ = interval.tick() => {}
+                _ = self.replicas.maintenance.notified() => {
+                    check_offline = true;
                 }
+            }
 
-                _ = self.replicas.shutdown.notified() => { break; }
+            if check_offline {
+                let offline = self
+                    .replicas
+                    .replicas
+                    .iter()
+                    .all(|target| !target.pool.lock().online);
+
+                if offline {
+                    break;
+                }
+            }
+
+            let now = Instant::now();
+            let mut banned = 0;
+
+            let bannable = targets.len() > 1;
+
+            for target in &targets {
+                // Clear expired bans.
+                target.ban.unban_if_expired(now);
+
+                // Check health and ban if unhealthy.
+                if !target.health.healthy() && bannable {
+                    target
+                        .ban
+                        .ban(Error::PoolUnhealthy, target.pool.config().ban_timeout);
+                    banned += 1;
+                }
+            }
+
+            // Clear all bans if all targets are unhealthy.
+            if targets.len() == banned {
+                targets.iter().for_each(|target| target.ban.unban());
             }
         }
 

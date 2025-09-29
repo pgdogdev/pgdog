@@ -36,4 +36,4 @@ read_only = true
 
 [admin]
 password = "pgdog"
-user = "pgdog"
+user = "admin"
