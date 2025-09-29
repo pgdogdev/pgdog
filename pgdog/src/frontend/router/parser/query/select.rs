@@ -91,7 +91,7 @@ impl QueryParser {
         }
 
         // Only rewrite if query is cross-shard.
-        if query.is_cross_shard() {
+        if query.is_cross_shard() && context.shards > 1 {
             if let Some(buffered_query) = context.router_context.query.as_ref() {
                 let rewrite =
                     RewriteEngine::new().rewrite_select(buffered_query.query(), query.aggregate());
