@@ -108,11 +108,10 @@ impl PreparedStatements {
         sql: &str,
         plan: RewritePlan,
     ) -> bool {
-        let updated = self
+        self
             .global
             .write()
-            .update_and_set_rewrite_plan(name, sql, plan);
-        updated
+            .update_and_set_rewrite_plan(name, sql, plan)
     }
 
     /// Get global statement counter.
