@@ -205,12 +205,12 @@ impl Inner {
     /// Place connection back into the pool
     /// or give it to a waiting client.
     #[inline]
-    pub(super) fn put(&mut self, conn: Box<Server>, now: Instant) {
+    pub(super) fn put(&mut self, mut conn: Box<Server>, now: Instant) {
         // Try to give it to a client that's been waiting, if any.
         let id = *conn.id();
-        if let Some(waiter) = self.waiting.pop_front() {
-            if let Err(conn) = waiter.tx.send(Ok(conn)) {
-                self.idle_connections.push(conn.unwrap());
+        while let Some(waiter) = self.waiting.pop_front() {
+            if let Err(conn_ret) = waiter.tx.send(Ok(conn)) {
+                conn = conn_ret.unwrap(); // SAFETY: We sent Ok(conn), we'll get back Ok(conn) if channel is closed.
             } else {
                 self.taken.take(&Mapping {
                     server: id,
@@ -218,10 +218,12 @@ impl Inner {
                 });
                 self.stats.counts.server_assignment_count += 1;
                 self.stats.counts.wait_time += now.duration_since(waiter.request.created_at);
+                return;
             }
-        } else {
-            self.idle_connections.push(conn);
         }
+
+        // No waiters, put connection in idle list.
+        self.idle_connections.push(conn);
     }
 
     #[inline]
@@ -326,6 +328,10 @@ impl Inner {
         result
     }
 
+    /// Remove waiter from the queue.
+    ///
+    /// This happens if the waiter timed out, e.g. checkout timeout,
+    /// or the caller got cancelled.
     #[inline]
     pub(super) fn remove_waiter(&mut self, id: &BackendKeyData) {
         if let Some(waiter) = self.waiting.pop_front() {
@@ -845,5 +851,83 @@ mod test {
 
         inner.set_taken(taken);
         assert_eq!(inner.checked_out(), 1);
+    }
+
+    #[test]
+    fn test_put_connection_skips_dropped_waiters() {
+        let mut inner = Inner::default();
+        let (tx1, _rx1) = channel(); // Will be dropped
+        let (tx2, _rx2) = channel(); // Will be dropped
+        let (tx3, mut rx3) = channel(); // Will remain active
+
+        let req1 = Request::default();
+        let req2 = Request::default();
+        let req3 = Request::default();
+
+        // Add three waiters to the queue
+        inner.waiting.push_back(Waiter {
+            request: req1,
+            tx: tx1,
+        });
+        inner.waiting.push_back(Waiter {
+            request: req2,
+            tx: tx2,
+        });
+        inner.waiting.push_back(Waiter {
+            request: req3,
+            tx: tx3,
+        });
+
+        // Drop the first two receivers to simulate cancelled waiters
+        drop(_rx1);
+        drop(_rx2);
+
+        assert_eq!(inner.waiting.len(), 3);
+
+        let server = Box::new(Server::default());
+        inner.put(server, Instant::now());
+
+        // All waiters should be removed from queue since we tried each one
+        assert_eq!(inner.waiting.len(), 0);
+        // Connection should be given to the third waiter (the only one still listening)
+        assert_eq!(inner.checked_out(), 1);
+        assert_eq!(inner.idle(), 0);
+
+        // Verify the third waiter received the connection
+        assert!(rx3.try_recv().is_ok());
+    }
+
+    #[test]
+    fn test_put_connection_all_waiters_dropped() {
+        let mut inner = Inner::default();
+        let (tx1, _rx1) = channel();
+        let (tx2, _rx2) = channel();
+
+        let req1 = Request::default();
+        let req2 = Request::default();
+
+        inner.waiting.push_back(Waiter {
+            request: req1,
+            tx: tx1,
+        });
+        inner.waiting.push_back(Waiter {
+            request: req2,
+            tx: tx2,
+        });
+
+        // Drop all receivers
+        drop(_rx1);
+        drop(_rx2);
+
+        assert_eq!(inner.waiting.len(), 2);
+
+        let server = Box::new(Server::default());
+        inner.put(server, Instant::now());
+
+        // All waiters should be removed since they were all dropped
+        assert_eq!(inner.waiting.len(), 0);
+        // Connection should go to idle pool since no waiters could receive it
+        assert_eq!(inner.idle(), 1);
+        assert_eq!(inner.checked_out(), 0);
     }
 }

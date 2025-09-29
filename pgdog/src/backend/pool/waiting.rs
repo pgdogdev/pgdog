@@ -120,3 +120,56 @@ pub(super) struct Waiter {
     pub(super) request: Request,
     pub(super) tx: Sender<Result<Box<Server>, Error>>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backend::pool::Pool;
+    use crate::net::messages::BackendKeyData;
+    use tokio::time::{sleep, Duration};
+
+    #[tokio::test]
+    async fn test_cancellation_safety() {
+        let pool = Pool::new_test();
+        pool.launch();
+
+        let num_tasks = 10;
+        let mut wait_tasks = Vec::new();
+
+        for i in 0..num_tasks {
+            let pool_clone = pool.clone();
+            let request = Request::new(BackendKeyData::new());
+            let mut waiting = Waiting::new(pool_clone, &request).unwrap();
+
+            let wait_task = tokio::spawn(async move { waiting.wait().await });
+
+            wait_tasks.push((wait_task, i));
+        }
+
+        {
+            let pool_guard = pool.lock();
+            assert_eq!(
+                pool_guard.waiting.len(),
+                num_tasks,
+                "All waiters should be in queue"
+            );
+        }
+
+        sleep(Duration::from_millis(5)).await;
+
+        for (wait_task, i) in wait_tasks {
+            if i % 2 == 0 {
+                sleep(Duration::from_millis(1)).await;
+            }
+            wait_task.abort();
+        }
+
+        sleep(Duration::from_millis(10)).await;
+
+        let pool_guard = pool.lock();
+        assert!(
+            pool_guard.waiting.is_empty(),
+            "All waiters should be removed from queue on cancellation"
+        );
+    }
+}
