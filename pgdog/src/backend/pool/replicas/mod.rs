@@ -237,7 +237,7 @@ impl Replicas {
             }
         }
 
-        candidates.iter().for_each(|target| target.ban.unban());
+        candidates.iter().for_each(|target| target.ban.unban(true));
 
         Err(Error::AllReplicasDown)
     }

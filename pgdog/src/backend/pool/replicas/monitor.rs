@@ -45,10 +45,9 @@ impl Monitor {
 
         debug!("replicas monitor running");
 
-        let mut ban_targets = Vec::new();
-
         loop {
             let mut check_offline = false;
+            let mut ban_targets = Vec::new();
 
             select! {
                 _ = interval.tick() => {}
@@ -82,7 +81,7 @@ impl Monitor {
                 }
 
                 // Check health and ban if unhealthy.
-                if !healthy && bannable {
+                if !healthy && bannable && !target.ban.banned() {
                     ban_targets.push(i);
                     banned += 1;
                 }
@@ -90,9 +89,9 @@ impl Monitor {
 
             // Clear all bans if all targets are unhealthy.
             if targets.len() == banned {
-                targets.iter().for_each(|target| target.ban.unban());
+                targets.iter().for_each(|target| target.ban.unban(false));
             } else {
-                for i in ban_targets.drain(..) {
+                for i in ban_targets {
                     targets.get(i).map(|target| {
                         target
                             .ban

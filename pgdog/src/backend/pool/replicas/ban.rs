@@ -31,12 +31,14 @@ impl Ban {
     }
 
     /// Unban the database.
-    pub fn unban(&self) {
+    pub fn unban(&self, manual_check: bool) {
         let mut guard = self.inner.upgradable_read();
-        if guard.ban.is_some() {
-            guard.with_upgraded(|guard| {
-                guard.ban = None;
-            });
+        if let Some(ref ban) = guard.ban {
+            if ban.error != Error::ManualBan || !manual_check {
+                guard.with_upgraded(|guard| {
+                    guard.ban = None;
+                });
+            }
             warn!("resuming read queries [{}]", self.pool.addr());
         }
     }
