@@ -36,6 +36,7 @@ impl Command for ShowPools {
             Field::text("pool_mode"),
             Field::bool("paused"),
             Field::bool("banned"),
+            Field::bool("healthy"),
             Field::numeric("errors"),
             Field::numeric("re_synced"),
             Field::numeric("out_of_sync"),
@@ -68,6 +69,7 @@ impl Command for ShowPools {
                         .add(state.pooler_mode.to_string())
                         .add(state.paused)
                         .add(ban.banned())
+                        .add(pool.healthy())
                         .add(state.errors)
                         .add(state.re_synced)
                         .add(state.out_of_sync)

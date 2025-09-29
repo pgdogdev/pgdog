@@ -50,6 +50,17 @@ impl ErrorResponse {
         }
     }
 
+    pub fn client_login_timeout(timeout: Duration) -> ErrorResponse {
+        let mut error = Self::client_idle_timeout(timeout);
+        error.message = "client login timeout".into();
+        error.detail = Some(format!(
+            "client_login_timeout of {}ms expired",
+            timeout.as_millis()
+        ));
+
+        error
+    }
+
     pub fn cross_shard_disabled() -> ErrorResponse {
         ErrorResponse {
             severity: "ERROR".into(),

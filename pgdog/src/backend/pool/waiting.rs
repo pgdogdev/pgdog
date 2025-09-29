@@ -1,3 +1,5 @@
+use std::ops::Deref;
+
 use crate::backend::Server;
 
 use super::{Error, Guard, Pool, Request};
@@ -8,8 +10,17 @@ use tokio::{
 
 pub(super) struct Waiting {
     pool: Pool,
-    rx: Receiver<Result<Box<Server>, Error>>,
+    rx: Option<Receiver<Result<Box<Server>, Error>>>,
     request: Request,
+    waiting: bool,
+}
+
+impl Drop for Waiting {
+    fn drop(&mut self) {
+        if self.waiting {
+            self.pool.lock().remove_waiter(&self.request.id);
+        }
+    }
 }
 
 impl Waiting {
@@ -28,12 +39,24 @@ impl Waiting {
         // Tell maintenance we are in line waiting for a connection.
         pool.comms().request.notify_one();
 
-        Ok(Self { pool, rx, request })
+        Ok(Self {
+            pool,
+            rx: Some(rx),
+            request,
+            waiting: true,
+        })
     }
 
-    pub(super) async fn wait(self) -> Result<(Guard, Instant), Error> {
+    /// Wait for connection from the pool.
+    pub(super) async fn wait(&mut self) -> Result<(Guard, Instant), Error> {
         let checkout_timeout = self.pool.inner().config.checkout_timeout;
-        let server = timeout(checkout_timeout, self.rx).await;
+        let rx = self.rx.take().expect("waiter rx taken");
+
+        // Make this cancellation-safe.
+        let mut wait_guard = WaitGuard::new(self);
+        let server = timeout(checkout_timeout, rx).await;
+        wait_guard.disarm();
+        drop(wait_guard);
 
         let now = Instant::now();
         match server {
@@ -53,6 +76,41 @@ impl Waiting {
             // This means someone else removed my waiter from the wait queue,
             // indicating a bug in the pool.
             Ok(Err(_)) => Err(Error::CheckoutTimeout),
+        }
+    }
+}
+
+struct WaitGuard<'a> {
+    waiting: &'a Waiting,
+    armed: bool,
+}
+
+impl<'a> Deref for WaitGuard<'a> {
+    type Target = &'a Waiting;
+
+    fn deref(&self) -> &Self::Target {
+        &self.waiting
+    }
+}
+
+impl<'a> WaitGuard<'a> {
+    fn new(waiting: &'a Waiting) -> Self {
+        Self {
+            waiting,
+            armed: true,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for WaitGuard<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            let id = self.waiting.request.id;
+            self.waiting.pool.lock().remove_waiter(&id);
         }
     }
 }

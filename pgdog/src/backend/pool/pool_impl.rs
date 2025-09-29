@@ -136,7 +136,7 @@ impl Pool {
         } else {
             // Slow path, pool is empty, will create new connection
             // or wait for one to be returned if the pool is maxed out.
-            let waiting = Waiting::new(pool, request)?;
+            let mut waiting = Waiting::new(pool, request)?;
             waiting.wait().await?
         };
 
@@ -205,7 +205,10 @@ impl Pool {
         } = { self.lock().maybe_check_in(server, now, counts) };
 
         if server_error {
-            error!("pool checked in broken server connection [{}]", self.addr());
+            error!(
+                "pool received broken server connection, closing [{}]",
+                self.addr()
+            );
             self.inner.health.toggle(false);
         }
 

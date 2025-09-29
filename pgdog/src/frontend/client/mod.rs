@@ -1,12 +1,11 @@
 //! Frontend client.
 
 use std::net::SocketAddr;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use bytes::BytesMut;
 use timeouts::Timeouts;
-use tokio::time::timeout;
-use tokio::{select, spawn};
+use tokio::{select, spawn, time::timeout};
 use tracing::{debug, enabled, error, info, trace, Level as LogLevel};
 
 use super::{ClientRequest, Comms, Error, PreparedStatements};
@@ -99,6 +98,26 @@ impl MemoryUsage for Client {
 impl Client {
     /// Create new frontend client from the given TCP stream.
     pub async fn spawn(
+        stream: Stream,
+        params: Parameters,
+        addr: SocketAddr,
+        comms: Comms,
+    ) -> Result<(), Error> {
+        let login_timeout =
+            Duration::from_millis(config::config().config.general.client_login_timeout);
+
+        match timeout(login_timeout, Self::login(stream, params, addr, comms)).await {
+            Ok(Ok(())) => Ok(()),
+            Err(_) => {
+                error!("client login timeout [{}]", addr);
+                Ok(())
+            }
+            Ok(Err(err)) => Err(err),
+        }
+    }
+
+    /// Create new frontend client from the given TCP stream.
+    async fn login(
         mut stream: Stream,
         params: Parameters,
         addr: SocketAddr,

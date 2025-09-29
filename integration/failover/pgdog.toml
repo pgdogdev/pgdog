@@ -1,7 +1,10 @@
 [general]
 checkout_timeout = 1_000
-ban_timeout = 5_000
+connect_timeout = 1_000
+ban_timeout = 30_000
+query_timeout = 1_000
 idle_healthcheck_interval = 1_000
+client_login_timeout = 1_000
 
 [[databases]]
 name = "failover"

@@ -138,54 +138,40 @@ describe 'tcp' do
     end
 
     describe 'both down' do
-
       it 'unbans all pools' do
         rw_config = admin.exec('SHOW CONFIG').select do |config|
           config['name'] == 'read_write_split'
         end[0]['value']
         expect(rw_config).to eq('include_primary')
 
-        def banned
+        def pool_stat(field, value)
           failover = admin.exec('SHOW POOLS').select do |pool|
             pool['database'] == 'failover'
           end
-          banned = failover.select { |item| item['banned'] == 't' }
-          return banned.size
+          entries = failover.select { |item| item[field] == value }
+          return entries.size
         end
 
-        25.times do |i|
+        25.times do
           Toxiproxy[:primary].toxic(:reset_peer).apply do
             Toxiproxy[:replica].toxic(:reset_peer).apply do
               Toxiproxy[:replica2].toxic(:reset_peer).apply do
                 Toxiproxy[:replica3].toxic(:reset_peer).apply do
-                  4.times do
-                    conn.exec_params 'SELECT $1::bigint', [1]
-                  rescue StandardError => e
-                    puts e
-                  end
-
-                  expect(banned).to eq(0)
-
-                  3.times do
-                    conn.exec_params 'SELECT $1::bigint', [1]
-                  rescue StandardError => e
-                    puts e
-                  end
-
-                  expect(banned).to eq(3)
-
                   begin
                     conn.exec_params 'SELECT $1::bigint', [1]
                   rescue StandardError
                   end
 
-                  expect(banned).to eq(0)
+                  # We set a login timeout, so we won't have time to try all replicas.
+                  expect(pool_stat('healthy', 'f')).to be >= 1
                 end
               end
             end
           end
-          conn.exec 'SELECT $1::bigint', [25]
-          expect(banned).to eq(0)
+
+          4.times do
+            conn.exec 'SELECT $1::bigint', [25]
+          end
         end
       end
     end
@@ -201,12 +187,11 @@ describe 'tcp' do
         c.exec 'ROLLBACK'
       rescue StandardError
       end
+
       banned = admin.exec('SHOW POOLS').select do |pool|
         pool['database'] == 'failover' && pool['role'] == 'primary'
       end
-      # Banning logic is on replicas (reads) only.
-      # Getting an error from the primary doesn't do anything.
-      expect(banned[0]['banned']).to eq('f')
+      expect(banned[0]['healthy']).to eq('f')
 
       c = conn
       c.exec 'BEGIN'
@@ -214,10 +199,6 @@ describe 'tcp' do
       c.exec 'SELECT * FROM test'
       c.exec 'ROLLBACK'
 
-      banned = admin.exec('SHOW POOLS').select do |pool|
-        pool['database'] == 'failover' && pool['role'] == 'primary'
-      end
-      expect(banned[0]['banned']).to eq('f')
     end
 
     it 'active record works' do

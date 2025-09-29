@@ -46,15 +46,6 @@ impl Ban {
         &self.pool
     }
 
-    /// Ban pool if its reporting a server error.
-    pub fn ban_if_unhealthy(&self) -> bool {
-        if !self.pool.inner().health.healthy() {
-            self.ban(Error::ServerError, self.pool.config().ban_timeout)
-        } else {
-            false
-        }
-    }
-
     /// Ban the database for the ban_timeout duration.
     pub fn ban(&self, error: Error, ban_timeout: Duration) -> bool {
         let created_at = Instant::now();

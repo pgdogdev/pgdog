@@ -45,6 +45,8 @@ impl Monitor {
 
         debug!("replicas monitor running");
 
+        let mut ban_targets = Vec::new();
+
         loop {
             let mut check_offline = false;
 
@@ -72,15 +74,16 @@ impl Monitor {
 
             let bannable = targets.len() > 1;
 
-            for target in &targets {
+            for (i, target) in targets.iter().enumerate() {
+                let healthy = target.health.healthy();
                 // Clear expired bans.
-                target.ban.unban_if_expired(now);
+                if healthy {
+                    target.ban.unban_if_expired(now);
+                }
 
                 // Check health and ban if unhealthy.
-                if !target.health.healthy() && bannable {
-                    target
-                        .ban
-                        .ban(Error::PoolUnhealthy, target.pool.config().ban_timeout);
+                if !healthy && bannable {
+                    ban_targets.push(i);
                     banned += 1;
                 }
             }
@@ -88,6 +91,14 @@ impl Monitor {
             // Clear all bans if all targets are unhealthy.
             if targets.len() == banned {
                 targets.iter().for_each(|target| target.ban.unban());
+            } else {
+                for i in ban_targets.drain(..) {
+                    targets.get(i).map(|target| {
+                        target
+                            .ban
+                            .ban(Error::PoolUnhealthy, target.pool.config().ban_timeout)
+                    });
+                }
             }
         }
 
