@@ -108,8 +108,7 @@ impl PreparedStatements {
         sql: &str,
         plan: RewritePlan,
     ) -> bool {
-        self
-            .global
+        self.global
             .write()
             .update_and_set_rewrite_plan(name, sql, plan)
     }
