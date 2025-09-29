@@ -1,8 +1,6 @@
 use rust::setup::{admin_sqlx, connections_sqlx};
 use sqlx::Executor;
 use sqlx::Row;
-use std::sync::Arc;
-use tokio::sync::Barrier;
 
 async fn ban_unban(database: &str, ban: bool, replica: bool) {
     let admin = admin_sqlx().await;
