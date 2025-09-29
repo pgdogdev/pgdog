@@ -6,6 +6,7 @@ use crate::backend::pool::{Address, Config, Error, PoolConfig, Request};
 use crate::config::LoadBalancingStrategy;
 
 use super::*;
+use monitor::Monitor;
 
 fn create_test_pool_config(host: &str, port: u16) -> PoolConfig {
     PoolConfig {
@@ -561,4 +562,39 @@ async fn test_read_write_split_exclude_primary_with_round_robin() {
     // Shutdown both primary and replicas
     replicas.primary.as_ref().unwrap().pool.shutdown();
     replicas.shutdown();
+}
+
+#[tokio::test]
+async fn test_monitor_shuts_down_on_notify() {
+    let pool_config1 = create_test_pool_config("127.0.0.1", 5432);
+    let pool_config2 = create_test_pool_config("localhost", 5432);
+
+    let replicas = Replicas::new(
+        &None,
+        &[pool_config1, pool_config2],
+        LoadBalancingStrategy::Random,
+        ReadWriteSplit::IncludePrimary,
+    );
+
+    replicas
+        .replicas
+        .iter()
+        .for_each(|target| target.pool.launch());
+    let monitor_handle = Monitor::new(&replicas);
+
+    // Give monitor time to start and register notified() future
+    sleep(Duration::from_millis(10)).await;
+
+    replicas.shutdown();
+
+    let result = tokio::time::timeout(Duration::from_secs(1), monitor_handle).await;
+
+    assert!(
+        result.is_ok(),
+        "Monitor should shut down within timeout after notify"
+    );
+    assert!(
+        result.unwrap().is_ok(),
+        "Monitor task should complete successfully"
+    );
 }

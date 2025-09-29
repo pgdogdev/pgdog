@@ -2,7 +2,7 @@ use std::time::Instant;
 
 use super::*;
 
-use tokio::{select, spawn, time::interval};
+use tokio::{select, spawn, task::JoinHandle, time::interval};
 use tracing::debug;
 
 static MAINTENANCE: Duration = Duration::from_millis(333);
@@ -14,14 +14,14 @@ pub(super) struct Monitor {
 
 impl Monitor {
     /// Create new replica targets monitor.
-    pub(super) fn new(replicas: &Replicas) {
+    pub(super) fn new(replicas: &Replicas) -> JoinHandle<()> {
         let monitor = Self {
             replicas: replicas.clone(),
         };
 
         spawn(async move {
             monitor.run().await;
-        });
+        })
     }
 
     async fn run(&self) {
