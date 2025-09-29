@@ -97,19 +97,22 @@ impl PreparedStatements {
         parse.rename_fast(&name)
     }
 
-    /// Update stored SQL for a prepared statement after a rewrite.
-    pub fn update_query(&mut self, name: &str, sql: &str) -> bool {
-        self.global.write().update_query(name, sql)
-    }
-
-    /// Store rewrite plan metadata for a prepared statement.
-    pub fn set_rewrite_plan(&mut self, name: &str, plan: RewritePlan) {
-        self.global.write().set_rewrite_plan(name, plan);
-    }
-
     /// Retrieve stored rewrite plan for a prepared statement, if any.
     pub fn rewrite_plan(&self, name: &str) -> Option<RewritePlan> {
         self.global.read().rewrite_plan(name)
+    }
+
+    pub fn update_and_set_rewrite_plan(
+        &mut self,
+        name: &str,
+        sql: &str,
+        plan: RewritePlan,
+    ) -> bool {
+        let updated = self
+            .global
+            .write()
+            .update_and_set_rewrite_plan(name, sql, plan);
+        updated
     }
 
     /// Get global statement counter.
