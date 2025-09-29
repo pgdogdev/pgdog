@@ -43,9 +43,8 @@ shared_examples 'minimal errors' do |role, toxic|
 
   it 'some connections survive' do
     threads = []
-    errors = 0
+    errors = Concurrent::AtomicFixnum.new(0)
     sem = Concurrent::Semaphore.new(0)
-    (5.0 / 25 * 25.0).ceil
     25.times do
       t = Thread.new do
         c = 1
@@ -54,13 +53,13 @@ shared_examples 'minimal errors' do |role, toxic|
           c = conn
           break
         rescue StandardError
-          errors += 1
+          errors.increment
         end
         25.times do
           c.exec 'SELECT 1'
         rescue PG::SystemError
           c = conn # reconnect
-          errors += 1
+          errors.increment
         end
       end
       threads << t
@@ -69,7 +68,7 @@ shared_examples 'minimal errors' do |role, toxic|
       sem.release(25)
       threads.each(&:join)
     end
-    expect(errors).to be < 25 # 5% error rate (instead of 100%)
+    expect(errors.value).to be < 25 # 5% error rate (instead of 100%)
   end
 
   it 'active record works' do
@@ -78,16 +77,19 @@ shared_examples 'minimal errors' do |role, toxic|
     # Connect (the pool is lazy)
     Sharded.where(id: 1).first
     errors = 0
+    ok = 0
     # Can't ban primary because it issues SET queries
     # that we currently route to primary.
     Toxiproxy[role].toxic(toxic).apply do
       25.times do
         Sharded.where(id: 1).first
+        ok += 1
       rescue StandardError
         errors += 1
       end
     end
     expect(errors).to be <= 1
+    expect(25 - ok).to eq(errors)
   end
 end
 
@@ -183,7 +185,7 @@ describe 'tcp' do
       Toxiproxy[:primary].toxic(:reset_peer).apply do
         c = conn
         c.exec 'BEGIN'
-        c.exec 'CREATE TABLE test(id BIGINT)'
+        c.exec 'CREATE TABLE IF NOT EXISTS test(id BIGINT)'
         c.exec 'ROLLBACK'
       rescue StandardError
       end
@@ -195,7 +197,7 @@ describe 'tcp' do
 
       c = conn
       c.exec 'BEGIN'
-      c.exec 'CREATE TABLE test(id BIGINT)'
+      c.exec 'CREATE TABLE IF NOT EXISTS test(id BIGINT)'
       c.exec 'SELECT * FROM test'
       c.exec 'ROLLBACK'
 
@@ -207,16 +209,19 @@ describe 'tcp' do
       # Connect (the pool is lazy)
       Sharded.where(id: 1).first
       errors = 0
+      ok = 0
       # Can't ban primary because it issues SET queries
       # that we currently route to primary.
       Toxiproxy[:primary].toxic(:reset_peer).apply do
         25.times do
           Sharded.where(id: 1).first
+          ok += 1
         rescue StandardError
           errors += 1
         end
       end
       expect(errors).to be <= 1
+      expect(25 - ok).to eq(errors)
     end
   end
 end
