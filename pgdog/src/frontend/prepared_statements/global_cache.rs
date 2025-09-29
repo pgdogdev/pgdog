@@ -226,14 +226,9 @@ impl GlobalCache {
         plan: RewritePlan,
     ) -> bool {
         if let Some(statement) = self.names.get_mut(name) {
-            let old_key = statement.cache_key();
-            let cached = self.statements.remove(&old_key);
             statement.parse.set_query(sql);
             if !plan.is_noop() {
                 statement.rewrite_plan = Some(plan);
-            }
-            if let Some(entry) = cached {
-                self.statements.insert(old_key, entry);
             }
             true
         } else {
