@@ -96,20 +96,11 @@ mod tests {
         assert!(!limiter.check(ip2));
     }
 
-    // Commented out: this test would take 1 minute to complete
-    // #[tokio::test]
-    // async fn test_rate_limiter_recovers() {
-    //     let limiter = AuthRateLimiter::new();
-    //     let ip = "127.0.0.1".parse().unwrap();
+    // Note: Time-based recovery test is not included because:
+    // 1. Governor crate uses DefaultClock (wall-clock time), not Tokio's time
+    // 2. Tokio's pause()/advance() don't affect governor's clock
+    // 3. Would need custom clock implementation or 60s wait
     //
-    //     // Exhaust limit
-    //     for _ in 0..10 {
-    //         assert!(limiter.check(ip));
-    //     }
-    //     assert!(!limiter.check(ip));
-    //
-    //     // Wait for quota to replenish
-    //     tokio::time::sleep(Duration::from_secs(60)).await;
-    //     assert!(limiter.check(ip));
-    // }
+    // The rate limiting behavior is well-tested by the governor crate itself.
+    // Our tests verify correct integration with the library.
 }
