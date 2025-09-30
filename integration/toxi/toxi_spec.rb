@@ -96,10 +96,8 @@ end
 describe 'healthcheck' do
   before do
     admin_conn = admin
-    admin_conn.exec 'SET idle_healthcheck_delay TO 500'
-    admin_conn.exec 'SET idle_healthcheck_interval TO 500'
-    admin_conn.exec 'SET ban_timeout TO 500'
     admin_conn.exec "SET read_write_split TO 'exclude_primary'"
+    admin_conn.exec 'SET ban_timeout TO 1'
   end
 
   describe 'will heal itself' do
@@ -110,42 +108,45 @@ describe 'healthcheck' do
     end
 
     it 'replica' do
-      # Cache connect params.
-      conn.exec "SELECT 1"
+      10.times do
+        # Cache connect params.
+        conn.exec 'SELECT 1'
 
-      Toxiproxy[:replica].toxic(:reset_peer).apply do
+        Toxiproxy[:replica].toxic(:reset_peer).apply do
+          4.times do
+            conn.exec 'SELECT 1'
+          rescue PG::Error
+          end
+          expect(health('replica')).to include('f')
+          sleep(0.4)
+          expect(health('replica', 'banned')).to include('t')
+        end
+
         4.times do
           conn.exec 'SELECT 1'
-        rescue PG::Error => e
         end
-        expect(health('replica')).to include('f')
+
+        admin.exec 'HEALTHCHECK'
         sleep(0.4)
-        expect(health('replica', 'banned')).to include('t')
+
+        expect(health('replica')).to eq(%w[t t t])
+        expect(health('replica', 'banned')).to eq(%w[f f f])
       end
-
-      admin.exec "UNBAN"
-
-      4.times do
-        conn.exec 'SELECT 1'
-      end
-
-      expect(health('replica')).to eq(%w[t t t])
-      expect(health('replica', 'banned')).to eq(%w[f f f])
     end
 
     it 'primary' do
       # Cache connect params.
-      conn.exec "CREATE TABLE IF NOT EXISTS test(id BIGINT)"
+      conn.exec 'DELETE FROM sharded'
 
       Toxiproxy[:primary].toxic(:reset_peer).apply do
         begin
-          conn.exec 'CREATE TABLE IF NOT EXISTS test(id BIGINT)'
-        rescue PG::Error => e
+          conn.exec 'DELETE FROM sharded'
+        rescue PG::Error
         end
         expect(health('primary')).to eq(['f'])
       end
 
-      conn.exec "CREATE TABLE IF NOT EXISTS test(id BIGINT)"
+      conn.exec 'DELETE FROM sharded'
 
       expect(health('primary')).to eq(%w[t])
     end
@@ -158,7 +159,7 @@ end
 
 describe 'tcp' do
   around :each do |example|
-    Timeout.timeout(10) do
+    Timeout.timeout(30) do
       example.run
     end
   end
@@ -217,18 +218,19 @@ describe 'tcp' do
           entries.size
         end
 
-        25.times do
+        admin.exec 'SET checkout_timeout TO 100'
+
+        10.times do
           Toxiproxy[:primary].toxic(:reset_peer).apply do
             Toxiproxy[:replica].toxic(:reset_peer).apply do
               Toxiproxy[:replica2].toxic(:reset_peer).apply do
                 Toxiproxy[:replica3].toxic(:reset_peer).apply do
-                  begin
+                  4.times do
                     conn.exec_params 'SELECT $1::bigint', [1]
                   rescue StandardError
                   end
 
-                  # We set a login timeout, so we won't have time to try all replicas.
-                  expect(pool_stat('healthy', 'f')).to be >= 1
+                  expect(pool_stat('healthy', 'f')).to eq(4)
                 end
               end
             end

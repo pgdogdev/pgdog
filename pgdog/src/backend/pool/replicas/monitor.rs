@@ -71,14 +71,15 @@ impl Monitor {
             let now = Instant::now();
             let mut banned = 0;
 
-            let bannable = targets.len() > 1;
-
             for (i, target) in targets.iter().enumerate() {
                 let healthy = target.health.healthy();
                 // Clear expired bans.
                 if healthy {
                     target.ban.unban_if_expired(now);
                 }
+
+                let bannable =
+                    targets.len() > 1 && target.pool.config().ban_timeout > Duration::ZERO;
 
                 // Check health and ban if unhealthy.
                 if !healthy && bannable && !target.ban.banned() {
@@ -89,7 +90,9 @@ impl Monitor {
 
             // Clear all bans if all targets are unhealthy.
             if targets.len() == banned {
-                targets.iter().for_each(|target| target.ban.unban(false));
+                targets.iter().for_each(|target| {
+                    target.ban.unban(false);
+                });
             } else {
                 for i in ban_targets {
                     targets.get(i).map(|target| {

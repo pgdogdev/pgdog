@@ -6,6 +6,7 @@ use crate::net::messages::Message;
 
 pub mod ban;
 pub mod error;
+pub mod healthcheck;
 pub mod maintenance_mode;
 pub mod named_row;
 pub mod parser;

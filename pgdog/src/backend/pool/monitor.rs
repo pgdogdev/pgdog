@@ -49,7 +49,7 @@ static MAINTENANCE: Duration = Duration::from_millis(333);
 ///
 /// See [`crate::backend::pool::monitor`] module documentation
 /// for more details.
-pub(super) struct Monitor {
+pub struct Monitor {
     pool: Pool,
 }
 
@@ -164,11 +164,7 @@ impl Monitor {
 
                     }
 
-                    if Self::healthcheck(&pool).await.is_err() {
-                        pool.inner().health.toggle(false);
-                    } else {
-                        pool.inner().health.toggle(true);
-                    }
+                    let _ = Self::healthcheck(&pool).await;
                 }
 
 
@@ -247,7 +243,7 @@ impl Monitor {
     }
 
     /// Perform a periodic healthcheck on the pool.
-    async fn healthcheck(pool: &Pool) -> Result<bool, Error> {
+    pub async fn healthcheck(pool: &Pool) -> Result<bool, Error> {
         let conn = {
             let mut guard = pool.lock();
             if !guard.online {
@@ -267,8 +263,6 @@ impl Monitor {
             )
             .healthcheck()
             .await?;
-
-            Ok(true)
         } else {
             // Create a new one and close it.
             info!("creating new healthcheck connection [{}]", pool.addr());
@@ -280,9 +274,10 @@ impl Monitor {
             Healtcheck::mandatory(&mut server, pool, healthcheck_timeout)
                 .healthcheck()
                 .await?;
-
-            Ok(true)
         }
+
+        pool.inner().health.toggle(true);
+        Ok(true)
     }
 
     async fn stats(pool: Pool) {

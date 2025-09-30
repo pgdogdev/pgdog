@@ -662,3 +662,56 @@ async fn test_monitor_unbans_all_when_all_unhealthy() {
 
     replicas.shutdown();
 }
+
+#[tokio::test]
+async fn test_monitor_does_not_ban_with_zero_ban_timeout() {
+    let pool_config1 = PoolConfig {
+        address: Address {
+            host: "127.0.0.1".into(),
+            port: 5432,
+            user: "pgdog".into(),
+            password: "pgdog".into(),
+            database_name: "pgdog".into(),
+            ..Default::default()
+        },
+        config: Config {
+            max: 1,
+            checkout_timeout: Duration::from_millis(1000),
+            ban_timeout: Duration::ZERO,
+            ..Default::default()
+        },
+    };
+
+    let pool_config2 = PoolConfig {
+        address: Address {
+            host: "localhost".into(),
+            port: 5432,
+            user: "pgdog".into(),
+            password: "pgdog".into(),
+            database_name: "pgdog".into(),
+            ..Default::default()
+        },
+        config: Config {
+            max: 1,
+            checkout_timeout: Duration::from_millis(1000),
+            ban_timeout: Duration::ZERO,
+            ..Default::default()
+        },
+    };
+
+    let replicas = Replicas::new(
+        &None,
+        &[pool_config1, pool_config2],
+        LoadBalancingStrategy::Random,
+        ReadWriteSplit::IncludePrimary,
+    );
+    replicas.launch();
+
+    replicas.replicas[0].health.toggle(false);
+
+    sleep(Duration::from_millis(400)).await;
+
+    assert!(!replicas.replicas[0].ban.banned());
+
+    replicas.shutdown();
+}

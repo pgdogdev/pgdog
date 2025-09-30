@@ -32,7 +32,7 @@ pub use error::Error;
 pub use guard::Guard;
 pub use healthcheck::Healtcheck;
 pub use mirror_stats::MirrorStats;
-use monitor::Monitor;
+pub use monitor::Monitor;
 pub use oids::Oids;
 pub use pool_impl::Pool;
 pub use replicas::Replicas;
