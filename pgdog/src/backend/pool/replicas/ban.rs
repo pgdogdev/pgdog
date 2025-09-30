@@ -73,7 +73,12 @@ impl Ban {
     /// Remove ban if it has expired.
     pub(super) fn unban_if_expired(&self, now: Instant) -> bool {
         let mut guard = self.inner.upgradable_read();
-        let unbanned = if guard.ban.as_ref().map(|b| b.expired(now)).unwrap_or(false) {
+        let unbanned = if guard
+            .ban
+            .as_ref()
+            .map(|b| b.expired(now) && b.error != Error::ManualBan)
+            .unwrap_or(false)
+        {
             let healthy = self.pool.healthy();
             if !healthy {
                 warn!(
@@ -371,5 +376,21 @@ mod tests {
 
         assert!(!unbanned);
         assert!(ban.banned());
+    }
+
+    #[test]
+    fn test_unban_if_expired_does_not_unban_manual_ban() {
+        let pool = Pool::new_test();
+        let ban = Ban::new(&pool);
+        let now = Instant::now();
+
+        ban.ban(Error::ManualBan, Duration::from_millis(1));
+
+        let future = now + Duration::from_millis(10);
+        let unbanned = ban.unban_if_expired(future);
+
+        assert!(!unbanned);
+        assert!(ban.banned());
+        assert_eq!(ban.error(), Some(Error::ManualBan));
     }
 }
