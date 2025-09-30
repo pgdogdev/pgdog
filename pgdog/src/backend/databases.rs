@@ -98,6 +98,9 @@ pub fn reload() -> Result<(), Error> {
     // Resize query cache
     Cache::resize(new_config.config.general.query_cache_limit);
 
+    // Reload rate limiter with new limit
+    crate::auth::rate_limit::reload(new_config.config.general.auth_rate_limit);
+
     Ok(())
 }
 

@@ -6,8 +6,10 @@ use governor::{
     Quota, RateLimiter,
 };
 use once_cell::sync::Lazy;
+use parking_lot::RwLock;
 use std::net::{IpAddr, Ipv6Addr};
 use std::num::NonZeroU32;
+use std::sync::Arc;
 
 use crate::config::config;
 
@@ -30,14 +32,19 @@ fn normalize_ip(ip: IpAddr) -> IpAddr {
 }
 
 type KeyedStore = DefaultKeyedStateStore<IpAddr>;
+type IpRateLimiter = RateLimiter<IpAddr, KeyedStore, DefaultClock>;
 
-/// Global rate limiter for authentication attempts per IP address.
-pub static AUTH_RATE_LIMITER: Lazy<RateLimiter<IpAddr, KeyedStore, DefaultClock>> = Lazy::new(|| {
-    let limit = config().config.general.auth_rate_limit;
+fn create_limiter(limit: u32) -> IpRateLimiter {
     // Config validation ensures limit is always >= 1
     let limit = NonZeroU32::new(limit).expect("auth_rate_limit validated to be non-zero");
     let quota = Quota::per_minute(limit).allow_burst(limit);
     RateLimiter::keyed(quota)
+}
+
+/// Global rate limiter for authentication attempts per IP address.
+static AUTH_RATE_LIMITER: Lazy<Arc<RwLock<IpRateLimiter>>> = Lazy::new(|| {
+    let limit = config().config.general.auth_rate_limit;
+    Arc::new(RwLock::new(create_limiter(limit)))
 });
 
 /// Check if an IP address can attempt authentication.
@@ -48,7 +55,14 @@ pub static AUTH_RATE_LIMITER: Lazy<RateLimiter<IpAddr, KeyedStore, DefaultClock>
 /// addresses in their allocated block.
 pub fn check(ip: IpAddr) -> bool {
     let normalized_ip = normalize_ip(ip);
-    AUTH_RATE_LIMITER.check_key(&normalized_ip).is_ok()
+    AUTH_RATE_LIMITER.read().check_key(&normalized_ip).is_ok()
+}
+
+/// Reload the rate limiter with a new limit.
+///
+/// Called when configuration is reloaded via SIGHUP or RELOAD command.
+pub fn reload(new_limit: u32) {
+    *AUTH_RATE_LIMITER.write() = create_limiter(new_limit);
 }
 
 #[cfg(test)]
@@ -132,6 +146,26 @@ mod tests {
         // Different /64 should still work
         let ip3: IpAddr = "2001:db8:cafe:5678:1234:5678:90ab:cdef".parse().unwrap();
         assert!(check(ip3));
+    }
+
+    #[test]
+    fn test_reload() {
+        let ip: IpAddr = "10.0.0.1".parse().unwrap();
+
+        // Exhaust default limit of 10
+        for _ in 0..10 {
+            assert!(check(ip));
+        }
+        assert!(!check(ip));
+
+        // Reload with higher limit
+        reload(20);
+
+        // Should now allow more requests (note: state is reset on reload)
+        for _ in 0..20 {
+            assert!(check(ip));
+        }
+        assert!(!check(ip));
     }
 
     // Note: Time-based recovery test is not included because:
