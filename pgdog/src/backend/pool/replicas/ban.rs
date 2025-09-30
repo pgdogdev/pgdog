@@ -74,6 +74,14 @@ impl Ban {
     pub(super) fn unban_if_expired(&self, now: Instant) -> bool {
         let mut guard = self.inner.upgradable_read();
         let unbanned = if guard.ban.as_ref().map(|b| b.expired(now)).unwrap_or(false) {
+            let healthy = self.pool.healthy();
+            if !healthy {
+                warn!(
+                    "not resuming read queries, pool is unhealthy [{}]",
+                    self.pool.addr()
+                );
+                return false;
+            }
             guard.with_upgraded(|guard| {
                 guard.ban = None;
             });
@@ -347,5 +355,21 @@ mod tests {
             ban.unban(false);
             assert!(!ban.banned());
         }
+    }
+
+    #[test]
+    fn test_unban_if_expired_does_not_unban_unhealthy_pool() {
+        let pool = Pool::new_test();
+        let ban = Ban::new(&pool);
+        let now = Instant::now();
+
+        ban.ban(Error::ServerError, Duration::from_millis(1));
+        pool.inner().health.toggle(false);
+
+        let future = now + Duration::from_millis(10);
+        let unbanned = ban.unban_if_expired(future);
+
+        assert!(!unbanned);
+        assert!(ban.banned());
     }
 }
