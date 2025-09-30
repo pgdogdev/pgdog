@@ -17,18 +17,30 @@ use tokio_rustls::{TlsConnector, rustls};
 
 const HOST: &str = "127.0.0.1";
 const PORT: u16 = 6432;
-const INITIAL_CERT_PATH: &str = "integration/rust/tests/data/tls/initial_cert.pem";
-const INITIAL_KEY_PATH: &str = "integration/rust/tests/data/tls/initial_key.pem";
-const ROTATED_CERT_PATH: &str = "integration/rust/tests/data/tls/rotated_cert.pem";
-const ROTATED_KEY_PATH: &str = "integration/rust/tests/data/tls/rotated_key.pem";
+const INITIAL_CERT_PLACEHOLDER: &str = "integration/rust/tests/data/tls/initial_cert.pem";
+const INITIAL_KEY_PLACEHOLDER: &str = "integration/rust/tests/data/tls/initial_key.pem";
+
+fn asset_path(name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/data/tls")
+        .join(name)
+}
+
+fn rotated_cert_path() -> PathBuf {
+    asset_path("rotated_cert.pem")
+}
+
+fn rotated_key_path() -> PathBuf {
+    asset_path("rotated_key.pem")
+}
 
 #[tokio::test]
 #[serial]
-async fn tls_acceptor_does_not_reload_via_sighup_yet() {
+async fn tls_acceptor_swaps_after_sighup() {
     let mut guard = ConfigGuard::new().expect("config guard");
 
     let initial_cert = fetch_server_cert_der().await.expect("initial cert");
-    let rotated_cert = load_cert_der(ROTATED_CERT_PATH).expect("rotated cert load");
+    let rotated_cert = load_cert_der(&rotated_cert_path()).expect("rotated cert load");
     assert_ne!(
         initial_cert.as_ref(),
         rotated_cert.as_ref(),
@@ -36,7 +48,7 @@ async fn tls_acceptor_does_not_reload_via_sighup_yet() {
     );
 
     guard
-        .rewrite_config(ROTATED_CERT_PATH, ROTATED_KEY_PATH)
+        .rewrite_config(&rotated_cert_path(), &rotated_key_path())
         .expect("rewrite config for rotated cert");
 
     guard.signal_sighup().expect("send sighup");
@@ -53,13 +65,13 @@ async fn tls_acceptor_does_not_reload_via_sighup_yet() {
 
 #[tokio::test]
 #[serial]
-async fn tls_acceptor_does_not_reload_via_admin_command_yet() {
+async fn tls_acceptor_swaps_after_admin_reload() {
     let mut guard = ConfigGuard::new().expect("config guard");
 
-    let rotated_cert = load_cert_der(ROTATED_CERT_PATH).expect("rotated cert load");
+    let rotated_cert = load_cert_der(&rotated_cert_path()).expect("rotated cert load");
 
     guard
-        .rewrite_config(ROTATED_CERT_PATH, ROTATED_KEY_PATH)
+        .rewrite_config(&rotated_cert_path(), &rotated_key_path())
         .expect("rewrite config for rotated cert");
 
     let admin = admin_tokio().await;
@@ -75,8 +87,10 @@ async fn tls_acceptor_does_not_reload_via_admin_command_yet() {
     );
 }
 
-fn load_cert_der(path: &str) -> Result<rustls::pki_types::CertificateDer<'static>, std::io::Error> {
-    rustls::pki_types::CertificateDer::from_pem_file(Path::new(path))
+fn load_cert_der(
+    path: &Path,
+) -> Result<rustls::pki_types::CertificateDer<'static>, std::io::Error> {
+    rustls::pki_types::CertificateDer::from_pem_file(path)
         .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))
 }
 
@@ -146,10 +160,13 @@ impl ConfigGuard {
         })
     }
 
-    fn rewrite_config(&mut self, cert: &str, key: &str) -> Result<(), std::io::Error> {
+    fn rewrite_config(&mut self, cert: &Path, key: &Path) -> Result<(), std::io::Error> {
         let mut updated = self.original.clone();
-        updated = updated.replace(INITIAL_CERT_PATH, cert);
-        updated = updated.replace(INITIAL_KEY_PATH, key);
+        let cert_str = cert.to_string_lossy();
+        let key_str = key.to_string_lossy();
+
+        updated = updated.replace(INITIAL_CERT_PLACEHOLDER, cert_str.as_ref());
+        updated = updated.replace(INITIAL_KEY_PLACEHOLDER, key_str.as_ref());
         fs::write(&self.path, updated)
     }
 
