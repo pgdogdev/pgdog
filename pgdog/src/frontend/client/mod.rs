@@ -152,7 +152,13 @@ impl Client {
 
         if let Some(addr) = *stream.peer_addr() {
             if !AUTH_RATE_LIMITER.check(addr.ip()) {
-                error!("Rate limit exceeded for IP: {}", addr.ip());
+                error!(
+                    "Authentication rate limit exceeded for IP: {}, user: \"{}\", database: \"{}\"",
+                    addr.ip(),
+                    user,
+                    database
+                );
+                // Send generic auth error to prevent information leakage to attacker
                 stream.fatal(ErrorResponse::auth(user, database)).await?;
                 return Ok(());
             }
