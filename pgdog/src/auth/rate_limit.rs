@@ -10,6 +10,7 @@ use parking_lot::RwLock;
 use std::net::{IpAddr, Ipv6Addr};
 use std::num::NonZeroU32;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use crate::config::config;
 
@@ -47,13 +48,27 @@ static AUTH_RATE_LIMITER: Lazy<Arc<RwLock<IpRateLimiter>>> = Lazy::new(|| {
     Arc::new(RwLock::new(create_limiter(limit)))
 });
 
+/// Track last reset time to prevent unbounded memory growth.
+///
+/// Governor's DefaultKeyedStateStore (DashMap) grows indefinitely.
+/// Reset limiter every hour to clear accumulated state.
+static LAST_RESET: Lazy<Arc<RwLock<Instant>>> = Lazy::new(|| Arc::new(RwLock::new(Instant::now())));
+
 /// Check if an IP address can attempt authentication.
 /// Returns true if the request is allowed, false if rate limited.
 ///
 /// IPv6 addresses are normalized to /64 prefix before rate limiting
 /// to prevent attackers from bypassing limits by rotating through
 /// addresses in their allocated block.
+///
+/// Resets state every hour to prevent unbounded memory growth.
 pub fn check(ip: IpAddr) -> bool {
+    // Reset every hour to prevent unbounded growth of keyed state
+    if LAST_RESET.read().elapsed() > Duration::from_secs(3600) {
+        reload(config().config.general.auth_rate_limit);
+        *LAST_RESET.write() = Instant::now();
+    }
+
     check_with_limiter(&AUTH_RATE_LIMITER.read(), ip)
 }
 
