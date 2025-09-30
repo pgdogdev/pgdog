@@ -598,3 +598,67 @@ async fn test_monitor_shuts_down_on_notify() {
         "Monitor task should complete successfully"
     );
 }
+
+#[tokio::test]
+async fn test_monitor_bans_unhealthy_target() {
+    let replicas = setup_test_replicas();
+
+    replicas.replicas[0].health.toggle(false);
+
+    sleep(Duration::from_millis(400)).await;
+
+    assert!(replicas.replicas[0].ban.banned());
+
+    replicas.shutdown();
+}
+
+#[tokio::test]
+async fn test_monitor_clears_expired_bans() {
+    let replicas = setup_test_replicas();
+
+    replicas.replicas[0]
+        .ban
+        .ban(Error::ServerError, Duration::from_millis(50));
+
+    sleep(Duration::from_millis(400)).await;
+
+    assert!(!replicas.replicas[0].ban.banned());
+
+    replicas.shutdown();
+}
+
+#[tokio::test]
+async fn test_monitor_does_not_ban_single_target() {
+    let pool_config = create_test_pool_config("127.0.0.1", 5432);
+
+    let replicas = Replicas::new(
+        &None,
+        &[pool_config],
+        LoadBalancingStrategy::Random,
+        ReadWriteSplit::IncludePrimary,
+    );
+    replicas.launch();
+
+    replicas.replicas[0].health.toggle(false);
+
+    sleep(Duration::from_millis(400)).await;
+
+    assert!(!replicas.replicas[0].ban.banned());
+
+    replicas.shutdown();
+}
+
+#[tokio::test]
+async fn test_monitor_unbans_all_when_all_unhealthy() {
+    let replicas = setup_test_replicas();
+
+    replicas.replicas[0].health.toggle(false);
+    replicas.replicas[1].health.toggle(false);
+
+    sleep(Duration::from_millis(400)).await;
+
+    assert!(!replicas.replicas[0].ban.banned());
+    assert!(!replicas.replicas[1].ban.banned());
+
+    replicas.shutdown();
+}
