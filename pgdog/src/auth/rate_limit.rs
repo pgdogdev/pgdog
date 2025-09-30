@@ -54,8 +54,14 @@ static AUTH_RATE_LIMITER: Lazy<Arc<RwLock<IpRateLimiter>>> = Lazy::new(|| {
 /// to prevent attackers from bypassing limits by rotating through
 /// addresses in their allocated block.
 pub fn check(ip: IpAddr) -> bool {
+    check_with_limiter(&AUTH_RATE_LIMITER.read(), ip)
+}
+
+/// Internal function to check rate limit with a specific limiter.
+/// Allows testing without depending on global config.
+fn check_with_limiter(limiter: &IpRateLimiter, ip: IpAddr) -> bool {
     let normalized_ip = normalize_ip(ip);
-    AUTH_RATE_LIMITER.read().check_key(&normalized_ip).is_ok()
+    limiter.check_key(&normalized_ip).is_ok()
 }
 
 /// Reload the rate limiter with a new limit.
@@ -69,35 +75,43 @@ pub fn reload(new_limit: u32) {
 mod tests {
     use super::*;
 
+    /// Create a test rate limiter with a specific limit.
+    /// Tests should use this to avoid coupling to config defaults.
+    fn test_limiter(limit: u32) -> IpRateLimiter {
+        create_limiter(limit)
+    }
+
     #[test]
     fn test_rate_limiter_allows_initial_requests() {
+        let limiter = test_limiter(10);
         let ip = "127.0.0.1".parse().unwrap();
 
         // First 10 requests should succeed
         for _ in 0..10 {
-            assert!(check(ip));
+            assert!(check_with_limiter(&limiter, ip));
         }
 
         // 11th request should be rate limited
-        assert!(!check(ip));
+        assert!(!check_with_limiter(&limiter, ip));
     }
 
     #[test]
     fn test_rate_limiter_per_ip() {
+        let limiter = test_limiter(10);
         let ip1: IpAddr = "127.0.0.10".parse().unwrap();
         let ip2: IpAddr = "127.0.0.20".parse().unwrap();
 
         // Exhaust ip1
         for _ in 0..10 {
-            assert!(check(ip1));
+            assert!(check_with_limiter(&limiter, ip1));
         }
-        assert!(!check(ip1));
+        assert!(!check_with_limiter(&limiter, ip1));
 
         // ip2 should still work
         for _ in 0..10 {
-            assert!(check(ip2));
+            assert!(check_with_limiter(&limiter, ip2));
         }
-        assert!(!check(ip2));
+        assert!(!check_with_limiter(&limiter, ip2));
     }
 
     #[test]
@@ -130,42 +144,67 @@ mod tests {
 
     #[test]
     fn test_ipv6_rate_limiting_blocks_same_subnet() {
+        let limiter = test_limiter(10);
+
         // Two addresses in same /64 block
         let ip1: IpAddr = "2001:db8:cafe:1234:5678:90ab:cdef:1111".parse().unwrap();
         let ip2: IpAddr = "2001:db8:cafe:1234:9999:aaaa:bbbb:cccc".parse().unwrap();
 
         // Exhaust rate limit with first address
         for _ in 0..10 {
-            assert!(check(ip1));
+            assert!(check_with_limiter(&limiter, ip1));
         }
-        assert!(!check(ip1));
+        assert!(!check_with_limiter(&limiter, ip1));
 
         // Second address in same /64 should also be blocked
-        assert!(!check(ip2));
+        assert!(!check_with_limiter(&limiter, ip2));
 
         // Different /64 should still work
         let ip3: IpAddr = "2001:db8:cafe:5678:1234:5678:90ab:cdef".parse().unwrap();
-        assert!(check(ip3));
+        assert!(check_with_limiter(&limiter, ip3));
     }
 
     #[test]
     fn test_reload() {
+        // Use unique IP to avoid interference from other tests
         let ip: IpAddr = "10.0.0.1".parse().unwrap();
 
-        // Exhaust default limit of 10
+        // Exhaust default limit of 10 on global limiter
         for _ in 0..10 {
             assert!(check(ip));
         }
         assert!(!check(ip));
 
-        // Reload with higher limit
+        // Reload with higher limit (resets state)
         reload(20);
 
-        // Should now allow more requests (note: state is reset on reload)
+        // Should now allow more requests (state was reset)
         for _ in 0..20 {
             assert!(check(ip));
         }
         assert!(!check(ip));
+    }
+
+    #[test]
+    fn test_different_limits() {
+        // Test with limit of 3
+        let limiter = test_limiter(3);
+        let ip: IpAddr = "192.168.100.1".parse().unwrap();
+
+        for _ in 0..3 {
+            assert!(check_with_limiter(&limiter, ip));
+        }
+        assert!(!check_with_limiter(&limiter, ip));
+    }
+
+    #[test]
+    fn test_limit_of_one() {
+        // Edge case: minimum limit of 1
+        let limiter = test_limiter(1);
+        let ip: IpAddr = "192.168.100.2".parse().unwrap();
+
+        assert!(check_with_limiter(&limiter, ip));
+        assert!(!check_with_limiter(&limiter, ip));
     }
 
     // Note: Time-based recovery test is not included because:
