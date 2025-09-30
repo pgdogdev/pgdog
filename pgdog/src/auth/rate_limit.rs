@@ -6,14 +6,31 @@ use governor::{
     Quota, RateLimiter,
 };
 use lru::LruCache;
-use nonzero_ext::nonzero;
 use once_cell::sync::Lazy;
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv6Addr};
 use std::num::{NonZeroU32, NonZeroUsize};
 use std::sync::Arc;
 use parking_lot::Mutex;
 
 use crate::config::config;
+
+/// Normalize an IP address for rate limiting purposes.
+///
+/// IPv4 addresses are used as-is.
+/// IPv6 addresses are masked to their /64 prefix to prevent attackers
+/// from bypassing rate limits by rotating through addresses in their
+/// allocated block (most ISPs and cloud providers allocate /64 or /48).
+fn normalize_ip(ip: IpAddr) -> IpAddr {
+    match ip {
+        IpAddr::V4(v4) => IpAddr::V4(v4),
+        IpAddr::V6(v6) => {
+            let segments = v6.segments();
+            // Keep first 4 segments (64 bits), zero out the rest
+            let masked = Ipv6Addr::new(segments[0], segments[1], segments[2], segments[3], 0, 0, 0, 0);
+            IpAddr::V6(masked)
+        }
+    }
+}
 
 /// Global rate limiter for authentication attempts per IP address.
 pub static AUTH_RATE_LIMITER: Lazy<AuthRateLimiter> = Lazy::new(AuthRateLimiter::new);
@@ -49,15 +66,21 @@ impl AuthRateLimiter {
     /// Check if an IP address can attempt authentication.
     /// Returns true if the request is allowed, false if rate limited.
     ///
+    /// IPv6 addresses are normalized to /64 prefix before rate limiting
+    /// to prevent attackers from bypassing limits by rotating through
+    /// addresses in their allocated block.
+    ///
     /// Thread safety: The lock only protects LRU cache access. The actual
     /// rate limit check runs without holding the lock, allowing concurrent
     /// authentication attempts. The governor RateLimiter is internally
     /// thread-safe using atomic operations.
     pub fn check(&self, ip: IpAddr) -> bool {
+        let normalized_ip = normalize_ip(ip);
+
         let limiter = {
             let mut limiters = self.limiters.lock();
             limiters
-                .get_or_insert(ip, || Arc::new(RateLimiter::direct(self.quota)))
+                .get_or_insert(normalized_ip, || Arc::new(RateLimiter::direct(self.quota)))
                 .clone() // Clone Arc (cheap - just reference count increment)
         }; // Lock released here
 
@@ -102,6 +125,56 @@ mod tests {
             assert!(limiter.check(ip2));
         }
         assert!(!limiter.check(ip2));
+    }
+
+    #[test]
+    fn test_ipv6_normalization() {
+        // Test that IPv6 addresses in same /64 are normalized to same value
+        let ip1: IpAddr = "2001:db8:abcd:1234:5678:90ab:cdef:1111".parse().unwrap();
+        let ip2: IpAddr = "2001:db8:abcd:1234:9999:aaaa:bbbb:cccc".parse().unwrap();
+        let ip3: IpAddr = "2001:db8:abcd:5678:1234:5678:90ab:cdef".parse().unwrap();
+
+        let normalized1 = normalize_ip(ip1);
+        let normalized2 = normalize_ip(ip2);
+        let normalized3 = normalize_ip(ip3);
+
+        // Same /64 prefix should normalize to same address
+        assert_eq!(normalized1, normalized2);
+        assert_eq!(normalized1.to_string(), "2001:db8:abcd:1234::");
+
+        // Different /64 prefix should normalize differently
+        assert_ne!(normalized1, normalized3);
+        assert_eq!(normalized3.to_string(), "2001:db8:abcd:5678::");
+    }
+
+    #[test]
+    fn test_ipv4_normalization() {
+        // IPv4 addresses should pass through unchanged
+        let ip: IpAddr = "192.168.1.100".parse().unwrap();
+        let normalized = normalize_ip(ip);
+        assert_eq!(ip, normalized);
+    }
+
+    #[test]
+    fn test_ipv6_rate_limiting_blocks_same_subnet() {
+        let limiter = AuthRateLimiter::new();
+
+        // Two addresses in same /64 block
+        let ip1: IpAddr = "2001:db8:abcd:1234:5678:90ab:cdef:1111".parse().unwrap();
+        let ip2: IpAddr = "2001:db8:abcd:1234:9999:aaaa:bbbb:cccc".parse().unwrap();
+
+        // Exhaust rate limit with first address
+        for _ in 0..10 {
+            assert!(limiter.check(ip1));
+        }
+        assert!(!limiter.check(ip1));
+
+        // Second address in same /64 should also be blocked
+        assert!(!limiter.check(ip2));
+
+        // Different /64 should still work
+        let ip3: IpAddr = "2001:db8:abcd:5678:1234:5678:90ab:cdef".parse().unwrap();
+        assert!(limiter.check(ip3));
     }
 
     // Note: Time-based recovery test is not included because:
