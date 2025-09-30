@@ -269,7 +269,7 @@ impl FromBytes for Bind {
                 _ => Format::Binary,
             })
             .collect();
-        let num_params = bytes.get_i16();
+        let num_params = bytes.get_u16();
         let params = (0..num_params)
             .map(|_| {
                 let len = bytes.get_i32();
@@ -316,7 +316,7 @@ impl ToBytes for Bind {
                 Format::Binary => 1,
             });
         }
-        payload.put_i16(self.params.len() as i16);
+        payload.put_u16(self.params.len() as u16);
         for param in &self.params {
             payload.put_i32(param.len);
             payload.put(&param.data[..]);
@@ -433,5 +433,20 @@ mod test {
             }
             assert_eq!(msg.code(), c);
         }
+    }
+
+    #[test]
+    fn test_large_parameter_count_round_trip() {
+        let count = 35_000;
+        let params: Vec<Parameter> = (0..count).map(|_| Parameter::new_null()).collect();
+        let bind = Bind::new_params("__pgdog_large", &params);
+
+        let bytes = bind.to_bytes().unwrap();
+        let decoded = Bind::from_bytes(bytes.clone()).unwrap();
+
+        assert_eq!(decoded.params_raw().len(), count);
+        assert_eq!(decoded.codes().len(), 0);
+        assert_eq!(decoded.statement(), "__pgdog_large");
+        assert_eq!(bytes.len(), decoded.len());
     }
 }
