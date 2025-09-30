@@ -419,7 +419,16 @@ mod test {
             names.push(name);
         }
 
-        assert_eq!(cache.close_unused(0), 0);
+        assert_eq!(cache.close_unused(0), 25);
+        assert!(cache.is_empty());
+
+        names.clear();
+        for stmt in 0..25 {
+            let parse = Parse::named("__sqlx_1", format!("SELECT {}", stmt));
+            let (new, name) = cache.insert(&parse);
+            assert!(new);
+            names.push(name);
+        }
 
         for name in &names[0..5] {
             assert!(!cache.close(name, 25)); // Won't close because
