@@ -36,7 +36,8 @@ impl AuthRateLimiter {
 
         Self {
             limiters: Arc::new(Mutex::new(LruCache::new(
-                NonZeroUsize::new(MAX_TRACKED_IPS).unwrap(),
+                NonZeroUsize::new(MAX_TRACKED_IPS)
+                    .expect("MAX_TRACKED_IPS must be non-zero"),
             ))),
             quota,
         }

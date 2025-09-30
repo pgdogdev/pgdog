@@ -57,7 +57,11 @@ impl AuthenticationProvider for UserPassword {
         // to avoid blocking the async runtime.
         // Note: Using block_in_place() because AuthenticationProvider trait is synchronous.
         let hash = tokio::task::block_in_place(|| {
-            hash_password(&self.password, NonZeroU32::new(iterations).unwrap(), &salt)
+            hash_password(
+                &self.password,
+                NonZeroU32::new(iterations).expect("PBKDF2 iterations must be non-zero"),
+                &salt,
+            )
         });
 
         Some(PasswordInfo::new(hash.to_vec(), iterations as u16, salt))
