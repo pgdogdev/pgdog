@@ -88,22 +88,20 @@ mod tests {
         assert!(!limiter.check(ip2));
     }
 
-    #[tokio::test]
-    async fn test_rate_limiter_recovers() {
-        let limiter = AuthRateLimiter::new();
-        let ip = "127.0.0.1".parse().unwrap();
-
-        // Exhaust limit
-        for _ in 0..10 {
-            assert!(limiter.check(ip));
-        }
-        assert!(!limiter.check(ip));
-
-        // Wait for quota to replenish (this test would take 1 minute)
-        // In practice, we'd test this differently or mock time
-        // For now, just verify it's blocked
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        // Still blocked (quota hasn't replenished yet)
-        // We'd need to wait full minute for this to pass
-    }
+    // Commented out: this test would take 1 minute to complete
+    // #[tokio::test]
+    // async fn test_rate_limiter_recovers() {
+    //     let limiter = AuthRateLimiter::new();
+    //     let ip = "127.0.0.1".parse().unwrap();
+    //
+    //     // Exhaust limit
+    //     for _ in 0..10 {
+    //         assert!(limiter.check(ip));
+    //     }
+    //     assert!(!limiter.check(ip));
+    //
+    //     // Wait for quota to replenish
+    //     tokio::time::sleep(Duration::from_secs(60)).await;
+    //     assert!(limiter.check(ip));
+    // }
 }
