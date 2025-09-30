@@ -2,15 +2,12 @@
 
 use governor::{
     clock::DefaultClock,
-    state::{InMemoryState, NotKeyed},
+    state::keyed::DefaultKeyedStateStore,
     Quota, RateLimiter,
 };
-use lru::LruCache;
 use once_cell::sync::Lazy;
 use std::net::{IpAddr, Ipv6Addr};
-use std::num::{NonZeroU32, NonZeroUsize};
-use std::sync::Arc;
-use parking_lot::Mutex;
+use std::num::NonZeroU32;
 
 use crate::config::config;
 
@@ -32,62 +29,26 @@ fn normalize_ip(ip: IpAddr) -> IpAddr {
     }
 }
 
+type KeyedStore = DefaultKeyedStateStore<IpAddr>;
+
 /// Global rate limiter for authentication attempts per IP address.
-pub static AUTH_RATE_LIMITER: Lazy<AuthRateLimiter> = Lazy::new(AuthRateLimiter::new);
+pub static AUTH_RATE_LIMITER: Lazy<RateLimiter<IpAddr, KeyedStore, DefaultClock>> = Lazy::new(|| {
+    let limit = config().config.general.auth_rate_limit;
+    // Config validation ensures limit is always >= 1
+    let limit = NonZeroU32::new(limit).expect("auth_rate_limit validated to be non-zero");
+    let quota = Quota::per_minute(limit).allow_burst(limit);
+    RateLimiter::keyed(quota)
+});
 
-/// Maximum number of IP addresses to track in the rate limiter cache.
-/// This prevents unbounded memory growth from storing every IP that ever connects.
-const MAX_TRACKED_IPS: usize = 10_000;
-
-/// Rate limiter for authentication attempts.
-pub struct AuthRateLimiter {
-    limiters: Arc<Mutex<LruCache<IpAddr, Arc<RateLimiter<NotKeyed, InMemoryState, DefaultClock>>>>>,
-    quota: Quota,
-}
-
-impl AuthRateLimiter {
-    /// Create a new rate limiter.
-    pub fn new() -> Self {
-        let limit = config().config.general.auth_rate_limit;
-        // Config validation ensures limit is always >= 1
-        let quota = Quota::per_minute(
-            NonZeroU32::new(limit).expect("auth_rate_limit validated to be non-zero"),
-        );
-
-        Self {
-            limiters: Arc::new(Mutex::new(LruCache::new(
-                NonZeroUsize::new(MAX_TRACKED_IPS)
-                    .expect("MAX_TRACKED_IPS must be non-zero"),
-            ))),
-            quota,
-        }
-    }
-
-    /// Check if an IP address can attempt authentication.
-    /// Returns true if the request is allowed, false if rate limited.
-    ///
-    /// IPv6 addresses are normalized to /64 prefix before rate limiting
-    /// to prevent attackers from bypassing limits by rotating through
-    /// addresses in their allocated block.
-    ///
-    /// Thread safety: The lock only protects LRU cache access. The actual
-    /// rate limit check runs without holding the lock, allowing concurrent
-    /// authentication attempts. The governor RateLimiter is internally
-    /// thread-safe using atomic operations.
-    pub fn check(&self, ip: IpAddr) -> bool {
-        let normalized_ip = normalize_ip(ip);
-
-        let limiter = {
-            let mut limiters = self.limiters.lock();
-            limiters
-                .get_or_insert(normalized_ip, || Arc::new(RateLimiter::direct(self.quota)))
-                .clone() // Clone Arc (cheap - just reference count increment)
-        }; // Lock released here
-
-        // Check rate limit without holding lock - allows concurrent auth attempts
-        limiter.check().is_ok()
-    }
-
+/// Check if an IP address can attempt authentication.
+/// Returns true if the request is allowed, false if rate limited.
+///
+/// IPv6 addresses are normalized to /64 prefix before rate limiting
+/// to prevent attackers from bypassing limits by rotating through
+/// addresses in their allocated block.
+pub fn check(ip: IpAddr) -> bool {
+    let normalized_ip = normalize_ip(ip);
+    AUTH_RATE_LIMITER.check_key(&normalized_ip).is_ok()
 }
 
 #[cfg(test)]
@@ -96,35 +57,33 @@ mod tests {
 
     #[test]
     fn test_rate_limiter_allows_initial_requests() {
-        let limiter = AuthRateLimiter::new();
         let ip = "127.0.0.1".parse().unwrap();
 
         // First 10 requests should succeed
         for _ in 0..10 {
-            assert!(limiter.check(ip));
+            assert!(check(ip));
         }
 
         // 11th request should be rate limited
-        assert!(!limiter.check(ip));
+        assert!(!check(ip));
     }
 
     #[test]
     fn test_rate_limiter_per_ip() {
-        let limiter = AuthRateLimiter::new();
-        let ip1: IpAddr = "127.0.0.1".parse().unwrap();
-        let ip2: IpAddr = "127.0.0.2".parse().unwrap();
+        let ip1: IpAddr = "127.0.0.10".parse().unwrap();
+        let ip2: IpAddr = "127.0.0.20".parse().unwrap();
 
         // Exhaust ip1
         for _ in 0..10 {
-            assert!(limiter.check(ip1));
+            assert!(check(ip1));
         }
-        assert!(!limiter.check(ip1));
+        assert!(!check(ip1));
 
         // ip2 should still work
         for _ in 0..10 {
-            assert!(limiter.check(ip2));
+            assert!(check(ip2));
         }
-        assert!(!limiter.check(ip2));
+        assert!(!check(ip2));
     }
 
     #[test]
@@ -157,24 +116,22 @@ mod tests {
 
     #[test]
     fn test_ipv6_rate_limiting_blocks_same_subnet() {
-        let limiter = AuthRateLimiter::new();
-
         // Two addresses in same /64 block
-        let ip1: IpAddr = "2001:db8:abcd:1234:5678:90ab:cdef:1111".parse().unwrap();
-        let ip2: IpAddr = "2001:db8:abcd:1234:9999:aaaa:bbbb:cccc".parse().unwrap();
+        let ip1: IpAddr = "2001:db8:cafe:1234:5678:90ab:cdef:1111".parse().unwrap();
+        let ip2: IpAddr = "2001:db8:cafe:1234:9999:aaaa:bbbb:cccc".parse().unwrap();
 
         // Exhaust rate limit with first address
         for _ in 0..10 {
-            assert!(limiter.check(ip1));
+            assert!(check(ip1));
         }
-        assert!(!limiter.check(ip1));
+        assert!(!check(ip1));
 
         // Second address in same /64 should also be blocked
-        assert!(!limiter.check(ip2));
+        assert!(!check(ip2));
 
         // Different /64 should still work
-        let ip3: IpAddr = "2001:db8:abcd:5678:1234:5678:90ab:cdef".parse().unwrap();
-        assert!(limiter.check(ip3));
+        let ip3: IpAddr = "2001:db8:cafe:5678:1234:5678:90ab:cdef".parse().unwrap();
+        assert!(check(ip3));
     }
 
     // Note: Time-based recovery test is not included because:

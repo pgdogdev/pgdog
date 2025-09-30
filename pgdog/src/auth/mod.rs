@@ -7,4 +7,3 @@ pub mod scram;
 
 pub use error::Error;
 pub use md5::Client;
-pub use rate_limit::AUTH_RATE_LIMITER;

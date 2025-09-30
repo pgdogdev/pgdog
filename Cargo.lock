@@ -1913,9 +1913,9 @@ dependencies = [
 
 [[package]]
 name = "lru"
-version = "0.16.0"
+version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "86ea4e65087ff52f3862caff188d489f1fab49a0cb09e01b2e3f1a617b10aaed"
+checksum = "bfe949189f46fabb938b3a9a0be30fdd93fd8a09260da863399a8cf3db756ec8"
 dependencies = [
  "hashbrown 0.15.3",
 ]
@@ -2407,9 +2407,8 @@ dependencies = [
  "hyper-util",
  "indexmap",
  "lazy_static",
- "lru 0.16.0",
+ "lru 0.16.1",
  "md5",
- "nonzero_ext",
  "once_cell",
  "parking_lot",
  "pg_query",

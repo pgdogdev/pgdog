@@ -10,7 +10,7 @@ use tokio::{select, spawn};
 use tracing::{debug, enabled, error, info, trace, Level as LogLevel};
 
 use super::{ClientRequest, Comms, Error, PreparedStatements};
-use crate::auth::{md5, scram::Server, AUTH_RATE_LIMITER};
+use crate::auth::{md5, rate_limit, scram::Server};
 use crate::backend::maintenance_mode;
 use crate::backend::{
     databases,
@@ -151,7 +151,7 @@ impl Client {
         };
 
         if let Some(addr) = *stream.peer_addr() {
-            if !AUTH_RATE_LIMITER.check(addr.ip()) {
+            if !rate_limit::check(addr.ip()) {
                 error!(
                     "Authentication rate limit exceeded for IP: {}, user: \"{}\", database: \"{}\"",
                     addr.ip(),
