@@ -54,7 +54,8 @@ impl AuthenticationProvider for UserPassword {
         let salt = rand::thread_rng().gen::<[u8; 16]>().to_vec();
 
         // Move expensive PBKDF2 computation to blocking thread pool
-        // to avoid blocking the async runtime
+        // to avoid blocking the async runtime.
+        // Note: Using block_in_place() because AuthenticationProvider trait is synchronous.
         let hash = tokio::task::block_in_place(|| {
             hash_password(&self.password, NonZeroU32::new(iterations).unwrap(), &salt)
         });
