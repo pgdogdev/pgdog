@@ -48,12 +48,20 @@ impl AuthRateLimiter {
 
     /// Check if an IP address can attempt authentication.
     /// Returns true if the request is allowed, false if rate limited.
+    ///
+    /// Thread safety: The lock only protects LRU cache access. The actual
+    /// rate limit check runs without holding the lock, allowing concurrent
+    /// authentication attempts. The governor RateLimiter is internally
+    /// thread-safe using atomic operations.
     pub fn check(&self, ip: IpAddr) -> bool {
-        let mut limiters = self.limiters.lock();
+        let limiter = {
+            let mut limiters = self.limiters.lock();
+            limiters
+                .get_or_insert(ip, || Arc::new(RateLimiter::direct(self.quota)))
+                .clone() // Clone Arc (cheap - just reference count increment)
+        }; // Lock released here
 
-        let limiter = limiters
-            .get_or_insert(ip, || Arc::new(RateLimiter::direct(self.quota)));
-
+        // Check rate limit without holding lock - allows concurrent auth attempts
         limiter.check().is_ok()
     }
 
