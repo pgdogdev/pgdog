@@ -107,11 +107,23 @@ impl Client {
             Duration::from_millis(config::config().config.general.client_login_timeout);
 
         match timeout(login_timeout, Self::login(stream, params, addr, comms)).await {
-            Ok(Ok(())) => Ok(()),
+            Ok(Ok(Some(mut client))) => {
+                if client.admin {
+                    // Admin clients are not waited on during shutdown.
+                    spawn(async move {
+                        client.spawn_internal().await;
+                    });
+                } else {
+                    client.spawn_internal().await;
+                }
+
+                Ok(())
+            }
             Err(_) => {
                 error!("client login timeout [{}]", addr);
                 Ok(())
             }
+            Ok(Ok(None)) => Ok(()),
             Ok(Err(err)) => Err(err),
         }
     }
@@ -122,7 +134,7 @@ impl Client {
         params: Parameters,
         addr: SocketAddr,
         mut comms: Comms,
-    ) -> Result<(), Error> {
+    ) -> Result<Option<Client>, Error> {
         let (user, database) = user_database_from_params(&params);
         let config = config::config();
 
@@ -165,7 +177,7 @@ impl Client {
             Ok(conn) => conn,
             Err(_) => {
                 stream.fatal(ErrorResponse::auth(user, database)).await?;
-                return Ok(());
+                return Ok(None);
             }
         };
 
@@ -204,7 +216,7 @@ impl Client {
 
         if !auth_ok {
             stream.fatal(ErrorResponse::auth(user, database)).await?;
-            return Ok(());
+            return Ok(None);
         } else {
             stream.send(&Authentication::Ok).await?;
         }
@@ -212,7 +224,7 @@ impl Client {
         // Check if the pooler is shutting down.
         if comms.offline() && !admin {
             stream.fatal(ErrorResponse::shutting_down()).await?;
-            return Ok(());
+            return Ok(None);
         }
 
         let server_params = match conn.parameters(&Request::new(id)).await {
@@ -226,7 +238,7 @@ impl Client {
                     stream
                         .fatal(ErrorResponse::connection(user, database))
                         .await?;
-                    return Ok(());
+                    return Ok(None);
                 } else {
                     return Err(err.into());
                 }
@@ -248,7 +260,7 @@ impl Client {
             );
         }
 
-        let mut client = Self {
+        Ok(Some(Self {
             addr,
             stream,
             id,
@@ -263,22 +275,8 @@ impl Client {
             client_request: ClientRequest::new(),
             stream_buffer: BytesMut::new(),
             shutdown: false,
-
             passthrough_password,
-        };
-
-        drop(conn);
-
-        if client.admin {
-            // Admin clients are not waited on during shutdown.
-            spawn(async move {
-                client.spawn_internal().await;
-            });
-        } else {
-            client.spawn_internal().await;
-        }
-
-        Ok(())
+        }))
     }
 
     #[cfg(test)]

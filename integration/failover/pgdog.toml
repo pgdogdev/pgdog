@@ -5,6 +5,7 @@ ban_timeout = 30_000
 query_timeout = 1_000
 idle_healthcheck_interval = 1_000
 client_login_timeout = 1_000
+load_balancing_algorithm = "round_robin"
 
 [[databases]]
 name = "failover"

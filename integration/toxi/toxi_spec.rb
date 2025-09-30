@@ -93,6 +93,69 @@ shared_examples 'minimal errors' do |role, toxic|
   end
 end
 
+describe 'healthcheck' do
+  before do
+    admin_conn = admin
+    admin_conn.exec 'SET idle_healthcheck_delay TO 500'
+    admin_conn.exec 'SET idle_healthcheck_interval TO 500'
+    admin_conn.exec 'SET ban_timeout TO 500'
+    admin_conn.exec "SET read_write_split TO 'exclude_primary'"
+  end
+
+  describe 'will heal itself' do
+    def health(role, field = 'healthy')
+      admin.exec('SHOW POOLS').select do |pool|
+        pool['database'] == 'failover' && pool['role'] == role
+      end.map { |pool| pool[field] }
+    end
+
+    it 'replica' do
+      # Cache connect params.
+      conn.exec "SELECT 1"
+
+      Toxiproxy[:replica].toxic(:reset_peer).apply do
+        4.times do
+          conn.exec 'SELECT 1'
+        rescue PG::Error => e
+        end
+        expect(health('replica')).to include('f')
+        sleep(0.4)
+        expect(health('replica', 'banned')).to include('t')
+      end
+
+      admin.exec "UNBAN"
+
+      4.times do
+        conn.exec 'SELECT 1'
+      end
+
+      expect(health('replica')).to eq(%w[t t t])
+      expect(health('replica', 'banned')).to eq(%w[f f f])
+    end
+
+    it 'primary' do
+      # Cache connect params.
+      conn.exec "CREATE TABLE IF NOT EXISTS test(id BIGINT)"
+
+      Toxiproxy[:primary].toxic(:reset_peer).apply do
+        begin
+          conn.exec 'CREATE TABLE IF NOT EXISTS test(id BIGINT)'
+        rescue PG::Error => e
+        end
+        expect(health('primary')).to eq(['f'])
+      end
+
+      conn.exec "CREATE TABLE IF NOT EXISTS test(id BIGINT)"
+
+      expect(health('primary')).to eq(%w[t])
+    end
+  end
+
+  after do
+    admin.exec 'RELOAD'
+  end
+end
+
 describe 'tcp' do
   around :each do |example|
     Timeout.timeout(10) do
@@ -151,7 +214,7 @@ describe 'tcp' do
             pool['database'] == 'failover'
           end
           entries = failover.select { |item| item[field] == value }
-          return entries.size
+          entries.size
         end
 
         25.times do
@@ -200,7 +263,6 @@ describe 'tcp' do
       c.exec 'CREATE TABLE IF NOT EXISTS test(id BIGINT)'
       c.exec 'SELECT * FROM test'
       c.exec 'ROLLBACK'
-
     end
 
     it 'active record works' do

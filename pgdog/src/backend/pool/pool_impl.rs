@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use once_cell::sync::Lazy;
+use once_cell::sync::{Lazy, OnceCell};
 use parking_lot::{lock_api::MutexGuard, Mutex, RawMutex};
 use tokio::time::Instant;
 use tracing::error;
@@ -12,7 +12,7 @@ use tracing::error;
 use crate::backend::{Server, ServerOptions};
 use crate::config::PoolerMode;
 use crate::net::messages::{BackendKeyData, DataRow, Format};
-use crate::net::Parameter;
+use crate::net::{Parameter, Parameters};
 
 use super::inner::CheckInResult;
 use super::inner::ReplicaLag;
@@ -39,6 +39,7 @@ pub(crate) struct InnerSync {
     pub(super) id: u64,
     pub(super) config: Config,
     pub(super) health: TargetHealth,
+    pub(super) params: OnceCell<Parameters>,
 }
 
 impl std::fmt::Debug for Pool {
@@ -61,6 +62,7 @@ impl Pool {
                 id,
                 config: config.config,
                 health: TargetHealth::new(id),
+                params: OnceCell::new(),
             }),
         }
     }
@@ -148,6 +150,17 @@ impl Pool {
                 granted_at,
             )
             .await;
+    }
+
+    /// Get server parameters, fetch them if necessary.
+    pub async fn params(&self, request: &Request) -> Result<&Parameters, Error> {
+        if let Some(params) = self.inner.params.get() {
+            Ok(params)
+        } else {
+            let conn = self.get(request).await?;
+            let params = conn.params().clone();
+            Ok(self.inner.params.get_or_init(|| params))
+        }
     }
 
     /// Perform a health check on the connection if one is needed.

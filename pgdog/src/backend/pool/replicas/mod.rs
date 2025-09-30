@@ -76,7 +76,7 @@ impl Replicas {
     ) -> Replicas {
         let checkout_timeout = addrs
             .iter()
-            .map(|c| c.config.checkout_timeout())
+            .map(|c| c.config.checkout_timeout)
             .sum::<Duration>();
 
         let replicas: Vec<_> = addrs
