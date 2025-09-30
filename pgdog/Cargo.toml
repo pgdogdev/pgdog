@@ -48,6 +48,8 @@ regex = "1"
 uuid = { version = "1", features = ["v4", "serde"] }
 url = "2"
 ratatui = { version = "0.30.0-alpha.1", optional = true }
+governor = "0.6"
+nonzero_ext = "0.3"
 rmp-serde = "1"
 rust_decimal = { version = "1.36", features = ["db-postgres"] }
 chrono = "0.4"
