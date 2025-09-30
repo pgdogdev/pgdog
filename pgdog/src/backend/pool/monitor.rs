@@ -161,7 +161,6 @@ impl Monitor {
                         if guard.paused {
                             continue;
                         }
-
                     }
 
                     let _ = Self::healthcheck(&pool).await;
@@ -242,8 +241,22 @@ impl Monitor {
         Ok(())
     }
 
-    /// Perform a periodic healthcheck on the pool.
     pub async fn healthcheck(pool: &Pool) -> Result<bool, Error> {
+        match Self::healthcheck_internal(pool).await {
+            Ok(result) => {
+                pool.inner().health.toggle(result);
+                Ok(result)
+            }
+
+            Err(err) => {
+                pool.inner().health.toggle(false);
+                return Err(err);
+            }
+        }
+    }
+
+    /// Perform a periodic healthcheck on the pool.
+    async fn healthcheck_internal(pool: &Pool) -> Result<bool, Error> {
         let conn = {
             let mut guard = pool.lock();
             if !guard.online {
@@ -355,6 +368,7 @@ impl Monitor {
 #[cfg(test)]
 mod test {
     use crate::backend::pool::test::pool;
+    use crate::backend::pool::{Address, Config, PoolConfig};
 
     use super::*;
 
@@ -364,5 +378,68 @@ mod test {
         let pool = pool();
         let ok = Monitor::healthcheck(&pool).await.unwrap();
         assert!(ok);
+    }
+
+    #[tokio::test]
+    async fn test_healthcheck_sets_health_true_on_success() {
+        crate::logger();
+        let pool = pool();
+
+        pool.inner().health.toggle(false);
+        assert!(!pool.inner().health.healthy());
+
+        let result = Monitor::healthcheck(&pool).await.unwrap();
+
+        assert!(result);
+        assert!(pool.inner().health.healthy());
+    }
+
+    #[tokio::test]
+    async fn test_healthcheck_sets_health_false_on_offline_pool() {
+        crate::logger();
+        let pool = pool();
+
+        pool.inner().health.toggle(true);
+        assert!(pool.inner().health.healthy());
+
+        pool.shutdown();
+
+        let result = Monitor::healthcheck(&pool).await.unwrap();
+
+        assert!(!result);
+        assert!(!pool.inner().health.healthy());
+    }
+
+    #[tokio::test]
+    async fn test_healthcheck_sets_health_false_on_connection_error() {
+        crate::logger();
+
+        let config = Config {
+            max: 1,
+            min: 1,
+            healthcheck_timeout: Duration::from_millis(10),
+            ..Default::default()
+        };
+
+        let pool = Pool::new(&PoolConfig {
+            address: Address {
+                host: "127.0.0.1".into(),
+                port: 1,
+                database_name: "pgdog".into(),
+                user: "pgdog".into(),
+                password: "pgdog".into(),
+                ..Default::default()
+            },
+            config,
+        });
+        pool.launch();
+
+        pool.inner().health.toggle(true);
+        assert!(pool.inner().health.healthy());
+
+        let result = Monitor::healthcheck(&pool).await;
+
+        assert!(result.is_err());
+        assert!(!pool.inner().health.healthy());
     }
 }
