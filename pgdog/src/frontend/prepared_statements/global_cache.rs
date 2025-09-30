@@ -17,8 +17,11 @@ fn global_name(counter: usize) -> String {
 pub struct Statement {
     parse: Parse,
     row_description: Option<RowDescription>,
+    #[allow(dead_code)]
     version: usize,
     rewrite_plan: Option<RewritePlan>,
+    cache_key: CacheKey,
+    evict_on_close: bool,
 }
 
 impl MemoryUsage for Statement {
@@ -30,8 +33,8 @@ impl MemoryUsage for Statement {
             } else {
                 0
             }
-            // Rewrite plans are small; treat as zero-cost for now.
-            + 0
+            + self.cache_key.memory_usage()
+            + self.evict_on_close.memory_usage()
     }
 }
 
@@ -41,11 +44,7 @@ impl Statement {
     }
 
     fn cache_key(&self) -> CacheKey {
-        CacheKey {
-            query: self.parse.query_ref(),
-            data_types: self.parse.data_types_ref(),
-            version: self.version,
-        }
+        self.cache_key.clone()
     }
 }
 
@@ -147,14 +146,14 @@ impl GlobalCache {
             let name = global_name(self.counter);
             let parse = parse.rename(&name);
 
-            let parse_key = CacheKey {
+            let cache_key = CacheKey {
                 query: parse.query_ref(),
                 data_types: parse.data_types_ref(),
                 version: 0,
             };
 
             self.statements.insert(
-                parse_key,
+                cache_key.clone(),
                 CachedStmt {
                     counter: self.counter,
                     used: 1,
@@ -168,6 +167,8 @@ impl GlobalCache {
                     row_description: None,
                     version: 0,
                     rewrite_plan: None,
+                    cache_key,
+                    evict_on_close: false,
                 },
             );
 
@@ -205,6 +206,8 @@ impl GlobalCache {
                 row_description: None,
                 version: self.versions,
                 rewrite_plan: None,
+                cache_key: key,
+                evict_on_close: false,
             },
         );
 
@@ -221,24 +224,24 @@ impl GlobalCache {
         }
     }
 
-    pub fn update_query(&mut self, name: &str, sql: &str) -> bool {
+    pub fn update_and_set_rewrite_plan(
+        &mut self,
+        name: &str,
+        sql: &str,
+        plan: RewritePlan,
+    ) -> bool {
         if let Some(statement) = self.names.get_mut(name) {
-            let old_key = statement.cache_key();
-            let cached = self.statements.remove(&old_key);
             statement.parse.set_query(sql);
-            let new_key = statement.cache_key();
-            if let Some(entry) = cached {
-                self.statements.insert(new_key, entry);
+            if !plan.is_noop() {
+                statement.evict_on_close = !plan.helpers().is_empty();
+                statement.rewrite_plan = Some(plan);
+            } else {
+                statement.evict_on_close = false;
+                statement.rewrite_plan = None;
             }
             true
         } else {
             false
-        }
-    }
-
-    pub fn set_rewrite_plan(&mut self, name: &str, plan: RewritePlan) {
-        if let Some(statement) = self.names.get_mut(name) {
-            statement.rewrite_plan = Some(plan);
         }
     }
 
@@ -290,27 +293,34 @@ impl GlobalCache {
 
     /// Close prepared statement.
     pub fn close(&mut self, name: &str, capacity: usize) -> bool {
-        let used = if let Some(stmt) = self.names.get(name) {
-            if let Some(stmt) = self.statements.get_mut(&stmt.cache_key()) {
-                stmt.used = stmt.used.saturating_sub(1);
-                stmt.used > 0
-            } else {
-                false
-            }
-        } else {
-            false
-        };
+        if let Some(statement) = self.names.get(name) {
+            let key = statement.cache_key();
+            let mut used_remaining = None;
 
-        if !used && self.len() > capacity {
-            self.remove(name);
-            true
-        } else {
-            false
+            if let Some(entry) = self.statements.get_mut(&key) {
+                entry.used = entry.used.saturating_sub(1);
+                used_remaining = Some(entry.used);
+                if entry.used == 0 && (statement.evict_on_close || self.len() > capacity) {
+                    self.remove(name);
+                    return true;
+                }
+            }
+
+            return used_remaining.map(|u| u > 0).unwrap_or(false);
         }
+
+        false
     }
 
     /// Close all unused statements exceeding capacity.
     pub fn close_unused(&mut self, capacity: usize) -> usize {
+        if capacity == 0 {
+            let removed = self.statements.len();
+            self.statements.clear();
+            self.names.clear();
+            return removed;
+        }
+
         let mut remove = self.statements.len() as i64 - capacity as i64;
         let mut to_remove = vec![];
         for stmt in self.statements.values() {
@@ -409,7 +419,16 @@ mod test {
             names.push(name);
         }
 
-        assert_eq!(cache.close_unused(0), 0);
+        assert_eq!(cache.close_unused(0), 25);
+        assert!(cache.is_empty());
+
+        names.clear();
+        for stmt in 0..25 {
+            let parse = Parse::named("__sqlx_1", format!("SELECT {}", stmt));
+            let (new, name) = cache.insert(&parse);
+            assert!(new);
+            names.push(name);
+        }
 
         for name in &names[0..5] {
             assert!(!cache.close(name, 25)); // Won't close because
@@ -421,5 +440,49 @@ mod test {
         assert_eq!(cache.close_unused(20), 1);
         assert_eq!(cache.close_unused(19), 0);
         assert_eq!(cache.len(), 20);
+    }
+
+    #[test]
+    fn test_close_unused_zero_clears_all_entries() {
+        let mut cache = GlobalCache::default();
+
+        for idx in 0..5 {
+            let parse = Parse::named("test", format!("SELECT {}", idx));
+            let (_is_new, _name) = cache.insert(&parse);
+        }
+
+        assert!(cache.len() > 0);
+
+        let removed = cache.close_unused(0);
+        assert_eq!(removed, 5);
+        assert!(cache.is_empty());
+    }
+
+    #[test]
+    fn test_update_query_reuses_cache_key() {
+        let mut cache = GlobalCache::default();
+        let parse = Parse::named("__sqlx_1", "SELECT 1");
+        let (is_new, name) = cache.insert(&parse);
+        assert!(is_new);
+
+        assert!(cache.update_and_set_rewrite_plan(
+            &name,
+            "SELECT 1 ORDER BY 1",
+            RewritePlan::default()
+        ));
+
+        let key = cache
+            .statements()
+            .keys()
+            .next()
+            .expect("statement key missing");
+        assert_eq!(key.query().unwrap(), "SELECT 1");
+        assert_eq!(cache.query(&name).unwrap(), "SELECT 1 ORDER BY 1");
+
+        let parse_again = Parse::named("__sqlx_2", "SELECT 1");
+        let (is_new_again, reused_name) = cache.insert(&parse_again);
+        assert!(!is_new_again);
+        assert_eq!(reused_name, name);
+        assert_eq!(cache.len(), 1);
     }
 }

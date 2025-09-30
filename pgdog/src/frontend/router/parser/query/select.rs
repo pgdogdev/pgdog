@@ -100,8 +100,11 @@ impl QueryParser {
                         let name = parse.name().to_owned();
                         {
                             let prepared = context.prepared_statements();
-                            prepared.set_rewrite_plan(&name, rewrite.plan.clone());
-                            prepared.update_query(&name, &rewrite.sql);
+                            prepared.update_and_set_rewrite_plan(
+                                &name,
+                                &rewrite.sql,
+                                rewrite.plan.clone(),
+                            );
                         }
                     }
                     query.set_rewrite(rewrite.plan, rewrite.sql);
