@@ -420,3 +420,48 @@ async fn test_prepared_statements_limit() {
     assert_eq!(guard.prepared_statements_mut().len(), 100);
     assert_eq!(guard.stats().total.prepared_statements, 100); // stats are accurate.
 }
+
+#[tokio::test]
+async fn test_idle_healthcheck_loop() {
+    crate::logger();
+
+    let config = Config {
+        max: 1,
+        min: 1,
+        idle_healthcheck_interval: Duration::from_millis(100),
+        idle_healthcheck_delay: Duration::from_millis(10),
+        ..Default::default()
+    };
+
+    let pool = Pool::new(&PoolConfig {
+        address: Address {
+            host: "127.0.0.1".into(),
+            port: 5432,
+            database_name: "pgdog".into(),
+            user: "pgdog".into(),
+            password: "pgdog".into(),
+            ..Default::default()
+        },
+        config,
+    });
+    pool.launch();
+
+    let initial_healthchecks = pool.state().stats.counts.healthchecks;
+
+    sleep(Duration::from_millis(350)).await;
+
+    let after_healthchecks = pool.state().stats.counts.healthchecks;
+
+    assert!(
+        after_healthchecks > initial_healthchecks,
+        "Expected healthchecks to increase from {} but got {}",
+        initial_healthchecks,
+        after_healthchecks
+    );
+    assert!(
+        after_healthchecks >= initial_healthchecks + 2,
+        "Expected at least 2 healthchecks to run in 350ms with 100ms interval, got {} (increase of {})",
+        after_healthchecks,
+        after_healthchecks - initial_healthchecks
+    );
+}
