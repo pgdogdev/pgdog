@@ -16,6 +16,8 @@ query_cache_limit = 500
 pub_sub_channel_size = 4098
 two_phase_commit = false
 healthcheck_port = 8080
+tls_certificate = "integration/rust/tests/data/tls/initial_cert.pem"
+tls_private_key = "integration/rust/tests/data/tls/initial_key.pem"
 
 # ------------------------------------------------------------------------------
 # ----- Database :: pgdog ------------------------------------------------------

@@ -1,9 +1,12 @@
 //! TLS configuration.
 
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use crate::config::TlsVerifyMode;
-use once_cell::sync::OnceCell;
+use arc_swap::ArcSwapOption;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use tokio_rustls::rustls::{
     self,
@@ -12,89 +15,90 @@ use tokio_rustls::rustls::{
     ClientConfig,
 };
 use tokio_rustls::{TlsAcceptor, TlsConnector};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use crate::config::config;
 
 use super::Error;
 
-static ACCEPTOR: OnceCell<Option<TlsAcceptor>> = OnceCell::new();
-static CONNECTOR: OnceCell<TlsConnector> = OnceCell::new();
+static ACCEPTOR: ArcSwapOption<TlsAcceptor> = ArcSwapOption::const_empty();
 
-/// Get preloaded TLS acceptor.
-pub fn acceptor() -> Option<&'static TlsAcceptor> {
-    if let Some(Some(acceptor)) = ACCEPTOR.get() {
-        return Some(acceptor);
-    }
-
-    None
+/// Get the current TLS acceptor snapshot, if TLS is enabled.
+pub fn acceptor() -> Option<Arc<TlsAcceptor>> {
+    ACCEPTOR.load_full()
 }
 
-/// Create a new TLS acceptor from the cert and key.
+/// Create new TLS connector using the current configuration.
+pub fn connector() -> Result<TlsConnector, Error> {
+    let config = config();
+    connector_with_verify_mode(
+        config.config.general.tls_verify,
+        config.config.general.tls_server_ca_certificate.as_ref(),
+    )
+}
+
+/// Preload TLS at startup.
+pub fn load() -> Result<(), Error> {
+    reload()
+}
+
+/// Rebuild TLS primitives according to the current configuration.
 ///
-/// This is not atomic, so call it on startup only.
-pub fn load_acceptor(cert: &PathBuf, key: &PathBuf) -> Result<Option<TlsAcceptor>, Error> {
-    if let Some(acceptor) = ACCEPTOR.get() {
-        return Ok(acceptor.clone());
+/// This validates the new settings and swaps them in atomically. If validation
+/// fails, the existing TLS acceptor remains active.
+pub fn reload() -> Result<(), Error> {
+    debug!("reloading TLS configuration");
+
+    let config = config();
+    let general = &config.config.general;
+
+    // Always validate upstream TLS settings so we surface CA issues early.
+    let _ = connector_with_verify_mode(
+        general.tls_verify,
+        general.tls_server_ca_certificate.as_ref(),
+    )?;
+
+    let tls_paths = general.tls();
+    let new_acceptor = tls_paths
+        .map(|(cert, key)| build_acceptor(cert, key))
+        .transpose()?;
+
+    match (new_acceptor, tls_paths) {
+        (Some(acceptor), Some((cert, _))) => {
+            let acceptor = Arc::new(acceptor);
+            let previous = ACCEPTOR.swap(Some(acceptor));
+
+            if previous.is_none() {
+                info!(cert = %cert.display(), "🔑 TLS enabled");
+            } else {
+                info!(cert = %cert.display(), "🔁 TLS certificate reloaded");
+            }
+        }
+        (None, _) => {
+            let previous = ACCEPTOR.swap(None);
+            if previous.is_some() {
+                info!("🔓 TLS disabled");
+            }
+        }
+        // This state should be unreachable because `new_acceptor` is `Some`
+        // iff `tls_paths` is `Some`.
+        (Some(_), None) => {
+            warn!("TLS acceptor built without configuration; keeping previous value");
+        }
     }
 
-    let pem = if let Ok(pem) = CertificateDer::from_pem_file(cert) {
-        pem
-    } else {
-        let _ = ACCEPTOR.set(None);
-        return Ok(None);
-    };
+    Ok(())
+}
 
-    let key = if let Ok(key) = PrivateKeyDer::from_pem_file(key) {
-        key
-    } else {
-        let _ = ACCEPTOR.set(None);
-        return Ok(None);
-    };
+fn build_acceptor(cert: &Path, key: &Path) -> Result<TlsAcceptor, Error> {
+    let pem = CertificateDer::from_pem_file(cert)?;
+    let key = PrivateKeyDer::from_pem_file(key)?;
 
     let config = rustls::ServerConfig::builder()
         .with_no_client_auth()
         .with_single_cert(vec![pem], key)?;
 
-    let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(config));
-
-    info!("🔑 TLS on");
-
-    // A bit of a race, but it's not a big deal unless this is called
-    // with different certificate/secret key.
-    let _ = ACCEPTOR.set(Some(acceptor.clone()));
-
-    Ok(Some(acceptor))
-}
-
-/// Create new TLS connector using the default configuration.
-pub fn connector() -> Result<TlsConnector, Error> {
-    if let Some(connector) = CONNECTOR.get() {
-        return Ok(connector.clone());
-    }
-
-    let config = config();
-    let connector = connector_with_verify_mode(
-        config.config.general.tls_verify,
-        config.config.general.tls_server_ca_certificate.as_ref(),
-    )?;
-
-    let _ = CONNECTOR.set(connector.clone());
-
-    Ok(connector)
-}
-
-/// Preload TLS at startup.
-pub fn load() -> Result<(), Error> {
-    let config = config();
-
-    if let Some((cert, key)) = config.config.general.tls() {
-        load_acceptor(cert, key)?;
-    }
-
-    connector()?;
-
-    Ok(())
+    Ok(TlsAcceptor::from(Arc::new(config)))
 }
 
 #[derive(Debug)]

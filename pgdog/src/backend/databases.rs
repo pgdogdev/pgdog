@@ -17,7 +17,7 @@ use crate::frontend::PreparedStatements;
 use crate::{
     backend::pool::PoolConfig,
     config::{config, load, ConfigAndUsers, ManualQuery, Role},
-    net::messages::BackendKeyData,
+    net::{messages::BackendKeyData, tls},
 };
 
 use super::{
@@ -89,6 +89,8 @@ pub fn reload() -> Result<(), Error> {
     let databases = from_config(&new_config);
 
     replace_databases(databases, true);
+
+    tls::reload()?;
 
     // Remove any unused prepared statements.
     PreparedStatements::global()
