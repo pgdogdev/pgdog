@@ -5,22 +5,26 @@ use governor::{
     state::{InMemoryState, NotKeyed},
     Quota, RateLimiter,
 };
+use lru::LruCache;
 use nonzero_ext::nonzero;
 use once_cell::sync::Lazy;
 use std::net::IpAddr;
-use std::num::NonZeroU32;
+use std::num::{NonZeroU32, NonZeroUsize};
 use std::sync::Arc;
 use parking_lot::Mutex;
-use std::collections::HashMap;
 
 use crate::config::config;
 
 /// Global rate limiter for authentication attempts per IP address.
 pub static AUTH_RATE_LIMITER: Lazy<AuthRateLimiter> = Lazy::new(AuthRateLimiter::new);
 
+/// Maximum number of IP addresses to track in the rate limiter cache.
+/// This prevents unbounded memory growth from storing every IP that ever connects.
+const MAX_TRACKED_IPS: usize = 10_000;
+
 /// Rate limiter for authentication attempts.
 pub struct AuthRateLimiter {
-    limiters: Arc<Mutex<HashMap<IpAddr, Arc<RateLimiter<NotKeyed, InMemoryState, DefaultClock>>>>>,
+    limiters: Arc<Mutex<LruCache<IpAddr, Arc<RateLimiter<NotKeyed, InMemoryState, DefaultClock>>>>>,
     quota: Quota,
 }
 
@@ -31,7 +35,9 @@ impl AuthRateLimiter {
         let quota = Quota::per_minute(NonZeroU32::new(limit).unwrap_or(nonzero!(10u32)));
 
         Self {
-            limiters: Arc::new(Mutex::new(HashMap::new())),
+            limiters: Arc::new(Mutex::new(LruCache::new(
+                NonZeroUsize::new(MAX_TRACKED_IPS).unwrap(),
+            ))),
             quota,
         }
     }
@@ -42,8 +48,7 @@ impl AuthRateLimiter {
         let mut limiters = self.limiters.lock();
 
         let limiter = limiters
-            .entry(ip)
-            .or_insert_with(|| Arc::new(RateLimiter::direct(self.quota)));
+            .get_or_insert(ip, || Arc::new(RateLimiter::direct(self.quota)));
 
         limiter.check().is_ok()
     }
@@ -53,7 +58,6 @@ impl AuthRateLimiter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
 
     #[test]
     fn test_rate_limiter_allows_initial_requests() {
