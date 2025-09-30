@@ -245,6 +245,14 @@ mirror_queue = 128
 # - trust
 auth_type = "scram"
 
+# Authentication rate limit (attempts per minute per IP address).
+#
+# Prevents brute-force authentication attacks by limiting the number
+# of authentication attempts from a single IP address.
+#
+# Default: 10
+auth_rate_limit = 10
+
 # Disable cross-shard queries.
 #
 # Default: false
