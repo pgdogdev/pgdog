@@ -150,6 +150,9 @@ pub struct General {
     /// Two-phase commit automatic transactions.
     #[serde(default)]
     pub two_phase_commit_auto: Option<bool>,
+    /// Authentication rate limit (attempts per minute per IP).
+    #[serde(default = "General::auth_rate_limit")]
+    pub auth_rate_limit: u32,
 }
 
 impl Default for General {
@@ -204,6 +207,7 @@ impl Default for General {
             two_phase_commit: bool::default(),
             two_phase_commit_auto: None,
             server_lifetime: Self::server_lifetime(),
+            auth_rate_limit: Self::auth_rate_limit(),
         }
     }
 }
@@ -465,6 +469,10 @@ impl General {
             "PGDOG_SERVER_LIFETIME",
             Duration::from_secs(3600 * 24).as_millis() as u64,
         )
+    }
+
+    pub fn auth_rate_limit() -> u32 {
+        Self::env_or_default("PGDOG_AUTH_RATE_LIMIT", 10)
     }
 
     fn default_passthrough_auth() -> PassthoughAuth {
