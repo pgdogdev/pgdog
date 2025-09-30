@@ -32,7 +32,10 @@ impl AuthRateLimiter {
     /// Create a new rate limiter.
     pub fn new() -> Self {
         let limit = config().config.general.auth_rate_limit;
-        let quota = Quota::per_minute(NonZeroU32::new(limit).unwrap_or(nonzero!(10u32)));
+        // Config validation ensures limit is always >= 1
+        let quota = Quota::per_minute(
+            NonZeroU32::new(limit).expect("auth_rate_limit validated to be non-zero"),
+        );
 
         Self {
             limiters: Arc::new(Mutex::new(LruCache::new(

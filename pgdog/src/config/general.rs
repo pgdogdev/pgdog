@@ -472,7 +472,9 @@ impl General {
     }
 
     pub fn auth_rate_limit() -> u32 {
-        Self::env_or_default("PGDOG_AUTH_RATE_LIMIT", 10)
+        let value = Self::env_or_default("PGDOG_AUTH_RATE_LIMIT", 10);
+        // Ensure value is at least 1 to prevent disabling rate limiting
+        value.max(1)
     }
 
     fn default_passthrough_auth() -> PassthoughAuth {
@@ -849,5 +851,20 @@ mod tests {
         env::remove_var("PGDOG_POOLER_MODE");
         env::remove_var("PGDOG_AUTH_TYPE");
         env::remove_var("PGDOG_DRY_RUN");
+    }
+
+    #[test]
+    fn test_auth_rate_limit_validation() {
+        // Test normal value
+        env::set_var("PGDOG_AUTH_RATE_LIMIT", "20");
+        assert_eq!(General::auth_rate_limit(), 20);
+
+        // Test zero value gets clamped to 1
+        env::set_var("PGDOG_AUTH_RATE_LIMIT", "0");
+        assert_eq!(General::auth_rate_limit(), 1);
+
+        // Test default
+        env::remove_var("PGDOG_AUTH_RATE_LIMIT");
+        assert_eq!(General::auth_rate_limit(), 10);
     }
 }
