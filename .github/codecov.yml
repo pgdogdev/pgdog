@@ -7,7 +7,7 @@ codecov:
 
 comment:
   layout: "condensed_header, condensed_files, condensed_footer"
-  behavior: true
+  behavior: default
   require_changes: false
   show_carryforward_flags: true
   hide_project_coverage: false
