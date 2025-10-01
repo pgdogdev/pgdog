@@ -131,6 +131,14 @@ impl Listener {
                 "terminating {} client connections due to shutdown timeout",
                 comms.tracker().len()
             );
+
+            // Shutdown timeout elapsed; cancel any still-running queries before tearing pools down.
+            let cancel_futures = comms
+                .clients()
+                .into_keys()
+                .map(|id| async move { databases().cancel(&id).await });
+
+            let _ = futures::future::join_all(cancel_futures).await;
         }
 
         self.shutdown.notify_waiters();
