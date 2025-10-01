@@ -143,23 +143,6 @@ impl Replicas {
         self.len() == 0
     }
 
-    /// Create new identical replica pool.
-    pub(super) fn duplicate(&self) -> Replicas {
-        Self {
-            replicas: self
-                .replicas
-                .iter()
-                .map(|target| ReadTarget::new(target.pool.duplicate(), Role::Replica))
-                .collect(),
-            primary: None,
-            checkout_timeout: self.checkout_timeout,
-            round_robin: Arc::new(AtomicUsize::new(0)),
-            lb_strategy: self.lb_strategy,
-            maintenance: Arc::new(Notify::new()),
-            rw_split: self.rw_split,
-        }
-    }
-
     /// Cancel a query if one is running.
     pub async fn cancel(&self, id: &BackendKeyData) -> Result<(), super::super::Error> {
         for target in &self.replicas {

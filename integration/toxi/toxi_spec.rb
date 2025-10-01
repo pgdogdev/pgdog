@@ -94,8 +94,9 @@ shared_examples 'minimal errors' do |role, toxic|
 end
 
 describe 'healthcheck' do
-  before do
+  before :each do
     admin_conn = admin
+    admin_conn.exec 'RECONNECT'
     admin_conn.exec "SET read_write_split TO 'exclude_primary'"
     admin_conn.exec 'SET ban_timeout TO 1'
   end
@@ -107,18 +108,21 @@ describe 'healthcheck' do
       end.map { |pool| pool[field] }
     end
 
-    it 'replica' do
-      10.times do
+    10.times do
+      it 'replica' do
         # Cache connect params.
         conn.exec 'SELECT 1'
 
         Toxiproxy[:replica].toxic(:reset_peer).apply do
+          errors = 0
           4.times do
             conn.exec 'SELECT 1'
           rescue PG::Error
+            errors += 1
           end
+          expect(errors).to be >= 1
           expect(health('replica')).to include('f')
-          sleep(0.4)
+          sleep(0.4) # ban maintenance runs every 333ms
           expect(health('replica', 'banned')).to include('t')
         end
 
@@ -204,23 +208,23 @@ describe 'tcp' do
     end
 
     describe 'both down' do
-      it 'unbans all pools' do
-        rw_config = admin.exec('SHOW CONFIG').select do |config|
-          config['name'] == 'read_write_split'
-        end[0]['value']
-        expect(rw_config).to eq('include_primary')
+      10.times do
+        it 'unbans all pools' do
+          rw_config = admin.exec('SHOW CONFIG').select do |config|
+            config['name'] == 'read_write_split'
+          end[0]['value']
+          expect(rw_config).to eq('include_primary')
 
-        def pool_stat(field, value)
-          failover = admin.exec('SHOW POOLS').select do |pool|
-            pool['database'] == 'failover'
+          def pool_stat(field, value)
+            failover = admin.exec('SHOW POOLS').select do |pool|
+              pool['database'] == 'failover'
+            end
+            entries = failover.select { |item| item[field] == value }
+            entries.size
           end
-          entries = failover.select { |item| item[field] == value }
-          entries.size
-        end
 
-        admin.exec 'SET checkout_timeout TO 100'
+          admin.exec 'SET checkout_timeout TO 100'
 
-        10.times do
           Toxiproxy[:primary].toxic(:reset_peer).apply do
             Toxiproxy[:replica].toxic(:reset_peer).apply do
               Toxiproxy[:replica2].toxic(:reset_peer).apply do

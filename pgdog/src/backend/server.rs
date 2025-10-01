@@ -46,8 +46,6 @@ pub struct Server {
     stream: Option<Stream>,
     id: BackendKeyData,
     params: Parameters,
-    #[allow(dead_code)]
-    startup_options: ServerOptions,
     changed_params: Parameters,
     client_params: Parameters,
     stats: Stats,
@@ -245,7 +243,6 @@ impl Server {
             id,
             stats: Stats::connect(id, addr, &params, &options),
             replication_mode: options.replication_mode(),
-            startup_options: options,
             params,
             changed_params: Parameters::default(),
             client_params: Parameters::default(),
@@ -907,7 +904,6 @@ pub mod test {
             Self {
                 stream: None,
                 id,
-                startup_options: ServerOptions::default(),
                 params: Parameters::default(),
                 changed_params: Parameters::default(),
                 client_params: Parameters::default(),

@@ -190,14 +190,6 @@ impl Pool {
         Ok(conn)
     }
 
-    /// Create new identical connection pool.
-    pub fn duplicate(&self) -> Pool {
-        Pool::new(&PoolConfig {
-            address: self.addr().clone(),
-            config: *self.lock().config(),
-        })
-    }
-
     /// Check the connection back into the pool.
     pub(super) fn checkin(&self, mut server: Box<Server>) {
         // Server is checked in right after transaction finished

@@ -9,7 +9,6 @@ use tokio::{join, select, spawn, sync::Notify};
 use tracing::{debug, error};
 
 use crate::backend::pool::replicas::ban::Ban;
-use crate::backend::pool::replicas::ReadTarget;
 use crate::backend::PubSubListener;
 use crate::config::{config, LoadBalancingStrategy, ReadWriteSplit, Role};
 use crate::net::messages::BackendKeyData;
@@ -133,33 +132,6 @@ impl Shard {
         }
     }
 
-    /// Clone pools but keep them independent.
-    pub fn duplicate(&self) -> Self {
-        let primary = self
-            .inner
-            .primary
-            .as_ref()
-            .map(|primary| primary.duplicate());
-        let pub_sub = if self.pub_sub.is_some() {
-            primary.as_ref().map(PubSubListener::new)
-        } else {
-            None
-        };
-
-        let mut replicas = self.inner.replicas.duplicate();
-        replicas.primary = primary.clone().map(|p| ReadTarget::new(p, Role::Primary));
-
-        Self {
-            inner: Arc::new(ShardInner {
-                primary,
-                pub_sub,
-                replicas,
-                rw_split: self.inner.rw_split,
-                comms: ShardComms::default(), // Create new comms instead of duplicating
-            }),
-        }
-    }
-
     /// Bring every pool online.
     pub fn launch(&self) {
         if let Some(ref primary) = self.primary {
@@ -259,7 +231,6 @@ impl Deref for Shard {
 pub struct ShardInner {
     primary: Option<Pool>,
     replicas: Replicas,
-    rw_split: ReadWriteSplit,
     comms: ShardComms,
     pub_sub: Option<PubSubListener>,
 }
@@ -285,7 +256,6 @@ impl ShardInner {
         Self {
             primary,
             replicas,
-            rw_split,
             comms,
             pub_sub,
         }
