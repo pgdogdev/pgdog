@@ -607,6 +607,7 @@ mod tests {
                     ..Default::default()
                 },
             ],
+            ..Default::default()
         };
 
         let databases = from_config(&ConfigAndUsers {
@@ -681,6 +682,7 @@ mod tests {
                 },
                 // Note: user2 missing for dest_db - this should disable mirroring
             ],
+            ..Default::default()
         };
 
         let databases = from_config(&ConfigAndUsers {
@@ -750,6 +752,7 @@ mod tests {
                     ..Default::default()
                 },
             ],
+            ..Default::default()
         };
 
         let databases = from_config(&ConfigAndUsers {
@@ -827,6 +830,7 @@ mod tests {
                     ..Default::default()
                 },
             ],
+            ..Default::default()
         };
 
         let databases = from_config(&ConfigAndUsers {
@@ -919,6 +923,7 @@ mod tests {
                     ..Default::default()
                 },
             ],
+            ..Default::default()
         };
 
         let databases = from_config(&ConfigAndUsers {
@@ -996,6 +1001,7 @@ mod tests {
                     ..Default::default()
                 },
             ],
+            ..Default::default()
         };
 
         let databases = from_config(&ConfigAndUsers {
@@ -1046,7 +1052,10 @@ mod tests {
         }];
 
         // No users at all
-        let users = crate::config::Users { users: vec![] };
+        let users = crate::config::Users {
+            users: vec![],
+            ..Default::default()
+        };
 
         let databases = from_config(&ConfigAndUsers {
             config: config.clone(),
@@ -1073,6 +1082,7 @@ mod tests {
                 },
                 // No user for dest_db!
             ],
+            ..Default::default()
         };
 
         let databases_partial = from_config(&ConfigAndUsers {
@@ -1100,6 +1110,7 @@ mod tests {
                 },
                 // No user for source_db!
             ],
+            ..Default::default()
         };
 
         let databases_dest_only = from_config(&ConfigAndUsers {

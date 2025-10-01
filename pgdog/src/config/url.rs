@@ -69,7 +69,7 @@ impl ConfigAndUsers {
             .into_iter()
             .collect::<Vec<_>>();
 
-        self.users = Users { users };
+        self.users = Users { users, admin: None };
         self.config.databases = databases;
 
         Ok(self)

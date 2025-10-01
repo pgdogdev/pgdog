@@ -28,7 +28,7 @@ pub struct ConfigAndUsers {
 impl ConfigAndUsers {
     /// Load configuration from disk or use defaults.
     pub fn load(config_path: &PathBuf, users_path: &PathBuf) -> Result<Self, Error> {
-        let config: Config = if let Ok(config) = read_to_string(config_path) {
+        let mut config: Config = if let Ok(config) = read_to_string(config_path) {
             let config = match toml::from_str(&config) {
                 Ok(config) => config,
                 Err(err) => return Err(Error::config(&config, err)),
@@ -43,18 +43,11 @@ impl ConfigAndUsers {
             Config::default()
         };
 
-        if config.admin.random() {
-            #[cfg(debug_assertions)]
-            info!("[debug only] admin password: {}", config.admin.password);
-            #[cfg(not(debug_assertions))]
-            warn!("admin password has been randomly generated");
-        }
-
         if config.multi_tenant.is_some() {
             info!("multi-tenant protection enabled");
         }
 
-        let users: Users = if let Ok(users) = read_to_string(users_path) {
+        let mut users: Users = if let Ok(users) = read_to_string(users_path) {
             let mut users: Users = toml::from_str(&users)?;
             users.check(&config);
             info!("loaded \"{}\"", users_path.display());
@@ -66,6 +59,19 @@ impl ConfigAndUsers {
             );
             Users::default()
         };
+
+        // Override admin set in pgdog.toml
+        // with what's in users.toml.
+        if let Some(admin) = users.admin.take() {
+            config.admin = admin;
+        }
+
+        if config.admin.random() {
+            #[cfg(debug_assertions)]
+            info!("[debug only] admin password: {}", config.admin.password);
+            #[cfg(not(debug_assertions))]
+            warn!("admin password has been randomly generated");
+        }
 
         Ok(ConfigAndUsers {
             config,
@@ -472,5 +478,84 @@ exposure = 0.75
         assert!(config
             .get_mirroring_config("source_db", "non_existent")
             .is_none());
+    }
+
+    #[test]
+    fn test_admin_override_from_users_toml() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let pgdog_config = r#"
+[admin]
+name = "pgdog_admin"
+user = "pgdog_admin_user"
+password = "pgdog_admin_password"
+"#;
+
+        let users_config = r#"
+[admin]
+name = "users_admin"
+user = "users_admin_user"
+password = "users_admin_password"
+"#;
+
+        let mut pgdog_file = NamedTempFile::new().unwrap();
+        let mut users_file = NamedTempFile::new().unwrap();
+
+        pgdog_file.write_all(pgdog_config.as_bytes()).unwrap();
+        users_file.write_all(users_config.as_bytes()).unwrap();
+
+        pgdog_file.flush().unwrap();
+        users_file.flush().unwrap();
+
+        let config_and_users =
+            ConfigAndUsers::load(&pgdog_file.path().into(), &users_file.path().into()).unwrap();
+
+        assert_eq!(config_and_users.config.admin.name, "users_admin");
+        assert_eq!(config_and_users.config.admin.user, "users_admin_user");
+        assert_eq!(
+            config_and_users.config.admin.password,
+            "users_admin_password"
+        );
+        assert!(config_and_users.users.admin.is_none());
+    }
+
+    #[test]
+    fn test_admin_override_with_default_config() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let pgdog_config = r#"
+[general]
+host = "0.0.0.0"
+port = 6432
+"#;
+
+        let users_config = r#"
+[admin]
+name = "users_admin"
+user = "users_admin_user"
+password = "users_admin_password"
+"#;
+
+        let mut pgdog_file = NamedTempFile::new().unwrap();
+        let mut users_file = NamedTempFile::new().unwrap();
+
+        pgdog_file.write_all(pgdog_config.as_bytes()).unwrap();
+        users_file.write_all(users_config.as_bytes()).unwrap();
+
+        pgdog_file.flush().unwrap();
+        users_file.flush().unwrap();
+
+        let config_and_users =
+            ConfigAndUsers::load(&pgdog_file.path().into(), &users_file.path().into()).unwrap();
+
+        assert_eq!(config_and_users.config.admin.name, "users_admin");
+        assert_eq!(config_and_users.config.admin.user, "users_admin_user");
+        assert_eq!(
+            config_and_users.config.admin.password,
+            "users_admin_password"
+        );
+        assert!(config_and_users.users.admin.is_none());
     }
 }
