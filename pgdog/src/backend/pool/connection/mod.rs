@@ -8,7 +8,7 @@ use crate::{
     admin::server::AdminServer,
     backend::{
         databases::{self, databases},
-        reload_notify, PubSubClient,
+        pool, reload_notify, PubSubClient,
     },
     config::{config, PoolerMode, User},
     frontend::{
@@ -219,7 +219,7 @@ impl Connection {
                         }
                     }
                 }
-                return Err(Error::NotConnected);
+                return Err(Error::Pool(pool::Error::AllReplicasDown));
             }
         }
     }

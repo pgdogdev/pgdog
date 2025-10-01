@@ -26,6 +26,7 @@ impl Command for ShowClients {
             .collect::<Vec<&str>>();
 
         let fields = vec![
+            Field::bigint("id"),
             Field::text("user"),
             Field::text("database"),
             Field::text("addr"),
@@ -77,6 +78,7 @@ impl Command for ShowClients {
             let row = self
                 .filter
                 .clone()
+                .add("id", client.id.pid as i64)
                 .add("user", user)
                 .add("database", client.paramters.get_default("database", user))
                 .add("addr", client.addr.ip().to_string())

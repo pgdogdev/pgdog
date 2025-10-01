@@ -102,6 +102,15 @@ impl ToDataRowColumn for i64 {
     }
 }
 
+impl ToDataRowColumn for Option<i64> {
+    fn to_data_row_column(&self) -> Data {
+        match self {
+            Some(value) => ToDataRowColumn::to_data_row_column(value),
+            None => Data::null(),
+        }
+    }
+}
+
 impl ToDataRowColumn for usize {
     fn to_data_row_column(&self) -> Data {
         Bytes::copy_from_slice(self.to_string().as_bytes()).into()

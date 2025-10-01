@@ -117,8 +117,9 @@ impl Listener {
         let shutdown_timeout = config().config.general.shutdown_timeout();
 
         info!(
-            "waiting up to {:.3}s for clients to finish transactions",
-            shutdown_timeout.as_secs_f64()
+            "waiting up to {:.3}s for {} clients to finish transactions",
+            shutdown_timeout.as_secs_f64(),
+            comms().tracker().len(),
         );
 
         let comms = comms();

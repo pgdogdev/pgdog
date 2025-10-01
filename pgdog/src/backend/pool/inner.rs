@@ -206,6 +206,11 @@ impl Inner {
     /// or give it to a waiting client.
     #[inline]
     pub(super) fn put(&mut self, mut conn: Box<Server>, now: Instant) {
+        // Don't store connections when pool is offline.
+        if !self.online {
+            return;
+        }
+
         // Try to give it to a client that's been waiting, if any.
         let id = *conn.id();
         while let Some(waiter) = self.waiting.pop_front() {
@@ -240,12 +245,10 @@ impl Inner {
     /// Take all idle connections and tell active ones to
     /// be returned to a different pool instance.
     #[inline]
-    #[allow(clippy::vec_box)] // Server is a very large struct, reading it when moving between contains is expensive.
+    #[allow(clippy::vec_box)] // Server is a very large struct, reading it when moving between containers is expensive.
     pub(super) fn move_conns_to(&mut self, destination: &Pool) -> (Vec<Box<Server>>, Taken) {
         self.moved = Some(destination.clone());
-        let idle = std::mem::take(&mut self.idle_connections)
-            .into_iter()
-            .collect();
+        let idle = std::mem::take(&mut self.idle_connections);
         let taken = std::mem::take(&mut self.taken);
 
         (idle, taken)
@@ -271,6 +274,8 @@ impl Inner {
             result.replenish = false;
             // Prevents deadlocks.
             if moved.id() != self.id {
+                server.stats_mut().pool_id = moved.id();
+                server.stats_mut().update();
                 moved.lock().maybe_check_in(server, now, stats);
                 return result;
             }

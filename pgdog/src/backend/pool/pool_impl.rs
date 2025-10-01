@@ -208,7 +208,11 @@ impl Pool {
             server.stats().last_used
         };
 
-        let counts = server.stats_mut().reset_last_checkout();
+        let counts = {
+            let stats = server.stats_mut();
+            stats.client_id = None;
+            stats.reset_last_checkout()
+        };
 
         // Check everything and maybe check the connection
         // into the idle pool.
@@ -381,7 +385,10 @@ impl Pool {
             });
         }
 
-        ServerOptions { params }
+        ServerOptions {
+            params,
+            pool_id: self.id(),
+        }
     }
 
     /// Pool state.

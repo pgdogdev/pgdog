@@ -442,4 +442,21 @@ mod test {
         assert!(result.is_err());
         assert!(!pool.inner().health.healthy());
     }
+
+    #[tokio::test]
+    async fn test_put_connection_into_offline_pool() {
+        crate::logger();
+        let pool = pool();
+
+        let conn = Monitor::create_connection(&pool).await.unwrap();
+        let server = Box::new(conn);
+
+        pool.shutdown();
+        assert!(!pool.lock().online);
+
+        let initial_idle = pool.lock().idle();
+        pool.lock().put(server, Instant::now());
+
+        assert_eq!(pool.lock().idle(), initial_idle);
+    }
 }
