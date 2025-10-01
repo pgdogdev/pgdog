@@ -220,7 +220,9 @@ impl Monitor {
         if let Ok(conn) = Self::create_connection(&self.pool).await {
             let server = Box::new(conn);
             let mut guard = self.pool.lock();
-            guard.put(server, Instant::now());
+            if guard.online {
+                guard.put(server, Instant::now());
+            }
             true
         } else {
             false
@@ -444,19 +446,38 @@ mod test {
     }
 
     #[tokio::test]
-    async fn test_put_connection_into_offline_pool() {
+    async fn test_replenish_only_when_pool_is_online() {
         crate::logger();
-        let pool = pool();
 
-        let conn = Monitor::create_connection(&pool).await.unwrap();
-        let server = Box::new(conn);
+        let config = Config {
+            max: 5,
+            min: 2,
+            ..Default::default()
+        };
+
+        let pool = Pool::new(&PoolConfig {
+            address: Address {
+                host: "127.0.0.1".into(),
+                port: 5432,
+                database_name: "pgdog".into(),
+                user: "pgdog".into(),
+                password: "pgdog".into(),
+                ..Default::default()
+            },
+            config,
+        });
+        pool.launch();
+
+        let initial_total = pool.lock().total();
 
         pool.shutdown();
         assert!(!pool.lock().online);
 
-        let initial_idle = pool.lock().idle();
-        pool.lock().put(server, Instant::now());
+        let monitor = Monitor { pool: pool.clone() };
+        let ok = monitor.replenish().await;
 
-        assert_eq!(pool.lock().idle(), initial_idle);
+        assert!(ok);
+        assert_eq!(pool.lock().total(), initial_total);
+        assert!(!pool.lock().online);
     }
 }

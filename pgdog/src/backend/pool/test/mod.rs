@@ -465,3 +465,66 @@ async fn test_idle_healthcheck_loop() {
         after_healthchecks - initial_healthchecks
     );
 }
+
+#[tokio::test]
+async fn test_move_conns_to() {
+    crate::logger();
+
+    let config = Config {
+        max: 3,
+        min: 0,
+        ..Default::default()
+    };
+
+    let source = Pool::new(&PoolConfig {
+        address: Address {
+            host: "127.0.0.1".into(),
+            port: 5432,
+            database_name: "pgdog".into(),
+            user: "pgdog".into(),
+            password: "pgdog".into(),
+            ..Default::default()
+        },
+        config,
+    });
+    source.launch();
+
+    let destination = Pool::new(&PoolConfig {
+        address: Address {
+            host: "127.0.0.1".into(),
+            port: 5432,
+            database_name: "pgdog".into(),
+            user: "pgdog".into(),
+            password: "pgdog".into(),
+            ..Default::default()
+        },
+        config,
+    });
+
+    let conn1 = source.get(&Request::default()).await.unwrap();
+    let conn2 = source.get(&Request::default()).await.unwrap();
+
+    drop(conn1);
+
+    sleep(Duration::from_millis(50)).await;
+
+    assert_eq!(source.lock().idle(), 1);
+    assert_eq!(source.lock().checked_out(), 1);
+    assert_eq!(source.lock().total(), 2);
+    assert_eq!(destination.lock().total(), 0);
+    assert!(!destination.lock().online);
+
+    source.move_conns_to(&destination);
+
+    assert!(!source.lock().online);
+    assert!(destination.lock().online);
+    assert_eq!(destination.lock().total(), 2);
+    assert_eq!(source.lock().total(), 0);
+
+    drop(conn2);
+
+    sleep(Duration::from_millis(50)).await;
+
+    assert_eq!(destination.lock().idle(), 2);
+    assert_eq!(destination.lock().checked_out(), 0);
+}

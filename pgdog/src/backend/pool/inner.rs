@@ -206,11 +206,6 @@ impl Inner {
     /// or give it to a waiting client.
     #[inline]
     pub(super) fn put(&mut self, mut conn: Box<Server>, now: Instant) {
-        // Don't store connections when pool is offline.
-        if !self.online {
-            return;
-        }
-
         // Try to give it to a client that's been waiting, if any.
         let id = *conn.id();
         while let Some(waiter) = self.waiting.pop_front() {
