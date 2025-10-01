@@ -6,7 +6,7 @@ codecov:
   disable_default_path_fixes: false
 
 comment:
-  layout: "condensed_header, condensed_files, condensed_footer"
+  layout: "condensed_header, diff, condensed_files, condensed_footer"
   behavior: default
   require_changes: false
   show_carryforward_flags: true
