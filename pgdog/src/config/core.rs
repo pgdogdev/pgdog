@@ -262,6 +262,16 @@ impl Config {
                 );
             }
         }
+
+        // Check that idle_healthcheck_interval is shorter than ban_timeout.
+        if self.general.ban_timeout > 0
+            && self.general.idle_healthcheck_interval >= self.general.ban_timeout
+        {
+            warn!(
+                "idle_healthcheck_interval ({}ms) should be shorter than ban_timeout ({}ms) to ensure health checks are triggered before a ban expires",
+                self.general.idle_healthcheck_interval, self.general.ban_timeout
+            );
+        }
     }
 
     /// Multi-tenanncy is enabled.

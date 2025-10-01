@@ -2,7 +2,7 @@
 
 use crate::{
     frontend::{client::query_engine::TwoPcPhase, ClientRequest},
-    net::{parameter::Parameters, ProtocolMessage},
+    net::{parameter::Parameters, BackendKeyData, ProtocolMessage},
     state::State,
 };
 
@@ -327,11 +327,17 @@ impl Binding {
         }
     }
 
-    pub async fn link_client(&mut self, params: &Parameters) -> Result<usize, Error> {
+    pub async fn link_client(
+        &mut self,
+        id: &BackendKeyData,
+        params: &Parameters,
+    ) -> Result<usize, Error> {
         match self {
-            Binding::Direct(Some(ref mut server)) => server.link_client(params).await,
+            Binding::Direct(Some(ref mut server)) => server.link_client(id, params).await,
             Binding::MultiShard(ref mut servers, _) => {
-                let futures = servers.iter_mut().map(|server| server.link_client(params));
+                let futures = servers
+                    .iter_mut()
+                    .map(|server| server.link_client(id, params));
                 let results = join_all(futures).await;
 
                 let mut max = 0;

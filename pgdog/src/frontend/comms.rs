@@ -101,7 +101,7 @@ impl Comms {
         self.global
             .clients
             .lock()
-            .insert(*id, ConnectedClient::new(addr, params));
+            .insert(*id, ConnectedClient::new(id, addr, params));
         self.id = Some(*id);
         self.clone()
     }

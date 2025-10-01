@@ -1,0 +1,11 @@
+[[users]]
+name = "pgdog-4"
+database = "source"
+password = "pgdog"
+schema_admin = true
+
+[[users]]
+name = "pgdog-4"
+database = "destination"
+password = "pgdog"
+schema_admin = true
