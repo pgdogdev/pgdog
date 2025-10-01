@@ -172,4 +172,45 @@ mod tests {
             "All waiters should be removed from queue on cancellation"
         );
     }
+
+    #[tokio::test]
+    async fn test_timeout_removes_waiter() {
+        let config = crate::backend::pool::Config {
+            max: 1,
+            min: 1,
+            checkout_timeout: Duration::from_millis(10),
+            ..Default::default()
+        };
+
+        let pool = Pool::new(&crate::backend::pool::PoolConfig {
+            address: crate::backend::pool::Address {
+                host: "127.0.0.1".into(),
+                port: 5432,
+                database_name: "pgdog".into(),
+                user: "pgdog".into(),
+                password: "pgdog".into(),
+                ..Default::default()
+            },
+            config,
+        });
+        pool.launch();
+
+        sleep(Duration::from_millis(100)).await;
+
+        let _conn = pool.get(&Request::default()).await.unwrap();
+
+        let request = Request::new(BackendKeyData::new());
+        let mut waiting = Waiting::new(pool.clone(), &request).unwrap();
+
+        let result = waiting.wait().await;
+
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), Error::CheckoutTimeout));
+
+        let pool_guard = pool.lock();
+        assert!(
+            pool_guard.waiting.is_empty(),
+            "Waiter should be removed on timeout"
+        );
+    }
 }

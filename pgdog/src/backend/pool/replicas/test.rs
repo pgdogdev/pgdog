@@ -221,6 +221,29 @@ async fn test_ban_timeout_not_expired() {
 }
 
 #[tokio::test]
+async fn test_unban_if_expired_checks_pool_health() {
+    let replicas = setup_test_replicas();
+
+    let ban = &replicas.replicas[0].ban;
+    let pool = &replicas.replicas[0].pool;
+
+    ban.ban(Error::ServerError, Duration::from_millis(50));
+    assert!(ban.banned());
+
+    pool.inner().health.toggle(false);
+
+    sleep(Duration::from_millis(60)).await;
+
+    let now = std::time::Instant::now();
+    let unbanned = ban.unban_if_expired(now);
+
+    assert!(!unbanned);
+    assert!(ban.banned());
+
+    replicas.shutdown();
+}
+
+#[tokio::test]
 async fn test_replica_ban_clears_idle_connections() {
     let replicas = setup_test_replicas();
 
@@ -712,6 +735,37 @@ async fn test_monitor_does_not_ban_with_zero_ban_timeout() {
     sleep(Duration::from_millis(400)).await;
 
     assert!(!replicas.replicas[0].ban.banned());
+
+    replicas.shutdown();
+}
+
+#[tokio::test]
+async fn test_monitor_health_state_race() {
+    use tokio::spawn;
+
+    let replicas = setup_test_replicas();
+    let target = replicas.replicas[0].clone();
+
+    let toggle_task = spawn(async move {
+        for _ in 0..50 {
+            target.health.toggle(false);
+            sleep(Duration::from_micros(100)).await;
+            target.health.toggle(true);
+            sleep(Duration::from_micros(100)).await;
+        }
+    });
+
+    sleep(Duration::from_millis(500)).await;
+
+    toggle_task.await.unwrap();
+
+    let banned = replicas.replicas[0].ban.banned();
+    let healthy = replicas.replicas[0].health.healthy();
+
+    assert!(
+        !banned || !healthy,
+        "Pool should not be banned if healthy after race"
+    );
 
     replicas.shutdown();
 }

@@ -41,3 +41,14 @@ impl Command for Healthcheck {
         Ok(vec![])
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_parse_healthcheck() {
+        let cmd = Healthcheck::parse("healthcheck").unwrap();
+        assert!(cmd.id.is_none());
+    }
+}
