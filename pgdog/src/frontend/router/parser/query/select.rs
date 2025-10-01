@@ -12,6 +12,7 @@ impl QueryParser {
     ///
     pub(super) fn select(
         &mut self,
+        ast: &pg_query::ParseResult,
         stmt: &SelectStmt,
         context: &mut QueryParserContext,
     ) -> Result<Command, Error> {
@@ -93,8 +94,11 @@ impl QueryParser {
         // Only rewrite if query is cross-shard.
         if query.is_cross_shard() && context.shards > 1 {
             if let Some(buffered_query) = context.router_context.query.as_ref() {
-                let rewrite =
-                    RewriteEngine::new().rewrite_select(buffered_query.query(), query.aggregate());
+                let rewrite = RewriteEngine::new().rewrite_select(
+                    ast,
+                    buffered_query.query(),
+                    query.aggregate(),
+                );
                 if !rewrite.plan.is_noop() {
                     if let BufferedQuery::Prepared(parse) = buffered_query {
                         let name = parse.name().to_owned();

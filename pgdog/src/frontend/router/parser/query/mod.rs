@@ -212,7 +212,7 @@ impl QueryParser {
                 return Ok(Command::Deallocate);
             }
             // SELECT statements.
-            Some(NodeEnum::SelectStmt(ref stmt)) => self.select(stmt, context),
+            Some(NodeEnum::SelectStmt(ref stmt)) => self.select(statement.ast(), stmt, context),
             // COPY statements.
             Some(NodeEnum::CopyStmt(ref stmt)) => Self::copy(stmt, context),
             // INSERT statements.
@@ -258,7 +258,7 @@ impl QueryParser {
                 return Ok(Command::Unlisten(stmt.conditionname.clone()));
             }
 
-            Some(NodeEnum::ExplainStmt(ref stmt)) => self.explain(stmt, context),
+            Some(NodeEnum::ExplainStmt(ref stmt)) => self.explain(statement.ast(), stmt, context),
 
             // VACUUM.
             Some(NodeEnum::VacuumRelation(_)) | Some(NodeEnum::VacuumStmt(_)) => {
