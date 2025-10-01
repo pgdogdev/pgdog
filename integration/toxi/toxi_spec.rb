@@ -287,5 +287,44 @@ describe 'tcp' do
       expect(errors).to be <= 1
       expect(25 - ok).to eq(errors)
     end
+
+    it 'clients can connect when all servers are down after caching connection params' do
+      # First, establish a connection to cache connection parameters
+      c = conn
+      c.exec 'SELECT 1'
+      c.close
+
+      # Verify initial state - all pools should be healthy before toxics
+      pools = admin.exec('SHOW POOLS').select do |pool|
+        pool['database'] == 'failover'
+      end
+      expect(pools.all? { |p| p['healthy'] == 't' }).to be true
+
+      # Now bring down all servers
+      Toxiproxy[:primary].toxic(:reset_peer).apply do
+        Toxiproxy[:replica].toxic(:reset_peer).apply do
+          Toxiproxy[:replica2].toxic(:reset_peer).apply do
+            Toxiproxy[:replica3].toxic(:reset_peer).apply do
+              # Try to establish many connections
+              connections = []
+              50.times do
+                c = conn
+                expect(c).not_to be_nil
+                connections << c
+              end
+
+              # Check internal state - verify we have active client connections
+              clients = admin.exec('SHOW CLIENTS').select do |client|
+                client['database'] == 'failover'
+              end
+              expect(clients.size).to be >= 50
+
+              # Clean up connections without executing queries to avoid timeouts
+              connections.each { |c| c.close rescue nil }
+            end
+          end
+        end
+      end
+    end
   end
 end
