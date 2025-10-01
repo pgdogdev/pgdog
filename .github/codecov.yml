@@ -6,10 +6,11 @@ codecov:
   disable_default_path_fixes: false
 
 comment:
-  layout: "reach,diff,flags,tree"
-  behavior: default
-  require_changes: true
+  layout: "condensed_header, condensed_files, condensed_footer"
+  behavior: true
+  require_changes: false
   show_carryforward_flags: true
+  hide_project_coverage: false
 
 coverage:
   precision: 2
