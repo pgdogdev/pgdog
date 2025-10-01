@@ -291,7 +291,6 @@ impl Monitor {
                 .await?;
         }
 
-        pool.inner().health.toggle(true);
         Ok(true)
     }
 
