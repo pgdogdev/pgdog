@@ -526,6 +526,8 @@ async fn test_transaction_state() {
 
 #[tokio::test]
 async fn test_close_parse() {
+    crate::logger();
+
     let (mut conn, mut client, mut engine) = new_client!(true);
 
     conn.write_all(&buffer!({ Close::named("test") }, { Sync }))
@@ -698,5 +700,72 @@ async fn test_parse_describe_flush_bind_execute_close_sync() {
         .await
         .unwrap();
 
+    handle.await.unwrap();
+}
+
+#[tokio::test]
+async fn test_client_login_timeout() {
+    use crate::{config::config, frontend::comms::comms};
+    use tokio::time::sleep;
+
+    crate::logger();
+    load_test();
+
+    let mut config = (*config()).clone();
+    config.config.general.client_login_timeout = 100;
+    set(config).unwrap();
+
+    let addr = "127.0.0.1:0".to_string();
+    let stream = TcpListener::bind(&addr).await.unwrap();
+    let port = stream.local_addr().unwrap().port();
+
+    let handle = tokio::spawn(async move {
+        let (stream, addr) = stream.accept().await.unwrap();
+        let stream = BufStream::new(stream);
+        let stream = Stream::Plain(stream);
+
+        let mut params = crate::net::parameter::Parameters::default();
+        params.insert("user", "pgdog");
+        params.insert("database", "pgdog");
+
+        Client::spawn(stream, params, addr, comms()).await
+    });
+
+    let conn = TcpStream::connect(&format!("127.0.0.1:{}", port))
+        .await
+        .unwrap();
+
+    sleep(Duration::from_millis(150)).await;
+
+    drop(conn);
+
+    handle.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn test_client_login_timeout_does_not_affect_queries() {
+    crate::logger();
+    load_test();
+
+    let mut config = (*config()).clone();
+    config.config.general.client_login_timeout = 100;
+    set(config).unwrap();
+
+    let (mut conn, mut client, _) = new_client!(false);
+
+    let handle = tokio::spawn(async move {
+        client.run().await.unwrap();
+    });
+
+    tokio::time::sleep(Duration::from_millis(150)).await;
+
+    let buf = buffer!({ Query::new("SELECT pg_sleep(0.2)") });
+    conn.write_all(&buf).await.unwrap();
+
+    let msgs = read!(conn, ['T', 'D', 'C', 'Z']);
+    assert_eq!(msgs[0][0] as char, 'T');
+    assert_eq!(msgs[3][0] as char, 'Z');
+
+    conn.write_all(&buffer!({ Terminate })).await.unwrap();
     handle.await.unwrap();
 }

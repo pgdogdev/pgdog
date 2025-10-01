@@ -1,12 +1,11 @@
 //! Frontend client.
 
 use std::net::SocketAddr;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use bytes::BytesMut;
 use timeouts::Timeouts;
-use tokio::time::timeout;
-use tokio::{select, spawn};
+use tokio::{select, spawn, time::timeout};
 use tracing::{debug, enabled, error, info, trace, Level as LogLevel};
 
 use super::{ClientRequest, Comms, Error, PreparedStatements};
@@ -99,11 +98,43 @@ impl MemoryUsage for Client {
 impl Client {
     /// Create new frontend client from the given TCP stream.
     pub async fn spawn(
+        stream: Stream,
+        params: Parameters,
+        addr: SocketAddr,
+        comms: Comms,
+    ) -> Result<(), Error> {
+        let login_timeout =
+            Duration::from_millis(config::config().config.general.client_login_timeout);
+
+        match timeout(login_timeout, Self::login(stream, params, addr, comms)).await {
+            Ok(Ok(Some(mut client))) => {
+                if client.admin {
+                    // Admin clients are not waited on during shutdown.
+                    spawn(async move {
+                        client.spawn_internal().await;
+                    });
+                } else {
+                    client.spawn_internal().await;
+                }
+
+                Ok(())
+            }
+            Err(_) => {
+                error!("client login timeout [{}]", addr);
+                Ok(())
+            }
+            Ok(Ok(None)) => Ok(()),
+            Ok(Err(err)) => Err(err),
+        }
+    }
+
+    /// Create new frontend client from the given TCP stream.
+    async fn login(
         mut stream: Stream,
         params: Parameters,
         addr: SocketAddr,
         mut comms: Comms,
-    ) -> Result<(), Error> {
+    ) -> Result<Option<Client>, Error> {
         let (user, database) = user_database_from_params(&params);
         let config = config::config();
 
@@ -146,7 +177,7 @@ impl Client {
             Ok(conn) => conn,
             Err(_) => {
                 stream.fatal(ErrorResponse::auth(user, database)).await?;
-                return Ok(());
+                return Ok(None);
             }
         };
 
@@ -185,7 +216,7 @@ impl Client {
 
         if !auth_ok {
             stream.fatal(ErrorResponse::auth(user, database)).await?;
-            return Ok(());
+            return Ok(None);
         } else {
             stream.send(&Authentication::Ok).await?;
         }
@@ -193,16 +224,21 @@ impl Client {
         // Check if the pooler is shutting down.
         if comms.offline() && !admin {
             stream.fatal(ErrorResponse::shutting_down()).await?;
-            return Ok(());
+            return Ok(None);
         }
 
         let server_params = match conn.parameters(&Request::new(id)).await {
             Ok(params) => params,
             Err(err) => {
                 if err.no_server() {
-                    error!("connection pool is down");
-                    stream.fatal(ErrorResponse::connection()).await?;
-                    return Ok(());
+                    error!(
+                        "aborting new client connection, connection pool is down [{}]",
+                        addr
+                    );
+                    stream
+                        .fatal(ErrorResponse::connection(user, database))
+                        .await?;
+                    return Ok(None);
                 } else {
                     return Err(err.into());
                 }
@@ -224,7 +260,7 @@ impl Client {
             );
         }
 
-        let mut client = Self {
+        Ok(Some(Self {
             addr,
             stream,
             id,
@@ -239,22 +275,8 @@ impl Client {
             client_request: ClientRequest::new(),
             stream_buffer: BytesMut::new(),
             shutdown: false,
-
             passthrough_password,
-        };
-
-        drop(conn);
-
-        if client.admin {
-            // Admin clients are not waited on during shutdown.
-            spawn(async move {
-                client.spawn_internal().await;
-            });
-        } else {
-            client.spawn_internal().await;
-        }
-
-        Ok(())
+        }))
     }
 
     #[cfg(test)]

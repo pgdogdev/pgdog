@@ -61,8 +61,12 @@ pub fn replace_databases(new_databases: Databases, reload: bool) {
 }
 
 /// Re-create all connections.
-pub fn reconnect() {
-    replace_databases(databases().duplicate(), false);
+pub fn reconnect() -> Result<(), Error> {
+    let config = config();
+    let databases = from_config(&config);
+
+    replace_databases(databases, false);
+    Ok(())
 }
 
 /// Initialize the databases for the first time.
@@ -303,20 +307,6 @@ impl Databases {
         }
 
         moved
-    }
-
-    /// Create new identical databases.
-    fn duplicate(&self) -> Databases {
-        Self {
-            databases: self
-                .databases
-                .iter()
-                .map(|(k, v)| (k.clone(), v.duplicate()))
-                .collect(),
-            manual_queries: self.manual_queries.clone(),
-            mirrors: self.mirrors.clone(),
-            mirror_configs: self.mirror_configs.clone(),
-        }
     }
 
     /// Shutdown all pools.
