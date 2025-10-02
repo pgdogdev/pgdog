@@ -129,6 +129,20 @@ impl ConfigAndUsers {
 
         Ok(self)
     }
+
+    /// Load from mirroring strings.
+    pub fn mirroring_from_strings(mut self, mirror_strs: &[String]) -> Result<Self, Error> {
+        use super::Mirroring;
+
+        let mirroring = mirror_strs
+            .iter()
+            .map(|s| Mirroring::from_str(s).map_err(|e| Error::ParseError(e)))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        self.config.mirroring = mirroring;
+
+        Ok(self)
+    }
 }
 
 #[cfg(test)]
@@ -220,5 +234,71 @@ mod test {
         assert_eq!(database.shard, 3);
         assert_eq!(database.pool_size, Some(20));
         assert_eq!(database.read_only, Some(true));
+    }
+
+    #[test]
+    fn test_basic_mirroring_string() {
+        let mirror_str = "source_db=primary&destination_db=backup";
+        let mirroring = super::super::Mirroring::from_str(mirror_str).unwrap();
+
+        assert_eq!(mirroring.source_db, "primary");
+        assert_eq!(mirroring.destination_db, "backup");
+        assert_eq!(mirroring.queue_length, None);
+        assert_eq!(mirroring.exposure, None);
+    }
+
+    #[test]
+    fn test_mirroring_with_queue_length() {
+        let mirror_str = "source_db=db1&destination_db=db2&queue_length=256";
+        let mirroring = super::super::Mirroring::from_str(mirror_str).unwrap();
+
+        assert_eq!(mirroring.source_db, "db1");
+        assert_eq!(mirroring.destination_db, "db2");
+        assert_eq!(mirroring.queue_length, Some(256));
+        assert_eq!(mirroring.exposure, None);
+    }
+
+    #[test]
+    fn test_mirroring_with_exposure() {
+        let mirror_str = "source_db=prod&destination_db=staging&exposure=0.5";
+        let mirroring = super::super::Mirroring::from_str(mirror_str).unwrap();
+
+        assert_eq!(mirroring.source_db, "prod");
+        assert_eq!(mirroring.destination_db, "staging");
+        assert_eq!(mirroring.queue_length, None);
+        assert_eq!(mirroring.exposure, Some(0.5));
+    }
+
+    #[test]
+    fn test_mirroring_with_both_overrides() {
+        let mirror_str = "source_db=main&destination_db=backup&queue_length=512&exposure=0.75";
+        let mirroring = super::super::Mirroring::from_str(mirror_str).unwrap();
+
+        assert_eq!(mirroring.source_db, "main");
+        assert_eq!(mirroring.destination_db, "backup");
+        assert_eq!(mirroring.queue_length, Some(512));
+        assert_eq!(mirroring.exposure, Some(0.75));
+    }
+
+    #[test]
+    fn test_config_mirroring_from_strings() {
+        let config = ConfigAndUsers::default();
+        let mirror_strs = vec![
+            "source_db=db1&destination_db=db1_mirror".to_string(),
+            "source_db=db2&destination_db=db2_mirror&queue_length=256&exposure=0.5".to_string(),
+        ];
+
+        let config = config.mirroring_from_strings(&mirror_strs).unwrap();
+
+        assert_eq!(config.config.mirroring.len(), 2);
+        assert_eq!(config.config.mirroring[0].source_db, "db1");
+        assert_eq!(config.config.mirroring[0].destination_db, "db1_mirror");
+        assert_eq!(config.config.mirroring[0].queue_length, None);
+        assert_eq!(config.config.mirroring[0].exposure, None);
+
+        assert_eq!(config.config.mirroring[1].source_db, "db2");
+        assert_eq!(config.config.mirroring[1].destination_db, "db2_mirror");
+        assert_eq!(config.config.mirroring[1].queue_length, Some(256));
+        assert_eq!(config.config.mirroring[1].exposure, Some(0.5));
     }
 }

@@ -25,6 +25,9 @@ pub enum Error {
 
     #[error("no database urls in environment")]
     NoDbsInEnv,
+
+    #[error("parse error: {0}")]
+    ParseError(String),
 }
 
 impl Error {
