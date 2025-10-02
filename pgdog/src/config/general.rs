@@ -10,6 +10,7 @@ use super::networking::TlsVerifyMode;
 use super::pooling::{PoolerMode, PreparedStatements};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct General {
     /// Run on this address.
     #[serde(default = "General::host")]
