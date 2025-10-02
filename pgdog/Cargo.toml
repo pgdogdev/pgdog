@@ -61,7 +61,6 @@ lru = "0.16"
 hickory-resolver = "0.25.2"
 lazy_static = "1"
 dashmap = "6"
-sha2 = "0.10"
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 tikv-jemallocator = "0.6"
