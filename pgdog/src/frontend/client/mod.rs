@@ -188,11 +188,8 @@ impl Client {
         };
 
         let auth_type = &config.config.general.auth_type;
-        let auth_ok = match (auth_type, stream.is_tls()) {
-            // TODO: SCRAM doesn't work with TLS currently because of
-            // lack of support for channel binding in our scram library.
-            // Defaulting to MD5.
-            (AuthType::Scram, true) | (AuthType::Md5, _) => {
+        let auth_ok = match auth_type {
+            AuthType::Md5 => {
                 let md5 = md5::Client::new(user, password);
                 stream.send_flush(&md5.challenge()).await?;
                 let password = Password::from_bytes(stream.read().await?.to_bytes()?)?;
@@ -203,7 +200,7 @@ impl Client {
                 }
             }
 
-            (AuthType::Scram, false) => {
+            AuthType::Scram => {
                 stream.send_flush(&Authentication::scram()).await?;
 
                 let scram = Server::new(password);
@@ -211,7 +208,7 @@ impl Client {
                 matches!(res, Ok(true))
             }
 
-            (AuthType::Trust, _) => true,
+            AuthType::Trust => true,
         };
 
         if !auth_ok {
