@@ -19,6 +19,20 @@ pub struct ErrorResponse {
     pub routine: Option<String>,
 }
 
+impl From<pgdog_plugin::ErrorResponse> for ErrorResponse {
+    fn from(value: pgdog_plugin::ErrorResponse) -> Self {
+        Self {
+            severity: value.severity,
+            code: value.code,
+            message: value.message,
+            detail: value.detail,
+            context: value.context,
+            file: value.file,
+            routine: value.routine,
+        }
+    }
+}
+
 impl Default for ErrorResponse {
     fn default() -> Self {
         Self {

@@ -1,9 +1,10 @@
 use tracing::{error, trace};
 
 use super::*;
+use crate::frontend::router::{parser::Error as ParserError, Error as RouterError};
 
 impl QueryEngine {
-    pub(super) async fn route_transaction(
+    pub(super) async fn route_query(
         &mut self,
         context: &mut QueryEngineContext<'_>,
     ) -> Result<bool, Error> {
@@ -28,6 +29,12 @@ impl QueryEngine {
                     context.client_request.messages,
                     cmd
                 );
+            }
+            // Query intercepted by plugin.
+            Err(RouterError::Parser(ParserError::ErrorResponse(err))) => {
+                self.stats
+                    .sent(context.stream.error(err, context.in_transaction()).await?);
+                return Ok(false);
             }
             Err(err) => {
                 error!("{:?} [{:?}]", err, context.stream.peer_addr());

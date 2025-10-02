@@ -2,15 +2,17 @@
 
 use std::ops::Deref;
 
-use once_cell::sync::OnceCell;
+use once_cell::sync::{Lazy, OnceCell};
 use pgdog_plugin::libloading::Library;
 use pgdog_plugin::Plugin;
 use pgdog_plugin::{comp, libloading};
+use semver::Version;
 use tokio::time::Instant;
 use tracing::{debug, error, info, warn};
 
 static LIBS: OnceCell<Vec<Library>> = OnceCell::new();
 pub static PLUGINS: OnceCell<Vec<Plugin>> = OnceCell::new();
+static MIN_VERSION: Lazy<Version> = Lazy::new(|| Version::parse("0.1.9").unwrap());
 
 /// Load plugins.
 ///
@@ -56,6 +58,24 @@ pub fn load(names: &[&str]) -> Result<(), libloading::Error> {
                 warn!(
                     "skipping plugin \"{}\" because it doesn't expose its Rust compiler version",
                     plugin.name()
+                );
+                continue;
+            }
+
+            // Check pgdog-plugin version.
+            if let Some(lib_version) = plugin.lib_version() {
+                let lib_version = lib_version.deref();
+                let lib_version = Version::parse(lib_version).unwrap();
+                if lib_version < *MIN_VERSION {
+                    warn!("skipping plugin \"{}\" because it's using an unsupported version of pgdog-plugin crate ({})",
+                        plugin.name(),
+                        lib_version
+                    );
+                    continue;
+                }
+            } else {
+                warn!("skipping plugin \"{}\" because it's using an old version of pgdog-plugin crate",
+                    plugin.name(),
                 );
                 continue;
             }

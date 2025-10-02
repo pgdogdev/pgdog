@@ -62,9 +62,22 @@ typedef struct PdRouterContext {
 } PdRouterContext;
 
 /**
+ * ErrorResponse.
+ */
+typedef struct PdErrorResponse {
+   const char *severity;
+   const char *code;
+   const char *message;
+   const char *detail;
+   const char *context;
+   const char *file;
+   const char *routine;
+} PdErrorResponse;
+
+/**
  * Routing decision returned by the plugin.
  */
- typedef struct PdRoute {
+typedef struct PdRoute {
      /** Which shard the query should go to.
       *
       * `-1` for all shards, `-2` for unknown, this setting is ignored.
@@ -75,4 +88,8 @@ typedef struct PdRouterContext {
       * `1` for `true`, `0` for `false`, `2` for unknown, this setting is ignored.
       */
      uint8_t read_write;
+     /**
+      * Specific error response to return, if blocking query.
+      */
+      PdErrorResponse error_response;
  } PdRoute;
