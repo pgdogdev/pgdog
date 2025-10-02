@@ -2,7 +2,10 @@
 
 use std::{
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
 };
 
 use crate::config::TlsVerifyMode;
@@ -22,6 +25,7 @@ use crate::config::config;
 use super::Error;
 
 static ACCEPTOR: ArcSwapOption<TlsAcceptor> = ArcSwapOption::const_empty();
+static ACCEPTOR_BUILD_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 /// Get the current TLS acceptor snapshot, if TLS is enabled.
 pub fn acceptor() -> Option<Arc<TlsAcceptor>> {
@@ -98,7 +102,22 @@ fn build_acceptor(cert: &Path, key: &Path) -> Result<TlsAcceptor, Error> {
         .with_no_client_auth()
         .with_single_cert(vec![pem], key)?;
 
+    ACCEPTOR_BUILD_COUNT.fetch_add(1, Ordering::SeqCst);
+
     Ok(TlsAcceptor::from(Arc::new(config)))
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+#[doc(hidden)]
+pub fn test_acceptor_build_count() -> usize {
+    ACCEPTOR_BUILD_COUNT.load(Ordering::SeqCst)
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+#[doc(hidden)]
+pub fn test_reset_acceptor() {
+    ACCEPTOR.store(None);
+    ACCEPTOR_BUILD_COUNT.store(0, Ordering::SeqCst);
 }
 
 #[derive(Debug)]
@@ -336,6 +355,41 @@ impl ServerCertVerifier for NoHostnameVerifier {
 mod tests {
     use super::*;
     use crate::config::TlsVerifyMode;
+    use std::sync::Arc;
+
+    #[test]
+    fn acceptor_reuse_snapshot() {
+        crate::logger();
+
+        super::test_reset_acceptor();
+
+        let cert = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/tls/cert.pem");
+        let key = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/tls/key.pem");
+
+        let mut cfg = crate::config::ConfigAndUsers::default();
+        cfg.config.general.tls_certificate = Some(cert.clone());
+        cfg.config.general.tls_private_key = Some(key.clone());
+
+        crate::config::set(cfg).unwrap();
+
+        super::reload().unwrap();
+
+        assert_eq!(super::test_acceptor_build_count(), 1, "acceptor built once");
+
+        let first = super::acceptor().expect("acceptor initialized");
+        let second = super::acceptor().expect("acceptor initialized");
+
+        assert!(Arc::ptr_eq(&first, &second), "cached acceptor reused");
+        assert_eq!(
+            super::test_acceptor_build_count(),
+            1,
+            "no additional builds"
+        );
+
+        super::test_reset_acceptor();
+
+        crate::config::set(crate::config::ConfigAndUsers::default()).unwrap();
+    }
 
     #[tokio::test]
     async fn test_connector_with_verify_mode() {
