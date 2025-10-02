@@ -1,12 +1,12 @@
 [package]
 name = "pgdog"
-version = "0.1.8"
+version = "0.1.9"
 edition = "2021"
 description = "Modern PostgreSQL proxy, pooler and load balancer."
-authors = ["Lev Kokotov <lev.kokotov@gmail.com>"]
+authors = ["PgDog <hi@pgdog.dev>"]
 license = "AGPL-3.0"
 homepage = "https://pgdog.dev"
-repository = "https://github.com/levkk/pgdog"
+repository = "https://github.com/pgdogdev/pgdog"
 readme = "README.md"
 default-run = "pgdog"
 
