@@ -61,8 +61,12 @@ pub fn replace_databases(new_databases: Databases, reload: bool) {
 }
 
 /// Re-create all connections.
-pub fn reconnect() {
-    replace_databases(databases().duplicate(), false);
+pub fn reconnect() -> Result<(), Error> {
+    let config = config();
+    let databases = from_config(&config);
+
+    replace_databases(databases, false);
+    Ok(())
 }
 
 /// Initialize the databases for the first time.
@@ -305,20 +309,6 @@ impl Databases {
         }
 
         moved
-    }
-
-    /// Create new identical databases.
-    fn duplicate(&self) -> Databases {
-        Self {
-            databases: self
-                .databases
-                .iter()
-                .map(|(k, v)| (k.clone(), v.duplicate()))
-                .collect(),
-            manual_queries: self.manual_queries.clone(),
-            mirrors: self.mirrors.clone(),
-            mirror_configs: self.mirror_configs.clone(),
-        }
     }
 
     /// Shutdown all pools.
@@ -619,6 +609,7 @@ mod tests {
                     ..Default::default()
                 },
             ],
+            ..Default::default()
         };
 
         let databases = from_config(&ConfigAndUsers {
@@ -693,6 +684,7 @@ mod tests {
                 },
                 // Note: user2 missing for dest_db - this should disable mirroring
             ],
+            ..Default::default()
         };
 
         let databases = from_config(&ConfigAndUsers {
@@ -762,6 +754,7 @@ mod tests {
                     ..Default::default()
                 },
             ],
+            ..Default::default()
         };
 
         let databases = from_config(&ConfigAndUsers {
@@ -839,6 +832,7 @@ mod tests {
                     ..Default::default()
                 },
             ],
+            ..Default::default()
         };
 
         let databases = from_config(&ConfigAndUsers {
@@ -931,6 +925,7 @@ mod tests {
                     ..Default::default()
                 },
             ],
+            ..Default::default()
         };
 
         let databases = from_config(&ConfigAndUsers {
@@ -1008,6 +1003,7 @@ mod tests {
                     ..Default::default()
                 },
             ],
+            ..Default::default()
         };
 
         let databases = from_config(&ConfigAndUsers {
@@ -1058,7 +1054,10 @@ mod tests {
         }];
 
         // No users at all
-        let users = crate::config::Users { users: vec![] };
+        let users = crate::config::Users {
+            users: vec![],
+            ..Default::default()
+        };
 
         let databases = from_config(&ConfigAndUsers {
             config: config.clone(),
@@ -1085,6 +1084,7 @@ mod tests {
                 },
                 // No user for dest_db!
             ],
+            ..Default::default()
         };
 
         let databases_partial = from_config(&ConfigAndUsers {
@@ -1112,6 +1112,7 @@ mod tests {
                 },
                 // No user for source_db!
             ],
+            ..Default::default()
         };
 
         let databases_dest_only = from_config(&ConfigAndUsers {

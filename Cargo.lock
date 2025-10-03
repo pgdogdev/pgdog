@@ -2351,7 +2351,7 @@ dependencies = [
 
 [[package]]
 name = "pgdog"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -2389,6 +2389,7 @@ dependencies = [
  "serde_json",
  "sha1",
  "socket2",
+ "tempfile",
  "thiserror 2.0.12",
  "tikv-jemallocator",
  "tokio",
@@ -3277,8 +3278,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 [[package]]
 name = "scram"
 version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7679a5e6b97bac99b2c208894ba0d34b17d9657f0b728c1cd3bf1c5f7f6ebe88"
+source = "git+https://github.com/pgdogdev/scram.git?rev=848003d#848003da80ef7d421ce6bf540f9e1ea01089caf8"
 dependencies = [
  "base64 0.13.1",
  "rand 0.8.5",
@@ -3900,9 +3900,9 @@ checksum = "55937e1799185b12863d447f42597ed69d9928686b8d88a1df17376a097d8369"
 
 [[package]]
 name = "tempfile"
-version = "3.20.0"
+version = "3.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e8a64e3985349f2441a1a9ef0b853f869006c3855f2cda6862a94d26ebb9d6a1"
+checksum = "2d31c77bdf42a745371d260a26ca7163f1e0924b64afa0b688e61b5a9fa02f16"
 dependencies = [
  "fastrand",
  "getrandom 0.3.3",

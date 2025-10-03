@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use super::prelude::*;
 use crate::backend::{databases::databases, pool};
 
@@ -43,7 +45,7 @@ impl Command for Ban {
     async fn execute(&self) -> Result<Vec<Message>, Error> {
         for database in databases().all().values() {
             for shard in database.shards() {
-                for pool in shard.pools() {
+                for (_role, ban, pool) in shard.pools_with_roles_and_bans() {
                     if let Some(id) = self.id {
                         if id != pool.id() {
                             continue;
@@ -51,9 +53,9 @@ impl Command for Ban {
                     }
 
                     if self.unban {
-                        pool.unban();
+                        ban.unban(false);
                     } else {
-                        pool.ban(pool::Error::ManualBan);
+                        ban.ban(pool::Error::ManualBan, Duration::MAX);
                     }
                 }
             }

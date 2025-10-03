@@ -8,7 +8,7 @@ use crate::{
     admin::server::AdminServer,
     backend::{
         databases::{self, databases},
-        reload_notify, PubSubClient,
+        pool, reload_notify, PubSubClient,
     },
     config::{config, PoolerMode, User},
     frontend::{
@@ -203,18 +203,23 @@ impl Connection {
         match &self.binding {
             Binding::Admin(_) => Ok(ParameterStatus::fake()),
             _ => {
-                // Try a replica. If not, try the primary.
-                if self.connect(request, &Route::read(Some(0))).await.is_err() {
-                    self.connect(request, &Route::write(Some(0))).await?;
-                };
-                let mut params = vec![];
-                for param in self.server()?.params().iter() {
-                    if let Some(value) = param.1.as_str() {
-                        params.push(ParameterStatus::from((param.0.as_str(), value)));
+                // Get params from the first database that answers.
+                // Parameters are cached on the pool.
+                for shard in self.cluster()?.shards() {
+                    for pool in shard.pools() {
+                        if let Ok(params) = pool.params(request).await {
+                            let mut result = vec![];
+                            for param in params.iter() {
+                                if let Some(value) = param.1.as_str() {
+                                    result.push(ParameterStatus::from((param.0.as_str(), value)));
+                                }
+                            }
+
+                            return Ok(result);
+                        }
                     }
                 }
-                self.disconnect();
-                Ok(params)
+                return Err(Error::Pool(pool::Error::AllReplicasDown));
             }
         }
     }
@@ -380,18 +385,6 @@ impl Connection {
             _ => {
                 return Err(Error::NotConnected);
             }
-        })
-    }
-
-    /// Get a connected server, if any. If multi-shard, get the first one.
-    #[inline]
-    fn server(&mut self) -> Result<&mut Guard, Error> {
-        Ok(match self.binding {
-            Binding::Direct(ref mut server) => server.as_mut().ok_or(Error::NotConnected)?,
-            Binding::MultiShard(ref mut servers, _) => {
-                servers.first_mut().ok_or(Error::NotConnected)?
-            }
-            _ => return Err(Error::NotConnected),
         })
     }
 

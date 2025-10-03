@@ -18,8 +18,8 @@ use crate::{
     backend::{self, pool::Error, Pool},
     config::config,
     net::{
-        FromBytes, NotificationResponse, Parameter, Parameters, Protocol, ProtocolMessage, Query,
-        ToBytes,
+        BackendKeyData, FromBytes, NotificationResponse, Parameter, Parameters, Protocol,
+        ProtocolMessage, Query, ToBytes,
     },
 };
 
@@ -162,10 +162,13 @@ impl PubSubListener {
 
         let mut server = pool.standalone().await?;
         server
-            .link_client(&Parameters::from(vec![Parameter {
-                name: "application_name".into(),
-                value: "PgDog Pub/Sub Listener".into(),
-            }]))
+            .link_client(
+                &BackendKeyData::new(),
+                &Parameters::from(vec![Parameter {
+                    name: "application_name".into(),
+                    value: "PgDog Pub/Sub Listener".into(),
+                }]),
+            )
             .await?;
 
         // Re-listen on all channels when re-starting the task.

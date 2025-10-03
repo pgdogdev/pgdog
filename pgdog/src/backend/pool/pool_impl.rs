@@ -4,21 +4,21 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use once_cell::sync::Lazy;
+use once_cell::sync::{Lazy, OnceCell};
 use parking_lot::{lock_api::MutexGuard, Mutex, RawMutex};
 use tokio::time::Instant;
-use tracing::{error, info};
+use tracing::error;
 
 use crate::backend::{Server, ServerOptions};
 use crate::config::PoolerMode;
 use crate::net::messages::{BackendKeyData, DataRow, Format};
-use crate::net::Parameter;
+use crate::net::{Parameter, Parameters};
 
 use super::inner::CheckInResult;
 use super::inner::ReplicaLag;
 use super::{
-    Address, Comms, Config, Error, Guard, Healtcheck, Inner, Monitor, Oids, PoolConfig, Request,
-    State, Waiting,
+    replicas::TargetHealth, Address, Comms, Config, Error, Guard, Healtcheck, Inner, Monitor, Oids,
+    PoolConfig, Request, State, Waiting,
 };
 
 static ID_COUNTER: Lazy<Arc<AtomicU64>> = Lazy::new(|| Arc::new(AtomicU64::new(0)));
@@ -38,6 +38,8 @@ pub(crate) struct InnerSync {
     pub(super) inner: Mutex<Inner>,
     pub(super) id: u64,
     pub(super) config: Config,
+    pub(super) health: TargetHealth,
+    pub(super) params: OnceCell<Parameters>,
 }
 
 impl std::fmt::Debug for Pool {
@@ -59,6 +61,8 @@ impl Pool {
                 inner: Mutex::new(Inner::new(config.config, id)),
                 id,
                 config: config.config,
+                health: TargetHealth::new(id),
+                params: OnceCell::new(),
             }),
         }
     }
@@ -78,6 +82,10 @@ impl Pool {
         &self.inner
     }
 
+    pub fn healthy(&self) -> bool {
+        self.inner.health.healthy()
+    }
+
     /// Launch the maintenance loop, bringing the pool online.
     pub fn launch(&self) {
         let mut guard = self.lock();
@@ -87,16 +95,12 @@ impl Pool {
         }
     }
 
-    pub async fn get_forced(&self, request: &Request) -> Result<Guard, Error> {
-        self.get_internal(request, true).await
-    }
-
     pub async fn get(&self, request: &Request) -> Result<Guard, Error> {
-        self.get_internal(request, false).await
+        self.get_internal(request).await
     }
 
     /// Get a connection from the pool.
-    async fn get_internal(&self, request: &Request, unban: bool) -> Result<Guard, Error> {
+    async fn get_internal(&self, request: &Request) -> Result<Guard, Error> {
         let pool = self.clone();
 
         // Fast path, idle connection probably available.
@@ -109,17 +113,6 @@ impl Pool {
 
             if !guard.online {
                 return Err(Error::Offline);
-            }
-
-            // Try this only once. If the pool still
-            // has an error after a checkout attempt,
-            // return error.
-            if unban && guard.banned() {
-                guard.maybe_unban();
-            }
-
-            if guard.banned() {
-                return Err(Error::Banned);
             }
 
             let conn = guard.take(request);
@@ -145,7 +138,7 @@ impl Pool {
         } else {
             // Slow path, pool is empty, will create new connection
             // or wait for one to be returned if the pool is maxed out.
-            let waiting = Waiting::new(pool, request)?;
+            let mut waiting = Waiting::new(pool, request)?;
             waiting.wait().await?
         };
 
@@ -157,6 +150,17 @@ impl Pool {
                 granted_at,
             )
             .await;
+    }
+
+    /// Get server parameters, fetch them if necessary.
+    pub async fn params(&self, request: &Request) -> Result<&Parameters, Error> {
+        if let Some(params) = self.inner.params.get() {
+            Ok(params)
+        } else {
+            let conn = self.get(request).await?;
+            let params = conn.params().clone();
+            Ok(self.inner.params.get_or_init(|| params))
+        }
     }
 
     /// Perform a health check on the connection if one is needed.
@@ -177,19 +181,13 @@ impl Pool {
 
         if let Err(err) = healthcheck.healthcheck().await {
             drop(conn);
-            self.ban(Error::HealthcheckError);
+            self.inner.health.toggle(false);
             return Err(err);
+        } else if !self.inner.health.healthy() {
+            self.inner.health.toggle(true);
         }
 
         Ok(conn)
-    }
-
-    /// Create new identical connection pool.
-    pub fn duplicate(&self) -> Pool {
-        Pool::new(&PoolConfig {
-            address: self.addr().clone(),
-            config: *self.lock().config(),
-        })
     }
 
     /// Check the connection back into the pool.
@@ -202,19 +200,25 @@ impl Pool {
             server.stats().last_used
         };
 
-        let counts = server.stats_mut().reset_last_checkout();
+        let counts = {
+            let stats = server.stats_mut();
+            stats.client_id = None;
+            stats.reset_last_checkout()
+        };
 
         // Check everything and maybe check the connection
         // into the idle pool.
-        let CheckInResult { banned, replenish } =
-            { self.lock().maybe_check_in(server, now, counts) };
+        let CheckInResult {
+            server_error,
+            replenish,
+        } = { self.lock().maybe_check_in(server, now, counts) };
 
-        if banned {
+        if server_error {
             error!(
-                "pool banned on check in: {} [{}]",
-                Error::ServerError,
+                "pool received broken server connection, closing [{}]",
                 self.addr()
             );
+            self.inner.health.toggle(false);
         }
 
         // Notify maintenance that we need a new connection because
@@ -238,40 +242,10 @@ impl Pool {
         Ok(())
     }
 
-    /// Is this pool banned?
-    pub fn banned(&self) -> bool {
-        self.lock().banned()
-    }
-
     /// Pool is available to serve connections.
     pub fn available(&self) -> bool {
         let guard = self.lock();
         !guard.paused && guard.online
-    }
-
-    /// Ban this connection pool from serving traffic.
-    pub fn ban(&self, reason: Error) {
-        let now = Instant::now();
-        let banned = self.lock().maybe_ban(now, reason);
-
-        if banned {
-            error!("pool banned explicitly: {} [{}]", reason, self.addr());
-        }
-    }
-
-    /// Unban this pool from serving traffic, unless manually banned.
-    #[allow(dead_code)]
-    pub fn maybe_unban(&self) {
-        let unbanned = self.lock().maybe_unban();
-        if unbanned {
-            info!("pool unbanned [{}]", self.addr());
-        }
-    }
-
-    pub fn unban(&self) {
-        if self.lock().unban() {
-            info!("pool unbanned [{}]", self.addr());
-        }
     }
 
     /// Connection pool unique identifier.
@@ -322,7 +296,6 @@ impl Pool {
         {
             let mut guard = self.lock();
             guard.paused = false;
-            guard.ban = None;
         }
 
         self.comms().ready.notify_waiters();
@@ -404,7 +377,10 @@ impl Pool {
             });
         }
 
-        ServerOptions { params }
+        ServerOptions {
+            params,
+            pool_id: self.id(),
+        }
     }
 
     /// Pool state.

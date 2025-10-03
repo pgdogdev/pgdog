@@ -17,8 +17,8 @@ use tokio_rustls::{TlsConnector, rustls};
 
 const HOST: &str = "127.0.0.1";
 const PORT: u16 = 6432;
-const INITIAL_CERT_PLACEHOLDER: &str = "integration/rust/tests/data/tls/initial_cert.pem";
-const INITIAL_KEY_PLACEHOLDER: &str = "integration/rust/tests/data/tls/initial_key.pem";
+const INITIAL_CERT_PLACEHOLDER: &str = "integration/tls/cert.pem";
+const INITIAL_KEY_PLACEHOLDER: &str = "integration/tls/key.pem";
 
 fn asset_path(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
