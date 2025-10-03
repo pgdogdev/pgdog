@@ -190,7 +190,7 @@ impl Client {
         let mut auth_ok = false;
 
         if let Some(ref passthrough_password) = passthrough_password {
-            if passthrough_password != password {
+            if passthrough_password != password && auth_type != &AuthType::Trust {
                 stream.fatal(ErrorResponse::auth(user, database)).await?;
                 return Ok(None);
             } else {
