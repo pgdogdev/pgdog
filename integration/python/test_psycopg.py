@@ -1,5 +1,6 @@
 import psycopg
-from globals import no_out_of_sync, sharded_sync, normal_sync
+import pytest
+from globals import direct_sync, no_out_of_sync, normal_sync, sharded_sync
 
 
 def setup(conn):
@@ -69,3 +70,36 @@ def _run_insert_test(conn):
             assert len(results) == 1
             assert results[0][0] == id
     no_out_of_sync()
+
+
+def _execute_parameter_count(conn, count: int) -> int:
+    placeholders = ", ".join("%s" for _ in range(count))
+    query = f"SELECT array_length(ARRAY[{placeholders}], 1)"
+    params = list(range(count))
+    cur = conn.cursor()
+    cur.execute(query, params)
+    value = cur.fetchone()[0]
+    conn.commit()
+    return value
+
+
+def test_direct_postgres_accepts_65535_bind_parameters():
+    conn = direct_sync()
+    try:
+        length = _execute_parameter_count(conn, 65_535)
+        assert length == 65_535
+    finally:
+        conn.close()
+
+
+def test_direct_postgres_rejects_65536_bind_parameters():
+    conn = direct_sync()
+    try:
+        with pytest.raises(psycopg.Error) as excinfo:
+            _execute_parameter_count(conn, 65_536)
+
+        message = str(excinfo.value).lower()
+        assert "between 0 and 65535" in message or "too many" in message
+    finally:
+        conn.rollback()
+        conn.close()
