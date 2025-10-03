@@ -36,6 +36,9 @@ pub mod shutdown;
 
 pub use error::Error;
 
+#[cfg(test)]
+mod tests;
+
 /// All pooler commands implement this trait.
 #[async_trait]
 pub trait Command: Sized {

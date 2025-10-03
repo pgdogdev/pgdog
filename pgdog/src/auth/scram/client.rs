@@ -66,3 +66,70 @@ impl<'a> Client<'a> {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use scram::{
+        hash_password, AuthenticationProvider, AuthenticationStatus, PasswordInfo, ScramServer,
+    };
+    use std::num::NonZeroU32;
+
+    struct TestProvider {
+        password: String,
+    }
+
+    impl AuthenticationProvider for TestProvider {
+        fn get_password_for(&self, _user: &str) -> Option<PasswordInfo> {
+            let iterations = NonZeroU32::new(4096).unwrap();
+            let salt = b"testsalt".to_vec();
+            let hash = hash_password(&self.password, iterations, &salt);
+            Some(PasswordInfo::new(
+                hash.to_vec(),
+                iterations.get() as u16,
+                salt,
+            ))
+        }
+    }
+
+    #[test]
+    fn scram_client_full_handshake_succeeds() {
+        let mut client = Client::new("user", "secret");
+        let provider = TestProvider {
+            password: "secret".into(),
+        };
+        let server = ScramServer::new(provider);
+
+        let client_first = client.first().expect("client first message");
+        let server = server
+            .handle_client_first(&client_first)
+            .expect("server handle client first");
+        let (server_client_final, server_first) = server.server_first();
+
+        client
+            .server_first(&server_first)
+            .expect("client handles server first");
+
+        let client_final = client.last().expect("client final message");
+        let server_final = server_client_final
+            .handle_client_final(&client_final)
+            .expect("server handles client final");
+        let (status, server_final_msg) = server_final.server_final();
+        assert_eq!(status, AuthenticationStatus::Authenticated);
+
+        client
+            .server_last(&server_final_msg)
+            .expect("client validates server final");
+    }
+
+    #[test]
+    fn scram_client_enforces_call_order() {
+        let mut client = Client::new("user", "secret");
+        let err = client
+            .last()
+            .expect_err("last without handshake should fail");
+        matches!(err, Error::OutOfOrder)
+            .then_some(())
+            .expect("expected out-of-order error");
+    }
+}

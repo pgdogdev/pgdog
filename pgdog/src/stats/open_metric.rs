@@ -162,4 +162,29 @@ mod test {
         assert_eq!(render.lines().next().unwrap(), "# TYPE pgdog.test gauge");
         assert_eq!(render.lines().last().unwrap(), "pgdog.test 5");
     }
+
+    #[test]
+    fn measurement_render_formats_labels() {
+        let measurement = Measurement {
+            labels: vec![
+                ("role".into(), "primary".into()),
+                ("shard".into(), "0".into()),
+            ],
+            measurement: MeasurementType::Integer(42),
+        };
+
+        let rendered = measurement.render("pool_clients");
+        assert_eq!(rendered, "pool_clients{role=\"primary\",shard=\"0\"} 42");
+    }
+
+    #[test]
+    fn measurement_render_rounds_floats() {
+        let measurement = Measurement {
+            labels: vec![],
+            measurement: MeasurementType::Float(1.23456),
+        };
+
+        let rendered = measurement.render("query_latency_seconds");
+        assert_eq!(rendered, "query_latency_seconds 1.235");
+    }
 }

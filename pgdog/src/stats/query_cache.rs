@@ -112,3 +112,84 @@ impl OpenMetric for QueryCacheMetric {
         }]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::config::{self, ConfigAndUsers};
+
+    use super::*;
+
+    #[test]
+    fn query_cache_metric_renders_counter_and_gauge() {
+        config::set(ConfigAndUsers::default()).unwrap();
+
+        let counter_metric = QueryCacheMetric {
+            name: "query_cache_hits".into(),
+            help: "Hits".into(),
+            value: 7,
+            gauge: false,
+        };
+        let counter_render = Metric::new(counter_metric).to_string();
+        let counter_lines: Vec<&str> = counter_render.lines().collect();
+        assert_eq!(counter_lines[0], "# TYPE query_cache_hits counter");
+        assert_eq!(counter_lines[2], "query_cache_hits 7");
+
+        let gauge_metric = QueryCacheMetric {
+            name: "query_cache_size".into(),
+            help: "Size".into(),
+            value: 3,
+            gauge: true,
+        };
+        let gauge_render = Metric::new(gauge_metric).to_string();
+        let gauge_lines: Vec<&str> = gauge_render.lines().collect();
+        assert_eq!(gauge_lines[0], "# TYPE query_cache_size gauge");
+        assert_eq!(gauge_lines[2], "query_cache_size 3");
+    }
+
+    #[test]
+    fn query_cache_metrics_expose_all_counters() {
+        let cache = QueryCache {
+            stats: Stats {
+                hits: 1,
+                misses: 2,
+                direct: 3,
+                multi: 4,
+            },
+            len: 5,
+            prepared_statements: 6,
+            prepared_statements_memory: 7,
+        };
+
+        let metrics = cache.metrics();
+        let metric_names: Vec<String> = metrics.iter().map(|metric| metric.name()).collect();
+        assert_eq!(
+            metric_names,
+            vec![
+                "query_cache_hits".to_string(),
+                "query_cache_misses".to_string(),
+                "query_cache_direct".to_string(),
+                "query_cache_cross".to_string(),
+                "query_cache_size".to_string(),
+                "prepared_statements".to_string(),
+                "prepared_statements_memory_used".to_string(),
+            ]
+        );
+
+        let hits_metric = &metrics[0];
+        let hits_value = hits_metric
+            .measurements()
+            .first()
+            .unwrap()
+            .measurement
+            .clone();
+        match hits_value {
+            MeasurementType::Integer(value) => assert_eq!(value, 1),
+            other => panic!("expected integer measurement, got {:?}", other),
+        }
+
+        let memory_metric = metrics.last().unwrap();
+        assert_eq!(memory_metric.metric_type(), "gauge");
+        let rendered = memory_metric.to_string();
+        assert!(rendered.contains("prepared_statements_memory_used 7"));
+    }
+}

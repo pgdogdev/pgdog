@@ -34,7 +34,10 @@ impl OpenMetric for Clients {
 
 #[cfg(test)]
 mod test {
-    use crate::stats::Metric;
+    use crate::{
+        config::{self, ConfigAndUsers},
+        stats::Metric,
+    };
 
     use super::*;
 
@@ -50,5 +53,20 @@ mod test {
             "# HELP clients Total number of connected clients."
         );
         assert_eq!(lines.next().unwrap(), "clients 25");
+    }
+
+    #[test]
+    fn clients_load_uses_global_state() {
+        config::set(ConfigAndUsers::default()).unwrap();
+
+        let metric = Clients::load();
+        let rendered = metric.to_string();
+        let lines: Vec<&str> = rendered.lines().collect();
+        assert_eq!(lines[0], "# TYPE clients gauge");
+        assert_eq!(
+            lines[1],
+            "# HELP clients Total number of connected clients."
+        );
+        assert_eq!(lines.last().copied(), Some("clients 0"));
     }
 }
