@@ -10,6 +10,7 @@ use super::networking::TlsVerifyMode;
 use super::pooling::{PoolerMode, PreparedStatements};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct General {
     /// Run on this address.
     #[serde(default = "General::host")]
@@ -82,7 +83,6 @@ pub struct General {
     pub openmetrics_port: Option<u16>,
     /// OpenMetrics prefix.
     pub openmetrics_namespace: Option<String>,
-
     /// Prepared statatements support.
     #[serde(default)]
     pub prepared_statements: PreparedStatements,
@@ -109,6 +109,9 @@ pub struct General {
     /// Checkout timeout.
     #[serde(default = "General::checkout_timeout")]
     pub checkout_timeout: u64,
+    /// Login timeout.
+    #[serde(default = "General::client_login_timeout")]
+    pub client_login_timeout: u64,
     /// Dry run for sharding. Parse the query, route to shard 0.
     #[serde(default)]
     pub dry_run: bool,
@@ -190,6 +193,7 @@ impl Default for General {
             connect_attempts: Self::connect_attempts(),
             query_timeout: Self::default_query_timeout(),
             checkout_timeout: Self::checkout_timeout(),
+            client_login_timeout: Self::client_login_timeout(),
             dry_run: Self::dry_run(),
             idle_timeout: Self::idle_timeout(),
             client_idle_timeout: Self::default_client_idle_timeout(),
@@ -296,6 +300,13 @@ impl General {
     fn idle_timeout() -> u64 {
         Self::env_or_default(
             "PGDOG_IDLE_TIMEOUT",
+            Duration::from_secs(60).as_millis() as u64,
+        )
+    }
+
+    fn client_login_timeout() -> u64 {
+        Self::env_or_default(
+            "PGDOG_CLIENT_LOG_TIMEOUT",
             Duration::from_secs(60).as_millis() as u64,
         )
     }

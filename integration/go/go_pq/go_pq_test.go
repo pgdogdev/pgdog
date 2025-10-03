@@ -27,6 +27,59 @@ func PqConnections() []*sql.DB {
 	return []*sql.DB{normal, sharded}
 }
 
+func TestAuthenticationWithoutTLS(t *testing.T) {
+	conn, err := sql.Open("postgres", "postgres://pgdog:pgdog@127.0.0.1:6432/pgdog?sslmode=disable")
+	assert.Nil(t, err)
+	defer conn.Close()
+
+	err = conn.Ping()
+	assert.Nil(t, err)
+
+	// Reset config
+	adminConn, err := sql.Open("postgres", "postgres://admin:pgdog@127.0.0.1:6432/admin?sslmode=disable")
+	assert.Nil(t, err)
+	defer adminConn.Close()
+
+	_, err = adminConn.Exec("RELOAD")
+	assert.Nil(t, err)
+}
+
+func TestAuthenticationWithTLS(t *testing.T) {
+	conn, err := sql.Open("postgres", "postgres://pgdog:pgdog@127.0.0.1:6432/pgdog?sslmode=require")
+	assert.Nil(t, err)
+	defer conn.Close()
+
+	err = conn.Ping()
+	assert.Nil(t, err)
+}
+
+func TestAuthenticationWithPassthrough(t *testing.T) {
+	adminConn, err := sql.Open("postgres", "postgres://admin:pgdog@127.0.0.1:6432/admin?sslmode=disable")
+	assert.Nil(t, err)
+	defer adminConn.Close()
+
+	_, err = adminConn.Exec("SET passthrough_auth TO 'enabled'")
+	assert.Nil(t, err)
+
+	conn, err := sql.Open("postgres", "postgres://pgdog:pgdog@127.0.0.1:6432/pgdog?sslmode=disable")
+	assert.Nil(t, err)
+	defer conn.Close()
+
+	err = conn.Ping()
+	assert.Nil(t, err)
+
+	badConn, err := sql.Open("postgres", "postgres://pgdog:wrong_password@127.0.0.1:6432/pgdog?sslmode=disable")
+	assert.Nil(t, err)
+	defer badConn.Close()
+
+	err = badConn.Ping()
+	assert.NotNil(t, err)
+
+	// Reset config
+	_, err = adminConn.Exec("RELOAD")
+	assert.Nil(t, err)
+}
+
 func TestPqCrud(t *testing.T) {
 	conns := PqConnections()
 

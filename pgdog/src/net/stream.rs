@@ -4,7 +4,7 @@ use bytes::{BufMut, BytesMut};
 use pin_project::pin_project;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufStream, ReadBuf};
 use tokio::net::TcpStream;
-use tracing::{debug, enabled, trace, Level};
+use tracing::trace;
 
 use std::io::{Error, ErrorKind};
 use std::net::SocketAddr;
@@ -131,11 +131,7 @@ impl Stream {
             Self::DevNull => (),
         }
 
-        if !enabled!(Level::TRACE) {
-            debug!("{:?} <-- {}", self.peer_addr(), message.code());
-        } else {
-            trace!("{:?} <-- {:#?}", self.peer_addr(), message);
-        }
+        trace!("{:?} <-- {:#?}", self.peer_addr(), message);
 
         #[cfg(debug_assertions)]
         {

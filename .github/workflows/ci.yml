@@ -140,6 +140,8 @@ jobs:
           echo "PGDOG_BIN=$(realpath "$BIN_PATH")" >> "$GITHUB_ENV"
       - name: pgbench
         run: bash integration/pgbench/run.sh
+      - name: schema-sync
+        run: bash integration/schema_sync/run.sh
       - name: Go
         run: bash integration/go/run.sh
       - name: JavaScript

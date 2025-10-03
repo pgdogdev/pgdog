@@ -3,6 +3,7 @@ use crate::net::Parameter;
 #[derive(Debug, Clone, Default)]
 pub struct ServerOptions {
     pub params: Vec<Parameter>,
+    pub pool_id: u64,
 }
 
 impl ServerOptions {
@@ -18,6 +19,7 @@ impl ServerOptions {
                 name: "replication".into(),
                 value: "database".into(),
             }],
+            pool_id: 0,
         }
     }
 }

@@ -95,6 +95,8 @@ pub fn from_urls(urls: &[String]) -> Result<ConfigAndUsers, Error> {
 /// Extract all database URLs from the environment and
 /// create the config.
 pub fn from_env() -> Result<ConfigAndUsers, Error> {
+    let _lock = LOCK.lock();
+
     let mut urls = vec![];
     let mut index = 1;
     while let Ok(url) = env::var(format!("PGDOG_DATABASE_URL_{}", index)) {
@@ -103,10 +105,26 @@ pub fn from_env() -> Result<ConfigAndUsers, Error> {
     }
 
     if urls.is_empty() {
-        Err(Error::NoDbsInEnv)
-    } else {
-        from_urls(&urls)
+        return Err(Error::NoDbsInEnv);
     }
+
+    let mut config = (*config()).clone();
+    config = config.databases_from_urls(&urls)?;
+
+    // Extract mirroring configuration
+    let mut mirror_strs = vec![];
+    let mut index = 1;
+    while let Ok(mirror_str) = env::var(format!("PGDOG_MIRRORING_{}", index)) {
+        mirror_strs.push(mirror_str);
+        index += 1;
+    }
+
+    if !mirror_strs.is_empty() {
+        config = config.mirroring_from_strings(&mirror_strs)?;
+    }
+
+    CONFIG.store(Arc::new(config.clone()));
+    Ok(config)
 }
 
 /// Override some settings.

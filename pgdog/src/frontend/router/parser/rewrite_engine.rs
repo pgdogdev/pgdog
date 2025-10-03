@@ -1,7 +1,6 @@
 use super::{Aggregate, AggregateFunction, HelperMapping, RewriteOutput, RewritePlan};
 use pg_query::protobuf::{FuncCall, Node, ResTarget, String as PgString};
 use pg_query::{NodeEnum, ParseResult};
-use tracing::debug;
 
 /// Query rewrite engine. Currently supports injecting helper aggregates for AVG.
 #[derive(Default)]
@@ -13,19 +12,18 @@ impl RewriteEngine {
     }
 
     /// Rewrite a SELECT query, adding helper aggregates when necessary.
-    pub fn rewrite_select(&self, sql: &str, aggregate: &Aggregate) -> RewriteOutput {
-        match pg_query::parse(sql) {
-            Ok(parsed) => self.rewrite_parsed(parsed, aggregate, sql),
-            Err(err) => {
-                debug!("rewrite failed to parse SELECT: {}", err);
-                RewriteOutput::new(sql.to_string(), RewritePlan::new())
-            }
-        }
+    pub fn rewrite_select(
+        &self,
+        ast: &ParseResult,
+        sql: &str,
+        aggregate: &Aggregate,
+    ) -> RewriteOutput {
+        self.rewrite_parsed(ast, aggregate, sql)
     }
 
     fn rewrite_parsed(
         &self,
-        parsed: ParseResult,
+        parsed: &ParseResult,
         aggregate: &Aggregate,
         original_sql: &str,
     ) -> RewriteOutput {
@@ -171,7 +169,7 @@ mod tests {
             None => panic!("empty"),
         };
         let aggregate = Aggregate::parse(stmt).unwrap();
-        RewriteEngine::new().rewrite_select(sql, &aggregate)
+        RewriteEngine::new().rewrite_select(&ast, sql, &aggregate)
     }
 
     #[test]
