@@ -18,7 +18,6 @@ two_phase_commit = false
 healthcheck_port = 8080
 tls_certificate = "integration/tls/cert.pem"
 tls_private_key = "integration/tls/key.pem"
-passthrough_auth = "enabled"
 
 # ------------------------------------------------------------------------------
 # ----- Database :: pgdog ------------------------------------------------------

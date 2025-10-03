@@ -34,6 +34,14 @@ func TestAuthenticationWithoutTLS(t *testing.T) {
 
 	err = conn.Ping()
 	assert.Nil(t, err)
+
+	// Reset config
+	adminConn, err := sql.Open("postgres", "postgres://admin:pgdog@127.0.0.1:6432/admin?sslmode=disable")
+	assert.Nil(t, err)
+	defer adminConn.Close()
+
+	_, err = adminConn.Exec("RELOAD")
+	assert.Nil(t, err)
 }
 
 func TestAuthenticationWithTLS(t *testing.T) {
@@ -66,6 +74,10 @@ func TestAuthenticationWithPassthrough(t *testing.T) {
 
 	err = badConn.Ping()
 	assert.NotNil(t, err)
+
+	// Reset config
+	_, err = adminConn.Exec("RELOAD")
+	assert.Nil(t, err)
 }
 
 func TestPqCrud(t *testing.T) {
