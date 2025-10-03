@@ -146,12 +146,16 @@ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Erro
         Some(ref command) => {
             if let Commands::DataSync { .. } = command {
                 info!("🔄 entering data sync mode");
-                cli::data_sync(command.clone()).await?;
+                if let Err(err) = cli::data_sync(command.clone()).await {
+                    error!("{}", err);
+                }
             }
 
             if let Commands::SchemaSync { .. } = command {
                 info!("🔄 entering schema sync mode");
-                cli::schema_sync(command.clone()).await?;
+                if let Err(err) = cli::schema_sync(command.clone()).await {
+                    error!("{}", err);
+                }
             }
 
             if let Commands::Setup { database } = command {

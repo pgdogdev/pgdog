@@ -8,7 +8,7 @@ use crate::net::c_string_buf;
 use super::prelude::*;
 
 /// ErrorResponse (B) message.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ErrorResponse {
     severity: String,
     pub code: String,
