@@ -281,15 +281,13 @@ pub async fn schema_sync(commands: Commands) -> Result<(), Box<dyn std::error::E
         ShardConfig::sync_all(&destination).await?;
     }
 
-    for output in output {
-        if dry_run {
-            let queries = output.statements(state)?;
-            for query in queries {
-                println!("{}", query.deref());
-            }
-        } else {
-            output.restore(&destination, ignore_errors, state).await?;
+    if dry_run {
+        let queries = output.statements(state)?;
+        for query in queries {
+            println!("{}", query.deref());
         }
+    } else {
+        output.restore(&destination, ignore_errors, state).await?;
     }
 
     Ok(())
