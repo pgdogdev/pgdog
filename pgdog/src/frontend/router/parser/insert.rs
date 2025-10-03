@@ -1,5 +1,6 @@
 //! Handle INSERT statements.
 use pg_query::{protobuf::*, NodeEnum};
+use tracing::debug;
 
 use crate::{
     backend::ShardingSchema,
@@ -64,9 +65,7 @@ impl<'a> Insert<'a> {
     ) -> Result<Shard, Error> {
         let tables = Tables::new(schema);
         let columns = self.columns();
-
         let table = self.table();
-
         let key = table.and_then(|table| tables.key(table, &columns));
 
         if let Some(key) = key {
@@ -80,34 +79,35 @@ impl<'a> Insert<'a> {
                         .build()?;
                     return Ok(ctx.apply()?);
                 }
-            } else {
-                let tuples = self.tuples();
+            }
 
-                // TODO: support rewriting INSERTs to run against multiple shards.
-                if tuples.len() != 1 {
-                    return Ok(Shard::All);
-                }
+            let tuples = self.tuples();
 
-                if let Some(value) = tuples.first().and_then(|tuple| tuple.get(key.position)) {
-                    match value {
-                        Value::Integer(int) => {
-                            let ctx = ContextBuilder::new(key.table)
-                                .data(*int)
-                                .shards(schema.shards)
-                                .build()?;
-                            return Ok(ctx.apply()?);
-                        }
+            // TODO: support rewriting INSERTs to run against multiple shards.
+            if tuples.len() != 1 {
+                debug!("multiple tuples in an INSERT statement");
+                return Ok(Shard::All);
+            }
 
-                        Value::String(str) => {
-                            let ctx = ContextBuilder::new(key.table)
-                                .data(*str)
-                                .shards(schema.shards)
-                                .build()?;
-                            return Ok(ctx.apply()?);
-                        }
-
-                        _ => (),
+            if let Some(value) = tuples.first().and_then(|tuple| tuple.get(key.position)) {
+                match value {
+                    Value::Integer(int) => {
+                        let ctx = ContextBuilder::new(key.table)
+                            .data(*int)
+                            .shards(schema.shards)
+                            .build()?;
+                        return Ok(ctx.apply()?);
                     }
+
+                    Value::String(str) => {
+                        let ctx = ContextBuilder::new(key.table)
+                            .data(*str)
+                            .shards(schema.shards)
+                            .build()?;
+                        return Ok(ctx.apply()?);
+                    }
+
+                    _ => (),
                 }
             }
         } else if let Some(table) = table {
@@ -146,7 +146,8 @@ mod test {
                     insert.table(),
                     Some(Table {
                         name: "my_table",
-                        schema: None
+                        schema: None,
+                        alias: None,
                     })
                 );
                 assert_eq!(

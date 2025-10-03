@@ -1,13 +1,15 @@
 //! Connection listener. Handles all client connections.
 
+use std::io::ErrorKind;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
 use crate::backend::databases::{databases, reload, shutdown};
 use crate::config::config;
+use crate::frontend::client::query_engine::two_pc::Manager;
 use crate::net::messages::BackendKeyData;
 use crate::net::messages::{hello::SslReply, Startup};
-use crate::net::tls::acceptor;
+use crate::net::{self, tls::acceptor};
 use crate::net::{tweak, Stream};
 use crate::sighup::Sighup;
 use tokio::net::{TcpListener, TcpStream};
@@ -101,12 +103,13 @@ impl Listener {
     }
 
     fn start_shutdown(&self) {
-        shutdown();
         comms().shutdown();
 
         let listener = self.clone();
         spawn(async move {
             listener.execute_shutdown().await;
+            Manager::get().shutdown().await; // wait for 2pc to flush
+            shutdown();
         });
     }
 
@@ -114,8 +117,9 @@ impl Listener {
         let shutdown_timeout = config().config.general.shutdown_timeout();
 
         info!(
-            "waiting up to {:.3}s for clients to finish transactions",
-            shutdown_timeout.as_secs_f64()
+            "waiting up to {:.3}s for {} clients to finish transactions",
+            shutdown_timeout.as_secs_f64(),
+            comms().tracker().len(),
         );
 
         let comms = comms();
@@ -137,14 +141,27 @@ impl Listener {
         tweak(&stream)?;
 
         let mut stream = Stream::plain(stream);
+
         let tls = acceptor();
 
         loop {
-            let startup = Startup::from_stream(&mut stream).await?;
+            let startup = match Startup::from_stream(&mut stream).await {
+                Ok(startup) => startup,
+                Err(net::Error::Io(io_err)) => {
+                    // Load balancers like AWS ELB use TCP to health check
+                    // targets and abruptly disconnect.
+                    if io_err.kind() == ErrorKind::ConnectionReset {
+                        return Ok(());
+                    } else {
+                        return Err(net::Error::Io(io_err).into());
+                    }
+                }
+                Err(err) => return Err(err.into()),
+            };
 
             match startup {
                 Startup::Ssl => {
-                    if let Some(tls) = tls {
+                    if let Some(tls) = tls.as_ref() {
                         stream.send_flush(&SslReply::Yes).await?;
                         let plain = stream.take()?;
                         let cipher = tls.accept(plain).await?;
@@ -152,6 +169,11 @@ impl Listener {
                     } else {
                         stream.send_flush(&SslReply::No).await?;
                     }
+                }
+
+                Startup::GssEnc => {
+                    // GSS encryption is not yet supported; reject and wait for a normal startup.
+                    stream.send_flush(&SslReply::No).await?;
                 }
 
                 Startup::Startup { params } => {

@@ -1,3 +1,5 @@
+use crate::frontend::router::parser::{from_clause::FromClause, where_clause::TablesSource};
+
 use super::*;
 
 impl QueryParser {
@@ -10,8 +12,9 @@ impl QueryParser {
     ///
     pub(super) fn select(
         &mut self,
+        ast: &pg_query::ParseResult,
         stmt: &SelectStmt,
-        context: &QueryParserContext,
+        context: &mut QueryParserContext,
     ) -> Result<Command, Error> {
         let cte_writes = Self::cte_writes(stmt);
         let mut writes = Self::functions(stmt)?;
@@ -40,10 +43,10 @@ impl QueryParser {
 
         let order_by = Self::select_sort(&stmt.sort_clause, context.router_context.bind);
         let mut shards = HashSet::new();
-        let the_table = Table::try_from(&stmt.from_clause).ok();
-        if let Some(where_clause) =
-            WhereClause::new(the_table.as_ref().map(|t| t.name), &stmt.where_clause)
-        {
+        let from_clause = TablesSource::from(FromClause::new(&stmt.from_clause));
+        let where_clause = WhereClause::new(&from_clause, &stmt.where_clause);
+
+        if let Some(ref where_clause) = where_clause {
             shards = Self::where_clause(
                 &context.sharding_schema,
                 &where_clause,
@@ -57,7 +60,7 @@ impl QueryParser {
                 for table in context.sharding_schema.tables.tables() {
                     if &table.column == column_name
                         && (table.name.is_none()
-                            || table.name.as_deref() == the_table.as_ref().map(|t| t.name))
+                            || table.name.as_deref() == from_clause.table_name())
                     {
                         let centroids = Centroids::from(&table.centroids);
                         shards.insert(centroids.shard(
@@ -79,13 +82,50 @@ impl QueryParser {
 
         let mut omni = false;
         if query.is_all_shards() {
-            if let Some(name) = the_table.as_ref().map(|t| t.name) {
+            if let Some(name) = from_clause.table_name() {
                 omni = context.sharding_schema.tables.omnishards().contains(name);
             }
         }
 
         if omni {
             query.set_shard_mut(round_robin::next() % context.shards);
+        }
+
+        // Only rewrite if query is cross-shard.
+        if query.is_cross_shard() && context.shards > 1 {
+            if let Some(buffered_query) = context.router_context.query.as_ref() {
+                let rewrite = RewriteEngine::new().rewrite_select(
+                    ast,
+                    buffered_query.query(),
+                    query.aggregate(),
+                );
+                if !rewrite.plan.is_noop() {
+                    if let BufferedQuery::Prepared(parse) = buffered_query {
+                        let name = parse.name().to_owned();
+                        {
+                            let prepared = context.prepared_statements();
+                            prepared.update_and_set_rewrite_plan(
+                                &name,
+                                &rewrite.sql,
+                                rewrite.plan.clone(),
+                            );
+                        }
+                    }
+                    query.set_rewrite(rewrite.plan, rewrite.sql);
+                } else if let BufferedQuery::Prepared(parse) = buffered_query {
+                    let name = parse.name().to_owned();
+                    let stored_plan = {
+                        let prepared = context.prepared_statements();
+                        prepared.rewrite_plan(&name)
+                    };
+                    if let Some(plan) = stored_plan {
+                        if !plan.is_noop() {
+                            query.clear_rewrite();
+                            *query.rewrite_plan_mut() = plan;
+                        }
+                    }
+                }
+            }
         }
 
         Ok(Command::Query(query.set_write(writes)))

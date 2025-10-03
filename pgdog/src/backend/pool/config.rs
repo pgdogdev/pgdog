@@ -139,7 +139,7 @@ impl Config {
     }
 
     /// Create from database/user configuration.
-    pub fn new(general: &General, database: &Database, user: &User) -> Self {
+    pub fn new(general: &General, database: &Database, user: &User, is_only_replica: bool) -> Self {
         Config {
             min: database
                 .min_pool_size
@@ -147,6 +147,11 @@ impl Config {
             max: database
                 .pool_size
                 .unwrap_or(user.pool_size.unwrap_or(general.default_pool_size)),
+            max_age: Duration::from_millis(
+                database
+                    .server_lifetime
+                    .unwrap_or(user.server_lifetime.unwrap_or(general.server_lifetime)),
+            ),
             healthcheck_interval: Duration::from_millis(general.healthcheck_interval),
             idle_healthcheck_interval: Duration::from_millis(general.idle_healthcheck_interval),
             idle_healthcheck_delay: Duration::from_millis(general.idle_healthcheck_delay),
@@ -169,13 +174,15 @@ impl Config {
             query_timeout: Duration::from_millis(general.query_timeout),
             checkout_timeout: Duration::from_millis(general.checkout_timeout),
             idle_timeout: Duration::from_millis(
-                user.idle_timeout
-                    .unwrap_or(database.idle_timeout.unwrap_or(general.idle_timeout)),
+                database
+                    .idle_timeout
+                    .unwrap_or(user.idle_timeout.unwrap_or(general.idle_timeout)),
             ),
             read_only: database
                 .read_only
                 .unwrap_or(user.read_only.unwrap_or_default()),
             prepared_statements_limit: general.prepared_statements_limit,
+            bannable: !is_only_replica,
             ..Default::default()
         }
     }

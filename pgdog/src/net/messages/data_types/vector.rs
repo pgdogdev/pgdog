@@ -13,12 +13,12 @@ use serde::{
 };
 use std::{fmt::Debug, ops::Deref, str::from_utf8};
 
-use super::{Datum, FromDataType, Numeric};
+use super::{Datum, Float, FromDataType};
 
 #[derive(Clone, PartialEq, PartialOrd, Ord, Eq, Hash)]
 #[repr(C)]
 pub struct Vector {
-    values: Vec<Numeric>,
+    values: Vec<Float>,
 }
 
 impl Debug for Vector {
@@ -48,9 +48,9 @@ impl FromDataType for Vector {
             Format::Binary => {
                 let mut values = vec![];
                 while bytes.len() >= std::mem::size_of::<f32>() {
-                    values.push(bytes.get_f32());
+                    values.push(Float(bytes.get_f32()));
                 }
-                Ok(values.into())
+                Ok(Self { values })
             }
             Format::Text => {
                 let no_brackets = &bytes[1..bytes.len() - 1];
@@ -58,7 +58,7 @@ impl FromDataType for Vector {
                     .split(|n| n == &b',')
                     .flat_map(|b| from_utf8(b).map(|n| n.trim().parse::<f32>().ok()))
                     .flatten()
-                    .map(Numeric::from)
+                    .map(Float::from)
                     .collect();
                 Ok(Self { values: floats })
             }
@@ -77,8 +77,8 @@ impl FromDataType for Vector {
             ))),
             Format::Binary => {
                 let mut bytes = BytesMut::new();
-                for n in &self.values {
-                    bytes.put_f32(**n as f32); // TODO: potential loss of precision. Vectors should be f32's.
+                for float in &self.values {
+                    bytes.put_f32(float.0);
                 }
                 Ok(bytes.freeze())
             }
@@ -104,13 +104,13 @@ impl Vector {
     }
 
     /// Compute L2 distance between the vectors.
-    pub fn distance_l2(&self, other: &Self) -> f64 {
+    pub fn distance_l2(&self, other: &Self) -> f32 {
         Distance::Euclidean(self, other).distance()
     }
 }
 
 impl Deref for Vector {
-    type Target = Vec<Numeric>;
+    type Target = Vec<Float>;
 
     fn deref(&self) -> &Self::Target {
         &self.values
@@ -120,7 +120,7 @@ impl Deref for Vector {
 impl From<&[f64]> for Vector {
     fn from(value: &[f64]) -> Self {
         Self {
-            values: value.iter().map(|v| Numeric::from(*v)).collect(),
+            values: value.iter().map(|v| Float(*v as f32)).collect(),
         }
     }
 }
@@ -128,7 +128,7 @@ impl From<&[f64]> for Vector {
 impl From<&[f32]> for Vector {
     fn from(value: &[f32]) -> Self {
         Self {
-            values: value.iter().map(|v| Numeric::from(*v)).collect(),
+            values: value.iter().map(|v| Float(*v)).collect(),
         }
     }
 }
@@ -136,7 +136,7 @@ impl From<&[f32]> for Vector {
 impl From<Vec<f32>> for Vector {
     fn from(value: Vec<f32>) -> Self {
         Self {
-            values: value.into_iter().map(Numeric::from).collect(),
+            values: value.into_iter().map(Float::from).collect(),
         }
     }
 }
@@ -144,8 +144,14 @@ impl From<Vec<f32>> for Vector {
 impl From<Vec<f64>> for Vector {
     fn from(value: Vec<f64>) -> Self {
         Self {
-            values: value.into_iter().map(Numeric::from).collect(),
+            values: value.into_iter().map(|v| Float(v as f32)).collect(),
         }
+    }
+}
+
+impl From<Vec<Float>> for Vector {
+    fn from(value: Vec<Float>) -> Self {
+        Self { values: value }
     }
 }
 
@@ -227,9 +233,9 @@ mod test {
     fn test_vectors() {
         let v = "[1,2,3]";
         let vector = Vector::decode(v.as_bytes(), Format::Text).unwrap();
-        assert_eq!(vector.values[0], 1.0.into());
-        assert_eq!(vector.values[1], 2.0.into());
-        assert_eq!(vector.values[2], 3.0.into());
+        assert_eq!(vector.values[0], Float(1.0));
+        assert_eq!(vector.values[1], Float(2.0));
+        assert_eq!(vector.values[2], Float(3.0));
         let b = vector.encode(Format::Text).unwrap();
         assert_eq!(&b, &"[1,2,3]");
 
@@ -238,8 +244,62 @@ mod test {
         v.extend(2.0_f32.to_be_bytes());
         v.extend(3.0_f32.to_be_bytes());
         let vector = Vector::decode(v.as_slice(), Format::Binary).unwrap();
-        assert_eq!(vector.values[0], 1.0.into());
-        assert_eq!(vector.values[1], 2.0.into());
-        assert_eq!(vector.values[2], 3.0.into());
+        assert_eq!(vector.values[0], Float(1.0));
+        assert_eq!(vector.values[1], Float(2.0));
+        assert_eq!(vector.values[2], Float(3.0));
+    }
+
+    #[test]
+    fn test_vector_with_nan_and_infinity() {
+        // Test text format with NaN and Infinity
+        let v = "[1.5,NaN,Infinity,-Infinity,2.5]";
+        let vector = Vector::decode(v.as_bytes(), Format::Text).unwrap();
+        assert_eq!(vector.values[0], Float(1.5));
+        assert!(vector.values[1].0.is_nan());
+        assert!(vector.values[2].0.is_infinite() && vector.values[2].0.is_sign_positive());
+        assert!(vector.values[3].0.is_infinite() && vector.values[3].0.is_sign_negative());
+        assert_eq!(vector.values[4], Float(2.5));
+
+        // Test binary format with special values
+        let mut v = vec![];
+        v.extend(1.5_f32.to_be_bytes());
+        v.extend(f32::NAN.to_be_bytes());
+        v.extend(f32::INFINITY.to_be_bytes());
+        v.extend(f32::NEG_INFINITY.to_be_bytes());
+        v.extend(2.5_f32.to_be_bytes());
+
+        let vector = Vector::decode(v.as_slice(), Format::Binary).unwrap();
+        assert_eq!(vector.values[0], Float(1.5));
+        assert!(vector.values[1].0.is_nan());
+        assert_eq!(vector.values[2], Float(f32::INFINITY));
+        assert_eq!(vector.values[3], Float(f32::NEG_INFINITY));
+        assert_eq!(vector.values[4], Float(2.5));
+
+        // Test encoding back to text
+        let encoded = vector.encode(Format::Text).unwrap();
+        let encoded_str = String::from_utf8_lossy(&encoded);
+        assert!(encoded_str.contains("NaN"));
+        assert!(encoded_str.contains("Infinity"));
+        assert!(encoded_str.contains("-Infinity"));
+    }
+
+    #[test]
+    fn test_vector_distance_with_special_values() {
+        // Test distance calculation with normal values
+        let v1 = Vector::from(&[3.0, 4.0][..]);
+        let v2 = Vector::from(&[0.0, 0.0][..]);
+        let distance = v1.distance_l2(&v2);
+        assert_eq!(distance, 5.0); // 3-4-5 triangle
+
+        // Test distance with NaN
+        let v_nan = Vector::from(vec![Float(f32::NAN), Float(1.0)]);
+        let v_normal = Vector::from(&[1.0, 1.0][..]);
+        let distance_nan = v_nan.distance_l2(&v_normal);
+        assert!(distance_nan.is_nan());
+
+        // Test distance with Infinity
+        let v_inf = Vector::from(vec![Float(f32::INFINITY), Float(1.0)]);
+        let distance_inf = v_inf.distance_l2(&v_normal);
+        assert!(distance_inf.is_infinite());
     }
 }

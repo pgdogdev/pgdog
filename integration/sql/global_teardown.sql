@@ -1,0 +1,2 @@
+-- Global teardown executed after every SQL regression scenario.
+-- Use this file to drop shared fixtures created in global_setup.sql.

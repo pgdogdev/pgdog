@@ -62,4 +62,10 @@ pub enum Error {
 
     #[error("this command requires a transaction")]
     RequiresTransaction,
+
+    #[error("two-phase transaction control statements are not allowed when two-phase is enabled")]
+    NoTwoPc,
+
+    #[error("regex error")]
+    RegexError,
 }

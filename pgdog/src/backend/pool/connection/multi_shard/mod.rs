@@ -6,18 +6,23 @@ use crate::{
     frontend::{router::Route, PreparedStatements},
     net::{
         messages::{
-            command_complete::CommandComplete, FromBytes, Message, Protocol, RowDescription,
-            ToBytes,
+            command_complete::CommandComplete, DataRow, FromBytes, Message, Protocol,
+            RowDescription, ToBytes,
         },
-        Decoder,
+        Decoder, ReadyForQuery,
     },
 };
 
 use super::buffer::Buffer;
 
 mod context;
+mod error;
 #[cfg(test)]
 mod test;
+mod validator;
+
+pub use error::Error;
+use validator::Validator;
 
 #[derive(Default, Debug)]
 struct Counters {
@@ -33,6 +38,7 @@ struct Counters {
     close_complete: usize,
     bind_complete: usize,
     command_complete: Option<Message>,
+    transaction_error: bool,
 }
 
 /// Multi-shard state.
@@ -49,6 +55,8 @@ pub struct MultiShard {
     /// Sorting/aggregate buffer.
     buffer: Buffer,
     decoder: Decoder,
+    /// Row consistency validator.
+    validator: Validator,
 }
 
 impl MultiShard {
@@ -62,9 +70,17 @@ impl MultiShard {
         }
     }
 
+    /// Update multi-shard state.
+    pub(super) fn update(&mut self, shards: usize, route: &Route) {
+        self.reset();
+        self.shards = shards;
+        self.route = route.clone();
+    }
+
     pub(super) fn reset(&mut self) {
         self.counters = Counters::default();
         self.buffer.reset();
+        self.validator.reset();
         // Don't reset:
         //  1. Route to keep routing decision
         //  2. Number of shards
@@ -73,14 +89,22 @@ impl MultiShard {
 
     /// Check if the message should be sent to the client, skipped,
     /// or modified.
-    pub(super) fn forward(&mut self, message: Message) -> Result<Option<Message>, super::Error> {
+    pub(super) fn forward(&mut self, message: Message) -> Result<Option<Message>, Error> {
         let mut forward = None;
 
         match message.code() {
             'Z' => {
                 self.counters.ready_for_query += 1;
+                if message.transaction_error() {
+                    self.counters.transaction_error = true;
+                }
+
                 forward = if self.counters.ready_for_query % self.shards == 0 {
-                    Some(message)
+                    if self.counters.transaction_error {
+                        Some(ReadyForQuery::error().message()?)
+                    } else {
+                        Some(message)
+                    }
                 } else {
                     None
                 };
@@ -102,14 +126,22 @@ impl MultiShard {
 
                 if self.counters.command_complete_count % self.shards == 0 {
                     self.buffer.full();
-                    self.buffer
-                        .aggregate(self.route.aggregate(), &self.decoder)?;
 
-                    self.buffer.sort(self.route.order_by(), &self.decoder);
-                    self.buffer.distinct(self.route.distinct(), &self.decoder);
+                    if !self.buffer.is_empty() {
+                        self.buffer
+                            .aggregate(
+                                self.route.aggregate(),
+                                &self.decoder,
+                                self.route.rewrite_plan(),
+                            )
+                            .map_err(Error::from)?;
+
+                        self.buffer.sort(self.route.order_by(), &self.decoder);
+                        self.buffer.distinct(self.route.distinct(), &self.decoder);
+                    }
 
                     if has_rows {
-                        let rows = if self.route.should_buffer() {
+                        let rows = if self.should_buffer() {
                             self.buffer.len()
                         } else {
                             self.counters.rows
@@ -123,16 +155,27 @@ impl MultiShard {
 
             'T' => {
                 self.counters.row_description += 1;
+                let rd = RowDescription::from_bytes(message.to_bytes()?)?;
+
+                // Validate row description consistency
+                let is_first = self.validator.validate_row_description(&rd)?;
+
                 // Set row description info as soon as we have it,
                 // so it's available to the aggregator and sorter.
-                if self.counters.row_description == 1 {
-                    let rd = RowDescription::from_bytes(message.to_bytes()?)?;
+                if is_first {
                     self.decoder.row_description(&rd);
                 }
+
                 if self.counters.row_description == self.shards {
                     // Only send it to the client once all shards sent it,
                     // so we don't get early requests from clients.
-                    forward = Some(message);
+                    let plan = self.route.rewrite_plan();
+                    if plan.drop_columns().is_empty() {
+                        forward = Some(message);
+                    } else {
+                        let client_rd = rd.drop_columns(plan.drop_columns());
+                        forward = Some(client_rd.message()?);
+                    }
                 }
             }
 
@@ -144,10 +187,16 @@ impl MultiShard {
             }
 
             'D' => {
-                if !self.route.should_buffer() && self.counters.row_description % self.shards == 0 {
+                if self.shards > 1 {
+                    // Validate data row consistency.
+                    let data_row = DataRow::from_bytes(message.to_bytes()?)?;
+                    self.validator.validate_data_row(&data_row)?;
+                }
+
+                if !self.should_buffer() && self.counters.row_description % self.shards == 0 {
                     forward = Some(message);
                 } else {
-                    self.buffer.add(message)?;
+                    self.buffer.add(message).map_err(Error::from)?;
                 }
             }
 
@@ -200,6 +249,10 @@ impl MultiShard {
         Ok(forward)
     }
 
+    fn should_buffer(&self) -> bool {
+        self.shards > 1 && self.route.should_buffer()
+    }
+
     /// Multi-shard state is ready to send messages.
     pub(super) fn message(&mut self) -> Option<Message> {
         if let Some(data_row) = self.buffer.take() {
@@ -215,15 +268,19 @@ impl MultiShard {
             Context::Bind(bind) => {
                 if self.decoder.rd().fields.is_empty() && !bind.anonymous() {
                     if let Some(rd) = PreparedStatements::global()
-                        .lock()
+                        .read()
                         .row_description(bind.statement())
                     {
                         self.decoder.row_description(&rd);
+                        self.validator.set_row_description(&rd);
                     }
                 }
                 self.decoder.bind(bind);
             }
-            Context::RowDescription(rd) => self.decoder.row_description(rd),
+            Context::RowDescription(rd) => {
+                self.decoder.row_description(rd);
+                self.validator.set_row_description(rd);
+            }
         }
     }
 }

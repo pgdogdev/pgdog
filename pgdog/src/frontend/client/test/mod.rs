@@ -10,11 +10,7 @@ use bytes::{Buf, BufMut, BytesMut};
 
 use crate::{
     backend::databases::databases,
-    config::{
-        config, set,
-        test::{load_test, load_test_replicas},
-        Role,
-    },
+    config::{config, load_test, load_test_replicas, set, Role},
     frontend::{
         client::{BufferEvent, QueryEngine},
         Client,
@@ -464,7 +460,6 @@ async fn test_transaction_state() {
     client.buffer(State::Idle).await.unwrap();
     client.client_messages(&mut engine).await.unwrap();
 
-    assert!(engine.router().routed());
     assert!(client.transaction.is_some());
     assert!(engine.router().route().is_write());
     assert!(engine.router().in_transaction());
@@ -494,10 +489,8 @@ async fn test_transaction_state() {
     .await
     .unwrap();
 
-    assert!(!engine.router().routed());
     client.buffer(State::Idle).await.unwrap();
     client.client_messages(&mut engine).await.unwrap();
-    assert!(engine.router().routed());
 
     for c in ['2', 'D', 'C', 'Z'] {
         let msg = engine.backend().read().await.unwrap();
@@ -508,7 +501,6 @@ async fn test_transaction_state() {
 
     read!(conn, ['2', 'D', 'C', 'Z']);
 
-    assert!(engine.router().routed());
     assert!(client.transaction.is_some());
     assert!(engine.router().route().is_write());
     assert!(engine.router().in_transaction());
@@ -530,11 +522,12 @@ async fn test_transaction_state() {
     read!(conn, ['C', 'Z']);
 
     assert!(client.transaction.is_none());
-    assert!(!engine.router().routed());
 }
 
 #[tokio::test]
 async fn test_close_parse() {
+    crate::logger();
+
     let (mut conn, mut client, mut engine) = new_client!(true);
 
     conn.write_all(&buffer!({ Close::named("test") }, { Sync }))
@@ -622,12 +615,157 @@ async fn test_prepared_syntax_error() {
 
     let stmts = client.prepared_statements.global.clone();
 
-    assert_eq!(stmts.lock().statements().iter().next().unwrap().1.used, 1);
+    assert_eq!(stmts.read().statements().iter().next().unwrap().1.used, 1);
 
     conn.write_all(&buffer!({ Terminate })).await.unwrap();
     let event = client.buffer(State::Idle).await.unwrap();
     assert_eq!(event, BufferEvent::DisconnectGraceful);
     drop(client);
 
-    assert_eq!(stmts.lock().statements().iter().next().unwrap().1.used, 0);
+    assert_eq!(stmts.read().statements().iter().next().unwrap().1.used, 0);
+}
+
+#[tokio::test]
+async fn test_close_parse_same_name_global_cache() {
+    let (mut conn, mut client, mut engine) = new_client!(false);
+
+    // Send Close and Parse for the same name with Flush
+    conn.write_all(&buffer!(
+        { Close::named("test_stmt") },
+        { Parse::named("test_stmt", "SELECT $1") },
+        { Flush }
+    ))
+    .await
+    .unwrap();
+
+    client.buffer(State::Idle).await.unwrap();
+    client.client_messages(&mut engine).await.unwrap();
+
+    // Read responses
+    for c in ['3', '1'] {
+        let msg = engine.backend().read().await.unwrap();
+        assert_eq!(msg.code(), c);
+        client.server_message(&mut engine, msg).await.unwrap();
+    }
+    read!(conn, ['3', '1']);
+
+    // Verify the statement is registered correctly in the global cache
+    let global_cache = client.prepared_statements.global.clone();
+    assert_eq!(global_cache.read().len(), 1);
+    let binding = global_cache.write();
+    let (_, cached_stmt) = binding.statements().iter().next().unwrap();
+    assert_eq!(cached_stmt.used, 1);
+
+    // Verify the SQL content in the global cache
+    let global_stmt_name = cached_stmt.name();
+    let cached_query = binding.query(&global_stmt_name).unwrap();
+    assert_eq!(cached_query, "SELECT $1");
+
+    // Verify the client's local cache
+    assert_eq!(client.prepared_statements.len_local(), 1);
+    assert!(client.prepared_statements.name("test_stmt").is_some());
+
+    conn.write_all(&buffer!({ Terminate })).await.unwrap();
+}
+
+#[tokio::test]
+async fn test_parse_describe_flush_bind_execute_close_sync() {
+    let (mut conn, mut client, _) = new_client!(false);
+
+    let handle = tokio::spawn(async move {
+        client.run().await.unwrap();
+    });
+
+    let mut buf = BytesMut::new();
+
+    buf.put(Parse::new_anonymous("SELECT 1").to_bytes().unwrap());
+    buf.put(Describe::new_statement("").to_bytes().unwrap());
+    buf.put(Flush.to_bytes().unwrap());
+
+    conn.write_all(&buf).await.unwrap();
+
+    let _ = read!(conn, ['1', 't', 'T']);
+
+    let mut buf = BytesMut::new();
+    buf.put(Bind::new_statement("").to_bytes().unwrap());
+    buf.put(Execute::new().to_bytes().unwrap());
+    buf.put(Close::named("").to_bytes().unwrap());
+    buf.put(Sync.to_bytes().unwrap());
+
+    conn.write_all(&buf).await.unwrap();
+
+    let _ = read!(conn, ['2', 'D', 'C', '3', 'Z']);
+
+    conn.write_all(&Terminate.to_bytes().unwrap())
+        .await
+        .unwrap();
+
+    handle.await.unwrap();
+}
+
+#[tokio::test]
+async fn test_client_login_timeout() {
+    use crate::{config::config, frontend::comms::comms};
+    use tokio::time::sleep;
+
+    crate::logger();
+    load_test();
+
+    let mut config = (*config()).clone();
+    config.config.general.client_login_timeout = 100;
+    set(config).unwrap();
+
+    let addr = "127.0.0.1:0".to_string();
+    let stream = TcpListener::bind(&addr).await.unwrap();
+    let port = stream.local_addr().unwrap().port();
+
+    let handle = tokio::spawn(async move {
+        let (stream, addr) = stream.accept().await.unwrap();
+        let stream = BufStream::new(stream);
+        let stream = Stream::Plain(stream);
+
+        let mut params = crate::net::parameter::Parameters::default();
+        params.insert("user", "pgdog");
+        params.insert("database", "pgdog");
+
+        Client::spawn(stream, params, addr, comms()).await
+    });
+
+    let conn = TcpStream::connect(&format!("127.0.0.1:{}", port))
+        .await
+        .unwrap();
+
+    sleep(Duration::from_millis(150)).await;
+
+    drop(conn);
+
+    handle.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn test_client_login_timeout_does_not_affect_queries() {
+    crate::logger();
+    load_test();
+
+    let mut config = (*config()).clone();
+    config.config.general.client_login_timeout = 100;
+    set(config).unwrap();
+
+    let (mut conn, mut client, _) = new_client!(false);
+
+    let handle = tokio::spawn(async move {
+        client.run().await.unwrap();
+    });
+
+    tokio::time::sleep(Duration::from_millis(150)).await;
+
+    let buf = buffer!({ Query::new("SELECT pg_sleep(0.2)") });
+    conn.write_all(&buf).await.unwrap();
+
+    let msgs = read!(conn, ['T', 'D', 'C', 'Z']);
+    assert_eq!(msgs[0][0] as char, 'T');
+    assert_eq!(msgs[3][0] as char, 'Z');
+
+    conn.write_all(&buffer!({ Terminate })).await.unwrap();
+    handle.await.unwrap();
 }

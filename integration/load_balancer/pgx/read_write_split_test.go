@@ -232,3 +232,93 @@ func TestTransactionsWithFunc(t *testing.T) {
 
 	assert.NoError(t, err)
 }
+
+func TestReadOnlyTransaction(t *testing.T) {
+	pool := GetPool()
+	defer pool.Close()
+
+	ResetStats()
+
+	_, err := pool.Exec(context.Background(), `CREATE TABLE IF NOT EXISTS lb_pgx_test_readonly (
+		id BIGINT,
+		data VARCHAR
+	)`)
+	assert.NoError(t, err)
+	defer pool.Exec(context.Background(), "DROP TABLE IF EXISTS lb_pgx_test_readonly")
+
+	// Wait for replicas to catch up
+	time.Sleep(2 * time.Second)
+
+	done := make(chan int)
+
+	for i := range 20 {
+		go func(clientId int) {
+			tx, err := pool.BeginTx(context.Background(), pgx.TxOptions{AccessMode: pgx.ReadOnly})
+			assert.NoError(t, err)
+
+			for j := range 5 {
+				_, err = tx.Exec(context.Background(), "SELECT $1::bigint, $2::bigint FROM lb_pgx_test_readonly", int64(clientId), int64(j))
+				assert.NoError(t, err)
+			}
+
+			err = tx.Commit(context.Background())
+			assert.NoError(t, err)
+			done <- 1
+		}(i)
+	}
+
+	for range 20 {
+		<-done
+	}
+
+	replicaCalls := LoadStatsForReplicas("lb_pgx_test_readonly")
+	assert.Equal(t, 2, len(replicaCalls))
+
+	totalCalls := int64(0)
+	for _, call := range replicaCalls {
+		totalCalls += call.Calls
+	}
+	assert.Equal(t, int64(100), totalCalls)
+}
+
+func TestRegularTransaction(t *testing.T) {
+	pool := GetPool()
+	defer pool.Close()
+
+	_, err := pool.Exec(context.Background(), `CREATE TABLE IF NOT EXISTS lb_pgx_test_regular (
+		id BIGINT,
+		data VARCHAR
+	)`)
+	assert.NoError(t, err)
+	defer pool.Exec(context.Background(), "DROP TABLE IF EXISTS lb_pgx_test_regular")
+
+	// Wait for replicas to catch up
+	time.Sleep(2 * time.Second)
+
+	ResetStats()
+
+	done := make(chan int)
+
+	for i := range 20 {
+		go func(clientId int) {
+			tx, err := pool.Begin(context.Background())
+			assert.NoError(t, err)
+
+			for j := range 5 {
+				_, err = tx.Exec(context.Background(), "SELECT $1::bigint, $2::bigint FROM lb_pgx_test_regular", int64(clientId), int64(j))
+				assert.NoError(t, err)
+			}
+
+			err = tx.Commit(context.Background())
+			assert.NoError(t, err)
+			done <- 1
+		}(i)
+	}
+
+	for range 20 {
+		<-done
+	}
+
+	primaryCalls := LoadStatsForPrimary("lb_pgx_test_regular")
+	assert.Equal(t, int64(100), primaryCalls.Calls)
+}

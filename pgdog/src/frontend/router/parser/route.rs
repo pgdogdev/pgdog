@@ -1,6 +1,8 @@
 use std::fmt::Display;
 
-use super::{Aggregate, DistinctBy, FunctionBehavior, Limit, LockingBehavior, OrderBy};
+use super::{
+    Aggregate, DistinctBy, FunctionBehavior, Limit, LockingBehavior, OrderBy, RewritePlan,
+};
 
 #[derive(Debug, Clone, PartialEq, PartialOrd, Ord, Eq, Hash, Default)]
 pub enum Shard {
@@ -46,7 +48,7 @@ impl From<Option<usize>> for Shard {
 
 /// Path a query should take and any transformations
 /// that should be applied along the way.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Route {
     shard: Shard,
     read: bool,
@@ -55,6 +57,9 @@ pub struct Route {
     limit: Limit,
     lock_session: bool,
     distinct: Option<DistinctBy>,
+    maintenance: bool,
+    rewrite_plan: RewritePlan,
+    rewritten_sql: Option<String>,
 }
 
 impl Display for Route {
@@ -139,6 +144,10 @@ impl Route {
         &self.aggregate
     }
 
+    pub fn aggregate_mut(&mut self) -> &mut Aggregate {
+        &mut self.aggregate
+    }
+
     pub fn set_shard_mut(&mut self, shard: usize) {
         self.shard = Shard::Direct(shard);
     }
@@ -146,6 +155,15 @@ impl Route {
     pub fn set_shard(mut self, shard: usize) -> Self {
         self.set_shard_mut(shard);
         self
+    }
+
+    pub fn set_maintenace(mut self) -> Self {
+        self.maintenance = true;
+        self
+    }
+
+    pub fn is_maintenance(&self) -> bool {
+        self.maintenance
     }
 
     pub fn set_shard_raw_mut(&mut self, shard: &Shard) {
@@ -194,5 +212,35 @@ impl Route {
 
     pub fn distinct(&self) -> &Option<DistinctBy> {
         &self.distinct
+    }
+
+    pub fn should_2pc(&self) -> bool {
+        self.is_cross_shard() && self.is_write() && !self.is_maintenance()
+    }
+
+    pub fn rewrite_plan(&self) -> &RewritePlan {
+        &self.rewrite_plan
+    }
+
+    pub fn rewrite_plan_mut(&mut self) -> &mut RewritePlan {
+        &mut self.rewrite_plan
+    }
+
+    pub fn set_rewrite(&mut self, plan: RewritePlan, sql: String) {
+        self.rewrite_plan = plan;
+        self.rewritten_sql = Some(sql);
+    }
+
+    pub fn clear_rewrite(&mut self) {
+        self.rewrite_plan = RewritePlan::new();
+        self.rewritten_sql = None;
+    }
+
+    pub fn rewritten_sql(&self) -> Option<&str> {
+        self.rewritten_sql.as_deref()
+    }
+
+    pub fn take_rewritten_sql(&mut self) -> Option<String> {
+        self.rewritten_sql.take()
     }
 }

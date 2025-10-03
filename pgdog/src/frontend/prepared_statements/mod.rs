@@ -3,9 +3,10 @@
 use std::{collections::HashMap, sync::Arc};
 
 use once_cell::sync::Lazy;
-use parking_lot::Mutex;
+use parking_lot::RwLock;
 
 use crate::{
+    frontend::router::parser::RewritePlan,
     net::{Parse, ProtocolMessage},
     stats::memory::MemoryUsage,
 };
@@ -23,7 +24,7 @@ static CACHE: Lazy<PreparedStatements> = Lazy::new(PreparedStatements::default);
 
 #[derive(Clone, Debug)]
 pub struct PreparedStatements {
-    pub(super) global: Arc<Mutex<GlobalCache>>,
+    pub(super) global: Arc<RwLock<GlobalCache>>,
     pub(super) local: HashMap<String, String>,
     pub(super) enabled: bool,
     pub(super) capacity: usize,
@@ -36,14 +37,14 @@ impl MemoryUsage for PreparedStatements {
         self.local.memory_usage()
             + self.enabled.memory_usage()
             + self.capacity.memory_usage()
-            + std::mem::size_of::<Arc<Mutex<GlobalCache>>>()
+            + std::mem::size_of::<Arc<RwLock<GlobalCache>>>()
     }
 }
 
 impl Default for PreparedStatements {
     fn default() -> Self {
         Self {
-            global: Arc::new(Mutex::new(GlobalCache::default())),
+            global: Arc::new(RwLock::new(GlobalCache::default())),
             local: HashMap::default(),
             enabled: true,
             capacity: usize::MAX,
@@ -59,20 +60,20 @@ impl PreparedStatements {
     }
 
     /// Get global cache.
-    pub fn global() -> Arc<Mutex<GlobalCache>> {
+    pub fn global() -> Arc<RwLock<GlobalCache>> {
         Self::new().global.clone()
     }
 
     /// Maybe rewrite message.
-    pub fn maybe_rewrite(&mut self, message: ProtocolMessage) -> Result<ProtocolMessage, Error> {
+    pub fn maybe_rewrite(&mut self, message: &mut ProtocolMessage) -> Result<(), Error> {
         let mut rewrite = Rewrite::new(self);
-        let message = rewrite.rewrite(message)?;
-        Ok(message)
+        rewrite.rewrite(message)?;
+        Ok(())
     }
 
     /// Register prepared statement with the global cache.
-    pub fn insert(&mut self, parse: Parse) -> Parse {
-        let (_new, name) = { self.global.lock().insert(&parse) };
+    pub fn insert(&mut self, parse: &mut Parse) {
+        let (_new, name) = { self.global.write().insert(parse) };
         let existed = self.local.insert(parse.name().to_owned(), name.clone());
         self.memory_used = self.memory_usage();
 
@@ -81,7 +82,7 @@ impl PreparedStatements {
         // condition which happens very infrequently, so we optimize for the happy path.
         if existed.is_some() {
             {
-                self.global.lock().decrement(&name);
+                self.global.write().decrement(&name);
             }
         }
 
@@ -89,11 +90,27 @@ impl PreparedStatements {
     }
 
     /// Insert statement into the cache bypassing duplicate checks.
-    pub fn insert_anyway(&mut self, parse: Parse) -> Parse {
-        let name = self.global.lock().insert_anyway(&parse);
+    pub fn insert_anyway(&mut self, parse: &mut Parse) {
+        let name = { self.global.write().insert_anyway(parse) };
         self.local.insert(parse.name().to_owned(), name.clone());
         self.memory_used = self.memory_usage();
         parse.rename_fast(&name)
+    }
+
+    /// Retrieve stored rewrite plan for a prepared statement, if any.
+    pub fn rewrite_plan(&self, name: &str) -> Option<RewritePlan> {
+        self.global.read().rewrite_plan(name)
+    }
+
+    pub fn update_and_set_rewrite_plan(
+        &mut self,
+        name: &str,
+        sql: &str,
+        plan: RewritePlan,
+    ) -> bool {
+        self.global
+            .write()
+            .update_and_set_rewrite_plan(name, sql, plan)
     }
 
     /// Get global statement counter.
@@ -114,7 +131,9 @@ impl PreparedStatements {
     /// Remove prepared statement from local cache.
     pub fn close(&mut self, name: &str) {
         if let Some(global_name) = self.local.remove(name) {
-            self.global.lock().close(&global_name, self.capacity);
+            {
+                self.global.write().close(&global_name, self.capacity);
+            }
             self.memory_used = self.memory_usage();
         }
     }
@@ -122,7 +141,7 @@ impl PreparedStatements {
     /// Close all prepared statements on this client.
     pub fn close_all(&mut self) {
         if !self.local.is_empty() {
-            let mut global = self.global.lock();
+            let mut global = self.global.write();
 
             for global_name in self.local.values() {
                 global.close(global_name, self.capacity);
@@ -150,52 +169,52 @@ mod test {
         let mut statements = PreparedStatements::default();
         statements.capacity = 0;
 
-        let messages = vec![
-            Parse::named("__sqlx_1", "SELECT 1").into(),
-            Bind::new_statement("__sqlx_1").into(),
+        let mut messages = vec![
+            ProtocolMessage::from(Parse::named("__sqlx_1", "SELECT 1")),
+            ProtocolMessage::from(Bind::new_statement("__sqlx_1")),
         ];
 
-        for message in messages {
+        for message in &mut messages {
             statements.maybe_rewrite(message).unwrap();
         }
 
         assert_eq!(statements.local.len(), 1);
-        assert_eq!(statements.global.lock().names().len(), 1);
+        assert_eq!(statements.global.read().names().len(), 1);
 
         statements.close_all();
 
         assert!(statements.local.is_empty());
-        assert!(statements.global.lock().names().is_empty());
+        assert!(statements.global.read().names().is_empty());
 
-        let messages = vec![
-            Parse::named("__sqlx_1", "SELECT 1").into(),
-            Bind::new_statement("__sqlx_1").into(),
+        let mut messages = vec![
+            ProtocolMessage::from(Parse::named("__sqlx_1", "SELECT 1")),
+            ProtocolMessage::from(Bind::new_statement("__sqlx_1")),
         ];
 
-        for message in messages {
+        for message in &mut messages {
             statements.maybe_rewrite(message).unwrap();
         }
 
         assert_eq!(statements.local.len(), 1);
-        assert_eq!(statements.global.lock().names().len(), 1);
+        assert_eq!(statements.global.read().names().len(), 1);
 
         statements.close("__sqlx_1");
 
         assert!(statements.local.is_empty());
-        assert!(statements.global.lock().names().is_empty());
+        assert!(statements.global.read().names().is_empty());
     }
 
     #[test]
     fn test_counted_only_once_per_client() {
         let mut statements = PreparedStatements::default();
 
-        let messages = vec![
-            Parse::named("__sqlx_1", "SELECT 1").into(),
-            Bind::new_statement("__sqlx_1").into(),
-        ];
-
         for _ in 0..25 {
-            for message in messages.clone() {
+            let mut messages = vec![
+                ProtocolMessage::from(Parse::named("__sqlx_1", "SELECT 1")),
+                ProtocolMessage::from(Bind::new_statement("__sqlx_1")),
+            ];
+
+            for message in &mut messages {
                 statements.maybe_rewrite(message).unwrap();
             }
         }
@@ -203,7 +222,7 @@ mod test {
         assert_eq!(
             statements
                 .global
-                .lock()
+                .read()
                 .statements()
                 .iter()
                 .next()
@@ -218,7 +237,7 @@ mod test {
         assert_eq!(
             statements
                 .global
-                .lock()
+                .read()
                 .statements()
                 .iter()
                 .next()

@@ -177,10 +177,9 @@ impl Bind {
     }
 
     /// Rename this Bind message to a different prepared statement.
-    pub fn rename(mut self, name: impl ToString) -> Self {
+    pub fn rename(&mut self, name: impl ToString) {
         self.statement = Bytes::from(name.to_string() + "\0");
         self.original = None;
-        self
     }
 
     /// Is this Bind message anonymous?
@@ -263,15 +262,15 @@ impl FromBytes for Bind {
         from_utf8(&portal[0..portal.len() - 1])?;
         from_utf8(&statement[0..statement.len() - 1])?;
 
-        let num_codes = bytes.get_i16();
-        let codes = (0..num_codes)
+        let num_codes = bytes.get_u16();
+        let codes = (0..num_codes as usize)
             .map(|_| match bytes.get_i16() {
                 0 => Format::Text,
                 _ => Format::Binary,
             })
             .collect();
-        let num_params = bytes.get_i16();
-        let params = (0..num_params)
+        let num_params = bytes.get_u16();
+        let params = (0..num_params as usize)
             .map(|_| {
                 let len = bytes.get_i32();
                 let data = if len >= 0 {
@@ -310,14 +309,14 @@ impl ToBytes for Bind {
 
         payload.put(self.portal.clone());
         payload.put(self.statement.clone());
-        payload.put_i16(self.codes.len() as i16);
+        payload.put_u16(self.codes.len() as u16);
         for code in &self.codes {
             payload.put_i16(match code {
                 Format::Text => 0,
                 Format::Binary => 1,
             });
         }
-        payload.put_i16(self.params.len() as i16);
+        payload.put_u16(self.params.len() as u16);
         for param in &self.params {
             payload.put_i32(param.len);
             payload.put(&param.data[..]);
@@ -434,5 +433,20 @@ mod test {
             }
             assert_eq!(msg.code(), c);
         }
+    }
+
+    #[test]
+    fn test_large_parameter_count_round_trip() {
+        let count = 35_000;
+        let params: Vec<Parameter> = (0..count).map(|_| Parameter::new_null()).collect();
+        let bind = Bind::new_params("__pgdog_large", &params);
+
+        let bytes = bind.to_bytes().unwrap();
+        let decoded = Bind::from_bytes(bytes.clone()).unwrap();
+
+        assert_eq!(decoded.params_raw().len(), count);
+        assert_eq!(decoded.codes().len(), 0);
+        assert_eq!(decoded.statement(), "__pgdog_large");
+        assert_eq!(bytes.len(), decoded.len());
     }
 }

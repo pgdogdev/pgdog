@@ -3,6 +3,7 @@ use std::collections::HashSet;
 
 use crate::{
     backend::{databases::databases, ShardingSchema},
+    config::Role,
     frontend::{
         router::{
             context::RouterContext,
@@ -133,27 +134,14 @@ impl QueryParser {
             }
         }
 
-        // e.g. Parse, Describe, Flush
-        // if !context.router_context.executable {
-        //     return Ok(Command::Query(
-        //         Route::write(Shard::Direct(round_robin::next() % context.shards))
-        //             .set_read(context.read_only),
-        //     ));
-        // }
-
-        // Parse hardcoded shard from a query comment.
-        if context.router_needed {
-            if let Some(BufferedQuery::Query(ref query)) = context.router_context.query {
-                self.shard = super::comment::shard(query.query(), &context.sharding_schema)?;
-            }
-        }
-
         let cache = Cache::get();
 
         // Get the AST from cache or parse the statement live.
         let statement = match context.query()? {
             // Only prepared statements (or just extended) are cached.
-            BufferedQuery::Prepared(query) => cache.parse(query.query()).map_err(Error::PgQuery)?,
+            BufferedQuery::Prepared(query) => {
+                cache.parse(query.query(), &context.sharding_schema)?
+            }
             // Don't cache simple queries.
             //
             // They contain parameter values, which makes the cache
@@ -162,13 +150,21 @@ impl QueryParser {
             // Make your clients use prepared statements
             // or at least send statements with placeholders using the
             // extended protocol.
-            BufferedQuery::Query(query) => cache
-                .parse_uncached(query.query())
-                .map_err(Error::PgQuery)?,
+            BufferedQuery::Query(query) => {
+                cache.parse_uncached(query.query(), &context.sharding_schema)?
+            }
         };
 
+        // Parse hardcoded shard from a query comment.
+        if context.router_needed || context.dry_run {
+            self.shard = statement.shard.clone();
+            if let Some(role) = statement.role {
+                self.write_override = role == Role::Primary;
+            }
+        }
+
         debug!("{}", context.query()?.query());
-        trace!("{:#?}", statement.ast());
+        trace!("{:#?}", statement);
 
         let rewrite = Rewrite::new(statement.ast());
         if rewrite.needs_rewrite() {
@@ -195,15 +191,16 @@ impl QueryParser {
         // We don't expect clients to send multiple queries. If they do
         // only the first one is used for routing.
         //
-        let root = statement
-            .ast()
-            .protobuf
-            .stmts
-            .first()
-            .ok_or(Error::EmptyQuery)?
-            .stmt
-            .as_ref()
-            .ok_or(Error::EmptyQuery)?;
+        let root = statement.ast().protobuf.stmts.first();
+
+        let root = if let Some(root) = root {
+            root.stmt.as_ref().ok_or(Error::EmptyQuery)?
+        } else {
+            // Send empty query to any shard.
+            return Ok(Command::Query(Route::read(Shard::Direct(
+                round_robin::next() % context.shards,
+            ))));
+        };
 
         let mut command = match root.node {
             // SET statements -> return immediately.
@@ -215,7 +212,7 @@ impl QueryParser {
                 return Ok(Command::Deallocate);
             }
             // SELECT statements.
-            Some(NodeEnum::SelectStmt(ref stmt)) => self.select(stmt, context),
+            Some(NodeEnum::SelectStmt(ref stmt)) => self.select(statement.ast(), stmt, context),
             // COPY statements.
             Some(NodeEnum::CopyStmt(ref stmt)) => Self::copy(stmt, context),
             // INSERT statements.
@@ -261,12 +258,32 @@ impl QueryParser {
                 return Ok(Command::Unlisten(stmt.conditionname.clone()));
             }
 
-            Some(NodeEnum::ExplainStmt(ref stmt)) => self.explain(stmt, context),
+            Some(NodeEnum::ExplainStmt(ref stmt)) => self.explain(statement.ast(), stmt, context),
+
+            // VACUUM.
+            Some(NodeEnum::VacuumRelation(_)) | Some(NodeEnum::VacuumStmt(_)) => {
+                Ok(Command::Query(Route::write(None).set_maintenace()))
+            }
+
+            Some(NodeEnum::DiscardStmt { .. }) => {
+                return Ok(Command::Discard {
+                    extended: !context.query()?.simple(),
+                })
+            }
 
             // All others are not handled.
             // They are sent to all shards concurrently.
             _ => Ok(Command::Query(Route::write(None))),
         }?;
+
+        // e.g. Parse, Describe, Flush-style flow.
+        if !context.router_context.executable {
+            if let Command::Query(query) = command {
+                return Ok(Command::Query(
+                    query.set_shard(round_robin::next() % context.shards),
+                ));
+            }
+        }
 
         // Run plugins, if any.
         self.plugins(
@@ -340,9 +357,11 @@ impl QueryParser {
         if context.dry_run {
             // Record statement in cache with normalized parameters.
             if !statement.cached {
-                cache
-                    .record_normalized(context.query()?.query(), command.route())
-                    .map_err(Error::PgQuery)?;
+                cache.record_normalized(
+                    context.query()?.query(),
+                    command.route(),
+                    &context.sharding_schema,
+                )?;
             }
             Ok(command.dry_run())
         } else {

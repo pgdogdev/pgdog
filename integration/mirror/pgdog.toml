@@ -1,5 +1,6 @@
 [general]
 mirror_exposure = 1.0
+openmetrics_port = 9090
 
 [[databases]]
 name = "pgdog"
@@ -9,7 +10,10 @@ host = "127.0.0.1"
 name = "pgdog_mirror"
 host = "127.0.0.1"
 database_name = "pgdog1"
-mirror_of = "pgdog"
+
+[[mirroring]]
+source_db = "pgdog"
+destination_db = "pgdog_mirror"
 
 [admin]
 password = "pgdog"

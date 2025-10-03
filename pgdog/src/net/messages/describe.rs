@@ -1,4 +1,5 @@
 //! Describe (F) message.
+use std::fmt::Debug;
 use std::str::from_utf8;
 use std::str::from_utf8_unchecked;
 
@@ -6,10 +7,19 @@ use super::code;
 use super::prelude::*;
 
 /// Describe (F) message.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Describe {
     payload: Bytes,
     original: Option<Bytes>,
+}
+
+impl Debug for Describe {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Describe")
+            .field("kind", &self.kind())
+            .field("name", &self.statement())
+            .finish()
+    }
 }
 
 impl FromBytes for Describe {
@@ -51,14 +61,12 @@ impl Describe {
         self.kind() != 'S' || self.statement().is_empty()
     }
 
-    pub fn rename(self, name: impl ToString) -> Self {
+    pub fn rename(&mut self, name: impl ToString) {
         let mut payload = Payload::named('D');
         payload.put_u8(self.kind() as u8);
         payload.put_string(&name.to_string());
-        Describe {
-            payload: payload.freeze(),
-            original: None,
-        }
+        self.payload = payload.freeze();
+        self.original = None;
     }
 
     pub fn new_statement(name: &str) -> Describe {

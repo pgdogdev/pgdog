@@ -7,6 +7,7 @@ use thiserror::Error;
 use tokio::{select, signal::ctrl_c};
 use tracing::error;
 
+use crate::backend::schema::sync::config::ShardConfig;
 use crate::backend::schema::sync::pg_dump::{PgDump, SyncState};
 use crate::backend::{databases::databases, replication::logical::Publisher};
 use crate::config::{Config, Users};
@@ -31,7 +32,7 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum Commands {
-    /// Run pgDog.
+    /// Start PgDog.
     Run {
         /// Size of the connection pool.
         #[arg(short, long)]
@@ -54,15 +55,8 @@ pub enum Commands {
         path: Option<PathBuf>,
     },
 
-    /// Check configuration.
-    Configcheck {
-        /// Path to the configuration file.
-        #[arg(short, long)]
-        config: Option<PathBuf>,
-        /// Path to the users.toml file.
-        #[arg(short, long)]
-        users: Option<PathBuf>,
-    },
+    /// Check configuration files for errors.
+    Configcheck,
 
     /// Copy data from source to destination cluster
     /// using logical replication.
@@ -89,14 +83,11 @@ pub enum Commands {
         replicate: bool,
     },
 
-    /// Schema synchronization between source and destination clusters.
+    /// Copy schema from source to destination cluster.
     SchemaSync {
         /// Source database name.
         #[arg(long)]
         from_database: String,
-        /// Source user name.
-        #[arg(long)]
-        from_user: String,
         /// Publication name.
         #[arg(long)]
         publication: String,
@@ -104,9 +95,6 @@ pub enum Commands {
         /// Destination database.
         #[arg(long)]
         to_database: String,
-        /// Destination user name.
-        #[arg(long)]
-        to_user: String,
 
         /// Dry run. Print schema commands, don't actually execute them.
         #[arg(long)]
@@ -119,6 +107,14 @@ pub enum Commands {
         /// Data sync has been complete.
         #[arg(long)]
         data_sync_complete: bool,
+    },
+
+    /// Perform cluster configuration steps
+    /// required for sharded operations.
+    Setup {
+        /// Database name.
+        #[arg(long)]
+        database: String,
     },
 }
 
@@ -251,17 +247,15 @@ pub async fn schema_sync(commands: Commands) -> Result<(), Box<dyn std::error::E
     let (source, destination, publication, dry_run, ignore_errors, data_sync_complete) =
         if let Commands::SchemaSync {
             from_database,
-            from_user,
             to_database,
-            to_user,
             publication,
             dry_run,
             ignore_errors,
             data_sync_complete,
         } = commands
         {
-            let source = databases().cluster((from_user.as_str(), from_database.as_str()))?;
-            let dest = databases().cluster((to_user.as_str(), to_database.as_str()))?;
+            let source = databases().schema_owner(&from_database)?;
+            let dest = databases().schema_owner(&to_database)?;
 
             (
                 source,
@@ -283,16 +277,27 @@ pub async fn schema_sync(commands: Commands) -> Result<(), Box<dyn std::error::E
         SyncState::PreData
     };
 
-    for output in output {
-        if dry_run {
-            let queries = output.statements(state)?;
-            for query in queries {
-                println!("{}", query.deref());
-            }
-        } else {
-            output.restore(&destination, ignore_errors, state).await?;
-        }
+    if state == SyncState::PreData {
+        ShardConfig::sync_all(&destination).await?;
     }
+
+    if dry_run {
+        let queries = output.statements(state)?;
+        for query in queries {
+            println!("{}", query.deref());
+        }
+    } else {
+        output.restore(&destination, ignore_errors, state).await?;
+    }
+
+    Ok(())
+}
+
+pub async fn setup(database: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let databases = databases();
+    let schema_owner = databases.schema_owner(database)?;
+
+    ShardConfig::sync_all(&schema_owner).await?;
 
     Ok(())
 }

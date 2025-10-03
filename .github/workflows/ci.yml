@@ -13,6 +13,7 @@ jobs:
           override: true
       - name: Install CMake 3.31
         run: |
+          sudo apt update && sudo apt install mold -y
           sudo apt remove cmake
           sudo pip3 install cmake==3.31.6
           cmake --version
@@ -31,6 +32,7 @@ jobs:
           override: true
       - name: Install CMake 3.31
         run: |
+          sudo apt update && sudo apt install mold -y
           sudo apt remove cmake
           sudo pip3 install cmake==3.31.6
           cmake --version
@@ -46,6 +48,7 @@ jobs:
         with:
           toolchain: stable
           override: true
+          components: llvm-tools-preview
       - uses: useblacksmith/rust-cache@v3
         with:
           prefix-key: "v1" # Change this when updating tooling
@@ -54,8 +57,10 @@ jobs:
           sudo service postgresql start
           sudo -u postgres createuser --superuser --login $USER
           sudo -u postgres createdb $USER
+          sudo -u postgres psql -c 'ALTER SYSTEM SET max_prepared_transactions TO 1000;'
+          sudo service postgresql restart
           bash integration/setup.sh
-          sudo apt update && sudo apt install -y python3-virtualenv
+          sudo apt update && sudo apt install -y python3-virtualenv mold
           sudo gem install bundler
           sudo apt remove -y cmake
           sudo pip3 install cmake==3.31.6
@@ -64,18 +69,35 @@ jobs:
           bash integration/toxi/setup.sh
       - name: Install test dependencies
         run: cargo install cargo-nextest --version "0.9.78" --locked
-      - name: Run tests
-        run: cargo nextest run -E 'package(pgdog)' --no-fail-fast --test-threads=1
+      - name: Install coverage tooling
+        run: cargo install cargo-llvm-cov --locked --version "0.6.10"
+      - name: Run tests with coverage
+        env:
+          RUSTFLAGS: "-C link-dead-code"
+        run: |
+          cargo llvm-cov clean --workspace
+          cargo llvm-cov nextest --lcov --output-path lcov.info --no-fail-fast --test-threads=1 --filter-expr "package(pgdog)"
       - name: Run documentation tests
         run: cargo test --doc
+      # Requires CODECOV_TOKEN secret for upload
+      - uses: codecov/codecov-action@v4
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+        with:
+          files: lcov.info
+          flags: unit
+          fail_ci_if_error: true
   integration:
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    env:
+      LLVM_PROFILE_FILE: ${{ github.workspace }}/target/llvm-cov-target/profiles/pgdog-%p-%m.profraw
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
           override: true
+          components: llvm-tools-preview
       - uses: useblacksmith/rust-cache@v3
         with:
           prefix-key: release-1
@@ -84,8 +106,11 @@ jobs:
           sudo service postgresql start
           sudo -u postgres createuser --superuser --login $USER
           sudo -u postgres createdb $USER
+          sudo -u postgres psql -c 'ALTER SYSTEM SET max_connections TO 1000;'
+          sudo -u postgres psql -c 'ALTER SYSTEM SET max_prepared_transactions TO 1000;'
+          sudo service postgresql restart
           bash integration/setup.sh
-          sudo apt update && sudo apt install -y python3-virtualenv
+          sudo apt update && sudo apt install -y python3-virtualenv mold
           sudo gem install bundler
           sudo apt remove -y cmake
           sudo pip3 install cmake==3.31.6
@@ -94,32 +119,71 @@ jobs:
           bash integration/toxi/setup.sh
           sudo curl -SL https://github.com/docker/compose/releases/download/v2.36.1/docker-compose-linux-x86_64 -o /usr/local/bin/docker-compose
           sudo chmod +x /usr/local/bin/docker-compose
-      - name: Build PgDog
-        run: cargo build --release
-      - name: Load balancer
-        run: bash integration/load_balancer/run.sh
+      - name: Install coverage tooling
+        run: cargo install cargo-llvm-cov --locked --version "0.6.10"
+      - name: Prepare instrumented PgDog build
+        env:
+          RUSTFLAGS: "-C link-dead-code"
+        run: |
+          cargo llvm-cov clean --workspace
+          mkdir -p target/llvm-cov-target/profiles
+          cargo llvm-cov run --no-report --release --package pgdog --bin pgdog -- --help
+          rm -f target/llvm-cov-target/profiles/*.profraw
+          rm -f target/llvm-cov-target/profiles/.last_snapshot
+          rm -rf target/llvm-cov-target/reports
+          BIN_PATH=$(find target/llvm-cov-target -type f -path '*/release/pgdog' | head -n 1)
+          if [ -z "$BIN_PATH" ]; then
+            echo "Instrumented PgDog binary not found" >&2
+            exit 1
+          fi
+          echo "Using instrumented binary at $BIN_PATH"
+          echo "PGDOG_BIN=$(realpath "$BIN_PATH")" >> "$GITHUB_ENV"
       - name: pgbench
         run: bash integration/pgbench/run.sh
+      - name: schema-sync
+        run: bash integration/schema_sync/run.sh
       - name: Go
         run: bash integration/go/run.sh
       - name: JavaScript
         run: bash integration/js/pg_tests/run.sh
-      - name: Toxi
-        run: bash integration/toxi/run.sh
-      - name: Python
-        run: bash integration/python/run.sh
       - name: Ruby
         run: bash integration/ruby/run.sh
       - name: Java
         run: bash integration/java/run.sh
-      - name: More complex stuff
-        run: bash integration/complex/run.sh
+      - name: SQL
+        run: bash integration/sql/run.sh
+      - name: Toxi
+        run: bash integration/toxi/run.sh
       - name: Rust
         run: bash integration/rust/run.sh
+      - name: Stop shared PgDog
+        run: bash -lc 'source integration/common.sh; stop_pgdog'
+      - name: Python
+        run: bash integration/python/run.sh
+      - name: Load balancer
+        run: bash integration/load_balancer/run.sh
+      - name: More complex stuff
+        run: bash integration/complex/run.sh
       - name: Dry run
         run: bash integration/dry_run/run.sh
       # - name: Plugins
       #   run: bash integration/plugins/run.sh
+      - name: Ensure PgDog stopped
+        run: |
+          if pgrep -x pgdog > /dev/null; then
+            killall -TERM pgdog
+            sleep 5
+          fi
+      - name: Generate integration coverage report
+        run: cargo llvm-cov report --release --package pgdog --lcov --output-path integration.lcov
+      # Requires CODECOV_TOKEN secret for upload
+      - uses: codecov/codecov-action@v4
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+        with:
+          files: integration.lcov
+          flags: integration
+          fail_ci_if_error: true
   plugin-unit-tests:
     runs-on: blacksmith-4vcpu-ubuntu-2404
     continue-on-error: true

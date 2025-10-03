@@ -2,8 +2,9 @@
 
 use crate::net::Decoder;
 
-use super::{code, prelude::*, Datum, Format, FromDataType, Numeric, RowDescription};
-use bytes::BytesMut;
+use super::{
+    code, prelude::*, Datum, Double, Float, Format, FromDataType, Numeric, RowDescription,
+};
 use std::ops::{Deref, DerefMut};
 
 #[derive(Debug, Clone, Eq, Hash, PartialEq)]
@@ -101,6 +102,15 @@ impl ToDataRowColumn for i64 {
     }
 }
 
+impl ToDataRowColumn for Option<i64> {
+    fn to_data_row_column(&self) -> Data {
+        match self {
+            Some(value) => ToDataRowColumn::to_data_row_column(value),
+            None => Data::null(),
+        }
+    }
+}
+
 impl ToDataRowColumn for usize {
     fn to_data_row_column(&self) -> Data {
         Bytes::copy_from_slice(self.to_string().as_bytes()).into()
@@ -151,12 +161,49 @@ impl DataRow {
 
     /// Insert column at index. If row is smaller than index,
     /// columns will be prefilled with NULLs.
-    pub fn insert(&mut self, index: usize, value: impl ToDataRowColumn) -> &mut Self {
+    pub fn insert(
+        &mut self,
+        index: usize,
+        value: impl ToDataRowColumn,
+        is_null: bool,
+    ) -> &mut Self {
         while self.columns.len() <= index {
             self.columns.push(Data::null());
         }
-        self.columns[index] = value.to_data_row_column();
+        let mut data = value.to_data_row_column();
+        data.is_null = is_null;
+        self.columns[index] = data;
         self
+    }
+
+    /// Drop columns by 0-based index, ignoring indexes out of bounds.
+    pub fn drop_columns(&mut self, drop: &[usize]) {
+        if drop.is_empty() {
+            return;
+        }
+
+        let mut indices = drop.to_vec();
+        indices.sort_unstable();
+        indices.dedup();
+
+        if indices.is_empty() {
+            return;
+        }
+
+        let mut dropped = indices.into_iter().peekable();
+        let mut retained = Vec::with_capacity(self.columns.len());
+
+        for (idx, column) in self.columns.drain(..).enumerate() {
+            match dropped.peek() {
+                Some(&drop_idx) if drop_idx == idx => {
+                    dropped.next();
+                }
+                _ => retained.push(column),
+            }
+        }
+
+        // Any remaining indexes are beyond the current column count; ignore.
+        self.columns = retained;
     }
 
     /// Create data row from columns.
@@ -181,8 +228,19 @@ impl DataRow {
 
     // Get float at index with text/binary encoding.
     pub fn get_float(&self, index: usize, text: bool) -> Option<f64> {
+        self.get::<Float>(index, if text { Format::Text } else { Format::Binary })
+            .map(|float| float.0 as f64)
+    }
+
+    // Get numeric at index with text/binary encoding.
+    pub fn get_numeric(&self, index: usize, text: bool) -> Option<Numeric> {
         self.get::<Numeric>(index, if text { Format::Text } else { Format::Binary })
-            .map(|numeric| *numeric.deref())
+    }
+
+    // Get double at index with text/binary encoding.
+    pub fn get_double(&self, index: usize, text: bool) -> Option<f64> {
+        self.get::<Double>(index, if text { Format::Text } else { Format::Binary })
+            .map(|double| double.0)
     }
 
     /// Get text value at index.
@@ -203,10 +261,15 @@ impl DataRow {
         decoder: &'a Decoder,
     ) -> Result<Option<Column<'a>>, Error> {
         if let Some(field) = decoder.rd().field(index) {
-            if let Some(data) = self.column(index) {
+            if let Some(data) = self.columns.get(index) {
                 return Ok(Some(Column {
                     name: field.name.as_str(),
-                    value: Datum::new(&data, field.data_type(), decoder.format(index))?,
+                    value: Datum::new(
+                        &data.data,
+                        field.data_type(),
+                        decoder.format(index),
+                        data.is_null,
+                    )?,
                 }));
             }
         }
@@ -219,10 +282,10 @@ impl DataRow {
         let mut row = vec![];
 
         for (index, field) in rd.fields.iter().enumerate() {
-            if let Some(data) = self.column(index) {
+            if let Some(data) = self.columns.get(index) {
                 row.push(Column {
                     name: field.name.as_str(),
-                    value: Datum::new(&data, field.data_type(), field.format())?,
+                    value: Datum::new(&data.data, field.data_type(), field.format(), data.is_null)?,
                 });
             }
         }
@@ -257,17 +320,13 @@ impl FromBytes for DataRow {
         let columns = (0..bytes.get_i16())
             .map(|_| {
                 let len = bytes.get_i32() as isize; // NULL = -1
-                let mut column = BytesMut::new();
 
                 if len < 0 {
-                    return (column.freeze(), true);
+                    return (Bytes::new(), true);
                 }
 
-                for _ in 0..len {
-                    column.put_u8(bytes.get_u8());
-                }
-
-                (column.freeze(), false)
+                let column = bytes.split_to(len as usize);
+                (column, false)
             })
             .map(Data::from)
             .collect();
@@ -307,9 +366,51 @@ mod test {
     #[test]
     fn test_insert() {
         let mut dr = DataRow::new();
-        dr.insert(4, "test");
+        dr.insert(4, "test", false);
         assert_eq!(dr.columns.len(), 5);
         assert_eq!(dr.get::<String>(4, Format::Text).unwrap(), "test");
         assert_eq!(dr.get::<String>(0, Format::Text).unwrap(), "");
+    }
+
+    #[test]
+    fn test_data_row_serde() {
+        let mut dr = DataRow::new();
+        dr.add("hello");
+        dr.add(42i64);
+        dr.add(true);
+        dr.add(Data::null());
+        dr.add("world");
+
+        let serialized = dr.to_bytes().unwrap();
+        let deserialized = DataRow::from_bytes(serialized).unwrap();
+
+        assert_eq!(deserialized.len(), 5);
+        assert_eq!(
+            deserialized.get::<String>(0, Format::Text).unwrap(),
+            "hello"
+        );
+        assert_eq!(deserialized.get::<String>(1, Format::Text).unwrap(), "42");
+        assert_eq!(deserialized.get::<String>(2, Format::Text).unwrap(), "t");
+        assert_eq!(deserialized.column(3), Some(Bytes::new()));
+        assert_eq!(
+            deserialized.get::<String>(4, Format::Text).unwrap(),
+            "world"
+        );
+
+        assert_eq!(dr, deserialized);
+    }
+
+    #[test]
+    fn test_drop_columns() {
+        let mut dr = DataRow::new();
+        dr.add("a");
+        dr.add("b");
+        dr.add("c");
+
+        dr.drop_columns(&[1, 5]);
+
+        assert_eq!(dr.len(), 2);
+        assert_eq!(dr.get::<String>(0, Format::Text).unwrap(), "a");
+        assert_eq!(dr.get::<String>(1, Format::Text).unwrap(), "c");
     }
 }

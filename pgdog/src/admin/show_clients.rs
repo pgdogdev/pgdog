@@ -26,6 +26,7 @@ impl Command for ShowClients {
             .collect::<Vec<&str>>();
 
         let fields = vec![
+            Field::bigint("id"),
             Field::text("user"),
             Field::text("database"),
             Field::text("addr"),
@@ -36,6 +37,7 @@ impl Command for ShowClients {
             Field::text("last_request"),
             Field::numeric("queries"),
             Field::numeric("transactions"),
+            Field::numeric("transactions_2pc"),
             Field::numeric("wait_time"),
             Field::numeric("query_time"),
             Field::numeric("transaction_time"),
@@ -76,6 +78,7 @@ impl Command for ShowClients {
             let row = self
                 .filter
                 .clone()
+                .add("id", client.id.pid as i64)
                 .add("user", user)
                 .add("database", client.paramters.get_default("database", user))
                 .add("addr", client.addr.ip().to_string())
@@ -96,6 +99,7 @@ impl Command for ShowClients {
                 )
                 .add("queries", client.stats.queries)
                 .add("transactions", client.stats.transactions)
+                .add("transactions_2pc", client.stats.transactions_2pc)
                 .add("wait_time", client.stats.wait_time().as_secs_f64() * 1000.0)
                 .add(
                     "query_time",

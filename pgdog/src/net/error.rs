@@ -7,8 +7,11 @@ use tokio_rustls::rustls;
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("{0}")]
+    #[error("io: {0}")]
     Io(#[from] std::io::Error),
+
+    #[error("connection closed by peer")]
+    UnexpectedEof,
 
     #[error("unsupported startup request: {0}")]
     UnsupportedStartup(i32),
@@ -24,6 +27,15 @@ pub enum Error {
 
     #[error("unexpected payload")]
     UnexpectedPayload,
+
+    #[error("data type not supported for encoding")]
+    UnsupportedDataTypeForEncoding,
+
+    #[error("CommandComplete contains no row counts")]
+    CommandCompleteNoRows,
+
+    #[error("unexpected replication meta message: {0}")]
+    UnexpectedReplicationMetaMessage(char),
 
     #[error("unsupported authentication: {0}")]
     UnsupportedAuthentication(i32),
@@ -46,8 +58,8 @@ pub enum Error {
     #[error("unknown tuple data identifier: {0}")]
     UnknownTupleDataIdentifier(char),
 
-    #[error("eof")]
-    Eof,
+    #[error("unknown transaction state identifier: {0}")]
+    UnknownTransactionStateIdentifier(char),
 
     #[error("not text encoding")]
     NotTextEncoding,

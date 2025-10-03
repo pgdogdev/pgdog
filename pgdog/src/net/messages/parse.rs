@@ -89,10 +89,9 @@ impl Parse {
     }
 
     /// Rename the prepared statement with minimal allocations.
-    pub fn rename_fast(mut self, name: &str) -> Parse {
+    pub fn rename_fast(&mut self, name: &str) {
         self.name = Bytes::from(name.to_string() + "\0");
         self.original = None;
-        self
     }
 
     pub fn data_types(&self) -> DataTypesIter<'_> {
@@ -104,6 +103,12 @@ impl Parse {
 
     pub fn data_types_ref(&self) -> Bytes {
         self.data_types.clone()
+    }
+
+    /// Update the SQL for this prepared statement.
+    pub fn set_query(&mut self, query: &str) {
+        self.query = Bytes::from(query.to_string() + "\0");
+        self.original = None;
     }
 }
 

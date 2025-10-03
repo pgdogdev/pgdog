@@ -87,8 +87,36 @@ impl Command for Set {
             "prepared_statements_limit" => {
                 config.config.general.prepared_statements_limit = self.value.parse()?;
                 PreparedStatements::global()
-                    .lock()
+                    .write()
                     .close_unused(config.config.general.prepared_statements_limit);
+            }
+
+            "cross_shard_disabled" => {
+                config.config.general.cross_shard_disabled = Self::from_json(&self.value)?;
+            }
+
+            "two_phase_commit" => {
+                config.config.general.two_phase_commit = Self::from_json(&self.value)?;
+            }
+
+            "two_phase_commit_auto" => {
+                config.config.general.two_phase_commit_auto = Self::from_json(&self.value)?;
+            }
+
+            "healthcheck_interval" => {
+                config.config.general.healthcheck_interval = self.value.parse()?;
+            }
+
+            "idle_healthcheck_interval" => {
+                config.config.general.idle_healthcheck_interval = self.value.parse()?;
+            }
+
+            "idle_healthcheck_delay" => {
+                config.config.general.idle_healthcheck_delay = self.value.parse()?;
+            }
+
+            "ban_timeout" => {
+                config.config.general.ban_timeout = self.value.parse()?;
             }
 
             _ => return Err(Error::Syntax),
@@ -103,7 +131,11 @@ impl Command for Set {
 
 impl Set {
     fn from_json<T: DeserializeOwned>(value: &str) -> serde_json::Result<T> {
-        serde_json::from_str::<T>(&format!(r#""{}""#, value))
+        let value = match value {
+            "true" | "false" => value.to_string(),
+            _ => format!(r#""{}""#, value),
+        };
+        serde_json::from_str::<T>(&value)
     }
 }
 

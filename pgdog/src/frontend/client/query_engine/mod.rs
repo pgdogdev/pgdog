@@ -1,8 +1,5 @@
 use crate::{
-    backend::{
-        maintenance_mode,
-        pool::{Connection, Request},
-    },
+    backend::pool::{Connection, Request},
     frontend::{
         router::{parser::Shard, Route},
         BufferedQuery, Client, Command, Comms, Error, Router, RouterContext, Stats,
@@ -16,20 +13,27 @@ use tracing::debug;
 pub mod connect;
 pub mod context;
 pub mod deallocate;
+pub mod discard;
 pub mod end_transaction;
 pub mod incomplete_requests;
+pub mod notify_buffer;
+pub mod prepared_statements;
 pub mod pub_sub;
 pub mod query;
 pub mod route_query;
 pub mod set;
 pub mod show_shards;
 pub mod start_transaction;
+pub mod two_pc;
 pub mod unknown_command;
 
 #[cfg(test)]
 mod testing;
 
 pub use context::QueryEngineContext;
+use notify_buffer::NotifyBuffer;
+pub use two_pc::phase::TwoPcPhase;
+use two_pc::TwoPc;
 
 #[derive(Default, Debug)]
 pub struct QueryEngine {
@@ -41,6 +45,9 @@ pub struct QueryEngine {
     streaming: bool,
     client_id: BackendKeyData,
     test_mode: bool,
+    set_route: Option<Route>,
+    two_pc: TwoPc,
+    notify_buffer: NotifyBuffer,
 }
 
 impl QueryEngine {
@@ -97,14 +104,8 @@ impl QueryEngine {
         self.stats
             .received(context.client_request.total_message_len());
 
-        // Check maintenance mode.
-        if !context.in_transaction() && !self.backend.is_admin() {
-            if let Some(waiter) = maintenance_mode::waiter() {
-                self.set_state(State::Waiting);
-                waiter.await;
-                self.set_state(State::Active);
-            }
-        }
+        // Rewrite prepared statements.
+        self.rewrite_extended(context)?;
 
         // Intercept commands we don't have to forward to a server.
         if self.intercept_incomplete(context).await? {
@@ -125,32 +126,51 @@ impl QueryEngine {
         self.backend.mirror(context.client_request);
 
         let command = self.router.command();
-        let route = command.route().clone();
+        let route = if let Some(ref route) = self.set_route {
+            route.clone()
+        } else {
+            command.route().clone()
+        };
 
         // FIXME, we should not to copy route twice.
-        context.client_request.route = route.clone();
+        context.client_request.route = Some(route.clone());
 
         match command {
             Command::Shards(shards) => self.show_shards(context, *shards).await?,
             Command::StartTransaction {
                 query,
                 transaction_type,
+                extended,
             } => {
-                self.start_transaction(context, query.clone(), *transaction_type)
+                self.start_transaction(context, query.clone(), *transaction_type, *extended)
                     .await?
             }
-            Command::CommitTransaction => {
-                if self.backend.connected() {
-                    self.execute(context, &route).await?
+            Command::CommitTransaction { extended } => {
+                self.set_route = None;
+
+                if self.backend.connected() || *extended {
+                    let extended = *extended;
+                    let transaction_route = self.transaction_route(&route)?;
+                    context.client_request.route = Some(transaction_route.clone());
+                    context.cross_shard_disabled = Some(false);
+                    self.end_connected(context, &transaction_route, false, extended)
+                        .await?;
                 } else {
-                    self.end_transaction(context, false).await?
+                    self.end_not_connected(context, false, *extended).await?
                 }
             }
-            Command::RollbackTransaction => {
-                if self.backend.connected() {
-                    self.execute(context, &route).await?
+            Command::RollbackTransaction { extended } => {
+                self.set_route = None;
+
+                if self.backend.connected() || *extended {
+                    let extended = *extended;
+                    let transaction_route = self.transaction_route(&route)?;
+                    context.client_request.route = Some(transaction_route.clone());
+                    context.cross_shard_disabled = Some(false);
+                    self.end_connected(context, &transaction_route, true, extended)
+                        .await?;
                 } else {
-                    self.end_transaction(context, true).await?
+                    self.end_not_connected(context, true, *extended).await?
                 }
             }
             Command::Query(_) => self.execute(context, &route).await?,
@@ -174,17 +194,25 @@ impl QueryEngine {
                     self.set(context, name.clone(), value.clone()).await?
                 }
             }
+            Command::SetRoute(route) => {
+                self.set_route(context, route.clone()).await?;
+            }
             Command::Copy(_) => self.execute(context, &route).await?,
             Command::Rewrite(query) => {
                 context.client_request.rewrite(query)?;
                 self.execute(context, &route).await?;
             }
             Command::Deallocate => self.deallocate(context).await?,
+            Command::Discard { extended } => self.discard(context, *extended).await?,
             command => self.unknown_command(context, command.clone()).await?,
         }
 
-        if !context.in_transaction() {
+        if context.in_error() {
+            self.backend.mirror_clear();
+            self.notify_buffer.clear();
+        } else if !context.in_transaction() {
             self.backend.mirror_flush();
+            self.flush_notify().await?;
         }
 
         self.update_stats(context);
@@ -211,8 +239,12 @@ impl QueryEngine {
         self.comms.stats(self.stats);
     }
 
-    fn set_state(&mut self, state: State) {
+    pub fn set_state(&mut self, state: State) {
         self.stats.state = state;
         self.comms.stats(self.stats);
+    }
+
+    pub fn get_state(&self) -> State {
+        self.stats.state
     }
 }

@@ -36,6 +36,7 @@ impl<'a> Column<'a> {
         self.table.map(|table| Table {
             name: table,
             schema: self.schema,
+            alias: None,
         })
     }
 

@@ -1,21 +1,21 @@
 //! Frontend client.
 
 use std::net::SocketAddr;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use bytes::BytesMut;
 use timeouts::Timeouts;
-use tokio::time::timeout;
-use tokio::{select, spawn};
+use tokio::{select, spawn, time::timeout};
 use tracing::{debug, enabled, error, info, trace, Level as LogLevel};
 
 use super::{ClientRequest, Comms, Error, PreparedStatements};
 use crate::auth::{md5, scram::Server};
+use crate::backend::maintenance_mode;
 use crate::backend::{
     databases,
     pool::{Connection, Request},
 };
-use crate::config::{self, AuthType};
+use crate::config::{self, config, AuthType};
 use crate::frontend::client::query_engine::{QueryEngine, QueryEngineContext};
 use crate::net::messages::{
     Authentication, BackendKeyData, ErrorResponse, FromBytes, Message, Password, Protocol,
@@ -25,6 +25,7 @@ use crate::net::ProtocolMessage;
 use crate::net::{parameter::Parameters, Stream};
 use crate::state::State;
 use crate::stats::memory::MemoryUsage;
+use crate::util::user_database_from_params;
 
 // pub mod counter;
 pub mod query_engine;
@@ -47,7 +48,6 @@ pub struct Client {
     timeouts: Timeouts,
     client_request: ClientRequest,
     stream_buffer: BytesMut,
-    cross_shard_disabled: bool,
     passthrough_password: Option<String>,
 }
 
@@ -56,6 +56,21 @@ pub enum TransactionType {
     ReadOnly,
     #[default]
     ReadWrite,
+    Error,
+}
+
+impl TransactionType {
+    pub fn read_only(&self) -> bool {
+        matches!(self, Self::ReadOnly)
+    }
+
+    pub fn write(&self) -> bool {
+        !self.read_only()
+    }
+
+    pub fn error(&self) -> bool {
+        matches!(self, Self::Error)
+    }
 }
 
 impl MemoryUsage for Client {
@@ -83,13 +98,44 @@ impl MemoryUsage for Client {
 impl Client {
     /// Create new frontend client from the given TCP stream.
     pub async fn spawn(
+        stream: Stream,
+        params: Parameters,
+        addr: SocketAddr,
+        comms: Comms,
+    ) -> Result<(), Error> {
+        let login_timeout =
+            Duration::from_millis(config::config().config.general.client_login_timeout);
+
+        match timeout(login_timeout, Self::login(stream, params, addr, comms)).await {
+            Ok(Ok(Some(mut client))) => {
+                if client.admin {
+                    // Admin clients are not waited on during shutdown.
+                    spawn(async move {
+                        client.spawn_internal().await;
+                    });
+                } else {
+                    client.spawn_internal().await;
+                }
+
+                Ok(())
+            }
+            Err(_) => {
+                error!("client login timeout [{}]", addr);
+                Ok(())
+            }
+            Ok(Ok(None)) => Ok(()),
+            Ok(Err(err)) => Err(err),
+        }
+    }
+
+    /// Create new frontend client from the given TCP stream.
+    async fn login(
         mut stream: Stream,
         params: Parameters,
         addr: SocketAddr,
         mut comms: Comms,
-    ) -> Result<(), Error> {
-        let user = params.get_default("user", "postgres");
-        let database = params.get_default("database", user);
+    ) -> Result<Option<Client>, Error> {
+        let (user, database) = user_database_from_params(&params);
         let config = config::config();
 
         let admin = database == config.config.admin.name && config.config.admin.user == user;
@@ -131,7 +177,7 @@ impl Client {
             Ok(conn) => conn,
             Err(_) => {
                 stream.fatal(ErrorResponse::auth(user, database)).await?;
-                return Ok(());
+                return Ok(None);
             }
         };
 
@@ -141,36 +187,55 @@ impl Client {
             conn.cluster()?.password()
         };
 
+        let mut auth_ok = false;
+
+        if let Some(ref passthrough_password) = passthrough_password {
+            if passthrough_password != password && auth_type != &AuthType::Trust {
+                stream.fatal(ErrorResponse::auth(user, database)).await?;
+                return Ok(None);
+            } else {
+                auth_ok = true;
+            }
+        }
+
         let auth_type = &config.config.general.auth_type;
-        let auth_ok = match (auth_type, stream.is_tls()) {
-            // TODO: SCRAM doesn't work with TLS currently because of
-            // lack of support for channel binding in our scram library.
-            // Defaulting to MD5.
-            (AuthType::Scram, true) | (AuthType::Md5, _) => {
-                let md5 = md5::Client::new(user, password);
-                stream.send_flush(&md5.challenge()).await?;
-                let password = Password::from_bytes(stream.read().await?.to_bytes()?)?;
-                if let Password::PasswordMessage { response } = password {
-                    md5.check(&response)
-                } else {
-                    false
+        if !auth_ok {
+            auth_ok = match auth_type {
+                AuthType::Md5 => {
+                    let md5 = md5::Client::new(user, password);
+                    stream.send_flush(&md5.challenge()).await?;
+                    let password = Password::from_bytes(stream.read().await?.to_bytes()?)?;
+                    if let Password::PasswordMessage { response } = password {
+                        md5.check(&response)
+                    } else {
+                        false
+                    }
                 }
+
+                AuthType::Scram => {
+                    stream.send_flush(&Authentication::scram()).await?;
+
+                    let scram = Server::new(password);
+                    let res = scram.handle(&mut stream).await;
+                    matches!(res, Ok(true))
+                }
+
+                AuthType::Plain => {
+                    stream
+                        .send_flush(&Authentication::ClearTextPassword)
+                        .await?;
+                    let response = stream.read().await?;
+                    let response = Password::from_bytes(response.to_bytes()?)?;
+                    response.password() == Some(password)
+                }
+
+                AuthType::Trust => true,
             }
-
-            (AuthType::Scram, false) => {
-                stream.send_flush(&Authentication::scram()).await?;
-
-                let scram = Server::new(password);
-                let res = scram.handle(&mut stream).await;
-                matches!(res, Ok(true))
-            }
-
-            (AuthType::Trust, _) => true,
         };
 
         if !auth_ok {
             stream.fatal(ErrorResponse::auth(user, database)).await?;
-            return Ok(());
+            return Ok(None);
         } else {
             stream.send(&Authentication::Ok).await?;
         }
@@ -178,16 +243,21 @@ impl Client {
         // Check if the pooler is shutting down.
         if comms.offline() && !admin {
             stream.fatal(ErrorResponse::shutting_down()).await?;
-            return Ok(());
+            return Ok(None);
         }
 
         let server_params = match conn.parameters(&Request::new(id)).await {
             Ok(params) => params,
             Err(err) => {
                 if err.no_server() {
-                    error!("connection pool is down");
-                    stream.fatal(ErrorResponse::connection()).await?;
-                    return Ok(());
+                    error!(
+                        "aborting new client connection, connection pool is down [{}]",
+                        addr
+                    );
+                    stream
+                        .fatal(ErrorResponse::connection(user, database))
+                        .await?;
+                    return Ok(None);
                 } else {
                     return Err(err.into());
                 }
@@ -202,9 +272,22 @@ impl Client {
         stream.send_flush(&ReadyForQuery::idle()).await?;
         comms.connect(&id, addr, &params);
 
-        info!("client connected [{}]", addr,);
+        if config.config.general.log_connections {
+            info!(
+                r#"client "{}" connected to database "{}" [{}, auth: {}] {}"#,
+                user,
+                database,
+                addr,
+                if passthrough_password.is_some() {
+                    "passthrough".into()
+                } else {
+                    auth_type.to_string()
+                },
+                if stream.is_tls() { "🔓" } else { "" }
+            );
+        }
 
-        let mut client = Self {
+        Ok(Some(Self {
             addr,
             stream,
             id,
@@ -219,22 +302,8 @@ impl Client {
             client_request: ClientRequest::new(),
             stream_buffer: BytesMut::new(),
             shutdown: false,
-            cross_shard_disabled: false,
             passthrough_password,
-        };
-
-        drop(conn);
-
-        if client.admin {
-            // Admin clients are not waited on during shutdown.
-            spawn(async move {
-                client.spawn_internal().await;
-            });
-        } else {
-            client.spawn_internal().await;
-        }
-
-        Ok(())
+        }))
     }
 
     #[cfg(test)]
@@ -260,7 +329,6 @@ impl Client {
             client_request: ClientRequest::new(),
             stream_buffer: BytesMut::new(),
             shutdown: false,
-            cross_shard_disabled: false,
             passthrough_password: None,
         }
     }
@@ -273,13 +341,27 @@ impl Client {
     /// Run the client and log disconnect.
     async fn spawn_internal(&mut self) {
         match self.run().await {
-            Ok(_) => info!("client disconnected [{}]", self.addr),
+            Ok(_) => {
+                if config().config.general.log_disconnections {
+                    let (user, database) = user_database_from_params(&self.params);
+                    info!(
+                        r#"client "{}" disconnected from database "{}" [{}]"#,
+                        user, database, self.addr
+                    )
+                }
+            }
             Err(err) => {
                 let _ = self
                     .stream
                     .error(ErrorResponse::from_err(&err), false)
                     .await;
-                error!("client disconnected with error [{}]: {}", self.addr, err)
+                if config().config.general.log_disconnections {
+                    let (user, database) = user_database_from_params(&self.params);
+                    error!(
+                        r#"client "{}" disconnected from database "{}" with error [{}]: {}"#,
+                        user, database, self.addr, err
+                    )
+                }
             }
         }
     }
@@ -356,9 +438,33 @@ impl Client {
 
     /// Handle client messages.
     async fn client_messages(&mut self, query_engine: &mut QueryEngine) -> Result<(), Error> {
-        let mut context = QueryEngineContext::new(self);
-        query_engine.handle(&mut context).await?;
-        self.transaction = context.transaction();
+        // Check maintenance mode.
+        if !self.in_transaction() && !self.admin {
+            if let Some(waiter) = maintenance_mode::waiter() {
+                let state = query_engine.get_state();
+                query_engine.set_state(State::Waiting);
+                waiter.await;
+                query_engine.set_state(state);
+            }
+        }
+
+        // If client sent multiple requests, split them up and execute individually.
+        let spliced = self.client_request.spliced()?;
+        if spliced.is_empty() {
+            let mut context = QueryEngineContext::new(self);
+            query_engine.handle(&mut context).await?;
+            self.transaction = context.transaction();
+        } else {
+            let total = spliced.len();
+            let mut reqs = spliced.into_iter().enumerate();
+            while let Some((num, mut req)) = reqs.next() {
+                debug!("processing spliced request {}/{}", num + 1, total);
+                let mut context = QueryEngineContext::new(self).spliced(&mut req, reqs.len());
+                query_engine.handle(&mut context).await?;
+                self.transaction = context.transaction();
+            }
+        }
+
         Ok(())
     }
 
@@ -378,7 +484,6 @@ impl Client {
         self.prepared_statements.enabled = config.prepared_statements();
         self.prepared_statements.capacity = config.config.general.prepared_statements_limit;
         self.timeouts = Timeouts::from_config(&config.config.general);
-        self.cross_shard_disabled = config.config.general.cross_shard_disabled;
 
         while !self.client_request.full() {
             let idle_timeout = self
@@ -408,13 +513,7 @@ impl Client {
                 return Ok(BufferEvent::DisconnectGraceful);
             } else {
                 let message = ProtocolMessage::from_bytes(message.to_bytes()?)?;
-                if message.extended() && self.prepared_statements.enabled {
-                    self.client_request
-                        .messages
-                        .push(self.prepared_statements.maybe_rewrite(message)?);
-                } else {
-                    self.client_request.messages.push(message);
-                }
+                self.client_request.push(message);
             }
         }
 

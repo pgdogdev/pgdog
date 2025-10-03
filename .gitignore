@@ -45,3 +45,12 @@ perf.data.old
 
 /pgdog.toml
 /users.toml
+CLAUDE.local.md
+.claude/plans/
+.claude/completed_plans/
+
+# Ignore generated bindings
+pgdog-plugin/src/bindings.rs
+local/
+integration/log.txt
+.pycache

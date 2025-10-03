@@ -1,6 +1,6 @@
 use tokio::io::AsyncWriteExt;
 
-use crate::net::{Close, CloseComplete, FromBytes, Protocol, ReadyForQuery, ToBytes};
+use crate::net::{CloseComplete, Protocol, ReadyForQuery};
 
 use super::*;
 
@@ -31,10 +31,6 @@ impl QueryEngine {
         for msg in context.client_request.messages.iter() {
             match msg.code() {
                 'C' => {
-                    let close = Close::from_bytes(msg.to_bytes()?)?;
-                    if close.is_statement() {
-                        context.prepared_statements.close(close.name());
-                    }
                     if only_close {
                         bytes_sent += context.stream.send(&CloseComplete).await?;
                     }

@@ -6,13 +6,13 @@ use pgdog::backend::pool::dns_cache::DnsCache;
 use pgdog::cli::{self, Commands};
 use pgdog::config::{self, config};
 use pgdog::frontend::listener::Listener;
-use pgdog::net;
 use pgdog::plugin;
 use pgdog::stats;
+use pgdog::util::pgdog_version;
+use pgdog::{healthcheck, net};
 use tokio::runtime::Builder;
-use tracing::info;
+use tracing::{error, info};
 
-use std::ops::Deref;
 use std::process::exit;
 
 #[cfg(not(target_env = "msvc"))]
@@ -35,13 +35,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             exit(0);
         }
 
-        Some(Commands::Configcheck { config, users }) => {
-            if let Err(e) = pgdog::cli::config_check(config, users) {
-                eprintln!("Configuration error: {}", e);
+        Some(Commands::Configcheck) => {
+            if let Err(e) = config::load(&args.config, &args.users) {
+                error!("{}", e);
                 exit(1);
             }
 
-            println!("✅ Configuration valid");
+            info!("✅ config valid");
             exit(0);
         }
 
@@ -60,11 +60,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         _ => (),
     }
 
-    info!(
-        "🐕 PgDog v{} ({})",
-        env!("GIT_HASH"),
-        pgdog_plugin::comp::rustc_version().deref()
-    );
+    info!("🐕 PgDog {}", pgdog_version());
     let config = config::load(&args.config, &args.users)?;
 
     // Get databases from environment or from --database-url args.
@@ -122,6 +118,10 @@ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Erro
         tokio::spawn(async move { stats::http_server::server(openmetrics_port).await });
     }
 
+    if let Some(healthcheck_port) = general.healthcheck_port {
+        tokio::spawn(async move { healthcheck::server(healthcheck_port).await });
+    }
+
     let dns_cache_override_enabled = general.dns_ttl().is_some();
     if dns_cache_override_enabled {
         DnsCache::global().start_refresh_loop();
@@ -146,12 +146,21 @@ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Erro
         Some(ref command) => {
             if let Commands::DataSync { .. } = command {
                 info!("🔄 entering data sync mode");
-                cli::data_sync(command.clone()).await?;
+                if let Err(err) = cli::data_sync(command.clone()).await {
+                    error!("{}", err);
+                }
             }
 
             if let Commands::SchemaSync { .. } = command {
                 info!("🔄 entering schema sync mode");
-                cli::schema_sync(command.clone()).await?;
+                if let Err(err) = cli::schema_sync(command.clone()).await {
+                    error!("{}", err);
+                }
+            }
+
+            if let Commands::Setup { database } = command {
+                info!("🔄 entering setup mode");
+                cli::setup(database).await?;
             }
         }
     }

@@ -1,4 +1,7 @@
+use std::ops::Deref;
+
 use crate::{
+    config::{self, config},
     frontend::client::TransactionType,
     net::{
         messages::{parse::Parse, Parameter},
@@ -191,6 +194,25 @@ fn test_select_for_update() {
 }
 
 #[test]
+fn test_prepared_avg_rewrite_plan() {
+    let route = parse!(
+        "avg_test",
+        "SELECT AVG(price) FROM menu",
+        Vec::<Vec<u8>>::new()
+    );
+
+    assert!(!route.rewrite_plan().is_noop());
+    assert_eq!(route.rewrite_plan().drop_columns(), &[1]);
+    let rewritten = route
+        .rewritten_sql()
+        .expect("rewrite should produce SQL for prepared average");
+    assert!(
+        rewritten.to_lowercase().contains("count"),
+        "helper COUNT should be injected"
+    );
+}
+
+#[test]
 fn test_omni() {
     let q = "SELECT sharded_omni.* FROM sharded_omni WHERE sharded_omni.id = $1";
     let route = query!(q);
@@ -201,13 +223,19 @@ fn test_omni() {
 
 #[test]
 fn test_set() {
-    let route = query!(r#"SET "pgdog.shard" TO 1"#, true);
-    assert_eq!(route.shard(), &Shard::Direct(1));
+    let (command, _) = command!(r#"SET "pgdog.shard" TO 1"#, true);
+    match command {
+        Command::SetRoute(route) => assert_eq!(route.shard(), &Shard::Direct(1)),
+        _ => panic!("not a set route"),
+    }
     let (_, qp) = command!(r#"SET "pgdog.shard" TO 1"#, true);
     assert!(qp.in_transaction);
 
-    let route = query!(r#"SET "pgdog.sharding_key" TO '11'"#, true);
-    assert_eq!(route.shard(), &Shard::Direct(1));
+    let (command, _) = command!(r#"SET "pgdog.sharding_key" TO '11'"#, true);
+    match command {
+        Command::SetRoute(route) => assert_eq!(route.shard(), &Shard::Direct(1)),
+        _ => panic!("not a set route"),
+    }
     let (_, qp) = command!(r#"SET "pgdog.sharding_key" TO '11'"#, true);
     assert!(qp.in_transaction);
 
@@ -346,7 +374,10 @@ fn test_insert_do_update() {
 #[test]
 fn test_begin_extended() {
     let command = query_parser!(QueryParser::default(), Parse::new_anonymous("BEGIN"), false);
-    assert!(matches!(command, Command::Query(_)));
+    match command {
+        Command::StartTransaction { extended, .. } => assert!(extended),
+        _ => panic!("not a transaction"),
+    }
 }
 
 #[test]
@@ -419,6 +450,10 @@ WHERE t2.account = (
 
 #[test]
 fn test_comment() {
+    let query = "/* pgdog_role: primary */ SELECT 1";
+    let route = query!(query);
+    assert!(route.is_write());
+
     let query = "/* pgdog_shard: 1234 */ SELECT 1234";
     let route = query!(query);
     assert_eq!(route.shard(), &Shard::Direct(1234));
@@ -434,7 +469,7 @@ fn test_comment() {
     );
 
     match command {
-        Command::Query(query) => assert_eq!(query.shard(), &Shard::All), // Round-robin because it's only a parse
+        Command::Query(query) => assert_eq!(query.shard(), &Shard::Direct(1)), // Round-robin because it's only a parse
         _ => panic!("not a query"),
     }
 }
@@ -502,4 +537,47 @@ fn test_any() {
     );
 
     assert_eq!(route.shard(), &Shard::All);
+}
+
+#[test]
+fn test_commit_prepared() {
+    let stmt = pg_query::parse("COMMIT PREPARED 'test'").unwrap();
+    println!("{:?}", stmt);
+}
+
+#[test]
+fn test_dry_run_simple() {
+    let mut config = config().deref().clone();
+    config.config.general.dry_run = true;
+    config::set(config).unwrap();
+
+    let cluster = Cluster::new_test_single_shard();
+    let command = query_parser!(
+        QueryParser::default(),
+        Query::new("/* pgdog_sharding_key: 1234 */ SELECT * FROM sharded"),
+        false,
+        cluster
+    );
+    let cache = Cache::queries();
+    let stmt = cache.values().next().unwrap();
+    assert_eq!(stmt.stats.lock().direct, 1);
+    assert_eq!(stmt.stats.lock().multi, 0);
+    assert_eq!(command.route().shard(), &Shard::Direct(0));
+}
+
+#[test]
+fn test_set_comments() {
+    let command = query_parser!(
+        QueryParser::default(),
+        Query::new("/* pgdog_sharding_key: 1234 */ SET statement_timeout TO 1"),
+        true
+    );
+    assert_eq!(command.route().shard(), &Shard::Direct(0));
+
+    let command = query_parser!(
+        QueryParser::default(),
+        Query::new("SET statement_timeout TO 1"),
+        true
+    );
+    assert_eq!(command.route().shard(), &Shard::All);
 }

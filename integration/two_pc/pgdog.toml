@@ -1,0 +1,17 @@
+[general]
+two_phase_commit = false
+
+[[databases]]
+name = "pgdog"
+host = "127.0.0.1"
+shard = 0
+database_name = "shard_0"
+
+[[databases]]
+name = "pgdog"
+host = "127.0.0.1"
+shard = 1
+database_name = "shard_1"
+
+[admin]
+password = "pgdog"

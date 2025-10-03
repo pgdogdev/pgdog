@@ -11,6 +11,7 @@ use parking_lot::Mutex;
 use tokio::time::Instant;
 
 use crate::{
+    backend::ServerOptions,
     net::{messages::BackendKeyData, Parameters},
     state::State,
 };
@@ -53,6 +54,7 @@ pub struct Counts {
     pub bytes_sent: usize,
     pub bytes_received: usize,
     pub transactions: usize,
+    pub transactions_2pc: usize,
     pub queries: usize,
     pub rollbacks: usize,
     pub errors: usize,
@@ -74,6 +76,7 @@ impl Add for Counts {
             bytes_sent: self.bytes_sent.saturating_add(rhs.bytes_sent),
             bytes_received: self.bytes_received.saturating_add(rhs.bytes_received),
             transactions: self.transactions.saturating_add(rhs.transactions),
+            transactions_2pc: self.transactions_2pc.saturating_add(rhs.transactions_2pc),
             queries: self.queries.saturating_add(rhs.queries),
             rollbacks: self.rollbacks.saturating_add(rhs.rollbacks),
             errors: self.errors.saturating_add(rhs.errors),
@@ -102,13 +105,20 @@ pub struct Stats {
     pub created_at_time: SystemTime,
     pub total: Counts,
     pub last_checkout: Counts,
+    pub pool_id: u64,
+    pub client_id: Option<BackendKeyData>,
     query_timer: Option<Instant>,
     transaction_timer: Option<Instant>,
 }
 
 impl Stats {
     /// Register new server with statistics.
-    pub fn connect(id: BackendKeyData, addr: &Address, params: &Parameters) -> Self {
+    pub fn connect(
+        id: BackendKeyData,
+        addr: &Address,
+        params: &Parameters,
+        options: &ServerOptions,
+    ) -> Self {
         let now = Instant::now();
         let stats = Stats {
             id,
@@ -121,12 +131,14 @@ impl Stats {
             last_checkout: Counts::default(),
             query_timer: None,
             transaction_timer: None,
+            pool_id: options.pool_id,
+            client_id: None,
         };
 
         STATS.lock().insert(
             id,
             ConnectedServer {
-                stats,
+                stats: stats.clone(),
                 addr: addr.clone(),
                 application_name: params.get_default("application_name", "PgDog").to_owned(),
                 client: None,
@@ -149,7 +161,8 @@ impl Stats {
         self.update();
     }
 
-    pub fn link_client(&mut self, client_name: &str, server_server: &str) {
+    pub fn link_client(&mut self, client_name: &str, server_server: &str, id: &BackendKeyData) {
+        self.client_id = Some(id.clone());
         if client_name != server_server {
             let mut guard = STATS.lock();
             if let Some(entry) = guard.get_mut(&self.id) {
@@ -192,6 +205,12 @@ impl Stats {
     /// A transaction has been completed.
     pub fn transaction(&mut self, now: Instant) {
         self.transaction_state(now, State::Idle);
+    }
+
+    /// Increment two-phase commit transaction count.
+    pub fn transaction_2pc(&mut self) {
+        self.last_checkout.transactions_2pc += 1;
+        self.total.transactions_2pc += 1;
     }
 
     /// Error occurred in a transaction.

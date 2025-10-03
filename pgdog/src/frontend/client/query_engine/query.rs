@@ -2,7 +2,10 @@ use tokio::time::timeout;
 
 use crate::{
     frontend::client::TransactionType,
-    net::{Message, Protocol, ProtocolMessage},
+    net::{
+        FromBytes, Message, Protocol, ProtocolMessage, Query, ReadyForQuery, ToBytes,
+        TransactionState,
+    },
     state::State,
 };
 
@@ -17,27 +20,44 @@ impl QueryEngine {
         context: &mut QueryEngineContext<'_>,
         route: &Route,
     ) -> Result<(), Error> {
-        // Check for cross-shard quries.
-        if context.cross_shard_disabled && route.is_cross_shard() {
-            let bytes_sent = context
-                .stream
-                .error(
-                    ErrorResponse::cross_shard_disabled(),
-                    context.in_transaction(),
-                )
-                .await?;
-            self.stats.sent(bytes_sent);
+        // Check that we're not in a transaction error state.
+        if !self.transaction_error_check(context).await? {
             return Ok(());
         }
 
-        if !self.connect(context, route).await? {
-            return Ok(());
-        }
+        // Check if we need to do 2pc automatically
+        // for single-statement writes.
+        self.two_pc_check(context, route);
 
         // We need to run a query now.
-        if context.client_request.executable() {
-            if let Some(begin_stmt) = self.begin_stmt.take() {
-                self.backend.execute(begin_stmt.query()).await?;
+        if let Some(begin_stmt) = self.begin_stmt.take() {
+            // Connect to one shard if not sharded or to all shards
+            // for a cross-shard tranasction.
+            if !self.connect_transaction(context, route).await? {
+                return Ok(());
+            }
+
+            self.backend.execute(begin_stmt.query()).await?;
+        } else if !self.connect(context, route).await? {
+            return Ok(());
+        }
+
+        // Check we can run this query.
+        if !self.cross_shard_check(context, route).await? {
+            return Ok(());
+        }
+
+        if let Some(sql) = route.rewritten_sql() {
+            match context.client_request.rewrite(sql) {
+                Ok(()) => (),
+                Err(crate::net::Error::OnlySimpleForRewrites) => {
+                    context.client_request.rewrite_prepared(
+                        sql,
+                        context.prepared_statements,
+                        route.rewrite_plan(),
+                    );
+                }
+                Err(err) => return Err(err.into()),
             }
         }
 
@@ -76,7 +96,7 @@ impl QueryEngine {
         self.streaming = message.streaming();
 
         let code = message.code();
-        let message = message.backend();
+        let mut message = message.backend();
         let has_more_messages = self.backend.has_more_messages();
 
         // Messages that we need to send to the client immediately.
@@ -89,36 +109,74 @@ impl QueryEngine {
         // ReadyForQuery (B)
         if code == 'Z' {
             self.stats.query();
-            // TODO: This is messed up.
-            //
-            // 1. We're ignoring server-set transaction state. Client gets a ReadyForQuery with transaction state set to Idle even
-            // if they sent a BEGIN statement to us already.
-            // 2. We're sending non-data fetching statements to the server without starting a transacation, e.g. Parse, Describe, Sync.
-            // 3. We're confusing the hell out of pretty much anyone reading this. I wrote the damn thing and I'm still confused.
-            let in_transaction = message.in_transaction() || self.begin_stmt.is_some();
-            if !in_transaction {
+
+            let mut two_pc_auto = false;
+            let state = ReadyForQuery::from_bytes(message.to_bytes()?)?.state()?;
+
+            match state {
+                TransactionState::Error => {
+                    context.transaction = Some(TransactionType::Error);
+                    if self.two_pc.auto() {
+                        self.end_two_pc(true).await?;
+                        // TODO: this records a 2pc transaction in client
+                        // stats anyway but not on the servers. Is this what we want?
+                        two_pc_auto = true;
+                    }
+                }
+
+                TransactionState::Idle => {
+                    context.transaction = None;
+                }
+
+                TransactionState::InTrasaction => {
+                    if self.two_pc.auto() {
+                        self.end_two_pc(false).await?;
+                        two_pc_auto = true;
+                    }
+                    if context.transaction.is_none() {
+                        // Query parser is disabled, so the server is responsible for telling us
+                        // we started a transaction.
+                        context.transaction = Some(TransactionType::ReadWrite);
+                    }
+                }
+            }
+
+            if two_pc_auto {
+                // In auto mode, 2pc transaction was started automatically
+                // without the client's knowledge. We need to return a regular RFQ
+                // message and close the transaction.
                 context.transaction = None;
-            } else if context.transaction.is_none() {
-                // Query parser is disabled, so the server is responsible for telling us
-                // we started a transaction.
-                context.transaction = Some(TransactionType::ReadWrite);
+                message = ReadyForQuery::in_transaction(false).message()?;
             }
 
             self.stats.idle(context.in_transaction());
 
             if !context.in_transaction() {
-                self.stats.transaction();
+                self.stats.transaction(two_pc_auto);
             }
         }
 
         self.stats.sent(message.len());
 
+        // Do this before flushing, because flushing can take time.
+        self.cleanup_backend(context);
+
+        if flush {
+            context.stream.send_flush(&message).await?;
+        } else {
+            context.stream.send(&message).await?;
+        }
+
+        Ok(())
+    }
+
+    pub(super) fn cleanup_backend(&mut self, context: &mut QueryEngineContext<'_>) {
         if self.backend.done() {
             let changed_params = self.backend.changed_params();
 
             // Release the connection back into the pool before flushing data to client.
             // Flushing can take a minute and we don't want to block the connection from being reused.
-            if self.backend.transaction_mode() {
+            if self.backend.transaction_mode() && context.requests_left == 0 {
                 self.backend.disconnect();
             }
 
@@ -139,13 +197,87 @@ impl QueryEngine {
                 self.comms.update_params(context.params);
             }
         }
+    }
 
-        if flush {
-            context.stream.send_flush(&message).await?;
-        } else {
-            context.stream.send(&message).await?;
+    // Perform cross-shard check.
+    async fn cross_shard_check(
+        &mut self,
+        context: &mut QueryEngineContext<'_>,
+        route: &Route,
+    ) -> Result<bool, Error> {
+        // Check for cross-shard queries.
+        if context.cross_shard_disabled.is_none() {
+            context.cross_shard_disabled = Some(
+                self.backend
+                    .cluster()
+                    .map(|c| c.cross_shard_disabled())
+                    .unwrap_or_default(),
+            );
         }
 
-        Ok(())
+        let cross_shard_disabled = context.cross_shard_disabled.unwrap_or_default();
+
+        debug!("cross-shard queries disabled: {}", cross_shard_disabled,);
+
+        if cross_shard_disabled
+            && route.is_cross_shard()
+            && !context.admin
+            && context.client_request.executable()
+        {
+            let bytes_sent = context
+                .stream
+                .error(
+                    ErrorResponse::cross_shard_disabled(),
+                    context.in_transaction(),
+                )
+                .await?;
+            self.stats.sent(bytes_sent);
+
+            if self.backend.connected() && self.backend.done() {
+                self.backend.disconnect();
+            }
+            Ok(false)
+        } else {
+            Ok(true)
+        }
+    }
+
+    fn two_pc_check(&mut self, context: &mut QueryEngineContext<'_>, route: &Route) {
+        let enabled = self
+            .backend
+            .cluster()
+            .map(|c| c.two_pc_auto_enabled())
+            .unwrap_or_default();
+
+        if enabled
+            && route.should_2pc()
+            && self.begin_stmt.is_none()
+            && context.client_request.executable()
+            && !context.in_transaction()
+        {
+            debug!("[2pc] enabling automatic transaction");
+            self.two_pc.set_auto();
+            self.begin_stmt = Some(BufferedQuery::Query(Query::new("BEGIN")));
+        }
+    }
+
+    async fn transaction_error_check(
+        &mut self,
+        context: &mut QueryEngineContext<'_>,
+    ) -> Result<bool, Error> {
+        if context.in_error() && !context.rollback && context.client_request.executable() {
+            let bytes_sent = context
+                .stream
+                .error(
+                    ErrorResponse::in_failed_transaction(),
+                    context.in_transaction(),
+                )
+                .await?;
+            self.stats.sent(bytes_sent);
+
+            Ok(false)
+        } else {
+            Ok(true)
+        }
     }
 }

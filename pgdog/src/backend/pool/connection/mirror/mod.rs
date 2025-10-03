@@ -6,7 +6,7 @@ use rand::{thread_rng, Rng};
 use tokio::select;
 use tokio::time::{sleep, Instant};
 use tokio::{spawn, sync::mpsc::*};
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
 
 use crate::backend::Cluster;
 use crate::config::{config, ConfigAndUsers};
@@ -64,13 +64,19 @@ impl Mirror {
     ///
     /// # Arguments
     ///
+    /// * `source_db`: Source database name for mirrored traffic.
     /// * `cluster`: Destination cluster for mirrored traffic.
+    /// * `mirror_config`: Optional precomputed mirror configuration.
     ///
     /// # Return
     ///
     /// Handler for sending queries to the background task.
     ///
-    pub fn spawn(cluster: &Cluster) -> Result<MirrorHandler, Error> {
+    pub fn spawn(
+        _source_db: &str,
+        cluster: &Cluster,
+        mirror_config: Option<&crate::config::MirrorConfig>,
+    ) -> Result<MirrorHandler, Error> {
         let config = config();
         let params = Parameters::from(vec![
             Parameter {
@@ -89,18 +95,35 @@ impl Mirror {
         // Mirror traffic handler.
         let mut mirror = Self::new(&params, &config);
 
-        // Mirror queue.
-        let (tx, mut rx) = channel(config.config.general.mirror_queue);
-        let handler = MirrorHandler::new(tx, config.config.general.mirror_exposure);
+        // Use provided mirror config or fall back to global defaults
+        let mirror_config = mirror_config
+            .cloned()
+            .unwrap_or_else(|| crate::config::MirrorConfig {
+                queue_length: config.config.general.mirror_queue,
+                exposure: config.config.general.mirror_exposure,
+            });
 
+        // Mirror queue.
+        let (tx, mut rx) = channel(mirror_config.queue_length);
+        let handler = MirrorHandler::new(tx, mirror_config.exposure, cluster.stats());
+
+        let stats_for_errors = cluster.stats();
         spawn(async move {
             loop {
                 select! {
                     req = rx.recv() => {
                         if let Some(mut req) = req {
+                            // Decrement queue_length when we receive a message from the channel
+                            {
+                                let mut stats = stats_for_errors.lock();
+                                stats.counts.queue_length = stats.counts.queue_length.saturating_sub(1);
+                            }
                             // TODO: timeout these.
                             if let Err(err) = mirror.handle(&mut req, &mut query_engine).await {
                                 error!("mirror error: {}", err);
+                                // Increment error count on mirror handling error
+                                let mut stats = stats_for_errors.lock();
+                                stats.counts.error_count += 1;
                             }
                         } else {
                             debug!("mirror client shutting down");
@@ -144,8 +167,13 @@ mod test {
 
     #[tokio::test]
     async fn test_mirror_exposure() {
+        use crate::backend::pool::MirrorStats;
+        use parking_lot::Mutex;
+        use std::sync::Arc;
+
         let (tx, rx) = channel(25);
-        let mut handle = MirrorHandler::new(tx.clone(), 1.0);
+        let stats = Arc::new(Mutex::new(MirrorStats::default()));
+        let mut handle = MirrorHandler::new(tx.clone(), 1.0, stats.clone());
 
         for _ in 0..25 {
             assert!(
@@ -158,8 +186,8 @@ mod test {
         assert_eq!(rx.len(), 25);
 
         let (tx, rx) = channel(25);
-
-        let mut handle = MirrorHandler::new(tx.clone(), 0.5);
+        let stats2 = Arc::new(Mutex::new(MirrorStats::default()));
+        let mut handle = MirrorHandler::new(tx.clone(), 0.5, stats2);
         let dropped = (0..25)
             .into_iter()
             .map(|_| handle.send(&vec![].into()) && handle.send(&vec![].into()) && handle.flush())
@@ -181,10 +209,10 @@ mod test {
 
     #[tokio::test]
     async fn test_mirror() {
-        config::test::load_test();
+        config::load_test();
         let cluster = Cluster::new_test();
         cluster.launch();
-        let mut mirror = Mirror::spawn(&cluster).unwrap();
+        let mut mirror = Mirror::spawn("pgdog", &cluster, None).unwrap();
         let mut conn = cluster.primary(0, &Request::default()).await.unwrap();
 
         for _ in 0..3 {
@@ -225,6 +253,57 @@ mod test {
             );
             assert!(mirror.buffer().is_empty(), "mirror buffer should be empty");
         }
+
+        cluster.shutdown();
+    }
+
+    #[tokio::test]
+    async fn test_mirror_stats_tracking() {
+        config::load_test();
+        let cluster = Cluster::new_test();
+        cluster.launch();
+
+        // Get initial stats
+        let initial_stats = {
+            let stats_arc = cluster.stats();
+            let stats = stats_arc.lock();
+            stats.counts
+        };
+
+        let mut mirror = Mirror::spawn("pgdog", &cluster, None).unwrap();
+
+        // Send a simple transaction
+        assert!(mirror.send(&vec![Query::new("BEGIN").into()].into()));
+        assert!(mirror.send(&vec![Query::new("SELECT 1").into()].into()));
+        assert!(mirror.send(&vec![Query::new("COMMIT").into()].into()));
+
+        // Flush should increment stats
+        assert!(mirror.flush());
+
+        // Wait for async processing
+        sleep(Duration::from_millis(100)).await;
+
+        // Verify stats were incremented
+        let final_stats = {
+            let stats_arc = cluster.stats();
+            let stats = stats_arc.lock();
+            stats.counts
+        };
+
+        assert_eq!(
+            final_stats.total_count,
+            initial_stats.total_count + 1,
+            "total_count should be incremented by 1, was {} now {}",
+            initial_stats.total_count,
+            final_stats.total_count
+        );
+        assert_eq!(
+            final_stats.mirrored_count,
+            initial_stats.mirrored_count + 1,
+            "mirrored_count should be incremented by 1, was {} now {}",
+            initial_stats.mirrored_count,
+            final_stats.mirrored_count
+        );
 
         cluster.shutdown();
     }

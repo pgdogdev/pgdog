@@ -1,7 +1,7 @@
 //! Rerwrite messages if using prepared statements.
 use crate::net::{
     messages::{Bind, Describe, Parse},
-    ProtocolMessage,
+    Close, ProtocolMessage,
 };
 
 use super::{Error, PreparedStatements};
@@ -19,43 +19,49 @@ impl<'a> Rewrite<'a> {
     }
 
     /// Rewrite a message if needed.
-    pub fn rewrite(&mut self, message: ProtocolMessage) -> Result<ProtocolMessage, Error> {
+    pub fn rewrite(&mut self, message: &mut ProtocolMessage) -> Result<(), Error> {
         match message {
-            ProtocolMessage::Bind(bind) => Ok(self.bind(bind)?.into()),
-            ProtocolMessage::Describe(describe) => Ok(self.describe(describe)?.into()),
-            ProtocolMessage::Parse(parse) => Ok(self.parse(parse)?.into()),
-            _ => Ok(message),
+            ProtocolMessage::Bind(ref mut bind) => Ok(self.bind(bind)?),
+            ProtocolMessage::Describe(ref mut describe) => Ok(self.describe(describe)?),
+            ProtocolMessage::Parse(ref mut parse) => Ok(self.parse(parse)?),
+            ProtocolMessage::Close(ref close) => Ok(self.close(close)?),
+            _ => Ok(()),
         }
     }
 
     /// Rewrite Parse message.
-    fn parse(&mut self, parse: Parse) -> Result<Parse, Error> {
-        let parse = self.statements.insert(parse);
-        Ok(parse)
+    fn parse(&mut self, parse: &mut Parse) -> Result<(), Error> {
+        self.statements.insert(parse);
+        Ok(())
     }
 
     /// Rerwrite Bind message.
-    fn bind(&mut self, bind: Bind) -> Result<Bind, Error> {
+    fn bind(&mut self, bind: &mut Bind) -> Result<(), Error> {
         let name = self.statements.name(bind.statement());
         if let Some(name) = name {
-            Ok(bind.rename(name))
-        } else {
-            Ok(bind)
+            bind.rename(name);
         }
+
+        Ok(())
     }
 
     /// Rewrite Describe message.
-    fn describe(&mut self, describe: Describe) -> Result<Describe, Error> {
+    fn describe(&mut self, describe: &mut Describe) -> Result<(), Error> {
         if describe.is_portal() {
-            Ok(describe)
+            Ok(())
         } else {
             let name = self.statements.name(describe.statement());
             if let Some(name) = name {
-                Ok(describe.rename(name))
-            } else {
-                Ok(describe)
+                describe.rename(name);
             }
+            Ok(())
         }
+    }
+
+    /// Handle Close message.
+    fn close(&mut self, close: &Close) -> Result<(), Error> {
+        self.statements.close(close.name());
+        Ok(())
     }
 }
 
@@ -71,34 +77,29 @@ mod test {
         let mut statements = PreparedStatements::default();
         let mut rewrite = Rewrite::new(&mut statements);
         let parse = Parse::named("__sqlx_1", "SELECT * FROM users");
-        let parse =
-            Parse::from_bytes(rewrite.rewrite(parse.into()).unwrap().to_bytes().unwrap()).unwrap();
+        let mut parse = ProtocolMessage::from(parse);
+        rewrite.rewrite(&mut parse).unwrap();
+        let parse = Parse::from_bytes(parse.to_bytes().unwrap()).unwrap();
 
         assert!(!parse.anonymous());
         assert_eq!(parse.name(), "__pgdog_1");
         assert_eq!(parse.query(), "SELECT * FROM users");
 
         let bind = Bind::new_statement("__sqlx_1");
-
-        let bind =
-            Bind::from_bytes(rewrite.rewrite(bind.into()).unwrap().to_bytes().unwrap()).unwrap();
+        let mut bind_msg = ProtocolMessage::from(bind);
+        rewrite.rewrite(&mut bind_msg).unwrap();
+        let bind = Bind::from_bytes(bind_msg.to_bytes().unwrap()).unwrap();
         assert_eq!(bind.statement(), "__pgdog_1");
 
         let describe = Describe::new_statement("__sqlx_1");
-
-        let describe = Describe::from_bytes(
-            rewrite
-                .rewrite(describe.into())
-                .unwrap()
-                .to_bytes()
-                .unwrap(),
-        )
-        .unwrap();
+        let mut describe = ProtocolMessage::from(describe);
+        rewrite.rewrite(&mut describe).unwrap();
+        let describe = Describe::from_bytes(describe.to_bytes().unwrap()).unwrap();
         assert_eq!(describe.statement(), "__pgdog_1");
         assert_eq!(describe.kind(), 'S');
 
         assert_eq!(statements.len_local(), 1);
-        assert_eq!(statements.global.lock().len(), 1);
+        assert_eq!(statements.global.read().len(), 1);
     }
 
     #[test]
@@ -107,13 +108,14 @@ mod test {
         let mut rewrite = Rewrite::new(&mut statements);
 
         let parse = Parse::new_anonymous("SELECT * FROM users");
-        let parse =
-            Parse::from_bytes(rewrite.rewrite(parse.into()).unwrap().to_bytes().unwrap()).unwrap();
+        let mut parse = ProtocolMessage::from(parse);
+        rewrite.rewrite(&mut parse).unwrap();
+        let parse = Parse::from_bytes(parse.to_bytes().unwrap()).unwrap();
 
         assert!(!parse.anonymous());
         assert_eq!(parse.query(), "SELECT * FROM users");
 
         assert_eq!(statements.len_local(), 1);
-        assert_eq!(statements.global.lock().len(), 1);
+        assert_eq!(statements.global.read().len(), 1);
     }
 }

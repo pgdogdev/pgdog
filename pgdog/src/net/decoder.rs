@@ -40,7 +40,7 @@ impl Decoder {
 
         if self.rd.is_empty() {
             if let Some(rd) = PreparedStatements::global()
-                .lock()
+                .read()
                 .row_description(bind.statement())
             {
                 self.rd = rd;

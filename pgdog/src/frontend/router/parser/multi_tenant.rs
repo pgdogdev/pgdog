@@ -5,7 +5,7 @@ use crate::{
     backend::Schema,
     config::MultiTenant,
     frontend::{
-        router::parser::{Table, WhereClause},
+        router::parser::{where_clause::TablesSource, Table, WhereClause},
         SearchPath,
     },
     net::Parameters,
@@ -47,24 +47,28 @@ impl<'a> MultiTenantCheck<'a> {
         match stmt.and_then(|n| n.node.as_ref()) {
             Some(NodeEnum::UpdateStmt(stmt)) => {
                 let table = stmt.relation.as_ref().map(Table::from);
-                let where_clause = WhereClause::new(table.map(|t| t.name), &stmt.where_clause);
+
                 if let Some(table) = table {
+                    let source = TablesSource::from(table);
+                    let where_clause = WhereClause::new(&source, &stmt.where_clause);
                     self.check(table, where_clause)?;
                 }
             }
             Some(NodeEnum::SelectStmt(stmt)) => {
                 let table = Table::try_from(&stmt.from_clause).ok();
-                let where_clause = WhereClause::new(table.map(|t| t.name), &stmt.where_clause);
 
                 if let Some(table) = table {
+                    let source = TablesSource::from(table);
+                    let where_clause = WhereClause::new(&source, &stmt.where_clause);
                     self.check(table, where_clause)?;
                 }
             }
             Some(NodeEnum::DeleteStmt(stmt)) => {
                 let table = stmt.relation.as_ref().map(Table::from);
-                let where_clause = WhereClause::new(table.map(|t| t.name), &stmt.where_clause);
 
                 if let Some(table) = table {
+                    let source = TablesSource::from(table);
+                    let where_clause = WhereClause::new(&source, &stmt.where_clause);
                     self.check(table, where_clause)?;
                 }
             }

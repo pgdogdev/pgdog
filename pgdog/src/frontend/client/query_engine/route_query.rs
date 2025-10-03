@@ -1,4 +1,3 @@
-use crate::net::{EmptyQueryResponse, ReadyForQuery};
 use tracing::{error, trace};
 
 use super::*;
@@ -8,11 +7,6 @@ impl QueryEngine {
         &mut self,
         context: &mut QueryEngineContext<'_>,
     ) -> Result<bool, Error> {
-        // Route request if we haven't already.
-        // if self.router.routed() {
-        //     return Ok(true);
-        // }
-
         // Admin doesn't have a cluster.
         let cluster = if let Ok(cluster) = self.backend.cluster() {
             cluster
@@ -29,27 +23,22 @@ impl QueryEngine {
         )?;
         match self.router.query(router_context) {
             Ok(cmd) => {
-                trace!("routing {:#?} to {:#?}", context.client_request, cmd);
+                trace!(
+                    "routing {:#?} to {:#?}",
+                    context.client_request.messages,
+                    cmd
+                );
             }
             Err(err) => {
-                if err.empty_query() {
-                    let mut bytes_sent = context.stream.send(&EmptyQueryResponse).await?;
-                    bytes_sent += context
-                        .stream
-                        .send_flush(&ReadyForQuery::in_transaction(context.in_transaction()))
-                        .await?;
-                    self.stats.sent(bytes_sent);
-                } else {
-                    error!("{:?} [{:?}]", err, context.stream.peer_addr());
-                    let bytes_sent = context
-                        .stream
-                        .error(
-                            ErrorResponse::syntax(err.to_string().as_str()),
-                            context.in_transaction(),
-                        )
-                        .await?;
-                    self.stats.sent(bytes_sent);
-                }
+                error!("{:?} [{:?}]", err, context.stream.peer_addr());
+                let bytes_sent = context
+                    .stream
+                    .error(
+                        ErrorResponse::syntax(err.to_string().as_str()),
+                        context.in_transaction(),
+                    )
+                    .await?;
+                self.stats.sent(bytes_sent);
                 return Ok(false);
             }
         }

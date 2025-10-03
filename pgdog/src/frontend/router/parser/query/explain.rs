@@ -3,14 +3,15 @@ use super::*;
 impl QueryParser {
     pub(super) fn explain(
         &mut self,
+        ast: &pg_query::ParseResult,
         stmt: &ExplainStmt,
-        context: &QueryParserContext,
+        context: &mut QueryParserContext,
     ) -> Result<Command, Error> {
         let query = stmt.query.as_ref().ok_or(Error::EmptyQuery)?;
         let node = query.node.as_ref().ok_or(Error::EmptyQuery)?;
 
         match node {
-            NodeEnum::SelectStmt(ref stmt) => self.select(stmt, context),
+            NodeEnum::SelectStmt(ref stmt) => self.select(ast, stmt, context),
             NodeEnum::InsertStmt(ref stmt) => Self::insert(stmt, context),
             NodeEnum::UpdateStmt(ref stmt) => Self::update(stmt, context),
             NodeEnum::DeleteStmt(ref stmt) => Self::delete(stmt, context),

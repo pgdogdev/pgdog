@@ -1,4 +1,5 @@
 //! PostgreSQL server connection.
+
 use std::time::Duration;
 
 use bytes::{BufMut, BytesMut};
@@ -17,6 +18,7 @@ use super::{
 };
 use crate::{
     auth::{md5, scram::Client},
+    config::AuthType,
     frontend::ClientRequest,
     net::{
         messages::{
@@ -45,7 +47,6 @@ pub struct Server {
     stream: Option<Stream>,
     id: BackendKeyData,
     params: Parameters,
-    startup_options: ServerOptions,
     changed_params: Parameters,
     client_params: Parameters,
     stats: Stats,
@@ -134,7 +135,7 @@ impl Server {
                 error!("server does not support TLS but it is required [{}]", addr,);
                 return Err(Error::TlsRequired);
             } else {
-                warn!(
+                debug!(
                     "server does not support TLS, continuing without encryption [{}]",
                     addr
                 );
@@ -156,6 +157,7 @@ impl Server {
 
         // Perform authentication.
         let mut scram = Client::new(&addr.user, &addr.password);
+        let mut auth_type = AuthType::Trust;
         loop {
             let message = stream.read().await?;
 
@@ -174,6 +176,7 @@ impl Server {
                             stream.send_flush(&password).await?;
                         }
                         Authentication::Sasl(_) => {
+                            auth_type = AuthType::Scram;
                             let initial = Password::sasl_initial(&scram.first()?);
                             stream.send_flush(&initial).await?;
                         }
@@ -188,6 +191,7 @@ impl Server {
                             scram.server_last(&data)?;
                         }
                         Authentication::Md5(salt) => {
+                            auth_type = AuthType::Md5;
                             let client = md5::Client::new_salt(&addr.user, &addr.password, &salt)?;
                             stream.send_flush(&client.response()).await?;
                         }
@@ -235,15 +239,19 @@ impl Server {
         let id = key_data.ok_or(Error::NoBackendKeyData)?;
         let params: Parameters = params.into();
 
-        info!("new server connection [{}]", addr);
+        info!(
+            "new server connection [{}, auth: {}] {}",
+            addr,
+            auth_type,
+            if stream.is_tls() { "🔓" } else { "" },
+        );
 
         let mut server = Server {
             addr: addr.clone(),
             stream: Some(stream),
             id,
-            stats: Stats::connect(id, addr, &params),
+            stats: Stats::connect(id, addr, &params, &options),
             replication_mode: options.replication_mode(),
-            startup_options: options,
             params,
             changed_params: Parameters::default(),
             client_params: Parameters::default(),
@@ -259,7 +267,6 @@ impl Server {
         };
 
         server.stats.memory_used(server.memory_usage()); // Stream capacity.
-        server.stats().update();
 
         Ok(server)
     }
@@ -417,6 +424,11 @@ impl Server {
                 let cmd = CommandComplete::from_bytes(message.to_bytes()?)?;
                 match cmd.command() {
                     "PREPARE" | "DEALLOCATE" => self.sync_prepared = true,
+                    "DEALLOCATE ALL" => self.prepared_statements.clear(),
+                    "DISCARD ALL" => {
+                        self.prepared_statements.clear();
+                        self.client_params.clear();
+                    }
                     "RESET" => self.client_params.clear(), // Someone reset params, we're gonna need to re-sync.
                     _ => (),
                 }
@@ -431,7 +443,11 @@ impl Server {
     }
 
     /// Synchronize parameters between client and server.
-    pub async fn link_client(&mut self, params: &Parameters) -> Result<usize, Error> {
+    pub async fn link_client(
+        &mut self,
+        id: &BackendKeyData,
+        params: &Parameters,
+    ) -> Result<usize, Error> {
         // Sync application_name parameter
         // and update it in the stats.
         let default_name = "PgDog";
@@ -439,7 +455,7 @@ impl Server {
             .client_params
             .get_default("application_name", default_name);
         let client_name = params.get_default("application_name", default_name);
-        self.stats.link_client(client_name, server_name);
+        self.stats.link_client(client_name, server_name, id);
 
         // Clear any params previously tracked by SET.
         self.changed_params.clear();
@@ -479,7 +495,7 @@ impl Server {
     /// Server can execute a query.
     pub fn in_sync(&self) -> bool {
         matches!(
-            self.stats.state,
+            self.stats().state,
             State::Idle | State::IdleInTransaction | State::TransactionError
         )
     }
@@ -487,7 +503,7 @@ impl Server {
     /// Server is done executing all queries and is
     /// not inside a transaction.
     pub fn can_check_in(&self) -> bool {
-        self.stats.state == State::Idle
+        self.stats().state == State::Idle
     }
 
     /// Server hasn't sent all messages yet.
@@ -508,7 +524,7 @@ impl Server {
     /// The server connection permanently failed.
     #[inline]
     pub fn error(&self) -> bool {
-        self.stats.state == State::Error
+        self.stats().state == State::Error
     }
 
     /// Did the schema change and prepared statements are broken.
@@ -529,7 +545,7 @@ impl Server {
 
     /// Close the connection, don't do any recovery.
     pub fn force_close(&self) -> bool {
-        self.stats.state == State::ForceClose
+        self.stats().state == State::ForceClose
     }
 
     /// Server parameters.
@@ -744,10 +760,6 @@ impl Server {
         Ok(())
     }
 
-    pub async fn reconnect(&self) -> Result<Server, Error> {
-        Self::connect(&self.addr, self.startup_options.clone()).await
-    }
-
     /// Reset error state caused by schema change.
     #[inline]
     pub fn reset_schema_changed(&mut self) {
@@ -779,19 +791,19 @@ impl Server {
     /// How old this connection is.
     #[inline]
     pub fn age(&self, instant: Instant) -> Duration {
-        instant.duration_since(self.stats.created_at)
+        instant.duration_since(self.stats().created_at)
     }
 
     /// How long this connection has been idle.
     #[inline]
     pub fn idle_for(&self, instant: Instant) -> Duration {
-        instant.duration_since(self.stats.last_used)
+        instant.duration_since(self.stats().last_used)
     }
 
     /// How long has it been since the last connection healthcheck.
     #[inline]
     pub fn healthcheck_age(&self, instant: Instant) -> Duration {
-        if let Some(last_healthcheck) = self.stats.last_healthcheck {
+        if let Some(last_healthcheck) = self.stats().last_healthcheck {
             instant.duration_since(last_healthcheck)
         } else {
             Duration::MAX
@@ -871,7 +883,7 @@ impl Server {
 
 impl Drop for Server {
     fn drop(&mut self) {
-        self.stats.disconnect();
+        self.stats().disconnect();
         if let Some(mut stream) = self.stream.take() {
             // If you see a lot of these, tell your clients
             // to not send queries unless they are willing to stick
@@ -879,7 +891,7 @@ impl Drop for Server {
             let out_of_sync = if self.done() {
                 " ".into()
             } else {
-                format!(" {} ", self.stats.state)
+                format!(" {} ", self.stats().state)
             };
             info!("closing{}server connection [{}]", out_of_sync, self.addr,);
 
@@ -906,11 +918,10 @@ pub mod test {
             Self {
                 stream: None,
                 id,
-                startup_options: ServerOptions::default(),
                 params: Parameters::default(),
                 changed_params: Parameters::default(),
                 client_params: Parameters::default(),
-                stats: Stats::connect(id, &addr, &Parameters::default()),
+                stats: Stats::connect(id, &addr, &Parameters::default(), &ServerOptions::default()),
                 prepared_statements: super::PreparedStatements::new(),
                 addr,
                 dirty: false,
@@ -1065,7 +1076,7 @@ pub mod test {
         for i in 0..25 {
             let name = format!("test_prepared_{}", i);
             let parse = Parse::named(&name, format!("SELECT $1, 'test_{}'", name));
-            let (new, new_name) = PreparedStatements::global().lock().insert(&parse);
+            let (new, new_name) = PreparedStatements::global().write().insert(&parse);
             let name = new_name;
             let parse = parse.rename(&name);
             assert!(new);
@@ -1146,7 +1157,7 @@ pub mod test {
         use crate::net::bind::Parameter;
         let global = PreparedStatements::global();
         let parse = Parse::named("random_name", "SELECT $1");
-        let (new, name) = global.lock().insert(&parse);
+        let (new, name) = global.write().insert(&parse);
         assert!(new);
         let parse = parse.rename(&name);
         assert_eq!(parse.name(), "__pgdog_1");
@@ -1541,7 +1552,8 @@ pub mod test {
         let mut server = test_server().await;
 
         let mut prep = PreparedStatements::new();
-        let parse = prep.insert_anyway(Parse::named("test", "SELECT 1::bigint"));
+        let mut parse = Parse::named("test", "SELECT 1::bigint");
+        prep.insert_anyway(&mut parse);
         assert_eq!(parse.name(), "__pgdog_1");
 
         server
@@ -1619,7 +1631,10 @@ pub mod test {
         let mut params = Parameters::default();
         params.insert("application_name", "test_sync_params");
         println!("server state: {}", server.stats().state);
-        let changed = server.link_client(&params).await.unwrap();
+        let changed = server
+            .link_client(&BackendKeyData::new(), &params)
+            .await
+            .unwrap();
         assert_eq!(changed, 1);
 
         let app_name = server
@@ -1628,7 +1643,10 @@ pub mod test {
             .unwrap();
         assert_eq!(app_name[0], "test_sync_params");
 
-        let changed = server.link_client(&params).await.unwrap();
+        let changed = server
+            .link_client(&BackendKeyData::new(), &params)
+            .await
+            .unwrap();
         assert_eq!(changed, 0);
     }
 
@@ -1715,20 +1733,20 @@ pub mod test {
 
         let mut server = test_server().await;
 
-        let changed = server.link_client(&params).await?;
+        let changed = server.link_client(&BackendKeyData::new(), &params).await?;
         assert_eq!(changed, 1);
 
-        let changed = server.link_client(&params).await?;
+        let changed = server.link_client(&BackendKeyData::new(), &params).await?;
         assert_eq!(changed, 0);
 
         for i in 0..25 {
             let value = format!("apples_{}", i);
             params.insert("application_name", value);
 
-            let changed = server.link_client(&params).await?;
+            let changed = server.link_client(&BackendKeyData::new(), &params).await?;
             assert_eq!(changed, 2); // RESET, SET.
 
-            let changed = server.link_client(&params).await?;
+            let changed = server.link_client(&BackendKeyData::new(), &params).await?;
             assert_eq!(changed, 0);
         }
 
@@ -1972,5 +1990,83 @@ pub mod test {
                 assert_eq!(msg.code(), c);
             }
         }
+    }
+
+    #[tokio::test]
+    async fn test_deallocate_all_clears_cache() {
+        let mut server = test_server().await;
+
+        server
+            .send(
+                &vec![
+                    Parse::named("__pgdog_1", "SELECT $1::bigint").into(),
+                    Parse::named("__pgdog_2", "SELECT 123").into(),
+                    Parse::named("__pgdog_3", "SELECT 1234").into(),
+                    Parse::named("__pgdog_4", "SELECT 12345").into(),
+                    Flush.into(),
+                ]
+                .into(),
+            )
+            .await
+            .unwrap();
+
+        for _ in 0..4 {
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), '1');
+        }
+
+        assert_eq!(server.prepared_statements.len(), 4);
+
+        server
+            .send(&vec![Query::new("DEALLOCATE ALL").into(), Sync.into()].into())
+            .await
+            .unwrap();
+
+        for c in ['C', 'Z', 'Z'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), c);
+        }
+
+        assert_eq!(server.prepared_statements.len(), 0);
+        assert!(server.done());
+    }
+
+    #[tokio::test]
+    async fn test_discard_all_clears_cache() {
+        let mut server = test_server().await;
+
+        server
+            .send(
+                &vec![
+                    Parse::named("__pgdog_1", "SELECT $1::bigint").into(),
+                    Parse::named("__pgdog_2", "SELECT 123").into(),
+                    Parse::named("__pgdog_3", "SELECT 1234").into(),
+                    Parse::named("__pgdog_4", "SELECT 12345").into(),
+                    Flush.into(),
+                ]
+                .into(),
+            )
+            .await
+            .unwrap();
+
+        for _ in 0..4 {
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), '1');
+        }
+
+        assert_eq!(server.prepared_statements.len(), 4);
+
+        server
+            .send(&vec![Query::new("DISCARD ALL").into(), Sync.into()].into())
+            .await
+            .unwrap();
+
+        for c in ['C', 'Z', 'Z'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), c);
+        }
+
+        assert_eq!(server.prepared_statements.len(), 0);
+        assert!(server.done());
     }
 }

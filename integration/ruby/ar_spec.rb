@@ -157,6 +157,34 @@ describe 'active record' do
           end
         end
       end
+
+      it 'can handle DISCARD ALL with prepared statements' do
+        # Create some records to work with
+        5.times do |i|
+          Sharded.create value: "test_#{i}"
+        end
+
+        5.times do |i|
+          record = Sharded.where(value: "test_#{i}").first
+          expect(record.value).to eq("test_#{i}")
+        end
+
+        ActiveRecord::Base.connection.execute 'DISCARD ALL'
+
+        5.times do |i|
+          record = Sharded.where(value: "test_#{i}").first
+          expect(record.value).to eq("test_#{i}")
+        end
+
+        # Verify prepared stataments exist
+        new_record = Sharded.create value: 'after_discard'
+        expect(new_record.value).to eq('after_discard')
+        record = Sharded.where(value: 'after_discard').first
+        expect(record.value).to eq('after_discard')
+
+        count = Sharded.count
+        expect(count).to eq(6)
+      end
     end
   end
 end

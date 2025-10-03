@@ -14,6 +14,8 @@ pub struct Stats {
     pub bytes_received: usize,
     /// Transactions served.
     pub transactions: usize,
+    /// Two-pc transactions.
+    pub transactions_2pc: usize,
     /// Queries served.
     pub queries: usize,
     /// Errors.
@@ -55,6 +57,7 @@ impl Stats {
             bytes_sent: 0,
             bytes_received: 0,
             transactions: 0,
+            transactions_2pc: 0,
             queries: 0,
             errors: 0,
             transaction_time: Duration::from_secs(0),
@@ -72,10 +75,13 @@ impl Stats {
         }
     }
 
-    pub(super) fn transaction(&mut self) {
+    pub(super) fn transaction(&mut self, two_pc: bool) {
         self.last_transaction_time = self.transaction_timer.elapsed();
         self.transactions += 1;
         self.transaction_time += self.last_transaction_time;
+        if two_pc {
+            self.transactions_2pc += 1;
+        }
         self.state = State::Idle;
     }
 
