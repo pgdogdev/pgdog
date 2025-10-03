@@ -10,9 +10,9 @@ impl FromBytes for ParameterDescription {
     fn from_bytes(mut bytes: Bytes) -> Result<Self, Error> {
         code!(bytes, 't');
         let _len = bytes.get_i32();
-        let num_params = bytes.get_i16();
-        let mut params = vec![];
-        for _ in 0..num_params {
+        let num_params = bytes.get_u16();
+        let mut params = Vec::with_capacity(num_params as usize);
+        for _ in 0..num_params as usize {
             params.push(bytes.get_i32());
         }
         Ok(Self { params })
@@ -22,7 +22,7 @@ impl FromBytes for ParameterDescription {
 impl ToBytes for ParameterDescription {
     fn to_bytes(&self) -> Result<Bytes, Error> {
         let mut payload = Payload::named(self.code());
-        payload.put_i16(self.params.len() as i16);
+        payload.put_u16(self.params.len() as u16);
         for param in &self.params {
             payload.put_i32(*param);
         }

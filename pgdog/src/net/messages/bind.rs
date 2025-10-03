@@ -262,15 +262,15 @@ impl FromBytes for Bind {
         from_utf8(&portal[0..portal.len() - 1])?;
         from_utf8(&statement[0..statement.len() - 1])?;
 
-        let num_codes = bytes.get_i16();
-        let codes = (0..num_codes)
+        let num_codes = bytes.get_u16();
+        let codes = (0..num_codes as usize)
             .map(|_| match bytes.get_i16() {
                 0 => Format::Text,
                 _ => Format::Binary,
             })
             .collect();
         let num_params = bytes.get_u16();
-        let params = (0..num_params)
+        let params = (0..num_params as usize)
             .map(|_| {
                 let len = bytes.get_i32();
                 let data = if len >= 0 {
@@ -309,7 +309,7 @@ impl ToBytes for Bind {
 
         payload.put(self.portal.clone());
         payload.put(self.statement.clone());
-        payload.put_i16(self.codes.len() as i16);
+        payload.put_u16(self.codes.len() as u16);
         for code in &self.codes {
             payload.put_i16(match code {
                 Format::Text => 0,
