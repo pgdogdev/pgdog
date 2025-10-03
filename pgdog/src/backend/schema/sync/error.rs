@@ -34,4 +34,7 @@ pub enum Error {
 
     #[error("missing entity in dump")]
     MissingEntity,
+
+    #[error("publication \"{0}\" has no tables")]
+    PublicationNoTables(String),
 }

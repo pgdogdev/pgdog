@@ -1,11 +1,11 @@
 [[users]]
-name = "pgdog-4"
+name = "pgdog"
 database = "source"
 password = "pgdog"
 schema_admin = true
 
 [[users]]
-name = "pgdog-4"
+name = "pgdog"
 database = "destination"
 password = "pgdog"
 schema_admin = true
