@@ -187,28 +187,50 @@ impl Client {
             conn.cluster()?.password()
         };
 
+        let mut auth_ok = false;
+
+        if let Some(ref passthrough_password) = passthrough_password {
+            if passthrough_password != password && auth_type != &AuthType::Trust {
+                stream.fatal(ErrorResponse::auth(user, database)).await?;
+                return Ok(None);
+            } else {
+                auth_ok = true;
+            }
+        }
+
         let auth_type = &config.config.general.auth_type;
-        let auth_ok = match auth_type {
-            AuthType::Md5 => {
-                let md5 = md5::Client::new(user, password);
-                stream.send_flush(&md5.challenge()).await?;
-                let password = Password::from_bytes(stream.read().await?.to_bytes()?)?;
-                if let Password::PasswordMessage { response } = password {
-                    md5.check(&response)
-                } else {
-                    false
+        if !auth_ok {
+            auth_ok = match auth_type {
+                AuthType::Md5 => {
+                    let md5 = md5::Client::new(user, password);
+                    stream.send_flush(&md5.challenge()).await?;
+                    let password = Password::from_bytes(stream.read().await?.to_bytes()?)?;
+                    if let Password::PasswordMessage { response } = password {
+                        md5.check(&response)
+                    } else {
+                        false
+                    }
                 }
+
+                AuthType::Scram => {
+                    stream.send_flush(&Authentication::scram()).await?;
+
+                    let scram = Server::new(password);
+                    let res = scram.handle(&mut stream).await;
+                    matches!(res, Ok(true))
+                }
+
+                AuthType::Plain => {
+                    stream
+                        .send_flush(&Authentication::ClearTextPassword)
+                        .await?;
+                    let response = stream.read().await?;
+                    let response = Password::from_bytes(response.to_bytes()?)?;
+                    response.password() == Some(password)
+                }
+
+                AuthType::Trust => true,
             }
-
-            AuthType::Scram => {
-                stream.send_flush(&Authentication::scram()).await?;
-
-                let scram = Server::new(password);
-                let res = scram.handle(&mut stream).await;
-                matches!(res, Ok(true))
-            }
-
-            AuthType::Trust => true,
         };
 
         if !auth_ok {
@@ -252,8 +274,16 @@ impl Client {
 
         if config.config.general.log_connections {
             info!(
-                r#"client "{}" connected to database "{}" [{}]"#,
-                user, database, addr
+                r#"client "{}" connected to database "{}" [{}, auth: {}] {}"#,
+                user,
+                database,
+                addr,
+                if passthrough_password.is_some() {
+                    "passthrough".into()
+                } else {
+                    auth_type.to_string()
+                },
+                if stream.is_tls() { "🔓" } else { "" }
             );
         }
 
