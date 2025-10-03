@@ -14,3 +14,4 @@ pub mod shard_consistency;
 pub mod stddev;
 pub mod syntax_error;
 pub mod timestamp_sorting;
+pub mod tls_reload;
