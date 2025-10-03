@@ -110,6 +110,7 @@ async fn show_pools_reports_schema_admin_flag() {
         "pool_mode",
         "paused",
         "banned",
+        "healthy",
         "errors",
         "re_synced",
         "out_of_sync",
