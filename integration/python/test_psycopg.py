@@ -83,23 +83,37 @@ def _execute_parameter_count(conn, count: int) -> int:
     return value
 
 
-def test_direct_postgres_accepts_65535_bind_parameters():
-    conn = direct_sync()
-    try:
-        length = _execute_parameter_count(conn, 65_535)
-        assert length == 65_535
-    finally:
-        conn.close()
+@pytest.mark.parametrize(
+    "count, expect_error_keywords",
+    [
+        (65_535, ()),
+        (65_536, ("between 0 and 65535", "too many")),
+    ],
+)
+def test_postgres_variants_parameter_limits(count, expect_error_keywords):
+    successes = []
+    errors = []
+    for connector in (direct_sync, normal_sync):
+        conn = connector()
+        try:
+            if expect_error_keywords:
+                with pytest.raises(psycopg.Error) as excinfo:
+                    _execute_parameter_count(conn, count)
 
+                message = str(excinfo.value).lower()
+                errors.append(message)
+                try:
+                    conn.rollback()
+                except psycopg.Error:
+                    pass
+            else:
+                successes.append(_execute_parameter_count(conn, count))
+        finally:
+            conn.close()
 
-def test_direct_postgres_rejects_65536_bind_parameters():
-    conn = direct_sync()
-    try:
-        with pytest.raises(psycopg.Error) as excinfo:
-            _execute_parameter_count(conn, 65_536)
-
-        message = str(excinfo.value).lower()
-        assert "between 0 and 65535" in message or "too many" in message
-    finally:
-        conn.rollback()
-        conn.close()
+    if expect_error_keywords:
+        assert len(errors) == 2
+        for message in errors:
+            assert any(keyword in message for keyword in expect_error_keywords)
+    else:
+        assert successes == [count, count]
