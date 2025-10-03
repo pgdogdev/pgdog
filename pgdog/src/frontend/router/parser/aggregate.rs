@@ -340,15 +340,14 @@ mod test {
 
     #[test]
     fn test_parse_group_by_ordinals() {
-        let query = pg_query::parse(
-            "SELECT price, category_id, SUM(quantity) FROM menu GROUP BY 1, 2",
-        )
-        .unwrap()
-        .protobuf
-        .stmts
-        .first()
-        .cloned()
-        .unwrap();
+        let query =
+            pg_query::parse("SELECT price, category_id, SUM(quantity) FROM menu GROUP BY 1, 2")
+                .unwrap()
+                .protobuf
+                .stmts
+                .first()
+                .cloned()
+                .unwrap();
         match query.stmt.unwrap().node.unwrap() {
             NodeEnum::SelectStmt(stmt) => {
                 let aggr = Aggregate::parse(&stmt).unwrap();
