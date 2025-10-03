@@ -337,4 +337,49 @@ mod test {
             _ => panic!("not a select"),
         }
     }
+
+    #[test]
+    fn test_parse_group_by_ordinals() {
+        let query = pg_query::parse(
+            "SELECT price, category_id, SUM(quantity) FROM menu GROUP BY 1, 2",
+        )
+        .unwrap()
+        .protobuf
+        .stmts
+        .first()
+        .cloned()
+        .unwrap();
+        match query.stmt.unwrap().node.unwrap() {
+            NodeEnum::SelectStmt(stmt) => {
+                let aggr = Aggregate::parse(&stmt).unwrap();
+                assert_eq!(aggr.group_by(), &[0, 1]);
+                assert_eq!(aggr.targets().len(), 1);
+                let target = &aggr.targets()[0];
+                assert!(matches!(target.function(), AggregateFunction::Sum));
+                assert_eq!(target.column(), 2);
+            }
+            _ => panic!("not a select"),
+        }
+    }
+
+    #[test]
+    fn test_parse_sum_distinct_sets_flag() {
+        let query = pg_query::parse("SELECT SUM(DISTINCT price) FROM menu")
+            .unwrap()
+            .protobuf
+            .stmts
+            .first()
+            .cloned()
+            .unwrap();
+        match query.stmt.unwrap().node.unwrap() {
+            NodeEnum::SelectStmt(stmt) => {
+                let aggr = Aggregate::parse(&stmt).unwrap();
+                assert_eq!(aggr.targets().len(), 1);
+                let target = &aggr.targets()[0];
+                assert!(matches!(target.function(), AggregateFunction::Sum));
+                assert!(target.is_distinct());
+            }
+            _ => panic!("not a select"),
+        }
+    }
 }

@@ -1118,4 +1118,93 @@ mod test {
         assert_eq!(avg0, 12.0);
         assert_eq!(avg1, 18.0);
     }
+
+    #[test]
+    fn aggregate_errors_when_helper_alias_missing() {
+        let stmt = pg_query::parse("SELECT AVG(price) FROM menu")
+            .unwrap()
+            .protobuf
+            .stmts
+            .first()
+            .cloned()
+            .unwrap();
+        let aggregate = match stmt.stmt.unwrap().node.unwrap() {
+            pg_query::NodeEnum::SelectStmt(stmt) => Aggregate::parse(&stmt).unwrap(),
+            _ => panic!("expected select stmt"),
+        };
+
+        let rd = RowDescription::new(&[Field::double("avg")]);
+        let decoder = Decoder::from(&rd);
+
+        let mut rows = VecDeque::new();
+        let mut shard0 = DataRow::new();
+        shard0.add(12.0_f64);
+        rows.push_back(shard0);
+
+        let mut plan = RewritePlan::new();
+        plan.add_helper(HelperMapping {
+            target_column: 0,
+            helper_column: 1,
+            expr_id: 0,
+            distinct: false,
+            kind: HelperKind::Count,
+            alias: "__pgdog_count_expr0_col0".into(),
+        });
+
+        let result = Aggregates::new(&rows, &decoder, &aggregate, &plan).aggregate();
+
+        match result {
+            Err(Error::UnsupportedAggregation { function, reason }) => {
+                assert_eq!(function, "aggregate");
+                assert!(reason.contains("missing helper column alias"));
+            }
+            other => panic!("expected unsupported aggregation error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn aggregate_group_by_merges_rows() {
+        let stmt = pg_query::parse("SELECT price, SUM(quantity) FROM menu GROUP BY 1")
+            .unwrap()
+            .protobuf
+            .stmts
+            .first()
+            .cloned()
+            .unwrap();
+        let aggregate = match stmt.stmt.unwrap().node.unwrap() {
+            pg_query::NodeEnum::SelectStmt(stmt) => Aggregate::parse(&stmt).unwrap(),
+            _ => panic!("expected select stmt"),
+        };
+
+        let rd = RowDescription::new(&[Field::double("price"), Field::bigint("sum")]);
+        let decoder = Decoder::from(&rd);
+
+        let mut rows = VecDeque::new();
+        let mut shard0 = DataRow::new();
+        shard0.add(10.0_f64).add(5_i64);
+        rows.push_back(shard0);
+        let mut shard1 = DataRow::new();
+        shard1.add(10.0_f64).add(7_i64);
+        rows.push_back(shard1);
+        let mut shard2 = DataRow::new();
+        shard2.add(20.0_f64).add(4_i64);
+        rows.push_back(shard2);
+
+        let mut result = Aggregates::new(&rows, &decoder, &aggregate, &RewritePlan::new())
+            .aggregate()
+            .unwrap();
+
+        assert_eq!(result.len(), 2);
+        let mut groups: Vec<(f64, i64)> = result
+            .drain(..)
+            .map(|row| {
+                let price = row.get::<Double>(0, Format::Text).unwrap().0;
+                let sum = row.get::<i64>(1, Format::Text).unwrap();
+                (price, sum)
+            })
+            .collect();
+        groups.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+        assert_eq!(groups[0], (10.0, 12));
+        assert_eq!(groups[1], (20.0, 4));
+    }
 }
