@@ -4,7 +4,9 @@ use pg_query::protobuf::{
 };
 use pg_query::{NodeEnum, ParseResult};
 
-/// Query rewrite engine. Currently supports injecting helper aggregates for AVG.
+/// Query rewrite engine. Currently supports injecting helper aggregates for AVG and
+/// variance-related functions that require additional helper aggregates when run
+/// across shards.
 #[derive(Default)]
 pub struct RewriteEngine;
 
@@ -14,16 +16,18 @@ impl RewriteEngine {
     }
 
     /// Rewrite a SELECT query, adding helper aggregates when necessary.
-    pub fn rewrite_select(&self, sql: &str, aggregate: &Aggregate) -> RewriteOutput {
-        match pg_query::parse(sql) {
-            Ok(parsed) => self.rewrite_parsed(parsed, aggregate, sql),
-            Err(_) => RewriteOutput::new(sql.to_string(), RewritePlan::new()),
-        }
+    pub fn rewrite_select(
+        &self,
+        ast: &ParseResult,
+        sql: &str,
+        aggregate: &Aggregate,
+    ) -> RewriteOutput {
+        self.rewrite_parsed(ast, aggregate, sql)
     }
 
     fn rewrite_parsed(
         &self,
-        parsed: ParseResult,
+        parsed: &ParseResult,
         aggregate: &Aggregate,
         original_sql: &str,
     ) -> RewriteOutput {
@@ -57,19 +61,26 @@ impl RewriteEngine {
             let Some(node) = select.target_list.get(target.column()) else {
                 continue;
             };
-            let Some(NodeEnum::ResTarget(res_target)) = node.node.as_ref() else {
-                continue;
-            };
-            let Some(original_value) = res_target.val.as_ref() else {
-                continue;
-            };
-            let location = res_target.location;
-            let Some(NodeEnum::FuncCall(func_call)) = original_value.node.as_ref() else {
+            let Some((location, helper_specs)) = ({
+                if let Some(NodeEnum::ResTarget(res_target)) = node.node.as_ref() {
+                    if let Some(original_value) = res_target.val.as_ref() {
+                        if let Some(func_call) = Self::extract_func_call(original_value) {
+                            let specs =
+                                Self::helper_specs(func_call, target.function(), target.is_distinct());
+                            Some((res_target.location, specs))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }) else {
                 continue;
             };
 
-            let helper_specs =
-                Self::helper_specs(func_call, target.function(), target.is_distinct());
             if helper_specs.is_empty() {
                 continue;
             }
@@ -128,6 +139,29 @@ impl RewriteEngine {
 
         let rewritten_sql = ast.deparse().unwrap_or_else(|_| original_sql.to_string());
         RewriteOutput::new(rewritten_sql, plan)
+    }
+
+    fn extract_func_call(node: &Node) -> Option<&FuncCall> {
+        match node.node.as_ref()? {
+            NodeEnum::FuncCall(func) => Some(func),
+            NodeEnum::TypeCast(cast) => cast
+                .arg
+                .as_deref()
+                .and_then(|inner| Self::extract_func_call(inner)),
+            NodeEnum::CollateClause(collate) => collate
+                .arg
+                .as_deref()
+                .and_then(|inner| Self::extract_func_call(inner)),
+            NodeEnum::CoerceToDomain(coerce) => coerce
+                .arg
+                .as_deref()
+                .and_then(|inner| Self::extract_func_call(inner)),
+            NodeEnum::ResTarget(res) => res
+                .val
+                .as_deref()
+                .and_then(|inner| Self::extract_func_call(inner)),
+            _ => None,
+        }
     }
 
     fn build_count_func(original: &FuncCall, distinct: bool) -> FuncCall {
@@ -291,7 +325,7 @@ mod tests {
             None => panic!("empty"),
         };
         let aggregate = Aggregate::parse(stmt).unwrap();
-        RewriteEngine::new().rewrite_select(sql, &aggregate)
+        RewriteEngine::new().rewrite_select(&ast, sql, &aggregate)
     }
 
     #[test]

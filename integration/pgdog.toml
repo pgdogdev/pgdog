@@ -16,6 +16,8 @@ query_cache_limit = 500
 pub_sub_channel_size = 4098
 two_phase_commit = false
 healthcheck_port = 8080
+tls_certificate = "integration/tls/cert.pem"
+tls_private_key = "integration/tls/key.pem"
 
 # ------------------------------------------------------------------------------
 # ----- Database :: pgdog ------------------------------------------------------
@@ -217,6 +219,60 @@ database = "pgdog_sharded"
 name = "sharded_uuid"
 column = "id_uuid"
 data_type = "uuid"
+
+# ------------------------------------------------------------------------------
+# ----- SQL Regression Sample --------------------------------------------------
+
+[[sharded_tables]]
+database = "pgdog_sharded"
+name = "sql_regression_sample"
+column = "id"
+data_type = "bigint"
+
+[[sharded_mappings]]
+database = "pgdog_sharded"
+table = "sql_regression_sample"
+column = "id"
+kind = "range"
+start = 0
+end = 100
+shard = 0
+
+[[sharded_mappings]]
+database = "pgdog_sharded"
+table = "sql_regression_sample"
+column = "id"
+kind = "range"
+start = 100
+end = 200
+shard = 1
+
+# ------------------------------------------------------------------------------
+# ----- SQL Regression Samples -------------------------------------------------
+
+[[sharded_tables]]
+database = "pgdog_sharded"
+name = "sql_regression_samples"
+column = "id"
+data_type = "bigint"
+
+[[sharded_mappings]]
+database = "pgdog_sharded"
+table = "sql_regression_samples"
+column = "id"
+kind = "range"
+start = 0
+end = 100
+shard = 0
+
+[[sharded_mappings]]
+database = "pgdog_sharded"
+table = "sql_regression_samples"
+column = "id"
+kind = "range"
+start = 100
+end = 200
+shard = 1
 
 # ------------------------------------------------------------------------------
 # ----- Range Sharded :: BIGINT ------------------------------------------------

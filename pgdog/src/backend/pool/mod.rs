@@ -1,7 +1,6 @@
 //! Manage connections to the servers.
 
 pub mod address;
-pub mod ban;
 pub mod cleanup;
 pub mod cluster;
 pub mod comms;
@@ -33,7 +32,7 @@ pub use error::Error;
 pub use guard::Guard;
 pub use healthcheck::Healtcheck;
 pub use mirror_stats::MirrorStats;
-use monitor::Monitor;
+pub use monitor::Monitor;
 pub use oids::Oids;
 pub use pool_impl::Pool;
 pub use replicas::Replicas;
@@ -42,7 +41,6 @@ pub use shard::Shard;
 pub use state::State;
 pub use stats::Stats;
 
-use ban::Ban;
 use comms::Comms;
 use inner::Inner;
 use mapping::Mapping;

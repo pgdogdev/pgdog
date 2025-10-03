@@ -42,7 +42,6 @@ pub struct Cluster {
     schema: Arc<RwLock<Schema>>,
     multi_tenant: Option<MultiTenant>,
     rw_strategy: ReadWriteStrategy,
-    rw_split: ReadWriteSplit,
     schema_admin: bool,
     stats: Arc<Mutex<MirrorStats>>,
     cross_shard_disabled: bool,
@@ -158,7 +157,6 @@ impl Cluster {
             schema: Arc::new(RwLock::new(Schema::default())),
             multi_tenant: multi_tenant.clone(),
             rw_strategy,
-            rw_split,
             schema_admin,
             stats: Arc::new(Mutex::new(MirrorStats::default())),
             cross_shard_disabled,
@@ -193,30 +191,6 @@ impl Cluster {
     pub(crate) fn move_conns_to(&self, other: &Cluster) {
         for (from, to) in self.shards.iter().zip(other.shards.iter()) {
             from.move_conns_to(to);
-        }
-    }
-
-    /// Create new identical cluster connection pool.
-    ///
-    /// This will allocate new server connections. Use when reloading configuration
-    /// and you expect to drop the current Cluster entirely.
-    pub fn duplicate(&self) -> Self {
-        Self {
-            identifier: self.identifier.clone(),
-            shards: self.shards.iter().map(|s| s.duplicate()).collect(),
-            password: self.password.clone(),
-            pooler_mode: self.pooler_mode,
-            sharded_tables: self.sharded_tables.clone(),
-            replication_sharding: self.replication_sharding.clone(),
-            schema: self.schema.clone(),
-            multi_tenant: self.multi_tenant.clone(),
-            rw_strategy: self.rw_strategy,
-            rw_split: self.rw_split,
-            schema_admin: self.schema_admin,
-            stats: Arc::new(Mutex::new(MirrorStats::default())),
-            cross_shard_disabled: self.cross_shard_disabled,
-            two_phase_commit: self.two_phase_commit,
-            two_phase_commit_auto: self.two_phase_commit_auto,
         }
     }
 

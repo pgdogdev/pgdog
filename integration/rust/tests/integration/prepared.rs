@@ -80,6 +80,136 @@ async fn test_prepared_cache() {
 }
 
 #[tokio::test]
+async fn test_prepared_cache_respects_limit() {
+    let admin = admin_sqlx().await;
+
+    // Start from a clean state so results aren't influenced by previous tests.
+    admin.execute("RECONNECT").await.unwrap();
+    admin
+        .execute("SET prepared_statements_limit TO 100")
+        .await
+        .unwrap();
+
+    // Run the average helper query a few times to populate the cache.
+    for _ in 0..3 {
+        let pools = connections_sqlx().await;
+        for pool in &pools {
+            sqlx::query("/* test_prepared_cache_rust */ SELECT $1")
+                .bind(5)
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        }
+
+        for pool in pools {
+            pool.close().await;
+        }
+    }
+
+    let mut prepared = admin.fetch_all("SHOW PREPARED").await.unwrap();
+    prepared.retain(|row| {
+        row.get::<String, &str>("statement")
+            .contains("/* test_prepared_cache_rust")
+    });
+    assert_eq!(
+        prepared.len(),
+        2,
+        "expected the original statement plus its helper"
+    );
+
+    // Tighten the cache limit and ensure unused statements are evicted.
+    admin
+        .execute("SET prepared_statements_limit TO 1")
+        .await
+        .unwrap();
+
+    let mut prepared = admin.fetch_all("SHOW PREPARED").await.unwrap();
+    prepared.retain(|row| {
+        row.get::<String, &str>("statement")
+            .contains("/* test_prepared_cache_rust")
+    });
+    assert!(
+        prepared.len() <= 1,
+        "expected helper statements to be evicted when limit drops"
+    );
+
+    admin.execute("RELOAD").await.unwrap();
+}
+
+#[tokio::test]
+async fn test_prepared_cache_helper_evicted_on_close() {
+    let admin = admin_sqlx().await;
+    admin.execute("RECONNECT").await.unwrap();
+    admin
+        .execute("SET prepared_statements_limit TO 100")
+        .await
+        .unwrap();
+
+    let mut pools = connections_sqlx().await;
+    let sharded = pools.remove(1);
+    let primary = pools.remove(0);
+
+    // Build a deterministic dataset per shard to trigger AVG rewrite.
+    for shard in [0, 1] {
+        let drop = format!(
+            "/* pgdog_shard: {} */ DROP TABLE IF EXISTS avg_helper_cleanup",
+            shard
+        );
+        sharded.execute(drop.as_str()).await.ok();
+
+        let create = format!(
+            "/* pgdog_shard: {} */ CREATE TABLE avg_helper_cleanup(price DOUBLE PRECISION)",
+            shard
+        );
+        sharded.execute(create.as_str()).await.unwrap();
+    }
+
+    sharded
+        .execute("/* pgdog_shard: 0 */ INSERT INTO avg_helper_cleanup(price) VALUES (10.0), (14.0)")
+        .await
+        .unwrap();
+    sharded
+        .execute("/* pgdog_shard: 1 */ INSERT INTO avg_helper_cleanup(price) VALUES (18.0), (22.0)")
+        .await
+        .unwrap();
+
+    sqlx::query("/* test_avg_helper_cleanup */ SELECT AVG(price) FROM avg_helper_cleanup")
+        .fetch_one(&sharded)
+        .await
+        .unwrap();
+
+    // Clean up tables so subsequent tests start fresh.
+    for shard in [0, 1] {
+        let drop = format!(
+            "/* pgdog_shard: {} */ DROP TABLE IF EXISTS avg_helper_cleanup",
+            shard
+        );
+        sharded.execute(drop.as_str()).await.ok();
+    }
+
+    sharded.close().await;
+    primary.close().await;
+
+    let prepared = admin
+        .fetch_all("SHOW PREPARED")
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|row| {
+            row.get::<String, &str>("statement")
+                .contains("test_avg_helper_cleanup")
+        })
+        .collect::<Vec<_>>();
+
+    assert!(
+        prepared.is_empty(),
+        "helper rewrite statements should be evicted once the connection closes"
+    );
+
+    admin.execute("RELOAD").await.unwrap();
+}
+
+#[tokio::test]
 async fn test_prepard_cache_eviction() {
     let admin = admin_sqlx().await;
     let conns = connections_sqlx().await;

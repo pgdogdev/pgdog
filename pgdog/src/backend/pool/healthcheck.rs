@@ -58,8 +58,8 @@ impl<'a> Healtcheck<'a> {
         match timeout(self.healthcheck_timeout, self.conn.healthcheck(";")).await {
             Ok(Ok(())) => Ok(()),
             Ok(Err(err)) => {
-                error!("server error: {} [{}]", err, self.pool.addr());
-                Err(Error::ServerError)
+                error!("healthcheck server error: {} [{}]", err, self.pool.addr());
+                Err(Error::HealthcheckError)
             }
             Err(_) => Err(Error::HealthcheckError),
         }

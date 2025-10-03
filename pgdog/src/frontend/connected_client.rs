@@ -1,7 +1,7 @@
 use chrono::{DateTime, Local};
 use std::net::SocketAddr;
 
-use crate::net::Parameters;
+use crate::net::{BackendKeyData, Parameters};
 
 use super::Stats;
 
@@ -16,12 +16,15 @@ pub struct ConnectedClient {
     pub connected_at: DateTime<Local>,
     /// Client connection parameters.
     pub paramters: Parameters,
+    /// Identifier.
+    pub id: BackendKeyData,
 }
 
 impl ConnectedClient {
     /// New connected client.
-    pub fn new(addr: SocketAddr, params: &Parameters) -> Self {
+    pub fn new(id: &BackendKeyData, addr: SocketAddr, params: &Parameters) -> Self {
         Self {
+            id: id.clone(),
             stats: Stats::new(),
             addr,
             connected_at: Local::now(),

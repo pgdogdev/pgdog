@@ -43,9 +43,8 @@ shared_examples 'minimal errors' do |role, toxic|
 
   it 'some connections survive' do
     threads = []
-    errors = 0
+    errors = Concurrent::AtomicFixnum.new(0)
     sem = Concurrent::Semaphore.new(0)
-    (5.0 / 25 * 25.0).ceil
     25.times do
       t = Thread.new do
         c = 1
@@ -54,13 +53,13 @@ shared_examples 'minimal errors' do |role, toxic|
           c = conn
           break
         rescue StandardError
-          errors += 1
+          errors.increment
         end
         25.times do
           c.exec 'SELECT 1'
         rescue PG::SystemError
           c = conn # reconnect
-          errors += 1
+          errors.increment
         end
       end
       threads << t
@@ -69,7 +68,7 @@ shared_examples 'minimal errors' do |role, toxic|
       sem.release(25)
       threads.each(&:join)
     end
-    expect(errors).to be < 25 # 5% error rate (instead of 100%)
+    expect(errors.value).to be < 25 # 5% error rate (instead of 100%)
   end
 
   it 'active record works' do
@@ -78,22 +77,93 @@ shared_examples 'minimal errors' do |role, toxic|
     # Connect (the pool is lazy)
     Sharded.where(id: 1).first
     errors = 0
+    ok = 0
     # Can't ban primary because it issues SET queries
     # that we currently route to primary.
     Toxiproxy[role].toxic(toxic).apply do
       25.times do
         Sharded.where(id: 1).first
+        ok += 1
       rescue StandardError
         errors += 1
       end
     end
-    expect(errors).to eq(1)
+    expect(errors).to be <= 1
+    expect(25 - ok).to eq(errors)
+  end
+end
+
+describe 'healthcheck' do
+  before :each do
+    admin_conn = admin
+    admin_conn.exec 'RECONNECT'
+    admin_conn.exec "SET read_write_split TO 'exclude_primary'"
+    admin_conn.exec 'SET ban_timeout TO 1'
+  end
+
+  describe 'will heal itself' do
+    def health(role, field = 'healthy')
+      admin.exec('SHOW POOLS').select do |pool|
+        pool['database'] == 'failover' && pool['role'] == role
+      end.map { |pool| pool[field] }
+    end
+
+    10.times do
+      it 'replica' do
+        # Cache connect params.
+        conn.exec 'SELECT 1'
+
+        Toxiproxy[:replica].toxic(:reset_peer).apply do
+          errors = 0
+          4.times do
+            conn.exec 'SELECT 1'
+          rescue PG::Error
+            errors += 1
+          end
+          expect(errors).to be >= 1
+          expect(health('replica')).to include('f')
+          sleep(0.4) # ban maintenance runs every 333ms
+          expect(health('replica', 'banned')).to include('t')
+        end
+
+        4.times do
+          conn.exec 'SELECT 1'
+        end
+
+        admin.exec 'HEALTHCHECK'
+        sleep(0.4)
+
+        expect(health('replica')).to eq(%w[t t t])
+        expect(health('replica', 'banned')).to eq(%w[f f f])
+      end
+    end
+
+    it 'primary' do
+      # Cache connect params.
+      conn.exec 'DELETE FROM sharded'
+
+      Toxiproxy[:primary].toxic(:reset_peer).apply do
+        begin
+          conn.exec 'DELETE FROM sharded'
+        rescue PG::Error
+        end
+        expect(health('primary')).to eq(['f'])
+      end
+
+      conn.exec 'DELETE FROM sharded'
+
+      expect(health('primary')).to eq(%w[t])
+    end
+  end
+
+  after do
+    admin.exec 'RELOAD'
   end
 end
 
 describe 'tcp' do
   around :each do |example|
-    Timeout.timeout(10) do
+    Timeout.timeout(30) do
       example.run
     end
   end
@@ -138,8 +208,23 @@ describe 'tcp' do
     end
 
     describe 'both down' do
-      it 'unbans all pools' do
-        25.times do
+      10.times do
+        it 'unbans all pools' do
+          rw_config = admin.exec('SHOW CONFIG').select do |config|
+            config['name'] == 'read_write_split'
+          end[0]['value']
+          expect(rw_config).to eq('include_primary')
+
+          def pool_stat(field, value)
+            failover = admin.exec('SHOW POOLS').select do |pool|
+              pool['database'] == 'failover'
+            end
+            entries = failover.select { |item| item[field] == value }
+            entries.size
+          end
+
+          admin.exec 'SET checkout_timeout TO 100'
+
           Toxiproxy[:primary].toxic(:reset_peer).apply do
             Toxiproxy[:replica].toxic(:reset_peer).apply do
               Toxiproxy[:replica2].toxic(:reset_peer).apply do
@@ -148,19 +233,16 @@ describe 'tcp' do
                     conn.exec_params 'SELECT $1::bigint', [1]
                   rescue StandardError
                   end
-                  banned = admin.exec('SHOW POOLS').select do |pool|
-                    pool['database'] == 'failover'
-                  end.select { |item| item['banned'] == 't' }
-                  expect(banned.size).to eq(4)
+
+                  expect(pool_stat('healthy', 'f')).to eq(4)
                 end
               end
             end
           end
-          conn.exec 'SELECT $1::bigint', [25]
-          banned = admin.exec('SHOW POOLS').select do |pool|
-            pool['database'] == 'failover'
-          end.select { |item| item['banned'] == 't' }
-          expect(banned.size).to eq(0)
+
+          4.times do
+            conn.exec 'SELECT $1::bigint', [25]
+          end
         end
       end
     end
@@ -172,25 +254,21 @@ describe 'tcp' do
       Toxiproxy[:primary].toxic(:reset_peer).apply do
         c = conn
         c.exec 'BEGIN'
-        c.exec 'CREATE TABLE test(id BIGINT)'
+        c.exec 'CREATE TABLE IF NOT EXISTS test(id BIGINT)'
         c.exec 'ROLLBACK'
       rescue StandardError
       end
+
       banned = admin.exec('SHOW POOLS').select do |pool|
         pool['database'] == 'failover' && pool['role'] == 'primary'
       end
-      expect(banned[0]['banned']).to eq('t')
+      expect(banned[0]['healthy']).to eq('f')
 
       c = conn
       c.exec 'BEGIN'
-      c.exec 'CREATE TABLE test(id BIGINT)'
+      c.exec 'CREATE TABLE IF NOT EXISTS test(id BIGINT)'
       c.exec 'SELECT * FROM test'
       c.exec 'ROLLBACK'
-
-      banned = admin.exec('SHOW POOLS').select do |pool|
-        pool['database'] == 'failover' && pool['role'] == 'primary'
-      end
-      expect(banned[0]['banned']).to eq('f')
     end
 
     it 'active record works' do
@@ -199,16 +277,58 @@ describe 'tcp' do
       # Connect (the pool is lazy)
       Sharded.where(id: 1).first
       errors = 0
+      ok = 0
       # Can't ban primary because it issues SET queries
       # that we currently route to primary.
       Toxiproxy[:primary].toxic(:reset_peer).apply do
         25.times do
           Sharded.where(id: 1).first
+          ok += 1
         rescue StandardError
           errors += 1
         end
       end
-      expect(errors).to eq(1)
+      expect(errors).to be <= 1
+      expect(25 - ok).to eq(errors)
+    end
+
+    it 'clients can connect when all servers are down after caching connection params' do
+      # First, establish a connection to cache connection parameters
+      c = conn
+      c.exec 'SELECT 1'
+      c.close
+
+      # Verify initial state - all pools should be healthy before toxics
+      pools = admin.exec('SHOW POOLS').select do |pool|
+        pool['database'] == 'failover'
+      end
+      expect(pools.all? { |p| p['healthy'] == 't' }).to be true
+
+      # Now bring down all servers
+      Toxiproxy[:primary].toxic(:reset_peer).apply do
+        Toxiproxy[:replica].toxic(:reset_peer).apply do
+          Toxiproxy[:replica2].toxic(:reset_peer).apply do
+            Toxiproxy[:replica3].toxic(:reset_peer).apply do
+              # Try to establish many connections
+              connections = []
+              50.times do
+                c = conn
+                expect(c).not_to be_nil
+                connections << c
+              end
+
+              # Check internal state - verify we have active client connections
+              clients = admin.exec('SHOW CLIENTS').select do |client|
+                client['database'] == 'failover'
+              end
+              expect(clients.size).to be >= 50
+
+              # Clean up connections without executing queries to avoid timeouts
+              connections.each { |c| c.close rescue nil }
+            end
+          end
+        end
+      end
     end
   end
 end

@@ -1,14 +1,14 @@
 //! Admin command parser.
 
 use super::{
-    ban::Ban, maintenance_mode::MaintenanceMode, pause::Pause, prelude::Message, probe::Probe,
-    reconnect::Reconnect, reload::Reload, reset_query_cache::ResetQueryCache, set::Set,
-    setup_schema::SetupSchema, show_clients::ShowClients, show_config::ShowConfig,
-    show_instance_id::ShowInstanceId, show_lists::ShowLists, show_mirrors::ShowMirrors,
-    show_peers::ShowPeers, show_pools::ShowPools, show_prepared_statements::ShowPreparedStatements,
-    show_query_cache::ShowQueryCache, show_servers::ShowServers, show_stats::ShowStats,
-    show_transactions::ShowTransactions, show_version::ShowVersion, shutdown::Shutdown, Command,
-    Error,
+    ban::Ban, healthcheck::Healthcheck, maintenance_mode::MaintenanceMode, pause::Pause,
+    prelude::Message, probe::Probe, reconnect::Reconnect, reload::Reload,
+    reset_query_cache::ResetQueryCache, set::Set, setup_schema::SetupSchema,
+    show_clients::ShowClients, show_config::ShowConfig, show_instance_id::ShowInstanceId,
+    show_lists::ShowLists, show_mirrors::ShowMirrors, show_peers::ShowPeers, show_pools::ShowPools,
+    show_prepared_statements::ShowPreparedStatements, show_query_cache::ShowQueryCache,
+    show_servers::ShowServers, show_stats::ShowStats, show_transactions::ShowTransactions,
+    show_version::ShowVersion, shutdown::Shutdown, Command, Error,
 };
 
 use tracing::debug;
@@ -38,6 +38,7 @@ pub enum ParseResult {
     Ban(Ban),
     Probe(Probe),
     MaintenanceMode(MaintenanceMode),
+    Healthcheck(Healthcheck),
 }
 
 impl ParseResult {
@@ -69,6 +70,7 @@ impl ParseResult {
             Ban(ban) => ban.execute().await,
             Probe(probe) => probe.execute().await,
             MaintenanceMode(maintenance_mode) => maintenance_mode.execute().await,
+            Healthcheck(healthcheck) => healthcheck.execute().await,
         }
     }
 
@@ -100,6 +102,7 @@ impl ParseResult {
             Ban(ban) => ban.name(),
             Probe(probe) => probe.name(),
             MaintenanceMode(maintenance_mode) => maintenance_mode.name(),
+            Healthcheck(healthcheck) => healthcheck.name(),
         }
     }
 }
@@ -119,6 +122,7 @@ impl Parser {
             "reconnect" => ParseResult::Reconnect(Reconnect::parse(&sql)?),
             "reload" => ParseResult::Reload(Reload::parse(&sql)?),
             "ban" | "unban" => ParseResult::Ban(Ban::parse(&sql)?),
+            "healthcheck" => ParseResult::Healthcheck(Healthcheck::parse(&sql)?),
             "show" => match iter.next().ok_or(Error::Syntax)?.trim() {
                 "clients" => ParseResult::ShowClients(ShowClients::parse(&sql)?),
                 "pools" => ParseResult::ShowPools(ShowPools::parse(&sql)?),
@@ -163,5 +167,28 @@ impl Parser {
                 return Err(Error::Syntax);
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Error, ParseResult, Parser};
+
+    #[test]
+    fn parses_show_clients_command() {
+        let result = Parser::parse("SHOW CLIENTS;");
+        assert!(matches!(result, Ok(ParseResult::ShowClients(_))));
+    }
+
+    #[test]
+    fn parses_reset_query_cache_command() {
+        let result = Parser::parse("RESET QUERY_CACHE");
+        assert!(matches!(result, Ok(ParseResult::ResetQueryCache(_))));
+    }
+
+    #[test]
+    fn rejects_unknown_admin_command() {
+        let result = Parser::parse("FOO BAR");
+        assert!(matches!(result, Err(Error::Syntax)));
     }
 }

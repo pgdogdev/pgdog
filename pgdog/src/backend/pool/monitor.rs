@@ -49,7 +49,7 @@ static MAINTENANCE: Duration = Duration::from_millis(333);
 ///
 /// See [`crate::backend::pool::monitor`] module documentation
 /// for more details.
-pub(super) struct Monitor {
+pub struct Monitor {
     pool: Pool,
 }
 
@@ -122,7 +122,7 @@ impl Monitor {
                     if should_create {
                         let ok = self.replenish().await;
                         if !ok {
-                            self.pool.ban(Error::ServerError);
+                            self.pool.inner().health.toggle(false);
                         }
                     }
                 }
@@ -147,7 +147,6 @@ impl Monitor {
         debug!("healthchecks running [{}]", pool.addr());
 
         loop {
-            let mut unbanned = false;
             select! {
                 _ = tick.tick() => {
                     {
@@ -162,21 +161,13 @@ impl Monitor {
                         if guard.paused {
                             continue;
                         }
-
                     }
 
-                    // If the server is okay, remove the ban if it had one.
-                    if let Ok(true) = Self::healthcheck(&pool).await {
-                        unbanned = pool.lock().maybe_unban();
-                    }
+                    let _ = Self::healthcheck(&pool).await;
                 }
 
 
                 _ = comms.shutdown.notified() => break,
-            }
-
-            if unbanned {
-                info!("pool unbanned due to healtcheck [{}]", pool.addr());
             }
         }
 
@@ -215,11 +206,6 @@ impl Monitor {
 
                     guard.close_idle(now);
                     guard.close_old(now);
-                    let unbanned = guard.check_ban(now);
-
-                    if unbanned {
-                        info!("pool unbanned due to maintenance [{}]", pool.addr());
-                    }
                 }
 
                 _ = comms.shutdown.notified() => break,
@@ -234,7 +220,9 @@ impl Monitor {
         if let Ok(conn) = Self::create_connection(&self.pool).await {
             let server = Box::new(conn);
             let mut guard = self.pool.lock();
-            guard.put(server, Instant::now());
+            if guard.online {
+                guard.put(server, Instant::now());
+            }
             true
         } else {
             false
@@ -255,11 +243,25 @@ impl Monitor {
         Ok(())
     }
 
+    pub async fn healthcheck(pool: &Pool) -> Result<bool, Error> {
+        match Self::healthcheck_internal(pool).await {
+            Ok(result) => {
+                pool.inner().health.toggle(result);
+                Ok(result)
+            }
+
+            Err(err) => {
+                pool.inner().health.toggle(false);
+                return Err(err);
+            }
+        }
+    }
+
     /// Perform a periodic healthcheck on the pool.
-    async fn healthcheck(pool: &Pool) -> Result<bool, Error> {
+    async fn healthcheck_internal(pool: &Pool) -> Result<bool, Error> {
         let conn = {
             let mut guard = pool.lock();
-            if !guard.online || guard.banned() {
+            if !guard.online {
                 return Ok(false);
             }
             guard.take(&Request::default())
@@ -276,8 +278,6 @@ impl Monitor {
             )
             .healthcheck()
             .await?;
-
-            Ok(true)
         } else {
             // Create a new one and close it.
             info!("creating new healthcheck connection [{}]", pool.addr());
@@ -289,9 +289,9 @@ impl Monitor {
             Healtcheck::mandatory(&mut server, pool, healthcheck_timeout)
                 .healthcheck()
                 .await?;
-
-            Ok(true)
         }
+
+        Ok(true)
     }
 
     async fn stats(pool: Pool) {
@@ -369,6 +369,7 @@ impl Monitor {
 #[cfg(test)]
 mod test {
     use crate::backend::pool::test::pool;
+    use crate::backend::pool::{Address, Config, PoolConfig};
 
     use super::*;
 
@@ -378,9 +379,104 @@ mod test {
         let pool = pool();
         let ok = Monitor::healthcheck(&pool).await.unwrap();
         assert!(ok);
+    }
 
-        pool.ban(Error::ManualBan);
-        let ok = Monitor::healthcheck(&pool).await.unwrap();
-        assert!(!ok);
+    #[tokio::test]
+    async fn test_healthcheck_sets_health_true_on_success() {
+        crate::logger();
+        let pool = pool();
+
+        pool.inner().health.toggle(false);
+        assert!(!pool.inner().health.healthy());
+
+        let result = Monitor::healthcheck(&pool).await.unwrap();
+
+        assert!(result);
+        assert!(pool.inner().health.healthy());
+    }
+
+    #[tokio::test]
+    async fn test_healthcheck_sets_health_false_on_offline_pool() {
+        crate::logger();
+        let pool = pool();
+
+        pool.inner().health.toggle(true);
+        assert!(pool.inner().health.healthy());
+
+        pool.shutdown();
+
+        let result = Monitor::healthcheck(&pool).await.unwrap();
+
+        assert!(!result);
+        assert!(!pool.inner().health.healthy());
+    }
+
+    #[tokio::test]
+    async fn test_healthcheck_sets_health_false_on_connection_error() {
+        crate::logger();
+
+        let config = Config {
+            max: 1,
+            min: 1,
+            healthcheck_timeout: Duration::from_millis(10),
+            ..Default::default()
+        };
+
+        let pool = Pool::new(&PoolConfig {
+            address: Address {
+                host: "127.0.0.1".into(),
+                port: 1,
+                database_name: "pgdog".into(),
+                user: "pgdog".into(),
+                password: "pgdog".into(),
+                ..Default::default()
+            },
+            config,
+        });
+        pool.launch();
+
+        pool.inner().health.toggle(true);
+        assert!(pool.inner().health.healthy());
+
+        let result = Monitor::healthcheck(&pool).await;
+
+        assert!(result.is_err());
+        assert!(!pool.inner().health.healthy());
+    }
+
+    #[tokio::test]
+    async fn test_replenish_only_when_pool_is_online() {
+        crate::logger();
+
+        let config = Config {
+            max: 5,
+            min: 2,
+            ..Default::default()
+        };
+
+        let pool = Pool::new(&PoolConfig {
+            address: Address {
+                host: "127.0.0.1".into(),
+                port: 5432,
+                database_name: "pgdog".into(),
+                user: "pgdog".into(),
+                password: "pgdog".into(),
+                ..Default::default()
+            },
+            config,
+        });
+        pool.launch();
+
+        let initial_total = pool.lock().total();
+
+        pool.shutdown();
+        assert!(!pool.lock().online);
+
+        let monitor = Monitor { pool: pool.clone() };
+        let ok = monitor.replenish().await;
+
+        assert!(ok);
+        assert_eq!(pool.lock().total(), initial_total);
+        assert!(!pool.lock().online);
     }
 }

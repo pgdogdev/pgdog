@@ -7,10 +7,15 @@ export PGHOST=127.0.0.1
 
 killall -TERM pgdog 2> /dev/null || true
 
-${SCRIPT_DIR}/../../../target/release/pgdog \
+PGDOG_BIN_PATH="${PGDOG_BIN:-${SCRIPT_DIR}/../../../target/release/pgdog}"
+
+"${PGDOG_BIN_PATH}" \
     --config ${SCRIPT_DIR}/pgdog-enabled.toml \
     --users ${SCRIPT_DIR}/users.toml &
-sleep 1
+
+until pg_isready -h 127.0.0.1 -p 6432 -U pgdog -d pgdog; do
+    sleep 1
+done
 
 if ! psql -U pgdog1 pgdog -c 'SELECT 1' > /dev/null; then
     echo "AutoDB not working"
@@ -28,10 +33,13 @@ fi
 
 killall -TERM pgdog
 
-${SCRIPT_DIR}/../../../target/release/pgdog \
+"${PGDOG_BIN_PATH}" \
     --config ${SCRIPT_DIR}/pgdog-disabled.toml \
     --users ${SCRIPT_DIR}/users.toml &
-sleep 1
+
+until pg_isready -h 127.0.0.1 -p 6432 -U pgdog -d pgdog; do
+    sleep 1
+done
 
 if psql -U pgdog1 pgdog -c 'SELECT 1' 2> /dev/null; then
     echo "AutoDB should be disabled"

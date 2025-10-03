@@ -4,9 +4,9 @@ use bytes::{BufMut, BytesMut};
 use pin_project::pin_project;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufStream, ReadBuf};
 use tokio::net::TcpStream;
-use tracing::{debug, enabled, trace, Level};
+use tracing::trace;
 
-use std::io::Error;
+use std::io::{Error, ErrorKind};
 use std::net::SocketAddr;
 use std::ops::Deref;
 use std::pin::Pin;
@@ -108,8 +108,8 @@ impl Stream {
     pub async fn check(&mut self) -> Result<(), crate::net::Error> {
         let mut buf = [0u8; 1];
         match self {
-            Self::Plain(plain) => plain.get_mut().peek(&mut buf).await?,
-            Self::Tls(tls) => tls.get_mut().get_mut().0.peek(&mut buf).await?,
+            Self::Plain(plain) => eof(plain.get_mut().peek(&mut buf).await)?,
+            Self::Tls(tls) => eof(tls.get_mut().get_mut().0.peek(&mut buf).await)?,
             Self::DevNull => 0,
         };
 
@@ -126,16 +126,12 @@ impl Stream {
         let bytes = message.to_bytes()?;
 
         match self {
-            Stream::Plain(ref mut stream) => stream.write_all(&bytes).await?,
-            Stream::Tls(ref mut stream) => stream.write_all(&bytes).await?,
+            Stream::Plain(ref mut stream) => eof(stream.write_all(&bytes).await)?,
+            Stream::Tls(ref mut stream) => eof(stream.write_all(&bytes).await)?,
             Self::DevNull => (),
         }
 
-        if !enabled!(Level::TRACE) {
-            debug!("{:?} <-- {}", self.peer_addr(), message.code());
-        } else {
-            trace!("{:?} <-- {:#?}", self.peer_addr(), message);
-        }
+        trace!("{:?} <-- {:#?}", self.peer_addr(), message);
 
         #[cfg(debug_assertions)]
         {
@@ -165,7 +161,7 @@ impl Stream {
         message: &impl Protocol,
     ) -> Result<usize, crate::net::Error> {
         let sent = self.send(message).await?;
-        self.flush().await?;
+        eof(self.flush().await)?;
         trace!("😳");
 
         Ok(sent)
@@ -180,7 +176,7 @@ impl Stream {
         for message in messages {
             sent += self.send(message).await?;
         }
-        self.flush().await?;
+        eof(self.flush().await)?;
         trace!("😳");
         Ok(sent)
     }
@@ -199,15 +195,15 @@ impl Stream {
 
     /// Read data into a buffer, avoiding unnecessary allocations.
     pub async fn read_buf(&mut self, bytes: &mut BytesMut) -> Result<Message, crate::net::Error> {
-        let code = self.read_u8().await?;
-        let len = self.read_i32().await?;
+        let code = eof(self.read_u8().await)?;
+        let len = eof(self.read_i32().await)?;
 
         bytes.put_u8(code);
         bytes.put_i32(len);
 
         // Length must be at least 4 bytes.
         if len < 4 {
-            return Err(crate::net::Error::Eof);
+            return Err(crate::net::Error::UnexpectedEof);
         }
 
         let capacity = len as usize + 1;
@@ -218,7 +214,7 @@ impl Stream {
             bytes.set_len(capacity);
         }
 
-        self.read_exact(&mut bytes[5..capacity]).await?;
+        eof(self.read_exact(&mut bytes[5..capacity]).await)?;
 
         let message = Message::new(bytes.split().freeze());
 
@@ -257,6 +253,19 @@ impl Stream {
         match self {
             Self::Plain(stream) => Ok(stream.into_inner()),
             _ => Err(crate::net::Error::UnexpectedTlsRequest),
+        }
+    }
+}
+
+fn eof<T>(result: std::io::Result<T>) -> Result<T, crate::net::Error> {
+    match result {
+        Ok(val) => Ok(val),
+        Err(err) => {
+            if err.kind() == ErrorKind::UnexpectedEof {
+                Err(crate::net::Error::UnexpectedEof)
+            } else {
+                Err(crate::net::Error::Io(err))
+            }
         }
     }
 }

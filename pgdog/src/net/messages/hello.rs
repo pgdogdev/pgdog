@@ -21,6 +21,8 @@ use super::{super::Parameter, FromBytes, Payload, Protocol, ToBytes};
 pub enum Startup {
     /// SSLRequest (F)
     Ssl,
+    /// GSSENCRequest (F)
+    GssEnc,
     /// StartupMessage (F)
     Startup { params: Parameters },
     /// CancelRequet (F)
@@ -38,6 +40,8 @@ impl Startup {
         match code {
             // SSLRequest (F)
             80877103 => Ok(Startup::Ssl),
+            // GSSENCRequest (F)
+            80877104 => Ok(Startup::GssEnc),
             // StartupMessage (F)
             196608 => {
                 let mut params = Parameters::default();
@@ -91,7 +95,7 @@ impl Startup {
     /// If no such parameter exists, `None` is returned.
     pub fn parameter(&self, name: &str) -> Option<&str> {
         match self {
-            Startup::Ssl | Startup::Cancel { .. } => None,
+            Startup::Ssl | Startup::GssEnc | Startup::Cancel { .. } => None,
             Startup::Startup { params } => params.get(name).and_then(|s| s.as_str()),
         }
     }
@@ -117,6 +121,11 @@ impl Startup {
     pub fn tls() -> Self {
         Self::Ssl
     }
+
+    /// Create new GSSENC request.
+    pub fn gss_enc() -> Self {
+        Self::GssEnc
+    }
 }
 
 impl super::ToBytes for Startup {
@@ -127,6 +136,15 @@ impl super::ToBytes for Startup {
 
                 buf.put_i32(8);
                 buf.put_i32(80877103);
+
+                Ok(buf.freeze())
+            }
+
+            Startup::GssEnc => {
+                let mut buf = BytesMut::new();
+
+                buf.put_i32(8);
+                buf.put_i32(80877104);
 
                 Ok(buf.freeze())
             }
@@ -220,7 +238,8 @@ mod test {
     use crate::net::messages::ToBytes;
 
     use super::*;
-    use bytes::Buf;
+    use bytes::{Buf, BufMut, BytesMut};
+    use tokio::io::AsyncWriteExt;
 
     #[test]
     fn test_ssl() {
@@ -229,6 +248,15 @@ mod test {
 
         assert_eq!(bytes.get_i32(), 8); // len
         assert_eq!(bytes.get_i32(), 80877103); // request code
+    }
+
+    #[test]
+    fn test_gssenc() {
+        let gss = Startup::gss_enc();
+        let mut bytes = gss.to_bytes().unwrap();
+
+        assert_eq!(bytes.get_i32(), 8); // len
+        assert_eq!(bytes.get_i32(), 80877104); // request code
     }
 
     #[tokio::test]
@@ -250,5 +278,19 @@ mod test {
         let bytes = startup.to_bytes().unwrap();
 
         assert_eq!(bytes.clone().get_i32(), 41);
+    }
+
+    #[tokio::test]
+    async fn test_read_gssenc_request() {
+        let (mut write, mut read) = tokio::io::duplex(64);
+        tokio::spawn(async move {
+            let mut buf = BytesMut::new();
+            buf.put_i32(8);
+            buf.put_i32(80877104);
+            write.write_all(&buf).await.unwrap();
+        });
+
+        let startup = Startup::from_stream(&mut read).await.unwrap();
+        assert!(matches!(startup, Startup::GssEnc));
     }
 }

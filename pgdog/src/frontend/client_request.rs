@@ -180,11 +180,7 @@ impl ClientRequest {
         for message in self.messages.iter_mut() {
             if let ProtocolMessage::Parse(parse) = message {
                 parse.set_query(query);
-                let name = parse.name().to_owned();
-                let _ = prepared.update_query(&name, query);
-                if !plan.is_noop() {
-                    prepared.set_rewrite_plan(&name, plan.clone());
-                }
+                prepared.update_and_set_rewrite_plan(&parse.name(), query, plan.clone());
                 updated = true;
             }
         }
