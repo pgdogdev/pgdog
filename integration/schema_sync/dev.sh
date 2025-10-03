@@ -6,6 +6,8 @@ pushd ${SCRIPT_DIR}
 
 export PGPASSWORD=pgdog
 export PGUSER=pgdog
+export PGHOST=127.0.0.1
+export PGPORT=5432
 psql -f ${SCRIPT_DIR}/ecommerce_schema.sql pgdog1
 psql -c 'CREATE PUBLICATION pgdog FOR ALL TABLES' pgdog1 || true
 
