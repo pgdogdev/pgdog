@@ -37,6 +37,12 @@ def normal_sync():
     )
 
 
+def direct_sync():
+    return psycopg.connect(
+        user="pgdog", password="pgdog", dbname="pgdog", host="127.0.0.1", port=5432
+    )
+
+
 async def sharded_async():
     return await asyncpg.connect(
         user="pgdog",
