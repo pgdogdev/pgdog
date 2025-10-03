@@ -35,8 +35,8 @@ pg_dump \
     --no-publications pgdog2 > destination.sql
 
 for f in source.sql destination.sql; do
-    sed -i '/^\/restrict/d' $f
-    sed -i '/^\/unrestrict/d' $f
+    sed -i '/^\\restrict.*$/d' $f
+    sed -i '/^\\unrestrict.*$/d' $f
 done
 
 diff source.sql destination.sql
