@@ -65,8 +65,11 @@ impl RewriteEngine {
                 if let Some(NodeEnum::ResTarget(res_target)) = node.node.as_ref() {
                     if let Some(original_value) = res_target.val.as_ref() {
                         if let Some(func_call) = Self::extract_func_call(original_value) {
-                            let specs =
-                                Self::helper_specs(func_call, target.function(), target.is_distinct());
+                            let specs = Self::helper_specs(
+                                func_call,
+                                target.function(),
+                                target.is_distinct(),
+                            );
                             Some((res_target.location, specs))
                         } else {
                             None
