@@ -112,7 +112,6 @@ impl PreparedStatements {
             .write()
             .update_and_set_rewrite_plan(name, sql, plan)
     }
-
     /// Get global statement counter.
     pub fn name(&self, name: &str) -> Option<&String> {
         self.local.get(name)

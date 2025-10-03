@@ -28,6 +28,9 @@ pub enum Error {
 
     #[error("net error: {0}")]
     Net(#[from] crate::net::Error),
+
+    #[error("unsupported aggregation {function}: {reason}")]
+    UnsupportedAggregation { function: String, reason: String },
 }
 
 impl From<crate::backend::Error> for Error {

@@ -1,9 +1,18 @@
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HelperKind {
+    Count,
+    Sum,
+    SumSquares,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct HelperMapping {
-    pub avg_column: usize,
+    pub target_column: usize,
     pub helper_column: usize,
     pub expr_id: usize,
     pub distinct: bool,
+    pub kind: HelperKind,
+    pub alias: String,
 }
 
 /// Plan describing how the proxy rewrites a query and its results.
@@ -85,17 +94,21 @@ mod tests {
     fn rewrite_plan_helpers() {
         let mut plan = RewritePlan::new();
         plan.add_helper(HelperMapping {
-            avg_column: 0,
+            target_column: 0,
             helper_column: 1,
             expr_id: 7,
             distinct: false,
+            kind: HelperKind::Count,
+            alias: "__pgdog_count_expr7_col0".into(),
         });
         assert_eq!(plan.helpers().len(), 1);
         let helper = &plan.helpers()[0];
-        assert_eq!(helper.avg_column, 0);
+        assert_eq!(helper.target_column, 0);
         assert_eq!(helper.helper_column, 1);
         assert_eq!(helper.expr_id, 7);
         assert!(!helper.distinct);
+        assert!(matches!(helper.kind, HelperKind::Count));
+        assert_eq!(helper.alias, "__pgdog_count_expr7_col0");
     }
 
     #[test]

@@ -39,6 +39,26 @@ pub enum AggregateFunction {
     Min,
     Avg,
     Sum,
+    StddevPop,
+    StddevSamp,
+    VarPop,
+    VarSamp,
+}
+
+impl AggregateFunction {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            AggregateFunction::Count => "count",
+            AggregateFunction::Max => "max",
+            AggregateFunction::Min => "min",
+            AggregateFunction::Avg => "avg",
+            AggregateFunction::Sum => "sum",
+            AggregateFunction::StddevPop => "stddev_pop",
+            AggregateFunction::StddevSamp => "stddev_samp",
+            AggregateFunction::VarPop => "var_pop",
+            AggregateFunction::VarSamp => "var_samp",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -78,6 +98,10 @@ impl Aggregate {
                             "min" => Some(AggregateFunction::Min),
                             "sum" => Some(AggregateFunction::Sum),
                             "avg" => Some(AggregateFunction::Avg),
+                            "stddev" | "stddev_samp" => Some(AggregateFunction::StddevSamp),
+                            "stddev_pop" => Some(AggregateFunction::StddevPop),
+                            "variance" | "var_samp" => Some(AggregateFunction::VarSamp),
+                            "var_pop" => Some(AggregateFunction::VarPop),
                             _ => None,
                         };
 
@@ -246,6 +270,113 @@ mod test {
                 assert!(count.is_distinct());
                 assert!(!avg.is_distinct());
                 assert_eq!(count.expr_id(), avg.expr_id());
+            }
+            _ => panic!("not a select"),
+        }
+    }
+
+    #[test]
+    fn test_parse_stddev_variants() {
+        let query = pg_query::parse(
+            "SELECT STDDEV(price), STDDEV_SAMP(price), STDDEV_POP(price) FROM menu",
+        )
+        .unwrap()
+        .protobuf
+        .stmts
+        .first()
+        .cloned()
+        .unwrap();
+        match query.stmt.unwrap().node.unwrap() {
+            NodeEnum::SelectStmt(stmt) => {
+                let aggr = Aggregate::parse(&stmt).unwrap();
+                assert_eq!(aggr.targets().len(), 3);
+                assert!(matches!(
+                    aggr.targets()[0].function(),
+                    AggregateFunction::StddevSamp
+                ));
+                assert!(matches!(
+                    aggr.targets()[1].function(),
+                    AggregateFunction::StddevSamp
+                ));
+                assert!(matches!(
+                    aggr.targets()[2].function(),
+                    AggregateFunction::StddevPop
+                ));
+            }
+            _ => panic!("not a select"),
+        }
+    }
+
+    #[test]
+    fn test_parse_variance_variants() {
+        let query =
+            pg_query::parse("SELECT VARIANCE(price), VAR_SAMP(price), VAR_POP(price) FROM menu")
+                .unwrap()
+                .protobuf
+                .stmts
+                .first()
+                .cloned()
+                .unwrap();
+        match query.stmt.unwrap().node.unwrap() {
+            NodeEnum::SelectStmt(stmt) => {
+                let aggr = Aggregate::parse(&stmt).unwrap();
+                assert_eq!(aggr.targets().len(), 3);
+                assert!(matches!(
+                    aggr.targets()[0].function(),
+                    AggregateFunction::VarSamp
+                ));
+                assert!(matches!(
+                    aggr.targets()[1].function(),
+                    AggregateFunction::VarSamp
+                ));
+                assert!(matches!(
+                    aggr.targets()[2].function(),
+                    AggregateFunction::VarPop
+                ));
+            }
+            _ => panic!("not a select"),
+        }
+    }
+
+    #[test]
+    fn test_parse_group_by_ordinals() {
+        let query =
+            pg_query::parse("SELECT price, category_id, SUM(quantity) FROM menu GROUP BY 1, 2")
+                .unwrap()
+                .protobuf
+                .stmts
+                .first()
+                .cloned()
+                .unwrap();
+        match query.stmt.unwrap().node.unwrap() {
+            NodeEnum::SelectStmt(stmt) => {
+                let aggr = Aggregate::parse(&stmt).unwrap();
+                assert_eq!(aggr.group_by(), &[0, 1]);
+                assert_eq!(aggr.targets().len(), 1);
+                let target = &aggr.targets()[0];
+                assert!(matches!(target.function(), AggregateFunction::Sum));
+                assert_eq!(target.column(), 2);
+            }
+            _ => panic!("not a select"),
+        }
+    }
+
+    #[test]
+    fn test_parse_sum_distinct_sets_flag() {
+        let query = pg_query::parse("SELECT SUM(DISTINCT price) FROM menu")
+            .unwrap()
+            .protobuf
+            .stmts
+            .first()
+            .cloned()
+            .unwrap();
+        match query.stmt.unwrap().node.unwrap() {
+            NodeEnum::SelectStmt(stmt) => {
+                let aggr = Aggregate::parse(&stmt).unwrap();
+                assert_eq!(aggr.targets().len(), 1);
+                let target = &aggr.targets()[0];
+                assert!(matches!(target.function(), AggregateFunction::Sum));
+                assert!(target.is_distinct());
             }
             _ => panic!("not a select"),
         }
