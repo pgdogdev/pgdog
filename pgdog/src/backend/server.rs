@@ -18,6 +18,7 @@ use super::{
 };
 use crate::{
     auth::{md5, scram::Client},
+    config::AuthType,
     frontend::ClientRequest,
     net::{
         messages::{
@@ -156,6 +157,7 @@ impl Server {
 
         // Perform authentication.
         let mut scram = Client::new(&addr.user, &addr.password);
+        let mut auth_type = AuthType::Trust;
         loop {
             let message = stream.read().await?;
 
@@ -174,6 +176,7 @@ impl Server {
                             stream.send_flush(&password).await?;
                         }
                         Authentication::Sasl(_) => {
+                            auth_type = AuthType::Scram;
                             let initial = Password::sasl_initial(&scram.first()?);
                             stream.send_flush(&initial).await?;
                         }
@@ -188,6 +191,7 @@ impl Server {
                             scram.server_last(&data)?;
                         }
                         Authentication::Md5(salt) => {
+                            auth_type = AuthType::Md5;
                             let client = md5::Client::new_salt(&addr.user, &addr.password, &salt)?;
                             stream.send_flush(&client.response()).await?;
                         }
@@ -235,7 +239,12 @@ impl Server {
         let id = key_data.ok_or(Error::NoBackendKeyData)?;
         let params: Parameters = params.into();
 
-        info!("new server connection [{}]", addr);
+        info!(
+            "new server connection [{}, auth: {}] {}",
+            addr,
+            auth_type,
+            if stream.is_tls() { "🔓" } else { "" },
+        );
 
         let mut server = Server {
             addr: addr.clone(),

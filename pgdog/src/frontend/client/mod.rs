@@ -208,6 +208,15 @@ impl Client {
                 matches!(res, Ok(true))
             }
 
+            AuthType::Plain => {
+                stream
+                    .send_flush(&Authentication::ClearTextPassword)
+                    .await?;
+                let response = stream.read().await?;
+                let response = Password::from_bytes(response.to_bytes()?)?;
+                response.password() == Some(password)
+            }
+
             AuthType::Trust => true,
         };
 
@@ -252,8 +261,12 @@ impl Client {
 
         if config.config.general.log_connections {
             info!(
-                r#"client "{}" connected to database "{}" [{}]"#,
-                user, database, addr
+                r#"client "{}" connected to database "{}" [{}, auth: {}] {}"#,
+                user,
+                database,
+                addr,
+                auth_type,
+                if stream.is_tls() { "🔓" } else { "" }
             );
         }
 

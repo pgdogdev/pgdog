@@ -27,6 +27,24 @@ func PqConnections() []*sql.DB {
 	return []*sql.DB{normal, sharded}
 }
 
+func TestAuthenticationWithoutTLS(t *testing.T) {
+	conn, err := sql.Open("postgres", "postgres://pgdog:pgdog@127.0.0.1:6432/pgdog?sslmode=disable")
+	assert.Nil(t, err)
+	defer conn.Close()
+
+	err = conn.Ping()
+	assert.Nil(t, err)
+}
+
+func TestAuthenticationWithTLS(t *testing.T) {
+	conn, err := sql.Open("postgres", "postgres://pgdog:pgdog@127.0.0.1:6432/pgdog?sslmode=require")
+	assert.Nil(t, err)
+	defer conn.Close()
+
+	err = conn.Ping()
+	assert.Nil(t, err)
+}
+
 func TestPqCrud(t *testing.T) {
 	conns := PqConnections()
 
