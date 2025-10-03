@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::str::FromStr;
+use std::{fmt::Display, str::FromStr};
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -17,6 +17,18 @@ pub enum AuthType {
     #[default]
     Scram,
     Trust,
+    Plain,
+}
+
+impl Display for AuthType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Md5 => write!(f, "md5"),
+            Self::Scram => write!(f, "scram"),
+            Self::Trust => write!(f, "trust"),
+            Self::Plain => write!(f, "plain"),
+        }
+    }
 }
 
 impl AuthType {
@@ -41,6 +53,7 @@ impl FromStr for AuthType {
             "md5" => Ok(Self::Md5),
             "scram" => Ok(Self::Scram),
             "trust" => Ok(Self::Trust),
+            "plain" => Ok(Self::Plain),
             _ => Err(format!("Invalid auth type: {}", s)),
         }
     }
