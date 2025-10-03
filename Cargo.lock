@@ -3094,6 +3094,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "futures-util",
+ "libc",
  "parking_lot",
  "reqwest",
  "serde_json",
@@ -3101,6 +3102,7 @@ dependencies = [
  "sqlx",
  "tokio",
  "tokio-postgres",
+ "tokio-rustls",
  "uuid",
 ]
 

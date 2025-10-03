@@ -141,6 +141,7 @@ impl Listener {
         tweak(&stream)?;
 
         let mut stream = Stream::plain(stream);
+
         let tls = acceptor();
 
         loop {
@@ -160,7 +161,7 @@ impl Listener {
 
             match startup {
                 Startup::Ssl => {
-                    if let Some(tls) = tls {
+                    if let Some(tls) = tls.as_ref() {
                         stream.send_flush(&SslReply::Yes).await?;
                         let plain = stream.take()?;
                         let cipher = tls.accept(plain).await?;
