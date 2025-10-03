@@ -12,6 +12,7 @@ impl QueryParser {
     ///
     pub(super) fn select(
         &mut self,
+        ast: &pg_query::ParseResult,
         stmt: &SelectStmt,
         context: &mut QueryParserContext,
     ) -> Result<Command, Error> {
@@ -90,29 +91,38 @@ impl QueryParser {
             query.set_shard_mut(round_robin::next() % context.shards);
         }
 
-        if let Some(buffered_query) = context.router_context.query.as_ref() {
-            let rewrite =
-                RewriteEngine::new().rewrite_select(buffered_query.query(), query.aggregate());
-            if !rewrite.plan.is_noop() {
-                if let BufferedQuery::Prepared(parse) = buffered_query {
-                    let name = parse.name().to_owned();
-                    {
-                        let prepared = context.prepared_statements();
-                        prepared.set_rewrite_plan(&name, rewrite.plan.clone());
-                        prepared.update_query(&name, &rewrite.sql);
+        // Only rewrite if query is cross-shard.
+        if query.is_cross_shard() && context.shards > 1 {
+            if let Some(buffered_query) = context.router_context.query.as_ref() {
+                let rewrite = RewriteEngine::new().rewrite_select(
+                    ast,
+                    buffered_query.query(),
+                    query.aggregate(),
+                );
+                if !rewrite.plan.is_noop() {
+                    if let BufferedQuery::Prepared(parse) = buffered_query {
+                        let name = parse.name().to_owned();
+                        {
+                            let prepared = context.prepared_statements();
+                            prepared.update_and_set_rewrite_plan(
+                                &name,
+                                &rewrite.sql,
+                                rewrite.plan.clone(),
+                            );
+                        }
                     }
-                }
-                query.set_rewrite(rewrite.plan, rewrite.sql);
-            } else if let BufferedQuery::Prepared(parse) = buffered_query {
-                let name = parse.name().to_owned();
-                let stored_plan = {
-                    let prepared = context.prepared_statements();
-                    prepared.rewrite_plan(&name)
-                };
-                if let Some(plan) = stored_plan {
-                    if !plan.is_noop() {
-                        query.clear_rewrite();
-                        *query.rewrite_plan_mut() = plan;
+                    query.set_rewrite(rewrite.plan, rewrite.sql);
+                } else if let BufferedQuery::Prepared(parse) = buffered_query {
+                    let name = parse.name().to_owned();
+                    let stored_plan = {
+                        let prepared = context.prepared_statements();
+                        prepared.rewrite_plan(&name)
+                    };
+                    if let Some(plan) = stored_plan {
+                        if !plan.is_noop() {
+                            query.clear_rewrite();
+                            *query.rewrite_plan_mut() = plan;
+                        }
                     }
                 }
             }

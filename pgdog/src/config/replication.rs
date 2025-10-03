@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::time::Duration;
 
 #[derive(Deserialize)]
@@ -129,6 +130,54 @@ pub struct Mirroring {
     pub queue_length: Option<usize>,
     /// Exposure for this mirror (overrides global mirror_exposure).
     pub exposure: Option<f32>,
+}
+
+impl FromStr for Mirroring {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let mut source_db = None;
+        let mut destination_db = None;
+        let mut queue_length = None;
+        let mut exposure = None;
+
+        for pair in s.split('&') {
+            let parts: Vec<&str> = pair.split('=').collect();
+            if parts.len() != 2 {
+                return Err(format!("Invalid key=value pair: {}", pair));
+            }
+
+            match parts[0] {
+                "source_db" => source_db = Some(parts[1].to_string()),
+                "destination_db" => destination_db = Some(parts[1].to_string()),
+                "queue_length" => {
+                    queue_length = Some(
+                        parts[1]
+                            .parse::<usize>()
+                            .map_err(|_| format!("Invalid queue_length: {}", parts[1]))?,
+                    );
+                }
+                "exposure" => {
+                    exposure = Some(
+                        parts[1]
+                            .parse::<f32>()
+                            .map_err(|_| format!("Invalid exposure: {}", parts[1]))?,
+                    );
+                }
+                _ => return Err(format!("Unknown parameter: {}", parts[0])),
+            }
+        }
+
+        let source_db = source_db.ok_or("Missing required parameter: source_db")?;
+        let destination_db = destination_db.ok_or("Missing required parameter: destination_db")?;
+
+        Ok(Mirroring {
+            source_db,
+            destination_db,
+            queue_length,
+            exposure,
+        })
+    }
 }
 
 /// Runtime mirror configuration with resolved values.

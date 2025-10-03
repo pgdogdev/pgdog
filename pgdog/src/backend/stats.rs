@@ -11,6 +11,7 @@ use parking_lot::Mutex;
 use tokio::time::Instant;
 
 use crate::{
+    backend::ServerOptions,
     net::{messages::BackendKeyData, Parameters},
     state::State,
 };
@@ -104,13 +105,20 @@ pub struct Stats {
     pub created_at_time: SystemTime,
     pub total: Counts,
     pub last_checkout: Counts,
+    pub pool_id: u64,
+    pub client_id: Option<BackendKeyData>,
     query_timer: Option<Instant>,
     transaction_timer: Option<Instant>,
 }
 
 impl Stats {
     /// Register new server with statistics.
-    pub fn connect(id: BackendKeyData, addr: &Address, params: &Parameters) -> Self {
+    pub fn connect(
+        id: BackendKeyData,
+        addr: &Address,
+        params: &Parameters,
+        options: &ServerOptions,
+    ) -> Self {
         let now = Instant::now();
         let stats = Stats {
             id,
@@ -123,12 +131,14 @@ impl Stats {
             last_checkout: Counts::default(),
             query_timer: None,
             transaction_timer: None,
+            pool_id: options.pool_id,
+            client_id: None,
         };
 
         STATS.lock().insert(
             id,
             ConnectedServer {
-                stats,
+                stats: stats.clone(),
                 addr: addr.clone(),
                 application_name: params.get_default("application_name", "PgDog").to_owned(),
                 client: None,
@@ -151,7 +161,8 @@ impl Stats {
         self.update();
     }
 
-    pub fn link_client(&mut self, client_name: &str, server_server: &str) {
+    pub fn link_client(&mut self, client_name: &str, server_server: &str, id: &BackendKeyData) {
+        self.client_id = Some(id.clone());
         if client_name != server_server {
             let mut guard = STATS.lock();
             if let Some(entry) = guard.get_mut(&self.id) {

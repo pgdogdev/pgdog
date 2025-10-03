@@ -1,0 +1,9 @@
+[[databases]]
+name = "source"
+host = "127.0.0.1"
+database_name = "pgdog1"
+
+[[databases]]
+name = "destination"
+host = "127.0.0.1"
+database_name = "pgdog2"

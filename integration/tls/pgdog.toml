@@ -1,0 +1,7 @@
+[general]
+tls_certificate = "cert.pem"
+tls_private_key = "key.pem"
+
+[[databases]]
+name = "pgdog"
+host = "127.0.0.1"

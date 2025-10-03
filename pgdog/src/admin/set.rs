@@ -103,6 +103,22 @@ impl Command for Set {
                 config.config.general.two_phase_commit_auto = Self::from_json(&self.value)?;
             }
 
+            "healthcheck_interval" => {
+                config.config.general.healthcheck_interval = self.value.parse()?;
+            }
+
+            "idle_healthcheck_interval" => {
+                config.config.general.idle_healthcheck_interval = self.value.parse()?;
+            }
+
+            "idle_healthcheck_delay" => {
+                config.config.general.idle_healthcheck_delay = self.value.parse()?;
+            }
+
+            "ban_timeout" => {
+                config.config.general.ban_timeout = self.value.parse()?;
+            }
+
             _ => return Err(Error::Syntax),
         }
 

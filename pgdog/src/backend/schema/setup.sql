@@ -7,7 +7,8 @@ GRANT USAGE ON SCHEMA pgdog TO PUBLIC;
 CREATE TABLE IF NOT EXISTS pgdog.config (
     shard INTEGER NOT NULL,
     shards INTEGER NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY(shard, shards)
 );
 
 CREATE OR REPLACE FUNCTION pgdog.config_trigger() RETURNS trigger AS $body$
