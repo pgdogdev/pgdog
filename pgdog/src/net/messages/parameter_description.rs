@@ -44,7 +44,9 @@ mod test {
     #[test]
     fn parameter_description_round_trip_small() {
         let params = vec![23, 42, 87];
-        let description = ParameterDescription { params: params.clone() };
+        let description = ParameterDescription {
+            params: params.clone(),
+        };
 
         let bytes = description.to_bytes().unwrap();
         let mut buf = bytes.clone();
@@ -61,7 +63,9 @@ mod test {
     fn parameter_description_round_trip_max_parameter_count() {
         let count = u16::MAX as usize;
         let params: Vec<i32> = (0..count).map(|i| i as i32).collect();
-        let description = ParameterDescription { params: params.clone() };
+        let description = ParameterDescription {
+            params: params.clone(),
+        };
 
         let bytes = description.to_bytes().unwrap();
         let mut buf = bytes.clone();
