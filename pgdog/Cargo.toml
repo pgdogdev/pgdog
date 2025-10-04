@@ -48,6 +48,7 @@ regex = "1"
 uuid = { version = "1", features = ["v4", "serde"] }
 url = "2"
 ratatui = { version = "0.30.0-alpha.1", optional = true }
+governor = "0.6"
 rmp-serde = "1"
 rust_decimal = { version = "1.36", features = ["db-postgres"] }
 chrono = "0.4"
@@ -60,7 +61,6 @@ indexmap = "2.9"
 lru = "0.16"
 hickory-resolver = "0.25.2"
 lazy_static = "1"
-dashmap = "6"
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 tikv-jemallocator = "0.6"

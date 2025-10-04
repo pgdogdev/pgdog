@@ -50,10 +50,20 @@ use base64::prelude::*;
 
 impl AuthenticationProvider for UserPassword {
     fn get_password_for(&self, _user: &str) -> Option<PasswordInfo> {
-        // TODO: This is slow. We should move it to its own thread pool.
         let iterations = 4096;
         let salt = rand::thread_rng().gen::<[u8; 16]>().to_vec();
-        let hash = hash_password(&self.password, NonZeroU32::new(iterations).unwrap(), &salt);
+
+        // Move expensive PBKDF2 computation to blocking thread pool
+        // to avoid blocking the async runtime.
+        // Note: Using block_in_place() because AuthenticationProvider trait is synchronous.
+        let hash = tokio::task::block_in_place(|| {
+            hash_password(
+                &self.password,
+                NonZeroU32::new(iterations).expect("PBKDF2 iterations must be non-zero"),
+                &salt,
+            )
+        });
+
         Some(PasswordInfo::new(hash.to_vec(), iterations as u16, salt))
     }
 }
