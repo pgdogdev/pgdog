@@ -73,6 +73,8 @@ impl Guard {
                     .await
                     .is_err()
                     {
+                        // Don't check-in servers in possibly un-sync state.
+                        server.stats_mut().state(State::Error);
                         error!("rollback timeout [{}]", server.addr());
                     };
 
@@ -193,8 +195,12 @@ impl Drop for Guard {
 
 #[cfg(test)]
 mod test {
+    use std::time::Duration;
+
+    use tokio::time::sleep;
+
     use crate::{
-        backend::pool::{test::pool, Request},
+        backend::pool::{test::pool, Address, Config, Pool, PoolConfig, Request},
         net::{Describe, Flush, Parse, Protocol, Query, Sync},
     };
 
@@ -278,5 +284,51 @@ mod test {
 
         let guard = pool.get(&Request::default()).await.unwrap();
         assert!(guard.prepared_statements().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_rollback_timeout() {
+        crate::logger();
+
+        let config = Config {
+            max: 1,
+            min: 0,
+            rollback_timeout: Duration::from_millis(100),
+            ..Default::default()
+        };
+
+        let pool = Pool::new(&PoolConfig {
+            address: Address {
+                host: "127.0.0.1".into(),
+                port: 5432,
+                database_name: "pgdog".into(),
+                user: "pgdog".into(),
+                password: "pgdog".into(),
+                ..Default::default()
+            },
+            config,
+        });
+        pool.launch();
+
+        let initial_errors = pool.lock().errors;
+
+        {
+            let mut guard = pool.get(&Request::default()).await.unwrap();
+
+            guard.execute("BEGIN").await.unwrap();
+            assert!(guard.in_transaction());
+
+            guard
+                .send(&vec![Query::new("SELECT pg_sleep(1)").into()].into())
+                .await
+                .unwrap();
+        }
+
+        sleep(Duration::from_millis(500)).await;
+
+        let state = pool.lock();
+        assert_eq!(state.errors, initial_errors + 1);
+        assert_eq!(state.idle(), 0);
+        assert_eq!(state.total(), 0);
     }
 }

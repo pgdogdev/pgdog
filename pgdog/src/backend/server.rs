@@ -1196,11 +1196,15 @@ pub mod test {
     async fn test_bad_parse() {
         let mut server = test_server().await;
         for _ in 0..25 {
+            let good_parse = Parse::named("test2", "SELECT $1");
             let parse = Parse::named("test", "SELECT bad syntax;");
+            let good_parse_2 = Parse::named("test3", "SELECT $2"); // Will be ignored due to error above.
             server
                 .send(
                     &vec![
+                        good_parse.into(),
                         ProtocolMessage::from(parse),
+                        good_parse_2.into(),
                         Describe::new_statement("test").into(),
                         Sync {}.into(),
                     ]
@@ -1208,12 +1212,22 @@ pub mod test {
                 )
                 .await
                 .unwrap();
-            for c in ['E', 'Z'] {
+            for c in ['1', 'E', 'Z'] {
                 let msg = server.read().await.unwrap();
                 assert_eq!(msg.code(), c);
             }
             assert!(server.done());
-            assert!(server.prepared_statements.is_empty());
+            assert_eq!(server.prepared_statements.len(), 1);
+            assert!(server.prepared_statements.contains("test2"));
+            server
+                .send(&vec![Query::new("SELECT 1").into()].into())
+                .await
+                .unwrap();
+
+            for c in ['T', 'D', 'C', 'Z'] {
+                let msg = server.read().await.unwrap();
+                assert_eq!(msg.code(), c);
+            }
         }
     }
 
