@@ -198,13 +198,15 @@ impl PreparedStatements {
         // Cleanup prepared statements state.
         match code {
             'E' => {
-                let parse = self.parses.pop_front();
-                let describe = self.describes.pop_front();
-                if let Some(parse) = parse {
-                    self.remove(&parse);
-                }
-                if let Some(describe) = describe {
+                // Backend ignored any subsequent extended commands.
+                // These prepared statements have not been prepared, even if they
+                // are syntactically valid.
+                while let Some(describe) = self.describes.pop_front() {
                     self.remove(&describe);
+                }
+
+                while let Some(parse) = self.parses.pop_front() {
+                    self.remove(&parse);
                 }
             }
 
@@ -370,5 +372,9 @@ impl PreparedStatements {
         }
 
         close
+    }
+
+    pub(super) fn local_cache(&self) -> &LruCache<String, ()> {
+        &self.local_cache
     }
 }
