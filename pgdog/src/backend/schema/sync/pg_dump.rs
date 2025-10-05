@@ -83,12 +83,7 @@ impl PgDump {
             return Err(Error::PublicationNoTables(self.publication.clone()));
         }
 
-        info!(
-            "dumping schema for {} tables [{}, {}]",
-            comparison.len(),
-            addr,
-            self.source.name()
-        );
+        info!("dumping schema [{}, {}]", comparison.len(), addr,);
 
         let config = config();
         let pg_dump_path = config
