@@ -253,7 +253,7 @@ impl Config {
     pub fn check(&self) {
         // Check databases.
         let mut duplicate_dbs = HashSet::new();
-        for database in self.databases.clone(){
+        for database in self.databases.clone() {
             let id = (
                 database.name.clone(),
                 database.role,
