@@ -266,6 +266,7 @@ async fn test_incomplete_request_recovery() {
 
     for query in ["SELECT 1", "BEGIN"] {
         let mut conn = pool.get(&Request::default()).await.unwrap();
+        let conn_id = *(conn.id());
 
         conn.send(&vec![ProtocolMessage::from(Query::new(query))].into())
             .await
@@ -282,6 +283,10 @@ async fn test_incomplete_request_recovery() {
         } else {
             assert_eq!(state.stats.counts.rollbacks, 0);
         }
+
+        // Verify the same connection is reused
+        let conn = pool.get(&Request::default()).await.unwrap();
+        assert_eq!(conn.id(), &conn_id);
     }
 }
 
