@@ -252,15 +252,16 @@ impl Config {
 
     pub fn check(&self) {
         // Check databases.
-        let mut duplicate_primaries = HashSet::new();
+        let mut duplicate_dbs = HashSet::new();
         for database in self.databases.clone() {
             let id = (
                 database.name.clone(),
                 database.role,
                 database.shard,
                 database.port,
+                database.host.clone(),
             );
-            let new = duplicate_primaries.insert(id);
+            let new = duplicate_dbs.insert(id);
             if !new {
                 warn!(
                     "database \"{}\" (shard={}) has a duplicate {}",
@@ -280,7 +281,7 @@ impl Config {
         }
     }
 
-    /// Multi-tenanncy is enabled.
+    /// Multi-tenancy is enabled.
     pub fn multi_tenant(&self) -> &Option<MultiTenant> {
         &self.multi_tenant
     }
