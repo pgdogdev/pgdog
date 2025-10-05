@@ -73,6 +73,8 @@ impl Guard {
                     .await
                     .is_err()
                     {
+                        // Don't check-in servers in possibly un-sync state.
+                        server.stats_mut().state(State::Error);
                         error!("rollback timeout [{}]", server.addr());
                     };
 
