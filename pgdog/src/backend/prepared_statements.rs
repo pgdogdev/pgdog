@@ -373,8 +373,4 @@ impl PreparedStatements {
 
         close
     }
-
-    pub(super) fn local_cache(&self) -> &LruCache<String, ()> {
-        &self.local_cache
-    }
 }
