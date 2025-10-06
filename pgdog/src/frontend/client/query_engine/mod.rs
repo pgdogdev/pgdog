@@ -1,6 +1,7 @@
 use crate::{
     backend::pool::{Connection, Request},
     frontend::{
+        client::query_engine::hooks::QueryEngineHooks,
         router::{parser::Shard, Route},
         BufferedQuery, Client, Command, Comms, Error, Router, RouterContext, Stats,
     },
@@ -15,6 +16,7 @@ pub mod context;
 pub mod deallocate;
 pub mod discard;
 pub mod end_transaction;
+pub mod hooks;
 pub mod incomplete_requests;
 pub mod notify_buffer;
 pub mod prepared_statements;
@@ -120,6 +122,9 @@ impl QueryEngine {
             return Ok(());
         }
 
+        let mut hooks = QueryEngineHooks::new();
+        hooks.before_execution(context)?;
+
         // Queue up request to mirrors, if any.
         // Do this before sending query to actual server
         // to have accurate timings between queries.
@@ -206,6 +211,8 @@ impl QueryEngine {
             Command::Discard { extended } => self.discard(context, *extended).await?,
             command => self.unknown_command(context, command.clone()).await?,
         }
+
+        hooks.after_execution(context)?;
 
         if context.in_error() {
             self.backend.mirror_clear();
