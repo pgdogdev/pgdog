@@ -39,3 +39,28 @@ impl ToBytes for HotStandbyFeedback {
         Ok(payload.freeze())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hot_standby_feedback_roundtrip() {
+        let feedback = HotStandbyFeedback {
+            system_clock: 1234,
+            global_xmin: 42,
+            epoch: 7,
+            catalog_min: 11,
+            epoch_catalog_min: 13,
+        };
+
+        let bytes = feedback.to_bytes().expect("serialize hot standby feedback");
+        let decoded = HotStandbyFeedback::from_bytes(bytes).expect("decode hot standby feedback");
+
+        assert_eq!(decoded.system_clock, 1234);
+        assert_eq!(decoded.global_xmin, 42);
+        assert_eq!(decoded.epoch, 7);
+        assert_eq!(decoded.catalog_min, 11);
+        assert_eq!(decoded.epoch_catalog_min, 13);
+    }
+}

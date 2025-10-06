@@ -46,3 +46,33 @@ impl ToBytes for KeepAlive {
         Ok(payload.freeze())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn keep_alive_roundtrip_and_reply_flag() {
+        let ka = KeepAlive {
+            wal_end: 9876,
+            system_clock: 5432,
+            reply: 1,
+        };
+
+        assert!(ka.reply());
+
+        let bytes = ka.to_bytes().expect("serialize keepalive");
+        let decoded = KeepAlive::from_bytes(bytes).expect("decode keepalive");
+
+        assert_eq!(decoded.wal_end, 9876);
+        assert_eq!(decoded.system_clock, 5432);
+        assert_eq!(decoded.reply, 1);
+        assert!(decoded.reply());
+
+        let wrapped = decoded.wrapped().expect("wrap keepalive copydata");
+        let meta = wrapped.replication_meta().expect("decode replication meta");
+        matches!(meta, ReplicationMeta::KeepAlive(_))
+            .then_some(())
+            .expect("should be keepalive meta");
+    }
+}

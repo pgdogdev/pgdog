@@ -376,6 +376,57 @@ impl Pools {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use crate::config::{self, ConfigAndUsers};
+
+    use super::*;
+
+    #[test]
+    fn pool_metric_defaults_to_gauge() {
+        let metric = PoolMetric {
+            name: "cl_waiting".into(),
+            measurements: vec![Measurement {
+                labels: vec![],
+                measurement: 3usize.into(),
+            }],
+            help: "Waiting clients per pool".into(),
+            unit: None,
+            metric_type: None,
+        };
+
+        assert_eq!(metric.metric_type(), "gauge");
+        assert!(metric.unit().is_none());
+        assert_eq!(metric.help(), Some("Waiting clients per pool".into()));
+    }
+
+    #[test]
+    fn pool_metric_renders_labels_and_unit() {
+        config::set(ConfigAndUsers::default()).unwrap();
+
+        let metric = PoolMetric {
+            name: "sv_active".into(),
+            measurements: vec![Measurement {
+                labels: vec![
+                    ("user".into(), "alice".into()),
+                    ("database".into(), "app".into()),
+                ],
+                measurement: 5usize.into(),
+            }],
+            help: "Active servers per pool".into(),
+            unit: Some("connections".into()),
+            metric_type: Some("gauge".into()),
+        };
+
+        let rendered = Metric::new(metric).to_string();
+        let lines: Vec<&str> = rendered.lines().collect();
+        assert_eq!(lines[0], "# TYPE sv_active gauge");
+        assert_eq!(lines[1], "# UNIT sv_active connections");
+        assert_eq!(lines[2], "# HELP sv_active Active servers per pool");
+        assert_eq!(lines[3], "sv_active{user=\"alice\",database=\"app\"} 5");
+    }
+}
+
 impl std::fmt::Display for Pools {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for pool in &self.metrics {
