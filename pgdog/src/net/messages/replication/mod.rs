@@ -47,3 +47,61 @@ impl ToBytes for ReplicationMeta {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn replication_meta_roundtrip_variants() {
+        let feedback = HotStandbyFeedback {
+            system_clock: 1,
+            global_xmin: 2,
+            epoch: 3,
+            catalog_min: 4,
+            epoch_catalog_min: 5,
+        };
+        let keepalive = KeepAlive {
+            wal_end: 6,
+            system_clock: 7,
+            reply: 0,
+        };
+        let status = StatusUpdate {
+            last_written: 8,
+            last_flushed: 9,
+            last_applied: 10,
+            system_clock: 11,
+            reply: 1,
+        };
+
+        for meta in [
+            ReplicationMeta::HotStandbyFeedback(feedback.clone()),
+            ReplicationMeta::KeepAlive(keepalive.clone()),
+            ReplicationMeta::StatusUpdate(status.clone()),
+        ] {
+            let bytes = meta.to_bytes().expect("serialize replication meta");
+            let decoded = ReplicationMeta::from_bytes(bytes).expect("decode replication meta");
+            match (meta, decoded) {
+                (
+                    ReplicationMeta::HotStandbyFeedback(expected),
+                    ReplicationMeta::HotStandbyFeedback(actual),
+                ) => {
+                    assert_eq!(actual.system_clock, expected.system_clock);
+                    assert_eq!(actual.global_xmin, expected.global_xmin);
+                }
+                (ReplicationMeta::KeepAlive(expected), ReplicationMeta::KeepAlive(actual)) => {
+                    assert_eq!(actual.wal_end, expected.wal_end);
+                    assert_eq!(actual.system_clock, expected.system_clock);
+                }
+                (
+                    ReplicationMeta::StatusUpdate(expected),
+                    ReplicationMeta::StatusUpdate(actual),
+                ) => {
+                    assert_eq!(actual.last_written, expected.last_written);
+                    assert_eq!(actual.reply, expected.reply);
+                }
+                _ => panic!("replication meta variant mismatch"),
+            }
+        }
+    }
+}
