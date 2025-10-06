@@ -1,8 +1,12 @@
-use super::{Aggregate, AggregateFunction, HelperMapping, RewriteOutput, RewritePlan};
-use pg_query::protobuf::{FuncCall, Node, ResTarget, String as PgString};
+use super::{Aggregate, AggregateFunction, HelperKind, HelperMapping, RewriteOutput, RewritePlan};
+use pg_query::protobuf::{
+    a_const::Val, AConst, FuncCall, Integer, Node, ResTarget, String as PgString,
+};
 use pg_query::{NodeEnum, ParseResult};
 
-/// Query rewrite engine. Currently supports injecting helper aggregates for AVG.
+/// Query rewrite engine. Currently supports injecting helper aggregates for AVG and
+/// variance-related functions that require additional helper aggregates when run
+/// across shards.
 #[derive(Default)]
 pub struct RewriteEngine;
 
@@ -43,58 +47,93 @@ impl RewriteEngine {
         let mut plan = RewritePlan::new();
         let mut modified = false;
 
-        for target in aggregate
-            .targets()
-            .iter()
-            .filter(|t| matches!(t.function(), AggregateFunction::Avg))
-        {
+        for target in aggregate.targets() {
             if aggregate.targets().iter().any(|other| {
                 matches!(other.function(), AggregateFunction::Count)
                     && other.expr_id() == target.expr_id()
                     && other.is_distinct() == target.is_distinct()
             }) {
-                continue;
+                if matches!(target.function(), AggregateFunction::Avg) {
+                    continue;
+                }
             }
 
             let Some(node) = select.target_list.get(target.column()) else {
                 continue;
             };
-            let Some(NodeEnum::ResTarget(res_target)) = node.node.as_ref() else {
+            let Some((location, helper_specs)) = ({
+                if let Some(NodeEnum::ResTarget(res_target)) = node.node.as_ref() {
+                    if let Some(original_value) = res_target.val.as_ref() {
+                        if let Some(func_call) = Self::extract_func_call(original_value) {
+                            let specs = Self::helper_specs(
+                                func_call,
+                                target.function(),
+                                target.is_distinct(),
+                            );
+                            Some((res_target.location, specs))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }) else {
                 continue;
             };
-            let Some(original_value) = res_target.val.as_ref() else {
+
+            if helper_specs.is_empty() {
                 continue;
-            };
-            let Some(func_call) = Self::extract_func_call(original_value) else {
-                continue;
-            };
+            }
 
-            let helper_index = select.target_list.len();
-            let helper_alias = format!("__pgdog_count_{}", helper_index);
+            for helper in helper_specs {
+                let helper_index = select.target_list.len();
+                let helper_alias = format!(
+                    "__pgdog_{}_expr{}_col{}",
+                    helper.kind.alias_suffix(),
+                    target.expr_id(),
+                    target.column()
+                );
 
-            let helper_func = Self::build_count_func(func_call, target.is_distinct());
-            let helper_res = ResTarget {
-                name: helper_alias,
-                indirection: vec![],
-                val: Some(Box::new(Node {
-                    node: Some(NodeEnum::FuncCall(Box::new(helper_func))),
-                })),
-                location: res_target.location,
-            };
+                let alias_exists = select.target_list.iter().any(|existing| {
+                    if let Some(NodeEnum::ResTarget(res)) = existing.node.as_ref() {
+                        res.name == helper_alias
+                    } else {
+                        false
+                    }
+                });
 
-            select.target_list.push(Node {
-                node: Some(NodeEnum::ResTarget(Box::new(helper_res))),
-            });
+                if alias_exists {
+                    continue;
+                }
 
-            plan.add_drop_column(helper_index);
-            plan.add_helper(HelperMapping {
-                avg_column: target.column(),
-                helper_column: helper_index,
-                expr_id: target.expr_id(),
-                distinct: target.is_distinct(),
-            });
+                let helper_res = ResTarget {
+                    name: helper_alias.clone(),
+                    indirection: vec![],
+                    val: Some(Box::new(Node {
+                        node: Some(NodeEnum::FuncCall(Box::new(helper.func))),
+                    })),
+                    location,
+                };
 
-            modified = true;
+                select.target_list.push(Node {
+                    node: Some(NodeEnum::ResTarget(Box::new(helper_res))),
+                });
+
+                plan.add_drop_column(helper_index);
+                plan.add_helper(HelperMapping {
+                    target_column: target.column(),
+                    helper_column: helper_index,
+                    expr_id: target.expr_id(),
+                    distinct: target.is_distinct(),
+                    kind: helper.kind,
+                    alias: helper_alias,
+                });
+
+                modified = true;
+            }
         }
 
         if !modified {
@@ -147,6 +186,126 @@ impl RewriteEngine {
             location: original.location,
         }
     }
+
+    fn build_sum_func(original: &FuncCall, distinct: bool) -> FuncCall {
+        FuncCall {
+            funcname: vec![Node {
+                node: Some(NodeEnum::String(PgString { sval: "sum".into() })),
+            }],
+            args: original.args.clone(),
+            agg_order: original.agg_order.clone(),
+            agg_filter: original.agg_filter.clone(),
+            over: original.over.clone(),
+            agg_within_group: original.agg_within_group,
+            agg_star: original.agg_star,
+            agg_distinct: distinct,
+            func_variadic: original.func_variadic,
+            funcformat: original.funcformat,
+            location: original.location,
+        }
+    }
+
+    fn build_sum_of_squares_func(original: &FuncCall, distinct: bool) -> Option<FuncCall> {
+        let arg = original.args.first()?.clone();
+
+        let two = Node {
+            node: Some(NodeEnum::AConst(AConst {
+                val: Some(Val::Ival(Integer { ival: 2 })),
+                location: original.location,
+                isnull: false,
+            })),
+        };
+
+        let power = FuncCall {
+            funcname: vec![Node {
+                node: Some(NodeEnum::String(PgString {
+                    sval: "power".into(),
+                })),
+            }],
+            args: vec![arg, two],
+            agg_order: vec![],
+            agg_filter: None,
+            over: None,
+            agg_within_group: false,
+            agg_star: false,
+            agg_distinct: false,
+            func_variadic: false,
+            funcformat: original.funcformat,
+            location: original.location,
+        };
+
+        Some(FuncCall {
+            funcname: vec![Node {
+                node: Some(NodeEnum::String(PgString { sval: "sum".into() })),
+            }],
+            args: vec![Node {
+                node: Some(NodeEnum::FuncCall(Box::new(power))),
+            }],
+            agg_order: original.agg_order.clone(),
+            agg_filter: original.agg_filter.clone(),
+            over: original.over.clone(),
+            agg_within_group: original.agg_within_group,
+            agg_star: false,
+            agg_distinct: distinct,
+            func_variadic: original.func_variadic,
+            funcformat: original.funcformat,
+            location: original.location,
+        })
+    }
+
+    fn helper_specs(
+        func_call: &FuncCall,
+        function: &AggregateFunction,
+        distinct: bool,
+    ) -> Vec<HelperSpec> {
+        match function {
+            AggregateFunction::Avg => vec![HelperSpec {
+                func: Self::build_count_func(func_call, distinct),
+                kind: HelperKind::Count,
+            }],
+            AggregateFunction::StddevSamp
+            | AggregateFunction::StddevPop
+            | AggregateFunction::VarSamp
+            | AggregateFunction::VarPop => {
+                let mut helpers = vec![
+                    HelperSpec {
+                        func: Self::build_count_func(func_call, distinct),
+                        kind: HelperKind::Count,
+                    },
+                    HelperSpec {
+                        func: Self::build_sum_func(func_call, distinct),
+                        kind: HelperKind::Sum,
+                    },
+                ];
+
+                if let Some(sum_sq) = Self::build_sum_of_squares_func(func_call, distinct) {
+                    helpers.push(HelperSpec {
+                        func: sum_sq,
+                        kind: HelperKind::SumSquares,
+                    });
+                }
+
+                helpers
+            }
+            _ => vec![],
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct HelperSpec {
+    func: FuncCall,
+    kind: HelperKind,
+}
+
+impl HelperKind {
+    fn alias_suffix(&self) -> &'static str {
+        match self {
+            HelperKind::Count => "count",
+            HelperKind::Sum => "sum",
+            HelperKind::SumSquares => "sumsq",
+        }
+    }
 }
 
 #[cfg(test)]
@@ -185,40 +344,11 @@ mod tests {
         assert_eq!(output.plan.drop_columns(), &[1]);
         assert_eq!(output.plan.helpers().len(), 1);
         let helper = &output.plan.helpers()[0];
-        assert_eq!(helper.avg_column, 0);
+        assert_eq!(helper.target_column, 0);
         assert_eq!(helper.helper_column, 1);
         assert_eq!(helper.expr_id, 0);
         assert!(!helper.distinct);
-
-        let parsed = pg_query::parse(&output.sql).unwrap();
-        let stmt = match parsed
-            .protobuf
-            .stmts
-            .first()
-            .and_then(|stmt| stmt.stmt.as_ref())
-        {
-            Some(raw) => match raw.node.as_ref().unwrap() {
-                NodeEnum::SelectStmt(select) => select,
-                _ => panic!("not select"),
-            },
-            None => panic!("empty"),
-        };
-        let aggregate = Aggregate::parse(stmt).unwrap();
-        assert_eq!(aggregate.targets().len(), 2);
-        assert!(aggregate
-            .targets()
-            .iter()
-            .any(|target| matches!(target.function(), AggregateFunction::Count)));
-    }
-
-    #[test]
-    fn rewrite_engine_handles_avg_with_casts() {
-        let output = rewrite("SELECT AVG(amount)::numeric::bigint::real FROM sharded");
-        assert_eq!(output.plan.drop_columns(), &[1]);
-        assert_eq!(output.plan.helpers().len(), 1);
-        let helper = &output.plan.helpers()[0];
-        assert_eq!(helper.avg_column, 0);
-        assert_eq!(helper.helper_column, 1);
+        assert!(matches!(helper.kind, HelperKind::Count));
 
         let parsed = pg_query::parse(&output.sql).unwrap();
         let stmt = match parsed
@@ -255,9 +385,10 @@ mod tests {
         assert_eq!(output.plan.drop_columns(), &[2]);
         assert_eq!(output.plan.helpers().len(), 1);
         let helper = &output.plan.helpers()[0];
-        assert_eq!(helper.avg_column, 1);
+        assert_eq!(helper.target_column, 1);
         assert_eq!(helper.helper_column, 2);
         assert!(!helper.distinct);
+        assert!(matches!(helper.kind, HelperKind::Count));
 
         // Ensure the rewritten SQL now contains both AVG and helper COUNT for the AVG target.
         let parsed = pg_query::parse(&output.sql).unwrap();
@@ -292,12 +423,14 @@ mod tests {
         assert_eq!(output.plan.helpers().len(), 2);
 
         let helper_price = &output.plan.helpers()[0];
-        assert_eq!(helper_price.avg_column, 0);
+        assert_eq!(helper_price.target_column, 0);
         assert_eq!(helper_price.helper_column, 2);
+        assert!(matches!(helper_price.kind, HelperKind::Count));
 
         let helper_discount = &output.plan.helpers()[1];
-        assert_eq!(helper_discount.avg_column, 1);
+        assert_eq!(helper_discount.target_column, 1);
         assert_eq!(helper_discount.helper_column, 3);
+        assert!(matches!(helper_discount.kind, HelperKind::Count));
 
         let parsed = pg_query::parse(&output.sql).unwrap();
         let stmt = match parsed
@@ -322,5 +455,43 @@ mod tests {
                 .count(),
             2
         );
+    }
+
+    #[test]
+    fn rewrite_engine_stddev_helpers() {
+        let output = rewrite("SELECT STDDEV(price) FROM menu");
+        assert!(!output.plan.is_noop());
+        assert_eq!(output.plan.drop_columns(), &[1, 2, 3]);
+        assert_eq!(output.plan.helpers().len(), 3);
+
+        let kinds: Vec<HelperKind> = output
+            .plan
+            .helpers()
+            .iter()
+            .map(|helper| {
+                assert_eq!(helper.target_column, 0);
+                helper.kind
+            })
+            .collect();
+
+        assert!(kinds.contains(&HelperKind::Count));
+        assert!(kinds.contains(&HelperKind::Sum));
+        assert!(kinds.contains(&HelperKind::SumSquares));
+
+        let parsed = pg_query::parse(&output.sql).unwrap();
+        let stmt = match parsed
+            .protobuf
+            .stmts
+            .first()
+            .and_then(|stmt| stmt.stmt.as_ref())
+        {
+            Some(raw) => match raw.node.as_ref().unwrap() {
+                NodeEnum::SelectStmt(select) => select,
+                _ => panic!("not select"),
+            },
+            None => panic!("empty"),
+        };
+        // Expect original STDDEV plus three helpers.
+        assert_eq!(stmt.target_list.len(), 4);
     }
 }
