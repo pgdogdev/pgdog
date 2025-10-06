@@ -31,21 +31,22 @@ impl RewriteEngine {
         aggregate: &Aggregate,
         original_sql: &str,
     ) -> RewriteOutput {
-        let mut ast = parsed.protobuf.clone();
-        let Some(raw_stmt) = ast.stmts.first_mut() else {
+        let Some(raw_stmt) = parsed.protobuf.stmts.first() else {
             return RewriteOutput::new(original_sql.to_string(), RewritePlan::new());
         };
 
-        let Some(stmt) = raw_stmt.stmt.as_mut() else {
+        let Some(stmt) = raw_stmt.stmt.as_ref() else {
             return RewriteOutput::new(original_sql.to_string(), RewritePlan::new());
         };
 
-        let Some(NodeEnum::SelectStmt(select)) = stmt.node.as_mut() else {
+        let Some(NodeEnum::SelectStmt(select)) = stmt.node.as_ref() else {
             return RewriteOutput::new(original_sql.to_string(), RewritePlan::new());
         };
 
         let mut plan = RewritePlan::new();
-        let mut modified = false;
+        let mut helper_nodes: Vec<Node> = Vec::new();
+        let mut planned_aliases: Vec<String> = Vec::new();
+        let base_len = select.target_list.len();
 
         for target in aggregate.targets() {
             if aggregate.targets().iter().any(|other| {
@@ -61,6 +62,7 @@ impl RewriteEngine {
             let Some(node) = select.target_list.get(target.column()) else {
                 continue;
             };
+
             let Some((location, helper_specs)) = ({
                 if let Some(NodeEnum::ResTarget(res_target)) = node.node.as_ref() {
                     if let Some(original_value) = res_target.val.as_ref() {
@@ -89,10 +91,11 @@ impl RewriteEngine {
             }
 
             for helper in helper_specs {
-                let helper_index = select.target_list.len();
+                let HelperSpec { func, kind } = helper;
+
                 let helper_alias = format!(
                     "__pgdog_{}_expr{}_col{}",
-                    helper.kind.alias_suffix(),
+                    kind.alias_suffix(),
                     target.expr_id(),
                     target.column()
                 );
@@ -103,42 +106,60 @@ impl RewriteEngine {
                     } else {
                         false
                     }
-                });
+                }) || planned_aliases
+                    .iter()
+                    .any(|existing| existing == &helper_alias);
 
                 if alias_exists {
                     continue;
                 }
 
+                let helper_column = base_len + helper_nodes.len();
+
                 let helper_res = ResTarget {
                     name: helper_alias.clone(),
                     indirection: vec![],
                     val: Some(Box::new(Node {
-                        node: Some(NodeEnum::FuncCall(Box::new(helper.func))),
+                        node: Some(NodeEnum::FuncCall(Box::new(func))),
                     })),
                     location,
                 };
 
-                select.target_list.push(Node {
+                helper_nodes.push(Node {
                     node: Some(NodeEnum::ResTarget(Box::new(helper_res))),
                 });
+                planned_aliases.push(helper_alias.clone());
 
-                plan.add_drop_column(helper_index);
+                plan.add_drop_column(helper_column);
                 plan.add_helper(HelperMapping {
                     target_column: target.column(),
-                    helper_column: helper_index,
+                    helper_column,
                     expr_id: target.expr_id(),
                     distinct: target.is_distinct(),
-                    kind: helper.kind,
+                    kind,
                     alias: helper_alias,
                 });
-
-                modified = true;
             }
         }
 
-        if !modified {
+        if helper_nodes.is_empty() {
             return RewriteOutput::new(original_sql.to_string(), RewritePlan::new());
         }
+
+        let mut ast = parsed.protobuf.clone();
+        let Some(raw_stmt) = ast.stmts.first_mut() else {
+            return RewriteOutput::new(original_sql.to_string(), RewritePlan::new());
+        };
+
+        let Some(stmt) = raw_stmt.stmt.as_mut() else {
+            return RewriteOutput::new(original_sql.to_string(), RewritePlan::new());
+        };
+
+        let Some(NodeEnum::SelectStmt(select)) = stmt.node.as_mut() else {
+            return RewriteOutput::new(original_sql.to_string(), RewritePlan::new());
+        };
+
+        select.target_list.extend(helper_nodes);
 
         let rewritten_sql = ast.deparse().unwrap_or_else(|_| original_sql.to_string());
         RewriteOutput::new(rewritten_sql, plan)
