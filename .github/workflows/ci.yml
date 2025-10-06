@@ -166,8 +166,6 @@ jobs:
         run: bash integration/complex/run.sh
       - name: Dry run
         run: bash integration/dry_run/run.sh
-      # - name: Plugins
-      #   run: bash integration/plugins/run.sh
       - name: Ensure PgDog stopped
         run: |
           if pgrep -x pgdog > /dev/null; then
@@ -198,6 +196,7 @@ jobs:
           prefix-key: "plugin-unit-v1"
       - name: Install CMake 3.31
         run: |
+          sudo apt-get install -y mold
           sudo apt remove cmake
           sudo pip3 install cmake==3.31.6
           cmake --version
@@ -225,7 +224,7 @@ jobs:
           bash integration/setup.sh
       - name: Install dependencies
         run: |
-          sudo apt update && sudo apt install -y python3-virtualenv
+          sudo apt update && sudo apt install -y python3-virtualenv mold
           sudo gem install bundler
           sudo apt remove -y cmake
           sudo pip3 install cmake==3.31.6
