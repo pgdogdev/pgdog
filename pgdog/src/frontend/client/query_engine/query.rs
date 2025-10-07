@@ -21,7 +21,7 @@ impl QueryEngine {
         route: &Route,
     ) -> Result<(), Error> {
         // Check that we're not in a transaction error state.
-        if !self.transaction_error_check(context).await? {
+        if !self.transaction_error_check(context, route).await? {
             return Ok(());
         }
 
@@ -115,7 +115,12 @@ impl QueryEngine {
 
             match state {
                 TransactionState::Error => {
-                    context.transaction = Some(TransactionType::Error);
+                    let error_state = match context.transaction {
+                        Some(TransactionType::ReadOnly) => Some(TransactionType::ErrorReadOnly),
+                        Some(TransactionType::ReadWrite) => Some(TransactionType::ErrorReadWrite),
+                        _ => None,
+                    };
+                    context.transaction = error_state;
                     if self.two_pc.auto() {
                         self.end_two_pc(true).await?;
                         // TODO: this records a 2pc transaction in client
@@ -133,10 +138,23 @@ impl QueryEngine {
                         self.end_two_pc(false).await?;
                         two_pc_auto = true;
                     }
-                    if context.transaction.is_none() {
+                    match context.transaction {
                         // Query parser is disabled, so the server is responsible for telling us
                         // we started a transaction.
-                        context.transaction = Some(TransactionType::ReadWrite);
+                        None => {
+                            context.transaction = Some(TransactionType::ReadWrite);
+                        }
+
+                        // Restore transaction state after rollback to savepoint.
+                        Some(TransactionType::ErrorReadOnly) => {
+                            context.transaction = Some(TransactionType::ReadOnly);
+                        }
+
+                        Some(TransactionType::ErrorReadWrite) => {
+                            context.transaction = Some(TransactionType::ReadWrite);
+                        }
+
+                        _ => (),
                     }
                 }
             }
@@ -264,8 +282,13 @@ impl QueryEngine {
     async fn transaction_error_check(
         &mut self,
         context: &mut QueryEngineContext<'_>,
+        route: &Route,
     ) -> Result<bool, Error> {
-        if context.in_error() && !context.rollback && context.client_request.executable() {
+        if context.in_error()
+            && !context.rollback
+            && context.client_request.executable()
+            && !route.rollback_savepoint()
+        {
             let bytes_sent = context
                 .stream
                 .error(
