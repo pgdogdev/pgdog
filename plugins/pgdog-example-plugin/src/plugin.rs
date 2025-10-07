@@ -55,10 +55,11 @@ pub(crate) fn route_query(context: Context) -> Result<Route, PluginError> {
 
             if let NodeEnum::RangeVar(RangeVar { relname, .. }) = table_name {
                 // Got info on last write.
-                if let Some(last_write) = { WRITE_TIMES.lock().get(relname).cloned() }
-                    && last_write.elapsed() > Duration::from_secs(5)
-                    && context.has_replicas()
-                {
+                if let Some(last_write) = { WRITE_TIMES.lock().get(relname).cloned() } {
+                    if last_write.elapsed() > Duration::from_secs(5) && context.has_replicas() {
+                        return Ok(Route::new(Shard::Unknown, ReadWrite::Read));
+                    }
+                } else if context.has_replicas() {
                     return Ok(Route::new(Shard::Unknown, ReadWrite::Read));
                 }
             }
