@@ -1,4 +1,5 @@
 use super::{explain_trace::ExplainRecorder, *};
+use std::string::String as StdString;
 
 impl QueryParser {
     /// Converge to a single route given multiple shards.
@@ -45,15 +46,13 @@ impl QueryParser {
                     Key::Constant { value, array } => {
                         if array {
                             shards.insert(Shard::All);
-                            if let Some(recorder) = recorder.as_mut() {
-                                recorder.record_entry(
-                                    Some(Shard::All),
-                                    format!(
-                                        "array value on {} forced broadcast",
-                                        format_column(table_name, &table.column)
-                                    ),
-                                );
-                            }
+                            record_column(
+                                recorder,
+                                Some(Shard::All),
+                                table_name,
+                                &table.column,
+                                |col| format!("array value on {} forced broadcast", col),
+                            );
                             break;
                         }
 
@@ -62,15 +61,13 @@ impl QueryParser {
                             .shards(sharding_schema.shards)
                             .build()?;
                         let shard = ctx.apply()?;
-                        if let Some(recorder) = recorder.as_mut() {
-                            recorder.record_entry(
-                                Some(shard.clone()),
-                                format!(
-                                    "matched sharding key {} using constant",
-                                    format_column(table_name, &table.column)
-                                ),
-                            );
-                        }
+                        record_column(
+                            recorder,
+                            Some(shard.clone()),
+                            table_name,
+                            &table.column,
+                            |col| format!("matched sharding key {} using constant", col),
+                        );
                         shards.insert(shard);
                     }
 
@@ -79,15 +76,13 @@ impl QueryParser {
                         // The odds are high this will go to all shards anyway.
                         if array {
                             shards.insert(Shard::All);
-                            if let Some(recorder) = recorder.as_mut() {
-                                recorder.record_entry(
-                                    Some(Shard::All),
-                                    format!(
-                                        "array parameter for {} forced broadcast",
-                                        format_column(table_name, &table.column)
-                                    ),
-                                );
-                            }
+                            record_column(
+                                recorder,
+                                Some(Shard::All),
+                                table_name,
+                                &table.column,
+                                |col| format!("array parameter for {} forced broadcast", col),
+                            );
                             break;
                         } else if let Some(params) = params {
                             if let Some(param) = params.parameter(pos)? {
@@ -97,16 +92,19 @@ impl QueryParser {
                                     .shards(sharding_schema.shards)
                                     .build()?;
                                 let shard = ctx.apply()?;
-                                if let Some(recorder) = recorder.as_mut() {
-                                    recorder.record_entry(
-                                        Some(shard.clone()),
+                                record_column(
+                                    recorder,
+                                    Some(shard.clone()),
+                                    table_name,
+                                    &table.column,
+                                    |col| {
                                         format!(
                                             "matched sharding key {} using parameter ${}",
-                                            format_column(table_name, &table.column),
+                                            col,
                                             pos + 1
-                                        ),
-                                    );
-                                }
+                                        )
+                                    },
+                                );
                                 shards.insert(shard);
                             }
                         }
@@ -122,9 +120,25 @@ impl QueryParser {
     }
 }
 
-fn format_column(table: Option<&str>, column: &str) -> std::string::String {
+fn format_column(table: Option<&str>, column: &str) -> StdString {
     match table {
         Some(table) if !table.is_empty() => format!("{}.{}", table, column),
         _ => column.to_string(),
+    }
+}
+
+fn record_column<F>(
+    recorder: &mut Option<ExplainRecorder>,
+    shard: Option<Shard>,
+    table: Option<&str>,
+    column: &str,
+    message: F,
+) where
+    F: FnOnce(StdString) -> StdString,
+{
+    if let Some(recorder) = recorder.as_mut() {
+        let column: StdString = format_column(table, column);
+        let description: StdString = message(column);
+        recorder.record_entry(shard, description);
     }
 }
