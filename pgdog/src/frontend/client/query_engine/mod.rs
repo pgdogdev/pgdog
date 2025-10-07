@@ -1,5 +1,6 @@
 use crate::{
     backend::pool::{Connection, Request},
+    config::config,
     frontend::{
         client::query_engine::hooks::QueryEngineHooks,
         router::{parser::Shard, Route},
@@ -142,7 +143,9 @@ impl QueryEngine {
         };
 
         if let Some(trace) = route.take_explain() {
-            self.pending_explain = Some(ExplainResponseState::new(trace));
+            if config().config.general.expanded_explain {
+                self.pending_explain = Some(ExplainResponseState::new(trace));
+            }
         }
 
         // FIXME, we should not to copy route twice.

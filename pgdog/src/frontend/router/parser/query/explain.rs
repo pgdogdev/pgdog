@@ -10,7 +10,10 @@ impl QueryParser {
         let query = stmt.query.as_ref().ok_or(Error::EmptyQuery)?;
         let node = query.node.as_ref().ok_or(Error::EmptyQuery)?;
 
-        self.explain_recorder = Some(ExplainRecorder::new());
+        self.explain_recorder = None;
+        if context.expanded_explain() {
+            self.explain_recorder = Some(ExplainRecorder::new());
+        }
 
         let result = match node {
             NodeEnum::SelectStmt(ref stmt) => self.select(ast, stmt, context),
@@ -42,12 +45,24 @@ mod tests {
     use super::*;
 
     use crate::backend::Cluster;
+    use crate::config::{self, config};
     use crate::frontend::{ClientRequest, PreparedStatements, RouterContext};
     use crate::net::messages::{Bind, Parameter, Parse, Query};
     use crate::net::Parameters;
+    use std::sync::Once;
+
+    fn enable_expanded_explain() {
+        static INIT: Once = Once::new();
+        INIT.call_once(|| {
+            let mut cfg = config().as_ref().clone();
+            cfg.config.general.expanded_explain = true;
+            config::set(cfg).unwrap();
+        });
+    }
 
     // Helper function to route a plain SQL statement and return its `Route`.
     fn route(sql: &str) -> Route {
+        enable_expanded_explain();
         let buffer = ClientRequest::from(vec![Query::new(sql).into()]);
 
         let cluster = Cluster::new_test();
@@ -64,6 +79,7 @@ mod tests {
 
     // Helper function to route a parameterized SQL statement and return its `Route`.
     fn route_parameterized(sql: &str, values: &[&[u8]]) -> Route {
+        enable_expanded_explain();
         let parse_msg = Parse::new_anonymous(sql);
         let parameters = values
             .iter()
