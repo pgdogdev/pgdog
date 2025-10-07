@@ -1,4 +1,4 @@
-use super::*;
+use super::{explain_trace::ExplainRecorder, *};
 
 impl QueryParser {
     /// Converge to a single route given multiple shards.
@@ -33,6 +33,7 @@ impl QueryParser {
         sharding_schema: &ShardingSchema,
         where_clause: &WhereClause,
         params: Option<&Bind>,
+        recorder: &mut Option<ExplainRecorder>,
     ) -> Result<HashSet<Shard>, Error> {
         let mut shards = HashSet::new();
         // Complexity: O(number of sharded tables * number of columns in the query)
@@ -44,6 +45,15 @@ impl QueryParser {
                     Key::Constant { value, array } => {
                         if array {
                             shards.insert(Shard::All);
+                            if let Some(recorder) = recorder.as_mut() {
+                                recorder.record_entry(
+                                    Some(Shard::All),
+                                    format!(
+                                        "array value on {} forced broadcast",
+                                        format_column(table_name, &table.column)
+                                    ),
+                                );
+                            }
                             break;
                         }
 
@@ -51,7 +61,17 @@ impl QueryParser {
                             .data(value.as_str())
                             .shards(sharding_schema.shards)
                             .build()?;
-                        shards.insert(ctx.apply()?);
+                        let shard = ctx.apply()?;
+                        if let Some(recorder) = recorder.as_mut() {
+                            recorder.record_entry(
+                                Some(shard.clone()),
+                                format!(
+                                    "matched sharding key {} using constant",
+                                    format_column(table_name, &table.column)
+                                ),
+                            );
+                        }
+                        shards.insert(shard);
                     }
 
                     Key::Parameter { pos, array } => {
@@ -59,6 +79,15 @@ impl QueryParser {
                         // The odds are high this will go to all shards anyway.
                         if array {
                             shards.insert(Shard::All);
+                            if let Some(recorder) = recorder.as_mut() {
+                                recorder.record_entry(
+                                    Some(Shard::All),
+                                    format!(
+                                        "array parameter for {} forced broadcast",
+                                        format_column(table_name, &table.column)
+                                    ),
+                                );
+                            }
                             break;
                         } else if let Some(params) = params {
                             if let Some(param) = params.parameter(pos)? {
@@ -67,7 +96,18 @@ impl QueryParser {
                                     .value(value)
                                     .shards(sharding_schema.shards)
                                     .build()?;
-                                shards.insert(ctx.apply()?);
+                                let shard = ctx.apply()?;
+                                if let Some(recorder) = recorder.as_mut() {
+                                    recorder.record_entry(
+                                        Some(shard.clone()),
+                                        format!(
+                                            "matched sharding key {} using parameter ${}",
+                                            format_column(table_name, &table.column),
+                                            pos + 1
+                                        ),
+                                    );
+                                }
+                                shards.insert(shard);
                             }
                         }
                     }
@@ -79,5 +119,12 @@ impl QueryParser {
         }
 
         Ok(shards)
+    }
+}
+
+fn format_column(table: Option<&str>, column: &str) -> std::string::String {
+    match table {
+        Some(table) if !table.is_empty() => format!("{}.{}", table, column),
+        _ => column.to_string(),
     }
 }

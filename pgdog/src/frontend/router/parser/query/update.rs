@@ -4,6 +4,7 @@ use super::*;
 
 impl QueryParser {
     pub(super) fn update(
+        &mut self,
         stmt: &UpdateStmt,
         context: &QueryParserContext,
     ) -> Result<Command, Error> {
@@ -18,11 +19,22 @@ impl QueryParser {
                     &context.sharding_schema,
                     &where_clause,
                     context.router_context.bind,
+                    &mut self.explain_recorder,
                 )?;
-                return Ok(Command::Query(Route::write(Self::converge(shards))));
+                let shard = Self::converge(shards);
+                if let Some(recorder) = self.recorder_mut() {
+                    recorder.record_entry(
+                        Some(shard.clone()),
+                        "UPDATE matched WHERE clause for sharding key",
+                    );
+                }
+                return Ok(Command::Query(Route::write(shard)));
             }
         }
 
+        if let Some(recorder) = self.recorder_mut() {
+            recorder.record_entry(None, "UPDATE fell back to broadcast");
+        }
         Ok(Command::Query(Route::write(Shard::All)))
     }
 }

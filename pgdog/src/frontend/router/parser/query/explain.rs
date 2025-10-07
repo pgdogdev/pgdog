@@ -10,15 +10,28 @@ impl QueryParser {
         let query = stmt.query.as_ref().ok_or(Error::EmptyQuery)?;
         let node = query.node.as_ref().ok_or(Error::EmptyQuery)?;
 
-        match node {
+        self.explain_recorder = Some(ExplainRecorder::new());
+
+        let result = match node {
             NodeEnum::SelectStmt(ref stmt) => self.select(ast, stmt, context),
-            NodeEnum::InsertStmt(ref stmt) => Self::insert(stmt, context),
-            NodeEnum::UpdateStmt(ref stmt) => Self::update(stmt, context),
-            NodeEnum::DeleteStmt(ref stmt) => Self::delete(stmt, context),
+            NodeEnum::InsertStmt(ref stmt) => self.insert(stmt, context),
+            NodeEnum::UpdateStmt(ref stmt) => self.update(stmt, context),
+            NodeEnum::DeleteStmt(ref stmt) => self.delete(stmt, context),
 
             _ => {
                 // For other statement types, route to all shards
                 Ok(Command::Query(Route::write(None)))
+            }
+        };
+
+        match result {
+            Ok(mut command) => {
+                self.attach_explain(&mut command);
+                Ok(command)
+            }
+            Err(err) => {
+                self.explain_recorder = None;
+                Err(err)
             }
         }
     }
@@ -95,10 +108,16 @@ mod tests {
         let r = route("EXPLAIN SELECT * FROM sharded WHERE id = 1");
         assert!(matches!(r.shard(), Shard::Direct(_)));
         assert!(r.is_read());
+        let lines = r.explain().unwrap().render_lines();
+        assert!(lines
+            .iter()
+            .any(|line| line.contains("matched sharding key")));
 
         let r = route_parameterized("EXPLAIN SELECT * FROM sharded WHERE id = $1", &[b"11"]);
         assert!(matches!(r.shard(), Shard::Direct(_)));
         assert!(r.is_read());
+        let lines = r.explain().unwrap().render_lines();
+        assert!(lines.iter().any(|line| line.contains("parameter")));
     }
 
     #[test]
@@ -106,6 +125,8 @@ mod tests {
         let r = route("EXPLAIN SELECT * FROM sharded");
         assert_eq!(r.shard(), &Shard::All);
         assert!(r.is_read());
+        let lines = r.explain().unwrap().render_lines();
+        assert!(lines.iter().any(|line| line.contains("broadcast")));
     }
 
     #[test]
