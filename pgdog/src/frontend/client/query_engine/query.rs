@@ -287,7 +287,7 @@ impl QueryEngine {
         if context.in_error()
             && !context.rollback
             && context.client_request.executable()
-            && !route.rollback_safepoint()
+            && !route.rollback_savepoint()
         {
             let bytes_sent = context
                 .stream

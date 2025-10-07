@@ -193,7 +193,7 @@ impl Route {
         self
     }
 
-    pub fn rollback_safepoint(&self) -> bool {
+    pub fn rollback_savepoint(&self) -> bool {
         self.rollback_savepoint
     }
 
