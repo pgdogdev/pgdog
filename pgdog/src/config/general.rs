@@ -70,6 +70,9 @@ pub struct General {
     /// Shutdown timeout.
     #[serde(default = "General::default_shutdown_timeout")]
     pub shutdown_timeout: u64,
+    /// Shutdown termination timeout (after shutdown_timeout expires, forcibly terminate).
+    #[serde(default = "General::default_shutdown_termination_timeout")]
+    pub shutdown_termination_timeout: Option<u64>,
     /// Broadcast IP.
     pub broadcast_address: Option<Ipv4Addr>,
     /// Broadcast port.
@@ -176,6 +179,7 @@ impl Default for General {
             tls_verify: Self::default_tls_verify(),
             tls_server_ca_certificate: Self::tls_server_ca_certificate(),
             shutdown_timeout: Self::default_shutdown_timeout(),
+            shutdown_termination_timeout: Self::default_shutdown_termination_timeout(),
             broadcast_address: Self::broadcast_address(),
             broadcast_port: Self::broadcast_port(),
             query_log: Self::query_log(),
@@ -342,6 +346,10 @@ impl General {
         Self::env_or_default("PGDOG_SHUTDOWN_TIMEOUT", 60_000)
     }
 
+    fn default_shutdown_termination_timeout() -> Option<u64> {
+        Self::env_option("PGDOG_SHUTDOWN_TERMINATION_TIMEOUT")
+    }
+
     fn default_connect_timeout() -> u64 {
         Self::env_or_default("PGDOG_CONNECT_TIMEOUT", 5_000)
     }
@@ -484,6 +492,10 @@ impl General {
     /// Get shutdown timeout as a duration.
     pub fn shutdown_timeout(&self) -> Duration {
         Duration::from_millis(self.shutdown_timeout)
+    }
+
+    pub fn shutdown_termination_timeout(&self) -> Option<Duration> {
+        self.shutdown_termination_timeout.map(Duration::from_millis)
     }
 
     /// Get TLS config, if any.
@@ -654,6 +666,7 @@ mod tests {
         env::set_var("PGDOG_BAN_TIMEOUT", "600000");
         env::set_var("PGDOG_ROLLBACK_TIMEOUT", "10000");
         env::set_var("PGDOG_SHUTDOWN_TIMEOUT", "120000");
+        env::set_var("PGDOG_SHUTDOWN_TERMINATION_TIMEOUT", "15000");
         env::set_var("PGDOG_CONNECT_ATTEMPT_DELAY", "1000");
         env::set_var("PGDOG_QUERY_TIMEOUT", "30000");
         env::set_var("PGDOG_CLIENT_IDLE_TIMEOUT", "3600000");
@@ -663,6 +676,10 @@ mod tests {
         assert_eq!(General::ban_timeout(), 600000);
         assert_eq!(General::rollback_timeout(), 10000);
         assert_eq!(General::default_shutdown_timeout(), 120000);
+        assert_eq!(
+            General::default_shutdown_termination_timeout(),
+            Some(15_000)
+        );
         assert_eq!(General::default_connect_attempt_delay(), 1000);
         assert_eq!(General::default_query_timeout(), 30000);
         assert_eq!(General::default_client_idle_timeout(), 3600000);
@@ -672,6 +689,7 @@ mod tests {
         env::remove_var("PGDOG_BAN_TIMEOUT");
         env::remove_var("PGDOG_ROLLBACK_TIMEOUT");
         env::remove_var("PGDOG_SHUTDOWN_TIMEOUT");
+        env::remove_var("PGDOG_SHUTDOWN_TERMINATION_TIMEOUT");
         env::remove_var("PGDOG_CONNECT_ATTEMPT_DELAY");
         env::remove_var("PGDOG_QUERY_TIMEOUT");
         env::remove_var("PGDOG_CLIENT_IDLE_TIMEOUT");
@@ -681,6 +699,7 @@ mod tests {
         assert_eq!(General::ban_timeout(), 300000);
         assert_eq!(General::rollback_timeout(), 5000);
         assert_eq!(General::default_shutdown_timeout(), 60000);
+        assert_eq!(General::default_shutdown_termination_timeout(), None);
         assert_eq!(General::default_connect_attempt_delay(), 0);
     }
 
