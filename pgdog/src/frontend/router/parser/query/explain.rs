@@ -137,6 +137,10 @@ mod tests {
         );
         assert!(matches!(r.shard(), Shard::Direct(_)));
         assert!(r.is_write());
+        let lines = r.explain().unwrap().render_lines();
+        assert!(lines
+            .iter()
+            .any(|line| line.contains("INSERT matched sharding key")));
     }
 
     #[test]
@@ -147,10 +151,18 @@ mod tests {
         );
         assert!(matches!(r.shard(), Shard::Direct(_)));
         assert!(r.is_write());
+        let lines = r.explain().unwrap().render_lines();
+        assert!(lines
+            .iter()
+            .any(|line| line.contains("UPDATE matched WHERE clause")));
 
         let r = route("EXPLAIN UPDATE sharded SET active = true");
         assert_eq!(r.shard(), &Shard::All);
         assert!(r.is_write());
+        let lines = r.explain().unwrap().render_lines();
+        assert!(lines
+            .iter()
+            .any(|line| line.contains("UPDATE fell back to broadcast")));
     }
 
     #[test]
@@ -158,10 +170,18 @@ mod tests {
         let r = route_parameterized("EXPLAIN DELETE FROM sharded WHERE id = $1", &[b"11"]);
         assert!(matches!(r.shard(), Shard::Direct(_)));
         assert!(r.is_write());
+        let lines = r.explain().unwrap().render_lines();
+        assert!(lines
+            .iter()
+            .any(|line| line.contains("DELETE matched WHERE clause")));
 
         let r = route("EXPLAIN DELETE FROM sharded");
         assert_eq!(r.shard(), &Shard::All);
         assert!(r.is_write());
+        let lines = r.explain().unwrap().render_lines();
+        assert!(lines
+            .iter()
+            .any(|line| line.contains("DELETE fell back to broadcast")));
     }
 
     #[test]
@@ -179,6 +199,27 @@ mod tests {
     fn test_explain_with_comment_override() {
         let r = route("/* pgdog_shard: 5 */ EXPLAIN SELECT * FROM sharded");
         assert_eq!(r.shard(), &Shard::Direct(5));
+        let lines = r.explain().unwrap().render_lines();
+        assert_eq!(lines[3], "  Shard 5: manual override to shard=5");
+    }
+
+    #[test]
+    fn test_explain_select_broadcast_entry() {
+        let lines = route("EXPLAIN SELECT * FROM sharded")
+            .explain()
+            .unwrap()
+            .render_lines();
+        assert_eq!(lines[3], "  Note: no sharding key matched; broadcasting");
+    }
+
+    #[test]
+    fn test_explain_select_parameter_entry() {
+        let lines = route_parameterized("EXPLAIN SELECT * FROM sharded WHERE id = $1", &[b"22"])
+            .explain()
+            .unwrap()
+            .render_lines();
+
+        assert!(lines.iter().any(|line| line.contains("parameter")));
     }
 
     #[test]

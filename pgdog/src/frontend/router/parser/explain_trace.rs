@@ -146,3 +146,82 @@ impl ExplainRecorder {
         ExplainTrace::new(summary, self.entries)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn render_lines_formats_summary_and_entries() {
+        let trace = ExplainTrace::new(
+            ExplainSummary {
+                shard: Shard::Direct(2),
+                read: true,
+            },
+            vec![ExplainEntry::new(
+                Some(Shard::Direct(2)),
+                "matched sharding key",
+            )],
+        );
+
+        let lines = trace.render_lines();
+        assert_eq!(lines[0], "");
+        assert_eq!(lines[1], "PgDog Routing:");
+        assert_eq!(lines[2], "  Summary: shard=2 role=replica");
+        assert_eq!(lines[3], "  Shard 2: matched sharding key");
+    }
+
+    #[test]
+    fn finalize_inserts_comment_and_plugin_entries() {
+        let mut recorder = ExplainRecorder::new();
+        recorder.record_entry(Some(Shard::Direct(7)), "matched sharding key");
+        recorder.record_comment_override(Shard::Direct(3), Some("primary"));
+        recorder.record_plugin_override("test_plugin", Some(Shard::Direct(9)), Some(true));
+
+        let trace = recorder.finalize(ExplainSummary {
+            shard: Shard::Direct(9),
+            read: true,
+        });
+
+        let descriptions: Vec<&str> = trace
+            .steps()
+            .iter()
+            .map(|entry| entry.description.as_str())
+            .collect();
+
+        assert_eq!(descriptions[0], "manual override to shard=3 role=primary");
+        assert_eq!(descriptions[1], "matched sharding key");
+        assert_eq!(
+            descriptions[2],
+            "plugin test_plugin adjusted routing shard=9 role=replica"
+        );
+    }
+
+    #[test]
+    fn finalize_injects_fallback_when_no_entries() {
+        let trace = ExplainRecorder::new().finalize(ExplainSummary {
+            shard: Shard::All,
+            read: false,
+        });
+
+        assert_eq!(trace.steps().len(), 1);
+        assert_eq!(
+            trace.steps()[0].description,
+            "no sharding key matched; broadcasting"
+        );
+        assert!(trace.steps()[0].shard.is_none());
+    }
+
+    #[test]
+    fn finalize_reports_multiple_shards() {
+        let trace = ExplainRecorder::new().finalize(ExplainSummary {
+            shard: Shard::Multi(vec![1, 5]),
+            read: true,
+        });
+
+        assert_eq!(
+            trace.steps()[0].description,
+            "multiple shards matched: [1, 5]"
+        );
+    }
+}
