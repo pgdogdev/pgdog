@@ -60,6 +60,7 @@ pub struct Route {
     maintenance: bool,
     rewrite_plan: RewritePlan,
     rewritten_sql: Option<String>,
+    rollback_savepoint: bool,
 }
 
 impl Display for Route {
@@ -185,6 +186,15 @@ impl Route {
 
     pub fn set_read_mut(&mut self, read: bool) {
         self.read = read;
+    }
+
+    pub fn set_rollback_savepoint(mut self, rollback: bool) -> Self {
+        self.rollback_savepoint = rollback;
+        self
+    }
+
+    pub fn rollback_safepoint(&self) -> bool {
+        self.rollback_savepoint
     }
 
     pub fn set_write(mut self, write: FunctionBehavior) -> Self {

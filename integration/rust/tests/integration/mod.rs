@@ -9,6 +9,7 @@ pub mod notify;
 pub mod per_stmt_routing;
 pub mod prepared;
 pub mod reload;
+pub mod savepoint;
 pub mod set_sharding_key;
 pub mod shard_consistency;
 pub mod stddev;
