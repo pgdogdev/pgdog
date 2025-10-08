@@ -16,6 +16,7 @@ impl QueryParser {
         context: &QueryParserContext,
     ) -> Result<Command, Error> {
         let extended = !context.query()?.simple();
+        let mut rollback_savepoint = false;
 
         if context.rw_conservative() && !context.read_only {
             self.write_override = true;
@@ -37,6 +38,7 @@ impl QueryParser {
                     extended,
                 });
             }
+            TransactionStmtKind::TransStmtRollbackTo => rollback_savepoint = true,
             TransactionStmtKind::TransStmtPrepare
             | TransactionStmtKind::TransStmtCommitPrepared
             | TransactionStmtKind::TransStmtRollbackPrepared => {
@@ -47,7 +49,9 @@ impl QueryParser {
             _ => (),
         }
 
-        Ok(Command::Query(Route::write(None)))
+        Ok(Command::Query(
+            Route::write(None).set_rollback_savepoint(rollback_savepoint),
+        ))
     }
 
     #[inline]

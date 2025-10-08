@@ -132,6 +132,28 @@ impl Listener {
                 "terminating {} client connections due to shutdown timeout",
                 comms.tracker().len()
             );
+
+            // If a shutdown termination timeout is configured, enforce it here.
+            // This will ensure that we don't wait indefinitely for databases to respond.
+            if let Some(termination_timeout) =
+                config().config.general.shutdown_termination_timeout()
+            {
+                // Shutdown timeout elapsed; cancel any still-running queries before tearing pools down.
+                let cancel_futures = comms.clients().into_keys().map(|id| async move {
+                    if let Err(err) = databases().cancel(&id).await {
+                        error!(?id, "cancel request failed during shutdown: {err}");
+                    }
+                });
+                let cancel_all = futures::future::join_all(cancel_futures);
+
+                if timeout(termination_timeout, cancel_all).await.is_err() {
+                    error!(
+                        "forced shutdown: abandoning {} outstanding cancel requests after waiting {:.3}s" ,
+                        comms.clients().len(),
+                        termination_timeout.as_secs_f64()
+                    );
+                }
+            }
         }
 
         self.shutdown.notify_waiters();

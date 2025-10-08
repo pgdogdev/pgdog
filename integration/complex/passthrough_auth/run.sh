@@ -12,6 +12,7 @@ PGDOG_BIN_PATH="${PGDOG_BIN:-${SCRIPT_DIR}/../../../target/release/pgdog}"
 "${PGDOG_BIN_PATH}" \
     --config ${SCRIPT_DIR}/pgdog-enabled.toml \
     --users ${SCRIPT_DIR}/users.toml &
+PGDOG_PID=$!
 
 until pg_isready -h 127.0.0.1 -p 6432 -U pgdog -d pgdog; do
     sleep 1
@@ -32,10 +33,12 @@ if [[ "$statement_timeout" != *"100ms"* ]]; then
 fi
 
 killall -TERM pgdog
+wait "${PGDOG_PID}" 2> /dev/null || true
 
 "${PGDOG_BIN_PATH}" \
     --config ${SCRIPT_DIR}/pgdog-disabled.toml \
     --users ${SCRIPT_DIR}/users.toml &
+PGDOG_PID=$!
 
 until pg_isready -h 127.0.0.1 -p 6432 -U pgdog -d pgdog; do
     sleep 1
@@ -49,3 +52,4 @@ fi
 psql -U pgdog pgdog -c 'SELECT 1' > /dev/null
 
 killall -TERM pgdog
+wait "${PGDOG_PID}" 2> /dev/null || true

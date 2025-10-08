@@ -395,4 +395,20 @@ impl Binding {
             _ => false,
         }
     }
+
+    /// Number of connected shards.
+    pub fn shards(&self) -> Result<usize, Error> {
+        Ok(match self {
+            Binding::Admin(_) => 1,
+            Binding::Direct(Some(_)) => 1,
+            Binding::MultiShard(ref servers, _) => {
+                if servers.is_empty() {
+                    return Err(Error::NotConnected);
+                } else {
+                    servers.len()
+                }
+            }
+            _ => return Err(Error::NotConnected),
+        })
+    }
 }

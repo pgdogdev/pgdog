@@ -62,6 +62,7 @@ pub struct Route {
     rewrite_plan: RewritePlan,
     rewritten_sql: Option<String>,
     explain: Option<ExplainTrace>,
+    rollback_savepoint: bool,
 }
 
 impl Display for Route {
@@ -199,6 +200,15 @@ impl Route {
 
     pub fn take_explain(&mut self) -> Option<ExplainTrace> {
         self.explain.take()
+    }
+
+    pub fn set_rollback_savepoint(mut self, rollback: bool) -> Self {
+        self.rollback_savepoint = rollback;
+        self
+    }
+
+    pub fn rollback_savepoint(&self) -> bool {
+        self.rollback_savepoint
     }
 
     pub fn set_write(mut self, write: FunctionBehavior) -> Self {

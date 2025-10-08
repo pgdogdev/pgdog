@@ -127,6 +127,12 @@ tls_server_ca_certificate = "relative/or/absolute/path/to/certificate.pem"
 # Default: 60 seconds
 shutdown_timeout = 60_000
 
+# How long to wait for active connections to be forcibly terminated
+# after shutdown_timeout expires.
+#
+# Default: disabled
+shutdown_termination_timeout = 60_000
+
 # OpenMetrics server port.
 #
 # If set, enables Prometheus-style metrics exporter.
