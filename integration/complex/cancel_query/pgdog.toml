@@ -1,0 +1,11 @@
+[general]
+query_timeout = 60000
+shutdown_timeout = 0
+shutdown_termination_timeout = 1000
+
+[[databases]]
+name = "pgdog"
+host = "127.0.0.1"
+
+[admin]
+password = "pgdog"

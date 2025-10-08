@@ -1,0 +1,57 @@
+[[users]]
+name = "pgdog"
+database = "pgdog"
+password = "pgdog"
+
+[[users]]
+name = "pgdog"
+database = "pgdog_sharded"
+password = "pgdog"
+
+[[users]]
+name = "pgdog_session"
+database = "pgdog"
+password = "pgdog"
+server_user = "pgdog"
+pooler_mode = "session"
+
+[[users]]
+name = "pgdog_2pc"
+database = "pgdog"
+password = "pgdog"
+server_user = "pgdog"
+two_phase_commit = true
+min_pool_size = 0
+
+[[users]]
+name = "pgdog_2pc"
+database = "pgdog_sharded"
+password = "pgdog"
+server_user = "pgdog"
+two_phase_commit = true
+min_pool_size = 0
+
+[[users]]
+name = "pgdog_migrator"
+database = "pgdog_sharded"
+password = "pgdog"
+server_user = "pgdog"
+schema_admin = true
+
+[[users]]
+name = "pgdog"
+database = "failover"
+password = "pgdog"
+
+[[users]]
+name = "pgdog"
+database = "single_sharded_list"
+password = "pgdog"
+
+[[users]]
+name = "pgdog_no_cross_shard"
+database = "single_sharded_list"
+password = "pgdog"
+server_user = "pgdog"
+cross_shard_disabled = true
+min_pool_size = 0
