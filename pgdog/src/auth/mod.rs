@@ -2,6 +2,7 @@
 
 pub mod error;
 pub mod md5;
+pub mod rate_limit;
 pub mod scram;
 
 pub use error::Error;
