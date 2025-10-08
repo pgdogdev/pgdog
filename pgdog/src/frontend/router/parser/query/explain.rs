@@ -10,9 +10,12 @@ impl QueryParser {
         let query = stmt.query.as_ref().ok_or(Error::EmptyQuery)?;
         let node = query.node.as_ref().ok_or(Error::EmptyQuery)?;
 
-        self.explain_recorder = None;
         if context.expanded_explain() {
-            self.explain_recorder = Some(ExplainRecorder::new());
+            if self.explain_recorder.is_none() {
+                self.explain_recorder = Some(ExplainRecorder::new());
+            }
+        } else {
+            self.explain_recorder = None;
         }
 
         let result = match node {

@@ -86,6 +86,24 @@ impl QueryParser {
         self.explain_recorder.as_mut()
     }
 
+    fn ensure_explain_recorder(
+        &mut self,
+        ast: &pg_query::ParseResult,
+        context: &QueryParserContext,
+    ) {
+        if self.explain_recorder.is_some() || !context.expanded_explain() {
+            return;
+        }
+
+        if let Some(root) = ast.protobuf.stmts.first() {
+            if let Some(node) = root.stmt.as_ref().and_then(|stmt| stmt.node.as_ref()) {
+                if matches!(node, NodeEnum::ExplainStmt(_)) {
+                    self.explain_recorder = Some(ExplainRecorder::new());
+                }
+            }
+        }
+    }
+
     fn attach_explain(&mut self, command: &mut Command) {
         if let (Some(recorder), Command::Query(route)) = (self.explain_recorder.take(), command) {
             let summary = ExplainSummary {
@@ -173,6 +191,8 @@ impl QueryParser {
                 cache.parse_uncached(query.query(), &context.sharding_schema)?
             }
         };
+
+        self.ensure_explain_recorder(statement.ast(), context);
 
         // Parse hardcoded shard from a query comment.
         if context.router_needed || context.dry_run {
