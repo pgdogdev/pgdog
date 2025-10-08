@@ -284,7 +284,13 @@ impl QueryEngine {
         context: &mut QueryEngineContext<'_>,
         route: &Route,
     ) -> Result<bool, Error> {
-        if context.in_error()
+        let shards = if let Ok(shards) = self.backend.shards() {
+            shards
+        } else {
+            return Ok(true);
+        };
+        if shards > 1 // This check only matters for cross-shard queries
+            && context.in_error()
             && !context.rollback
             && context.client_request.executable()
             && !route.rollback_savepoint()
