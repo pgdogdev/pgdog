@@ -130,7 +130,7 @@ shutdown_timeout = 60_000
 # How long to wait for active connections to be forcibly terminated
 # after shutdown_timeout expires.
 #
-# Default: unlimited
+# Default: disabled
 shutdown_termination_timeout = 60_000
 
 # OpenMetrics server port.
