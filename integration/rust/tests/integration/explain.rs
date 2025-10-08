@@ -44,21 +44,40 @@ async fn explain_routing_annotations_surface() -> Result<(), Box<dyn std::error:
         }
     }
 
-    assert!(plan_lines.iter().any(|line| line.contains("Aggregate")));
     assert!(
+        plan_lines.iter().any(|line| line.contains("Aggregate")),
+        "missing Aggregate node in EXPLAIN output: {:?}",
         plan_lines
-            .iter()
-            .any(|line| line.contains("PgDog Routing:"))
     );
+    let routing_header = plan_lines
+        .iter()
+        .find(|line| line.contains("PgDog Routing:"));
     assert!(
+        routing_header.is_some(),
+        "missing PgDog Routing header in EXPLAIN output: {:?}",
         plan_lines
-            .iter()
-            .any(|line| line.contains("Summary: shard=All role=primary"))
     );
+    let summary_line = plan_lines
+        .iter()
+        .find(|line| line.contains("Summary:"))
+        .cloned();
     assert!(
+        summary_line
+            .as_ref()
+            .map(|line| line.contains("Summary: shard=All role=primary"))
+            .unwrap_or(false),
+        "unexpected summary line: {:?} (all lines: {:?})",
+        summary_line,
         plan_lines
-            .iter()
-            .any(|line| line.contains("no sharding key matched; broadcasting"))
+    );
+    let broadcast_line = plan_lines
+        .iter()
+        .find(|line| line.contains("no sharding key matched"))
+        .cloned();
+    assert!(
+        broadcast_line.is_some(),
+        "missing broadcast note in EXPLAIN output: {:?}",
+        plan_lines
     );
 
     for shard in [0, 1] {
