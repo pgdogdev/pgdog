@@ -64,7 +64,7 @@ async fn explain_routing_annotations_surface() -> Result<(), Box<dyn std::error:
     assert!(
         summary_line
             .as_ref()
-            .map(|line| line.contains("Summary: shard=All role=primary"))
+            .map(|line| line.contains("Summary: shard=all"))
             .unwrap_or(false),
         "unexpected summary line: {:?} (all lines: {:?})",
         summary_line,
