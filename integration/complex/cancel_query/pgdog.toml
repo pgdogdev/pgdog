@@ -2,6 +2,7 @@
 query_timeout = 60000
 shutdown_timeout = 0
 shutdown_termination_timeout = 1000
+rewrite_shard_key_updates = "ignore"
 
 [[databases]]
 name = "pgdog"
