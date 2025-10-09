@@ -2351,7 +2351,7 @@ dependencies = [
 
 [[package]]
 name = "pgdog"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "arc-swap",
  "async-trait",
