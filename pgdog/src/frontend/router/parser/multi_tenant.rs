@@ -106,3 +106,66 @@ impl<'a> MultiTenantCheck<'a> {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backend::schema::{columns::Column, Relation, Schema};
+    use crate::net::Parameters;
+    use std::collections::HashMap;
+
+    fn schema_with_tenant_column(column: &str) -> Schema {
+        let mut columns = HashMap::new();
+        columns.insert(
+            column.to_string(),
+            Column {
+                table_catalog: "catalog".into(),
+                table_schema: "public".into(),
+                table_name: "accounts".into(),
+                column_name: column.into(),
+                column_default: String::new(),
+                is_nullable: false,
+                data_type: "bigint".into(),
+            },
+        );
+
+        let relation = Relation::test_table("public", "accounts", columns);
+        let mut relations = HashMap::new();
+        relations.insert(("public".into(), "accounts".into()), relation);
+
+        Schema::from_parts(vec!["$user".into(), "public".into()], relations)
+    }
+
+    #[test]
+    fn multi_tenant_check_passes_with_matching_filter() {
+        let schema = schema_with_tenant_column("tenant_id");
+        let ast = pg_query::parse("SELECT * FROM accounts WHERE tenant_id = 1")
+            .expect("parse select statement");
+        let config = MultiTenant {
+            column: "tenant_id".into(),
+        };
+        let params = Parameters::default();
+
+        let check = MultiTenantCheck::new("alice", &config, schema, &ast, &params);
+        assert!(check.run().is_ok());
+    }
+
+    #[test]
+    fn multi_tenant_check_requires_tenant_column_in_filter() {
+        let schema = schema_with_tenant_column("tenant_id");
+        let ast = pg_query::parse("SELECT * FROM accounts WHERE other_id = 1")
+            .expect("parse select statement");
+        let config = MultiTenant {
+            column: "tenant_id".into(),
+        };
+        let params = Parameters::default();
+
+        let check = MultiTenantCheck::new("alice", &config, schema, &ast, &params);
+        let err = check
+            .run()
+            .expect_err("expected tenant id validation error");
+        matches!(err, Error::MultiTenantId)
+            .then_some(())
+            .expect("should return multi-tenant id error");
+    }
+}

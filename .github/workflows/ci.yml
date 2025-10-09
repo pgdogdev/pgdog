@@ -166,8 +166,6 @@ jobs:
         run: bash integration/complex/run.sh
       - name: Dry run
         run: bash integration/dry_run/run.sh
-      # - name: Plugins
-      #   run: bash integration/plugins/run.sh
       - name: Ensure PgDog stopped
         run: |
           if pgrep -x pgdog > /dev/null; then
@@ -184,3 +182,59 @@ jobs:
           files: integration.lcov
           flags: integration
           fail_ci_if_error: true
+  plugin-unit-tests:
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+      - uses: useblacksmith/rust-cache@v3
+        with:
+          prefix-key: "plugin-unit-v1"
+      - name: Install CMake 3.31
+        run: |
+          sudo apt-get install -y mold
+          sudo apt remove cmake
+          sudo pip3 install cmake==3.31.6
+          cmake --version
+      - name: Install test dependencies
+        run: cargo install cargo-nextest --version "0.9.78" --locked
+      - name: Run plugin unit tests
+        run: cargo nextest run -E 'package(pgdog-example-plugin)' --no-fail-fast
+  plugin-integration-tests:
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+      - uses: useblacksmith/rust-cache@v3
+        with:
+          prefix-key: "plugin-integration-v1"
+      - name: Setup PostgreSQL
+        run: |
+          sudo service postgresql start
+          sudo -u postgres createuser --superuser --login $USER
+          sudo -u postgres createdb $USER
+          bash integration/setup.sh
+      - name: Install dependencies
+        run: |
+          sudo apt update && sudo apt install -y python3-virtualenv mold
+          sudo gem install bundler
+          sudo apt remove -y cmake
+          sudo pip3 install cmake==3.31.6
+          cmake --version
+          cargo install cargo-nextest --version "0.9.78" --locked
+      - name: Build plugin
+        run: |
+          cargo build --release
+          pushd plugins/pgdog-example-plugin
+          cargo build --release
+          popd
+      - name: Run plugin integration tests
+        run: bash integration/plugins/run.sh

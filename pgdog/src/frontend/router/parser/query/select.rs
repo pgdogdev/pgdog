@@ -49,8 +49,9 @@ impl QueryParser {
         if let Some(ref where_clause) = where_clause {
             shards = Self::where_clause(
                 &context.sharding_schema,
-                &where_clause,
+                where_clause,
                 context.router_context.bind,
+                &mut self.explain_recorder,
             )?;
         }
 
@@ -63,11 +64,14 @@ impl QueryParser {
                             || table.name.as_deref() == from_clause.table_name())
                     {
                         let centroids = Centroids::from(&table.centroids);
-                        shards.insert(centroids.shard(
-                            vector,
-                            context.shards,
-                            table.centroid_probes,
-                        ));
+                        let shard = centroids.shard(vector, context.shards, table.centroid_probes);
+                        if let Some(recorder) = self.recorder_mut() {
+                            recorder.record_entry(
+                                Some(shard.clone()),
+                                format!("ORDER BY vector distance on {}", column_name),
+                            );
+                        }
+                        shards.insert(shard);
                     }
                 }
             }

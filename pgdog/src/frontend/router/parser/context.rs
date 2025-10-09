@@ -44,6 +44,8 @@ pub struct QueryParserContext<'a> {
     pub(super) multi_tenant: &'a Option<MultiTenant>,
     /// Dry run enabled?
     pub(super) dry_run: bool,
+    /// Expanded EXPLAIN annotations enabled?
+    pub(super) expanded_explain: bool,
 }
 
 impl<'a> QueryParserContext<'a> {
@@ -61,6 +63,7 @@ impl<'a> QueryParserContext<'a> {
             pub_sub_enabled: config.config.general.pub_sub_enabled(),
             multi_tenant: router_context.cluster.multi_tenant(),
             dry_run: config.config.general.dry_run,
+            expanded_explain: config.config.general.expanded_explain,
             router_context,
         }
     }
@@ -135,5 +138,9 @@ impl<'a> QueryParserContext<'a> {
             write_override: 0, // This is set inside `QueryParser::plugins`.
             params,
         }
+    }
+
+    pub(super) fn expanded_explain(&self) -> bool {
+        self.expanded_explain
     }
 }

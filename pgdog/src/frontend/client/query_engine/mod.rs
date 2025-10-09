@@ -1,6 +1,8 @@
 use crate::{
     backend::pool::{Connection, Request},
+    config::config,
     frontend::{
+        client::query_engine::hooks::QueryEngineHooks,
         router::{parser::Shard, Route},
         BufferedQuery, Client, Command, Comms, Error, Router, RouterContext, Stats,
     },
@@ -15,6 +17,7 @@ pub mod context;
 pub mod deallocate;
 pub mod discard;
 pub mod end_transaction;
+pub mod hooks;
 pub mod incomplete_requests;
 pub mod notify_buffer;
 pub mod prepared_statements;
@@ -30,6 +33,7 @@ pub mod unknown_command;
 #[cfg(test)]
 mod testing;
 
+use self::query::ExplainResponseState;
 pub use context::QueryEngineContext;
 use notify_buffer::NotifyBuffer;
 pub use two_pc::phase::TwoPcPhase;
@@ -48,6 +52,7 @@ pub struct QueryEngine {
     set_route: Option<Route>,
     two_pc: TwoPc,
     notify_buffer: NotifyBuffer,
+    pending_explain: Option<ExplainResponseState>,
 }
 
 impl QueryEngine {
@@ -120,17 +125,28 @@ impl QueryEngine {
             return Ok(());
         }
 
+        let mut hooks = QueryEngineHooks::new();
+        hooks.before_execution(context)?;
+
         // Queue up request to mirrors, if any.
         // Do this before sending query to actual server
         // to have accurate timings between queries.
         self.backend.mirror(context.client_request);
 
+        self.pending_explain = None;
+
         let command = self.router.command();
-        let route = if let Some(ref route) = self.set_route {
+        let mut route = if let Some(ref route) = self.set_route {
             route.clone()
         } else {
             command.route().clone()
         };
+
+        if let Some(trace) = route.take_explain() {
+            if config().config.general.expanded_explain {
+                self.pending_explain = Some(ExplainResponseState::new(trace));
+            }
+        }
 
         // FIXME, we should not to copy route twice.
         context.client_request.route = Some(route.clone());
@@ -206,6 +222,8 @@ impl QueryEngine {
             Command::Discard { extended } => self.discard(context, *extended).await?,
             command => self.unknown_command(context, command.clone()).await?,
         }
+
+        hooks.after_execution(context)?;
 
         if context.in_error() {
             self.backend.mirror_clear();

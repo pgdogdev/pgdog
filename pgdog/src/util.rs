@@ -32,7 +32,7 @@ pub fn human_duration(duration: Duration) -> String {
 
     let ms = duration.as_millis();
     let ms_fmt = |ms: u128, unit: u128, name: &str| -> String {
-        if ms % unit > 0 {
+        if !ms.is_multiple_of(unit) {
             format!("{}ms", ms)
         } else {
             format!("{}{}", ms / unit, name)
