@@ -156,6 +156,9 @@ pub struct General {
     /// Two-phase commit automatic transactions.
     #[serde(default)]
     pub two_phase_commit_auto: Option<bool>,
+    /// Enable expanded EXPLAIN output.
+    #[serde(default = "General::expanded_explain")]
+    pub expanded_explain: bool,
 }
 
 impl Default for General {
@@ -211,6 +214,7 @@ impl Default for General {
             log_disconnections: Self::log_disconnections(),
             two_phase_commit: bool::default(),
             two_phase_commit_auto: None,
+            expanded_explain: Self::expanded_explain(),
             server_lifetime: Self::server_lifetime(),
         }
     }
@@ -477,6 +481,10 @@ impl General {
 
     pub fn log_disconnections() -> bool {
         Self::env_bool_or_default("PGDOG_LOG_DISCONNECTIONS", true)
+    }
+
+    pub fn expanded_explain() -> bool {
+        Self::env_bool_or_default("PGDOG_EXPANDED_EXPLAIN", false)
     }
 
     pub fn server_lifetime() -> u64 {

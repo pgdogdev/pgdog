@@ -1,4 +1,5 @@
-use super::*;
+use super::{explain_trace::ExplainRecorder, *};
+use std::string::String as StdString;
 
 impl QueryParser {
     /// Converge to a single route given multiple shards.
@@ -33,6 +34,7 @@ impl QueryParser {
         sharding_schema: &ShardingSchema,
         where_clause: &WhereClause,
         params: Option<&Bind>,
+        recorder: &mut Option<ExplainRecorder>,
     ) -> Result<HashSet<Shard>, Error> {
         let mut shards = HashSet::new();
         // Complexity: O(number of sharded tables * number of columns in the query)
@@ -44,6 +46,13 @@ impl QueryParser {
                     Key::Constant { value, array } => {
                         if array {
                             shards.insert(Shard::All);
+                            record_column(
+                                recorder,
+                                Some(Shard::All),
+                                table_name,
+                                &table.column,
+                                |col| format!("array value on {} forced broadcast", col),
+                            );
                             break;
                         }
 
@@ -51,7 +60,15 @@ impl QueryParser {
                             .data(value.as_str())
                             .shards(sharding_schema.shards)
                             .build()?;
-                        shards.insert(ctx.apply()?);
+                        let shard = ctx.apply()?;
+                        record_column(
+                            recorder,
+                            Some(shard.clone()),
+                            table_name,
+                            &table.column,
+                            |col| format!("matched sharding key {} using constant", col),
+                        );
+                        shards.insert(shard);
                     }
 
                     Key::Parameter { pos, array } => {
@@ -59,6 +76,13 @@ impl QueryParser {
                         // The odds are high this will go to all shards anyway.
                         if array {
                             shards.insert(Shard::All);
+                            record_column(
+                                recorder,
+                                Some(Shard::All),
+                                table_name,
+                                &table.column,
+                                |col| format!("array parameter for {} forced broadcast", col),
+                            );
                             break;
                         } else if let Some(params) = params {
                             if let Some(param) = params.parameter(pos)? {
@@ -67,7 +91,21 @@ impl QueryParser {
                                     .value(value)
                                     .shards(sharding_schema.shards)
                                     .build()?;
-                                shards.insert(ctx.apply()?);
+                                let shard = ctx.apply()?;
+                                record_column(
+                                    recorder,
+                                    Some(shard.clone()),
+                                    table_name,
+                                    &table.column,
+                                    |col| {
+                                        format!(
+                                            "matched sharding key {} using parameter ${}",
+                                            col,
+                                            pos + 1
+                                        )
+                                    },
+                                );
+                                shards.insert(shard);
                             }
                         }
                     }
@@ -79,5 +117,28 @@ impl QueryParser {
         }
 
         Ok(shards)
+    }
+}
+
+fn format_column(table: Option<&str>, column: &str) -> StdString {
+    match table {
+        Some(table) if !table.is_empty() => format!("{}.{}", table, column),
+        _ => column.to_string(),
+    }
+}
+
+fn record_column<F>(
+    recorder: &mut Option<ExplainRecorder>,
+    shard: Option<Shard>,
+    table: Option<&str>,
+    column: &str,
+    message: F,
+) where
+    F: FnOnce(StdString) -> StdString,
+{
+    if let Some(recorder) = recorder.as_mut() {
+        let column: StdString = format_column(table, column);
+        let description: StdString = message(column);
+        recorder.record_entry(shard, description);
     }
 }

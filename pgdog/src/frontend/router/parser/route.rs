@@ -1,7 +1,8 @@
 use std::fmt::Display;
 
 use super::{
-    Aggregate, DistinctBy, FunctionBehavior, Limit, LockingBehavior, OrderBy, RewritePlan,
+    explain_trace::ExplainTrace, Aggregate, DistinctBy, FunctionBehavior, Limit, LockingBehavior,
+    OrderBy, RewritePlan,
 };
 
 #[derive(Debug, Clone, PartialEq, PartialOrd, Ord, Eq, Hash, Default)]
@@ -60,6 +61,7 @@ pub struct Route {
     maintenance: bool,
     rewrite_plan: RewritePlan,
     rewritten_sql: Option<String>,
+    explain: Option<ExplainTrace>,
     rollback_savepoint: bool,
 }
 
@@ -186,6 +188,18 @@ impl Route {
 
     pub fn set_read_mut(&mut self, read: bool) {
         self.read = read;
+    }
+
+    pub fn explain(&self) -> Option<&ExplainTrace> {
+        self.explain.as_ref()
+    }
+
+    pub fn set_explain(&mut self, trace: ExplainTrace) {
+        self.explain = Some(trace);
+    }
+
+    pub fn take_explain(&mut self) -> Option<ExplainTrace> {
+        self.explain.take()
     }
 
     pub fn set_rollback_savepoint(mut self, rollback: bool) -> Self {
