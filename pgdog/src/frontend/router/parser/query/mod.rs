@@ -20,7 +20,10 @@ use crate::{
     plugin::plugins,
 };
 
-use super::*;
+use super::{
+    explain_trace::{ExplainRecorder, ExplainSummary},
+    *,
+};
 mod delete;
 mod explain;
 mod plugins;
@@ -63,6 +66,7 @@ pub struct QueryParser {
     shard: Shard,
     // Plugin read override.
     plugin_output: PluginOutput,
+    explain_recorder: Option<ExplainRecorder>,
 }
 
 impl Default for QueryParser {
@@ -72,11 +76,44 @@ impl Default for QueryParser {
             write_override: false,
             shard: Shard::All,
             plugin_output: PluginOutput::default(),
+            explain_recorder: None,
         }
     }
 }
 
 impl QueryParser {
+    fn recorder_mut(&mut self) -> Option<&mut ExplainRecorder> {
+        self.explain_recorder.as_mut()
+    }
+
+    fn ensure_explain_recorder(
+        &mut self,
+        ast: &pg_query::ParseResult,
+        context: &QueryParserContext,
+    ) {
+        if self.explain_recorder.is_some() || !context.expanded_explain() {
+            return;
+        }
+
+        if let Some(root) = ast.protobuf.stmts.first() {
+            if let Some(node) = root.stmt.as_ref().and_then(|stmt| stmt.node.as_ref()) {
+                if matches!(node, NodeEnum::ExplainStmt(_)) {
+                    self.explain_recorder = Some(ExplainRecorder::new());
+                }
+            }
+        }
+    }
+
+    fn attach_explain(&mut self, command: &mut Command) {
+        if let (Some(recorder), Command::Query(route)) = (self.explain_recorder.take(), command) {
+            let summary = ExplainSummary {
+                shard: route.shard().clone(),
+                read: route.is_read(),
+            };
+            route.set_explain(recorder.finalize(summary));
+        }
+    }
+
     /// Indicates we are in a transaction.
     pub fn in_transaction(&self) -> bool {
         self.in_transaction
@@ -155,11 +192,23 @@ impl QueryParser {
             }
         };
 
+        self.ensure_explain_recorder(statement.ast(), context);
+
         // Parse hardcoded shard from a query comment.
         if context.router_needed || context.dry_run {
             self.shard = statement.shard.clone();
-            if let Some(role) = statement.role {
+            let role_override = statement.role;
+            if let Some(role) = role_override {
                 self.write_override = role == Role::Primary;
+            }
+            if let Some(recorder) = self.recorder_mut() {
+                if !matches!(statement.shard, Shard::All) || role_override.is_some() {
+                    let role_str = role_override.map(|role| match role {
+                        Role::Primary => "primary",
+                        Role::Replica => "replica",
+                    });
+                    recorder.record_comment_override(statement.shard.clone(), role_str);
+                }
             }
         }
 
@@ -216,11 +265,11 @@ impl QueryParser {
             // COPY statements.
             Some(NodeEnum::CopyStmt(ref stmt)) => Self::copy(stmt, context),
             // INSERT statements.
-            Some(NodeEnum::InsertStmt(ref stmt)) => Self::insert(stmt, context),
+            Some(NodeEnum::InsertStmt(ref stmt)) => self.insert(stmt, context),
             // UPDATE statements.
-            Some(NodeEnum::UpdateStmt(ref stmt)) => Self::update(stmt, context),
+            Some(NodeEnum::UpdateStmt(ref stmt)) => self.update(stmt, context),
             // DELETE statements.
-            Some(NodeEnum::DeleteStmt(ref stmt)) => Self::delete(stmt, context),
+            Some(NodeEnum::DeleteStmt(ref stmt)) => self.delete(stmt, context),
             // Transaction control statements,
             // e.g. BEGIN, COMMIT, etc.
             Some(NodeEnum::TransactionStmt(ref stmt)) => match self.transaction(stmt, context)? {
@@ -386,9 +435,24 @@ impl QueryParser {
     /// * `stmt`: INSERT statement from pg_query.
     /// * `context`: Query parser context.
     ///
-    fn insert(stmt: &InsertStmt, context: &QueryParserContext) -> Result<Command, Error> {
+    fn insert(
+        &mut self,
+        stmt: &InsertStmt,
+        context: &QueryParserContext,
+    ) -> Result<Command, Error> {
         let insert = Insert::new(stmt);
         let shard = insert.shard(&context.sharding_schema, context.router_context.bind)?;
+        if let Some(recorder) = self.recorder_mut() {
+            match &shard {
+                Shard::Direct(_) => {
+                    recorder.record_entry(Some(shard.clone()), "INSERT matched sharding key")
+                }
+                Shard::Multi(_) => {
+                    recorder.record_entry(Some(shard.clone()), "INSERT targeted multiple shards")
+                }
+                Shard::All => recorder.record_entry(None, "INSERT broadcasted"),
+            };
+        }
         Ok(Command::Query(Route::write(shard)))
     }
 }

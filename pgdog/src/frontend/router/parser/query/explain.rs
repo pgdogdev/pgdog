@@ -10,15 +10,34 @@ impl QueryParser {
         let query = stmt.query.as_ref().ok_or(Error::EmptyQuery)?;
         let node = query.node.as_ref().ok_or(Error::EmptyQuery)?;
 
-        match node {
+        if context.expanded_explain() {
+            if self.explain_recorder.is_none() {
+                self.explain_recorder = Some(ExplainRecorder::new());
+            }
+        } else {
+            self.explain_recorder = None;
+        }
+
+        let result = match node {
             NodeEnum::SelectStmt(ref stmt) => self.select(ast, stmt, context),
-            NodeEnum::InsertStmt(ref stmt) => Self::insert(stmt, context),
-            NodeEnum::UpdateStmt(ref stmt) => Self::update(stmt, context),
-            NodeEnum::DeleteStmt(ref stmt) => Self::delete(stmt, context),
+            NodeEnum::InsertStmt(ref stmt) => self.insert(stmt, context),
+            NodeEnum::UpdateStmt(ref stmt) => self.update(stmt, context),
+            NodeEnum::DeleteStmt(ref stmt) => self.delete(stmt, context),
 
             _ => {
                 // For other statement types, route to all shards
                 Ok(Command::Query(Route::write(None)))
+            }
+        };
+
+        match result {
+            Ok(mut command) => {
+                self.attach_explain(&mut command);
+                Ok(command)
+            }
+            Err(err) => {
+                self.explain_recorder = None;
+                Err(err)
             }
         }
     }
@@ -29,12 +48,24 @@ mod tests {
     use super::*;
 
     use crate::backend::Cluster;
+    use crate::config::{self, config};
     use crate::frontend::{ClientRequest, PreparedStatements, RouterContext};
     use crate::net::messages::{Bind, Parameter, Parse, Query};
     use crate::net::Parameters;
+    use std::sync::Once;
+
+    fn enable_expanded_explain() {
+        static INIT: Once = Once::new();
+        INIT.call_once(|| {
+            let mut cfg = config().as_ref().clone();
+            cfg.config.general.expanded_explain = true;
+            config::set(cfg).unwrap();
+        });
+    }
 
     // Helper function to route a plain SQL statement and return its `Route`.
     fn route(sql: &str) -> Route {
+        enable_expanded_explain();
         let buffer = ClientRequest::from(vec![Query::new(sql).into()]);
 
         let cluster = Cluster::new_test();
@@ -51,6 +82,7 @@ mod tests {
 
     // Helper function to route a parameterized SQL statement and return its `Route`.
     fn route_parameterized(sql: &str, values: &[&[u8]]) -> Route {
+        enable_expanded_explain();
         let parse_msg = Parse::new_anonymous(sql);
         let parameters = values
             .iter()
@@ -95,10 +127,16 @@ mod tests {
         let r = route("EXPLAIN SELECT * FROM sharded WHERE id = 1");
         assert!(matches!(r.shard(), Shard::Direct(_)));
         assert!(r.is_read());
+        let lines = r.explain().unwrap().render_lines();
+        assert!(lines
+            .iter()
+            .any(|line| line.contains("matched sharding key")));
 
         let r = route_parameterized("EXPLAIN SELECT * FROM sharded WHERE id = $1", &[b"11"]);
         assert!(matches!(r.shard(), Shard::Direct(_)));
         assert!(r.is_read());
+        let lines = r.explain().unwrap().render_lines();
+        assert!(lines.iter().any(|line| line.contains("parameter")));
     }
 
     #[test]
@@ -106,6 +144,8 @@ mod tests {
         let r = route("EXPLAIN SELECT * FROM sharded");
         assert_eq!(r.shard(), &Shard::All);
         assert!(r.is_read());
+        let lines = r.explain().unwrap().render_lines();
+        assert!(lines.iter().any(|line| line.contains("broadcast")));
     }
 
     #[test]
@@ -116,6 +156,10 @@ mod tests {
         );
         assert!(matches!(r.shard(), Shard::Direct(_)));
         assert!(r.is_write());
+        let lines = r.explain().unwrap().render_lines();
+        assert!(lines
+            .iter()
+            .any(|line| line.contains("INSERT matched sharding key")));
     }
 
     #[test]
@@ -126,10 +170,18 @@ mod tests {
         );
         assert!(matches!(r.shard(), Shard::Direct(_)));
         assert!(r.is_write());
+        let lines = r.explain().unwrap().render_lines();
+        assert!(lines
+            .iter()
+            .any(|line| line.contains("UPDATE matched WHERE clause")));
 
         let r = route("EXPLAIN UPDATE sharded SET active = true");
         assert_eq!(r.shard(), &Shard::All);
         assert!(r.is_write());
+        let lines = r.explain().unwrap().render_lines();
+        assert!(lines
+            .iter()
+            .any(|line| line.contains("UPDATE fell back to broadcast")));
     }
 
     #[test]
@@ -137,10 +189,18 @@ mod tests {
         let r = route_parameterized("EXPLAIN DELETE FROM sharded WHERE id = $1", &[b"11"]);
         assert!(matches!(r.shard(), Shard::Direct(_)));
         assert!(r.is_write());
+        let lines = r.explain().unwrap().render_lines();
+        assert!(lines
+            .iter()
+            .any(|line| line.contains("DELETE matched WHERE clause")));
 
         let r = route("EXPLAIN DELETE FROM sharded");
         assert_eq!(r.shard(), &Shard::All);
         assert!(r.is_write());
+        let lines = r.explain().unwrap().render_lines();
+        assert!(lines
+            .iter()
+            .any(|line| line.contains("DELETE fell back to broadcast")));
     }
 
     #[test]
@@ -158,6 +218,27 @@ mod tests {
     fn test_explain_with_comment_override() {
         let r = route("/* pgdog_shard: 5 */ EXPLAIN SELECT * FROM sharded");
         assert_eq!(r.shard(), &Shard::Direct(5));
+        let lines = r.explain().unwrap().render_lines();
+        assert_eq!(lines[3], "  Shard 5: manual override to shard=5");
+    }
+
+    #[test]
+    fn test_explain_select_broadcast_entry() {
+        let lines = route("EXPLAIN SELECT * FROM sharded")
+            .explain()
+            .unwrap()
+            .render_lines();
+        assert_eq!(lines[3], "  Note: no sharding key matched; broadcasting");
+    }
+
+    #[test]
+    fn test_explain_select_parameter_entry() {
+        let lines = route_parameterized("EXPLAIN SELECT * FROM sharded WHERE id = $1", &[b"22"])
+            .explain()
+            .unwrap()
+            .render_lines();
+
+        assert!(lines.iter().any(|line| line.contains("parameter")));
     }
 
     #[test]

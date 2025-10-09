@@ -11,6 +11,7 @@ pub mod copy;
 pub mod csv;
 pub mod distinct;
 pub mod error;
+pub mod explain_trace;
 mod expression;
 pub mod from_clause;
 pub mod function;

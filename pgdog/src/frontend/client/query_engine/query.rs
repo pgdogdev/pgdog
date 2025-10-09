@@ -1,10 +1,10 @@
 use tokio::time::timeout;
 
 use crate::{
-    frontend::client::TransactionType,
+    frontend::{client::TransactionType, router::parser::explain_trace::ExplainTrace},
     net::{
-        FromBytes, Message, Protocol, ProtocolMessage, Query, ReadyForQuery, ToBytes,
-        TransactionState,
+        DataRow, FromBytes, Message, Protocol, ProtocolMessage, Query, ReadyForQuery,
+        RowDescription, ToBytes, TransactionState,
     },
     state::State,
 };
@@ -96,8 +96,34 @@ impl QueryEngine {
         self.streaming = message.streaming();
 
         let code = message.code();
+        let payload = if code == 'T' {
+            Some(message.payload())
+        } else {
+            None
+        };
         let mut message = message.backend();
         let has_more_messages = self.backend.has_more_messages();
+
+        if let Some(bytes) = payload {
+            if let Some(state) = self.pending_explain.as_mut() {
+                if let Ok(row_description) = RowDescription::from_bytes(bytes) {
+                    state.capture_row_description(row_description);
+                } else {
+                    state.annotated = true;
+                }
+            }
+        }
+
+        if code == 'C' {
+            self.emit_explain_rows(context).await?;
+        }
+
+        if code == 'E' {
+            if let Some(state) = self.pending_explain.as_mut() {
+                state.annotated = true;
+            }
+            self.pending_explain = None;
+        }
 
         // Messages that we need to send to the client immediately.
         // ReadyForQuery (B) | CopyInResponse (B) | ErrorResponse(B) | NoticeResponse(B) | NotificationResponse (B)
@@ -183,6 +209,38 @@ impl QueryEngine {
             context.stream.send_flush(&message).await?;
         } else {
             context.stream.send(&message).await?;
+        }
+
+        if code == 'Z' {
+            self.pending_explain = None;
+        }
+
+        Ok(())
+    }
+
+    async fn emit_explain_rows(
+        &mut self,
+        context: &mut QueryEngineContext<'_>,
+    ) -> Result<(), Error> {
+        if let Some(state) = self.pending_explain.as_mut() {
+            if !state.should_emit() {
+                return Ok(());
+            }
+
+            if state.row_description.is_none() {
+                return Ok(());
+            }
+
+            for line in state.lines.clone() {
+                let mut row = DataRow::new();
+                row.add(line);
+                let message = row.message()?;
+                let len = message.len();
+                context.stream.send(&message).await?;
+                self.stats.sent(len);
+            }
+
+            state.annotated = true;
         }
 
         Ok(())
@@ -308,5 +366,38 @@ impl QueryEngine {
         } else {
             Ok(true)
         }
+    }
+}
+
+#[derive(Debug, Default, Clone)]
+pub(super) struct ExplainResponseState {
+    lines: Vec<String>,
+    row_description: Option<RowDescription>,
+    annotated: bool,
+    supported: bool,
+}
+
+impl ExplainResponseState {
+    pub fn new(trace: ExplainTrace) -> Self {
+        Self {
+            lines: trace.render_lines(),
+            row_description: None,
+            annotated: false,
+            supported: false,
+        }
+    }
+
+    pub fn capture_row_description(&mut self, row_description: RowDescription) {
+        self.supported = row_description.fields.len() == 1
+            && matches!(row_description.field(0).map(|f| f.type_oid), Some(25));
+        if self.supported {
+            self.row_description = Some(row_description);
+        } else {
+            self.annotated = true;
+        }
+    }
+
+    pub fn should_emit(&self) -> bool {
+        self.supported && !self.annotated
     }
 }
