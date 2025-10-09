@@ -1,7 +1,7 @@
-use std::ops::Deref;
+use std::{ops::Deref, sync::Mutex};
 
 use crate::{
-    config::{self, config},
+    config::{self, config, ConfigAndUsers, ShardKeyUpdateMode},
     frontend::client::TransactionType,
     net::{
         messages::{parse::Parse, Parameter},
@@ -15,6 +15,28 @@ use crate::config::ReadWriteStrategy;
 use crate::frontend::{ClientRequest, PreparedStatements, RouterContext};
 use crate::net::messages::Query;
 use crate::net::Parameters;
+
+struct ConfigModeGuard {
+    original: ConfigAndUsers,
+}
+
+impl ConfigModeGuard {
+    fn set(mode: ShardKeyUpdateMode) -> Self {
+        let original = config().deref().clone();
+        let mut updated = original.clone();
+        updated.config.general.rewrite_shard_key_updates = mode;
+        config::set(updated).unwrap();
+        Self { original }
+    }
+}
+
+impl Drop for ConfigModeGuard {
+    fn drop(&mut self) {
+        config::set(self.original.clone()).unwrap();
+    }
+}
+
+static CONFIG_MODE_LOCK: Mutex<()> = Mutex::new(());
 
 macro_rules! command {
     ($query:expr) => {{
@@ -393,6 +415,63 @@ fn test_transaction() {
 fn test_insert_do_update() {
     let route = query!("INSERT INTO foo (id) VALUES ($1::UUID) ON CONFLICT (id) DO UPDATE SET id = excluded.id RETURNING id");
     assert!(route.is_write())
+}
+
+#[test]
+fn update_sharding_key_errors_by_default() {
+    let _lock = CONFIG_MODE_LOCK.lock().unwrap();
+    let _guard = ConfigModeGuard::set(ShardKeyUpdateMode::Error);
+
+    let query = "UPDATE sharded SET id = id + 1 WHERE id = 1";
+    let mut prep_stmts = PreparedStatements::default();
+    let params = Parameters::default();
+    let client_request: ClientRequest = vec![Query::new(query).into()].into();
+    let cluster = Cluster::new_test();
+    let router_context =
+        RouterContext::new(&client_request, &cluster, &mut prep_stmts, &params, None).unwrap();
+
+    let result = QueryParser::default().parse(router_context);
+    assert!(
+        matches!(result, Err(Error::ShardKeyUpdateViolation { .. })),
+        "{result:?}"
+    );
+}
+
+#[test]
+fn update_sharding_key_ignore_mode_allows() {
+    let _lock = CONFIG_MODE_LOCK.lock().unwrap();
+    let _guard = ConfigModeGuard::set(ShardKeyUpdateMode::Ignore);
+
+    let query = "UPDATE sharded SET id = id + 1 WHERE id = 1";
+    let mut prep_stmts = PreparedStatements::default();
+    let params = Parameters::default();
+    let client_request: ClientRequest = vec![Query::new(query).into()].into();
+    let cluster = Cluster::new_test();
+    let router_context =
+        RouterContext::new(&client_request, &cluster, &mut prep_stmts, &params, None).unwrap();
+
+    let command = QueryParser::default().parse(router_context).unwrap();
+    assert!(matches!(command, Command::Query(_)));
+}
+
+#[test]
+fn update_sharding_key_rewrite_mode_not_supported() {
+    let _lock = CONFIG_MODE_LOCK.lock().unwrap();
+    let _guard = ConfigModeGuard::set(ShardKeyUpdateMode::Rewrite);
+
+    let query = "UPDATE sharded SET id = id + 1 WHERE id = 1";
+    let mut prep_stmts = PreparedStatements::default();
+    let params = Parameters::default();
+    let client_request: ClientRequest = vec![Query::new(query).into()].into();
+    let cluster = Cluster::new_test();
+    let router_context =
+        RouterContext::new(&client_request, &cluster, &mut prep_stmts, &params, None).unwrap();
+
+    let result = QueryParser::default().parse(router_context);
+    assert!(
+        matches!(result, Err(Error::ShardKeyRewriteNotSupported { .. })),
+        "{result:?}"
+    );
 }
 
 #[test]
