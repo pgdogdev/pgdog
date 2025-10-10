@@ -482,7 +482,7 @@ impl Client {
         // Check config once per request.
         let config = config::config();
         // Configure prepared statements cache.
-        self.prepared_statements.enabled = config.prepared_statements();
+        self.prepared_statements.level = config.prepared_statements();
         self.prepared_statements.capacity = config.config.general.prepared_statements_limit;
         self.timeouts = Timeouts::from_config(&config.config.general);
 

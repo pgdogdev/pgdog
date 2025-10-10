@@ -6,6 +6,7 @@ use once_cell::sync::Lazy;
 use parking_lot::RwLock;
 
 use crate::{
+    config::PreparedStatements as PreparedStatementsLevel,
     frontend::router::parser::RewritePlan,
     net::{Parse, ProtocolMessage},
     stats::memory::MemoryUsage,
@@ -26,7 +27,7 @@ static CACHE: Lazy<PreparedStatements> = Lazy::new(PreparedStatements::default);
 pub struct PreparedStatements {
     pub(super) global: Arc<RwLock<GlobalCache>>,
     pub(super) local: HashMap<String, String>,
-    pub(super) enabled: bool,
+    pub(super) level: PreparedStatementsLevel,
     pub(super) capacity: usize,
     pub(super) memory_used: usize,
 }
@@ -35,7 +36,7 @@ impl MemoryUsage for PreparedStatements {
     #[inline]
     fn memory_usage(&self) -> usize {
         self.local.memory_usage()
-            + self.enabled.memory_usage()
+            + std::mem::size_of::<PreparedStatementsLevel>()
             + self.capacity.memory_usage()
             + std::mem::size_of::<Arc<RwLock<GlobalCache>>>()
     }
@@ -46,7 +47,7 @@ impl Default for PreparedStatements {
         Self {
             global: Arc::new(RwLock::new(GlobalCache::default())),
             local: HashMap::default(),
-            enabled: true,
+            level: PreparedStatementsLevel::Extended,
             capacity: usize::MAX,
             memory_used: 0,
         }

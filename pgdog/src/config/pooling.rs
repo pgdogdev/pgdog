@@ -1,12 +1,13 @@
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Copy)]
 #[serde(rename_all = "snake_case")]
 pub enum PreparedStatements {
     Disabled,
     #[default]
     Extended,
+    ExtendedAnonymous,
     Full,
 }
 
@@ -18,6 +19,10 @@ impl PreparedStatements {
     pub fn enabled(&self) -> bool {
         !matches!(self, PreparedStatements::Disabled)
     }
+
+    pub fn rewrite_anonymous(&self) -> bool {
+        matches!(self, PreparedStatements::ExtendedAnonymous)
+    }
 }
 
 impl FromStr for PreparedStatements {
@@ -27,6 +32,7 @@ impl FromStr for PreparedStatements {
         match s.to_lowercase().as_str() {
             "disabled" => Ok(Self::Disabled),
             "extended" => Ok(Self::Extended),
+            "extended_anonymous" => Ok(Self::ExtendedAnonymous),
             "full" => Ok(Self::Full),
             _ => Err(format!("Invalid prepared statements mode: {}", s)),
         }

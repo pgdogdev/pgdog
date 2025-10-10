@@ -4,6 +4,8 @@ use std::fs::read_to_string;
 use std::path::PathBuf;
 use tracing::{info, warn};
 
+use crate::config::PreparedStatements;
+
 use super::database::Database;
 use super::error::Error;
 use super::general::General;
@@ -82,12 +84,12 @@ impl ConfigAndUsers {
     }
 
     /// Prepared statements are enabled.
-    pub fn prepared_statements(&self) -> bool {
+    pub fn prepared_statements(&self) -> PreparedStatements {
         // Disable prepared statements automatically in session mode
         if self.config.general.pooler_mode == PoolerMode::Session {
-            false
+            PreparedStatements::Disabled
         } else {
-            self.config.general.prepared_statements.enabled()
+            self.config.general.prepared_statements
         }
     }
 
@@ -378,31 +380,34 @@ column = "tenant_id"
         // Test transaction mode (default) - prepared statements should be enabled
         config.config.general.pooler_mode = PoolerMode::Transaction;
         config.config.general.prepared_statements = PreparedStatements::Extended;
-        assert!(
+        assert_eq!(
             config.prepared_statements(),
+            PreparedStatements::Extended,
             "Prepared statements should be enabled in transaction mode"
         );
 
         // Test session mode - prepared statements should be disabled
         config.config.general.pooler_mode = PoolerMode::Session;
         config.config.general.prepared_statements = PreparedStatements::Extended;
-        assert!(
-            !config.prepared_statements(),
+        assert_eq!(
+            config.prepared_statements(),
+            PreparedStatements::Disabled,
             "Prepared statements should be disabled in session mode"
         );
 
         // Test session mode with full prepared statements - should still be disabled
         config.config.general.pooler_mode = PoolerMode::Session;
         config.config.general.prepared_statements = PreparedStatements::Full;
-        assert!(
-            !config.prepared_statements(),
+        assert_eq!(
+            config.prepared_statements(),
+            PreparedStatements::Disabled,
             "Prepared statements should be disabled in session mode even when set to Full"
         );
 
         // Test transaction mode with disabled prepared statements - should remain disabled
         config.config.general.pooler_mode = PoolerMode::Transaction;
         config.config.general.prepared_statements = PreparedStatements::Disabled;
-        assert!(!config.prepared_statements(), "Prepared statements should remain disabled when explicitly set to Disabled in transaction mode");
+        assert_eq!(config.prepared_statements(), PreparedStatements::Disabled, "Prepared statements should remain disabled when explicitly set to Disabled in transaction mode");
     }
 
     #[test]
