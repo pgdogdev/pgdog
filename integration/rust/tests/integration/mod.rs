@@ -13,6 +13,7 @@ pub mod reload;
 pub mod savepoint;
 pub mod set_sharding_key;
 pub mod shard_consistency;
+pub mod shard_key_rewrite;
 pub mod stddev;
 pub mod syntax_error;
 pub mod timestamp_sorting;

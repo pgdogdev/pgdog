@@ -1,4 +1,7 @@
-use std::{ops::Deref, sync::Mutex};
+use std::{
+    ops::Deref,
+    sync::{Mutex, MutexGuard},
+};
 
 use crate::{
     config::{self, config, ConfigAndUsers, ShardKeyUpdateMode},
@@ -37,6 +40,12 @@ impl Drop for ConfigModeGuard {
 }
 
 static CONFIG_MODE_LOCK: Mutex<()> = Mutex::new(());
+
+fn lock_config_mode() -> MutexGuard<'static, ()> {
+    CONFIG_MODE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 macro_rules! command {
     ($query:expr) => {{
@@ -149,6 +158,38 @@ macro_rules! parse {
     ($name:expr, $query:expr, $params: expr) => {
         parse!($name, $query, $params, &[])
     };
+}
+
+fn parse_with_parameters(query: &str, params: Parameters) -> Result<Command, Error> {
+    let mut prep_stmts = PreparedStatements::default();
+    let client_request: ClientRequest = vec![Query::new(query).into()].into();
+    let cluster = Cluster::new_test();
+    let router_context =
+        RouterContext::new(&client_request, &cluster, &mut prep_stmts, &params, None).unwrap();
+    QueryParser::default().parse(router_context)
+}
+
+fn parse_with_bind(query: &str, params: &[&[u8]]) -> Result<Command, Error> {
+    let mut prep_stmts = PreparedStatements::default();
+    let cluster = Cluster::new_test();
+    let parameters = Parameters::default();
+    let parse = Parse::new_anonymous(query);
+    let params = params
+        .iter()
+        .map(|value| Parameter::new(value))
+        .collect::<Vec<_>>();
+    let bind = crate::net::messages::Bind::new_params("", &params);
+    let client_request: ClientRequest = vec![parse.into(), bind.into()].into();
+    let router_context = RouterContext::new(
+        &client_request,
+        &cluster,
+        &mut prep_stmts,
+        &parameters,
+        None,
+    )
+    .unwrap();
+
+    QueryParser::default().parse(router_context)
 }
 
 #[test]
@@ -419,7 +460,7 @@ fn test_insert_do_update() {
 
 #[test]
 fn update_sharding_key_errors_by_default() {
-    let _lock = CONFIG_MODE_LOCK.lock().unwrap();
+    let _lock = lock_config_mode();
     let _guard = ConfigModeGuard::set(ShardKeyUpdateMode::Error);
 
     let query = "UPDATE sharded SET id = id + 1 WHERE id = 1";
@@ -439,7 +480,7 @@ fn update_sharding_key_errors_by_default() {
 
 #[test]
 fn update_sharding_key_ignore_mode_allows() {
-    let _lock = CONFIG_MODE_LOCK.lock().unwrap();
+    let _lock = lock_config_mode();
     let _guard = ConfigModeGuard::set(ShardKeyUpdateMode::Ignore);
 
     let query = "UPDATE sharded SET id = id + 1 WHERE id = 1";
@@ -456,7 +497,7 @@ fn update_sharding_key_ignore_mode_allows() {
 
 #[test]
 fn update_sharding_key_rewrite_mode_not_supported() {
-    let _lock = CONFIG_MODE_LOCK.lock().unwrap();
+    let _lock = lock_config_mode();
     let _guard = ConfigModeGuard::set(ShardKeyUpdateMode::Rewrite);
 
     let query = "UPDATE sharded SET id = id + 1 WHERE id = 1";
@@ -468,6 +509,126 @@ fn update_sharding_key_rewrite_mode_not_supported() {
         RouterContext::new(&client_request, &cluster, &mut prep_stmts, &params, None).unwrap();
 
     let result = QueryParser::default().parse(router_context);
+    assert!(
+        matches!(result, Err(Error::ShardKeyRewriteNotSupported { .. })),
+        "{result:?}"
+    );
+}
+
+#[test]
+fn update_sharding_key_rewrite_plan_detected() {
+    let _lock = lock_config_mode();
+    let _guard = ConfigModeGuard::set(ShardKeyUpdateMode::Rewrite);
+
+    let query = "UPDATE sharded SET id = 11 WHERE id = 1";
+    let mut prep_stmts = PreparedStatements::default();
+    let params = Parameters::default();
+    let client_request: ClientRequest = vec![Query::new(query).into()].into();
+    let cluster = Cluster::new_test();
+    let router_context =
+        RouterContext::new(&client_request, &cluster, &mut prep_stmts, &params, None).unwrap();
+
+    let command = QueryParser::default().parse(router_context).unwrap();
+    match command {
+        Command::ShardKeyRewrite(plan) => {
+            assert_eq!(plan.table().name, "sharded");
+            assert_eq!(plan.assignments().len(), 1);
+            let assignment = &plan.assignments()[0];
+            assert_eq!(assignment.column(), "id");
+            assert!(matches!(assignment.value(), AssignmentValue::Integer(11)));
+        }
+        other => panic!("expected shard key rewrite plan, got {other:?}"),
+    }
+}
+
+#[test]
+fn update_sharding_key_rewrite_computes_new_shard() {
+    let _lock = lock_config_mode();
+    let _guard = ConfigModeGuard::set(ShardKeyUpdateMode::Rewrite);
+
+    let command = parse_with_parameters(
+        "UPDATE sharded SET id = 11 WHERE id = 1",
+        Parameters::default(),
+    )
+    .expect("expected command");
+
+    let plan = match command {
+        Command::ShardKeyRewrite(plan) => plan,
+        other => panic!("expected shard key rewrite plan, got {other:?}"),
+    };
+
+    assert!(plan.new_shard().is_some(), "new shard should be computed");
+}
+
+#[test]
+fn update_sharding_key_rewrite_requires_parameter_values() {
+    let _lock = lock_config_mode();
+    let _guard = ConfigModeGuard::set(ShardKeyUpdateMode::Rewrite);
+
+    let result = parse_with_parameters(
+        "UPDATE sharded SET id = $1 WHERE id = 1",
+        Parameters::default(),
+    );
+
+    assert!(
+        matches!(result, Err(Error::MissingParameter(1))),
+        "{result:?}"
+    );
+}
+
+#[test]
+fn update_sharding_key_rewrite_parameter_assignment_succeeds() {
+    let _lock = lock_config_mode();
+    let _guard = ConfigModeGuard::set(ShardKeyUpdateMode::Rewrite);
+
+    let command = parse_with_bind("UPDATE sharded SET id = $1 WHERE id = 1", &[b"11"])
+        .expect("expected rewrite command");
+
+    match command {
+        Command::ShardKeyRewrite(plan) => {
+            assert!(
+                plan.new_shard().is_some(),
+                "expected computed destination shard"
+            );
+            assert_eq!(plan.assignments().len(), 1);
+            assert!(matches!(
+                plan.assignments()[0].value(),
+                AssignmentValue::Parameter(1)
+            ));
+        }
+        other => panic!("expected shard key rewrite plan, got {other:?}"),
+    }
+}
+
+#[test]
+fn update_sharding_key_rewrite_self_assignment_falls_back() {
+    let _lock = lock_config_mode();
+    let _guard = ConfigModeGuard::set(ShardKeyUpdateMode::Rewrite);
+
+    let command = parse_with_parameters(
+        "UPDATE sharded SET id = id WHERE id = 1",
+        Parameters::default(),
+    )
+    .expect("expected command");
+
+    match command {
+        Command::Query(route) => {
+            assert!(matches!(route.shard(), Shard::Direct(_)));
+        }
+        other => panic!("expected standard update route, got {other:?}"),
+    }
+}
+
+#[test]
+fn update_sharding_key_rewrite_null_assignment_not_supported() {
+    let _lock = lock_config_mode();
+    let _guard = ConfigModeGuard::set(ShardKeyUpdateMode::Rewrite);
+
+    let result = parse_with_parameters(
+        "UPDATE sharded SET id = NULL WHERE id = 1",
+        Parameters::default(),
+    );
+
     assert!(
         matches!(result, Err(Error::ShardKeyRewriteNotSupported { .. })),
         "{result:?}"
