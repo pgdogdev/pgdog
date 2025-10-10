@@ -10,10 +10,10 @@ use bytes::{Buf, BufMut, BytesMut};
 
 use crate::{
     backend::databases::databases,
-    config::{config, load_test, load_test_replicas, set, Role},
+    config::{config, load_test, load_test_replicas, set, PreparedStatements, Role},
     frontend::{
         client::{BufferEvent, QueryEngine},
-        Client,
+        prepared_statements, Client,
     },
     net::{
         bind::Parameter, Bind, Close, CommandComplete, DataRow, Describe, ErrorResponse, Execute,
@@ -307,8 +307,8 @@ async fn test_client_with_replicas() {
             client.run().await.unwrap();
         });
         let buf = buffer!(
-            { Parse::new_anonymous("SELECT * FROM test_client_with_replicas") },
-            { Bind::new_statement("") },
+            { Parse::named("test", "SELECT * FROM test_client_with_replicas") },
+            { Bind::new_statement("test") },
             { Execute::new() },
             { Sync }
         );
@@ -765,6 +765,78 @@ async fn test_client_login_timeout_does_not_affect_queries() {
     let msgs = read!(conn, ['T', 'D', 'C', 'Z']);
     assert_eq!(msgs[0][0] as char, 'T');
     assert_eq!(msgs[3][0] as char, 'Z');
+
+    conn.write_all(&buffer!({ Terminate })).await.unwrap();
+    handle.await.unwrap();
+}
+
+#[tokio::test]
+async fn test_anon_prepared_statements() {
+    crate::logger();
+    load_test();
+
+    let (mut conn, mut client, _) = new_client!(false);
+
+    let mut c = (*config()).clone();
+    c.config.general.prepared_statements = PreparedStatements::ExtendedAnonymous;
+    set(c).unwrap();
+
+    let handle = tokio::spawn(async move {
+        client.run().await.unwrap();
+    });
+
+    conn.write_all(&buffer!(
+        { Parse::new_anonymous("SELECT 1") },
+        { Bind::new_params("", &[]) },
+        { Execute::new() },
+        { Sync }
+    ))
+    .await
+    .unwrap();
+
+    let _ = read!(conn, ['1', '2', 'D', 'C', 'Z']);
+
+    {
+        let cache = prepared_statements::PreparedStatements::global();
+        let read = cache.read();
+        assert!(!read.is_empty());
+    }
+
+    conn.write_all(&buffer!({ Terminate })).await.unwrap();
+    handle.await.unwrap();
+}
+
+#[tokio::test]
+async fn test_anon_prepared_statements_extended() {
+    crate::logger();
+    load_test();
+
+    let (mut conn, mut client, _) = new_client!(false);
+
+    let mut c = (*config()).clone();
+    c.config.general.prepared_statements = PreparedStatements::Extended;
+    set(c).unwrap();
+
+    let handle = tokio::spawn(async move {
+        client.run().await.unwrap();
+    });
+
+    conn.write_all(&buffer!(
+        { Parse::new_anonymous("SELECT 1") },
+        { Bind::new_params("", &[]) },
+        { Execute::new() },
+        { Sync }
+    ))
+    .await
+    .unwrap();
+
+    let _ = read!(conn, ['1', '2', 'D', 'C', 'Z']);
+
+    {
+        let cache = prepared_statements::PreparedStatements::global();
+        let read = cache.read();
+        assert!(read.is_empty());
+    }
 
     conn.write_all(&buffer!({ Terminate })).await.unwrap();
     handle.await.unwrap();

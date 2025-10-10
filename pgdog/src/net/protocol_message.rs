@@ -31,6 +31,17 @@ impl ProtocolMessage {
         )
     }
 
+    pub fn anonymous(&self) -> bool {
+        use ProtocolMessage::*;
+
+        match self {
+            Bind(bind) => bind.anonymous(),
+            Parse(parse) => parse.anonymous(),
+            Describe(describe) => describe.anonymous(),
+            _ => false,
+        }
+    }
+
     pub fn len(&self) -> usize {
         match self {
             Self::Bind(bind) => bind.len(),

@@ -91,6 +91,10 @@ impl Command for Set {
                     .close_unused(config.config.general.prepared_statements_limit);
             }
 
+            "prepared_statements" => {
+                config.config.general.prepared_statements = Self::from_json(&self.value)?;
+            }
+
             "cross_shard_disabled" => {
                 config.config.general.cross_shard_disabled = Self::from_json(&self.value)?;
             }

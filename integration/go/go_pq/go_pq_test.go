@@ -81,6 +81,13 @@ func TestAuthenticationWithPassthrough(t *testing.T) {
 }
 
 func TestPqCrud(t *testing.T) {
+	adminConn, err := sql.Open("postgres", "postgres://admin:pgdog@127.0.0.1:6432/admin?sslmode=disable")
+	assert.Nil(t, err)
+	defer adminConn.Close()
+
+	_, err = adminConn.Exec("SET prepared_statements TO 'extended_anonymous'")
+	assert.Nil(t, err)
+
 	conns := PqConnections()
 
 	for _, conn := range conns {
