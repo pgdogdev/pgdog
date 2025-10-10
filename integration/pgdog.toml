@@ -11,6 +11,7 @@ read_write_strategy = "aggressive"
 openmetrics_port = 9090
 openmetrics_namespace = "pgdog_"
 prepared_statements_limit = 500
+prepared_statements = "extended"
 expanded_explain = true
 # dns_ttl = 15_000
 query_cache_limit = 500

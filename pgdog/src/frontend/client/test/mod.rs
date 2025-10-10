@@ -307,8 +307,8 @@ async fn test_client_with_replicas() {
             client.run().await.unwrap();
         });
         let buf = buffer!(
-            { Parse::new_anonymous("SELECT * FROM test_client_with_replicas") },
-            { Bind::new_statement("") },
+            { Parse::named("test", "SELECT * FROM test_client_with_replicas") },
+            { Bind::new_statement("test") },
             { Execute::new() },
             { Sync }
         );

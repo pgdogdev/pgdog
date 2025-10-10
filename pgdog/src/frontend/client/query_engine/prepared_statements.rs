@@ -12,7 +12,7 @@ impl QueryEngine {
             if message.extended() {
                 let level = context.prepared_statements.level;
                 match (level, message.anonymous()) {
-                    (PreparedStatements::ExtendedAnonymous, true)
+                    (PreparedStatements::ExtendedAnonymous, _)
                     | (PreparedStatements::Extended, false) => {
                         context.prepared_statements.maybe_rewrite(message)?
                     }
