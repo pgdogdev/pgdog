@@ -1,6 +1,7 @@
 [general]
 mirror_exposure = 1.0
 openmetrics_port = 9090
+rewrite_shard_key_updates = "ignore"
 
 [[databases]]
 name = "pgdog"

@@ -2,7 +2,7 @@
 
 use thiserror::Error;
 
-use crate::frontend::router::sharding;
+use crate::{config::ShardKeyUpdateMode, frontend::router::sharding};
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -68,4 +68,18 @@ pub enum Error {
 
     #[error("regex error")]
     RegexError,
+
+    #[error(
+        "updating sharding key columns ({columns}) on table \"{table}\" is not allowed when rewrite_shard_key_updates={mode}"
+    )]
+    ShardKeyUpdateViolation {
+        table: String,
+        columns: String,
+        mode: ShardKeyUpdateMode,
+    },
+
+    #[error(
+        "rewrite_shard_key_updates=\"rewrite\" is not yet supported for table \"{table}\" (columns: {columns})"
+    )]
+    ShardKeyRewriteNotSupported { table: String, columns: String },
 }

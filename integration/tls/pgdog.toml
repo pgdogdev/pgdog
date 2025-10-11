@@ -1,6 +1,7 @@
 [general]
 tls_certificate = "cert.pem"
 tls_private_key = "key.pem"
+rewrite_shard_key_updates = "ignore"
 
 [[databases]]
 name = "pgdog"

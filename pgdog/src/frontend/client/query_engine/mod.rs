@@ -25,6 +25,7 @@ pub mod pub_sub;
 pub mod query;
 pub mod route_query;
 pub mod set;
+pub mod shard_key_rewrite;
 pub mod show_shards;
 pub mod start_transaction;
 pub mod two_pc;
@@ -218,6 +219,7 @@ impl QueryEngine {
                 context.client_request.rewrite(query)?;
                 self.execute(context, &route).await?;
             }
+            Command::ShardKeyRewrite(plan) => self.shard_key_rewrite(context, plan.clone()).await?,
             Command::Deallocate => self.deallocate(context).await?,
             Command::Discard { extended } => self.discard(context, *extended).await?,
             command => self.unknown_command(context, command.clone()).await?,

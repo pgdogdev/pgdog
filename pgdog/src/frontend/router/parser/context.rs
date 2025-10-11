@@ -9,7 +9,7 @@ use crate::frontend::client::TransactionType;
 use crate::net::Bind;
 use crate::{
     backend::ShardingSchema,
-    config::{config, MultiTenant, ReadWriteStrategy},
+    config::{config, MultiTenant, ReadWriteStrategy, ShardKeyUpdateMode},
     frontend::{BufferedQuery, PreparedStatements, RouterContext},
 };
 
@@ -46,6 +46,8 @@ pub struct QueryParserContext<'a> {
     pub(super) dry_run: bool,
     /// Expanded EXPLAIN annotations enabled?
     pub(super) expanded_explain: bool,
+    /// How to handle sharding-key updates.
+    pub(super) shard_key_update_mode: ShardKeyUpdateMode,
 }
 
 impl<'a> QueryParserContext<'a> {
@@ -64,6 +66,7 @@ impl<'a> QueryParserContext<'a> {
             multi_tenant: router_context.cluster.multi_tenant(),
             dry_run: config.config.general.dry_run,
             expanded_explain: config.config.general.expanded_explain,
+            shard_key_update_mode: config.config.general.rewrite_shard_key_updates,
             router_context,
         }
     }
@@ -142,5 +145,9 @@ impl<'a> QueryParserContext<'a> {
 
     pub(super) fn expanded_explain(&self) -> bool {
         self.expanded_explain
+    }
+
+    pub(super) fn shard_key_update_mode(&self) -> ShardKeyUpdateMode {
+        self.shard_key_update_mode
     }
 }
