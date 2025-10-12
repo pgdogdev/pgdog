@@ -53,6 +53,7 @@ pub struct QueryEngine {
     two_pc: TwoPc,
     notify_buffer: NotifyBuffer,
     pending_explain: Option<ExplainResponseState>,
+    hooks: QueryEngineHooks,
 }
 
 impl QueryEngine {
@@ -72,6 +73,7 @@ impl QueryEngine {
             backend,
             client_id: comms.client_id(),
             comms: comms.clone(),
+            hooks: QueryEngineHooks::new(),
             #[cfg(test)]
             test_mode: true,
             #[cfg(not(test))]
@@ -125,8 +127,7 @@ impl QueryEngine {
             return Ok(());
         }
 
-        let mut hooks = QueryEngineHooks::new();
-        hooks.before_execution(context)?;
+        self.hooks.before_execution(context)?;
 
         // Queue up request to mirrors, if any.
         // Do this before sending query to actual server
@@ -223,7 +224,7 @@ impl QueryEngine {
             command => self.unknown_command(context, command.clone()).await?,
         }
 
-        hooks.after_execution(context)?;
+        self.hooks.after_execution(context)?;
 
         if context.in_error() {
             self.backend.mirror_clear();
