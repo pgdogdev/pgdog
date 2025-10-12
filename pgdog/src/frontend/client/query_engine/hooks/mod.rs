@@ -2,7 +2,14 @@
 #![allow(unused_variables, dead_code)]
 use super::*;
 
+#[derive(Debug)]
 pub struct QueryEngineHooks;
+
+impl Default for QueryEngineHooks {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl QueryEngineHooks {
     pub(super) fn new() -> Self {
@@ -12,6 +19,14 @@ impl QueryEngineHooks {
     pub(super) fn before_execution(
         &mut self,
         context: &mut QueryEngineContext<'_>,
+    ) -> Result<(), Error> {
+        Ok(())
+    }
+
+    pub(super) fn after_connected(
+        &mut self,
+        context: &mut QueryEngineContext<'_>,
+        backend: &Connection,
     ) -> Result<(), Error> {
         Ok(())
     }

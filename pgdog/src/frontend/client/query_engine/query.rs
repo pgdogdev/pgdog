@@ -68,6 +68,8 @@ impl QueryEngine {
             }
         }
 
+        self.hooks.after_connected(context, &self.backend)?;
+
         self.backend
             .handle_client_request(context.client_request, &mut self.router, self.streaming)
             .await?;
