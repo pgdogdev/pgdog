@@ -17,7 +17,7 @@ RUN source ~/.cargo/env && \
 FROM ubuntu:latest
 ENV RUST_LOG=info
 RUN apt update && \
-    apt install -y ca-certificates postgresql-client && \
+    apt install -y ca-certificates postgresql-client ssl-cert && \
     update-ca-certificates
 
 COPY --from=builder /build/target/release/pgdog /usr/local/bin/pgdog
