@@ -10,7 +10,7 @@ async fn test_savepoint() {
         transaction
             .execute("CREATE TABLE test_savepoint (id BIGINT)")
             .await
-            .unwrap(); //p//p
+            .unwrap();
         transaction.execute("SAVEPOINT test").await.unwrap();
         assert!(transaction.execute("SELECT sdfsf").await.is_err());
         transaction
