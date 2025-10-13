@@ -1,4 +1,4 @@
-use rust::setup::{admin_sqlx, connections_sqlx};
+use rust::setup::connections_sqlx;
 use sqlx::Executor;
 
 #[tokio::test]
@@ -10,7 +10,7 @@ async fn test_savepoint() {
         transaction
             .execute("CREATE TABLE test_savepoint (id BIGINT)")
             .await
-            .unwrap();
+            .unwrap(); //p//p
         transaction.execute("SAVEPOINT test").await.unwrap();
         assert!(transaction.execute("SELECT sdfsf").await.is_err());
         transaction
