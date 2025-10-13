@@ -1041,7 +1041,7 @@ pub mod test {
                 "",
                 &[Parameter {
                     len: 1,
-                    data: "1".as_bytes().to_vec(),
+                    data: "1".as_bytes().into(),
                 }],
                 &[Format::Text],
             );
@@ -1086,7 +1086,7 @@ pub mod test {
                 &name,
                 &[Parameter {
                     len: 1,
-                    data: "1".as_bytes().to_vec(),
+                    data: "1".as_bytes().into(),
                 }],
             );
 
@@ -1172,7 +1172,7 @@ pub mod test {
                             "__pgdog_1",
                             &[Parameter {
                                 len: 1,
-                                data: "1".as_bytes().to_vec(),
+                                data: "1".as_bytes().into(),
                             }],
                         )),
                         Execute::new().into(),
@@ -1368,7 +1368,7 @@ pub mod test {
                 "test_1",
                 &[crate::net::bind::Parameter {
                     len: 1,
-                    data: "1".as_bytes().to_vec(),
+                    data: "1".as_bytes().into(),
                 }],
             )
             .into(),
@@ -1429,7 +1429,7 @@ pub mod test {
                 "test",
                 &[crate::net::bind::Parameter {
                     len: 1,
-                    data: "1".as_bytes().to_vec(),
+                    data: "1".as_bytes().into(),
                 }],
             )
             .into(),
@@ -1494,7 +1494,7 @@ pub mod test {
                             "test",
                             &[crate::net::bind::Parameter {
                                 len: 1,
-                                data: "1".as_bytes().to_vec(),
+                                data: "1".as_bytes().into(),
                             }],
                         )
                         .into(),
@@ -1927,7 +1927,7 @@ pub mod test {
                 "",
                 &[Parameter {
                     len: 4,
-                    data: "1234".as_bytes().to_vec(),
+                    data: "1234".as_bytes().into(),
                 }],
             )
             .into(),
