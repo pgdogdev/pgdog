@@ -479,7 +479,7 @@ async fn test_transaction_state() {
                 "test",
                 &[Parameter {
                     len: 1,
-                    data: "1".as_bytes().to_vec(),
+                    data: "1".as_bytes().into(),
                 }],
             )
         },

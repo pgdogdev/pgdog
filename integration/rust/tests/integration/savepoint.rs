@@ -1,4 +1,4 @@
-use rust::setup::{admin_sqlx, connections_sqlx};
+use rust::setup::connections_sqlx;
 use sqlx::Executor;
 
 #[tokio::test]

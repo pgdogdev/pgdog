@@ -52,6 +52,7 @@ mod tests {
     use crate::frontend::{ClientRequest, PreparedStatements, RouterContext};
     use crate::net::messages::{Bind, Parameter, Parse, Query};
     use crate::net::Parameters;
+    use bytes::Bytes;
     use std::sync::Once;
 
     fn enable_expanded_explain() {
@@ -88,7 +89,7 @@ mod tests {
             .iter()
             .map(|v| Parameter {
                 len: v.len() as i32,
-                data: v.to_vec(),
+                data: Bytes::copy_from_slice(v),
             })
             .collect::<Vec<_>>();
 

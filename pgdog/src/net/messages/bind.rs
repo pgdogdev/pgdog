@@ -7,6 +7,7 @@ use super::prelude::*;
 use super::Error;
 use super::FromDataType;
 use super::Vector;
+use bytes::BytesMut;
 
 use std::fmt::Debug;
 use std::str::from_utf8;
@@ -34,7 +35,7 @@ pub struct Parameter {
     /// Parameter data length.
     pub len: i32,
     /// Parameter data.
-    pub data: Vec<u8>,
+    pub data: Bytes,
 }
 
 impl Debug for Parameter {
@@ -59,14 +60,14 @@ impl Parameter {
     pub fn new_null() -> Self {
         Self {
             len: -1,
-            data: vec![],
+            data: Bytes::new(),
         }
     }
 
     pub fn new(data: &[u8]) -> Self {
         Self {
             len: data.len() as i32,
-            data: data.to_vec(),
+            data: Bytes::copy_from_slice(data),
         }
     }
 }
@@ -124,8 +125,8 @@ pub struct Bind {
     codes: Vec<Format>,
     /// Parameters.
     params: Vec<Parameter>,
-    /// Results format.
-    results: Vec<i16>,
+    /// Results format (raw bytes, 2 bytes per i16).
+    results: Bytes,
     /// Original payload.
     original: Option<Bytes>,
 }
@@ -137,7 +138,7 @@ impl Default for Bind {
             statement: Bytes::from("\0"),
             codes: vec![],
             params: vec![],
-            results: vec![],
+            results: Bytes::new(),
             original: None,
         }
     }
@@ -149,7 +150,7 @@ impl Bind {
             + self.statement.len()
             + self.codes.len() * std::mem::size_of::<i16>() + 2 // num codes
             + self.params.iter().map(|p| p.len()).sum::<usize>() + 2 // num params
-            + self.results.len() * std::mem::size_of::<i16>() + 2 // num results
+            + self.results.len() + 2 // num results (results already stores raw bytes)
             + 4 // len
             + 1 // code
     }
@@ -237,7 +238,11 @@ impl Bind {
         results: &[i16],
     ) -> Self {
         let mut me = Self::new_params_codes(name, params, codes);
-        me.results = results.to_vec();
+        let mut buf = BytesMut::with_capacity(results.len() * 2);
+        for result in results {
+            buf.put_i16(*result);
+        }
+        me.results = buf.freeze();
 
         me
     }
@@ -274,17 +279,19 @@ impl FromBytes for Bind {
             .map(|_| {
                 let len = bytes.get_i32();
                 let data = if len >= 0 {
-                    let mut data = Vec::with_capacity(len as usize);
-                    (0..len).for_each(|_| data.push(bytes.get_u8()));
-                    data
+                    bytes.split_to(len as usize)
                 } else {
-                    vec![]
+                    Bytes::new()
                 };
                 Parameter { len, data }
             })
             .collect();
         let num_results = bytes.get_i16();
-        let results = (0..num_results).map(|_| bytes.get_i16()).collect();
+        let results = if num_results > 0 {
+            bytes.split_to((num_results * 2) as usize)
+        } else {
+            Bytes::new()
+        };
 
         Ok(Self {
             portal,
@@ -321,10 +328,8 @@ impl ToBytes for Bind {
             payload.put_i32(param.len);
             payload.put(&param.data[..]);
         }
-        payload.put_i16(self.results.len() as i16);
-        for result in &self.results {
-            payload.put_i16(*result);
-        }
+        payload.put_i16((self.results.len() / 2) as i16);
+        payload.put(self.results.clone());
         Ok(payload.freeze())
     }
 }
@@ -358,14 +363,18 @@ mod test {
             params: vec![
                 Parameter {
                     len: 2,
-                    data: vec![0, 1],
+                    data: Bytes::copy_from_slice(&[0, 1]),
                 },
                 Parameter {
                     len: 4,
-                    data: "test".as_bytes().to_vec(),
+                    data: Bytes::from("test"),
                 },
             ],
-            results: vec![0],
+            results: {
+                let mut buf = BytesMut::with_capacity(2);
+                buf.put_i16(0);
+                buf.freeze()
+            },
         };
         let bytes = bind.to_bytes().unwrap();
         let mut original = Bind::from_bytes(bytes.clone()).unwrap();
@@ -400,7 +409,7 @@ mod test {
             statement: "test\0".into(),
             codes: vec![Format::Binary],
             params: vec![Parameter {
-                data: jsonb.as_bytes().to_vec(),
+                data: Bytes::copy_from_slice(jsonb.as_bytes()),
                 len: jsonb.len() as i32,
             }],
             ..Default::default()

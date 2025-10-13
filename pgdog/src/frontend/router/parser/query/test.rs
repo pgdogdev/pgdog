@@ -8,6 +8,7 @@ use crate::{
         Close, Format, Sync,
     },
 };
+use bytes::Bytes;
 
 use super::{super::Shard, *};
 use crate::backend::Cluster;
@@ -99,7 +100,7 @@ macro_rules! parse {
             .into_iter()
             .map(|p| Parameter {
                 len: p.len() as i32,
-                data: p.to_vec(),
+                data: Bytes::copy_from_slice(&p),
             })
             .collect::<Vec<_>>();
         let bind = Bind::new_params_codes($name, &params, $codes);

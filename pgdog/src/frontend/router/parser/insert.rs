@@ -130,6 +130,7 @@ mod test {
     use crate::config::ShardedTable;
     use crate::net::bind::Parameter;
     use crate::net::Format;
+    use bytes::Bytes;
 
     use super::super::Value;
     use super::*;
@@ -243,7 +244,7 @@ mod test {
                     "",
                     &[Parameter {
                         len: 1,
-                        data: "3".as_bytes().to_vec(),
+                        data: "3".as_bytes().into(),
                     }],
                 );
 
@@ -254,7 +255,7 @@ mod test {
                     "",
                     &[Parameter {
                         len: 8,
-                        data: 234_i64.to_be_bytes().to_vec(),
+                        data: Bytes::copy_from_slice(&234_i64.to_be_bytes()),
                     }],
                     &[Format::Binary],
                 );
