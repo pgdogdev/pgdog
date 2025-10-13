@@ -10,9 +10,9 @@ struct RewriteConfigGuard {
 impl RewriteConfigGuard {
     async fn enable(admin: Pool<Postgres>) -> Self {
         admin
-            .execute("SET two_phase_commit TO true")
+            .execute("SET two_phase_commit TO false")
             .await
-            .expect("enable two_phase_commit");
+            .expect("disable two_phase_commit");
         admin
             .execute("SET rewrite_shard_key_updates TO rewrite")
             .await

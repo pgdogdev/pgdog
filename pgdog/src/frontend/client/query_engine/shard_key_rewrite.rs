@@ -10,12 +10,13 @@ use crate::{
             rewrite::{AssignmentValue, ShardKeyRewritePlan},
         },
     },
+    net::messages::Protocol,
     net::{
         messages::{
             bind::Format, command_complete::CommandComplete, Bind, DataRow, FromBytes, Message,
             RowDescription, ToBytes,
         },
-        ErrorResponse, Protocol, ReadyForQuery,
+        ReadyForQuery,
     },
     util::escape_identifier,
 };
@@ -28,19 +29,7 @@ impl QueryEngine {
         plan: ShardKeyRewritePlan,
     ) -> Result<(), Error> {
         let cluster = self.backend.cluster()?.clone();
-
-        if !cluster.two_pc_enabled() {
-            let mut error = ErrorResponse::default();
-            error.code = "0A000".into();
-            error.message =
-                "rewrite_shard_key_updates requires two_phase_commit to be enabled".into();
-            let bytes_sent = context
-                .stream
-                .error(error, context.in_transaction())
-                .await?;
-            self.stats.sent(bytes_sent);
-            return Ok(());
-        }
+        let use_two_pc = cluster.two_pc_enabled();
 
         let source_shard = match plan.route().shard() {
             Shard::Direct(value) => *value,
@@ -71,64 +60,100 @@ impl QueryEngine {
 
         source.execute("BEGIN").await?;
         target.execute("BEGIN").await?;
-
-        let delete_sql = build_delete_sql(&plan)?;
-        let mut delete = execute_sql(&mut source, &delete_sql).await?;
-
-        let deleted_rows = delete
-            .command_complete
-            .rows()
-            .unwrap_or_default()
-            .unwrap_or_default();
-
-        if deleted_rows == 0 {
-            source.execute("ROLLBACK").await?;
-            target.execute("ROLLBACK").await?;
-            return self.send_update_complete(context, 0).await;
+        enum RewriteOutcome {
+            Noop,
+            Applied { deleted_rows: usize },
         }
 
-        let row_description = delete
-            .row_description
-            .take()
-            .ok_or_else(|| Error::Router(router::Error::Parser(parser::Error::EmptyQuery)))?;
-        let data_row = delete
-            .data_row
-            .take()
-            .ok_or_else(|| Error::Router(router::Error::Parser(parser::Error::EmptyQuery)))?;
+        let outcome = match async {
+            let delete_sql = build_delete_sql(&plan)?;
+            let mut delete = execute_sql(&mut source, &delete_sql).await?;
 
-        let parameters = context.client_request.parameters()?;
-        let assignments = apply_assignments(&row_description, &data_row, &plan, parameters)?;
-        let insert_sql = build_insert_sql(&plan, &row_description, &assignments);
+            let deleted_rows = delete
+                .command_complete
+                .rows()
+                .unwrap_or_default()
+                .unwrap_or_default();
 
-        execute_sql(&mut target, &insert_sql).await?;
+            if deleted_rows == 0 {
+                return Ok(RewriteOutcome::Noop);
+            }
 
-        let identifier = cluster.identifier();
-        let transaction_name = self.two_pc.transaction().to_string();
-        let guard_phase_one = self.two_pc.phase_one(&identifier).await?;
+            let row_description = delete
+                .row_description
+                .take()
+                .ok_or_else(|| Error::Router(router::Error::Parser(parser::Error::EmptyQuery)))?;
+            let data_row = delete
+                .data_row
+                .take()
+                .ok_or_else(|| Error::Router(router::Error::Parser(parser::Error::EmptyQuery)))?;
 
-        let prepare_source = format!(
-            "PREPARE TRANSACTION '{}_{}'",
-            transaction_name, source_shard
-        );
-        let prepare_target = format!(
-            "PREPARE TRANSACTION '{}_{}'",
-            transaction_name, target_shard
-        );
-        execute_sql(&mut source, &prepare_source).await?;
-        execute_sql(&mut target, &prepare_target).await?;
+            let parameters = context.client_request.parameters()?;
+            let assignments = apply_assignments(&row_description, &data_row, &plan, parameters)?;
+            let insert_sql = build_insert_sql(&plan, &row_description, &assignments);
 
-        let guard_phase_two = self.two_pc.phase_two(&identifier).await?;
-        let commit_source = format!("COMMIT PREPARED '{}_{}'", transaction_name, source_shard);
-        let commit_target = format!("COMMIT PREPARED '{}_{}'", transaction_name, target_shard);
-        execute_sql(&mut source, &commit_source).await?;
-        execute_sql(&mut target, &commit_target).await?;
+            execute_sql(&mut target, &insert_sql).await?;
 
-        self.two_pc.done().await?;
+            Ok::<RewriteOutcome, Error>(RewriteOutcome::Applied { deleted_rows })
+        }
+        .await
+        {
+            Ok(outcome) => outcome,
+            Err(err) => {
+                let _ = source.execute("ROLLBACK").await;
+                let _ = target.execute("ROLLBACK").await;
+                return Err(err);
+            }
+        };
 
-        drop(guard_phase_two);
-        drop(guard_phase_one);
+        match outcome {
+            RewriteOutcome::Noop => {
+                let _ = source.execute("ROLLBACK").await;
+                let _ = target.execute("ROLLBACK").await;
+                self.send_update_complete(context, 0).await
+            }
+            RewriteOutcome::Applied { deleted_rows } => {
+                if use_two_pc {
+                    let identifier = cluster.identifier();
+                    let transaction_name = self.two_pc.transaction().to_string();
+                    let guard_phase_one = self.two_pc.phase_one(&identifier).await?;
 
-        self.send_update_complete(context, deleted_rows).await
+                    let prepare_source = format!(
+                        "PREPARE TRANSACTION '{}_{}'",
+                        transaction_name, source_shard
+                    );
+                    let prepare_target = format!(
+                        "PREPARE TRANSACTION '{}_{}'",
+                        transaction_name, target_shard
+                    );
+                    execute_sql(&mut source, &prepare_source).await?;
+                    execute_sql(&mut target, &prepare_target).await?;
+
+                    let guard_phase_two = self.two_pc.phase_two(&identifier).await?;
+                    let commit_source =
+                        format!("COMMIT PREPARED '{}_{}'", transaction_name, source_shard);
+                    let commit_target =
+                        format!("COMMIT PREPARED '{}_{}'", transaction_name, target_shard);
+                    execute_sql(&mut source, &commit_source).await?;
+                    execute_sql(&mut target, &commit_target).await?;
+
+                    self.two_pc.done().await?;
+
+                    drop(guard_phase_two);
+                    drop(guard_phase_one);
+                } else {
+                    if let Err(err) = target.execute("COMMIT").await {
+                        let _ = source.execute("ROLLBACK").await;
+                        return Err(err.into());
+                    }
+                    if let Err(err) = source.execute("COMMIT").await {
+                        return Err(err.into());
+                    }
+                }
+
+                self.send_update_complete(context, deleted_rows).await
+            }
+        }
     }
 
     async fn send_update_complete(

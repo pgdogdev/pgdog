@@ -1,6 +1,6 @@
 //! Shortcut the parser given the cluster config.
 
-use std::os::raw::c_void;
+use std::{os::raw::c_void, sync::Once};
 
 use pgdog_plugin::pg_query::protobuf::ParseResult;
 use pgdog_plugin::{PdParameters, PdRouterContext, PdStatement};
@@ -12,6 +12,8 @@ use crate::{
     config::{config, MultiTenant, ReadWriteStrategy, ShardKeyUpdateMode},
     frontend::{BufferedQuery, PreparedStatements, RouterContext},
 };
+
+use tracing::warn;
 
 use super::Error;
 
@@ -50,10 +52,19 @@ pub struct QueryParserContext<'a> {
     pub(super) shard_key_update_mode: ShardKeyUpdateMode,
 }
 
+static SHARD_KEY_REWRITE_WARNING: Once = Once::new();
+
 impl<'a> QueryParserContext<'a> {
     /// Create query parser context from router context.
     pub fn new(router_context: RouterContext<'a>) -> Self {
         let config = config();
+        if config.config.general.rewrite_shard_key_updates == ShardKeyUpdateMode::Rewrite {
+            SHARD_KEY_REWRITE_WARNING.call_once(|| {
+                warn!(
+                    "rewrite_shard_key_updates=rewrite will apply non-atomic shard-key rewrites; enabling two_phase_commit is strongly recommended"
+                );
+            });
+        }
         Self {
             read_only: router_context.cluster.read_only(),
             write_only: router_context.cluster.write_only(),
