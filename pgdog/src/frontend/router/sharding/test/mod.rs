@@ -124,7 +124,7 @@ async fn test_binary_encoding() {
                     "",
                     &[Parameter {
                         len: 5,
-                        data: "test1".as_bytes().to_vec(),
+                        data: "test1".as_bytes().into(),
                     }],
                     &[Format::Binary],
                     &[1],
