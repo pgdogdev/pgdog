@@ -7,7 +7,7 @@ use crate::{
         self as router,
         parser::{
             self as parser,
-            rewrite::{AssignmentValue, ShardKeyRewritePlan},
+            rewrite::{Assignment, AssignmentValue, ShardKeyRewritePlan},
         },
     },
     net::messages::Protocol,
@@ -16,7 +16,7 @@ use crate::{
             bind::Format, command_complete::CommandComplete, Bind, DataRow, FromBytes, Message,
             RowDescription, ToBytes,
         },
-        ReadyForQuery,
+        ErrorResponse, ReadyForQuery,
     },
     util::escape_identifier,
 };
@@ -33,9 +33,15 @@ impl QueryEngine {
 
         let source_shard = match plan.route().shard() {
             Shard::Direct(value) => *value,
-            _ => {
+            shard => {
                 return Err(Error::Router(router::Error::Parser(
-                    parser::Error::EmptyQuery,
+                    parser::Error::ShardKeyRewriteInvariant {
+                        reason: format!(
+                            "rewrite plan for table {} expected direct source shard, got {:?}",
+                            plan.table(),
+                            shard
+                        ),
+                    },
                 )))
             }
         };
@@ -46,6 +52,10 @@ impl QueryEngine {
 
         if source_shard == target_shard {
             return self.execute(context, plan.route()).await;
+        }
+
+        if context.in_transaction() {
+            return self.send_shard_key_transaction_error(context, &plan).await;
         }
 
         let request = Request::default();
@@ -62,6 +72,7 @@ impl QueryEngine {
         target.execute("BEGIN").await?;
         enum RewriteOutcome {
             Noop,
+            MultipleRows,
             Applied { deleted_rows: usize },
         }
 
@@ -79,14 +90,30 @@ impl QueryEngine {
                 return Ok(RewriteOutcome::Noop);
             }
 
-            let row_description = delete
-                .row_description
-                .take()
-                .ok_or_else(|| Error::Router(router::Error::Parser(parser::Error::EmptyQuery)))?;
-            let data_row = delete
-                .data_row
-                .take()
-                .ok_or_else(|| Error::Router(router::Error::Parser(parser::Error::EmptyQuery)))?;
+            if deleted_rows > 1 || delete.data_rows.len() > 1 {
+                return Ok(RewriteOutcome::MultipleRows);
+            }
+
+            let row_description = delete.row_description.take().ok_or_else(|| {
+                Error::Router(router::Error::Parser(
+                    parser::Error::ShardKeyRewriteInvariant {
+                        reason: format!(
+                            "DELETE rewrite for table {} returned no row description",
+                            plan.table()
+                        ),
+                    },
+                ))
+            })?;
+            let data_row = delete.data_rows.pop().ok_or_else(|| {
+                Error::Router(router::Error::Parser(
+                    parser::Error::ShardKeyRewriteInvariant {
+                        reason: format!(
+                            "DELETE rewrite for table {} returned no row data",
+                            plan.table()
+                        ),
+                    },
+                ))
+            })?;
 
             let parameters = context.client_request.parameters()?;
             let assignments = apply_assignments(&row_description, &data_row, &plan, parameters)?;
@@ -110,7 +137,13 @@ impl QueryEngine {
             RewriteOutcome::Noop => {
                 let _ = source.execute("ROLLBACK").await;
                 let _ = target.execute("ROLLBACK").await;
-                self.send_update_complete(context, 0).await
+                self.send_update_complete(context, 0, false).await
+            }
+            RewriteOutcome::MultipleRows => {
+                let _ = source.execute("ROLLBACK").await;
+                let _ = target.execute("ROLLBACK").await;
+                self.send_shard_key_multiple_rows_error(context, &plan)
+                    .await
             }
             RewriteOutcome::Applied { deleted_rows } => {
                 if use_two_pc {
@@ -151,7 +184,8 @@ impl QueryEngine {
                     }
                 }
 
-                self.send_update_complete(context, deleted_rows).await
+                self.send_update_complete(context, deleted_rows, use_two_pc)
+                    .await
             }
         }
     }
@@ -160,6 +194,7 @@ impl QueryEngine {
         &mut self,
         context: &mut QueryEngineContext<'_>,
         rows: usize,
+        two_pc: bool,
     ) -> Result<(), Error> {
         let command = if rows == 1 {
             CommandComplete::from_str("UPDATE 1")
@@ -175,13 +210,76 @@ impl QueryEngine {
             ])
             .await?;
         self.stats.sent(bytes_sent);
+        self.stats.query();
+        self.stats.idle(context.in_transaction());
+        if !context.in_transaction() {
+            self.stats.transaction(two_pc);
+        }
+        Ok(())
+    }
+
+    async fn send_shard_key_multiple_rows_error(
+        &mut self,
+        context: &mut QueryEngineContext<'_>,
+        plan: &ShardKeyRewritePlan,
+    ) -> Result<(), Error> {
+        let columns = plan
+            .assignments()
+            .iter()
+            .map(|assignment| format!("\"{}\"", escape_identifier(assignment.column())))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let columns = if columns.is_empty() {
+            "<unknown>".to_string()
+        } else {
+            columns
+        };
+
+        let mut error = ErrorResponse::default();
+        error.code = "0A000".into();
+        error.message = format!(
+            "updating multiple rows is not supported when updating the sharding key on table {} (columns: {})",
+            plan.table(),
+            columns
+        );
+
+        let bytes_sent = context
+            .stream
+            .error(error, context.in_transaction())
+            .await?;
+        self.stats.sent(bytes_sent);
+        self.stats.error();
+        self.stats.idle(context.in_transaction());
+        Ok(())
+    }
+
+    async fn send_shard_key_transaction_error(
+        &mut self,
+        context: &mut QueryEngineContext<'_>,
+        plan: &ShardKeyRewritePlan,
+    ) -> Result<(), Error> {
+        let mut error = ErrorResponse::default();
+        error.code = "25001".into();
+        error.message = format!(
+            "shard key rewrites must run outside explicit transactions (table {})",
+            plan.table()
+        );
+
+        let bytes_sent = context
+            .stream
+            .error(error, context.in_transaction())
+            .await?;
+        self.stats.sent(bytes_sent);
+        self.stats.error();
+        self.stats.idle(context.in_transaction());
         Ok(())
     }
 }
 
 struct SqlResult {
     row_description: Option<RowDescription>,
-    data_row: Option<DataRow>,
+    data_rows: Vec<DataRow>,
     command_complete: CommandComplete,
 }
 
@@ -192,7 +290,7 @@ async fn execute_sql(server: &mut Guard, sql: &str) -> Result<SqlResult, Error> 
 
 fn parse_messages(messages: Vec<Message>) -> Result<SqlResult, Error> {
     let mut row_description = None;
-    let mut data_row = None;
+    let mut data_rows = Vec::new();
     let mut command_complete = None;
 
     for message in messages {
@@ -203,7 +301,7 @@ fn parse_messages(messages: Vec<Message>) -> Result<SqlResult, Error> {
             }
             'D' => {
                 let row = DataRow::from_bytes(message.to_bytes()?)?;
-                data_row = Some(row);
+                data_rows.push(row);
             }
             'C' => {
                 let cc = CommandComplete::from_bytes(message.to_bytes()?)?;
@@ -213,12 +311,17 @@ fn parse_messages(messages: Vec<Message>) -> Result<SqlResult, Error> {
         }
     }
 
-    let command_complete = command_complete
-        .ok_or_else(|| Error::Router(router::Error::Parser(parser::Error::EmptyQuery)))?;
+    let command_complete = command_complete.ok_or_else(|| {
+        Error::Router(router::Error::Parser(
+            parser::Error::ShardKeyRewriteInvariant {
+                reason: "expected CommandComplete message for shard key rewrite".into(),
+            },
+        ))
+    })?;
 
     Ok(SqlResult {
         row_description,
-        data_row,
+        data_rows,
         command_complete,
     })
 }
@@ -241,7 +344,12 @@ fn build_delete_sql(plan: &ShardKeyRewritePlan) -> Result<String, Error> {
                     sql.push_str(&update_sql[index..]);
                 } else {
                     return Err(Error::Router(router::Error::Parser(
-                        parser::Error::EmptyQuery,
+                        parser::Error::ShardKeyRewriteInvariant {
+                            reason: format!(
+                                "UPDATE on table {} attempted shard-key rewrite without WHERE clause",
+                                plan.table()
+                            ),
+                        },
                     )));
                 }
             }
@@ -526,5 +634,49 @@ mod tests {
 
         databases::shutdown();
         config::load_test();
+    }
+
+    #[test]
+    fn build_delete_sql_requires_where_clause() {
+        let parsed = pgdog_plugin::pg_query::parse("UPDATE sharded SET id = 5")
+            .expect("parse update without where");
+        let stmt = parsed
+            .protobuf
+            .stmts
+            .first()
+            .and_then(|node| node.stmt.as_ref())
+            .and_then(|node| node.node.as_ref())
+            .expect("statement node");
+
+        let update_stmt = match stmt {
+            NodeEnum::UpdateStmt(update) => (*update.clone()),
+            _ => panic!("expected update statement"),
+        };
+
+        let plan = ShardKeyRewritePlan::new(
+            OwnedTable {
+                name: "sharded".into(),
+                schema: None,
+                alias: None,
+            },
+            Route::write(Shard::Direct(0)),
+            Some(1),
+            update_stmt,
+            vec![Assignment::new("id".into(), AssignmentValue::Integer(5))],
+        );
+
+        let err = build_delete_sql(&plan).expect_err("expected invariant error");
+        match err {
+            Error::Router(router::Error::Parser(parser::Error::ShardKeyRewriteInvariant {
+                reason,
+            })) => {
+                assert!(
+                    reason.contains("without WHERE clause"),
+                    "unexpected reason: {}",
+                    reason
+                );
+            }
+            other => panic!("unexpected error variant: {other:?}"),
+        }
     }
 }

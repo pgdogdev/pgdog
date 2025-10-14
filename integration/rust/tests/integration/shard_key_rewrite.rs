@@ -1,5 +1,5 @@
 use rust::setup::{admin_sqlx, connections_sqlx};
-use sqlx::{Executor, Pool, Postgres};
+use sqlx::{Acquire, Executor, Pool, Postgres};
 
 const TEST_TABLE: &str = "sharded_list";
 
@@ -64,6 +64,109 @@ async fn shard_key_update_rewrite_moves_row_between_shards() {
         count_on_shard(&pool, 1, 11).await,
         1,
         "row inserted on shard 1"
+    );
+
+    cleanup_table(&pool).await;
+}
+
+#[tokio::test]
+async fn shard_key_update_rewrite_rejects_multiple_rows() {
+    let admin = admin_sqlx().await;
+    let _guard = RewriteConfigGuard::enable(admin.clone()).await;
+
+    let mut pools = connections_sqlx().await;
+    let pool = pools.swap_remove(1);
+
+    prepare_table(&pool).await;
+
+    let insert_first = format!("INSERT INTO {TEST_TABLE} (id, value) VALUES (1, 'old')");
+    pool.execute(insert_first.as_str())
+        .await
+        .expect("insert first row");
+
+    let insert_second = format!("INSERT INTO {TEST_TABLE} (id, value) VALUES (2, 'older')");
+    pool.execute(insert_second.as_str())
+        .await
+        .expect("insert second row");
+
+    let update = format!("UPDATE {TEST_TABLE} SET id = 11 WHERE id IN (1, 2)");
+    let err = pool
+        .execute(update.as_str())
+        .await
+        .expect_err("expected multi-row rewrite to fail");
+    let db_err = err
+        .as_database_error()
+        .expect("expected database error from proxy");
+    assert!(
+        db_err
+            .message()
+            .contains("updating multiple rows is not supported when updating the sharding key"),
+        "unexpected error message: {}",
+        db_err.message()
+    );
+
+    assert_eq!(
+        count_on_shard(&pool, 0, 1).await,
+        1,
+        "row 1 still on shard 0"
+    );
+    assert_eq!(
+        count_on_shard(&pool, 0, 2).await,
+        1,
+        "row 2 still on shard 0"
+    );
+    assert_eq!(
+        count_on_shard(&pool, 1, 11).await,
+        0,
+        "no row inserted on shard 1"
+    );
+
+    cleanup_table(&pool).await;
+}
+
+#[tokio::test]
+async fn shard_key_update_rewrite_rejects_transactions() {
+    let admin = admin_sqlx().await;
+    let _guard = RewriteConfigGuard::enable(admin.clone()).await;
+
+    let mut pools = connections_sqlx().await;
+    let pool = pools.swap_remove(1);
+
+    prepare_table(&pool).await;
+
+    let insert = format!("INSERT INTO {TEST_TABLE} (id, value) VALUES (1, 'old')");
+    pool.execute(insert.as_str())
+        .await
+        .expect("insert initial row");
+
+    let mut conn = pool.acquire().await.expect("acquire connection");
+    conn.execute("BEGIN").await.expect("begin transaction");
+
+    let update = format!("UPDATE {TEST_TABLE} SET id = 11 WHERE id = 1");
+    let err = conn
+        .execute(update.as_str())
+        .await
+        .expect_err("rewrite inside transaction must fail");
+    let db_err = err
+        .as_database_error()
+        .expect("expected database error from proxy");
+    assert!(
+        db_err
+            .message()
+            .contains("shard key rewrites must run outside explicit transactions"),
+        "unexpected error message: {}",
+        db_err.message()
+    );
+
+    conn.execute("ROLLBACK").await.ok();
+
+    drop(conn);
+
+    assert_eq!(count_on_shard(&pool, 0, 1).await, 1, "row still on shard 0");
+    assert_eq!(
+        count_on_shard(&pool, 1, 11).await,
+        0,
+        "no row inserted on shard 1"
     );
 
     cleanup_table(&pool).await;

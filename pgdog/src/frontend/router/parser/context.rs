@@ -58,7 +58,9 @@ impl<'a> QueryParserContext<'a> {
     /// Create query parser context from router context.
     pub fn new(router_context: RouterContext<'a>) -> Self {
         let config = config();
-        if config.config.general.rewrite_shard_key_updates == ShardKeyUpdateMode::Rewrite {
+        if config.config.general.rewrite_shard_key_updates == ShardKeyUpdateMode::Rewrite
+            && !config.config.general.two_phase_commit
+        {
             SHARD_KEY_REWRITE_WARNING.call_once(|| {
                 warn!(
                     "rewrite_shard_key_updates=rewrite will apply non-atomic shard-key rewrites; enabling two_phase_commit is strongly recommended"

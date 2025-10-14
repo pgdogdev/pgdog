@@ -82,4 +82,7 @@ pub enum Error {
         "rewrite_shard_key_updates=\"rewrite\" is not yet supported for table \"{table}\" (columns: {columns})"
     )]
     ShardKeyRewriteNotSupported { table: String, columns: String },
+
+    #[error("internal shard key rewrite invariant violated: {reason}")]
+    ShardKeyRewriteInvariant { reason: String },
 }
