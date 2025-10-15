@@ -96,7 +96,7 @@ impl PreparedStatements {
                     match message {
                         Some(message) => {
                             self.state.add_ignore('1', bind.statement());
-                            self.prepared(bind.statement());
+                            self.parses.push_back(bind.statement().to_string());
                             self.state.add('2');
                             return Ok(HandleResult::Prepend(message));
                         }
@@ -116,7 +116,7 @@ impl PreparedStatements {
                     match message {
                         Some(message) => {
                             self.state.add_ignore('1', describe.statement());
-                            self.prepared(describe.statement());
+                            self.parses.push_back(describe.statement().to_string());
                             self.state.add(ExecutionCode::DescriptionOrNothing); // t
                             self.state.add(ExecutionCode::DescriptionOrNothing); // T
                             return Ok(HandleResult::Prepend(message));
@@ -156,7 +156,6 @@ impl PreparedStatements {
                         self.state.add_simulated(ParseComplete.message()?);
                         return Ok(HandleResult::Drop);
                     } else {
-                        self.prepared(parse.name());
                         self.state.add('1');
                         self.parses.push_back(parse.name().to_string());
                     }
@@ -225,7 +224,9 @@ impl PreparedStatements {
             }
 
             '1' => {
-                self.parses.pop_front();
+                if let Some(name) = self.parses.pop_front() {
+                    self.prepared(&name);
+                }
             }
 
             'G' => {
@@ -266,7 +267,7 @@ impl PreparedStatements {
     }
 
     fn check_prepared(&mut self, name: &str) -> Result<Option<ProtocolMessage>, Error> {
-        if !self.contains(name) {
+        if !self.contains(name) && !self.parses.iter().any(|s| s == name) {
             let parse = self.parse(name);
             if let Some(parse) = parse {
                 Ok(Some(ProtocolMessage::Parse(parse)))
