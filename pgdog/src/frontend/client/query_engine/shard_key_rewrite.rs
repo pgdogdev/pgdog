@@ -354,6 +354,15 @@ fn build_delete_sql(plan: &ShardKeyRewritePlan) -> Result<String, Error> {
                 }
             }
         }
+    } else {
+        return Err(Error::Router(router::Error::Parser(
+            parser::Error::ShardKeyRewriteInvariant {
+                reason: format!(
+                    "UPDATE on table {} attempted shard-key rewrite without WHERE clause",
+                    plan.table()
+                ),
+            },
+        )));
     }
     sql.push_str(" RETURNING *");
     Ok(sql)
