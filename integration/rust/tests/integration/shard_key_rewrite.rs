@@ -1,5 +1,5 @@
 use rust::setup::{admin_sqlx, connections_sqlx};
-use sqlx::{Acquire, Executor, Pool, Postgres};
+use sqlx::{Executor, Pool, Postgres};
 
 const TEST_TABLE: &str = "sharded_list";
 

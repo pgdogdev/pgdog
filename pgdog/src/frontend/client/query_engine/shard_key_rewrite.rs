@@ -7,7 +7,7 @@ use crate::{
         self as router,
         parser::{
             self as parser,
-            rewrite::{Assignment, AssignmentValue, ShardKeyRewritePlan},
+            rewrite::{AssignmentValue, ShardKeyRewritePlan},
         },
     },
     net::messages::Protocol,
@@ -457,6 +457,10 @@ fn format_literal(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::frontend::router::{
+        parser::{rewrite::Assignment, route::Shard, table::OwnedTable},
+        Route,
+    };
     use crate::{
         backend::{
             databases::{self, databases, lock, User as DbUser},
@@ -649,7 +653,7 @@ mod tests {
             .expect("statement node");
 
         let update_stmt = match stmt {
-            NodeEnum::UpdateStmt(update) => (*update.clone()),
+            NodeEnum::UpdateStmt(update) => (**update).clone(),
             _ => panic!("expected update statement"),
         };
 
