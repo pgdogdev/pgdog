@@ -1,6 +1,8 @@
+use std::time::Duration;
+
 use rust::setup::*;
 use sqlx::{Executor, Row, postgres::PgPoolOptions, types::BigDecimal};
-use tokio::spawn;
+use tokio::{spawn, time::sleep};
 
 #[tokio::test]
 async fn test_prepared_cache() {
@@ -250,6 +252,9 @@ async fn test_prepard_cache_eviction() {
     for conn in conns {
         conn.close().await;
     }
+
+    // Let maintenance clean up.
+    sleep(Duration::from_secs(2)).await;
 
     // Evicted only when clients disconnect or manually close the statement.
     let prepared = admin.fetch_all("SHOW PREPARED").await.unwrap();
