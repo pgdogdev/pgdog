@@ -1,12 +1,14 @@
 //! Prepared statements cache.
 
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use once_cell::sync::Lazy;
 use parking_lot::RwLock;
+use tokio::{spawn, time::sleep};
+use tracing::debug;
 
 use crate::{
-    config::PreparedStatements as PreparedStatementsLevel,
+    config::{config, PreparedStatements as PreparedStatementsLevel},
     frontend::router::parser::RewritePlan,
     net::{Parse, ProtocolMessage},
     stats::memory::MemoryUsage,
@@ -28,7 +30,6 @@ pub struct PreparedStatements {
     pub(super) global: Arc<RwLock<GlobalCache>>,
     pub(super) local: HashMap<String, String>,
     pub(super) level: PreparedStatementsLevel,
-    pub(super) capacity: usize,
     pub(super) memory_used: usize,
 }
 
@@ -37,7 +38,6 @@ impl MemoryUsage for PreparedStatements {
     fn memory_usage(&self) -> usize {
         self.local.memory_usage()
             + std::mem::size_of::<PreparedStatementsLevel>()
-            + self.capacity.memory_usage()
             + std::mem::size_of::<Arc<RwLock<GlobalCache>>>()
     }
 }
@@ -48,7 +48,6 @@ impl Default for PreparedStatements {
             global: Arc::new(RwLock::new(GlobalCache::default())),
             local: HashMap::default(),
             level: PreparedStatementsLevel::Extended,
-            capacity: usize::MAX,
             memory_used: 0,
         }
     }
@@ -132,7 +131,7 @@ impl PreparedStatements {
     pub fn close(&mut self, name: &str) {
         if let Some(global_name) = self.local.remove(name) {
             {
-                self.global.write().close(&global_name, self.capacity);
+                self.global.write().close(&global_name);
             }
             self.memory_used = self.memory_usage();
         }
@@ -144,7 +143,7 @@ impl PreparedStatements {
             let mut global = self.global.write();
 
             for global_name in self.local.values() {
-                global.close(global_name, self.capacity);
+                global.close(global_name);
             }
         }
 
@@ -158,6 +157,25 @@ impl PreparedStatements {
     }
 }
 
+/// Run prepared statements maintenance task
+/// every second.
+pub fn start_maintenance() {
+    spawn(async move {
+        debug!("prepared statements cache maintenance started");
+        loop {
+            sleep(Duration::from_secs(1)).await;
+            run_maintenance();
+        }
+    });
+}
+
+/// Check prepared statements cache for overflows
+/// and remove any unused statements exceeding the limit.
+pub fn run_maintenance() {
+    let capacity = config().config.general.prepared_statements_limit;
+    PreparedStatements::global().write().close_unused(capacity);
+}
+
 #[cfg(test)]
 mod test {
     use crate::net::messages::Bind;
@@ -167,7 +185,6 @@ mod test {
     #[test]
     fn test_maybe_rewrite() {
         let mut statements = PreparedStatements::default();
-        statements.capacity = 0;
 
         let mut messages = vec![
             ProtocolMessage::from(Parse::named("__sqlx_1", "SELECT 1")),
@@ -184,7 +201,6 @@ mod test {
         statements.close_all();
 
         assert!(statements.local.is_empty());
-        assert!(statements.global.read().names().is_empty());
 
         let mut messages = vec![
             ProtocolMessage::from(Parse::named("__sqlx_1", "SELECT 1")),
@@ -201,7 +217,6 @@ mod test {
         statements.close("__sqlx_1");
 
         assert!(statements.local.is_empty());
-        assert!(statements.global.read().names().is_empty());
     }
 
     #[test]
