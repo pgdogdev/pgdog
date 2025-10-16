@@ -2,12 +2,13 @@ use std::collections::HashMap;
 
 use super::*;
 use crate::{
-    backend::pool::{Guard, Request},
+    backend::pool::{connection::binding::Binding, Guard, Request},
     frontend::router::{
         self as router,
         parser::{
             self as parser,
             rewrite::{AssignmentValue, ShardKeyRewritePlan},
+            Shard,
         },
     },
     net::messages::Protocol,
@@ -21,6 +22,7 @@ use crate::{
     util::escape_identifier,
 };
 use pgdog_plugin::pg_query::NodeEnum;
+use tracing::warn;
 
 impl QueryEngine {
     pub(super) async fn shard_key_rewrite(
@@ -127,21 +129,21 @@ impl QueryEngine {
         {
             Ok(outcome) => outcome,
             Err(err) => {
-                let _ = source.execute("ROLLBACK").await;
-                let _ = target.execute("ROLLBACK").await;
+                rollback_guard(&mut source, source_shard, &plan, "delete").await;
+                rollback_guard(&mut target, target_shard, &plan, "insert").await;
                 return Err(err);
             }
         };
 
         match outcome {
             RewriteOutcome::Noop => {
-                let _ = source.execute("ROLLBACK").await;
-                let _ = target.execute("ROLLBACK").await;
+                rollback_guard(&mut source, source_shard, &plan, "noop").await;
+                rollback_guard(&mut target, target_shard, &plan, "noop").await;
                 self.send_update_complete(context, 0, false).await
             }
             RewriteOutcome::MultipleRows => {
-                let _ = source.execute("ROLLBACK").await;
-                let _ = target.execute("ROLLBACK").await;
+                rollback_guard(&mut source, source_shard, &plan, "multiple_rows").await;
+                rollback_guard(&mut target, target_shard, &plan, "multiple_rows").await;
                 self.send_shard_key_multiple_rows_error(context, &plan)
                     .await
             }
@@ -151,41 +153,33 @@ impl QueryEngine {
                     let transaction_name = self.two_pc.transaction().to_string();
                     let guard_phase_one = self.two_pc.phase_one(&identifier).await?;
 
-                    let prepare_source = format!(
-                        "PREPARE TRANSACTION '{}_{}'",
-                        transaction_name, source_shard
-                    );
-                    let prepare_target = format!(
-                        "PREPARE TRANSACTION '{}_{}'",
-                        transaction_name, target_shard
-                    );
-                    execute_sql(&mut source, &prepare_source).await?;
-                    execute_sql(&mut target, &prepare_target).await?;
+                    let mut servers = vec![source, target];
+                    Binding::two_pc_on_guards(&mut servers, &transaction_name, TwoPcPhase::Phase1)
+                        .await?;
 
                     let guard_phase_two = self.two_pc.phase_two(&identifier).await?;
-                    let commit_source =
-                        format!("COMMIT PREPARED '{}_{}'", transaction_name, source_shard);
-                    let commit_target =
-                        format!("COMMIT PREPARED '{}_{}'", transaction_name, target_shard);
-                    execute_sql(&mut source, &commit_source).await?;
-                    execute_sql(&mut target, &commit_target).await?;
+                    Binding::two_pc_on_guards(&mut servers, &transaction_name, TwoPcPhase::Phase2)
+                        .await?;
 
                     self.two_pc.done().await?;
 
                     drop(guard_phase_two);
                     drop(guard_phase_one);
+
+                    return self.send_update_complete(context, deleted_rows, true).await;
                 } else {
                     if let Err(err) = target.execute("COMMIT").await {
-                        let _ = source.execute("ROLLBACK").await;
+                        rollback_guard(&mut source, source_shard, &plan, "commit_target").await;
                         return Err(err.into());
                     }
                     if let Err(err) = source.execute("COMMIT").await {
                         return Err(err.into());
                     }
-                }
 
-                self.send_update_complete(context, deleted_rows, use_two_pc)
-                    .await
+                    return self
+                        .send_update_complete(context, deleted_rows, false)
+                        .await;
+                }
             }
         }
     }
@@ -274,6 +268,18 @@ impl QueryEngine {
         self.stats.error();
         self.stats.idle(context.in_transaction());
         Ok(())
+    }
+}
+
+async fn rollback_guard(guard: &mut Guard, shard: usize, plan: &ShardKeyRewritePlan, stage: &str) {
+    if let Err(err) = guard.execute("ROLLBACK").await {
+        warn!(
+            table = %plan.table(),
+            shard,
+            stage,
+            error = %err,
+            "failed to rollback shard-key rewrite transaction"
+        );
     }
 }
 
@@ -661,10 +667,12 @@ mod tests {
             .and_then(|node| node.node.as_ref())
             .expect("statement node");
 
-        let update_stmt = match stmt {
+        let mut update_stmt = match stmt {
             NodeEnum::UpdateStmt(update) => (**update).clone(),
             _ => panic!("expected update statement"),
         };
+
+        update_stmt.where_clause = None;
 
         let plan = ShardKeyRewritePlan::new(
             OwnedTable {

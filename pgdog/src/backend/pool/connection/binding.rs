@@ -273,54 +273,52 @@ impl Binding {
         Ok(result)
     }
 
+    pub(crate) async fn two_pc_on_guards(
+        servers: &mut [Guard],
+        name: &str,
+        phase: TwoPcPhase,
+    ) -> Result<(), Error> {
+        let skip_missing = matches!(phase, TwoPcPhase::Phase2 | TwoPcPhase::Rollback);
+
+        let mut futures = Vec::new();
+        for (shard, server) in servers.iter_mut().enumerate() {
+            let shard_name = format!("{}_{}", name, shard);
+
+            let query = match phase {
+                TwoPcPhase::Phase1 => format!("PREPARE TRANSACTION '{}'", shard_name),
+                TwoPcPhase::Phase2 => format!("COMMIT PREPARED '{}'", shard_name),
+                TwoPcPhase::Rollback => format!("ROLLBACK PREPARED '{}'", shard_name),
+            };
+
+            futures.push(server.execute(query));
+        }
+
+        let results = join_all(futures).await;
+
+        for (shard, result) in results.into_iter().enumerate() {
+            match result {
+                Err(Error::ExecutionError(err)) => {
+                    if !(skip_missing && err.code == "42704") {
+                        return Err(Error::ExecutionError(err));
+                    }
+                }
+                Err(err) => return Err(err),
+                Ok(_) => {
+                    if phase == TwoPcPhase::Phase2 {
+                        servers[shard].stats_mut().transaction_2pc();
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     /// Execute two-phase commit transaction control statements.
     pub async fn two_pc(&mut self, name: &str, phase: TwoPcPhase) -> Result<(), Error> {
         match self {
             Binding::MultiShard(ref mut servers, _) => {
-                let skip_missing = match phase {
-                    TwoPcPhase::Phase1 => false,
-                    TwoPcPhase::Phase2 | TwoPcPhase::Rollback => true,
-                };
-
-                // Build futures for all servers
-                let mut futures = Vec::new();
-                for (shard, server) in servers.iter_mut().enumerate() {
-                    // Each shard has its own transaction name.
-                    // This is to make this work on sharded databases that use the same
-                    // database underneath.
-                    let shard_name = format!("{}_{}", name, shard);
-
-                    let query = match phase {
-                        TwoPcPhase::Phase1 => format!("PREPARE TRANSACTION '{}'", shard_name),
-                        TwoPcPhase::Phase2 => format!("COMMIT PREPARED '{}'", shard_name),
-                        TwoPcPhase::Rollback => format!("ROLLBACK PREPARED '{}'", shard_name),
-                    };
-
-                    futures.push(server.execute(query));
-                }
-
-                // Execute all operations in parallel
-                let results = join_all(futures).await;
-
-                // Process results and handle errors
-                for (shard, result) in results.into_iter().enumerate() {
-                    match result {
-                        Err(Error::ExecutionError(err)) => {
-                            // Undefined object, transaction doesn't exist.
-                            if !(skip_missing && err.code == "42704") {
-                                return Err(Error::ExecutionError(err));
-                            }
-                        }
-                        Err(err) => return Err(err),
-                        Ok(_) => {
-                            if phase == TwoPcPhase::Phase2 {
-                                servers[shard].stats_mut().transaction_2pc();
-                            }
-                        }
-                    }
-                }
-
-                Ok(())
+                Self::two_pc_on_guards(servers, name, phase).await
             }
 
             _ => Err(Error::TwoPcMultiShardOnly),
