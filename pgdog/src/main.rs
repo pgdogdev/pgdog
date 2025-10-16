@@ -6,6 +6,7 @@ use pgdog::backend::pool::dns_cache::DnsCache;
 use pgdog::cli::{self, Commands};
 use pgdog::config::{self, config};
 use pgdog::frontend::listener::Listener;
+use pgdog::frontend::prepared_statements;
 use pgdog::plugin;
 use pgdog::stats;
 use pgdog::util::pgdog_version;
@@ -128,6 +129,7 @@ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Erro
     }
 
     let stats_logger = stats::StatsLogger::new();
+    prepared_statements::start_maintenance();
 
     if general.dry_run {
         stats_logger.spawn();

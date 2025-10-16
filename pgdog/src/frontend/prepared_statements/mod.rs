@@ -162,18 +162,19 @@ impl PreparedStatements {
 
 /// Run prepared statements maintenance task
 /// every second.
-pub fn maintenance() {
+pub fn start_maintenance() {
     spawn(async move {
-        sleep(Duration::from_secs(1)).await;
-        run_maintenance();
+        debug!("prepared statements cache maintenance started");
+        loop {
+            sleep(Duration::from_secs(1)).await;
+            run_maintenance();
+        }
     });
 }
 
 /// Check prepared statements cache for overflows
 /// and remove any unused statements exceeding the limit.
 pub fn run_maintenance() {
-    debug!("running prepared statements cache maintenance");
-
     let capacity = config().config.general.prepared_statements_limit;
     PreparedStatements::global().write().close_unused(capacity);
 }
