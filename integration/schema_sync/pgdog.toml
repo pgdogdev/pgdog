@@ -1,3 +1,6 @@
+[general]
+rewrite_shard_key_updates = "ignore"
+
 [[databases]]
 name = "source"
 host = "127.0.0.1"

@@ -25,7 +25,7 @@ pub use overrides::Overrides;
 pub use core::{Config, ConfigAndUsers};
 
 // Re-export from general module
-pub use general::General;
+pub use general::{General, ShardKeyUpdateMode};
 
 // Re-export from auth module
 pub use auth::{AuthType, PassthoughAuth};

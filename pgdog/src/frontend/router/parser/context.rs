@@ -1,6 +1,6 @@
 //! Shortcut the parser given the cluster config.
 
-use std::os::raw::c_void;
+use std::{os::raw::c_void, sync::Once};
 
 use pgdog_plugin::pg_query::protobuf::ParseResult;
 use pgdog_plugin::{PdParameters, PdRouterContext, PdStatement};
@@ -9,9 +9,11 @@ use crate::frontend::client::TransactionType;
 use crate::net::Bind;
 use crate::{
     backend::ShardingSchema,
-    config::{config, MultiTenant, ReadWriteStrategy},
+    config::{config, MultiTenant, ReadWriteStrategy, ShardKeyUpdateMode},
     frontend::{BufferedQuery, PreparedStatements, RouterContext},
 };
+
+use tracing::warn;
 
 use super::Error;
 
@@ -46,12 +48,25 @@ pub struct QueryParserContext<'a> {
     pub(super) dry_run: bool,
     /// Expanded EXPLAIN annotations enabled?
     pub(super) expanded_explain: bool,
+    /// How to handle sharding-key updates.
+    pub(super) shard_key_update_mode: ShardKeyUpdateMode,
 }
+
+static SHARD_KEY_REWRITE_WARNING: Once = Once::new();
 
 impl<'a> QueryParserContext<'a> {
     /// Create query parser context from router context.
     pub fn new(router_context: RouterContext<'a>) -> Self {
         let config = config();
+        if config.config.general.rewrite_shard_key_updates == ShardKeyUpdateMode::Rewrite
+            && !config.config.general.two_phase_commit
+        {
+            SHARD_KEY_REWRITE_WARNING.call_once(|| {
+                warn!(
+                    "rewrite_shard_key_updates=rewrite will apply non-atomic shard-key rewrites; enabling two_phase_commit is strongly recommended"
+                );
+            });
+        }
         Self {
             read_only: router_context.cluster.read_only(),
             write_only: router_context.cluster.write_only(),
@@ -64,6 +79,7 @@ impl<'a> QueryParserContext<'a> {
             multi_tenant: router_context.cluster.multi_tenant(),
             dry_run: config.config.general.dry_run,
             expanded_explain: config.config.general.expanded_explain,
+            shard_key_update_mode: config.config.general.rewrite_shard_key_updates,
             router_context,
         }
     }
@@ -142,5 +158,9 @@ impl<'a> QueryParserContext<'a> {
 
     pub(super) fn expanded_explain(&self) -> bool {
         self.expanded_explain
+    }
+
+    pub(super) fn shard_key_update_mode(&self) -> ShardKeyUpdateMode {
+        self.shard_key_update_mode
     }
 }

@@ -1,8 +1,12 @@
 use pg_query::{NodeEnum, ParseResult};
 
 use super::{Command, Error};
+
+mod shard_key;
+
 use crate::frontend::PreparedStatements;
 use crate::net::Parse;
+pub use shard_key::{Assignment, AssignmentValue, ShardKeyRewritePlan};
 
 #[derive(Debug, Clone)]
 pub struct Rewrite<'a> {

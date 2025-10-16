@@ -1,5 +1,6 @@
 [general]
 dry_run = true
+rewrite_shard_key_updates = "ignore"
 
 [[databases]]
 name = "pgdog"

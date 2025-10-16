@@ -6,6 +6,7 @@ query_timeout = 1_000
 idle_healthcheck_interval = 1_000
 client_login_timeout = 1_000
 load_balancing_algorithm = "round_robin"
+rewrite_shard_key_updates = "ignore"
 
 [[databases]]
 name = "failover"

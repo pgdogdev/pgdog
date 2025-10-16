@@ -1,6 +1,6 @@
 use crate::{
     backend::databases,
-    config::{self, config},
+    config::{self, config, general::ShardKeyUpdateMode},
     frontend::PreparedStatements,
 };
 
@@ -105,6 +105,13 @@ impl Command for Set {
 
             "two_phase_commit_auto" => {
                 config.config.general.two_phase_commit_auto = Self::from_json(&self.value)?;
+            }
+
+            "rewrite_shard_key_updates" => {
+                config.config.general.rewrite_shard_key_updates = self
+                    .value
+                    .parse::<ShardKeyUpdateMode>()
+                    .map_err(|_| Error::Syntax)?;
             }
 
             "healthcheck_interval" => {
