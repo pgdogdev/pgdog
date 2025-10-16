@@ -190,6 +190,7 @@ impl QueryEngine {
         rows: usize,
         two_pc: bool,
     ) -> Result<(), Error> {
+        // Note the special case for 1 is due to not supporting multirow inserts right now
         let command = if rows == 1 {
             CommandComplete::from_str("UPDATE 1")
         } else {
