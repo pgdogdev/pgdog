@@ -30,7 +30,6 @@ pub struct PreparedStatements {
     pub(super) global: Arc<RwLock<GlobalCache>>,
     pub(super) local: HashMap<String, String>,
     pub(super) level: PreparedStatementsLevel,
-    pub(super) capacity: usize,
     pub(super) memory_used: usize,
 }
 
@@ -39,7 +38,6 @@ impl MemoryUsage for PreparedStatements {
     fn memory_usage(&self) -> usize {
         self.local.memory_usage()
             + std::mem::size_of::<PreparedStatementsLevel>()
-            + self.capacity.memory_usage()
             + std::mem::size_of::<Arc<RwLock<GlobalCache>>>()
     }
 }
@@ -50,7 +48,6 @@ impl Default for PreparedStatements {
             global: Arc::new(RwLock::new(GlobalCache::default())),
             local: HashMap::default(),
             level: PreparedStatementsLevel::Extended,
-            capacity: usize::MAX,
             memory_used: 0,
         }
     }
@@ -188,7 +185,6 @@ mod test {
     #[test]
     fn test_maybe_rewrite() {
         let mut statements = PreparedStatements::default();
-        statements.capacity = 0;
 
         let mut messages = vec![
             ProtocolMessage::from(Parse::named("__sqlx_1", "SELECT 1")),
