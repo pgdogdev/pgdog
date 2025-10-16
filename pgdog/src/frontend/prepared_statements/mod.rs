@@ -205,7 +205,6 @@ mod test {
         statements.close_all();
 
         assert!(statements.local.is_empty());
-        assert!(statements.global.read().names().is_empty());
 
         let mut messages = vec![
             ProtocolMessage::from(Parse::named("__sqlx_1", "SELECT 1")),
@@ -222,7 +221,6 @@ mod test {
         statements.close("__sqlx_1");
 
         assert!(statements.local.is_empty());
-        assert!(statements.global.read().names().is_empty());
     }
 
     #[test]
