@@ -16,6 +16,7 @@ pooler_mode = "transaction"
 load_balancing_strategy = "round_robin"
 auth_type = "trust"
 read_write_split = "exclude_primary"
+rewrite_shard_key_updates = "ignore"
 
 # [replica_lag]
 # check_interval = 2000

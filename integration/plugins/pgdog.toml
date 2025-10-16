@@ -1,3 +1,6 @@
+[general]
+rewrite_shard_key_updates = "ignore"
+
 [[plugins]]
 name = "pgdog_example_plugin"
 
