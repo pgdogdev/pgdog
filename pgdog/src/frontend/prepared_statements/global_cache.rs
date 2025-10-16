@@ -292,24 +292,14 @@ impl GlobalCache {
     }
 
     /// Close prepared statement.
-    pub fn close(&mut self, name: &str, capacity: usize) -> bool {
+    pub fn close(&mut self, name: &str) {
         if let Some(statement) = self.names.get(name) {
             let key = statement.cache_key();
-            let mut used_remaining = None;
 
             if let Some(entry) = self.statements.get_mut(&key) {
                 entry.used = entry.used.saturating_sub(1);
-                used_remaining = Some(entry.used);
-                if entry.used == 0 && (statement.evict_on_close || self.len() > capacity) {
-                    self.remove(name);
-                    return true;
-                }
             }
-
-            return used_remaining.map(|u| u > 0).unwrap_or(false);
         }
-
-        false
     }
 
     /// Close all unused statements exceeding capacity.
@@ -390,18 +380,18 @@ mod test {
         assert_eq!(entry.used, 26);
 
         for _ in 0..25 {
-            cache.close("__pgdog_1", 0);
+            cache.close("__pgdog_1");
         }
 
         let entry = cache.statements.get(&stmt.cache_key()).unwrap();
         assert_eq!(entry.used, 1);
 
-        cache.close("__pgdog_1", 0);
-        assert!(cache.statements.is_empty());
-        assert!(cache.names.is_empty());
+        cache.close("__pgdog_1");
+        let entry = cache.statements.get(&stmt.cache_key()).unwrap();
+        assert_eq!(entry.used, 0);
 
         let name = cache.insert_anyway(&parse);
-        cache.close(&name, 0);
+        cache.close(&name);
 
         assert!(cache.names.is_empty());
         assert!(cache.statements.is_empty());
@@ -431,8 +421,8 @@ mod test {
         }
 
         for name in &names[0..5] {
-            assert!(!cache.close(name, 25)); // Won't close because
-                                             // capacity is enough to keep unused around.
+            cache.close(name); // Won't close because
+                               // capacity is enough to keep unused around.
         }
 
         assert_eq!(cache.close_unused(26), 0);

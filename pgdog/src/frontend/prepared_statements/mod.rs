@@ -1,12 +1,14 @@
 //! Prepared statements cache.
 
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use once_cell::sync::Lazy;
 use parking_lot::RwLock;
+use tokio::{spawn, time::sleep};
+use tracing::debug;
 
 use crate::{
-    config::PreparedStatements as PreparedStatementsLevel,
+    config::{config, PreparedStatements as PreparedStatementsLevel},
     frontend::router::parser::RewritePlan,
     net::{Parse, ProtocolMessage},
     stats::memory::MemoryUsage,
@@ -132,7 +134,7 @@ impl PreparedStatements {
     pub fn close(&mut self, name: &str) {
         if let Some(global_name) = self.local.remove(name) {
             {
-                self.global.write().close(&global_name, self.capacity);
+                self.global.write().close(&global_name);
             }
             self.memory_used = self.memory_usage();
         }
@@ -144,7 +146,7 @@ impl PreparedStatements {
             let mut global = self.global.write();
 
             for global_name in self.local.values() {
-                global.close(global_name, self.capacity);
+                global.close(global_name);
             }
         }
 
@@ -156,6 +158,24 @@ impl PreparedStatements {
     pub fn memory_used(&self) -> usize {
         self.memory_used
     }
+}
+
+/// Run prepared statements maintenance task
+/// every second.
+pub fn maintenance() {
+    spawn(async move {
+        sleep(Duration::from_secs(1)).await;
+        run_maintenance();
+    });
+}
+
+/// Check prepared statements cache for overflows
+/// and remove any unused statements exceeding the limit.
+pub fn run_maintenance() {
+    debug!("running prepared statements cache maintenance");
+
+    let capacity = config().config.general.prepared_statements_limit;
+    PreparedStatements::global().write().close_unused(capacity);
 }
 
 #[cfg(test)]
