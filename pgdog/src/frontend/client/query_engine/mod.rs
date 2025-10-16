@@ -23,6 +23,7 @@ pub mod notify_buffer;
 pub mod prepared_statements;
 pub mod pub_sub;
 pub mod query;
+pub mod rewrite;
 pub mod route_query;
 pub mod set;
 pub mod show_shards;
@@ -33,7 +34,7 @@ pub mod unknown_command;
 #[cfg(test)]
 mod testing;
 
-use self::query::ExplainResponseState;
+use self::{query::ExplainResponseState, rewrite::RewriteDriver};
 pub use context::QueryEngineContext;
 use notify_buffer::NotifyBuffer;
 pub use two_pc::phase::TwoPcPhase;
@@ -53,6 +54,7 @@ pub struct QueryEngine {
     two_pc: TwoPc,
     notify_buffer: NotifyBuffer,
     pending_explain: Option<ExplainResponseState>,
+    rewrite_driver: RewriteDriver,
     hooks: QueryEngineHooks,
 }
 
@@ -136,7 +138,7 @@ impl QueryEngine {
 
         self.pending_explain = None;
 
-        let command = self.router.command();
+        let command = self.router.command().clone();
         let mut route = if let Some(ref route) = self.set_route {
             route.clone()
         } else {
@@ -153,75 +155,72 @@ impl QueryEngine {
         context.client_request.route = Some(route.clone());
 
         match command {
-            Command::Shards(shards) => self.show_shards(context, *shards).await?,
+            Command::Shards(shards) => self.show_shards(context, shards).await?,
             Command::StartTransaction {
                 query,
                 transaction_type,
                 extended,
             } => {
-                self.start_transaction(context, query.clone(), *transaction_type, *extended)
+                self.start_transaction(context, query.clone(), transaction_type, extended)
                     .await?
             }
             Command::CommitTransaction { extended } => {
                 self.set_route = None;
 
-                if self.backend.connected() || *extended {
-                    let extended = *extended;
+                if self.backend.connected() || extended {
                     let transaction_route = self.transaction_route(&route)?;
                     context.client_request.route = Some(transaction_route.clone());
                     context.cross_shard_disabled = Some(false);
                     self.end_connected(context, &transaction_route, false, extended)
                         .await?;
                 } else {
-                    self.end_not_connected(context, false, *extended).await?
+                    self.end_not_connected(context, false, extended).await?
                 }
             }
             Command::RollbackTransaction { extended } => {
                 self.set_route = None;
 
-                if self.backend.connected() || *extended {
-                    let extended = *extended;
+                if self.backend.connected() || extended {
                     let transaction_route = self.transaction_route(&route)?;
                     context.client_request.route = Some(transaction_route.clone());
                     context.cross_shard_disabled = Some(false);
                     self.end_connected(context, &transaction_route, true, extended)
                         .await?;
                 } else {
-                    self.end_not_connected(context, true, *extended).await?
+                    self.end_not_connected(context, true, extended).await?
                 }
             }
             Command::Query(_) => self.execute(context, &route).await?,
-            Command::Listen { channel, shard } => {
-                self.listen(context, &channel.clone(), shard.clone())
-                    .await?
-            }
+            Command::Listen { channel, shard } => self.listen(context, &channel, shard).await?,
             Command::Notify {
                 channel,
                 payload,
                 shard,
-            } => {
-                self.notify(context, &channel.clone(), &payload.clone(), &shard.clone())
-                    .await?
-            }
-            Command::Unlisten(channel) => self.unlisten(context, &channel.clone()).await?,
+            } => self.notify(context, &channel, &payload, &shard).await?,
+            Command::Unlisten(channel) => self.unlisten(context, &channel).await?,
             Command::Set { name, value } => {
                 if self.backend.connected() {
                     self.execute(context, &route).await?
                 } else {
-                    self.set(context, name.clone(), value.clone()).await?
+                    self.set(context, name, value).await?
                 }
             }
             Command::SetRoute(route) => {
-                self.set_route(context, route.clone()).await?;
+                self.set_route(context, route).await?;
             }
             Command::Copy(_) => self.execute(context, &route).await?,
             Command::Rewrite(query) => {
-                context.client_request.rewrite(query)?;
+                context.client_request.rewrite(&query)?;
                 self.execute(context, &route).await?;
             }
+            Command::PlannedRewrite(plan) => {
+                if let Some(handler) = self.rewrite_driver.handler(plan.kind()) {
+                    handler(self, context, &plan)?;
+                }
+            }
             Command::Deallocate => self.deallocate(context).await?,
-            Command::Discard { extended } => self.discard(context, *extended).await?,
-            command => self.unknown_command(context, command.clone()).await?,
+            Command::Discard { extended } => self.discard(context, extended).await?,
+            command => self.unknown_command(context, command).await?,
         }
 
         self.hooks.after_execution(context)?;

@@ -8,6 +8,7 @@ use crate::{
         router::{
             context::RouterContext,
             parser::{rewrite::Rewrite, OrderBy, Shard},
+            rewrite::{PlannerContext, PlannerInput, RewritePlanner, RewriteRegistry},
             round_robin,
             sharding::{Centroids, ContextBuilder, Value as ShardingValue},
         },
@@ -67,6 +68,7 @@ pub struct QueryParser {
     // Plugin read override.
     plugin_output: PluginOutput,
     explain_recorder: Option<ExplainRecorder>,
+    rewrite_registry: RewriteRegistry,
 }
 
 impl Default for QueryParser {
@@ -77,11 +79,16 @@ impl Default for QueryParser {
             shard: Shard::All,
             plugin_output: PluginOutput::default(),
             explain_recorder: None,
+            rewrite_registry: RewriteRegistry::new(),
         }
     }
 }
 
 impl QueryParser {
+    pub fn register_rewrite_planner(&mut self, planner: Box<dyn RewritePlanner + Send + Sync>) {
+        self.rewrite_registry.add_planner(planner);
+    }
+
     fn recorder_mut(&mut self) -> Option<&mut ExplainRecorder> {
         self.explain_recorder.as_mut()
     }
@@ -132,11 +139,26 @@ impl QueryParser {
             Command::default()
         };
 
+        if let Some(plan) = self.rewrite_registry.plan(
+            &PlannerContext::new(&qp_context),
+            &PlannerInput::Command(&command),
+        )? {
+            command = Command::PlannedRewrite(plan);
+        }
+
         // If the cluster only has one shard, use direct-to-shard queries.
-        if let Command::Query(ref mut query) = command {
-            if !matches!(query.shard(), Shard::Direct(_)) && qp_context.shards == 1 {
-                query.set_shard_mut(0);
+        match &mut command {
+            Command::Query(ref mut query) => {
+                if !matches!(query.shard(), Shard::Direct(_)) && qp_context.shards == 1 {
+                    query.set_shard_mut(0);
+                }
             }
+            Command::PlannedRewrite(ref mut plan) => {
+                if !matches!(plan.route().shard(), Shard::Direct(_)) && qp_context.shards == 1 {
+                    plan.route_mut().set_shard_mut(0);
+                }
+            }
+            _ => {}
         }
 
         Ok(command)

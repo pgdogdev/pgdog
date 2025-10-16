@@ -1,5 +1,6 @@
 use super::*;
 use crate::{
+    frontend::router::rewrite::RewriteExecutionPlan,
     frontend::{client::TransactionType, BufferedQuery},
     net::parameter::ParameterValue,
 };
@@ -43,6 +44,7 @@ pub enum Command {
     },
     Unlisten(String),
     SetRoute(Route),
+    PlannedRewrite(RewriteExecutionPlan),
 }
 
 impl Command {
@@ -53,6 +55,7 @@ impl Command {
 
         match self {
             Self::Query(route) => route,
+            Self::PlannedRewrite(plan) => plan.route(),
             _ => &DEFAULT_ROUTE,
         }
     }
