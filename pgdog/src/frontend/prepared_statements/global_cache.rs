@@ -256,7 +256,6 @@ impl GlobalCache {
         self.names.get(name).and_then(|s| s.rewrite_plan.clone())
     }
 
-    #[cfg(test)]
     pub fn reset(&mut self) {
         self.statements.clear();
         self.names.clear();
@@ -306,7 +305,9 @@ impl GlobalCache {
 
             if let Some(entry) = self.statements.get_mut(&key) {
                 entry.used = entry.used.saturating_sub(1);
-                if entry.used == 0 {
+                if entry.used == 0 && statement.evict_on_close {
+                    self.remove(name);
+                } else if entry.used == 0 {
                     self.unused.insert(entry.counter);
                 }
             }
@@ -315,6 +316,12 @@ impl GlobalCache {
 
     /// Close all unused statements exceeding capacity.
     pub fn close_unused(&mut self, capacity: usize) -> usize {
+        if capacity == 0 {
+            let removed = self.len();
+            self.reset();
+            return removed;
+        }
+
         let over = self.len().saturating_sub(capacity);
         let remove = self.unused.iter().take(over).copied().collect::<Vec<_>>();
 
