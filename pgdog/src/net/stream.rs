@@ -229,9 +229,9 @@ impl Stream {
 
     /// Read data into a buffer, avoiding unnecessary allocations.
     pub async fn read_buf(&mut self, bytes: &mut BytesMut) -> Result<Message, crate::net::Error> {
-        self.io_in_progress = true;
         let result = async {
             let code = eof(self.read_u8().await)?;
+            self.io_in_progress = true;
             bytes.put_u8(code);
             let len = eof(self.read_i32().await)?;
             bytes.put_i32(len);
