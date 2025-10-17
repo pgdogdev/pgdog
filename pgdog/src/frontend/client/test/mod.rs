@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt, BufStream},
+    io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
     time::timeout,
 };
@@ -47,9 +47,7 @@ pub async fn parallel_test_client() -> (TcpStream, Client) {
     let port = stream.local_addr().unwrap().port();
     let connect_handle = tokio::spawn(async move {
         let (stream, addr) = stream.accept().await.unwrap();
-
-        let stream = BufStream::new(stream);
-        let stream = Stream::Plain(stream);
+        let stream = Stream::plain(stream);
 
         Client::new_test(stream, addr)
     });
@@ -721,8 +719,7 @@ async fn test_client_login_timeout() {
 
     let handle = tokio::spawn(async move {
         let (stream, addr) = stream.accept().await.unwrap();
-        let stream = BufStream::new(stream);
-        let stream = Stream::Plain(stream);
+        let stream = Stream::plain(stream);
 
         let mut params = crate::net::parameter::Parameters::default();
         params.insert("user", "pgdog");

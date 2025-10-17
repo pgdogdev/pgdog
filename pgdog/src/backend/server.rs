@@ -492,6 +492,14 @@ impl Server {
         self.prepared_statements.done() && !self.in_transaction()
     }
 
+    /// Server hasn't finished sending or receiving a complete message.
+    pub fn io_in_progress(&self) -> bool {
+        self.stream
+            .as_ref()
+            .map(|stream| stream.io_in_progress())
+            .unwrap_or(false)
+    }
+
     /// Server can execute a query.
     pub fn in_sync(&self) -> bool {
         matches!(
@@ -545,7 +553,7 @@ impl Server {
 
     /// Close the connection, don't do any recovery.
     pub fn force_close(&self) -> bool {
-        self.stats().state == State::ForceClose
+        self.stats().state == State::ForceClose || self.io_in_progress()
     }
 
     /// Server parameters.
@@ -2082,5 +2090,92 @@ pub mod test {
 
         assert_eq!(server.prepared_statements.len(), 0);
         assert!(server.done());
+    }
+
+    #[tokio::test]
+    async fn test_drain_chaos() {
+        use crate::net::bind::Parameter;
+        use rand::{thread_rng, Rng};
+
+        let mut server = test_server().await;
+        let mut rng = thread_rng();
+
+        for iteration in 0..1000 {
+            let name = format!("chaos_test_{}", iteration);
+            let use_sync = rng.gen_bool(0.5);
+
+            if rng.gen_bool(0.2) {
+                let bad_parse = Parse::named(&name, "SELECT invalid syntax");
+                server
+                    .send(
+                        &vec![
+                            ProtocolMessage::from(bad_parse),
+                            ProtocolMessage::from(Bind::new_params(&name, &[])),
+                            ProtocolMessage::from(Execute::new()),
+                            ProtocolMessage::from(Flush),
+                        ]
+                        .into(),
+                    )
+                    .await
+                    .unwrap();
+
+                let messages_to_read = rng.gen_range(0..=1);
+                for _ in 0..messages_to_read {
+                    let _ = server.read().await;
+                }
+            } else {
+                let parse = Parse::named(&name, "SELECT $1, $2");
+                let bind = Bind::new_params(
+                    &name,
+                    &[
+                        Parameter {
+                            len: 1,
+                            data: "1".as_bytes().into(),
+                        },
+                        Parameter {
+                            len: 1,
+                            data: "2".as_bytes().into(),
+                        },
+                    ],
+                );
+                let execute = Execute::new();
+
+                let messages = if use_sync {
+                    vec![
+                        ProtocolMessage::from(parse),
+                        ProtocolMessage::from(bind),
+                        ProtocolMessage::from(execute),
+                        ProtocolMessage::from(Sync),
+                    ]
+                } else {
+                    vec![
+                        ProtocolMessage::from(parse),
+                        ProtocolMessage::from(bind),
+                        ProtocolMessage::from(execute),
+                        ProtocolMessage::from(Flush),
+                    ]
+                };
+
+                server.send(&messages.into()).await.unwrap();
+
+                let expected_messages = if use_sync {
+                    vec!['1', '2', 'D', 'C', 'Z']
+                } else {
+                    vec!['1', '2', 'D', 'C']
+                };
+                let messages_to_read = rng.gen_range(0..expected_messages.len());
+
+                for i in 0..messages_to_read {
+                    let msg = server.read().await.unwrap();
+                    assert_eq!(msg.code(), expected_messages[i]);
+                }
+            }
+
+            server.drain().await;
+
+            assert!(server.in_sync(), "Server should be in sync after drain");
+            assert!(!server.error(), "Server should not be in error state");
+            assert!(server.done(), "Server should be done after drain");
+        }
     }
 }

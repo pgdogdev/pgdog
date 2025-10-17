@@ -233,8 +233,8 @@ impl PreparedStatements {
                 self.state.prepend('G'); // Next thing we'll see is a CopyFail or CopyDone.
             }
 
-            'c' | 'f' => {
-                // Backend told us the copy failed or succeeded.
+            // Backend told us the copy is done.
+            'c' => {
                 self.state.action(code)?;
             }
 
