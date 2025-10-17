@@ -40,6 +40,7 @@ impl Command for ShowPools {
             Field::numeric("errors"),
             Field::numeric("re_synced"),
             Field::numeric("out_of_sync"),
+            Field::numeric("force_closed"),
             Field::bool("online"),
             Field::text("replica_lag"),
             Field::bool("schema_admin"),
@@ -73,6 +74,7 @@ impl Command for ShowPools {
                         .add(state.errors)
                         .add(state.re_synced)
                         .add(state.out_of_sync)
+                        .add(state.force_close)
                         .add(state.online)
                         .add(state.replica_lag.simple_display())
                         .add(cluster.schema_admin());

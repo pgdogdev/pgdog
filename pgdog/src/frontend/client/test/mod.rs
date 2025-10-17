@@ -838,3 +838,29 @@ async fn test_anon_prepared_statements_extended() {
     conn.write_all(&buffer!({ Terminate })).await.unwrap();
     handle.await.unwrap();
 }
+
+#[tokio::test]
+async fn test_query_timeout() {
+    crate::logger();
+    load_test();
+
+    let (mut conn, mut client, mut engine) = new_client!(false);
+
+    let mut c = (*config()).clone();
+    c.config.general.query_timeout = 50;
+    set(c).unwrap();
+
+    engine.set_test_mode(false);
+
+    let buf = buffer!({ Query::new("SELECT pg_sleep(0.2)") });
+    conn.write_all(&buf).await.unwrap();
+
+    client.buffer(State::Idle).await.unwrap();
+    let result = client.client_messages(&mut engine).await;
+
+    assert!(result.is_err());
+
+    let pools = databases().cluster(("pgdog", "pgdog")).unwrap().shards()[0].pools();
+    let state = pools[0].state();
+    assert_eq!(state.force_close, 1);
+}

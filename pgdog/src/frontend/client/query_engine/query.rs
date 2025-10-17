@@ -79,11 +79,20 @@ impl QueryEngine {
             && !self.streaming
             && !self.test_mode
         {
-            let message = timeout(
+            let message = match timeout(
                 context.timeouts.query_timeout(&State::Active),
                 self.backend.read(),
             )
-            .await??;
+            .await
+            {
+                Ok(response) => response?,
+                Err(err) => {
+                    // Close the conn, it could be stuck executing a query
+                    // or dead.
+                    self.backend.force_close();
+                    return Err(err.into());
+                }
+            };
             self.server_message(context, message).await?;
         }
 
