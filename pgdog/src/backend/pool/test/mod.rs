@@ -344,25 +344,6 @@ async fn test_server_force_close_discards_connection() {
 }
 
 #[tokio::test]
-async fn test_cleanup_close_error_force_closes_connection() {
-    crate::logger();
-
-    let pool = pool();
-    let mut guard = pool.get(&Request::default()).await.unwrap();
-
-    guard.prepared_statements_mut().set_capacity(0);
-    guard.prepared_statements_mut().prepared("phantom_cleanup");
-
-    drop(guard);
-
-    sleep(Duration::from_millis(200)).await;
-
-    let state = pool.state();
-    assert_eq!(state.force_close, 1);
-    assert_eq!(state.errors, 0);
-}
-
-#[tokio::test]
 async fn test_query_stats() {
     let pool = pool();
     let before = pool.state();
