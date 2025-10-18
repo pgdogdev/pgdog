@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt, BufStream},
+    io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
     time::timeout,
 };
@@ -47,9 +47,7 @@ pub async fn parallel_test_client() -> (TcpStream, Client) {
     let port = stream.local_addr().unwrap().port();
     let connect_handle = tokio::spawn(async move {
         let (stream, addr) = stream.accept().await.unwrap();
-
-        let stream = BufStream::new(stream);
-        let stream = Stream::Plain(stream);
+        let stream = Stream::plain(stream);
 
         Client::new_test(stream, addr)
     });
@@ -721,8 +719,7 @@ async fn test_client_login_timeout() {
 
     let handle = tokio::spawn(async move {
         let (stream, addr) = stream.accept().await.unwrap();
-        let stream = BufStream::new(stream);
-        let stream = Stream::Plain(stream);
+        let stream = Stream::plain(stream);
 
         let mut params = crate::net::parameter::Parameters::default();
         params.insert("user", "pgdog");
@@ -840,4 +837,30 @@ async fn test_anon_prepared_statements_extended() {
 
     conn.write_all(&buffer!({ Terminate })).await.unwrap();
     handle.await.unwrap();
+}
+
+#[tokio::test]
+async fn test_query_timeout() {
+    crate::logger();
+    load_test();
+
+    let (mut conn, mut client, mut engine) = new_client!(false);
+
+    let mut c = (*config()).clone();
+    c.config.general.query_timeout = 50;
+    set(c).unwrap();
+
+    engine.set_test_mode(false);
+
+    let buf = buffer!({ Query::new("SELECT pg_sleep(0.2)") });
+    conn.write_all(&buf).await.unwrap();
+
+    client.buffer(State::Idle).await.unwrap();
+    let result = client.client_messages(&mut engine).await;
+
+    assert!(result.is_err());
+
+    let pools = databases().cluster(("pgdog", "pgdog")).unwrap().shards()[0].pools();
+    let state = pools[0].state();
+    assert_eq!(state.force_close, 1);
 }

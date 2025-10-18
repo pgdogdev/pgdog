@@ -54,7 +54,7 @@ impl Mirror {
             prepared_statements: PreparedStatements::new(),
             params: params.clone(),
             timeouts: Timeouts::from_config(&config.config.general),
-            stream: Stream::DevNull,
+            stream: Stream::dev_null(),
             transaction: None,
             cross_shard_disabled: config.config.general.cross_shard_disabled,
         }

@@ -2,6 +2,7 @@
 
 require_relative 'rspec_helper'
 require 'pp'
+require 'timeout'
 
 class Sharded < ActiveRecord::Base
   self.table_name = 'sharded'
@@ -185,6 +186,131 @@ describe 'active record' do
         count = Sharded.count
         expect(count).to eq(6)
       end
+    end
+  end
+
+  describe 'chaos testing with interrupted queries' do
+    before do
+      conn('failover', false)
+      ActiveRecord::Base.connection.execute 'DROP TABLE IF EXISTS sharded'
+      ActiveRecord::Base.connection.execute 'CREATE TABLE sharded (id BIGSERIAL PRIMARY KEY, value TEXT)'
+    end
+
+    it 'handles interrupted queries and continues operating normally' do
+      interrupted_count = 0
+      successful_count = 0
+      mutex = Mutex.new
+
+      # Apply latency toxic to slow down query transmission,
+      # making it easier to interrupt queries mid-flight
+      Toxiproxy[:primary].toxic(:latency, latency: 100, jitter: 50).apply do
+        # Phase 1: Chaos - interrupt queries randomly with thread kills
+        chaos_threads = []
+        killer_threads = []
+
+        # Start 10 query threads
+        10.times do |thread_id|
+          t = Thread.new do
+            100.times do |i|
+              begin
+                case rand(3)
+                when 0
+                  # SELECT query
+                  Sharded.where('id > ?', 0).limit(10).to_a
+                when 1
+                  # INSERT query
+                  Sharded.create value: "thread_#{thread_id}_iter_#{i}"
+                when 2
+                  # Transaction with multiple operations
+                  Sharded.transaction do
+                    rec = Sharded.create value: "tx_#{thread_id}_#{i}"
+                    Sharded.where(id: rec.id).first if rec.id
+                  end
+                end
+                mutex.synchronize { successful_count += 1 }
+              rescue StandardError => e
+                # Killed mid-query or other error
+                mutex.synchronize { interrupted_count += 1 }
+              end
+            end
+          end
+          chaos_threads << t
+        end
+
+        # Start killer thread that randomly kills query threads
+        killer = Thread.new do
+          50.times do
+            sleep(rand(0.01..0.05))
+            alive_threads = chaos_threads.select(&:alive?)
+            if alive_threads.any?
+              victim = alive_threads.sample
+              victim.kill
+              mutex.synchronize { interrupted_count += 1 }
+            end
+          end
+        end
+        killer_threads << killer
+
+        # Wait for killer to finish
+        killer_threads.each(&:join)
+
+        # Wait for remaining threads (with timeout)
+        chaos_threads.each { |t| t.join(0.1) }
+
+        puts "Chaos phase complete: #{successful_count} successful, #{interrupted_count} interrupted"
+        expect(interrupted_count).to be > 0
+      end # End toxiproxy latency
+
+      # Give PgDog time to clean up broken connections
+      sleep(0.5)
+
+      # Disconnect all connections to clear bad state
+      ActiveRecord::Base.connection_pool.disconnect!
+
+      # Wait a bit more for cleanup
+      sleep(0.5)
+
+      # Phase 2: Verify database continues to operate normally
+      verification_errors = []
+      errors_mutex = Mutex.new
+
+      verification_threads = 10.times.map do |thread_id|
+        Thread.new do
+          20.times do |i|
+            begin
+              # Simple queries that don't depend on finding specific records
+              # INSERT
+              rec = Sharded.create value: "verify_#{thread_id}_#{i}"
+              expect(rec.id).to be > 0
+
+              # SELECT with basic query
+              results = Sharded.where('value LIKE ?', 'verify_%').limit(5).to_a
+              expect(results).to be_a(Array)
+
+              # COUNT query
+              count = Sharded.where('id > ?', 0).count
+              expect(count).to be >= 0
+            rescue PG::Error => e
+              # PG errors should fail the test
+              raise
+            rescue StandardError => e
+              errors_mutex.synchronize { verification_errors << e }
+            end
+          end
+        end
+      end
+
+      verification_threads.each(&:join)
+
+      # Verify no errors occurred during verification
+      expect(verification_errors).to be_empty, "Verification errors: #{verification_errors.map(&:message).join(', ')}"
+
+      # Verify we can still execute basic queries
+      ActiveRecord::Base.connection.execute('SELECT 1')
+
+      # Verify count works
+      count = Sharded.count
+      expect(count).to be >= 0
     end
   end
 end

@@ -302,6 +302,48 @@ async fn test_force_close() {
 }
 
 #[tokio::test]
+async fn test_server_force_close_discards_connection() {
+    crate::logger();
+
+    let config = Config {
+        max: 1,
+        min: 0,
+        ..Default::default()
+    };
+
+    let pool = Pool::new(&PoolConfig {
+        address: Address {
+            host: "127.0.0.1".into(),
+            port: 5432,
+            database_name: "pgdog".into(),
+            user: "pgdog".into(),
+            password: "pgdog".into(),
+            ..Default::default()
+        },
+        config,
+    });
+    pool.launch();
+
+    let mut conn = pool.get(&Request::default()).await.unwrap();
+    conn.execute("BEGIN").await.unwrap();
+    assert!(conn.in_transaction());
+
+    assert_eq!(pool.lock().total(), 1);
+    assert_eq!(pool.lock().idle(), 0);
+    assert_eq!(pool.lock().checked_out(), 1);
+
+    conn.stats_mut().state(State::ForceClose);
+    drop(conn);
+
+    sleep(Duration::from_millis(100)).await;
+
+    let state = pool.state();
+    assert_eq!(state.force_close, 1);
+    assert_eq!(state.idle, 0);
+    assert_eq!(state.total, 0);
+}
+
+#[tokio::test]
 async fn test_query_stats() {
     let pool = pool();
     let before = pool.state();

@@ -38,6 +38,8 @@ pub struct State {
     pub pooler_mode: PoolerMode,
     /// Lag
     pub replica_lag: ReplicaLag,
+    /// Force closed.
+    pub force_close: usize,
 }
 
 impl State {
@@ -66,6 +68,7 @@ impl State {
                 .unwrap_or(Duration::ZERO),
             pooler_mode: guard.config().pooler_mode,
             replica_lag: guard.replica_lag,
+            force_close: guard.force_close,
         }
     }
 }
