@@ -9,7 +9,6 @@ use tracing::{debug, error};
 use crate::backend::Server;
 use crate::state::State;
 
-use super::Error;
 use super::{cleanup::Cleanup, Pool};
 
 /// Connection guard.
@@ -91,7 +90,7 @@ impl Guard {
         }
     }
 
-    async fn cleanup_internal(server: &mut Box<Server>, cleanup: Cleanup) -> Result<(), Error> {
+    async fn cleanup_internal(server: &mut Box<Server>, cleanup: Cleanup) {
         let schema_changed = server.schema_changed();
         let sync_prepared = server.sync_prepared();
         let needs_drain = server.needs_drain();
@@ -126,8 +125,11 @@ impl Guard {
                 server.addr()
             );
             match server.execute_batch(cleanup.queries()).await {
-                Err(_) => {
-                    error!("server reset error [{}]", server.addr());
+                Err(err) => {
+                    error!("server reset error: {} [{}]", err, server.addr());
+                    server.stats_mut().state(State::ForceClose);
+                    debug!("marking server for force close [{}]", server.addr());
+                    return;
                 }
                 Ok(_) => {
                     if cleanup.is_deallocate() {
@@ -140,8 +142,9 @@ impl Guard {
             match server.close_many(cleanup.close()).await {
                 Ok(_) => (),
                 Err(err) => {
-                    server.stats_mut().state(State::Error);
+                    server.stats_mut().state(State::ForceClose);
                     error!("server close error: {} [{}]", err, server.addr());
+                    return;
                 }
             }
         }
@@ -166,10 +169,9 @@ impl Guard {
                     err,
                     server.addr()
                 );
+                server.stats_mut().state(State::ForceClose);
             }
         }
-
-        Ok(())
     }
 }
 

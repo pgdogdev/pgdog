@@ -361,6 +361,13 @@ impl Server {
                             }
                         }
                         Err(err) => {
+                            if matches!(err, Error::ProtocolOutOfSync) {
+                                self.stats.state(State::ForceClose);
+                                debug!(
+                                    "marking server for force close due to protocol out-of-sync [{}]",
+                                    self.addr()
+                                );
+                            }
                             error!(
                                 "{:?} got: {}, extended buffer: {:?}",
                                 err,
