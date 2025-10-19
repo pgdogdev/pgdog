@@ -200,13 +200,8 @@ impl PreparedStatements {
                 // Backend ignored any subsequent extended commands.
                 // These prepared statements have not been prepared, even if they
                 // are syntactically valid.
-                while let Some(describe) = self.describes.pop_front() {
-                    self.remove(&describe);
-                }
-
-                while let Some(parse) = self.parses.pop_front() {
-                    self.remove(&parse);
-                }
+                self.describes.clear();
+                self.parses.clear();
             }
 
             'T' => {
