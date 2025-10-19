@@ -492,6 +492,14 @@ impl Server {
         self.prepared_statements.done() && !self.in_transaction()
     }
 
+    /// Server hasn't finished sending or receiving a complete message.
+    pub fn io_in_progress(&self) -> bool {
+        self.stream
+            .as_ref()
+            .map(|stream| stream.io_in_progress())
+            .unwrap_or(false)
+    }
+
     /// Server can execute a query.
     pub fn in_sync(&self) -> bool {
         matches!(
@@ -500,7 +508,7 @@ impl Server {
         )
     }
 
-    /// Server is done executing all queries and is
+    /// Server is done executing all queries and isz
     /// not inside a transaction.
     pub fn can_check_in(&self) -> bool {
         self.stats().state == State::Idle
@@ -545,7 +553,7 @@ impl Server {
 
     /// Close the connection, don't do any recovery.
     pub fn force_close(&self) -> bool {
-        self.stats().state == State::ForceClose
+        self.stats().state == State::ForceClose || self.io_in_progress()
     }
 
     /// Server parameters.
@@ -650,48 +658,40 @@ impl Server {
     }
 
     /// Attempt to rollback the transaction on this server, if any has been started.
-    pub async fn rollback(&mut self) {
+    pub(super) async fn rollback(&mut self) -> Result<(), Error> {
         if self.in_transaction() {
-            if let Err(_err) = self.execute("ROLLBACK").await {
-                self.stats.state(State::Error);
-            }
+            self.execute("ROLLBACK").await?;
             self.stats.rollback();
         }
 
         if !self.done() {
-            self.stats.state(State::Error);
+            Err(Error::RollbackFailed)
+        } else {
+            Ok(())
         }
     }
 
-    pub async fn drain(&mut self) {
+    /// Drain any remaining messages on the server connection,
+    /// attempting to return the connection into a synchronized state.
+    pub(super) async fn drain(&mut self) -> Result<(), Error> {
         while self.has_more_messages() {
-            if self.read().await.is_err() {
-                self.stats.state(State::Error);
-                break;
-            }
+            self.read().await?;
         }
 
         if !self.in_sync() {
-            if self
-                .send(&vec![ProtocolMessage::Sync(Sync)].into())
-                .await
-                .is_err()
-            {
-                self.stats.state(State::Error);
-                return;
-            }
-            while !self.in_sync() {
-                if self.read().await.is_err() {
-                    self.stats.state(State::Error);
-                    break;
-                }
-            }
+            self.send(&vec![ProtocolMessage::Sync(Sync)].into()).await?;
 
-            self.re_synced = true;
+            while !self.in_sync() {
+                self.read().await?;
+            }
         }
+
+        self.re_synced = true;
+        Ok(())
     }
 
-    pub async fn sync_prepared_statements(&mut self) -> Result<(), Error> {
+    /// Synchronize prepared statements from Postgres.
+    pub(super) async fn sync_prepared_statements(&mut self) -> Result<(), Error> {
         let names = self
             .fetch_all::<String>("SELECT name FROM pg_prepared_statements")
             .await?;
@@ -709,7 +709,7 @@ impl Server {
     }
 
     /// Close any prepared statements that exceed cache capacity.
-    pub fn ensure_prepared_capacity(&mut self) -> Vec<Close> {
+    pub(super) fn ensure_prepared_capacity(&mut self) -> Vec<Close> {
         let close = self.prepared_statements.ensure_capacity();
         self.stats
             .close_many(close.len(), self.prepared_statements.len());
@@ -717,7 +717,7 @@ impl Server {
     }
 
     /// Close multiple prepared statements.
-    pub async fn close_many(&mut self, close: &[Close]) -> Result<(), Error> {
+    pub(super) async fn close_many(&mut self, close: &[Close]) -> Result<(), Error> {
         if close.is_empty() {
             return Ok(());
         }
@@ -1709,7 +1709,7 @@ pub mod test {
         assert!(server.needs_drain());
         assert!(!server.has_more_messages());
         assert!(server.done());
-        server.drain().await;
+        server.drain().await.unwrap();
         assert!(server.in_sync());
         assert!(server.done());
         assert!(!server.needs_drain());
@@ -1731,9 +1731,9 @@ pub mod test {
 
         assert!(!server.needs_drain());
         assert!(server.in_transaction());
-        server.drain().await; // Nothing will be done.
+        server.drain().await.unwrap(); // Nothing will be done.
         assert!(server.in_transaction());
-        server.rollback().await;
+        server.rollback().await.unwrap();
         assert!(server.in_sync());
         assert!(!server.in_transaction());
 
@@ -2082,5 +2082,92 @@ pub mod test {
 
         assert_eq!(server.prepared_statements.len(), 0);
         assert!(server.done());
+    }
+
+    #[tokio::test]
+    async fn test_drain_chaos() {
+        use crate::net::bind::Parameter;
+        use rand::{thread_rng, Rng};
+
+        let mut server = test_server().await;
+        let mut rng = thread_rng();
+
+        for iteration in 0..1000 {
+            let name = format!("chaos_test_{}", iteration);
+            let use_sync = rng.gen_bool(0.5);
+
+            if rng.gen_bool(0.2) {
+                let bad_parse = Parse::named(&name, "SELECT invalid syntax");
+                server
+                    .send(
+                        &vec![
+                            ProtocolMessage::from(bad_parse),
+                            ProtocolMessage::from(Bind::new_params(&name, &[])),
+                            ProtocolMessage::from(Execute::new()),
+                            ProtocolMessage::from(Flush),
+                        ]
+                        .into(),
+                    )
+                    .await
+                    .unwrap();
+
+                let messages_to_read = rng.gen_range(0..=1);
+                for _ in 0..messages_to_read {
+                    let _ = server.read().await;
+                }
+            } else {
+                let parse = Parse::named(&name, "SELECT $1, $2");
+                let bind = Bind::new_params(
+                    &name,
+                    &[
+                        Parameter {
+                            len: 1,
+                            data: "1".as_bytes().into(),
+                        },
+                        Parameter {
+                            len: 1,
+                            data: "2".as_bytes().into(),
+                        },
+                    ],
+                );
+                let execute = Execute::new();
+
+                let messages = if use_sync {
+                    vec![
+                        ProtocolMessage::from(parse),
+                        ProtocolMessage::from(bind),
+                        ProtocolMessage::from(execute),
+                        ProtocolMessage::from(Sync),
+                    ]
+                } else {
+                    vec![
+                        ProtocolMessage::from(parse),
+                        ProtocolMessage::from(bind),
+                        ProtocolMessage::from(execute),
+                        ProtocolMessage::from(Flush),
+                    ]
+                };
+
+                server.send(&messages.into()).await.unwrap();
+
+                let expected_messages = if use_sync {
+                    vec!['1', '2', 'D', 'C', 'Z']
+                } else {
+                    vec!['1', '2', 'D', 'C']
+                };
+                let messages_to_read = rng.gen_range(0..expected_messages.len());
+
+                for i in 0..messages_to_read {
+                    let msg = server.read().await.unwrap();
+                    assert_eq!(msg.code(), expected_messages[i]);
+                }
+            }
+
+            server.drain().await.unwrap();
+
+            assert!(server.in_sync(), "Server should be in sync after drain");
+            assert!(!server.error(), "Server should not be in error state");
+            assert!(server.done(), "Server should be done after drain");
+        }
     }
 }

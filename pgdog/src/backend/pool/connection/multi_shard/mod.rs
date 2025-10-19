@@ -39,6 +39,9 @@ struct Counters {
     bind_complete: usize,
     command_complete: Option<Message>,
     transaction_error: bool,
+    copy_done: usize,
+    copy_out: usize,
+    copy_data: usize,
 }
 
 /// Multi-shard state.
@@ -242,6 +245,25 @@ impl MultiShard {
                 self.counters.bind_complete += 1;
 
                 if self.counters.bind_complete.is_multiple_of(self.shards) {
+                    forward = Some(message);
+                }
+            }
+
+            'c' => {
+                self.counters.copy_done += 1;
+                if self.counters.copy_done.is_multiple_of(self.shards) {
+                    forward = Some(message);
+                }
+            }
+
+            'd' => {
+                self.counters.copy_data += 1;
+                forward = Some(message);
+            }
+
+            'H' => {
+                self.counters.copy_out += 1;
+                if self.counters.copy_out.is_multiple_of(self.shards) {
                     forward = Some(message);
                 }
             }

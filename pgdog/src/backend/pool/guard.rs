@@ -6,10 +6,9 @@ use tokio::time::timeout;
 use tokio::{spawn, time::Instant};
 use tracing::{debug, error};
 
-use crate::backend::Server;
+use crate::backend::{Error, Server};
 use crate::state::State;
 
-use super::Error;
 use super::{cleanup::Cleanup, Pool};
 
 /// Connection guard.
@@ -59,24 +58,32 @@ impl Guard {
             let sync_prepared = server.sync_prepared();
             let needs_drain = server.needs_drain();
             let force_close = server.force_close();
+            let needs_cleanup = rollback || reset || sync_prepared || needs_drain;
 
             server.reset_changed_params();
 
             // No need to delay checkin unless we have to.
-            if (rollback || reset || sync_prepared || needs_drain) && !force_close {
+            if needs_cleanup && !force_close {
                 let rollback_timeout = pool.inner().config.rollback_timeout();
                 spawn(async move {
-                    if timeout(
+                    match timeout(
                         rollback_timeout,
                         Self::cleanup_internal(&mut server, cleanup),
                     )
                     .await
-                    .is_err()
                     {
-                        // Don't check-in servers in possibly un-sync state.
-                        server.stats_mut().state(State::Error);
-                        error!("rollback timeout [{}]", server.addr());
-                    };
+                        Ok(Ok(_)) => (),
+                        Err(_) => {
+                            error!("server cleanup timed out [{}]", server.addr());
+                            server.stats_mut().state(State::ForceClose);
+                        }
+                        Ok(Err(err)) => {
+                            error!("server cleanup failed: {} [{}]", err, server.addr());
+                            if !server.error() {
+                                server.stats_mut().state(State::ForceClose);
+                            }
+                        }
+                    }
 
                     pool.checkin(server);
                 });
@@ -103,7 +110,7 @@ impl Guard {
                 server.stats().state,
                 server.addr()
             );
-            server.drain().await;
+            server.drain().await?;
         }
         let rollback = server.in_transaction();
 
@@ -115,7 +122,7 @@ impl Guard {
                 server.stats().state,
                 server.addr(),
             );
-            server.rollback().await;
+            server.rollback().await?;
         }
 
         if cleanup.needed() {
@@ -125,25 +132,18 @@ impl Guard {
                 server.stats().state,
                 server.addr()
             );
-            match server.execute_batch(cleanup.queries()).await {
-                Err(_) => {
-                    error!("server reset error [{}]", server.addr());
-                }
-                Ok(_) => {
-                    if cleanup.is_deallocate() {
-                        server.prepared_statements_mut().clear();
-                    }
-                    server.cleaned();
-                }
-            }
+            server.execute_batch(cleanup.queries()).await?;
 
-            match server.close_many(cleanup.close()).await {
-                Ok(_) => (),
-                Err(err) => {
-                    server.stats_mut().state(State::Error);
-                    error!("server close error: {} [{}]", err, server.addr());
-                }
+            if cleanup.is_deallocate() {
+                server.prepared_statements_mut().clear();
             }
+            server.cleaned();
+
+            debug!(
+                "[cleanup] closing {} prepared statements",
+                cleanup.close().len()
+            );
+            server.close_many(cleanup.close()).await?;
         }
 
         if schema_changed {
@@ -160,13 +160,7 @@ impl Guard {
                 server.stats().state,
                 server.addr()
             );
-            if let Err(err) = server.sync_prepared_statements().await {
-                error!(
-                    "prepared statements sync error: {:?} [{}]",
-                    err,
-                    server.addr()
-                );
-            }
+            server.sync_prepared_statements().await?;
         }
 
         Ok(())
@@ -310,8 +304,6 @@ mod test {
         });
         pool.launch();
 
-        let initial_errors = pool.lock().errors;
-
         {
             let mut guard = pool.get(&Request::default()).await.unwrap();
 
@@ -327,8 +319,9 @@ mod test {
         sleep(Duration::from_millis(500)).await;
 
         let state = pool.lock();
-        assert_eq!(state.errors, initial_errors + 1);
+        assert_eq!(state.errors, 0);
         assert_eq!(state.idle(), 0);
         assert_eq!(state.total(), 0);
+        assert_eq!(state.force_close, 1);
     }
 }
