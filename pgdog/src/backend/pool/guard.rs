@@ -79,7 +79,9 @@ impl Guard {
                         }
                         Ok(Err(err)) => {
                             error!("server cleanup failed: {} [{}]", err, server.addr());
-                            server.stats_mut().state(State::ForceClose);
+                            if !server.error() {
+                                server.stats_mut().state(State::ForceClose);
+                            }
                         }
                     }
 
