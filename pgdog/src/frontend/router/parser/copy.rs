@@ -60,7 +60,7 @@ pub struct CopyParser {
     delimiter: Option<char>,
     /// Number of columns
     columns: usize,
-    /// This is a COPY coming from the server.
+    /// This is a COPY coming from the client.
     is_from: bool,
     /// Stream parser.
     stream: CopyStream,
@@ -89,7 +89,7 @@ impl Default for CopyParser {
 
 impl CopyParser {
     /// Create new copy parser from a COPY statement.
-    pub fn new(stmt: &CopyStmt, cluster: &Cluster) -> Result<Option<Self>, Error> {
+    pub fn new(stmt: &CopyStmt, cluster: &Cluster) -> Result<Self, Error> {
         let mut parser = Self {
             is_from: stmt.is_from,
             ..Default::default()
@@ -178,7 +178,7 @@ impl CopyParser {
         };
         parser.sharding_schema = cluster.sharding_schema();
 
-        Ok(Some(parser))
+        Ok(parser)
     }
 
     #[inline]
@@ -288,9 +288,7 @@ mod test {
             _ => panic!("not a copy"),
         };
 
-        let mut copy = CopyParser::new(&copy, &Cluster::default())
-            .unwrap()
-            .unwrap();
+        let mut copy = CopyParser::new(&copy, &Cluster::default()).unwrap();
 
         assert_eq!(copy.delimiter(), '\t');
         assert!(!copy.headers);
@@ -312,9 +310,7 @@ mod test {
             _ => panic!("not a copy"),
         };
 
-        let mut copy = CopyParser::new(&copy, &Cluster::default())
-            .unwrap()
-            .unwrap();
+        let mut copy = CopyParser::new(&copy, &Cluster::default()).unwrap();
         assert!(copy.is_from);
 
         assert_eq!(copy.delimiter(), ',');
@@ -353,9 +349,7 @@ mod test {
             _ => panic!("not a copy"),
         };
 
-        let mut copy = CopyParser::new(&copy, &Cluster::new_test())
-            .unwrap()
-            .unwrap();
+        let mut copy = CopyParser::new(&copy, &Cluster::new_test()).unwrap();
 
         let rows = copy.shard(&[copy_data]).unwrap();
         assert_eq!(rows.len(), 3);
@@ -377,9 +371,7 @@ mod test {
             _ => panic!("not a copy"),
         };
 
-        let mut copy = CopyParser::new(&copy, &Cluster::default())
-            .unwrap()
-            .unwrap();
+        let mut copy = CopyParser::new(&copy, &Cluster::default()).unwrap();
 
         assert_eq!(copy.delimiter(), ',');
         assert!(!copy.headers);
@@ -403,9 +395,7 @@ mod test {
             _ => panic!("not a copy"),
         };
 
-        let mut copy = CopyParser::new(&copy, &Cluster::default())
-            .unwrap()
-            .unwrap();
+        let mut copy = CopyParser::new(&copy, &Cluster::default()).unwrap();
         assert!(copy.is_from);
         assert!(copy.headers);
         let mut data = b"PGCOPY".to_vec();

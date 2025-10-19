@@ -421,10 +421,10 @@ impl QueryParser {
     /// Handle COPY command.
     fn copy(stmt: &CopyStmt, context: &QueryParserContext) -> Result<Command, Error> {
         let parser = CopyParser::new(stmt, context.router_context.cluster)?;
-        if let Some(parser) = parser {
-            Ok(Command::Copy(Box::new(parser)))
+        if !stmt.is_from {
+            Ok(Command::Query(Route::read(Shard::All)))
         } else {
-            Ok(Command::Query(Route::write(None)))
+            Ok(Command::Copy(Box::new(parser)))
         }
     }
 
