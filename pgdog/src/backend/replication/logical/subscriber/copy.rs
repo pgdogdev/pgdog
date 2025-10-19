@@ -47,9 +47,7 @@ impl CopySubscriber {
             .as_ref()
             .ok_or(Error::MissingData)?;
         let copy = if let NodeEnum::CopyStmt(stmt) = stmt {
-            CopyParser::new(stmt, cluster)
-                .map_err(|_| Error::MissingData)?
-                .ok_or(Error::MissingData)?
+            CopyParser::new(stmt, cluster).map_err(|_| Error::MissingData)?
         } else {
             return Err(Error::MissingData);
         };

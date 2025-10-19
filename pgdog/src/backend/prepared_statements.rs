@@ -95,7 +95,7 @@ impl PreparedStatements {
                     let message = self.check_prepared(bind.statement())?;
                     match message {
                         Some(message) => {
-                            self.state.add_ignore('1', bind.statement());
+                            self.state.add_ignore('1');
                             self.parses.push_back(bind.statement().to_string());
                             self.state.add('2');
                             return Ok(HandleResult::Prepend(message));
@@ -115,7 +115,7 @@ impl PreparedStatements {
 
                     match message {
                         Some(message) => {
-                            self.state.add_ignore('1', describe.statement());
+                            self.state.add_ignore('1');
                             self.parses.push_back(describe.statement().to_string());
                             self.state.add(ExecutionCode::DescriptionOrNothing); // t
                             self.state.add(ExecutionCode::DescriptionOrNothing); // T
@@ -200,13 +200,8 @@ impl PreparedStatements {
                 // Backend ignored any subsequent extended commands.
                 // These prepared statements have not been prepared, even if they
                 // are syntactically valid.
-                while let Some(describe) = self.describes.pop_front() {
-                    self.remove(&describe);
-                }
-
-                while let Some(parse) = self.parses.pop_front() {
-                    self.remove(&parse);
-                }
+                self.describes.clear();
+                self.parses.clear();
             }
 
             'T' => {
@@ -233,8 +228,8 @@ impl PreparedStatements {
                 self.state.prepend('G'); // Next thing we'll see is a CopyFail or CopyDone.
             }
 
-            'c' | 'f' => {
-                // Backend told us the copy failed or succeeded.
+            // Backend told us the copy is done.
+            'c' => {
                 self.state.action(code)?;
             }
 
@@ -243,12 +238,6 @@ impl PreparedStatements {
 
         match action {
             Action::Ignore => Ok(false),
-            Action::ForwardAndRemove(names) => {
-                for name in names {
-                    self.remove(&name);
-                }
-                Ok(true)
-            }
             Action::Forward => Ok(true),
         }
     }

@@ -5,6 +5,7 @@ from globals import normal_async, sharded_async, no_out_of_sync, admin
 import random
 import string
 import pytest_asyncio
+from io import BytesIO
 
 
 @pytest_asyncio.fixture
@@ -231,6 +232,7 @@ async def test_copy(conns):
     records = 250
     for i in range(50):
         for conn in conns:
+            # Test COPY FROM (TO table)
             rows = [[x, f"value_{x}", datetime.now()] for x in range(records)]
             await conn.copy_records_to_table(
                 "sharded", records=rows, columns=["id", "value", "created_at"]
@@ -238,6 +240,16 @@ async def test_copy(conns):
             count = await conn.fetch("SELECT COUNT(*) FROM sharded")
             assert len(count) == 1
             assert count[0][0] == records
+
+            # Test COPY TO STDOUT
+            buffer = BytesIO()
+            copied_data = await conn.copy_from_table(
+                "sharded", columns=["id", "value", "created_at"], output=buffer
+            )
+            buffer.seek(0)
+            lines = buffer.read().decode('utf-8').strip().split('\n')
+            assert len(lines) == records, f"expected {records} lines in COPY output, got {len(lines)}"
+
             await conn.execute("DELETE FROM sharded")
 
 

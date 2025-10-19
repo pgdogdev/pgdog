@@ -14,14 +14,23 @@ use std::task::Context;
 
 use super::messages::{ErrorResponse, Message, Protocol, ReadyForQuery, Terminate};
 
-/// A network socket.
-#[pin_project(project = StreamProjection)]
+/// Inner stream types.
+#[pin_project(project = StreamInnerProjection)]
 #[derive(Debug)]
 #[allow(clippy::large_enum_variant)]
-pub enum Stream {
+enum StreamInner {
     Plain(#[pin] BufStream<TcpStream>),
     Tls(#[pin] BufStream<tokio_rustls::TlsStream<TcpStream>>),
     DevNull,
+}
+
+/// A network socket.
+#[pin_project]
+#[derive(Debug)]
+pub struct Stream {
+    #[pin]
+    inner: StreamInner,
+    io_in_progress: bool,
 }
 
 impl AsyncRead for Stream {
@@ -31,10 +40,10 @@ impl AsyncRead for Stream {
         buf: &mut ReadBuf<'_>,
     ) -> std::task::Poll<std::io::Result<()>> {
         let project = self.project();
-        match project {
-            StreamProjection::Plain(stream) => stream.poll_read(cx, buf),
-            StreamProjection::Tls(stream) => stream.poll_read(cx, buf),
-            StreamProjection::DevNull => std::task::Poll::Ready(Ok(())),
+        match project.inner.project() {
+            StreamInnerProjection::Plain(stream) => stream.poll_read(cx, buf),
+            StreamInnerProjection::Tls(stream) => stream.poll_read(cx, buf),
+            StreamInnerProjection::DevNull => std::task::Poll::Ready(Ok(())),
         }
     }
 }
@@ -46,10 +55,10 @@ impl AsyncWrite for Stream {
         buf: &[u8],
     ) -> std::task::Poll<Result<usize, Error>> {
         let project = self.project();
-        match project {
-            StreamProjection::Plain(stream) => stream.poll_write(cx, buf),
-            StreamProjection::Tls(stream) => stream.poll_write(cx, buf),
-            StreamProjection::DevNull => std::task::Poll::Ready(Ok(buf.len())),
+        match project.inner.project() {
+            StreamInnerProjection::Plain(stream) => stream.poll_write(cx, buf),
+            StreamInnerProjection::Tls(stream) => stream.poll_write(cx, buf),
+            StreamInnerProjection::DevNull => std::task::Poll::Ready(Ok(buf.len())),
         }
     }
 
@@ -58,10 +67,10 @@ impl AsyncWrite for Stream {
         cx: &mut Context<'_>,
     ) -> std::task::Poll<Result<(), Error>> {
         let project = self.project();
-        match project {
-            StreamProjection::Plain(stream) => stream.poll_flush(cx),
-            StreamProjection::Tls(stream) => stream.poll_flush(cx),
-            StreamProjection::DevNull => std::task::Poll::Ready(Ok(())),
+        match project.inner.project() {
+            StreamInnerProjection::Plain(stream) => stream.poll_flush(cx),
+            StreamInnerProjection::Tls(stream) => stream.poll_flush(cx),
+            StreamInnerProjection::DevNull => std::task::Poll::Ready(Ok(())),
         }
     }
 
@@ -70,10 +79,10 @@ impl AsyncWrite for Stream {
         cx: &mut Context<'_>,
     ) -> std::task::Poll<Result<(), Error>> {
         let project = self.project();
-        match project {
-            StreamProjection::Plain(stream) => stream.poll_shutdown(cx),
-            StreamProjection::Tls(stream) => stream.poll_shutdown(cx),
-            StreamProjection::DevNull => std::task::Poll::Ready(Ok(())),
+        match project.inner.project() {
+            StreamInnerProjection::Plain(stream) => stream.poll_shutdown(cx),
+            StreamInnerProjection::Tls(stream) => stream.poll_shutdown(cx),
+            StreamInnerProjection::DevNull => std::task::Poll::Ready(Ok(())),
         }
     }
 }
@@ -81,39 +90,58 @@ impl AsyncWrite for Stream {
 impl Stream {
     /// Wrap an unencrypted TCP stream.
     pub fn plain(stream: TcpStream) -> Self {
-        Self::Plain(BufStream::with_capacity(9126, 9126, stream))
+        Self {
+            inner: StreamInner::Plain(BufStream::with_capacity(9126, 9126, stream)),
+            io_in_progress: false,
+        }
     }
 
     /// Wrap an encrypted TCP stream.
     pub fn tls(stream: tokio_rustls::TlsStream<TcpStream>) -> Self {
-        Self::Tls(BufStream::with_capacity(9126, 9126, stream))
+        Self {
+            inner: StreamInner::Tls(BufStream::with_capacity(9126, 9126, stream)),
+            io_in_progress: false,
+        }
+    }
+
+    /// Create a dev null stream that discards all data.
+    pub fn dev_null() -> Self {
+        Self {
+            inner: StreamInner::DevNull,
+            io_in_progress: false,
+        }
     }
 
     /// This is a TLS stream.
     pub fn is_tls(&self) -> bool {
-        matches!(self, Self::Tls(_))
+        matches!(self.inner, StreamInner::Tls(_))
     }
 
     /// Get peer address if any. We're not using UNIX sockets (yet)
     /// so the peer address should always be available.
     pub fn peer_addr(&self) -> PeerAddr {
-        match self {
-            Self::Plain(stream) => stream.get_ref().peer_addr().ok().into(),
-            Self::Tls(stream) => stream.get_ref().get_ref().0.peer_addr().ok().into(),
-            Self::DevNull => PeerAddr { addr: None },
+        match &self.inner {
+            StreamInner::Plain(stream) => stream.get_ref().peer_addr().ok().into(),
+            StreamInner::Tls(stream) => stream.get_ref().get_ref().0.peer_addr().ok().into(),
+            StreamInner::DevNull => PeerAddr { addr: None },
         }
     }
 
     /// Check socket is okay while we wait for something else.
     pub async fn check(&mut self) -> Result<(), crate::net::Error> {
         let mut buf = [0u8; 1];
-        match self {
-            Self::Plain(plain) => eof(plain.get_mut().peek(&mut buf).await)?,
-            Self::Tls(tls) => eof(tls.get_mut().get_mut().0.peek(&mut buf).await)?,
-            Self::DevNull => 0,
+        match &mut self.inner {
+            StreamInner::Plain(plain) => eof(plain.get_mut().peek(&mut buf).await)?,
+            StreamInner::Tls(tls) => eof(tls.get_mut().get_mut().0.peek(&mut buf).await)?,
+            StreamInner::DevNull => 0,
         };
 
         Ok(())
+    }
+
+    /// Get the current io_in_progress state.
+    pub fn io_in_progress(&self) -> bool {
+        self.io_in_progress
     }
 
     /// Send data via the stream.
@@ -123,30 +151,36 @@ impl Stream {
     /// This is fast because the stream is buffered. Make sure to call [`Stream::send_flush`]
     /// for the last message in the exchange.
     pub async fn send(&mut self, message: &impl Protocol) -> Result<usize, crate::net::Error> {
-        let bytes = message.to_bytes()?;
+        self.io_in_progress = true;
+        let result = async {
+            let bytes = message.to_bytes()?;
 
-        match self {
-            Stream::Plain(ref mut stream) => eof(stream.write_all(&bytes).await)?,
-            Stream::Tls(ref mut stream) => eof(stream.write_all(&bytes).await)?,
-            Self::DevNull => (),
-        }
+            match &mut self.inner {
+                StreamInner::Plain(ref mut stream) => eof(stream.write_all(&bytes).await)?,
+                StreamInner::Tls(ref mut stream) => eof(stream.write_all(&bytes).await)?,
+                StreamInner::DevNull => (),
+            }
 
-        trace!("{:?} <-- {:#?}", self.peer_addr(), message);
+            trace!("{:?} <-- {:#?}", self.peer_addr(), message);
 
-        #[cfg(debug_assertions)]
-        {
-            use crate::net::messages::FromBytes;
-            use tracing::error;
+            #[cfg(debug_assertions)]
+            {
+                use crate::net::messages::FromBytes;
+                use tracing::error;
 
-            if message.code() == 'E' {
-                let error = ErrorResponse::from_bytes(bytes.clone())?;
-                if !error.message.is_empty() {
-                    error!("{:?} <-- {}", self.peer_addr(), error)
+                if message.code() == 'E' {
+                    let error = ErrorResponse::from_bytes(bytes.clone())?;
+                    if !error.message.is_empty() {
+                        error!("{:?} <-- {}", self.peer_addr(), error)
+                    }
                 }
             }
-        }
 
-        Ok(bytes.len())
+            Ok(bytes.len())
+        }
+        .await;
+        self.io_in_progress = false;
+        result
     }
 
     /// Send data via the stream and flush the buffer,
@@ -195,30 +229,35 @@ impl Stream {
 
     /// Read data into a buffer, avoiding unnecessary allocations.
     pub async fn read_buf(&mut self, bytes: &mut BytesMut) -> Result<Message, crate::net::Error> {
-        let code = eof(self.read_u8().await)?;
-        let len = eof(self.read_i32().await)?;
+        let result = async {
+            let code = eof(self.read_u8().await)?;
+            self.io_in_progress = true;
+            bytes.put_u8(code);
+            let len = eof(self.read_i32().await)?;
+            bytes.put_i32(len);
 
-        bytes.put_u8(code);
-        bytes.put_i32(len);
+            // Length must be at least 4 bytes.
+            if len < 4 {
+                return Err(crate::net::Error::UnexpectedEof);
+            }
 
-        // Length must be at least 4 bytes.
-        if len < 4 {
-            return Err(crate::net::Error::UnexpectedEof);
+            let capacity = len as usize + 1;
+            bytes.reserve(capacity); // self + 1 byte for the message code
+            unsafe {
+                // SAFETY: We reserved the memory above, so it's there.
+                // It contains garbage but we're about to write to it.
+                bytes.set_len(capacity);
+            }
+
+            eof(self.read_exact(&mut bytes[5..capacity]).await)?;
+
+            let message = Message::new(bytes.split().freeze());
+
+            Ok(message)
         }
-
-        let capacity = len as usize + 1;
-        bytes.reserve(capacity); // self + 1 byte for the message code
-        unsafe {
-            // SAFETY: We reserved the memory above, so it's there.
-            // It contains garbage but we're about to write to it.
-            bytes.set_len(capacity);
-        }
-
-        eof(self.read_exact(&mut bytes[5..capacity]).await)?;
-
-        let message = Message::new(bytes.split().freeze());
-
-        Ok(message)
+        .await;
+        self.io_in_progress = false;
+        result
     }
 
     /// Send an error to the client and disconnect gracefully.
@@ -250,8 +289,8 @@ impl Stream {
 
     /// Get the wrapped TCP stream back.
     pub(crate) fn take(self) -> Result<TcpStream, crate::net::Error> {
-        match self {
-            Self::Plain(stream) => Ok(stream.into_inner()),
+        match self.inner {
+            StreamInner::Plain(stream) => Ok(stream.into_inner()),
             _ => Err(crate::net::Error::UnexpectedTlsRequest),
         }
     }
@@ -297,5 +336,29 @@ impl std::fmt::Debug for PeerAddr {
         } else {
             write!(f, "")
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::net::TcpListener;
+
+    #[tokio::test]
+    async fn test_io_in_progress_initially_false() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let client = tokio::spawn(async move { TcpStream::connect(addr).await.unwrap() });
+
+        let (server_stream, _) = listener.accept().await.unwrap();
+        let stream = Stream::plain(server_stream);
+
+        assert!(
+            !stream.io_in_progress(),
+            "io_in_progress should be false initially"
+        );
+
+        client.await.unwrap();
     }
 }

@@ -97,6 +97,7 @@ impl Binding {
                             }
 
                             let message = server.read().await?;
+
                             read = true;
                             if let Some(message) = state.forward(message)? {
                                 return Ok(message);

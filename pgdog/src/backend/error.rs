@@ -84,6 +84,9 @@ pub enum Error {
     #[error("protocol is out of sync")]
     ProtocolOutOfSync,
 
+    #[error("rollback left server in inconsistent state")]
+    RollbackFailed,
+
     #[error("decoder is missing required data to decode row")]
     DecoderRowError,
 
