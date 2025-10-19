@@ -95,7 +95,7 @@ impl PreparedStatements {
                     let message = self.check_prepared(bind.statement())?;
                     match message {
                         Some(message) => {
-                            self.state.add_ignore('1', bind.statement());
+                            self.state.add_ignore('1');
                             self.parses.push_back(bind.statement().to_string());
                             self.state.add('2');
                             return Ok(HandleResult::Prepend(message));
@@ -115,7 +115,7 @@ impl PreparedStatements {
 
                     match message {
                         Some(message) => {
-                            self.state.add_ignore('1', describe.statement());
+                            self.state.add_ignore('1');
                             self.parses.push_back(describe.statement().to_string());
                             self.state.add(ExecutionCode::DescriptionOrNothing); // t
                             self.state.add(ExecutionCode::DescriptionOrNothing); // T

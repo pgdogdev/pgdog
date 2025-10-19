@@ -70,7 +70,6 @@ impl MemoryUsage for ExecutionItem {
 #[derive(Debug, Clone, Default)]
 pub struct ProtocolState {
     queue: VecDeque<ExecutionItem>,
-    names: VecDeque<String>,
     simulated: VecDeque<Message>,
     extended: bool,
     out_of_sync: bool,
@@ -80,7 +79,6 @@ impl MemoryUsage for ProtocolState {
     #[inline]
     fn memory_usage(&self) -> usize {
         self.queue.memory_usage()
-            + self.names.memory_usage()
             + self.simulated.memory_usage()
             + self.extended.memory_usage()
             + self.out_of_sync.memory_usage()
@@ -94,11 +92,10 @@ impl ProtocolState {
     /// This is used for preparing statements that the client expects to be there
     /// but the server connection doesn't have yet.
     ///
-    pub(crate) fn add_ignore(&mut self, code: impl Into<ExecutionCode>, name: &str) {
+    pub(crate) fn add_ignore(&mut self, code: impl Into<ExecutionCode>) {
         let code = code.into();
         self.extended = self.extended || code.extended();
         self.queue.push_back(ExecutionItem::Ignore(code));
-        self.names.push_back(name.to_owned());
     }
 
     /// Add a message to the execution queue. We expect this message
@@ -156,7 +153,6 @@ impl ProtocolState {
                 }
                 let last = self.queue.pop_back();
                 self.queue.clear();
-                self.names.clear();
                 if let Some(ExecutionItem::Code(ExecutionCode::ReadyForQuery)) = last {
                     self.queue
                         .push_back(ExecutionItem::Code(ExecutionCode::ReadyForQuery));
@@ -186,7 +182,6 @@ impl ProtocolState {
 
             // Used for preparing statements that the client expects to be there.
             ExecutionItem::Ignore(in_queue) => {
-                self.names.pop_front().ok_or(Error::ProtocolOutOfSync)?;
                 if code == in_queue {
                     Ok(Action::Ignore)
                 } else {
@@ -554,7 +549,7 @@ mod test {
     #[test]
     fn test_ignore_parse_complete() {
         let mut state = ProtocolState::default();
-        state.add_ignore('1', "test_statement");
+        state.add_ignore('1');
         assert_eq!(state.action('1').unwrap(), Action::Ignore);
         assert!(state.is_empty());
     }
@@ -562,7 +557,7 @@ mod test {
     #[test]
     fn test_ignore_bind_complete() {
         let mut state = ProtocolState::default();
-        state.add_ignore('2', "test_portal");
+        state.add_ignore('2');
         assert_eq!(state.action('2').unwrap(), Action::Ignore);
         assert!(state.is_empty());
     }
@@ -570,8 +565,8 @@ mod test {
     #[test]
     fn test_ignore_error_behavior() {
         let mut state = ProtocolState::default();
-        state.add_ignore('1', "statement1");
-        state.add_ignore('2', "portal1");
+        state.add_ignore('1');
+        state.add_ignore('2');
 
         // When we get an error with Ignore items in queue,
         // the Error arm is triggered first (before checking queue items)
@@ -588,7 +583,7 @@ mod test {
     #[test]
     fn test_ignore_wrong_code_is_out_of_sync() {
         let mut state = ProtocolState::default();
-        state.add_ignore('1', "test");
+        state.add_ignore('1');
         // We expect ParseComplete but get BindComplete
         assert!(state.action('2').is_err());
     }
@@ -807,81 +802,15 @@ mod test {
         assert!(!state.has_more_messages());
     }
 
-    // ========================================
-    // Test for Line 189 OutOfSync Error
-    // ========================================
-
-    #[test]
-    fn test_names_queue_mismatch_not_possible() {
-        // This test attempts to trigger the OutOfSync error on line 189:
-        // self.names.pop_front().ok_or(Error::ProtocolOutOfSync)?;
-        //
-        // This error would occur if we have an ExecutionItem::Ignore in the queue
-        // but the names VecDeque is empty.
-        //
-        // After analyzing the code, this appears to be IMPOSSIBLE through the
-        // public API because:
-        // 1. add_ignore() always adds BOTH an Ignore item AND a name (paired)
-        // 2. action() on an Ignore item pops from BOTH queue and names (paired)
-        // 3. No other method can create an Ignore item or remove from names
-        //
-        // The only potential bug would be if names gets cleared but queue retains Ignore items.
-        // Let's try to trigger this through various scenarios:
-
-        let mut state = ProtocolState::default();
-
-        // Scenario 1: Error during ignore processing
-        // The Error handler clears the queue but NOT names - could this cause issues?
-        state.add_ignore('1', "stmt1");
-        state.add_ignore('2', "stmt2");
-        state.add('Z'); // ReadyForQuery
-
-        // Trigger error - this clears queue (except RFQ) but not names
-        assert_eq!(state.action('E').unwrap(), Action::Forward);
-        assert_eq!(state.action('Z').unwrap(), Action::Forward);
-
-        // At this point: queue is empty, names still has ["stmt1", "stmt2"]
-        // This is a potential memory leak but doesn't trigger line 189
-
-        // If we add a new ignore item now:
-        state.add_ignore('3', "stmt3");
-        // queue: [Ignore('3')], names: ["stmt1", "stmt2", "stmt3"]
-        // This would pop "stmt1" instead of "stmt3", which is wrong but doesn't OutOfSync
-        assert_eq!(state.action('3').unwrap(), Action::Ignore);
-
-        // Scenario 2: Multiple ignore items processed successfully
-        let mut state2 = ProtocolState::default();
-        state2.add_ignore('1', "parse1");
-        state2.add_ignore('2', "bind1");
-
-        assert_eq!(state2.action('1').unwrap(), Action::Ignore);
-        assert_eq!(state2.action('2').unwrap(), Action::Ignore);
-        // Both queues are consumed in lockstep - no mismatch
-
-        // Scenario 3: Try to consume more ignore items than we have
-        let mut state3 = ProtocolState::default();
-        state3.add_ignore('1', "test");
-        assert_eq!(state3.action('1').unwrap(), Action::Ignore);
-
-        // Queue is now empty - trying to action() on anything will hit line 172 OutOfSync
-        // BEFORE we can reach line 189
-        let result = state3.action('2');
-        assert!(result.is_err()); // This is line 172 OutOfSync, not line 189
-
-        // CONCLUSION: Line 189 appears to be defensive programming that cannot be
-        // triggered through the public API. It would only be triggered if there's
-        // a bug elsewhere in the implementation that breaks the queue/names invariant.
-    }
-
     #[test]
     fn test_names_cleared_on_error() {
         // This test verifies that when an error occurs, both queue AND names
         // are cleared to maintain the invariant that they stay synchronized.
 
         let mut state = ProtocolState::default();
-        state.add_ignore('1', "stmt1");
-        state.add_ignore('2', "stmt2");
-        state.add_ignore('3', "stmt3");
+        state.add_ignore('1');
+        state.add_ignore('2');
+        state.add_ignore('3');
         state.add('Z'); // ReadyForQuery
 
         // Error should clear both queue (except RFQ) and names
@@ -893,12 +822,12 @@ mod test {
 
         // Now if we add a new ignore item, it should work correctly
         // because names was also cleared
-        state.add_ignore('1', "new_stmt");
+        state.add_ignore('1');
         assert_eq!(state.action('1').unwrap(), Action::Ignore);
         assert!(state.is_empty()); // Both queue and names should be empty
 
         // Verify we can continue using the state normally
-        state.add_ignore('2', "another_stmt");
+        state.add_ignore('2');
         state.add('C');
         state.add('Z');
 
