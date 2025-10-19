@@ -10,7 +10,6 @@ use std::{collections::VecDeque, fmt::Debug};
 pub enum Action {
     Forward,
     Ignore,
-    ForwardAndRemove(VecDeque<String>),
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -190,8 +189,6 @@ impl ProtocolState {
                 self.names.pop_front().ok_or(Error::ProtocolOutOfSync)?;
                 if code == in_queue {
                     Ok(Action::Ignore)
-                } else if code == ExecutionCode::Error {
-                    Ok(Action::ForwardAndRemove(std::mem::take(&mut self.names)))
                 } else {
                     Err(Error::ProtocolOutOfSync)
                 }

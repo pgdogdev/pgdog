@@ -243,12 +243,6 @@ impl PreparedStatements {
 
         match action {
             Action::Ignore => Ok(false),
-            Action::ForwardAndRemove(names) => {
-                for name in names {
-                    self.remove(&name);
-                }
-                Ok(true)
-            }
             Action::Forward => Ok(true),
         }
     }
