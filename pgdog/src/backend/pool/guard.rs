@@ -389,5 +389,6 @@ mod test {
         .await;
         assert!(res.is_err());
         assert!(server.force_close());
+        assert!(server.io_in_progress())
     }
 }
