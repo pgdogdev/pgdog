@@ -71,6 +71,11 @@ impl Cleanup {
         clean
     }
 
+    /// Number of queries to run for cleanup.
+    pub fn len(&self) -> usize {
+        self.queries.len()
+    }
+
     /// Cleanup prepared statements.
     pub fn prepared_statements() -> Self {
         Self {

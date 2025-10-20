@@ -362,10 +362,11 @@ impl Server {
                         }
                         Err(err) => {
                             error!(
-                                "{:?} got: {}, extended buffer: {:?}",
+                                "{:?} got: {}, extended buffer: {:?}, state: {}",
                                 err,
                                 message.code(),
                                 self.prepared_statements.state(),
+                                self.stats.state,
                             );
                             return Err(err);
                         }
@@ -1352,6 +1353,9 @@ pub mod test {
             .unwrap();
         for c in ['T', 'D', 'C', 'T', 'D', 'C', 'Z'] {
             let msg = server.read().await.unwrap();
+            if c != 'Z' {
+                assert!(!server.done());
+            }
             assert_eq!(c, msg.code());
         }
     }
@@ -1852,6 +1856,36 @@ pub mod test {
 
         server.execute("ROLLBACK").await.unwrap();
         assert!(server.in_sync());
+    }
+
+    #[tokio::test]
+    async fn test_copy_client_fail() {
+        let mut server = test_server().await;
+        server.execute("BEGIN").await.unwrap();
+        server
+            .execute("CREATE TABLE IF NOT EXISTS test_copy_t (id BIGINT)")
+            .await
+            .unwrap();
+        server
+            .send(
+                &vec![
+                    Query::new("COPY test_copy_t(id) FROM STDIN CSV").into(),
+                    CopyData::new(b"1\n").into(),
+                    CopyFail::new("something went wrong").into(),
+                ]
+                .into(),
+            )
+            .await
+            .unwrap();
+        for c in ['G', 'E', 'Z'] {
+            if c != 'Z' {
+                assert!(!server.done());
+                assert!(server.has_more_messages());
+            }
+            assert_eq!(server.read().await.unwrap().code(), c);
+        }
+
+        server.execute("ROLLBACK").await.unwrap();
     }
 
     #[tokio::test]

@@ -5,6 +5,15 @@ pub struct CopyFail {
     error: Bytes,
 }
 
+impl CopyFail {
+    pub fn new(error: impl ToString) -> Self {
+        let error = error.to_string();
+        Self {
+            error: Bytes::from(format!("{}\0", error)),
+        }
+    }
+}
+
 impl FromBytes for CopyFail {
     fn from_bytes(mut bytes: Bytes) -> Result<Self, Error> {
         code!(bytes, 'f');
