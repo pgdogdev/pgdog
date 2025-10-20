@@ -127,8 +127,8 @@ impl Guard {
 
         if cleanup.needed() {
             debug!(
-                "[cleanup] {}, server in \"{}\" state [{}]",
-                cleanup,
+                "[cleanup] running {} cleanup queries, server in \"{}\" state [{}]",
+                cleanup.len(),
                 server.stats().state,
                 server.addr()
             );
@@ -191,11 +191,16 @@ impl Drop for Guard {
 mod test {
     use std::time::Duration;
 
-    use tokio::time::sleep;
+    use tokio::time::{sleep, timeout, Instant};
 
     use crate::{
-        backend::pool::{test::pool, Address, Config, Pool, PoolConfig, Request},
-        net::{Describe, Flush, Parse, Protocol, Query, Sync},
+        backend::{
+            pool::{
+                cleanup::Cleanup, test::pool, Address, Config, Guard, Pool, PoolConfig, Request,
+            },
+            server::test::test_server,
+        },
+        net::{Describe, Flush, Parse, Protocol, ProtocolMessage, Query, Sync},
     };
 
     #[tokio::test]
@@ -292,14 +297,7 @@ mod test {
         };
 
         let pool = Pool::new(&PoolConfig {
-            address: Address {
-                host: "127.0.0.1".into(),
-                port: 5432,
-                database_name: "pgdog".into(),
-                user: "pgdog".into(),
-                password: "pgdog".into(),
-                ..Default::default()
-            },
+            address: Address::new_test(),
             config,
         });
         pool.launch();
@@ -318,10 +316,78 @@ mod test {
 
         sleep(Duration::from_millis(500)).await;
 
-        let state = pool.lock();
-        assert_eq!(state.errors, 0);
-        assert_eq!(state.idle(), 0);
-        assert_eq!(state.total(), 0);
-        assert_eq!(state.force_close, 1);
+        {
+            let state = pool.lock();
+            assert_eq!(state.errors, 0);
+            assert_eq!(state.idle(), 0);
+            assert_eq!(state.total(), 0);
+            assert_eq!(state.force_close, 1);
+        }
+
+        // Will create new connection.
+        let mut server = pool.get(&Request::default()).await.unwrap();
+        let one: Vec<i32> = server.fetch_all("SELECT 1").await.unwrap();
+        assert_eq!(one[0], 1);
+    }
+
+    #[tokio::test]
+    async fn test_cleanup_close_drain() {
+        crate::logger();
+
+        let mut server = Guard::new(
+            Pool::new_test(),
+            Box::new(test_server().await),
+            Instant::now(),
+        );
+        server.prepared_statements_mut().set_capacity(1);
+
+        for i in 0..5 {
+            server
+                .send(
+                    &vec![
+                        ProtocolMessage::from(Parse::named(format!("test_{}", i), "SELECT 1")),
+                        Flush.into(),
+                    ]
+                    .into(),
+                )
+                .await
+                .unwrap();
+
+            let ok = server.read().await.unwrap();
+            assert_eq!(ok.code(), '1');
+            assert!(server.done());
+        }
+        assert_eq!(server.prepared_statements().len(), 5);
+        server
+            .send(&vec![Query::new("SHOW prepared_statements").into()].into())
+            .await
+            .unwrap();
+        let mut guard = server;
+        let mut server = guard.server.take().unwrap();
+        let cleanup = Cleanup::new(&guard, &mut server);
+        assert_eq!(cleanup.close().len(), 4);
+        assert!(server.needs_drain());
+
+        Guard::cleanup_internal(&mut server, cleanup).await.unwrap();
+
+        assert!(server.done());
+        assert!(!server.needs_drain());
+
+        let one: Vec<i32> = server.fetch_all("SELECT 1").await.unwrap();
+        assert_eq!(one[0], 1);
+    }
+
+    #[tokio::test]
+    async fn test_cancel_safety_partial_send() {
+        let mut server = test_server().await;
+        let select = (0..10_000_000).into_iter().map(|_| 'b').collect::<String>();
+        let select = Query::new(format!("SELECT '{}'", select));
+        let res = timeout(
+            Duration::from_millis(1),
+            server.send(&vec![select.into()].into()),
+        )
+        .await;
+        assert!(res.is_err());
+        assert!(server.force_close());
     }
 }
