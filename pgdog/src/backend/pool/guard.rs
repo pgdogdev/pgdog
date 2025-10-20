@@ -380,7 +380,7 @@ mod test {
     #[tokio::test]
     async fn test_cancel_safety_partial_send() {
         let mut server = test_server().await;
-        let select = (0..10_000_000).into_iter().map(|_| 'b').collect::<String>();
+        let select = (0..50_000_000).into_iter().map(|_| 'b').collect::<String>();
         let select = Query::new(format!("SELECT '{}'", select));
         let res = timeout(
             Duration::from_millis(1),
