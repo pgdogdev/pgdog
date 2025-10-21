@@ -4,12 +4,15 @@ use crate::{
         client::{timeouts::Timeouts, TransactionType},
         Client, ClientRequest, PreparedStatements,
     },
-    net::{Parameters, Stream},
+    net::{BackendKeyData, Parameters, Stream},
     stats::memory::MemoryUsage,
 };
 
+#[allow(dead_code)]
 /// Context passed to the query engine to execute a query.
 pub struct QueryEngineContext<'a> {
+    /// Client ID running the query.
+    pub(super) id: &'a BackendKeyData,
     /// Prepared statements cache.
     pub(super) prepared_statements: &'a mut PreparedStatements,
     /// Client session parameters.
@@ -39,6 +42,7 @@ impl<'a> QueryEngineContext<'a> {
         let memory_usage = client.memory_usage();
 
         Self {
+            id: &client.id,
             prepared_statements: &mut client.prepared_statements,
             params: &mut client.params,
             client_request: &mut client.client_request,
@@ -62,6 +66,7 @@ impl<'a> QueryEngineContext<'a> {
     /// Create context from mirror.
     pub fn new_mirror(mirror: &'a mut Mirror, buffer: &'a mut ClientRequest) -> Self {
         Self {
+            id: &mirror.id,
             prepared_statements: &mut mirror.prepared_statements,
             params: &mut mirror.params,
             client_request: buffer,
