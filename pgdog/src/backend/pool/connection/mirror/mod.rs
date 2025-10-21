@@ -15,7 +15,7 @@ use crate::frontend::client::timeouts::Timeouts;
 use crate::frontend::client::TransactionType;
 use crate::frontend::comms::comms;
 use crate::frontend::PreparedStatements;
-use crate::net::{Parameter, Parameters, Stream};
+use crate::net::{BackendKeyData, Parameter, Parameters, Stream};
 
 use crate::frontend::ClientRequest;
 
@@ -33,6 +33,8 @@ pub use request::*;
 /// to PgDog.
 #[derive(Debug)]
 pub struct Mirror {
+    /// Random identifier for this mirror connection.
+    pub id: BackendKeyData,
     /// Mirror's prepared statements. Should be similar
     /// to client's statements, if exposure is high.
     pub prepared_statements: PreparedStatements,
@@ -51,6 +53,7 @@ pub struct Mirror {
 impl Mirror {
     fn new(params: &Parameters, config: &ConfigAndUsers) -> Self {
         Self {
+            id: BackendKeyData::new(),
             prepared_statements: PreparedStatements::new(),
             params: params.clone(),
             timeouts: Timeouts::from_config(&config.config.general),
