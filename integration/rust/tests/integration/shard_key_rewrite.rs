@@ -2,6 +2,7 @@ use rust::setup::{admin_sqlx, connections_sqlx};
 use sqlx::{Executor, Pool, Postgres};
 
 const TEST_TABLE: &str = "sharded_list";
+const NON_SHARDED_TABLE: &str = "shard_key_rewrite_non_sharded";
 
 struct RewriteConfigGuard {
     admin: Pool<Postgres>,
@@ -31,6 +32,67 @@ impl Drop for RewriteConfigGuard {
             let _ = admin.execute("SET two_phase_commit TO false").await;
         });
     }
+}
+
+#[tokio::test]
+async fn shard_key_insert_rewrite_is_pending_for_multi_row_inserts() {
+    let admin = admin_sqlx().await;
+    let _guard = RewriteConfigGuard::enable(admin.clone()).await;
+
+    let mut pools = connections_sqlx().await;
+    let sharded = pools.swap_remove(1);
+
+    cleanup_table(&sharded).await;
+
+    let err = sqlx::query(
+        "INSERT INTO sharded (id, value) VALUES (1, 'one'), (2, 'two')",
+    )
+    .execute(&sharded)
+    .await
+    .expect_err("multi-row insert into sharded table should fail for now");
+
+    let db_err = err
+        .as_database_error()
+        .expect("expected database error from proxy");
+    let message = db_err.message();
+    assert!(
+        message.contains("multiple-row INSERT into sharded table is not supported")
+            || message.contains("multi-row insert not supported"),
+        "unexpected error message: {}",
+        message
+    );
+
+    verify_sharded_table_empty(&sharded).await;
+}
+
+#[tokio::test]
+async fn shard_key_insert_rewrite_allows_multi_row_inserts_on_non_sharded_tables() {
+    let admin = admin_sqlx().await;
+    let _guard = RewriteConfigGuard::enable(admin.clone()).await;
+
+    let mut pools = connections_sqlx().await;
+    let sharded = pools.swap_remove(1);
+
+    prepare_non_sharded_table(&sharded).await;
+
+    sqlx::query(format!(
+        "INSERT INTO {NON_SHARDED_TABLE} (id, name) VALUES (1, 'one'), (2, 'two')"
+    ).as_str())
+    .execute(&sharded)
+    .await
+    .expect("multi-row insert should succeed for non-sharded table");
+
+    let rows: Vec<(i64, String)> = sqlx::query_as(&format!(
+        "SELECT id, name FROM {NON_SHARDED_TABLE} ORDER BY id"
+    ))
+    .fetch_all(&sharded)
+    .await
+    .expect("read back non-sharded rows");
+    assert_eq!(rows.len(), 2, "expected two rows in non-sharded table");
+    assert_eq!(rows[0], (1, "one".to_string()));
+    assert_eq!(rows[1], (2, "two".to_string()));
+
+    cleanup_non_sharded_table(&sharded).await;
 }
 
 #[tokio::test]
@@ -198,4 +260,42 @@ async fn count_on_shard(pool: &Pool<Postgres>, shard: i32, id: i64) -> i64 {
         .fetch_one(pool)
         .await
         .unwrap()
+}
+
+async fn verify_sharded_table_empty(pool: &Pool<Postgres>) {
+    for shard in [0, 1] {
+        let count = sqlx::query_scalar::<_, i64>(&format!(
+            "/* pgdog_shard: {shard} */ SELECT COUNT(*) FROM {TEST_TABLE}"
+        ))
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!(count, 0, "expected shard {shard} to remain empty");
+    }
+}
+
+async fn prepare_non_sharded_table(pool: &Pool<Postgres>) {
+    let drop = format!("/* pgdog_shard: 0 */ DROP TABLE IF EXISTS {NON_SHARDED_TABLE}");
+    pool.execute(drop.as_str()).await.ok();
+    let drop = format!("/* pgdog_shard: 1 */ DROP TABLE IF EXISTS {NON_SHARDED_TABLE}");
+    pool.execute(drop.as_str()).await.ok();
+
+    sqlx::query(
+        &format!(
+            "CREATE TABLE IF NOT EXISTS {NON_SHARDED_TABLE} (id BIGINT PRIMARY KEY, name TEXT)"
+        ),
+    )
+    .execute(pool)
+    .await
+    .expect("create non-sharded table");
+
+    sqlx::query(&format!("TRUNCATE TABLE {NON_SHARDED_TABLE}")).execute(pool)
+        .await
+        .expect("truncate non-sharded table");
+}
+
+async fn cleanup_non_sharded_table(pool: &Pool<Postgres>) {
+    sqlx::query(&format!("DROP TABLE IF EXISTS {NON_SHARDED_TABLE}")).execute(pool)
+        .await
+        .ok();
 }
