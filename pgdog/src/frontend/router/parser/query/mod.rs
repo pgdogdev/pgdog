@@ -441,7 +441,12 @@ impl QueryParser {
         context: &QueryParserContext,
     ) -> Result<Command, Error> {
         let insert = Insert::new(stmt);
-        let shard = insert.shard(&context.sharding_schema, context.router_context.bind)?;
+        let shard = insert.shard(
+            &context.sharding_schema,
+            context.router_context.bind,
+            context.rewrite_enabled(),
+            context.split_insert_mode(),
+        )?;
         if let Some(recorder) = self.recorder_mut() {
             match &shard {
                 Shard::Direct(_) => {

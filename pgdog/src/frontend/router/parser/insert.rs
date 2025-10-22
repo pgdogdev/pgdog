@@ -4,6 +4,7 @@ use tracing::debug;
 
 use crate::{
     backend::ShardingSchema,
+    config::RewriteMode,
     frontend::router::{
         round_robin,
         sharding::{ContextBuilder, Tables, Value as ShardingValue},
@@ -62,10 +63,34 @@ impl<'a> Insert<'a> {
         &'a self,
         schema: &'a ShardingSchema,
         bind: Option<&Bind>,
+        rewrite_enabled: bool,
+        split_mode: RewriteMode,
     ) -> Result<Shard, Error> {
         let tables = Tables::new(schema);
         let columns = self.columns();
         let table = self.table();
+        let tuples = self.tuples();
+
+        if let Some(table) = table {
+            if tables.sharded(table).is_some() && tuples.len() > 1 {
+                match split_mode {
+                    RewriteMode::Ignore => {}
+                    RewriteMode::Rewrite if rewrite_enabled => {
+                        return Err(Error::ShardedMultiRowInsert {
+                            table: table.name.to_owned(),
+                            mode: split_mode,
+                        });
+                    }
+                    RewriteMode::Rewrite | RewriteMode::Error => {
+                        return Err(Error::ShardedMultiRowInsert {
+                            table: table.name.to_owned(),
+                            mode: split_mode,
+                        });
+                    }
+                }
+            }
+        }
+
         let key = table.and_then(|table| tables.key(table, &columns));
 
         if let Some(key) = key {
@@ -80,8 +105,6 @@ impl<'a> Insert<'a> {
                     return Ok(ctx.apply()?);
                 }
             }
-
-            let tuples = self.tuples();
 
             // TODO: support rewriting INSERTs to run against multiple shards.
             if tuples.len() != 1 {
@@ -237,7 +260,9 @@ mod test {
         match &select.node {
             Some(NodeEnum::InsertStmt(stmt)) => {
                 let insert = Insert::new(stmt);
-                let shard = insert.shard(&schema, None).unwrap();
+                let shard = insert
+                    .shard(&schema, None, false, RewriteMode::Error)
+                    .unwrap();
                 assert!(matches!(shard, Shard::Direct(2)));
 
                 let bind = Bind::new_params(
@@ -248,7 +273,9 @@ mod test {
                     }],
                 );
 
-                let shard = insert.shard(&schema, Some(&bind)).unwrap();
+                let shard = insert
+                    .shard(&schema, Some(&bind), false, RewriteMode::Error)
+                    .unwrap();
                 assert!(matches!(shard, Shard::Direct(1)));
 
                 let bind = Bind::new_params_codes(
@@ -260,7 +287,9 @@ mod test {
                     &[Format::Binary],
                 );
 
-                let shard = insert.shard(&schema, Some(&bind)).unwrap();
+                let shard = insert
+                    .shard(&schema, Some(&bind), false, RewriteMode::Error)
+                    .unwrap();
                 assert!(matches!(shard, Shard::Direct(0)));
             }
 
@@ -273,7 +302,9 @@ mod test {
         match &select.node {
             Some(NodeEnum::InsertStmt(stmt)) => {
                 let insert = Insert::new(stmt);
-                let shard = insert.shard(&schema, None).unwrap();
+                let shard = insert
+                    .shard(&schema, None, false, RewriteMode::Error)
+                    .unwrap();
                 assert!(matches!(shard, Shard::Direct(2)));
             }
 
@@ -286,7 +317,9 @@ mod test {
         match &select.node {
             Some(NodeEnum::InsertStmt(stmt)) => {
                 let insert = Insert::new(stmt);
-                let shard = insert.shard(&schema, None).unwrap();
+                let shard = insert
+                    .shard(&schema, None, false, RewriteMode::Error)
+                    .unwrap();
                 assert!(matches!(shard, Shard::All));
             }
 
@@ -300,7 +333,9 @@ mod test {
         match &select.node {
             Some(NodeEnum::InsertStmt(stmt)) => {
                 let insert = Insert::new(stmt);
-                let shard = insert.shard(&schema, None).unwrap();
+                let shard = insert
+                    .shard(&schema, None, false, RewriteMode::Error)
+                    .unwrap();
                 assert!(matches!(shard, Shard::Direct(_)));
             }
 

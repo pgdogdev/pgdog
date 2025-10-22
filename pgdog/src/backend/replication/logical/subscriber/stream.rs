@@ -247,7 +247,15 @@ impl StreamSubscriber {
             // we are able to replay changes we already applied safely.
             if let Some(upsert) = statements.upsert.insert() {
                 let upsert = Insert::new(upsert);
-                let val = upsert.shard(&self.sharding_schema, Some(&bind))?;
+                let cfg = crate::config::config();
+                let rewrite_enabled = cfg.config.rewrite.enabled;
+                let split_mode = cfg.config.rewrite.split_inserts;
+                let val = upsert.shard(
+                    &self.sharding_schema,
+                    Some(&bind),
+                    rewrite_enabled,
+                    split_mode,
+                )?;
                 self.send(&val, &bind).await?;
             }
 

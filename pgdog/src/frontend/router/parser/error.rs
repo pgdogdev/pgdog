@@ -2,7 +2,7 @@
 
 use thiserror::Error;
 
-use crate::{config::ShardKeyUpdateMode, frontend::router::sharding};
+use crate::{config::RewriteMode, frontend::router::sharding};
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -70,19 +70,24 @@ pub enum Error {
     RegexError,
 
     #[error(
-        "updating sharding key columns ({columns}) on table \"{table}\" is not allowed when rewrite_shard_key_updates={mode}"
+        "updating sharding key columns ({columns}) on table \"{table}\" is not allowed when rewrite.shard_key={mode}"
     )]
     ShardKeyUpdateViolation {
         table: String,
         columns: String,
-        mode: ShardKeyUpdateMode,
+        mode: RewriteMode,
     },
 
     #[error(
-        "rewrite_shard_key_updates=\"rewrite\" is not yet supported for table \"{table}\" (columns: {columns})"
+        "rewrite.shard_key=\"rewrite\" is not yet supported for table \"{table}\" (columns: {columns})"
     )]
     ShardKeyRewriteNotSupported { table: String, columns: String },
 
     #[error("internal shard key rewrite invariant violated: {reason}")]
     ShardKeyRewriteInvariant { reason: String },
+
+    #[error(
+        "multi-row INSERT into sharded table \"{table}\" is not supported when rewrite.split_inserts={mode}"
+    )]
+    ShardedMultiRowInsert { table: String, mode: RewriteMode },
 }
