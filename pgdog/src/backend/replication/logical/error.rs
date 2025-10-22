@@ -2,7 +2,7 @@ use std::num::ParseIntError;
 
 use thiserror::Error;
 
-use crate::net::ErrorResponse;
+use crate::{backend::replication::publisher::PublicationTable, net::ErrorResponse};
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -65,6 +65,9 @@ pub enum Error {
 
     #[error("no replicas available for table sync")]
     NoReplicas,
+
+    #[error("table {0} doesn't have a primary key")]
+    NoPrimaryKey(PublicationTable),
 }
 
 impl From<ErrorResponse> for Error {

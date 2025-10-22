@@ -3,6 +3,8 @@
 //! TODO: I think these are Postgres-version specific, so we need to handle that
 //! later. These were fetched from CREATE SUBSCRIPTION ran on Postgres 17.
 //!
+use std::fmt::Display;
+
 use crate::{
     backend::Server,
     net::{DataRow, Format},
@@ -26,6 +28,12 @@ pub struct PublicationTable {
     pub schema: String,
     pub name: String,
     pub attributes: String,
+}
+
+impl Display for PublicationTable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "\"{}\".\"{}\"", self.schema, self.name)
+    }
 }
 
 impl PublicationTable {

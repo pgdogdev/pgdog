@@ -49,6 +49,15 @@ impl Table {
         Ok(results)
     }
 
+    /// Check that the table supports replication.
+    pub fn valid(&self) -> Result<(), Error> {
+        if !self.columns.iter().any(|c| c.identity) {
+            return Err(Error::NoPrimaryKey(self.table.clone()));
+        }
+
+        Ok(())
+    }
+
     /// Upsert record into table.
     pub fn insert(&self, upsert: bool) -> String {
         let names = format!(
