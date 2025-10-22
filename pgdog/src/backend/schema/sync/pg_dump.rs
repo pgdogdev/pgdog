@@ -436,6 +436,15 @@ impl PgDumpOutput {
                             }
                         }
 
+                        NodeEnum::AlterOwnerStmt(stmt) => {
+                            if stmt.object_type() != ObjectType::ObjectPublication {
+                                result.push(Statement::Other {
+                                    sql: original.to_string(),
+                                    idempotent: true,
+                                });
+                            }
+                        }
+
                         NodeEnum::CreateEnumStmt(_)
                         | NodeEnum::CreateDomainStmt(_)
                         | NodeEnum::CompositeTypeStmt(_) => {
