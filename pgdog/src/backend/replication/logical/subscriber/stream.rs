@@ -13,7 +13,7 @@ use pg_query::{
     protobuf::{InsertStmt, ParseResult},
     NodeEnum,
 };
-use tracing::trace;
+use tracing::{debug, trace};
 
 use super::super::{publisher::Table, Error};
 use crate::{
@@ -95,8 +95,11 @@ impl Statement {
             .flatten()
             .flatten()
     }
-}
 
+    fn query(&self) -> &str {
+        &self.query
+    }
+}
 #[derive(Debug)]
 pub struct StreamSubscriber {
     /// Destination cluster.
@@ -303,10 +306,17 @@ impl StreamSubscriber {
         if let Some(table) = table {
             // Prepare queries for this table. Prepared statements
             // are much faster.
+
+            table.valid()?;
+
             let insert = Statement::new(&table.insert(false))?;
             let upsert = Statement::new(&table.insert(true))?;
 
             for server in &mut self.connections {
+                for stmt in &[&insert, &upsert] {
+                    debug!("preparing \"{}\" [{}]", stmt.query(), server.addr());
+                }
+
                 server
                     .send(&vec![insert.parse().into(), upsert.parse().into(), Sync.into()].into())
                     .await?;
