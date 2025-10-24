@@ -1,6 +1,6 @@
 [package]
 name = "pgdog"
-version = "0.1.10"
+version = "0.1.12"
 edition = "2021"
 description = "Modern PostgreSQL proxy, pooler and load balancer."
 authors = ["PgDog <hi@pgdog.dev>"]
