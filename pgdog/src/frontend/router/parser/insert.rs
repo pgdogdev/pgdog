@@ -1,18 +1,38 @@
 //! Handle INSERT statements.
 use pg_query::{protobuf::*, NodeEnum};
+use std::{collections::BTreeSet, string::String as StdString};
 use tracing::debug;
 
+use crate::frontend::router::parser::rewrite::{InsertSplitPlan, InsertSplitRow};
+use crate::frontend::router::parser::table::OwnedTable;
+use crate::net::messages::bind::Format;
+use crate::util::escape_identifier;
 use crate::{
     backend::ShardingSchema,
     config::RewriteMode,
     frontend::router::{
         round_robin,
-        sharding::{ContextBuilder, Tables, Value as ShardingValue},
+        sharding::{self, ContextBuilder, Tables, Value as ShardingValue},
     },
     net::Bind,
 };
 
-use super::{Column, Error, Shard, Table, Tuple, Value};
+use super::{Column, Error, Route, Shard, Table, Tuple, Value};
+
+#[derive(Debug, Clone)]
+pub enum InsertRouting {
+    Routed(Shard),
+    Split(InsertSplitPlan),
+}
+
+impl InsertRouting {
+    pub fn shard(&self) -> &Shard {
+        match self {
+            InsertRouting::Routed(shard) => shard,
+            InsertRouting::Split(plan) => plan.route().shard(),
+        }
+    }
+}
 
 /// Parse an `INSERT` statement.
 #[derive(Debug)]
@@ -65,7 +85,7 @@ impl<'a> Insert<'a> {
         bind: Option<&Bind>,
         rewrite_enabled: bool,
         split_mode: RewriteMode,
-    ) -> Result<Shard, Error> {
+    ) -> Result<InsertRouting, Error> {
         let tables = Tables::new(schema);
         let columns = self.columns();
         let table = self.table();
@@ -73,21 +93,14 @@ impl<'a> Insert<'a> {
 
         if let Some(table) = table {
             if tables.sharded(table).is_some() && tuples.len() > 1 {
-                match split_mode {
-                    RewriteMode::Ignore => {}
-                    RewriteMode::Rewrite if rewrite_enabled => {
-                        return Err(Error::ShardedMultiRowInsert {
-                            table: table.name.to_owned(),
-                            mode: split_mode,
-                        });
-                    }
-                    RewriteMode::Rewrite | RewriteMode::Error => {
-                        return Err(Error::ShardedMultiRowInsert {
-                            table: table.name.to_owned(),
-                            mode: split_mode,
-                        });
-                    }
+                if rewrite_enabled && split_mode == RewriteMode::Rewrite {
+                    return self.build_split_plan(&tables, schema, bind, table, &columns, &tuples);
                 }
+
+                return Err(Error::ShardedMultiRowInsert {
+                    table: table.name.to_owned(),
+                    mode: split_mode,
+                });
             }
         }
 
@@ -102,14 +115,14 @@ impl<'a> Insert<'a> {
                         .value(value)
                         .shards(schema.shards)
                         .build()?;
-                    return Ok(ctx.apply()?);
+                    return Ok(InsertRouting::Routed(ctx.apply()?));
                 }
             }
 
             // TODO: support rewriting INSERTs to run against multiple shards.
             if tuples.len() != 1 {
                 debug!("multiple tuples in an INSERT statement");
-                return Ok(Shard::All);
+                return Ok(InsertRouting::Routed(Shard::All));
             }
 
             if let Some(value) = tuples.first().and_then(|tuple| tuple.get(key.position)) {
@@ -119,7 +132,7 @@ impl<'a> Insert<'a> {
                             .data(*int)
                             .shards(schema.shards)
                             .build()?;
-                        return Ok(ctx.apply()?);
+                        return Ok(InsertRouting::Routed(ctx.apply()?));
                     }
 
                     Value::String(str) => {
@@ -127,7 +140,7 @@ impl<'a> Insert<'a> {
                             .data(*str)
                             .shards(schema.shards)
                             .build()?;
-                        return Ok(ctx.apply()?);
+                        return Ok(InsertRouting::Routed(ctx.apply()?));
                     }
 
                     _ => (),
@@ -137,12 +150,290 @@ impl<'a> Insert<'a> {
             // If this table is sharded, but the sharding key isn't in the query,
             // choose a shard at random.
             if tables.sharded(table).is_some() {
-                return Ok(Shard::Direct(round_robin::next() % schema.shards));
+                return Ok(InsertRouting::Routed(Shard::Direct(
+                    round_robin::next() % schema.shards,
+                )));
             }
         }
 
-        Ok(Shard::All)
+        Ok(InsertRouting::Routed(Shard::All))
     }
+
+    fn build_split_plan(
+        &'a self,
+        tables: &Tables<'a>,
+        schema: &'a ShardingSchema,
+        bind: Option<&Bind>,
+        table: Table<'a>,
+        columns: &[Column<'a>],
+        tuples: &[Tuple<'a>],
+    ) -> Result<InsertRouting, Error> {
+        let key = tables
+            .key(table, columns)
+            .ok_or_else(|| Error::SplitInsertNotSupported {
+                table: table.name.to_owned(),
+                reason: "unable to determine sharding key for INSERT".into(),
+            })?;
+
+        let mut rows = Vec::with_capacity(tuples.len());
+        let mut shard_indexes = Vec::with_capacity(tuples.len());
+
+        for (tuple_index, tuple) in tuples.iter().enumerate() {
+            let shard = self.compute_tuple_shard(schema, bind, &key, tuple, tuple_index, table)?;
+            let values = self.tuple_values_sql(bind, tuple, tuple_index, table)?;
+            shard_indexes.push(shard);
+            rows.push(InsertSplitRow::new(shard, values));
+        }
+
+        let unique: BTreeSet<usize> = shard_indexes.iter().copied().collect();
+        if unique.len() == 1 {
+            let shard = *unique.iter().next().expect("expected shard value");
+            return Ok(InsertRouting::Routed(Shard::Direct(shard)));
+        }
+
+        let columns_sql = columns
+            .iter()
+            .map(|column| StdString::from(format!("\"{}\"", escape_identifier(column.name))))
+            .collect::<Vec<_>>();
+
+        let shard_vec = unique.iter().copied().collect::<Vec<_>>();
+        let route = Route::write(Shard::Multi(shard_vec));
+        let plan = InsertSplitPlan::new(route, OwnedTable::from(table), columns_sql, rows);
+        Ok(InsertRouting::Split(plan))
+    }
+
+    fn compute_tuple_shard(
+        &'a self,
+        schema: &'a ShardingSchema,
+        bind: Option<&Bind>,
+        key: &sharding::tables::Key<'a>,
+        tuple: &Tuple<'a>,
+        tuple_index: usize,
+        table: Table<'a>,
+    ) -> Result<usize, Error> {
+        let value = tuple
+            .get(key.position)
+            .ok_or_else(|| Error::SplitInsertNotSupported {
+                table: table.name.to_owned(),
+                reason: format!(
+                    "row {} is missing a value for sharding column \"{}\"",
+                    tuple_index + 1,
+                    key.table.column
+                ),
+            })?;
+
+        let shard = match value {
+            Value::Integer(int) => ContextBuilder::new(key.table)
+                .data(*int)
+                .shards(schema.shards)
+                .build()?
+                .apply()?,
+            Value::String(str) => ContextBuilder::new(key.table)
+                .data(*str)
+                .shards(schema.shards)
+                .build()?
+                .apply()?,
+            Value::Null => {
+                return Err(Error::SplitInsertNotSupported {
+                    table: table.name.to_owned(),
+                    reason: format!(
+                        "row {} provides NULL for sharding column \"{}\"",
+                        tuple_index + 1,
+                        key.table.column
+                    ),
+                })
+            }
+            Value::Placeholder(index) => {
+                let bind = bind.ok_or_else(|| Error::SplitInsertNotSupported {
+                    table: table.name.to_owned(),
+                    reason: format!(
+                        "row {} references parameter ${}, but no Bind message was supplied",
+                        tuple_index + 1,
+                        index
+                    ),
+                })?;
+
+                let parameter_index = (*index as usize).checked_sub(1).ok_or_else(|| {
+                    Error::SplitInsertNotSupported {
+                        table: table.name.to_owned(),
+                        reason: format!(
+                            "row {} references invalid parameter index ${}",
+                            tuple_index + 1,
+                            index
+                        ),
+                    }
+                })?;
+
+                let parameter = bind.parameter(parameter_index)?.ok_or_else(|| {
+                    Error::SplitInsertNotSupported {
+                        table: table.name.to_owned(),
+                        reason: format!(
+                            "row {} references parameter ${}, but no value was provided",
+                            tuple_index + 1,
+                            index
+                        ),
+                    }
+                })?;
+
+                if parameter.is_null() {
+                    return Err(Error::SplitInsertNotSupported {
+                        table: table.name.to_owned(),
+                        reason: format!(
+                            "row {} parameter ${} evaluates to NULL for the sharding key",
+                            tuple_index + 1,
+                            index
+                        ),
+                    });
+                }
+
+                match parameter.format() {
+                    Format::Binary => {
+                        return Err(Error::SplitInsertNotSupported {
+                            table: table.name.to_owned(),
+                            reason: format!(
+                                "row {} parameter ${} uses binary format, which is not supported for split inserts",
+                                tuple_index + 1,
+                                index
+                            ),
+                        })
+                    }
+                    Format::Text => {
+                        let shard = sharding::shard_param(&parameter, key.table, schema.shards);
+                        shard
+                    }
+                }
+            }
+            _ => {
+                return Err(Error::SplitInsertNotSupported {
+                    table: table.name.to_owned(),
+                    reason: format!(
+                        "row {} uses an expression that cannot be rewritten for the sharding key",
+                        tuple_index + 1
+                    ),
+                })
+            }
+        };
+
+        match shard {
+            Shard::Direct(value) => Ok(value),
+            Shard::Multi(_) | Shard::All => Err(Error::SplitInsertNotSupported {
+                table: table.name.to_owned(),
+                reason: format!(
+                    "row {} produced an ambiguous shard for column \"{}\"",
+                    tuple_index + 1,
+                    key.table.column
+                ),
+            }),
+        }
+    }
+
+    fn tuple_values_sql(
+        &'a self,
+        bind: Option<&Bind>,
+        tuple: &Tuple<'a>,
+        tuple_index: usize,
+        table: Table<'a>,
+    ) -> Result<Vec<StdString>, Error> {
+        tuple
+            .values
+            .iter()
+            .enumerate()
+            .map(|(value_index, value)| {
+                self.value_sql(bind, value, tuple_index, value_index, table)
+            })
+            .collect()
+    }
+
+    fn value_sql(
+        &'a self,
+        bind: Option<&Bind>,
+        value: &Value<'a>,
+        tuple_index: usize,
+        value_index: usize,
+        table: Table<'a>,
+    ) -> Result<StdString, Error> {
+        match value {
+            Value::Integer(int) => Ok(int.to_string()),
+            Value::String(string) => Ok(format_literal(string)),
+            Value::Boolean(boolean) => Ok(if *boolean {
+                StdString::from("TRUE")
+            } else {
+                StdString::from("FALSE")
+            }),
+            Value::Null => Ok(StdString::from("NULL")),
+            Value::Placeholder(index) => {
+                let bind = bind.ok_or_else(|| Error::SplitInsertNotSupported {
+                    table: table.name.to_owned(),
+                    reason: format!(
+                        "row {} references parameter ${}, but no Bind message was supplied",
+                        tuple_index + 1,
+                        index
+                    ),
+                })?;
+
+                let parameter_index = (*index as usize).checked_sub(1).ok_or_else(|| {
+                    Error::SplitInsertNotSupported {
+                        table: table.name.to_owned(),
+                        reason: format!(
+                            "row {} references invalid parameter index ${}",
+                            tuple_index + 1,
+                            index
+                        ),
+                    }
+                })?;
+
+                let parameter = bind.parameter(parameter_index)?.ok_or_else(|| {
+                    Error::SplitInsertNotSupported {
+                        table: table.name.to_owned(),
+                        reason: format!(
+                            "row {} references parameter ${}, but no value was provided",
+                            tuple_index + 1,
+                            index
+                        ),
+                    }
+                })?;
+
+                if parameter.is_null() {
+                    return Ok(StdString::from("NULL"));
+                }
+
+                match parameter.format() {
+                    Format::Binary => Err(Error::SplitInsertNotSupported {
+                        table: table.name.to_owned(),
+                        reason: format!(
+                            "row {} parameter ${} uses binary format, which is not supported for split inserts",
+                            tuple_index + 1,
+                            index
+                        ),
+                    }),
+                    Format::Text => {
+                        let text = parameter.text().ok_or_else(|| Error::SplitInsertNotSupported {
+                            table: table.name.to_owned(),
+                            reason: format!(
+                                "row {} parameter ${} could not be decoded as UTF-8",
+                                tuple_index + 1,
+                                index
+                            ),
+                        })?;
+                        Ok(format_literal(text))
+                    }
+                }
+            }
+            _ => Err(Error::SplitInsertNotSupported {
+                table: table.name.to_owned(),
+                reason: format!(
+                    "row {} column {} uses an unsupported expression for split inserts",
+                    tuple_index + 1,
+                    value_index + 1
+                ),
+            }),
+        }
+    }
+}
+
+fn format_literal(value: &str) -> StdString {
+    let escaped = value.replace('\'', "''");
+    format!("'{}'", escaped)
 }
 
 #[cfg(test)]
@@ -260,10 +551,10 @@ mod test {
         match &select.node {
             Some(NodeEnum::InsertStmt(stmt)) => {
                 let insert = Insert::new(stmt);
-                let shard = insert
+                let routing = insert
                     .shard(&schema, None, false, RewriteMode::Error)
                     .unwrap();
-                assert!(matches!(shard, Shard::Direct(2)));
+                assert!(matches!(routing.shard(), Shard::Direct(2)));
 
                 let bind = Bind::new_params(
                     "",
@@ -273,10 +564,10 @@ mod test {
                     }],
                 );
 
-                let shard = insert
+                let routing = insert
                     .shard(&schema, Some(&bind), false, RewriteMode::Error)
                     .unwrap();
-                assert!(matches!(shard, Shard::Direct(1)));
+                assert!(matches!(routing.shard(), Shard::Direct(1)));
 
                 let bind = Bind::new_params_codes(
                     "",
@@ -287,10 +578,10 @@ mod test {
                     &[Format::Binary],
                 );
 
-                let shard = insert
+                let routing = insert
                     .shard(&schema, Some(&bind), false, RewriteMode::Error)
                     .unwrap();
-                assert!(matches!(shard, Shard::Direct(0)));
+                assert!(matches!(routing.shard(), Shard::Direct(0)));
             }
 
             _ => panic!("not an insert"),
@@ -302,10 +593,10 @@ mod test {
         match &select.node {
             Some(NodeEnum::InsertStmt(stmt)) => {
                 let insert = Insert::new(stmt);
-                let shard = insert
+                let routing = insert
                     .shard(&schema, None, false, RewriteMode::Error)
                     .unwrap();
-                assert!(matches!(shard, Shard::Direct(2)));
+                assert!(matches!(routing.shard(), Shard::Direct(2)));
             }
 
             _ => panic!("not a select"),
@@ -317,10 +608,10 @@ mod test {
         match &select.node {
             Some(NodeEnum::InsertStmt(stmt)) => {
                 let insert = Insert::new(stmt);
-                let shard = insert
+                let routing = insert
                     .shard(&schema, None, false, RewriteMode::Error)
                     .unwrap();
-                assert!(matches!(shard, Shard::All));
+                assert!(matches!(routing.shard(), Shard::All));
             }
 
             _ => panic!("not a select"),
@@ -333,13 +624,47 @@ mod test {
         match &select.node {
             Some(NodeEnum::InsertStmt(stmt)) => {
                 let insert = Insert::new(stmt);
-                let shard = insert
+                let routing = insert
                     .shard(&schema, None, false, RewriteMode::Error)
                     .unwrap();
-                assert!(matches!(shard, Shard::Direct(_)));
+                assert!(matches!(routing.shard(), Shard::Direct(_)));
             }
 
             _ => panic!("not a select"),
+        }
+    }
+
+    #[test]
+    fn test_split_plan_multiple_shards() {
+        let query = parse("INSERT INTO sharded (id, value) VALUES (1, 'a'), (11, 'b')").unwrap();
+        let select = query.protobuf.stmts.first().unwrap().stmt.as_ref().unwrap();
+        let schema = ShardingSchema {
+            shards: 2,
+            tables: ShardedTables::new(
+                vec![ShardedTable {
+                    name: Some("sharded".into()),
+                    column: "id".into(),
+                    ..Default::default()
+                }],
+                vec![],
+            ),
+        };
+
+        match &select.node {
+            Some(NodeEnum::InsertStmt(stmt)) => {
+                let insert = Insert::new(stmt);
+                let routing = insert
+                    .shard(&schema, None, true, RewriteMode::Rewrite)
+                    .unwrap();
+                match routing {
+                    InsertRouting::Split(plan) => {
+                        assert_eq!(plan.rows().len(), 2);
+                        assert!(plan.shard_list().len() > 1);
+                    }
+                    InsertRouting::Routed(_) => panic!("expected split plan"),
+                }
+            }
+            _ => panic!("not an insert"),
         }
     }
 }

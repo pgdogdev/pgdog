@@ -34,6 +34,7 @@ impl Drop for RewriteConfigGuard {
             let _ = admin
                 .execute("SET rewrite_shard_key_updates TO ignore")
                 .await;
+            let _ = admin.execute("SET rewrite_split_inserts TO error").await;
             let _ = admin.execute("SET rewrite_enabled TO false").await;
             let _ = admin.execute("SET two_phase_commit TO false").await;
         });
@@ -94,6 +95,47 @@ async fn non_sharded_multi_row_insert_allowed() {
     assert_eq!(rows[1], (2, "two".to_string()));
 
     cleanup_non_sharded_table(&primary).await;
+}
+
+#[tokio::test]
+async fn split_inserts_rewrite_moves_rows_across_shards() {
+    let admin = admin_sqlx().await;
+    let _guard = RewriteConfigGuard::enable(admin.clone()).await;
+
+    admin
+        .execute("SET rewrite_split_inserts TO rewrite")
+        .await
+        .expect("enable split insert rewrite");
+
+    let mut pools = connections_sqlx().await;
+    let pool = pools.swap_remove(1);
+
+    prepare_split_table(&pool).await;
+
+    sqlx::query(&format!(
+        "INSERT INTO {SHARDED_INSERT_TABLE} (id, value) VALUES (1, 'one'), (11, 'eleven')"
+    ))
+    .execute(&pool)
+    .await
+    .expect("split insert should succeed");
+
+    let shard0: Option<String> = sqlx::query_scalar(&format!(
+        "/* pgdog_shard: 0 */ SELECT value FROM {SHARDED_INSERT_TABLE} WHERE id = 1"
+    ))
+    .fetch_optional(&pool)
+    .await
+    .expect("fetch shard 0 row");
+    let shard1: Option<String> = sqlx::query_scalar(&format!(
+        "/* pgdog_shard: 1 */ SELECT value FROM {SHARDED_INSERT_TABLE} WHERE id = 11"
+    ))
+    .fetch_optional(&pool)
+    .await
+    .expect("fetch shard 1 row");
+
+    assert_eq!(shard0.as_deref(), Some("one"), "expected row on shard 0");
+    assert_eq!(shard1.as_deref(), Some("eleven"), "expected row on shard 1");
+
+    cleanup_split_table(&pool).await;
 }
 
 #[tokio::test]
@@ -249,6 +291,26 @@ async fn prepare_table(pool: &Pool<Postgres>) {
 async fn cleanup_table(pool: &Pool<Postgres>) {
     for shard in [0, 1] {
         let drop = format!("/* pgdog_shard: {shard} */ DROP TABLE IF EXISTS {TEST_TABLE}");
+        pool.execute(drop.as_str()).await.ok();
+    }
+}
+
+async fn prepare_split_table(pool: &Pool<Postgres>) {
+    for shard in [0, 1] {
+        let drop =
+            format!("/* pgdog_shard: {shard} */ DROP TABLE IF EXISTS {SHARDED_INSERT_TABLE}");
+        pool.execute(drop.as_str()).await.unwrap();
+        let create = format!(
+            "/* pgdog_shard: {shard} */ CREATE TABLE {SHARDED_INSERT_TABLE} (id BIGINT PRIMARY KEY, value TEXT)"
+        );
+        pool.execute(create.as_str()).await.unwrap();
+    }
+}
+
+async fn cleanup_split_table(pool: &Pool<Postgres>) {
+    for shard in [0, 1] {
+        let drop =
+            format!("/* pgdog_shard: {shard} */ DROP TABLE IF EXISTS {SHARDED_INSERT_TABLE}");
         pool.execute(drop.as_str()).await.ok();
     }
 }

@@ -90,4 +90,7 @@ pub enum Error {
         "multi-row INSERT into sharded table \"{table}\" is not supported when rewrite.split_inserts={mode}"
     )]
     ShardedMultiRowInsert { table: String, mode: RewriteMode },
+
+    #[error("multi-row INSERT into sharded table \"{table}\" cannot be rewritten: {reason}")]
+    SplitInsertNotSupported { table: String, reason: String },
 }

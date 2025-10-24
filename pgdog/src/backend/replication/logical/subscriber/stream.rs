@@ -19,7 +19,7 @@ use super::super::{publisher::Table, Error};
 use crate::{
     backend::{Cluster, Server, ShardingSchema},
     config::Role,
-    frontend::router::parser::{Insert, Shard},
+    frontend::router::parser::{self, Insert, InsertRouting, Shard},
     net::{
         replication::{
             xlog_data::XLogPayload, Commit as XLogCommit, Insert as XLogInsert, Relation,
@@ -250,13 +250,21 @@ impl StreamSubscriber {
                 let cfg = crate::config::config();
                 let rewrite_enabled = cfg.config.rewrite.enabled;
                 let split_mode = cfg.config.rewrite.split_inserts;
-                let val = upsert.shard(
+                let routing = upsert.shard(
                     &self.sharding_schema,
                     Some(&bind),
                     rewrite_enabled,
                     split_mode,
                 )?;
-                self.send(&val, &bind).await?;
+                match routing {
+                    InsertRouting::Routed(shard) => self.send(&shard, &bind).await?,
+                    InsertRouting::Split(plan) => {
+                        return Err(Error::Parser(parser::Error::SplitInsertNotSupported {
+                            table: plan.table().to_string(),
+                            reason: "logical replication does not support split inserts".into(),
+                        }))
+                    }
+                }
             }
 
             // Update table LSN.

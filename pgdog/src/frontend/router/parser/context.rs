@@ -57,6 +57,7 @@ pub struct QueryParserContext<'a> {
 }
 
 static SHARD_KEY_REWRITE_WARNING: Once = Once::new();
+static SPLIT_INSERT_REWRITE_WARNING: Once = Once::new();
 
 impl<'a> QueryParserContext<'a> {
     /// Create query parser context from router context.
@@ -70,6 +71,16 @@ impl<'a> QueryParserContext<'a> {
             SHARD_KEY_REWRITE_WARNING.call_once(|| {
                 warn!(
                     "rewrite.shard_key=rewrite will apply non-atomic shard-key rewrites; enabling two_phase_commit is strongly recommended"
+                );
+            });
+        }
+        if rewrite_cfg.split_inserts == RewriteMode::Rewrite
+            && rewrite_cfg.enabled
+            && !config.config.general.two_phase_commit
+        {
+            SPLIT_INSERT_REWRITE_WARNING.call_once(|| {
+                warn!(
+                    "rewrite.split_inserts=rewrite may commit partial multi-row INSERTs; enabling two_phase_commit is strongly recommended"
                 );
             });
         }
