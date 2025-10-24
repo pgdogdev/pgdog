@@ -112,6 +112,10 @@ impl<'a> ParameterWithFormat<'a> {
     pub fn data(&'a self) -> &'a [u8] {
         &self.parameter.data
     }
+
+    pub fn is_null(&self) -> bool {
+        self.parameter.len < 0
+    }
 }
 
 /// Bind (F) message.

@@ -12,6 +12,7 @@ use super::general::General;
 use super::networking::{MultiTenant, Tcp};
 use super::pooling::{PoolerMode, Stats};
 use super::replication::{MirrorConfig, Mirroring, ReplicaLag, Replication};
+use super::rewrite::Rewrite;
 use super::sharding::{ManualQuery, OmnishardedTables, ShardedMapping, ShardedTable};
 use super::users::{Admin, Plugin, Users};
 
@@ -121,6 +122,10 @@ pub struct Config {
     /// General configuration.
     #[serde(default)]
     pub general: General,
+
+    /// Rewrite configuration.
+    #[serde(default)]
+    pub rewrite: Rewrite,
 
     /// Statistics.
     #[serde(default)]

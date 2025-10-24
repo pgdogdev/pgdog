@@ -1,6 +1,6 @@
 use crate::{
     backend::databases,
-    config::{self, config, general::ShardKeyUpdateMode},
+    config::{self, config, RewriteMode},
     frontend::PreparedStatements,
 };
 
@@ -108,10 +108,21 @@ impl Command for Set {
             }
 
             "rewrite_shard_key_updates" => {
-                config.config.general.rewrite_shard_key_updates = self
+                config.config.rewrite.shard_key = self
                     .value
-                    .parse::<ShardKeyUpdateMode>()
+                    .parse::<RewriteMode>()
                     .map_err(|_| Error::Syntax)?;
+            }
+
+            "rewrite_split_inserts" => {
+                config.config.rewrite.split_inserts = self
+                    .value
+                    .parse::<RewriteMode>()
+                    .map_err(|_| Error::Syntax)?;
+            }
+
+            "rewrite_enabled" => {
+                config.config.rewrite.enabled = Self::from_json(&self.value)?;
             }
 
             "healthcheck_interval" => {

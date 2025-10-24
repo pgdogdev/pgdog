@@ -46,7 +46,7 @@ pub use distinct::{Distinct, DistinctBy, DistinctColumn};
 pub use error::Error;
 pub use function::Function;
 pub use function::{FunctionBehavior, LockingBehavior};
-pub use insert::Insert;
+pub use insert::{Insert, InsertRouting};
 pub use key::Key;
 pub use limit::{Limit, LimitClause};
 pub use order_by::OrderBy;

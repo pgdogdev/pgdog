@@ -1,53 +1,13 @@
 use serde::{Deserialize, Serialize};
 use std::env;
-use std::fmt;
 use std::net::Ipv4Addr;
 use std::path::PathBuf;
-use std::str::FromStr;
 use std::time::Duration;
 
 use super::auth::{AuthType, PassthoughAuth};
 use super::database::{LoadBalancingStrategy, ReadWriteSplit, ReadWriteStrategy};
 use super::networking::TlsVerifyMode;
 use super::pooling::{PoolerMode, PreparedStatements};
-
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum ShardKeyUpdateMode {
-    Error,
-    Rewrite,
-    Ignore,
-}
-
-impl Default for ShardKeyUpdateMode {
-    fn default() -> Self {
-        Self::Error
-    }
-}
-
-impl fmt::Display for ShardKeyUpdateMode {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let value = match self {
-            ShardKeyUpdateMode::Error => "error",
-            ShardKeyUpdateMode::Rewrite => "rewrite",
-            ShardKeyUpdateMode::Ignore => "ignore",
-        };
-        f.write_str(value)
-    }
-}
-
-impl FromStr for ShardKeyUpdateMode {
-    type Err = ();
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_ascii_lowercase().as_str() {
-            "error" => Ok(ShardKeyUpdateMode::Error),
-            "rewrite" => Ok(ShardKeyUpdateMode::Rewrite),
-            "ignore" => Ok(ShardKeyUpdateMode::Ignore),
-            _ => Err(()),
-        }
-    }
-}
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(deny_unknown_fields)]
@@ -199,9 +159,6 @@ pub struct General {
     /// Enable expanded EXPLAIN output.
     #[serde(default = "General::expanded_explain")]
     pub expanded_explain: bool,
-    /// How to handle sharding-key updates.
-    #[serde(default = "General::rewrite_shard_key_updates")]
-    pub rewrite_shard_key_updates: ShardKeyUpdateMode,
 }
 
 impl Default for General {
@@ -258,7 +215,6 @@ impl Default for General {
             two_phase_commit: bool::default(),
             two_phase_commit_auto: None,
             expanded_explain: Self::expanded_explain(),
-            rewrite_shard_key_updates: Self::rewrite_shard_key_updates(),
             server_lifetime: Self::server_lifetime(),
         }
     }
@@ -439,10 +395,6 @@ impl General {
 
     fn auth_type() -> AuthType {
         Self::env_enum_or_default("PGDOG_AUTH_TYPE")
-    }
-
-    fn rewrite_shard_key_updates() -> ShardKeyUpdateMode {
-        Self::env_enum_or_default("PGDOG_REWRITE_SHARD_KEY_UPDATES")
     }
 
     fn tls_certificate() -> Option<PathBuf> {

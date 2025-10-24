@@ -441,19 +441,36 @@ impl QueryParser {
         context: &QueryParserContext,
     ) -> Result<Command, Error> {
         let insert = Insert::new(stmt);
-        let shard = insert.shard(&context.sharding_schema, context.router_context.bind)?;
-        if let Some(recorder) = self.recorder_mut() {
-            match &shard {
-                Shard::Direct(_) => {
-                    recorder.record_entry(Some(shard.clone()), "INSERT matched sharding key")
+        let routing = insert.shard(
+            &context.sharding_schema,
+            context.router_context.bind,
+            context.rewrite_enabled(),
+            context.split_insert_mode(),
+        )?;
+
+        match routing {
+            InsertRouting::Routed(shard) => {
+                if let Some(recorder) = self.recorder_mut() {
+                    match &shard {
+                        Shard::Direct(_) => recorder
+                            .record_entry(Some(shard.clone()), "INSERT matched sharding key"),
+                        Shard::Multi(_) => recorder
+                            .record_entry(Some(shard.clone()), "INSERT targeted multiple shards"),
+                        Shard::All => recorder.record_entry(None, "INSERT broadcasted"),
+                    };
                 }
-                Shard::Multi(_) => {
-                    recorder.record_entry(Some(shard.clone()), "INSERT targeted multiple shards")
+                Ok(Command::Query(Route::write(shard)))
+            }
+            InsertRouting::Split(plan) => {
+                if let Some(recorder) = self.recorder_mut() {
+                    recorder.record_entry(
+                        Some(plan.route().shard().clone()),
+                        "INSERT split across shards",
+                    );
                 }
-                Shard::All => recorder.record_entry(None, "INSERT broadcasted"),
-            };
+                Ok(Command::InsertSplit(plan))
+            }
         }
-        Ok(Command::Query(Route::write(shard)))
     }
 }
 

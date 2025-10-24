@@ -1,7 +1,7 @@
 use std::{collections::HashMap, string::String as StdString};
 
 use crate::{
-    config::{ShardKeyUpdateMode, ShardedTable},
+    config::{RewriteMode, ShardedTable},
     frontend::router::{
         parser::where_clause::TablesSource,
         sharding::{ContextBuilder, Value as ShardingValue},
@@ -25,7 +25,7 @@ impl QueryParser {
                 (!shard_key_columns.is_empty()).then(|| shard_key_columns.join(", "));
             let mode = context.shard_key_update_mode();
 
-            if let (Some(columns), ShardKeyUpdateMode::Error) = (columns_display.as_ref(), mode) {
+            if let (Some(columns), RewriteMode::Error) = (columns_display.as_ref(), mode) {
                 return Err(Error::ShardKeyUpdateViolation {
                     table: table.name.to_owned(),
                     columns: columns.clone(),
@@ -55,7 +55,7 @@ impl QueryParser {
                     (!shard_key_columns.is_empty()).then_some(&shard_key_columns),
                     columns_display.as_deref(),
                 ) {
-                    if matches!(mode, ShardKeyUpdateMode::Rewrite) {
+                    if matches!(mode, RewriteMode::Rewrite) {
                         let assignments = Self::collect_assignments(stmt, table, columns, display)?;
 
                         if assignments.is_empty() {

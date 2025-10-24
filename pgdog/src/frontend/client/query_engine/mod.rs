@@ -19,6 +19,7 @@ pub mod discard;
 pub mod end_transaction;
 pub mod hooks;
 pub mod incomplete_requests;
+pub mod insert_split;
 pub mod notify_buffer;
 pub mod prepared_statements;
 pub mod pub_sub;
@@ -220,6 +221,7 @@ impl QueryEngine {
                 context.client_request.rewrite(query)?;
                 self.execute(context, &route).await?;
             }
+            Command::InsertSplit(plan) => self.insert_split(context, plan.clone()).await?,
             Command::ShardKeyRewrite(plan) => self.shard_key_rewrite(context, plan.clone()).await?,
             Command::Deallocate => self.deallocate(context).await?,
             Command::Discard { extended } => self.discard(context, *extended).await?,

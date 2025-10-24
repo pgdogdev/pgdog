@@ -37,6 +37,18 @@ impl Protocol for ParameterDescription {
     }
 }
 
+impl ParameterDescription {
+    /// Create an empty parameter description.
+    pub fn empty() -> Self {
+        Self { params: Vec::new() }
+    }
+
+    /// Create a parameter description from a list of type OIDs.
+    pub fn from_params(params: Vec<i32>) -> Self {
+        Self { params }
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;

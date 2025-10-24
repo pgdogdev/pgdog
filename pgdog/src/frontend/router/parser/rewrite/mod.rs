@@ -2,10 +2,12 @@ use pg_query::{NodeEnum, ParseResult};
 
 use super::{Command, Error};
 
+mod insert_split;
 mod shard_key;
 
 use crate::frontend::PreparedStatements;
 use crate::net::Parse;
+pub use insert_split::{InsertSplitPlan, InsertSplitRow};
 pub use shard_key::{Assignment, AssignmentValue, ShardKeyRewritePlan};
 
 #[derive(Debug, Clone)]
