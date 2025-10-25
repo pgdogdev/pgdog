@@ -226,4 +226,13 @@ mod test {
         let info = hashed.get_password_for("user");
         assert!(info.is_some());
     }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_user_password_get_password_for_blocking_ok() {
+        let plain = UserPassword {
+            password: "secret".to_string(),
+        };
+        let info = plain.get_password_for("user");
+        assert!(info.is_some());
+    }
 }
