@@ -36,16 +36,15 @@ type KeyedStore = DefaultKeyedStateStore<IpAddr>;
 type IpRateLimiter = RateLimiter<IpAddr, KeyedStore, DefaultClock>;
 
 fn create_limiter(limit: u32) -> IpRateLimiter {
-    // Config validation ensures limit is always >= 1
-    let limit = NonZeroU32::new(limit).expect("auth_rate_limit validated to be non-zero");
+    let limit = NonZeroU32::new(limit).expect("limit must be non-zero");
     let quota = Quota::per_minute(limit).allow_burst(limit);
     RateLimiter::keyed(quota)
 }
 
 /// Global rate limiter for authentication attempts per IP address.
-static AUTH_RATE_LIMITER: Lazy<Arc<RwLock<IpRateLimiter>>> = Lazy::new(|| {
+static AUTH_RATE_LIMITER: Lazy<Arc<RwLock<Option<IpRateLimiter>>>> = Lazy::new(|| {
     let limit = config().config.general.auth_rate_limit;
-    Arc::new(RwLock::new(create_limiter(limit)))
+    Arc::new(RwLock::new(limit.map(create_limiter)))
 });
 
 /// Track last reset time to prevent unbounded memory growth.
@@ -69,7 +68,12 @@ pub fn check(ip: IpAddr) -> bool {
         *LAST_RESET.write() = Instant::now();
     }
 
-    check_with_limiter(&AUTH_RATE_LIMITER.read(), ip)
+    let guard = AUTH_RATE_LIMITER.read();
+    if let Some(ref limiter) = *guard {
+        check_with_limiter(limiter, ip)
+    } else {
+        true
+    }
 }
 
 /// Internal function to check rate limit with a specific limiter.
@@ -82,8 +86,8 @@ fn check_with_limiter(limiter: &IpRateLimiter, ip: IpAddr) -> bool {
 /// Reload the rate limiter with a new limit.
 ///
 /// Called when configuration is reloaded via SIGHUP or RELOAD command.
-pub fn reload(new_limit: u32) {
-    *AUTH_RATE_LIMITER.write() = create_limiter(new_limit);
+pub fn reload(new_limit: Option<u32>) {
+    *AUTH_RATE_LIMITER.write() = new_limit.map(create_limiter);
 }
 
 #[cfg(test)]
@@ -191,7 +195,7 @@ mod tests {
         assert!(!check(ip));
 
         // Reload with higher limit (resets state)
-        reload(20);
+        reload(Some(20));
 
         // Should now allow more requests (state was reset)
         for _ in 0..20 {
@@ -216,6 +220,17 @@ mod tests {
     fn test_limit_of_one() {
         // Edge case: minimum limit of 1
         let limiter = test_limiter(1);
+    #[test]
+    fn test_unlimited_mode_allows_all() {
+        // Temporarily set global limiter to None and ensure check() always returns true
+        reload(None);
+        let ip: IpAddr = "203.0.113.1".parse().unwrap();
+        for _ in 0..1000 {
+            assert!(check(ip));
+        }
+        // Restore to default reasonable limit for other tests
+        reload(Some(10));
+    }
         let ip: IpAddr = "192.168.100.2".parse().unwrap();
 
         assert!(check_with_limiter(&limiter, ip));

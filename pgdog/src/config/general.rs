@@ -151,8 +151,10 @@ pub struct General {
     #[serde(default)]
     pub two_phase_commit_auto: Option<bool>,
     /// Authentication rate limit (attempts per minute per IP).
+    ///
+    /// None means unlimited (rate limiting disabled by default).
     #[serde(default = "General::auth_rate_limit")]
-    pub auth_rate_limit: u32,
+    pub auth_rate_limit: Option<u32>,
 }
 
 impl Default for General {
@@ -471,10 +473,15 @@ impl General {
         )
     }
 
-    pub fn auth_rate_limit() -> u32 {
-        let value = Self::env_or_default("PGDOG_AUTH_RATE_LIMIT", 10);
-        // Ensure value is at least 1 to prevent disabling rate limiting
-        value.max(1)
+    pub fn auth_rate_limit() -> Option<u32> {
+        // Default: unlimited (None)
+        match std::env::var("PGDOG_AUTH_RATE_LIMIT") {
+            Ok(s) => s
+                .parse::<u32>()
+                .ok()
+                .and_then(|v| if v == 0 { None } else { Some(v) }),
+            Err(_) => None,
+        }
     }
 
     fn default_passthrough_auth() -> PassthoughAuth {
@@ -857,14 +864,14 @@ mod tests {
     fn test_auth_rate_limit_validation() {
         // Test normal value
         env::set_var("PGDOG_AUTH_RATE_LIMIT", "20");
-        assert_eq!(General::auth_rate_limit(), 20);
+        assert_eq!(General::auth_rate_limit(), Some(20));
 
-        // Test zero value gets clamped to 1
+        // Test zero disables limiting
         env::set_var("PGDOG_AUTH_RATE_LIMIT", "0");
-        assert_eq!(General::auth_rate_limit(), 1);
+        assert_eq!(General::auth_rate_limit(), None);
 
-        // Test default
+        // Test default (unset) -> unlimited
         env::remove_var("PGDOG_AUTH_RATE_LIMIT");
-        assert_eq!(General::auth_rate_limit(), 10);
+        assert_eq!(General::auth_rate_limit(), None);
     }
 }

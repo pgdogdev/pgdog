@@ -151,7 +151,8 @@ impl Client {
         };
 
         if let Some(addr) = *stream.peer_addr() {
-            if !rate_limit::check(addr.ip()) {
+            // Apply rate limiting only if enabled in config
+            if config.config.general.auth_rate_limit.is_some() && !rate_limit::check(addr.ip()) {
                 error!(
                     "Authentication rate limit exceeded for IP: {}, user: \"{}\", database: \"{}\"",
                     addr.ip(),
