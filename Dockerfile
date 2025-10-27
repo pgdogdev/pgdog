@@ -12,6 +12,7 @@ WORKDIR /build
 
 RUN rm /bin/sh && ln -s /bin/bash /bin/sh
 RUN source ~/.cargo/env && \
+    cd pgdog && \
     cargo build --release
 
 FROM ubuntu:latest
