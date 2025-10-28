@@ -31,12 +31,14 @@ impl QueryEngine {
             }
             Err(err) => {
                 error!("{:?} [{:?}]", err, context.stream.peer_addr());
+
+                let error = ErrorResponse::syntax(err.to_string().as_str());
+
+                self.hooks.on_engine_error(context, &error)?;
+
                 let bytes_sent = context
                     .stream
-                    .error(
-                        ErrorResponse::syntax(err.to_string().as_str()),
-                        context.in_transaction(),
-                    )
+                    .error(error, context.in_transaction())
                     .await?;
                 self.stats.sent(bytes_sent);
                 return Ok(false);
