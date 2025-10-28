@@ -42,6 +42,7 @@ impl Command for ShowStats {
                         Field::numeric(&format!("{}_server_parse_count", prefix)),
                         Field::numeric(&format!("{}_bind_count", prefix)),
                         Field::numeric(&format!("{}_close_count", prefix)),
+                        Field::numeric(&format!("{}_errors", prefix)),
                     ]
                 })
                 .collect::<Vec<Field>>(),
@@ -82,7 +83,8 @@ impl Command for ShowStats {
                             .add(stat.wait_time.as_millis() as u64)
                             .add(stat.parse_count)
                             .add(stat.bind_count)
-                            .add(stat.close);
+                            .add(stat.close)
+                            .add(stat.errors);
                     }
 
                     messages.push(dr.message()?);

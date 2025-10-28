@@ -37,4 +37,12 @@ impl QueryEngineHooks {
     ) -> Result<(), Error> {
         Ok(())
     }
+
+    pub(super) fn on_server_message(
+        &mut self,
+        context: &mut QueryEngineContext<'_>,
+        message: &Message,
+    ) -> Result<(), Error> {
+        Ok(())
+    }
 }
