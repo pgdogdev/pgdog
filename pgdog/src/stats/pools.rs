@@ -65,6 +65,9 @@ impl Pools {
         let mut avg_query_time = vec![];
         let mut total_close = vec![];
         let mut avg_close = vec![];
+        let mut total_server_errors = vec![];
+        let mut avg_server_errors = vec![];
+
         for (user, cluster) in databases().all() {
             for (shard_num, shard) in cluster.shards().iter().enumerate() {
                 for (role, pool) in shard.pools_with_roles() {
@@ -190,6 +193,16 @@ impl Pools {
                     avg_close.push(Measurement {
                         labels: labels.clone(),
                         measurement: averages.close.into(),
+                    });
+
+                    total_server_errors.push(Measurement {
+                        labels: labels.clone(),
+                        measurement: totals.errors.into(),
+                    });
+
+                    avg_server_errors.push(Measurement {
+                        labels: labels.clone(),
+                        measurement: averages.errors.into(),
                     });
                 }
             }
@@ -368,6 +381,22 @@ impl Pools {
             name: "avg_prepared_evictions".into(),
             measurements: avg_close,
             help: "Average number of prepared statements closed because of cache evictions.".into(),
+            unit: None,
+            metric_type: None,
+        }));
+
+        metrics.push(Metric::new(PoolMetric {
+            name: "total_server_errors".into(),
+            measurements: total_server_errors,
+            help: "Total number of errors returned by server connections.".into(),
+            unit: None,
+            metric_type: Some("counter".into()),
+        }));
+
+        metrics.push(Metric::new(PoolMetric {
+            name: "avg_server_errors".into(),
+            measurements: avg_server_errors,
+            help: "Average number of errors returned by server connections.".into(),
             unit: None,
             metric_type: None,
         }));
