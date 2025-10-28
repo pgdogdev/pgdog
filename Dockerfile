@@ -12,6 +12,9 @@ WORKDIR /build
 
 RUN rm /bin/sh && ln -s /bin/bash /bin/sh
 RUN source ~/.cargo/env && \
+    if [ "$(uname -m)" = "aarch64" ] || [ "$(uname -m)" = "arm64" ]; then \
+        export RUSTFLAGS="-Ctarget-feature=+lse"; \
+    fi && \
     cd pgdog && \
     cargo build --release
 

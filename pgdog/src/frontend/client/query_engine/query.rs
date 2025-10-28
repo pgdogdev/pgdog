@@ -225,6 +225,7 @@ impl QueryEngine {
         if code == 'Z' {
             self.pending_explain = None;
         }
+        self.hooks.on_server_message(context, &message)?;
 
         Ok(())
     }

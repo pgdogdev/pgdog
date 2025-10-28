@@ -24,6 +24,7 @@ pub struct Counts {
     pub rollbacks: usize,
     pub healthchecks: usize,
     pub close: usize,
+    pub errors: usize,
 }
 
 impl Sub for Counts {
@@ -47,6 +48,7 @@ impl Sub for Counts {
             rollbacks: self.rollbacks.saturating_sub(rhs.rollbacks),
             healthchecks: self.healthchecks.saturating_add(rhs.healthchecks),
             close: self.close.saturating_add(rhs.close),
+            errors: self.errors.saturating_add(rhs.errors),
         }
     }
 }
@@ -70,6 +72,7 @@ impl Div<usize> for Counts {
             rollbacks: self.rollbacks.saturating_div(rhs),
             healthchecks: self.healthchecks.saturating_div(rhs),
             close: self.close.saturating_div(rhs),
+            errors: self.errors.saturating_div(rhs),
         }
     }
 }
@@ -93,6 +96,7 @@ impl Add<BackendCounts> for Counts {
             rollbacks: self.rollbacks + rhs.rollbacks,
             healthchecks: self.healthchecks + rhs.healthchecks,
             close: self.close + rhs.close,
+            errors: self.errors + rhs.errors,
         }
     }
 }
@@ -129,6 +133,7 @@ impl Add for Counts {
             rollbacks: self.rollbacks.saturating_add(rhs.rollbacks),
             healthchecks: self.healthchecks.saturating_add(rhs.healthchecks),
             close: self.close.saturating_add(rhs.close),
+            errors: self.errors.saturating_add(rhs.errors),
         }
     }
 }
