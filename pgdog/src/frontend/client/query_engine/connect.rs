@@ -61,10 +61,16 @@ impl QueryEngine {
 
                 if err.no_server() {
                     error!("{} [{:?}]", err, context.stream.peer_addr());
+
+                    let error = ErrorResponse::from_err(&err);
+
+                    self.hooks.on_engine_error(context, &error)?;
+
                     let bytes_sent = context
                         .stream
-                        .error(ErrorResponse::from_err(&err), context.in_transaction())
+                        .error(error, context.in_transaction())
                         .await?;
+
                     self.stats.sent(bytes_sent);
                     self.backend.disconnect();
                     self.router.reset();
