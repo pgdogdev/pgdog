@@ -45,4 +45,12 @@ impl QueryEngineHooks {
     ) -> Result<(), Error> {
         Ok(())
     }
+
+    pub(super) fn on_engine_error(
+        &mut self,
+        context: &mut QueryEngineContext<'_>,
+        error: &ErrorResponse,
+    ) -> Result<(), Error> {
+        Ok(())
+    }
 }

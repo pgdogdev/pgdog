@@ -365,12 +365,13 @@ impl QueryEngine {
             && context.client_request.executable()
             && !route.rollback_savepoint()
         {
+            let error = ErrorResponse::in_failed_transaction();
+
+            self.hooks.on_engine_error(context, &error)?;
+
             let bytes_sent = context
                 .stream
-                .error(
-                    ErrorResponse::in_failed_transaction(),
-                    context.in_transaction(),
-                )
+                .error(error, context.in_transaction())
                 .await?;
             self.stats.sent(bytes_sent);
 
