@@ -97,10 +97,12 @@ impl<'a> Insert<'a> {
                     return self.build_split_plan(&tables, schema, bind, table, &columns, &tuples);
                 }
 
-                return Err(Error::ShardedMultiRowInsert {
-                    table: table.name.to_owned(),
-                    mode: split_mode,
-                });
+                if split_mode == RewriteMode::Error {
+                    return Err(Error::ShardedMultiRowInsert {
+                        table: table.name.to_owned(),
+                        mode: split_mode,
+                    });
+                }
             }
         }
 
@@ -441,7 +443,7 @@ mod test {
     use pg_query::{parse, NodeEnum};
 
     use crate::backend::ShardedTables;
-    use crate::config::ShardedTable;
+    use crate::config::{RewriteMode, ShardedTable};
     use crate::net::bind::Parameter;
     use crate::net::Format;
     use bytes::Bytes;
@@ -662,6 +664,71 @@ mod test {
                         assert!(plan.shard_list().len() > 1);
                     }
                     InsertRouting::Routed(_) => panic!("expected split plan"),
+                }
+            }
+            _ => panic!("not an insert"),
+        }
+    }
+
+    #[test]
+    fn test_split_plan_error_mode_rejected() {
+        let query = parse("INSERT INTO sharded (id, value) VALUES (1, 'a'), (11, 'b')").unwrap();
+        let select = query.protobuf.stmts.first().unwrap().stmt.as_ref().unwrap();
+        let schema = ShardingSchema {
+            shards: 2,
+            tables: ShardedTables::new(
+                vec![ShardedTable {
+                    name: Some("sharded".into()),
+                    column: "id".into(),
+                    ..Default::default()
+                }],
+                vec![],
+            ),
+        };
+
+        match &select.node {
+            Some(NodeEnum::InsertStmt(stmt)) => {
+                let insert = Insert::new(stmt);
+                let result = insert.shard(&schema, None, true, RewriteMode::Error);
+                match result {
+                    Err(Error::ShardedMultiRowInsert { table, mode }) => {
+                        assert_eq!(table, "sharded");
+                        assert_eq!(mode, RewriteMode::Error);
+                    }
+                    other => panic!("expected sharded multi-row error, got {:?}", other),
+                }
+            }
+            _ => panic!("not an insert"),
+        }
+    }
+
+    #[test]
+    fn test_split_plan_ignore_mode_falls_back() {
+        let query = parse("INSERT INTO sharded (id, value) VALUES (1, 'a'), (11, 'b')").unwrap();
+        let select = query.protobuf.stmts.first().unwrap().stmt.as_ref().unwrap();
+        let schema = ShardingSchema {
+            shards: 2,
+            tables: ShardedTables::new(
+                vec![ShardedTable {
+                    name: Some("sharded".into()),
+                    column: "id".into(),
+                    ..Default::default()
+                }],
+                vec![],
+            ),
+        };
+
+        match &select.node {
+            Some(NodeEnum::InsertStmt(stmt)) => {
+                let insert = Insert::new(stmt);
+                let routing = insert
+                    .shard(&schema, None, true, RewriteMode::Ignore)
+                    .expect("ignore mode should not error");
+                match routing {
+                    InsertRouting::Routed(shard) => {
+                        assert!(matches!(shard, Shard::All));
+                    }
+                    InsertRouting::Split(_) => panic!("ignore mode should not split"),
                 }
             }
             _ => panic!("not an insert"),
