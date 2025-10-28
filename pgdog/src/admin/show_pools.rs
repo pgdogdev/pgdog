@@ -37,6 +37,7 @@ impl Command for ShowPools {
             Field::bool("paused"),
             Field::bool("banned"),
             Field::bool("healthy"),
+            Field::numeric("errors"),
             Field::numeric("re_synced"),
             Field::numeric("out_of_sync"),
             Field::numeric("force_closed"),
