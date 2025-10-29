@@ -29,11 +29,10 @@ pub mod set;
 pub mod shard_key_rewrite;
 pub mod show_shards;
 pub mod start_transaction;
-pub mod two_pc;
-pub mod unknown_command;
-
 #[cfg(test)]
 mod testing;
+pub mod two_pc;
+pub mod unknown_command;
 
 use self::query::ExplainResponseState;
 pub use context::QueryEngineContext;

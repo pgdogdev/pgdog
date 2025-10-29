@@ -734,4 +734,103 @@ mod test {
             _ => panic!("not an insert"),
         }
     }
+
+    #[test]
+    fn split_insert_requires_bind_for_placeholders() {
+        let query =
+            parse("INSERT INTO sharded (id, value) VALUES ($1, 'one'), ($2, 'two')").unwrap();
+        let select = query.protobuf.stmts.first().unwrap().stmt.as_ref().unwrap();
+        let schema = ShardingSchema {
+            shards: 2,
+            tables: ShardedTables::new(
+                vec![ShardedTable {
+                    name: Some("sharded".into()),
+                    column: "id".into(),
+                    ..Default::default()
+                }],
+                vec![],
+            ),
+        };
+
+        match &select.node {
+            Some(NodeEnum::InsertStmt(stmt)) => {
+                let insert = Insert::new(stmt);
+                let result = insert.shard(&schema, None, true, RewriteMode::Rewrite);
+                assert!(matches!(
+                    result,
+                    Err(Error::SplitInsertNotSupported { table, reason })
+                        if table == "sharded" && reason.contains("no Bind message")
+                ));
+            }
+            _ => panic!("not an insert"),
+        }
+    }
+
+    #[test]
+    fn split_insert_rejects_null_parameters() {
+        let query =
+            parse("INSERT INTO sharded (id, value) VALUES ($1, 'one'), ($2, 'two')").unwrap();
+        let select = query.protobuf.stmts.first().unwrap().stmt.as_ref().unwrap();
+        let schema = ShardingSchema {
+            shards: 2,
+            tables: ShardedTables::new(
+                vec![ShardedTable {
+                    name: Some("sharded".into()),
+                    column: "id".into(),
+                    ..Default::default()
+                }],
+                vec![],
+            ),
+        };
+
+        match &select.node {
+            Some(NodeEnum::InsertStmt(stmt)) => {
+                let insert = Insert::new(stmt);
+                let bind = Bind::new_params("", &[Parameter::new_null(), Parameter::new(b"11")]);
+                let result = insert.shard(&schema, Some(&bind), true, RewriteMode::Rewrite);
+                assert!(matches!(
+                    result,
+                    Err(Error::SplitInsertNotSupported { table, reason })
+                        if table == "sharded" && reason.contains("evaluates to NULL")
+                ));
+            }
+            _ => panic!("not an insert"),
+        }
+    }
+
+    #[test]
+    fn split_insert_rejects_binary_parameters() {
+        let query =
+            parse("INSERT INTO sharded (id, value) VALUES ($1, 'one'), ($2, 'two')").unwrap();
+        let select = query.protobuf.stmts.first().unwrap().stmt.as_ref().unwrap();
+        let schema = ShardingSchema {
+            shards: 2,
+            tables: ShardedTables::new(
+                vec![ShardedTable {
+                    name: Some("sharded".into()),
+                    column: "id".into(),
+                    ..Default::default()
+                }],
+                vec![],
+            ),
+        };
+
+        match &select.node {
+            Some(NodeEnum::InsertStmt(stmt)) => {
+                let insert = Insert::new(stmt);
+                let bind = Bind::new_params_codes(
+                    "",
+                    &[Parameter::new(&1_i64.to_be_bytes()), Parameter::new(b"11")],
+                    &[Format::Binary, Format::Text],
+                );
+                let result = insert.shard(&schema, Some(&bind), true, RewriteMode::Rewrite);
+                assert!(matches!(
+                    result,
+                    Err(Error::SplitInsertNotSupported { table, reason })
+                        if table == "sharded" && reason.contains("binary format")
+                ));
+            }
+            _ => panic!("not an insert"),
+        }
+    }
 }

@@ -41,6 +41,27 @@ impl Drop for ConfigModeGuard {
     }
 }
 
+struct SplitConfigGuard {
+    original: ConfigAndUsers,
+}
+
+impl SplitConfigGuard {
+    fn set(mode: RewriteMode) -> Self {
+        let original = config().deref().clone();
+        let mut updated = original.clone();
+        updated.config.rewrite.split_inserts = mode;
+        updated.config.rewrite.enabled = true;
+        config::set(updated).unwrap();
+        Self { original }
+    }
+}
+
+impl Drop for SplitConfigGuard {
+    fn drop(&mut self) {
+        config::set(self.original.clone()).unwrap();
+    }
+}
+
 static CONFIG_MODE_LOCK: Mutex<()> = Mutex::new(());
 
 fn lock_config_mode() -> MutexGuard<'static, ()> {
@@ -803,6 +824,22 @@ fn test_any() {
     );
 
     assert_eq!(route.shard(), &Shard::All);
+}
+
+#[test]
+fn split_insert_rewrite_emits_command() {
+    let _lock = lock_config_mode();
+    let _guard = SplitConfigGuard::set(RewriteMode::Rewrite);
+
+    let (command, _) = command!("INSERT INTO sharded (id, value) VALUES (1, 'a'), (11, 'b')");
+
+    match command {
+        Command::InsertSplit(plan) => {
+            assert_eq!(plan.total_rows(), 2);
+            assert!(plan.shard_list().len() > 1, "expected multiple shards");
+        }
+        other => panic!("expected insert split command, got {other:?}"),
+    }
 }
 
 #[test]

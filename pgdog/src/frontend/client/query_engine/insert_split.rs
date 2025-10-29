@@ -258,3 +258,93 @@ impl QueryEngine {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::super::QueryEngineContext;
+    use super::*;
+    use crate::{
+        config,
+        frontend::{
+            client::{Client, TransactionType},
+            router::parser::{
+                rewrite::{InsertSplitPlan, InsertSplitRow},
+                route::Route,
+                table::OwnedTable,
+                Shard,
+            },
+        },
+        net::{
+            messages::{Parse, Query, Sync},
+            Stream,
+        },
+    };
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+
+    fn sample_plan() -> InsertSplitPlan {
+        InsertSplitPlan::new(
+            Route::write(Shard::Multi(vec![0, 1])),
+            OwnedTable {
+                name: "sharded".into(),
+                ..Default::default()
+            },
+            vec!["\"id\"".into()],
+            vec![
+                InsertSplitRow::new(0, vec!["1".into()]),
+                InsertSplitRow::new(1, vec!["11".into()]),
+            ],
+        )
+    }
+
+    fn test_client() -> Client {
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+        Client::new_test(Stream::dev_null(), addr)
+    }
+
+    #[tokio::test]
+    async fn parse_ack_sent_for_non_executable_split() {
+        config::load_test();
+
+        let mut client = test_client();
+        client
+            .client_request
+            .messages
+            .push(Parse::named("split", "INSERT INTO sharded (id) VALUES (1, 11)").into());
+        client.client_request.messages.push(Sync::new().into());
+
+        let mut engine = QueryEngine::from_client(&client).unwrap();
+        let mut context = QueryEngineContext::new(&mut client);
+        let plan = sample_plan();
+
+        assert!(!context.client_request.executable());
+
+        engine.insert_split(&mut context, plan).await.unwrap();
+
+        assert!(engine.stats().bytes_sent > 0);
+        assert_eq!(engine.stats().errors, 0);
+    }
+
+    #[tokio::test]
+    async fn split_insert_rejected_inside_transaction() {
+        config::load_test();
+
+        let mut client = test_client();
+        client.transaction = Some(TransactionType::ReadWrite);
+        client
+            .client_request
+            .messages
+            .push(Query::new("INSERT INTO sharded (id) VALUES (1), (11)").into());
+
+        let mut engine = QueryEngine::from_client(&client).unwrap();
+        let mut context = QueryEngineContext::new(&mut client);
+        let plan = sample_plan();
+
+        assert!(context.client_request.executable());
+        assert!(context.in_transaction());
+
+        engine.insert_split(&mut context, plan).await.unwrap();
+
+        assert!(engine.stats().bytes_sent > 0);
+        assert_eq!(engine.stats().errors, 1);
+    }
+}

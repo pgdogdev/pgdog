@@ -97,3 +97,36 @@ impl InsertSplitPlan {
         Some(values)
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::frontend::router::parser::{route::Route, Shard};
+
+    #[test]
+    fn values_sql_grouped_by_shard() {
+        let rows = vec![
+            InsertSplitRow::new(0, vec!["1".into(), "'a'".into()]),
+            InsertSplitRow::new(1, vec!["11".into(), "'b'".into()]),
+            InsertSplitRow::new(0, vec!["2".into(), "'c'".into()]),
+        ];
+        let plan = InsertSplitPlan::new(
+            Route::write(Shard::Multi(vec![0, 1])),
+            OwnedTable {
+                name: "sharded".into(),
+                ..Default::default()
+            },
+            vec!["\"id\"".into(), "\"value\"".into()],
+            rows,
+        );
+
+        assert_eq!(plan.total_rows(), 3);
+        assert_eq!(plan.shard_list(), &[0, 1]);
+        assert_eq!(
+            plan.values_sql_for_shard(0).as_deref(),
+            Some("(1, 'a'), (2, 'c')")
+        );
+        assert_eq!(plan.values_sql_for_shard(1).as_deref(), Some("(11, 'b')"));
+        assert!(plan.values_sql_for_shard(2).is_none());
+    }
+}
