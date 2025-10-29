@@ -21,8 +21,7 @@ use crate::net::messages::{
     Authentication, BackendKeyData, ErrorResponse, FromBytes, Message, Password, Protocol,
     ReadyForQuery, ToBytes,
 };
-use crate::net::ProtocolMessage;
-use crate::net::{parameter::Parameters, Stream};
+use crate::net::{parameter::Parameters, ProtocolMessage, Stream};
 use crate::state::State;
 use crate::stats::memory::MemoryUsage;
 use crate::util::user_database_from_params;
@@ -136,9 +135,15 @@ impl Client {
         addr: SocketAddr,
         mut comms: Comms,
     ) -> Result<Option<Client>, Error> {
-        let (user, database) = user_database_from_params(&params);
         let config = config::config();
 
+        // Bail immediately if TLS is required but the connection isn't using it.
+        if config.config.general.tls_client_required && !stream.is_tls() {
+            stream.fatal(ErrorResponse::tls_required()).await?;
+            return Ok(None);
+        }
+
+        let (user, database) = user_database_from_params(&params);
         let admin = database == config.config.admin.name && config.config.admin.user == user;
         let admin_password = &config.config.admin.password;
         let auth_type = &config.config.general.auth_type;

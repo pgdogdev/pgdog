@@ -1,6 +1,7 @@
 use rust::setup::admin_sqlx;
+use rust::utils::assert_setting_str;
 use serial_test::serial;
-use sqlx::{Connection, Executor, PgConnection, Row};
+use sqlx::{Connection, Executor, PgConnection};
 
 #[tokio::test]
 #[serial]
@@ -23,23 +24,6 @@ async fn test_auth() {
     assert_setting_str("auth_type", "scram").await;
 
     assert!(PgConnection::connect(bad_password).await.is_err());
-}
-
-async fn assert_setting_str(name: &str, expected: &str) {
-    let admin = admin_sqlx().await;
-    let rows = admin.fetch_all("SHOW CONFIG").await.unwrap();
-    let mut found = false;
-    for row in rows {
-        let db_name: String = row.get(0);
-        let value: String = row.get(1);
-
-        if name == db_name {
-            found = true;
-            assert_eq!(value, expected);
-        }
-    }
-
-    assert!(found);
 }
 
 #[tokio::test]

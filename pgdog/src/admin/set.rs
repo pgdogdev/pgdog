@@ -130,6 +130,10 @@ impl Command for Set {
                 config.config.general.ban_timeout = self.value.parse()?;
             }
 
+            "tls_client_required" => {
+                config.config.general.tls_client_required = Self::from_json(&self.value)?;
+            }
+
             _ => return Err(Error::Syntax),
         }
 
