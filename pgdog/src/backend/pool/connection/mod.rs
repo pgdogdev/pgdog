@@ -225,18 +225,12 @@ impl Connection {
     }
 
     /// Read a message from the server connection or a pub/sub channel.
-    ///
-    /// Only await this future inside a `select!`. One of the conditions
-    /// suspends this loop indefinitely and expects another `select!` branch
-    /// to cancel it.
-    ///
     pub(crate) async fn read(&mut self) -> Result<Message, Error> {
         select! {
             notification = self.pub_sub.recv() => {
                 Ok(notification.ok_or(Error::ProtocolOutOfSync)?.message()?)
             }
 
-            // BUG: This is not cancellation-safe.
             message = self.binding.read() => {
                 message
             }

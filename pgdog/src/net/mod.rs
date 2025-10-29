@@ -1,3 +1,4 @@
+pub mod buffer;
 pub mod decoder;
 pub mod discovery;
 pub mod error;
@@ -8,6 +9,7 @@ pub mod stream;
 pub mod tls;
 pub mod tweaks;
 
+pub use buffer::Buffer;
 use bytes::{Buf, Bytes};
 pub use decoder::Decoder;
 pub use error::Error;

@@ -158,7 +158,7 @@ impl Client {
                 stream
                     .send_flush(&Authentication::ClearTextPassword)
                     .await?;
-                let password = stream.read().await?;
+                let password = stream.read_message().await?;
                 Password::from_bytes(password.to_bytes()?)?
             };
 
@@ -205,7 +205,7 @@ impl Client {
                 AuthType::Md5 => {
                     let md5 = md5::Client::new(user, password);
                     stream.send_flush(&md5.challenge()).await?;
-                    let password = Password::from_bytes(stream.read().await?.to_bytes()?)?;
+                    let password = Password::from_bytes(stream.read_message().await?.to_bytes()?)?;
                     if let Password::PasswordMessage { response } = password {
                         md5.check(&response)
                     } else {
@@ -225,7 +225,7 @@ impl Client {
                     stream
                         .send_flush(&Authentication::ClearTextPassword)
                         .await?;
-                    let response = stream.read().await?;
+                    let response = stream.read_message().await?;
                     let response = Password::from_bytes(response.to_bytes()?)?;
                     response.password() == Some(password)
                 }
@@ -490,18 +490,22 @@ impl Client {
                 .timeouts
                 .client_idle_timeout(&state, &self.client_request);
 
-            let message =
-                match timeout(idle_timeout, self.stream.read_buf(&mut self.stream_buffer)).await {
-                    Err(_) => {
-                        self.stream
-                            .fatal(ErrorResponse::client_idle_timeout(idle_timeout))
-                            .await?;
-                        return Ok(BufferEvent::DisconnectAbrupt);
-                    }
+            let message = match timeout(
+                idle_timeout,
+                self.stream.read_into_buffer(&mut self.stream_buffer),
+            )
+            .await
+            {
+                Err(_) => {
+                    self.stream
+                        .fatal(ErrorResponse::client_idle_timeout(idle_timeout))
+                        .await?;
+                    return Ok(BufferEvent::DisconnectAbrupt);
+                }
 
-                    Ok(Ok(message)) => message.stream(self.streaming).frontend(),
-                    Ok(Err(_)) => return Ok(BufferEvent::DisconnectAbrupt),
-                };
+                Ok(Ok(message)) => message.stream(self.streaming).frontend(),
+                Ok(Err(_)) => return Ok(BufferEvent::DisconnectAbrupt),
+            };
 
             if timer.is_none() {
                 timer = Some(Instant::now());

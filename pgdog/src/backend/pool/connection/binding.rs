@@ -62,6 +62,13 @@ impl Binding {
         }
     }
 
+    /// Read a message from a backend server.
+    ///
+    /// # Cancellation safety
+    ///
+    /// This method is not cancel-safe if connected to a server. If connected,
+    /// some of the data will be read from the stream, breaking protocol state.
+    ///
     pub(super) async fn read(&mut self) -> Result<Message, Error> {
         match self {
             Binding::Direct(guard) => {

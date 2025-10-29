@@ -139,7 +139,7 @@ impl Server {
         let mut scram_client = None;
 
         loop {
-            let message = stream.read().await?;
+            let message = stream.read_message().await?;
             match message.code() {
                 'p' => {
                     let password = Password::from_bytes(message.to_bytes()?)?;

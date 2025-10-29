@@ -96,4 +96,7 @@ pub enum Error {
 
     #[error("not a boolean")]
     NotBoolean,
+
+    #[error("unfinished IO")]
+    UnfinishedIo,
 }

@@ -222,13 +222,27 @@ impl Stream {
     /// The stream is buffered, so this is quite fast. The pooler will perform exactly
     /// one memory allocation per protocol message. It can be optimized to re-use an existing
     /// buffer but it's not worth the complexity.
-    pub async fn read(&mut self) -> Result<Message, crate::net::Error> {
+    pub async fn read_message(&mut self) -> Result<Message, crate::net::Error> {
         let mut buf = BytesMut::with_capacity(5);
-        self.read_buf(&mut buf).await
+        self.read_into_buffer(&mut buf).await
     }
 
     /// Read data into a buffer, avoiding unnecessary allocations.
-    pub async fn read_buf(&mut self, bytes: &mut BytesMut) -> Result<Message, crate::net::Error> {
+    ///
+    /// # Cancellation safety
+    ///
+    /// This function is not cancel-safe.
+    ///
+    pub async fn read_into_buffer(
+        &mut self,
+        bytes: &mut BytesMut,
+    ) -> Result<Message, crate::net::Error> {
+        // Return an error if we didn't finish reading a complete message
+        // fromm the stream.
+        if self.io_in_progress {
+            return Err(crate::net::Error::UnfinishedIo);
+        }
+
         let result = async {
             let code = eof(self.read_u8().await)?;
             self.io_in_progress = true;

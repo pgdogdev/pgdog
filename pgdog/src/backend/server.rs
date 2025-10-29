@@ -25,7 +25,7 @@ use crate::{
             hello::SslReply, Authentication, BackendKeyData, ErrorResponse, FromBytes, Message,
             ParameterStatus, Password, Protocol, Query, ReadyForQuery, Startup, Terminate, ToBytes,
         },
-        Close, Parameter, ProtocolMessage, Sync,
+        Buffer, Close, Parameter, ProtocolMessage, Sync,
     },
     stats::memory::MemoryUsage,
 };
@@ -59,7 +59,7 @@ pub struct Server {
     re_synced: bool,
     replication_mode: bool,
     pooler_mode: PoolerMode,
-    stream_buffer: BytesMut,
+    stream_buffer: Buffer,
 }
 
 impl MemoryUsage for Server {
@@ -159,7 +159,7 @@ impl Server {
         let mut scram = Client::new(&addr.user, &addr.password);
         let mut auth_type = AuthType::Trust;
         loop {
-            let message = stream.read().await?;
+            let message = stream.read_message().await?;
 
             match message.code() {
                 'E' => {
@@ -206,7 +206,7 @@ impl Server {
         let mut key_data: Option<BackendKeyData> = None;
 
         loop {
-            let message = stream.read().await?;
+            let message = stream.read_message().await?;
 
             match message.code() {
                 // ReadyForQuery (B)
@@ -263,7 +263,7 @@ impl Server {
             in_transaction: false,
             re_synced: false,
             pooler_mode: PoolerMode::Transaction,
-            stream_buffer: BytesMut::with_capacity(1024),
+            stream_buffer: Buffer::new(),
         };
 
         server.stats.memory_used(server.memory_usage()); // Stream capacity.
@@ -289,13 +289,24 @@ impl Server {
     }
 
     /// Send messages to the server and flush the buffer.
+    ///
+    /// # Cancellation safety
+    ///
+    /// This method is not cancel safe. If used inside a `select!` or a `timeout`,
+    /// it can send a partial request to the server.
+    ///
     pub async fn send(&mut self, client_request: &ClientRequest) -> Result<(), Error> {
         self.stats.state(State::Active);
+
+        self.stream_buffer.start_chain(client_request.len());
 
         for message in client_request.messages.iter() {
             self.send_one(message).await?;
         }
-        self.flush().await?;
+
+        self.stream_buffer
+            .flush(self.stream.as_mut().unwrap())
+            .await?;
 
         self.stats.state(State::ReceivingData);
 
@@ -316,13 +327,24 @@ impl Server {
         };
 
         for message in queue.into_iter().flatten() {
-            match self.stream().send(message).await {
+            match self
+                .stream_buffer
+                .send_chain(message, self.stream.as_mut().unwrap())
+                .await
+            {
                 Ok(sent) => self.stats.send(sent),
                 Err(err) => {
                     self.stats.state(State::Error);
                     return Err(err.into());
                 }
             }
+            // match self.stream().send(message).await {
+            //     Ok(sent) => self.stats.send(sent),
+            //     Err(err) => {
+            //         self.stats.state(State::Error);
+            //         return Err(err.into());
+            //     }
+            // }
         }
 
         Ok(())
@@ -340,18 +362,17 @@ impl Server {
     }
 
     /// Read a single message from the server.
+    ///
+    /// # Cancellation safety
+    ///
+    /// This method is cancel-safe.
+    ///
     pub async fn read(&mut self) -> Result<Message, Error> {
         let message = loop {
             if let Some(message) = self.prepared_statements.state_mut().get_simulated() {
                 return Ok(message.backend());
             }
-            match self
-                .stream
-                .as_mut()
-                .unwrap()
-                .read_buf(&mut self.stream_buffer)
-                .await
-            {
+            match self.stream_buffer.read(self.stream.as_mut().unwrap()).await {
                 Ok(message) => {
                     let message = message.stream(self.streaming).backend();
                     match self.prepared_statements.forward(&message) {
@@ -495,10 +516,12 @@ impl Server {
 
     /// Server hasn't finished sending or receiving a complete message.
     pub fn io_in_progress(&self) -> bool {
-        self.stream
-            .as_ref()
-            .map(|stream| stream.io_in_progress())
-            .unwrap_or(false)
+        self.stream_buffer.io_in_progress()
+            || self
+                .stream
+                .as_ref()
+                .map(|stream| stream.io_in_progress())
+                .unwrap_or(false)
     }
 
     /// Server can execute a query.
@@ -739,7 +762,7 @@ impl Server {
         self.stream().send_many(&buf).await?;
 
         for close in close {
-            let response = self.stream().read().await?;
+            let response = self.stream().read_message().await?;
             match response.code() {
                 '3' => self.prepared_statements.remove(close.name()),
                 'E' => {
@@ -753,7 +776,7 @@ impl Server {
             };
         }
 
-        let rfq = self.stream().read().await?;
+        let rfq = self.stream().read_message().await?;
         if rfq.code() != 'Z' {
             return Err(Error::UnexpectedMessage(rfq.code()));
         }
@@ -818,7 +841,7 @@ impl Server {
     }
 
     #[inline]
-    fn stream(&mut self) -> &mut Stream {
+    pub fn stream(&mut self) -> &mut Stream {
         self.stream.as_mut().unwrap()
     }
 
@@ -933,7 +956,7 @@ pub mod test {
                 re_synced: false,
                 replication_mode: false,
                 pooler_mode: PoolerMode::Transaction,
-                stream_buffer: BytesMut::with_capacity(1024),
+                stream_buffer: Buffer::new(),
             }
         }
     }
