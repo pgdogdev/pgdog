@@ -51,6 +51,7 @@ pub enum ReadWriteSplit {
     #[default]
     IncludePrimary,
     ExcludePrimary,
+    IncludePrimaryIfReplicaBanned,
 }
 
 impl FromStr for ReadWriteSplit {
@@ -60,6 +61,7 @@ impl FromStr for ReadWriteSplit {
         match s.to_lowercase().replace(['_', '-'], "").as_str() {
             "includeprimary" => Ok(Self::IncludePrimary),
             "excludeprimary" => Ok(Self::ExcludePrimary),
+            "includeprimaryifreplicabanned" => Ok(Self::IncludePrimaryIfReplicaBanned),
             _ => Err(format!("Invalid read-write split: {}", s)),
         }
     }
