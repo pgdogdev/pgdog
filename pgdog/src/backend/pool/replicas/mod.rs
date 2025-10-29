@@ -178,7 +178,12 @@ impl Replicas {
 
         let mut candidates: Vec<&ReadTarget> = self.replicas.iter().collect();
 
-        let primary_reads = self.rw_split == IncludePrimary;
+        let primary_reads = match self.rw_split {
+            IncludePrimary => true,
+            IncludePrimaryIfReplicaBanned => candidates.iter().any(|target| target.ban.banned()),
+            ExcludePrimary => false,
+        };
+
         if primary_reads {
             if let Some(ref primary) = self.primary {
                 candidates.push(primary);

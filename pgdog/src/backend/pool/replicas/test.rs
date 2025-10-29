@@ -769,3 +769,81 @@ async fn test_monitor_health_state_race() {
 
     replicas.shutdown();
 }
+
+#[tokio::test]
+async fn test_include_primary_if_replica_banned_no_bans() {
+    let primary_config = create_test_pool_config("127.0.0.1", 5432);
+    let primary_pool = Pool::new(&primary_config);
+    primary_pool.launch();
+
+    let replica_configs = [create_test_pool_config("localhost", 5432)];
+
+    let replicas = Replicas::new(
+        &Some(primary_pool),
+        &replica_configs,
+        LoadBalancingStrategy::Random,
+        ReadWriteSplit::IncludePrimaryIfReplicaBanned,
+    );
+    replicas.launch();
+
+    let request = Request::default();
+
+    // When no replicas are banned, primary should NOT be used
+    let mut used_pool_ids = HashSet::new();
+    for _ in 0..20 {
+        let conn = replicas.get(&request).await.unwrap();
+        used_pool_ids.insert(conn.pool.id());
+    }
+
+    // Should only use replica pool
+    assert_eq!(used_pool_ids.len(), 1);
+
+    // Verify primary pool ID is not in the set of used pools
+    let primary_id = replicas.primary.as_ref().unwrap().pool.id();
+    assert!(!used_pool_ids.contains(&primary_id));
+
+    // Shutdown both primary and replicas
+    replicas.primary.as_ref().unwrap().pool.shutdown();
+    replicas.shutdown();
+}
+
+#[tokio::test]
+async fn test_include_primary_if_replica_banned_with_ban() {
+    let primary_config = create_test_pool_config("127.0.0.1", 5432);
+    let primary_pool = Pool::new(&primary_config);
+    primary_pool.launch();
+
+    let replica_configs = [create_test_pool_config("localhost", 5432)];
+
+    let replicas = Replicas::new(
+        &Some(primary_pool),
+        &replica_configs,
+        LoadBalancingStrategy::Random,
+        ReadWriteSplit::IncludePrimaryIfReplicaBanned,
+    );
+    replicas.launch();
+
+    // Ban the replica
+    let replica_ban = &replicas.replicas[0].ban;
+    replica_ban.ban(Error::ServerError, Duration::from_millis(1000));
+
+    let request = Request::default();
+
+    // When replica is banned, primary SHOULD be used
+    let mut used_pool_ids = HashSet::new();
+    for _ in 0..20 {
+        let conn = replicas.get(&request).await.unwrap();
+        used_pool_ids.insert(conn.pool.id());
+    }
+
+    // Should only use primary pool since replica is banned
+    assert_eq!(used_pool_ids.len(), 1);
+
+    // Verify primary pool ID is in the set of used pools
+    let primary_id = replicas.primary.as_ref().unwrap().pool.id();
+    assert!(used_pool_ids.contains(&primary_id));
+
+    // Shutdown both primary and replicas
+    replicas.primary.as_ref().unwrap().pool.shutdown();
+    replicas.shutdown();
+}
