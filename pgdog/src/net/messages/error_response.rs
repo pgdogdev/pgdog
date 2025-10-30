@@ -134,7 +134,7 @@ impl ErrorResponse {
         Self {
             severity: "FATAL".into(),
             code: "08004".into(),
-            message: "Clients must connect with TLS".into(),
+            message: "only TLS connections are allowed".into(),
             detail: None,
             context: None,
             file: None,
