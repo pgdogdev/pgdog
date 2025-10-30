@@ -25,7 +25,7 @@ use crate::{
             hello::SslReply, Authentication, BackendKeyData, ErrorResponse, FromBytes, Message,
             ParameterStatus, Password, Protocol, Query, ReadyForQuery, Startup, Terminate, ToBytes,
         },
-        Close, Parameter, ProtocolMessage, Sync,
+        Close, MessageBuffer, Parameter, ProtocolMessage, Sync,
     },
     stats::memory::MemoryUsage,
 };
@@ -59,7 +59,7 @@ pub struct Server {
     re_synced: bool,
     replication_mode: bool,
     pooler_mode: PoolerMode,
-    stream_buffer: BytesMut,
+    stream_buffer: MessageBuffer,
 }
 
 impl MemoryUsage for Server {
@@ -263,7 +263,7 @@ impl Server {
             in_transaction: false,
             re_synced: false,
             pooler_mode: PoolerMode::Transaction,
-            stream_buffer: BytesMut::with_capacity(1024),
+            stream_buffer: MessageBuffer::new(),
         };
 
         server.stats.memory_used(server.memory_usage()); // Stream capacity.
@@ -340,18 +340,17 @@ impl Server {
     }
 
     /// Read a single message from the server.
+    ///
+    /// # Cancellation safety
+    ///
+    /// This method is cancel-safe.
+    ///
     pub async fn read(&mut self) -> Result<Message, Error> {
         let message = loop {
             if let Some(message) = self.prepared_statements.state_mut().get_simulated() {
                 return Ok(message.backend());
             }
-            match self
-                .stream
-                .as_mut()
-                .unwrap()
-                .read_buf(&mut self.stream_buffer)
-                .await
-            {
+            match self.stream_buffer.read(self.stream.as_mut().unwrap()).await {
                 Ok(message) => {
                     let message = message.stream(self.streaming).backend();
                     match self.prepared_statements.forward(&message) {
@@ -704,7 +703,7 @@ impl Server {
         debug!("prepared statements synchronized [{}]", self.addr());
 
         let count = self.prepared_statements.len();
-        self.stats_mut().set_prepared_statements(count);
+        self.stats.set_prepared_statements(count);
 
         Ok(())
     }
@@ -838,6 +837,7 @@ impl Server {
     #[inline]
     pub(super) fn cleaned(&mut self) {
         self.dirty = false;
+        self.stats.cleaned();
     }
 
     /// Server is streaming data.
@@ -933,7 +933,7 @@ pub mod test {
                 re_synced: false,
                 replication_mode: false,
                 pooler_mode: PoolerMode::Transaction,
-                stream_buffer: BytesMut::with_capacity(1024),
+                stream_buffer: MessageBuffer::new(),
             }
         }
     }

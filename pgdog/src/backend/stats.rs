@@ -66,6 +66,8 @@ pub struct Counts {
     pub healthchecks: usize,
     pub close: usize,
     pub memory_used: usize,
+    pub cleaned: usize,
+    pub prepared_sync: usize,
 }
 
 impl Add for Counts {
@@ -80,15 +82,15 @@ impl Add for Counts {
             queries: self.queries.saturating_add(rhs.queries),
             rollbacks: self.rollbacks.saturating_add(rhs.rollbacks),
             errors: self.errors.saturating_add(rhs.errors),
-            prepared_statements: self
-                .prepared_statements
-                .saturating_add(rhs.prepared_statements),
+            prepared_statements: rhs.prepared_statements, // It's a gauge.
             query_time: self.query_time.saturating_add(rhs.query_time),
             transaction_time: self.query_time.saturating_add(rhs.transaction_time),
             parse: self.parse.saturating_add(rhs.parse),
             bind: self.bind.saturating_add(rhs.bind),
             healthchecks: self.healthchecks.saturating_add(rhs.healthchecks),
             close: self.close.saturating_add(rhs.close),
+            cleaned: self.cleaned.saturating_add(rhs.cleaned),
+            prepared_sync: self.prepared_sync.saturating_add(rhs.prepared_sync),
             memory_used: self.memory_used, // It's a gauge.
         }
     }
@@ -183,6 +185,8 @@ impl Stats {
     /// for stats.
     pub fn set_prepared_statements(&mut self, size: usize) {
         self.total.prepared_statements = size;
+        self.total.prepared_sync += 1;
+        self.last_checkout.prepared_sync += 1;
         self.update();
     }
 
@@ -286,6 +290,12 @@ impl Stats {
     pub fn memory_used(&mut self, memory: usize) {
         self.total.memory_used = memory;
         self.last_checkout.memory_used = memory;
+    }
+
+    #[inline]
+    pub fn cleaned(&mut self) {
+        self.last_checkout.cleaned += 1;
+        self.total.cleaned += 1;
     }
 
     /// Track rollbacks.
