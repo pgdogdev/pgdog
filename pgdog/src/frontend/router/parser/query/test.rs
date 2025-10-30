@@ -4,7 +4,7 @@ use std::{
 };
 
 use crate::{
-    config::{self, config, ConfigAndUsers, ShardKeyUpdateMode},
+    config::{self, config, ConfigAndUsers, RewriteMode},
     frontend::client::TransactionType,
     net::{
         messages::{parse::Parse, Parameter},
@@ -25,16 +25,38 @@ struct ConfigModeGuard {
 }
 
 impl ConfigModeGuard {
-    fn set(mode: ShardKeyUpdateMode) -> Self {
+    fn set(mode: RewriteMode) -> Self {
         let original = config().deref().clone();
         let mut updated = original.clone();
-        updated.config.general.rewrite_shard_key_updates = mode;
+        updated.config.rewrite.shard_key = mode;
+        updated.config.rewrite.enabled = true;
         config::set(updated).unwrap();
         Self { original }
     }
 }
 
 impl Drop for ConfigModeGuard {
+    fn drop(&mut self) {
+        config::set(self.original.clone()).unwrap();
+    }
+}
+
+struct SplitConfigGuard {
+    original: ConfigAndUsers,
+}
+
+impl SplitConfigGuard {
+    fn set(mode: RewriteMode) -> Self {
+        let original = config().deref().clone();
+        let mut updated = original.clone();
+        updated.config.rewrite.split_inserts = mode;
+        updated.config.rewrite.enabled = true;
+        config::set(updated).unwrap();
+        Self { original }
+    }
+}
+
+impl Drop for SplitConfigGuard {
     fn drop(&mut self) {
         config::set(self.original.clone()).unwrap();
     }
@@ -462,7 +484,7 @@ fn test_insert_do_update() {
 #[test]
 fn update_sharding_key_errors_by_default() {
     let _lock = lock_config_mode();
-    let _guard = ConfigModeGuard::set(ShardKeyUpdateMode::Error);
+    let _guard = ConfigModeGuard::set(RewriteMode::Error);
 
     let query = "UPDATE sharded SET id = id + 1 WHERE id = 1";
     let mut prep_stmts = PreparedStatements::default();
@@ -482,7 +504,7 @@ fn update_sharding_key_errors_by_default() {
 #[test]
 fn update_sharding_key_ignore_mode_allows() {
     let _lock = lock_config_mode();
-    let _guard = ConfigModeGuard::set(ShardKeyUpdateMode::Ignore);
+    let _guard = ConfigModeGuard::set(RewriteMode::Ignore);
 
     let query = "UPDATE sharded SET id = id + 1 WHERE id = 1";
     let mut prep_stmts = PreparedStatements::default();
@@ -499,7 +521,7 @@ fn update_sharding_key_ignore_mode_allows() {
 #[test]
 fn update_sharding_key_rewrite_mode_not_supported() {
     let _lock = lock_config_mode();
-    let _guard = ConfigModeGuard::set(ShardKeyUpdateMode::Rewrite);
+    let _guard = ConfigModeGuard::set(RewriteMode::Rewrite);
 
     let query = "UPDATE sharded SET id = id + 1 WHERE id = 1";
     let mut prep_stmts = PreparedStatements::default();
@@ -519,7 +541,7 @@ fn update_sharding_key_rewrite_mode_not_supported() {
 #[test]
 fn update_sharding_key_rewrite_plan_detected() {
     let _lock = lock_config_mode();
-    let _guard = ConfigModeGuard::set(ShardKeyUpdateMode::Rewrite);
+    let _guard = ConfigModeGuard::set(RewriteMode::Rewrite);
 
     let query = "UPDATE sharded SET id = 11 WHERE id = 1";
     let mut prep_stmts = PreparedStatements::default();
@@ -545,7 +567,7 @@ fn update_sharding_key_rewrite_plan_detected() {
 #[test]
 fn update_sharding_key_rewrite_computes_new_shard() {
     let _lock = lock_config_mode();
-    let _guard = ConfigModeGuard::set(ShardKeyUpdateMode::Rewrite);
+    let _guard = ConfigModeGuard::set(RewriteMode::Rewrite);
 
     let command = parse_with_parameters(
         "UPDATE sharded SET id = 11 WHERE id = 1",
@@ -564,7 +586,7 @@ fn update_sharding_key_rewrite_computes_new_shard() {
 #[test]
 fn update_sharding_key_rewrite_requires_parameter_values() {
     let _lock = lock_config_mode();
-    let _guard = ConfigModeGuard::set(ShardKeyUpdateMode::Rewrite);
+    let _guard = ConfigModeGuard::set(RewriteMode::Rewrite);
 
     let result = parse_with_parameters(
         "UPDATE sharded SET id = $1 WHERE id = 1",
@@ -580,7 +602,7 @@ fn update_sharding_key_rewrite_requires_parameter_values() {
 #[test]
 fn update_sharding_key_rewrite_parameter_assignment_succeeds() {
     let _lock = lock_config_mode();
-    let _guard = ConfigModeGuard::set(ShardKeyUpdateMode::Rewrite);
+    let _guard = ConfigModeGuard::set(RewriteMode::Rewrite);
 
     let command = parse_with_bind("UPDATE sharded SET id = $1 WHERE id = 1", &[b"11"])
         .expect("expected rewrite command");
@@ -604,7 +626,7 @@ fn update_sharding_key_rewrite_parameter_assignment_succeeds() {
 #[test]
 fn update_sharding_key_rewrite_self_assignment_falls_back() {
     let _lock = lock_config_mode();
-    let _guard = ConfigModeGuard::set(ShardKeyUpdateMode::Rewrite);
+    let _guard = ConfigModeGuard::set(RewriteMode::Rewrite);
 
     let command = parse_with_parameters(
         "UPDATE sharded SET id = id WHERE id = 1",
@@ -623,7 +645,7 @@ fn update_sharding_key_rewrite_self_assignment_falls_back() {
 #[test]
 fn update_sharding_key_rewrite_null_assignment_not_supported() {
     let _lock = lock_config_mode();
-    let _guard = ConfigModeGuard::set(ShardKeyUpdateMode::Rewrite);
+    let _guard = ConfigModeGuard::set(RewriteMode::Rewrite);
 
     let result = parse_with_parameters(
         "UPDATE sharded SET id = NULL WHERE id = 1",
@@ -802,6 +824,22 @@ fn test_any() {
     );
 
     assert_eq!(route.shard(), &Shard::All);
+}
+
+#[test]
+fn split_insert_rewrite_emits_command() {
+    let _lock = lock_config_mode();
+    let _guard = SplitConfigGuard::set(RewriteMode::Rewrite);
+
+    let (command, _) = command!("INSERT INTO sharded (id, value) VALUES (1, 'a'), (11, 'b')");
+
+    match command {
+        Command::InsertSplit(plan) => {
+            assert_eq!(plan.total_rows(), 2);
+            assert!(plan.shard_list().len() > 1, "expected multiple shards");
+        }
+        other => panic!("expected insert split command, got {other:?}"),
+    }
 }
 
 #[test]

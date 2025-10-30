@@ -9,7 +9,7 @@ use crate::frontend::client::TransactionType;
 use crate::net::Bind;
 use crate::{
     backend::ShardingSchema,
-    config::{config, MultiTenant, ReadWriteStrategy, ShardKeyUpdateMode},
+    config::{config, MultiTenant, ReadWriteStrategy, RewriteMode},
     frontend::{BufferedQuery, PreparedStatements, RouterContext},
 };
 
@@ -48,22 +48,39 @@ pub struct QueryParserContext<'a> {
     pub(super) dry_run: bool,
     /// Expanded EXPLAIN annotations enabled?
     pub(super) expanded_explain: bool,
+    /// Rewrite features toggled on/off globally.
+    pub(super) rewrite_enabled: bool,
     /// How to handle sharding-key updates.
-    pub(super) shard_key_update_mode: ShardKeyUpdateMode,
+    pub(super) shard_key_update_mode: RewriteMode,
+    /// How to handle multi-row INSERTs into sharded tables.
+    pub(super) split_insert_mode: RewriteMode,
 }
 
 static SHARD_KEY_REWRITE_WARNING: Once = Once::new();
+static SPLIT_INSERT_REWRITE_WARNING: Once = Once::new();
 
 impl<'a> QueryParserContext<'a> {
     /// Create query parser context from router context.
     pub fn new(router_context: RouterContext<'a>) -> Self {
         let config = config();
-        if config.config.general.rewrite_shard_key_updates == ShardKeyUpdateMode::Rewrite
+        let rewrite_cfg = &config.config.rewrite;
+        if rewrite_cfg.shard_key == RewriteMode::Rewrite
+            && rewrite_cfg.enabled
             && !config.config.general.two_phase_commit
         {
             SHARD_KEY_REWRITE_WARNING.call_once(|| {
                 warn!(
-                    "rewrite_shard_key_updates=rewrite will apply non-atomic shard-key rewrites; enabling two_phase_commit is strongly recommended"
+                    "rewrite.shard_key=rewrite will apply non-atomic shard-key rewrites; enabling two_phase_commit is strongly recommended"
+                );
+            });
+        }
+        if rewrite_cfg.split_inserts == RewriteMode::Rewrite
+            && rewrite_cfg.enabled
+            && !config.config.general.two_phase_commit
+        {
+            SPLIT_INSERT_REWRITE_WARNING.call_once(|| {
+                warn!(
+                    "rewrite.split_inserts=rewrite may commit partial multi-row INSERTs; enabling two_phase_commit is strongly recommended"
                 );
             });
         }
@@ -79,7 +96,9 @@ impl<'a> QueryParserContext<'a> {
             multi_tenant: router_context.cluster.multi_tenant(),
             dry_run: config.config.general.dry_run,
             expanded_explain: config.config.general.expanded_explain,
-            shard_key_update_mode: config.config.general.rewrite_shard_key_updates,
+            rewrite_enabled: rewrite_cfg.enabled,
+            shard_key_update_mode: rewrite_cfg.shard_key,
+            split_insert_mode: rewrite_cfg.split_inserts,
             router_context,
         }
     }
@@ -160,7 +179,15 @@ impl<'a> QueryParserContext<'a> {
         self.expanded_explain
     }
 
-    pub(super) fn shard_key_update_mode(&self) -> ShardKeyUpdateMode {
+    pub(super) fn shard_key_update_mode(&self) -> RewriteMode {
         self.shard_key_update_mode
+    }
+
+    pub(super) fn rewrite_enabled(&self) -> bool {
+        self.rewrite_enabled
+    }
+
+    pub(super) fn split_insert_mode(&self) -> RewriteMode {
+        self.split_insert_mode
     }
 }

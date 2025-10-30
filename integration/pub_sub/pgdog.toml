@@ -1,6 +1,10 @@
 [general]
 pub_sub_channel_size = 4098
-rewrite_shard_key_updates = "ignore"
+
+[rewrite]
+enabled = false
+shard_key = "ignore"
+split_inserts = "error"
 
 [[databases]]
 name = "pgdog"
