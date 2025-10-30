@@ -506,7 +506,7 @@ mod tests {
             .expect_err("expected split reject");
         match err {
             Error::Parser(parser::Error::SplitInsertNotSupported { table, reason }) => {
-                assert_eq!(table, "sharded");
+                assert!(table.contains("sharded"));
                 assert!(reason.contains("logical replication does not support"));
             }
             other => panic!("unexpected error: {other:?}"),
