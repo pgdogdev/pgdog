@@ -25,6 +25,8 @@ pub struct Counts {
     pub healthchecks: usize,
     pub close: usize,
     pub errors: usize,
+    pub cleaned: usize,
+    pub prepared_sync: usize,
 }
 
 impl Sub for Counts {
@@ -49,6 +51,8 @@ impl Sub for Counts {
             healthchecks: self.healthchecks.saturating_add(rhs.healthchecks),
             close: self.close.saturating_add(rhs.close),
             errors: self.errors.saturating_add(rhs.errors),
+            cleaned: self.cleaned.saturating_add(rhs.cleaned),
+            prepared_sync: self.prepared_sync.saturating_add(self.prepared_sync),
         }
     }
 }
@@ -73,6 +77,8 @@ impl Div<usize> for Counts {
             healthchecks: self.healthchecks.saturating_div(rhs),
             close: self.close.saturating_div(rhs),
             errors: self.errors.saturating_div(rhs),
+            cleaned: self.cleaned.saturating_div(rhs),
+            prepared_sync: self.prepared_sync.saturating_div(rhs),
         }
     }
 }
@@ -97,6 +103,8 @@ impl Add<BackendCounts> for Counts {
             healthchecks: self.healthchecks + rhs.healthchecks,
             close: self.close + rhs.close,
             errors: self.errors + rhs.errors,
+            cleaned: self.cleaned + rhs.cleaned,
+            prepared_sync: self.prepared_sync + rhs.prepared_sync,
         }
     }
 }
@@ -134,6 +142,8 @@ impl Add for Counts {
             healthchecks: self.healthchecks.saturating_add(rhs.healthchecks),
             close: self.close.saturating_add(rhs.close),
             errors: self.errors.saturating_add(rhs.errors),
+            cleaned: self.cleaned.saturating_add(rhs.cleaned),
+            prepared_sync: self.prepared_sync.saturating_add(rhs.prepared_sync),
         }
     }
 }

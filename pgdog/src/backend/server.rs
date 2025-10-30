@@ -703,7 +703,7 @@ impl Server {
         debug!("prepared statements synchronized [{}]", self.addr());
 
         let count = self.prepared_statements.len();
-        self.stats_mut().set_prepared_statements(count);
+        self.stats.set_prepared_statements(count);
 
         Ok(())
     }
@@ -837,6 +837,7 @@ impl Server {
     #[inline]
     pub(super) fn cleaned(&mut self) {
         self.dirty = false;
+        self.stats.cleaned();
     }
 
     /// Server is streaming data.
