@@ -486,9 +486,9 @@ mod tests {
             self,
             core::ConfigAndUsers,
             database::Database,
-            general::ShardKeyUpdateMode,
             sharding::{DataType, FlexibleType, ShardedMapping, ShardedMappingKind, ShardedTable},
             users::User as ConfigUser,
+            RewriteMode,
         },
         frontend::Client,
         net::{Query, Stream},
@@ -502,7 +502,8 @@ mod tests {
         let mut cfg = ConfigAndUsers::default();
         cfg.config.general.two_phase_commit = two_pc_enabled;
         cfg.config.general.two_phase_commit_auto = Some(false);
-        cfg.config.general.rewrite_shard_key_updates = ShardKeyUpdateMode::Rewrite;
+        cfg.config.rewrite.enabled = true;
+        cfg.config.rewrite.shard_key = RewriteMode::Rewrite;
 
         cfg.config.databases = vec![
             Database {

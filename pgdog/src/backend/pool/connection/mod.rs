@@ -236,7 +236,7 @@ impl Connection {
                 Ok(notification.ok_or(Error::ProtocolOutOfSync)?.message()?)
             }
 
-            // BUG: This is not cancellation-safe.
+            // This is cancel-safe.
             message = self.binding.read() => {
                 message
             }

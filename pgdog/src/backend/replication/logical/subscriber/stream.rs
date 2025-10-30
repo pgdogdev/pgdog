@@ -19,7 +19,7 @@ use super::super::{publisher::Table, Error};
 use crate::{
     backend::{Cluster, Server, ShardingSchema},
     config::Role,
-    frontend::router::parser::{Insert, Shard},
+    frontend::router::parser::{self, Insert, InsertRouting, Shard},
     net::{
         replication::{
             xlog_data::XLogPayload, Commit as XLogCommit, Insert as XLogInsert, Relation,
@@ -250,8 +250,24 @@ impl StreamSubscriber {
             // we are able to replay changes we already applied safely.
             if let Some(upsert) = statements.upsert.insert() {
                 let upsert = Insert::new(upsert);
-                let val = upsert.shard(&self.sharding_schema, Some(&bind))?;
-                self.send(&val, &bind).await?;
+                let cfg = crate::config::config();
+                let rewrite_enabled = cfg.config.rewrite.enabled;
+                let split_mode = cfg.config.rewrite.split_inserts;
+                let routing = upsert.shard(
+                    &self.sharding_schema,
+                    Some(&bind),
+                    rewrite_enabled,
+                    split_mode,
+                )?;
+                match routing {
+                    InsertRouting::Routed(shard) => self.send(&shard, &bind).await?,
+                    InsertRouting::Split(plan) => {
+                        return Err(Error::Parser(parser::Error::SplitInsertNotSupported {
+                            table: plan.table().to_string(),
+                            reason: "logical replication does not support split inserts".into(),
+                        }))
+                    }
+                }
             }
 
             // Update table LSN.
@@ -423,5 +439,87 @@ impl StreamSubscriber {
     /// Lsn changed since the last time we updated it.
     pub fn lsn_changed(&self) -> bool {
         self.lsn_changed
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        config::{self, config, ConfigAndUsers, RewriteMode},
+        net::messages::replication::logical::tuple_data::{Column, Identifier, TupleData},
+    };
+    use bytes::Bytes;
+    use std::ops::Deref;
+
+    struct RewriteGuard {
+        original: ConfigAndUsers,
+    }
+
+    impl RewriteGuard {
+        fn enable_split_rewrite() -> Self {
+            let original = config().deref().clone();
+            let mut updated = original.clone();
+            updated.config.rewrite.enabled = true;
+            updated.config.rewrite.split_inserts = RewriteMode::Rewrite;
+            config::set(updated).unwrap();
+            Self { original }
+        }
+    }
+
+    impl Drop for RewriteGuard {
+        fn drop(&mut self) {
+            config::set(self.original.clone()).unwrap();
+        }
+    }
+
+    fn text_column(value: &str) -> Column {
+        Column {
+            identifier: Identifier::Format(crate::net::messages::bind::Format::Text),
+            len: value.len() as i32,
+            data: Bytes::copy_from_slice(value.as_bytes()),
+        }
+    }
+
+    #[tokio::test]
+    async fn split_insert_rejected_during_replication() {
+        config::load_test();
+        let _guard = RewriteGuard::enable_split_rewrite();
+
+        let cluster = Cluster::new_test();
+        let mut subscriber = StreamSubscriber::new(&cluster, &[]);
+
+        let upsert =
+            Statement::new("INSERT INTO sharded (id, value) VALUES (1, 'one'), (11, 'eleven')")
+                .unwrap();
+
+        subscriber.statements.insert(
+            42,
+            Statements {
+                insert: Statement::default(),
+                upsert: upsert.clone(),
+                update: Statement::default(),
+            },
+        );
+
+        let insert = XLogInsert {
+            xid: None,
+            oid: 42,
+            tuple_data: TupleData {
+                columns: vec![text_column("1"), text_column("one")],
+            },
+        };
+
+        let err = subscriber
+            .insert(insert)
+            .await
+            .expect_err("expected split reject");
+        match err {
+            Error::Parser(parser::Error::SplitInsertNotSupported { table, reason }) => {
+                assert!(table.contains("sharded"));
+                assert!(reason.contains("logical replication does not support"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
     }
 }

@@ -5,7 +5,7 @@ use crate::{
 };
 use lazy_static::lazy_static;
 
-use super::rewrite::ShardKeyRewritePlan;
+use super::rewrite::{InsertSplitPlan, ShardKeyRewritePlan};
 
 #[derive(Debug, Clone)]
 pub enum Command {
@@ -46,6 +46,7 @@ pub enum Command {
     Unlisten(String),
     SetRoute(Route),
     ShardKeyRewrite(ShardKeyRewritePlan),
+    InsertSplit(InsertSplitPlan),
 }
 
 impl Command {
@@ -57,6 +58,7 @@ impl Command {
         match self {
             Self::Query(route) => route,
             Self::ShardKeyRewrite(plan) => plan.route(),
+            Self::InsertSplit(plan) => plan.route(),
             _ => &DEFAULT_ROUTE,
         }
     }
@@ -112,6 +114,11 @@ impl Command {
             }
 
             Command::ShardKeyRewrite(plan) => {
+                let mut route = plan.route().clone();
+                route.set_shard_mut(0);
+                Command::Query(route)
+            }
+            Command::InsertSplit(plan) => {
                 let mut route = plan.route().clone();
                 route.set_shard_mut(0);
                 Command::Query(route)

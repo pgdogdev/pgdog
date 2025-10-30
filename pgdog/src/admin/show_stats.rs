@@ -43,6 +43,8 @@ impl Command for ShowStats {
                         Field::numeric(&format!("{}_bind_count", prefix)),
                         Field::numeric(&format!("{}_close_count", prefix)),
                         Field::numeric(&format!("{}_errors", prefix)),
+                        Field::numeric(&format!("{}_cleaned", prefix)),
+                        Field::numeric(&format!("{}_rollbacks", prefix)),
                     ]
                 })
                 .collect::<Vec<Field>>(),
@@ -84,7 +86,9 @@ impl Command for ShowStats {
                             .add(stat.parse_count)
                             .add(stat.bind_count)
                             .add(stat.close)
-                            .add(stat.errors);
+                            .add(stat.errors)
+                            .add(stat.cleaned)
+                            .add(stat.rollbacks);
                     }
 
                     messages.push(dr.message()?);
