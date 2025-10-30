@@ -3,7 +3,6 @@
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
-use bytes::BytesMut;
 use timeouts::Timeouts;
 use tokio::{select, spawn, time::timeout};
 use tracing::{debug, enabled, error, info, trace, Level as LogLevel};
@@ -21,8 +20,8 @@ use crate::net::messages::{
     Authentication, BackendKeyData, ErrorResponse, FromBytes, Message, Password, Protocol,
     ReadyForQuery, ToBytes,
 };
-use crate::net::ProtocolMessage;
 use crate::net::{parameter::Parameters, Stream};
+use crate::net::{MessageBuffer, ProtocolMessage};
 use crate::state::State;
 use crate::stats::memory::MemoryUsage;
 use crate::util::user_database_from_params;
@@ -47,7 +46,7 @@ pub struct Client {
     transaction: Option<TransactionType>,
     timeouts: Timeouts,
     client_request: ClientRequest,
-    stream_buffer: BytesMut,
+    stream_buffer: MessageBuffer,
     passthrough_password: Option<String>,
 }
 
@@ -86,7 +85,7 @@ impl MemoryUsage for Client {
             + std::mem::size_of::<bool>() * 5
             + self.prepared_statements.memory_used()
             + std::mem::size_of::<Timeouts>()
-            + self.stream_buffer.memory_usage()
+            + self.stream_buffer.capacity()
             + self.client_request.memory_usage()
             + self
                 .passthrough_password
@@ -301,7 +300,7 @@ impl Client {
             transaction: None,
             timeouts: Timeouts::from_config(&config.config.general),
             client_request: ClientRequest::new(),
-            stream_buffer: BytesMut::new(),
+            stream_buffer: MessageBuffer::new(),
             shutdown: false,
             passthrough_password,
         }))
@@ -328,7 +327,7 @@ impl Client {
             transaction: None,
             timeouts: Timeouts::from_config(&config().config.general),
             client_request: ClientRequest::new(),
-            stream_buffer: BytesMut::new(),
+            stream_buffer: MessageBuffer::new(),
             shutdown: false,
             passthrough_password: None,
         }
@@ -491,7 +490,7 @@ impl Client {
                 .client_idle_timeout(&state, &self.client_request);
 
             let message =
-                match timeout(idle_timeout, self.stream.read_buf(&mut self.stream_buffer)).await {
+                match timeout(idle_timeout, self.stream_buffer.read(&mut self.stream)).await {
                     Err(_) => {
                         self.stream
                             .fatal(ErrorResponse::client_idle_timeout(idle_timeout))

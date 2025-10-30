@@ -296,7 +296,7 @@ impl Stream {
     }
 }
 
-fn eof<T>(result: std::io::Result<T>) -> Result<T, crate::net::Error> {
+pub fn eof<T>(result: std::io::Result<T>) -> Result<T, crate::net::Error> {
     match result {
         Ok(val) => Ok(val),
         Err(err) => {

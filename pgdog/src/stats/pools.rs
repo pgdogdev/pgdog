@@ -67,6 +67,10 @@ impl Pools {
         let mut avg_close = vec![];
         let mut total_server_errors = vec![];
         let mut avg_server_errors = vec![];
+        let mut total_cleaned = vec![];
+        let mut avg_cleaned = vec![];
+        let mut total_rollbacks = vec![];
+        let mut avg_rollbacks = vec![];
 
         for (user, cluster) in databases().all() {
             for (shard_num, shard) in cluster.shards().iter().enumerate() {
@@ -203,6 +207,26 @@ impl Pools {
                     avg_server_errors.push(Measurement {
                         labels: labels.clone(),
                         measurement: averages.errors.into(),
+                    });
+
+                    total_cleaned.push(Measurement {
+                        labels: labels.clone(),
+                        measurement: totals.cleaned.into(),
+                    });
+
+                    avg_cleaned.push(Measurement {
+                        labels: labels.clone(),
+                        measurement: averages.cleaned.into(),
+                    });
+
+                    total_rollbacks.push(Measurement {
+                        labels: labels.clone(),
+                        measurement: totals.rollbacks.into(),
+                    });
+
+                    avg_rollbacks.push(Measurement {
+                        labels: labels.clone(),
+                        measurement: averages.rollbacks.into(),
                     });
                 }
             }
@@ -397,6 +421,44 @@ impl Pools {
             name: "avg_server_errors".into(),
             measurements: avg_server_errors,
             help: "Average number of errors returned by server connections.".into(),
+            unit: None,
+            metric_type: None,
+        }));
+
+        metrics.push(Metric::new(PoolMetric {
+            name: "total_cleaned".into(),
+            measurements: total_cleaned,
+            help: "Total number of times server connections were cleaned from client parameters."
+                .into(),
+            unit: None,
+            metric_type: Some("counter".into()),
+        }));
+
+        metrics.push(Metric::new(PoolMetric {
+            name: "avg_cleaned".into(),
+            measurements: avg_cleaned,
+            help: "Average number of times server connections were cleaned from client parameters."
+                .into(),
+            unit: None,
+            metric_type: None,
+        }));
+
+        metrics.push(Metric::new(PoolMetric {
+            name: "total_rollbacks".into(),
+            measurements: total_rollbacks,
+            help:
+                "Total number of abandoned transactions that had to be rolled back automatically."
+                    .into(),
+            unit: None,
+            metric_type: Some("counter".into()),
+        }));
+
+        metrics.push(Metric::new(PoolMetric {
+            name: "avg_rollbacks".into(),
+            measurements: avg_rollbacks,
+            help:
+                "Average number of abandoned transactions that had to be rolled back automatically."
+                    .into(),
             unit: None,
             metric_type: None,
         }));
