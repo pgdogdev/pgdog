@@ -6,6 +6,8 @@ use std::io::Cursor;
 use bytes::{Buf, BytesMut};
 use tokio::io::{AsyncRead, AsyncReadExt};
 
+use crate::net::stream::eof;
+
 use super::{Error, Message};
 
 const HEADER_SIZE: usize = 5;
@@ -46,7 +48,7 @@ impl MessageBuffer {
                 self.buffer.reserve(1028);
             }
 
-            let read = stream.read_buf(&mut self.buffer).await?;
+            let read = eof(stream.read_buf(&mut self.buffer).await)?;
 
             if read == 0 {
                 return Err(Error::UnexpectedEof);
