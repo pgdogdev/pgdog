@@ -323,6 +323,11 @@ port = 5432
 # Role set to replica.
 role = "replica"
 
+[rewrite]
+enabled = false
+shard_key = "ignore"
+split_inserts = "error"
+
 #
 # TCP tweaks.
 #

@@ -11,6 +11,7 @@ pub mod networking;
 pub mod overrides;
 pub mod pooling;
 pub mod replication;
+pub mod rewrite;
 pub mod sharding;
 pub mod url;
 pub mod users;
@@ -25,7 +26,10 @@ pub use overrides::Overrides;
 pub use core::{Config, ConfigAndUsers};
 
 // Re-export from general module
-pub use general::{General, ShardKeyUpdateMode};
+pub use general::General;
+
+// Re-export from rewrite module
+pub use rewrite::{Rewrite, RewriteMode};
 
 // Re-export from auth module
 pub use auth::{AuthType, PassthoughAuth};
