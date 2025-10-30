@@ -275,7 +275,7 @@ mod tests {
             },
         },
         net::{
-            messages::{Parse, Query, Sync},
+            messages::{Bind, Describe, Execute, Parse, Query, Sync},
             Stream,
         },
     };
@@ -346,5 +346,57 @@ mod tests {
 
         assert!(engine.stats().bytes_sent > 0);
         assert_eq!(engine.stats().errors, 1);
+    }
+
+    #[tokio::test]
+    async fn send_insert_complete_simple_flow() {
+        config::load_test();
+
+        let mut client = test_client();
+        client
+            .client_request
+            .messages
+            .push(Query::new("INSERT INTO sharded (id) VALUES (1)").into());
+
+        let mut engine = QueryEngine::default();
+        let mut context = QueryEngineContext::new(&mut client);
+
+        engine
+            .send_insert_complete(&mut context, 1, false)
+            .await
+            .expect("simple insert complete should succeed");
+
+        let stats = engine.stats();
+        assert_eq!(stats.queries, 1);
+        assert!(stats.bytes_sent > 0);
+        assert_eq!(stats.transactions_2pc, 0);
+    }
+
+    #[tokio::test]
+    async fn send_insert_complete_extended_flow() {
+        config::load_test();
+
+        let mut client = test_client();
+        client.client_request.messages.extend_from_slice(&[
+            Parse::named("multi", "INSERT INTO sharded (id, value) VALUES ($1, $2)").into(),
+            Bind::new_statement("multi").into(),
+            Describe::new_statement("multi").into(),
+            Execute::new().into(),
+            Sync::new().into(),
+        ]);
+
+        let mut engine = QueryEngine::default();
+        let mut context = QueryEngineContext::new(&mut client);
+
+        engine
+            .send_insert_complete(&mut context, 2, true)
+            .await
+            .expect("extended insert complete should succeed");
+
+        let stats = engine.stats();
+        assert_eq!(stats.queries, 1);
+        assert!(stats.bytes_sent > 0);
+        assert_eq!(stats.transactions, 1);
+        assert_eq!(stats.transactions_2pc, 1);
     }
 }
