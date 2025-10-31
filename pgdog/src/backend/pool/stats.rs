@@ -188,6 +188,6 @@ impl MemoryStats {
     }
 
     pub fn total(&self) -> usize {
-        self.buffer.bytes_alloc + self.prepared_statements
+        self.buffer.bytes_alloc + self.prepared_statements + self.stream
     }
 }

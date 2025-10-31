@@ -53,7 +53,7 @@ impl Command for ShowClientMemory {
                 .add(memory.buffer.bytes_alloc as i64)
                 .add(memory.prepared_statements as i64)
                 .add(memory.stream as i64)
-                .add((memory.total() + memory.stream) as i64);
+                .add((memory.total()) as i64);
 
             messages.push(row.message()?);
         }
