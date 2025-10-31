@@ -3,7 +3,7 @@
 
 use std::io::Cursor;
 
-use bytes::{Buf, BufMut, BytesMut};
+use bytes::{Buf, BytesMut};
 use tokio::io::{AsyncRead, AsyncReadExt};
 
 use crate::net::stream::eof;
@@ -88,12 +88,15 @@ impl MessageBuffer {
     }
 
     /// Re-allcoate buffer if it exceeds capacity.
-    pub fn shrink_to_fit(&mut self) {
+    pub fn shrink_to_fit(&mut self) -> bool {
         if self.bytes_used > BUFFER_SIZE {
             let mut buffer = BytesMut::with_capacity(BUFFER_SIZE);
             buffer.extend_from_slice(&self.buffer);
-            self.bytes_used += self.buffer.len();
+            self.bytes_used = self.buffer.len();
             self.buffer = buffer;
+            true
+        } else {
+            false
         }
     }
 
@@ -217,5 +220,66 @@ mod test {
 
         assert_eq!(region.change().allocations, 2);
         assert!(region.change().bytes_allocated < 6000); // Depends on the allocator, but it will never be more.
+    }
+
+    #[tokio::test]
+    async fn test_shrink_to_fit() {
+        use std::io::Cursor;
+
+        let mut stream_data = Vec::new();
+
+        // Create a large message (10KB query)
+        let large_query = "SELECT * FROM ".to_string() + &"x".repeat(10_000);
+        let large_msg = Parse::named("large", &large_query).to_bytes().unwrap();
+        stream_data.extend_from_slice(&large_msg);
+
+        // Create a small message
+        let small_msg = Sync.to_bytes().unwrap();
+        stream_data.extend_from_slice(&small_msg);
+
+        let mut cursor = Cursor::new(stream_data);
+        let mut buf = MessageBuffer::new();
+
+        // Read the large message
+        let msg = buf.read(&mut cursor).await.unwrap();
+        assert_eq!(msg.code(), 'P');
+
+        // At this point, bytes_used should be > BUFFER_SIZE
+        let bytes_used_before = buf.bytes_used;
+        assert!(bytes_used_before > BUFFER_SIZE);
+
+        // Shrink the buffer
+        assert!(buf.shrink_to_fit());
+
+        // After shrinking, we should have reset to BUFFER_SIZE capacity
+        assert_eq!(buf.buffer.capacity(), BUFFER_SIZE);
+
+        // Should still be able to read the next message
+        let msg = buf.read(&mut cursor).await.unwrap();
+        assert_eq!(msg.code(), 'S');
+    }
+
+    #[tokio::test]
+    async fn test_shrink_to_fit_preserves_partial_data() {
+        use bytes::BufMut;
+
+        let mut buf = MessageBuffer::new();
+
+        // Simulate having read a large message by inflating bytes_used
+        buf.bytes_used = BUFFER_SIZE * 2;
+
+        // Put some partial message data in the buffer (incomplete header)
+        buf.buffer.put_u8('P' as u8);
+        buf.buffer.put_u8(0);
+        buf.buffer.put_u8(0);
+
+        let data_before = buf.buffer.clone();
+
+        // Shrink should preserve the partial data
+        assert!(buf.shrink_to_fit());
+
+        assert_eq!(buf.buffer.len(), data_before.len());
+        assert_eq!(buf.buffer[..], data_before[..]);
+        assert_eq!(buf.buffer.capacity(), BUFFER_SIZE);
     }
 }
