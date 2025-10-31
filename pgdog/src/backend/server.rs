@@ -18,6 +18,7 @@ use super::{
 };
 use crate::{
     auth::{md5, scram::Client},
+    backend::pool::stats::MemoryStats,
     config::AuthType,
     frontend::ClientRequest,
     net::{
@@ -266,7 +267,7 @@ impl Server {
             stream_buffer: MessageBuffer::new(),
         };
 
-        server.stats.memory_used(server.memory_usage()); // Stream capacity.
+        server.stats.memory_used(server.memory_stats()); // Stream capacity.
 
         Ok(server)
     }
@@ -385,7 +386,7 @@ impl Server {
             'Z' => {
                 let now = Instant::now();
                 self.stats.query(now);
-                self.stats.memory_used(self.memory_usage());
+                self.stats.memory_used(self.memory_stats());
 
                 let rfq = ReadyForQuery::from_bytes(message.payload())?;
 
@@ -404,9 +405,6 @@ impl Server {
                         return Err(Error::UnexpectedTransactionStatus(status));
                     }
                 }
-
-                // Check buffer size once per request.
-                self.stream_buffer.shrink_to_fit();
 
                 self.streaming = false;
             }
@@ -441,6 +439,8 @@ impl Server {
             '2' => self.stats.bind_complete(),
             _ => (),
         }
+
+        self.stream_buffer.shrink_to_fit();
 
         Ok(message)
     }
@@ -882,6 +882,19 @@ impl Server {
     #[inline]
     pub fn prepared_statements(&self) -> &PreparedStatements {
         &self.prepared_statements
+    }
+
+    #[inline]
+    pub fn memory_stats(&self) -> MemoryStats {
+        MemoryStats {
+            buffer: *self.stream_buffer.stats(),
+            prepared_statements: self.prepared_statements.memory_used(),
+            stream: self
+                .stream
+                .as_ref()
+                .map(|s| s.memory_usage())
+                .unwrap_or_default(),
+        }
     }
 }
 

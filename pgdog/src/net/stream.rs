@@ -14,6 +14,8 @@ use std::task::Context;
 
 use super::messages::{ErrorResponse, Message, Protocol, ReadyForQuery, Terminate};
 
+pub static BUFFER_SIZE: usize = 4096;
+
 /// Inner stream types.
 #[pin_project(project = StreamInnerProjection)]
 #[derive(Debug)]
@@ -88,10 +90,15 @@ impl AsyncWrite for Stream {
 }
 
 impl Stream {
+    /// Memory used by the stream buffers.
+    pub fn memory_usage(&self) -> usize {
+        BUFFER_SIZE * 2 // One for read, one for write.
+    }
+
     /// Wrap an unencrypted TCP stream.
     pub fn plain(stream: TcpStream) -> Self {
         Self {
-            inner: StreamInner::Plain(BufStream::with_capacity(9126, 9126, stream)),
+            inner: StreamInner::Plain(BufStream::with_capacity(BUFFER_SIZE, BUFFER_SIZE, stream)),
             io_in_progress: false,
         }
     }
@@ -99,7 +106,7 @@ impl Stream {
     /// Wrap an encrypted TCP stream.
     pub fn tls(stream: tokio_rustls::TlsStream<TcpStream>) -> Self {
         Self {
-            inner: StreamInner::Tls(BufStream::with_capacity(9126, 9126, stream)),
+            inner: StreamInner::Tls(BufStream::with_capacity(BUFFER_SIZE, BUFFER_SIZE, stream)),
             io_in_progress: false,
         }
     }

@@ -1,7 +1,7 @@
 //! Cancel-safe and memory-efficient
 //! read buffer for Postgres messages.
 
-use std::io::Cursor;
+use std::{io::Cursor, ops::Add};
 
 use bytes::{Buf, BytesMut};
 use tokio::io::{AsyncRead, AsyncReadExt};
@@ -12,11 +12,12 @@ use super::{Error, Message};
 
 const HEADER_SIZE: usize = 5;
 const BUFFER_SIZE: usize = 4096;
+const REALLOC_THRESHOLD: usize = BUFFER_SIZE * 2;
 
 #[derive(Default, Debug, Clone)]
 pub struct MessageBuffer {
     buffer: BytesMut,
-    bytes_used: usize,
+    stats: MessageBufferStats,
 }
 
 impl MessageBuffer {
@@ -25,7 +26,10 @@ impl MessageBuffer {
     pub fn new() -> Self {
         Self {
             buffer: BytesMut::with_capacity(BUFFER_SIZE),
-            bytes_used: 0,
+            stats: MessageBufferStats {
+                bytes_alloc: BUFFER_SIZE,
+                ..Default::default()
+            },
         }
     }
 
@@ -47,12 +51,13 @@ impl MessageBuffer {
                 self.ensure_capacity(size); // Reserve at least enough space for the whole message.
             }
 
-            if self.buffer.capacity() == 0 {
-                self.ensure_capacity(BUFFER_SIZE);
-            }
+            // Ensure there is 1/4 of the buffer
+            // available at all times. This clears memory usage
+            // frequently.
+            self.ensure_capacity(BUFFER_SIZE / 4);
 
             let read = eof(stream.read_buf(&mut self.buffer).await)?;
-            self.bytes_used += read;
+            self.stats.bytes_used += read;
 
             if read == 0 {
                 return Err(Error::UnexpectedEof);
@@ -64,9 +69,14 @@ impl MessageBuffer {
     // a message we are receiving.
     fn ensure_capacity(&mut self, amount: usize) {
         if self.buffer.try_reclaim(amount) {
-            self.bytes_used -= amount;
+            // I know this isn't exactly right, we could be reclaiming more.
+            // But undercounting is better than overcounting.
+            self.stats.bytes_used = self.stats.bytes_used.saturating_sub(amount);
+            self.stats.frees += 1;
         } else {
             self.buffer.reserve(amount);
+            // Possibly undercounting.
+            self.stats.bytes_alloc += amount;
         }
     }
 
@@ -89,15 +99,26 @@ impl MessageBuffer {
 
     /// Re-allcoate buffer if it exceeds capacity.
     pub fn shrink_to_fit(&mut self) -> bool {
-        if self.bytes_used > BUFFER_SIZE {
+        // Re-allocate the buffer to save on memory.
+        if self.stats.bytes_alloc > REALLOC_THRESHOLD {
+            // Create new buffer and copy contents.
             let mut buffer = BytesMut::with_capacity(BUFFER_SIZE);
             buffer.extend_from_slice(&self.buffer);
-            self.bytes_used = self.buffer.len();
+
+            // Update stats.
+            self.stats.bytes_used = self.buffer.len();
             self.buffer = buffer;
+            self.stats.reallocs += 1;
+            self.stats.bytes_alloc = BUFFER_SIZE; // Possibly undercounting.
             true
         } else {
             false
         }
+    }
+
+    /// Get buffer stats.
+    pub fn stats(&self) -> &MessageBufferStats {
+        &self.stats
     }
 
     /// Read a Postgres message off of a stream.
@@ -111,6 +132,27 @@ impl MessageBuffer {
         stream: &mut (impl AsyncRead + Unpin + AsyncReadExt),
     ) -> Result<Message, Error> {
         self.read_internal(stream).await
+    }
+}
+
+#[derive(Debug, Copy, Clone, Default)]
+pub struct MessageBufferStats {
+    pub reallocs: usize,
+    pub frees: usize,
+    pub bytes_used: usize,
+    pub bytes_alloc: usize,
+}
+
+impl Add for MessageBufferStats {
+    type Output = Self;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        Self {
+            reallocs: rhs.reallocs + self.reallocs,
+            frees: rhs.frees + self.frees,
+            bytes_used: rhs.bytes_used + self.bytes_used,
+            bytes_alloc: rhs.bytes_alloc + self.bytes_alloc,
+        }
     }
 }
 
@@ -245,7 +287,7 @@ mod test {
         assert_eq!(msg.code(), 'P');
 
         // At this point, bytes_used should be > BUFFER_SIZE
-        let bytes_used_before = buf.bytes_used;
+        let bytes_used_before = buf.stats.bytes_used;
         assert!(bytes_used_before > BUFFER_SIZE);
 
         // Shrink the buffer
@@ -266,7 +308,7 @@ mod test {
         let mut buf = MessageBuffer::new();
 
         // Simulate having read a large message by inflating bytes_used
-        buf.bytes_used = BUFFER_SIZE * 2;
+        buf.stats.bytes_used = BUFFER_SIZE * 2;
 
         // Put some partial message data in the buffer (incomplete header)
         buf.buffer.put_u8('P' as u8);
@@ -278,8 +320,52 @@ mod test {
         // Shrink should preserve the partial data
         assert!(buf.shrink_to_fit());
 
+        assert_eq!(buf.stats().bytes_alloc, BUFFER_SIZE);
         assert_eq!(buf.buffer.len(), data_before.len());
         assert_eq!(buf.buffer[..], data_before[..]);
         assert_eq!(buf.buffer.capacity(), BUFFER_SIZE);
+    }
+
+    #[tokio::test]
+    async fn test_shrink_to_fit_no_realloc_when_under_capacity() {
+        use std::io::Cursor;
+
+        let mut stream_data = Vec::new();
+
+        // Create several small messages that won't exceed BUFFER_SIZE
+        for i in 0..10 {
+            let query = format!("SELECT {}", i);
+            let msg = Parse::named(format!("stmt_{}", i), &query)
+                .to_bytes()
+                .unwrap();
+            stream_data.extend_from_slice(&msg);
+        }
+
+        let mut cursor = Cursor::new(stream_data);
+        let mut buf = MessageBuffer::new();
+
+        // Read all small messages
+        for _ in 0..10 {
+            let msg = buf.read(&mut cursor).await.unwrap();
+            assert_eq!(msg.code(), 'P');
+        }
+
+        // At this point, bytes_used should be below BUFFER_SIZE
+        let bytes_used = buf.stats.bytes_used;
+        assert!(bytes_used <= BUFFER_SIZE);
+
+        let capacity_before = buf.buffer.capacity();
+        let reallocs_before = buf.stats.reallocs;
+        let bytes_alloc_before = buf.stats.bytes_alloc;
+        let frees_before = buf.stats.frees;
+
+        // Should not reallocate since we haven't exceeded BUFFER_SIZE
+        assert!(!buf.shrink_to_fit());
+
+        // Verify no reallocation occurred and stats remain unchanged
+        assert_eq!(buf.buffer.capacity(), capacity_before);
+        assert_eq!(buf.stats.reallocs, reallocs_before);
+        assert_eq!(buf.stats.bytes_alloc, bytes_alloc_before);
+        assert_eq!(buf.stats.frees, frees_before);
     }
 }

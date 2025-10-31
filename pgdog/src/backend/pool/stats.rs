@@ -1,6 +1,6 @@
 //! Pool stats.
 
-use crate::backend::stats::Counts as BackendCounts;
+use crate::{backend::stats::Counts as BackendCounts, net::MessageBufferStats};
 
 use std::{
     iter::Sum,
@@ -165,5 +165,18 @@ impl Stats {
             self.averages = (self.counts - self.last_counts) / secs;
             self.last_counts = self.counts;
         }
+    }
+}
+
+#[derive(Debug, Clone, Default, Copy)]
+pub struct MemoryStats {
+    pub buffer: MessageBufferStats,
+    pub prepared_statements: usize,
+    pub stream: usize,
+}
+
+impl MemoryStats {
+    pub fn total(&self) -> usize {
+        self.buffer.bytes_alloc + self.prepared_statements
     }
 }

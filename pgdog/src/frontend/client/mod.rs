@@ -10,6 +10,7 @@ use tracing::{debug, enabled, error, info, trace, Level as LogLevel};
 use super::{ClientRequest, Comms, Error, PreparedStatements};
 use crate::auth::{md5, scram::Server};
 use crate::backend::maintenance_mode;
+use crate::backend::pool::stats::MemoryStats;
 use crate::backend::{
     databases,
     pool::{Connection, Request},
@@ -547,6 +548,15 @@ impl Client {
 
     pub fn in_transaction(&self) -> bool {
         self.transaction.is_some()
+    }
+
+    /// Get client memory stats.
+    pub fn memory_stats(&self) -> MemoryStats {
+        MemoryStats {
+            buffer: *self.stream_buffer.stats(),
+            prepared_statements: self.prepared_statements.memory_used(),
+            stream: self.stream.memory_usage(),
+        }
     }
 }
 

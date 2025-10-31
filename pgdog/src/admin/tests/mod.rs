@@ -4,10 +4,12 @@ use crate::backend::pool::mirror_stats::Counts;
 use crate::config::{self, ConfigAndUsers, Database, Role, User as ConfigUser};
 use crate::net::messages::{DataRow, DataType, FromBytes, Protocol, RowDescription};
 
+use super::show_client_memory::ShowClientMemory;
 use super::show_config::ShowConfig;
 use super::show_lists::ShowLists;
 use super::show_mirrors::ShowMirrors;
 use super::show_pools::ShowPools;
+use super::show_server_memory::ShowServerMemory;
 
 #[derive(Clone)]
 struct SavedState {
@@ -350,4 +352,112 @@ async fn show_lists_reports_basic_counts() {
     assert_eq!(used_clients, 0);
     assert_eq!(free_servers, 0);
     assert_eq!(used_servers, 0);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn show_server_memory_reports_memory_stats() {
+    let command = ShowServerMemory;
+    let messages = command
+        .execute()
+        .await
+        .expect("show server memory execution failed");
+
+    assert!(messages.len() >= 1, "expected at least row description");
+
+    let row_description = RowDescription::from_bytes(messages[0].payload())
+        .expect("row description message should parse");
+    let actual_names: Vec<&str> = row_description
+        .fields
+        .iter()
+        .map(|field| field.name.as_str())
+        .collect();
+    let expected_names = vec![
+        "pool_id",
+        "database",
+        "user",
+        "addr",
+        "port",
+        "remote_pid",
+        "buffer_reallocs",
+        "buffer_frees",
+        "buffer_bytes_used",
+        "buffer_bytes_alloc",
+        "prepared_statements_bytes",
+        "total_bytes",
+    ];
+    assert_eq!(actual_names, expected_names);
+
+    for (idx, expected_type) in [
+        DataType::Bigint,
+        DataType::Text,
+        DataType::Text,
+        DataType::Text,
+        DataType::Numeric,
+        DataType::Numeric,
+        DataType::Numeric,
+        DataType::Numeric,
+        DataType::Numeric,
+        DataType::Numeric,
+        DataType::Numeric,
+        DataType::Numeric,
+    ]
+    .iter()
+    .enumerate()
+    {
+        let field = row_description.field(idx).expect("field should exist");
+        assert_eq!(field.data_type(), *expected_type);
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn show_client_memory_reports_memory_stats() {
+    let command = ShowClientMemory;
+    let messages = command
+        .execute()
+        .await
+        .expect("show client memory execution failed");
+
+    assert!(messages.len() >= 1, "expected at least row description");
+
+    let row_description = RowDescription::from_bytes(messages[0].payload())
+        .expect("row description message should parse");
+    let actual_names: Vec<&str> = row_description
+        .fields
+        .iter()
+        .map(|field| field.name.as_str())
+        .collect();
+    let expected_names = vec![
+        "client_id",
+        "database",
+        "user",
+        "addr",
+        "port",
+        "buffer_reallocs",
+        "buffer_frees",
+        "buffer_bytes_used",
+        "buffer_bytes_alloc",
+        "prepared_statements_bytes",
+        "total_bytes",
+    ];
+    assert_eq!(actual_names, expected_names);
+
+    for (idx, expected_type) in [
+        DataType::Bigint,
+        DataType::Text,
+        DataType::Text,
+        DataType::Text,
+        DataType::Numeric,
+        DataType::Numeric,
+        DataType::Numeric,
+        DataType::Numeric,
+        DataType::Numeric,
+        DataType::Numeric,
+        DataType::Numeric,
+    ]
+    .iter()
+    .enumerate()
+    {
+        let field = row_description.field(idx).expect("field should exist");
+        assert_eq!(field.data_type(), *expected_type);
+    }
 }

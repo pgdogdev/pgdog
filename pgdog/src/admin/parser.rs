@@ -4,9 +4,10 @@ use super::{
     ban::Ban, healthcheck::Healthcheck, maintenance_mode::MaintenanceMode, pause::Pause,
     prelude::Message, probe::Probe, reconnect::Reconnect, reload::Reload,
     reset_query_cache::ResetQueryCache, set::Set, setup_schema::SetupSchema,
-    show_clients::ShowClients, show_config::ShowConfig, show_instance_id::ShowInstanceId,
-    show_lists::ShowLists, show_mirrors::ShowMirrors, show_peers::ShowPeers, show_pools::ShowPools,
-    show_prepared_statements::ShowPreparedStatements, show_query_cache::ShowQueryCache,
+    show_client_memory::ShowClientMemory, show_clients::ShowClients, show_config::ShowConfig,
+    show_instance_id::ShowInstanceId, show_lists::ShowLists, show_mirrors::ShowMirrors,
+    show_peers::ShowPeers, show_pools::ShowPools, show_prepared_statements::ShowPreparedStatements,
+    show_query_cache::ShowQueryCache, show_server_memory::ShowServerMemory,
     show_servers::ShowServers, show_stats::ShowStats, show_transactions::ShowTransactions,
     show_version::ShowVersion, shutdown::Shutdown, Command, Error,
 };
@@ -34,6 +35,8 @@ pub enum ParseResult {
     Shutdown(Shutdown),
     ShowLists(ShowLists),
     ShowPrepared(ShowPreparedStatements),
+    ShowServerMemory(ShowServerMemory),
+    ShowClientMemory(ShowClientMemory),
     Set(Set),
     Ban(Ban),
     Probe(Probe),
@@ -66,6 +69,8 @@ impl ParseResult {
             Shutdown(shutdown) => shutdown.execute().await,
             ShowLists(show_lists) => show_lists.execute().await,
             ShowPrepared(cmd) => cmd.execute().await,
+            ShowServerMemory(show_server_memory) => show_server_memory.execute().await,
+            ShowClientMemory(show_client_memory) => show_client_memory.execute().await,
             Set(set) => set.execute().await,
             Ban(ban) => ban.execute().await,
             Probe(probe) => probe.execute().await,
@@ -98,6 +103,8 @@ impl ParseResult {
             Shutdown(shutdown) => shutdown.name(),
             ShowLists(show_lists) => show_lists.name(),
             ShowPrepared(show) => show.name(),
+            ShowServerMemory(show_server_memory) => show_server_memory.name(),
+            ShowClientMemory(show_client_memory) => show_client_memory.name(),
             Set(set) => set.name(),
             Ban(ban) => ban.name(),
             Probe(probe) => probe.name(),
@@ -128,6 +135,20 @@ impl Parser {
                 "pools" => ParseResult::ShowPools(ShowPools::parse(&sql)?),
                 "config" => ParseResult::ShowConfig(ShowConfig::parse(&sql)?),
                 "servers" => ParseResult::ShowServers(ShowServers::parse(&sql)?),
+                "server" => match iter.next().ok_or(Error::Syntax)?.trim() {
+                    "memory" => ParseResult::ShowServerMemory(ShowServerMemory::parse(&sql)?),
+                    command => {
+                        debug!("unknown admin show server command: '{}'", command);
+                        return Err(Error::Syntax);
+                    }
+                },
+                "client" => match iter.next().ok_or(Error::Syntax)?.trim() {
+                    "memory" => ParseResult::ShowClientMemory(ShowClientMemory::parse(&sql)?),
+                    command => {
+                        debug!("unknown admin show client command: '{}'", command);
+                        return Err(Error::Syntax);
+                    }
+                },
                 "peers" => ParseResult::ShowPeers(ShowPeers::parse(&sql)?),
                 "query_cache" => ParseResult::ShowQueryCache(ShowQueryCache::parse(&sql)?),
                 "stats" => ParseResult::ShowStats(ShowStats::parse(&sql)?),
@@ -190,5 +211,17 @@ mod tests {
     fn rejects_unknown_admin_command() {
         let result = Parser::parse("FOO BAR");
         assert!(matches!(result, Err(Error::Syntax)));
+    }
+
+    #[test]
+    fn parses_show_server_memory_command() {
+        let result = Parser::parse("SHOW SERVER MEMORY;");
+        assert!(matches!(result, Ok(ParseResult::ShowServerMemory(_))));
+    }
+
+    #[test]
+    fn parses_show_client_memory_command() {
+        let result = Parser::parse("SHOW CLIENT MEMORY;");
+        assert!(matches!(result, Ok(ParseResult::ShowClientMemory(_))));
     }
 }
