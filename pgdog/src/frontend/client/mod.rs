@@ -20,7 +20,7 @@ use crate::net::messages::{
     Authentication, BackendKeyData, ErrorResponse, FromBytes, Message, Password, Protocol,
     ReadyForQuery, ToBytes,
 };
-use crate::net::{parameter::Parameters, ProtocolMessage, Stream, MessageBuffer};
+use crate::net::{parameter::Parameters, MessageBuffer, ProtocolMessage, Stream};
 use crate::state::State;
 use crate::stats::memory::MemoryUsage;
 use crate::util::user_database_from_params;
