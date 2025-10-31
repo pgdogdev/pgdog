@@ -1,10 +1,6 @@
 //! Pool stats.
 
-use crate::{
-    backend::stats::Counts as BackendCounts,
-    config::{ConfigAndUsers, Memory},
-    net::MessageBufferStats,
-};
+use crate::{backend::stats::Counts as BackendCounts, config::Memory, net::MessageBufferStats};
 
 use std::{
     iter::Sum,
