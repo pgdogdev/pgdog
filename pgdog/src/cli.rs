@@ -56,7 +56,23 @@ pub enum Commands {
     },
 
     /// Check configuration files for errors.
-    Configcheck,
+    Configcheck {
+        /// Path to the configuration file.
+        #[arg(short, long)]
+        config: Option<PathBuf>,
+        /// Path to the users.toml file.
+        #[arg(short, long)]
+        users: Option<PathBuf>,
+    },
+
+    Psql {
+        /// database to connect to
+        #[arg(short, long)]
+        database: Option<String>,
+        /// user to auth with
+        #[arg(short, long)]
+        user: Option<String>,
+    },
 
     /// Copy data from source to destination cluster
     /// using logical replication.
