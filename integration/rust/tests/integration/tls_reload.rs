@@ -142,6 +142,7 @@ struct ConfigGuard {
 impl ConfigGuard {
     fn new() -> Result<Self, std::io::Error> {
         let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        println!("base: {}", manifest_dir.display());
         let config_path = manifest_dir.join("../pgdog.toml").canonicalize()?;
         let original = fs::read_to_string(&config_path)?;
         let pid_path = manifest_dir.join("../pgdog.pid").canonicalize()?;
