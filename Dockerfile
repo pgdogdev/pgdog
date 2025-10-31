@@ -31,7 +31,6 @@ RUN install -d /usr/share/postgresql-common/pgdg && \
     sh -c "echo 'deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $VERSION_CODENAME-pgdg main' > /etc/apt/sources.list.d/pgdg.list"
 
 RUN apt update && apt install -y postgresql-client-${PSQL_VERSION}
-RUN apt remove -y curl
 
 COPY --from=builder /build/target/release/pgdog /usr/local/bin/pgdog
 
