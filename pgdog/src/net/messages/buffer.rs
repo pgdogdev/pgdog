@@ -11,10 +11,12 @@ use crate::net::stream::eof;
 use super::{Error, Message};
 
 const HEADER_SIZE: usize = 5;
+const BUFFER_SIZE: usize = 4096;
 
 #[derive(Default, Debug, Clone)]
 pub struct MessageBuffer {
     buffer: BytesMut,
+    bytes_used: usize,
 }
 
 impl MessageBuffer {
@@ -22,7 +24,8 @@ impl MessageBuffer {
     /// message buffer.
     pub fn new() -> Self {
         Self {
-            buffer: BytesMut::with_capacity(1028),
+            buffer: BytesMut::with_capacity(BUFFER_SIZE),
+            bytes_used: 0,
         }
     }
 
@@ -41,18 +44,29 @@ impl MessageBuffer {
                     return Ok(Message::new(self.buffer.split_to(size).freeze()));
                 }
 
-                self.buffer.reserve(size); // Reserve at least enough space for the whole message.
+                self.ensure_capacity(size); // Reserve at least enough space for the whole message.
             }
 
             if self.buffer.capacity() == 0 {
-                self.buffer.reserve(1028);
+                self.ensure_capacity(BUFFER_SIZE);
             }
 
             let read = eof(stream.read_buf(&mut self.buffer).await)?;
+            self.bytes_used += read;
 
             if read == 0 {
                 return Err(Error::UnexpectedEof);
             }
+        }
+    }
+
+    // This may or may not allocate memory, depending on how big of
+    // a message we are receiving.
+    fn ensure_capacity(&mut self, amount: usize) {
+        if self.buffer.try_reclaim(amount) {
+            self.bytes_used -= amount;
+        } else {
+            self.buffer.reserve(amount);
         }
     }
 
@@ -73,6 +87,13 @@ impl MessageBuffer {
         }
     }
 
+    /// Re-allcoate buffer if it exceeds capacity.
+    pub fn shrink_to_fit(&mut self) {
+        if self.bytes_used > BUFFER_SIZE {
+            self.buffer = BytesMut::with_capacity(BUFFER_SIZE);
+        }
+    }
+
     /// Read a Postgres message off of a stream.
     ///
     /// # Cancellation safety
@@ -87,9 +108,11 @@ impl MessageBuffer {
     }
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn test_read() {
+#[cfg(test)]
+mod test {
+    use super::*;
     use crate::net::{FromBytes, Parse, Protocol, Sync, ToBytes};
+    use bytes::BufMut;
     use std::time::Duration;
     use tokio::{
         io::AsyncWriteExt,
@@ -99,70 +122,97 @@ async fn test_read() {
         time::interval,
     };
 
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let (tx, mut rx) = mpsc::channel(1);
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_read() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (tx, mut rx) = mpsc::channel(1);
 
-    spawn(async move {
-        let mut conn = TcpStream::connect(addr).await.unwrap();
-        use rand::{rngs::StdRng, Rng, SeedableRng};
-        let mut rng = StdRng::from_entropy();
+        spawn(async move {
+            let mut conn = TcpStream::connect(addr).await.unwrap();
+            use rand::{rngs::StdRng, Rng, SeedableRng};
+            let mut rng = StdRng::from_entropy();
 
-        for i in 0..5000 {
-            let msg = Sync.to_bytes().unwrap();
-            conn.write_all(&msg).await.unwrap();
+            for i in 0..5000 {
+                let msg = Sync.to_bytes().unwrap();
+                conn.write_all(&msg).await.unwrap();
 
-            let query_len = rng.gen_range(10..=1000);
-            let query: String = (0..query_len)
-                .map(|_| rng.sample(rand::distributions::Alphanumeric) as char)
-                .collect();
+                let query_len = rng.gen_range(10..=1000);
+                let query: String = (0..query_len)
+                    .map(|_| rng.sample(rand::distributions::Alphanumeric) as char)
+                    .collect();
 
-            let msg = Parse::named(format!("test_{}", i), &query)
-                .to_bytes()
-                .unwrap();
-            conn.write_all(&msg).await.unwrap();
-            conn.flush().await.unwrap();
-        }
-        rx.recv().await;
-    });
+                let msg = Parse::named(format!("test_{}", i), &query)
+                    .to_bytes()
+                    .unwrap();
+                conn.write_all(&msg).await.unwrap();
+                conn.flush().await.unwrap();
+            }
+            rx.recv().await;
+        });
 
-    let (mut conn, _) = listener.accept().await.unwrap();
-    let mut buf = MessageBuffer::default();
+        let (mut conn, _) = listener.accept().await.unwrap();
+        let mut buf = MessageBuffer::default();
 
-    let mut counter = 0;
-    let mut interrupted = 0;
-    let mut interval = interval(Duration::from_millis(1));
+        let mut counter = 0;
+        let mut interrupted = 0;
+        let mut interval = interval(Duration::from_millis(1));
 
-    while counter < 10000 {
-        let msg = tokio::select! {
-            msg = buf.read(&mut conn) => {
-                msg.unwrap()
+        while counter < 10000 {
+            let msg = tokio::select! {
+                msg = buf.read(&mut conn) => {
+                    msg.unwrap()
+                }
+
+                _ = interval.tick() => {
+                    interrupted += 1;
+                    continue;
+                }
+            };
+
+            if counter % 2 == 0 {
+                assert_eq!(msg.code(), 'S');
+            } else {
+                assert_eq!(msg.code(), 'P');
+                let parse = Parse::from_bytes(msg.to_bytes().unwrap()).unwrap();
+                assert_eq!(parse.name(), format!("test_{}", counter / 2));
             }
 
-            _ = interval.tick() => {
-                interrupted += 1;
-                continue;
-            }
-        };
-
-        if counter % 2 == 0 {
-            assert_eq!(msg.code(), 'S');
-        } else {
-            assert_eq!(msg.code(), 'P');
-            let parse = Parse::from_bytes(msg.to_bytes().unwrap()).unwrap();
-            assert_eq!(parse.name(), format!("test_{}", counter / 2));
+            counter += 1;
         }
 
-        counter += 1;
+        tx.send(0).await.unwrap();
+
+        assert!(interrupted > 0, "no cancellations");
+        assert_eq!(counter, 10000, "didnt receive all messages");
+        assert!(matches!(
+            buf.read(&mut conn).await.err(),
+            Some(Error::UnexpectedEof)
+        ));
+        assert!(buf.capacity() > 0);
     }
 
-    tx.send(0).await.unwrap();
+    #[test]
+    fn test_bytes_mut() {
+        let region = stats_alloc::Region::new(crate::GLOBAL);
 
-    assert!(interrupted > 0, "no cancellations");
-    assert_eq!(counter, 10000, "didnt receive all messages");
-    assert!(matches!(
-        buf.read(&mut conn).await.err(),
-        Some(Error::UnexpectedEof)
-    ));
-    assert!(buf.capacity() > 0);
+        let mut original = BytesMut::with_capacity(5 * 1000);
+        assert_eq!(original.capacity(), 5 * 1000);
+        assert_eq!(original.len(), 0);
+
+        for _ in 0..(5 * 25 * 1000) {
+            original.put_u8('S' as u8);
+            original.put_i32(4);
+
+            let sync = original.split_to(5);
+            assert_eq!(sync.capacity(), 5);
+            assert_eq!(sync.len(), 5);
+
+            // Removes it from the buffer, giving that space back.
+            drop(sync);
+        }
+
+        assert_eq!(region.change().allocations, 2);
+        assert!(region.change().bytes_allocated < 6000); // Depends on the allocator, but it will never be more.
+    }
 }

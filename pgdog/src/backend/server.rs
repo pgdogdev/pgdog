@@ -405,6 +405,9 @@ impl Server {
                     }
                 }
 
+                // Check buffer size once per request.
+                self.stream_buffer.shrink_to_fit();
+
                 self.streaming = false;
             }
             'E' => {
