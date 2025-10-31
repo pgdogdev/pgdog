@@ -84,10 +84,10 @@ impl Server {
         debug!("=> {}", addr);
         let stream = TcpStream::connect(addr.addr().await?).await?;
         tweak(&stream)?;
-
-        let mut stream = Stream::plain(stream);
-
         let cfg = config();
+
+        let mut stream = Stream::plain(stream, cfg.config.memory.net_buffer);
+
         let tls_mode = cfg.config.general.tls_verify;
 
         // Only attempt TLS if not in Disabled mode
@@ -121,7 +121,7 @@ impl Server {
                     Ok(tls_stream) => {
                         debug!("TLS handshake successful with {}", addr.host);
                         let cipher = tokio_rustls::TlsStream::Client(tls_stream);
-                        stream = Stream::tls(cipher);
+                        stream = Stream::tls(cipher, cfg.config.memory.net_buffer);
                     }
                     Err(e) => {
                         error!("TLS handshake failed with {:?} [{}]", e, addr);
@@ -251,7 +251,7 @@ impl Server {
             addr: addr.clone(),
             stream: Some(stream),
             id,
-            stats: Stats::connect(id, addr, &params, &options),
+            stats: Stats::connect(id, addr, &params, &options, &cfg.config.memory),
             replication_mode: options.replication_mode(),
             params,
             changed_params: Parameters::default(),
@@ -264,7 +264,7 @@ impl Server {
             in_transaction: false,
             re_synced: false,
             pooler_mode: PoolerMode::Transaction,
-            stream_buffer: MessageBuffer::new(),
+            stream_buffer: MessageBuffer::new(cfg.config.memory.message_buffer),
         };
 
         server.stats.memory_used(server.memory_stats()); // Stream capacity.
@@ -924,7 +924,7 @@ impl Drop for Server {
 // Used for testing.
 #[cfg(test)]
 pub mod test {
-    use crate::{frontend::PreparedStatements, net::*};
+    use crate::{config::Memory, frontend::PreparedStatements, net::*};
 
     use super::*;
 
@@ -938,7 +938,13 @@ pub mod test {
                 params: Parameters::default(),
                 changed_params: Parameters::default(),
                 client_params: Parameters::default(),
-                stats: Stats::connect(id, &addr, &Parameters::default(), &ServerOptions::default()),
+                stats: Stats::connect(
+                    id,
+                    &addr,
+                    &Parameters::default(),
+                    &ServerOptions::default(),
+                    &Memory::default(),
+                ),
                 prepared_statements: super::PreparedStatements::new(),
                 addr,
                 dirty: false,
@@ -949,7 +955,7 @@ pub mod test {
                 re_synced: false,
                 replication_mode: false,
                 pooler_mode: PoolerMode::Transaction,
-                stream_buffer: MessageBuffer::new(),
+                stream_buffer: MessageBuffer::new(4096),
             }
         }
     }

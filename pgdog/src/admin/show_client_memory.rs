@@ -29,6 +29,7 @@ impl Command for ShowClientMemory {
             Field::numeric("buffer_bytes_used"),
             Field::numeric("buffer_bytes_alloc"),
             Field::numeric("prepared_statements_bytes"),
+            Field::numeric("net_buffer_bytes"),
             Field::numeric("total_bytes"),
         ]);
         let mut messages = vec![rd.message()?];
@@ -51,7 +52,8 @@ impl Command for ShowClientMemory {
                 .add(memory.buffer.bytes_used as i64)
                 .add(memory.buffer.bytes_alloc as i64)
                 .add(memory.prepared_statements as i64)
-                .add(memory.total() as i64);
+                .add(memory.stream as i64)
+                .add((memory.total() + memory.stream) as i64);
 
             messages.push(row.message()?);
         }

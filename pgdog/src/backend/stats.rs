@@ -12,6 +12,7 @@ use tokio::time::Instant;
 
 use crate::{
     backend::{pool::stats::MemoryStats, ServerOptions},
+    config::Memory,
     net::{messages::BackendKeyData, Parameters},
     state::State,
 };
@@ -119,6 +120,7 @@ impl Stats {
         addr: &Address,
         params: &Parameters,
         options: &ServerOptions,
+        config: &Memory,
     ) -> Self {
         let now = Instant::now();
         let stats = Stats {
@@ -134,7 +136,7 @@ impl Stats {
             transaction_timer: None,
             pool_id: options.pool_id,
             client_id: None,
-            memory: MemoryStats::default(),
+            memory: MemoryStats::new(config),
         };
 
         STATS.lock().insert(

@@ -1,6 +1,10 @@
 //! Pool stats.
 
-use crate::{backend::stats::Counts as BackendCounts, net::MessageBufferStats};
+use crate::{
+    backend::stats::Counts as BackendCounts,
+    config::{ConfigAndUsers, Memory},
+    net::MessageBufferStats,
+};
 
 use std::{
     iter::Sum,
@@ -176,6 +180,17 @@ pub struct MemoryStats {
 }
 
 impl MemoryStats {
+    pub fn new(config: &Memory) -> Self {
+        Self {
+            buffer: MessageBufferStats {
+                bytes_alloc: config.message_buffer,
+                ..Default::default()
+            },
+            prepared_statements: 0,
+            stream: config.net_buffer,
+        }
+    }
+
     pub fn total(&self) -> usize {
         self.buffer.bytes_alloc + self.prepared_statements
     }

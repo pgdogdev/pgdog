@@ -11,23 +11,23 @@ use crate::net::stream::eof;
 use super::{Error, Message};
 
 const HEADER_SIZE: usize = 5;
-const BUFFER_SIZE: usize = 4096;
-const REALLOC_THRESHOLD: usize = BUFFER_SIZE * 2;
 
 #[derive(Default, Debug, Clone)]
 pub struct MessageBuffer {
     buffer: BytesMut,
+    capacity: usize,
     stats: MessageBufferStats,
 }
 
 impl MessageBuffer {
     /// Create new cancel-safe
     /// message buffer.
-    pub fn new() -> Self {
+    pub fn new(capacity: usize) -> Self {
         Self {
-            buffer: BytesMut::with_capacity(BUFFER_SIZE),
+            buffer: BytesMut::with_capacity(capacity),
+            capacity,
             stats: MessageBufferStats {
-                bytes_alloc: BUFFER_SIZE,
+                bytes_alloc: capacity,
                 ..Default::default()
             },
         }
@@ -54,7 +54,7 @@ impl MessageBuffer {
             // Ensure there is 1/4 of the buffer
             // available at all times. This clears memory usage
             // frequently.
-            self.ensure_capacity(BUFFER_SIZE / 4);
+            self.ensure_capacity(self.capacity / 4);
 
             let read = eof(stream.read_buf(&mut self.buffer).await)?;
             self.stats.bytes_used += read;
@@ -100,16 +100,16 @@ impl MessageBuffer {
     /// Re-allcoate buffer if it exceeds capacity.
     pub fn shrink_to_fit(&mut self) -> bool {
         // Re-allocate the buffer to save on memory.
-        if self.stats.bytes_alloc > REALLOC_THRESHOLD {
+        if self.stats.bytes_alloc > self.capacity * 2 {
             // Create new buffer and copy contents.
-            let mut buffer = BytesMut::with_capacity(BUFFER_SIZE);
+            let mut buffer = BytesMut::with_capacity(self.capacity);
             buffer.extend_from_slice(&self.buffer);
 
             // Update stats.
             self.stats.bytes_used = self.buffer.len();
             self.buffer = buffer;
             self.stats.reallocs += 1;
-            self.stats.bytes_alloc = BUFFER_SIZE; // Possibly undercounting.
+            self.stats.bytes_alloc = self.capacity; // Possibly undercounting.
             true
         } else {
             false
@@ -280,7 +280,7 @@ mod test {
         stream_data.extend_from_slice(&small_msg);
 
         let mut cursor = Cursor::new(stream_data);
-        let mut buf = MessageBuffer::new();
+        let mut buf = MessageBuffer::new(4096);
 
         // Read the large message
         let msg = buf.read(&mut cursor).await.unwrap();
@@ -288,13 +288,13 @@ mod test {
 
         // At this point, bytes_used should be > BUFFER_SIZE
         let bytes_used_before = buf.stats.bytes_used;
-        assert!(bytes_used_before > BUFFER_SIZE);
+        assert!(bytes_used_before > 4096);
 
         // Shrink the buffer
         assert!(buf.shrink_to_fit());
 
         // After shrinking, we should have reset to BUFFER_SIZE capacity
-        assert_eq!(buf.buffer.capacity(), BUFFER_SIZE);
+        assert_eq!(buf.buffer.capacity(), 4096);
 
         // Should still be able to read the next message
         let msg = buf.read(&mut cursor).await.unwrap();
@@ -305,10 +305,10 @@ mod test {
     async fn test_shrink_to_fit_preserves_partial_data() {
         use bytes::BufMut;
 
-        let mut buf = MessageBuffer::new();
+        let mut buf = MessageBuffer::new(4096);
 
         // Simulate having read a large message by inflating bytes_used
-        buf.stats.bytes_used = BUFFER_SIZE * 2;
+        buf.stats.bytes_used = 4096 * 2;
 
         // Put some partial message data in the buffer (incomplete header)
         buf.buffer.put_u8('P' as u8);
@@ -320,10 +320,10 @@ mod test {
         // Shrink should preserve the partial data
         assert!(buf.shrink_to_fit());
 
-        assert_eq!(buf.stats().bytes_alloc, BUFFER_SIZE);
+        assert_eq!(buf.stats().bytes_alloc, 4096);
         assert_eq!(buf.buffer.len(), data_before.len());
         assert_eq!(buf.buffer[..], data_before[..]);
-        assert_eq!(buf.buffer.capacity(), BUFFER_SIZE);
+        assert_eq!(buf.buffer.capacity(), 4096);
     }
 
     #[tokio::test]
@@ -342,7 +342,7 @@ mod test {
         }
 
         let mut cursor = Cursor::new(stream_data);
-        let mut buf = MessageBuffer::new();
+        let mut buf = MessageBuffer::new(4096);
 
         // Read all small messages
         for _ in 0..10 {
@@ -352,7 +352,7 @@ mod test {
 
         // At this point, bytes_used should be below BUFFER_SIZE
         let bytes_used = buf.stats.bytes_used;
-        assert!(bytes_used <= BUFFER_SIZE);
+        assert!(bytes_used <= 4096);
 
         let capacity_before = buf.buffer.capacity();
         let reallocs_before = buf.stats.reallocs;

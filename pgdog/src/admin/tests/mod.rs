@@ -383,6 +383,7 @@ async fn show_server_memory_reports_memory_stats() {
         "buffer_bytes_used",
         "buffer_bytes_alloc",
         "prepared_statements_bytes",
+        "net_buffer_bytes",
         "total_bytes",
     ];
     assert_eq!(actual_names, expected_names);
@@ -392,6 +393,7 @@ async fn show_server_memory_reports_memory_stats() {
         DataType::Text,
         DataType::Text,
         DataType::Text,
+        DataType::Numeric,
         DataType::Numeric,
         DataType::Numeric,
         DataType::Numeric,
@@ -437,6 +439,7 @@ async fn show_client_memory_reports_memory_stats() {
         "buffer_bytes_used",
         "buffer_bytes_alloc",
         "prepared_statements_bytes",
+        "net_buffer_bytes",
         "total_bytes",
     ];
     assert_eq!(actual_names, expected_names);
@@ -446,6 +449,7 @@ async fn show_client_memory_reports_memory_stats() {
         DataType::Text,
         DataType::Text,
         DataType::Text,
+        DataType::Numeric,
         DataType::Numeric,
         DataType::Numeric,
         DataType::Numeric,

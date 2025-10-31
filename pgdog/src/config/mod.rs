@@ -7,6 +7,7 @@ pub mod core;
 pub mod database;
 pub mod error;
 pub mod general;
+pub mod memory;
 pub mod networking;
 pub mod overrides;
 pub mod pooling;
@@ -45,6 +46,8 @@ pub use networking::{MultiTenant, Tcp, TlsVerifyMode};
 
 // Re-export from users module
 pub use users::{Admin, Plugin, User, Users};
+
+pub use memory::*;
 
 // Re-export from sharding module
 pub use sharding::{
