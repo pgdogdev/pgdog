@@ -307,11 +307,12 @@ mod test {
 
         let mut buf = MessageBuffer::new(4096);
 
-        // Simulate having read a large message by inflating bytes_used
+        // Simulate having allocated memory for a large message
+        buf.stats.bytes_alloc = 4096 * 3;
         buf.stats.bytes_used = 4096 * 2;
 
         // Put some partial message data in the buffer (incomplete header)
-        buf.buffer.put_u8('P' as u8);
+        buf.buffer.put_u8(b'P');
         buf.buffer.put_u8(0);
         buf.buffer.put_u8(0);
 
