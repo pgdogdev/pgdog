@@ -405,7 +405,7 @@ impl Server {
                         return Err(Error::UnexpectedTransactionStatus(status));
                     }
                 }
-
+                self.stream_buffer.shrink_to_fit();
                 self.streaming = false;
             }
             'E' => {
@@ -439,8 +439,6 @@ impl Server {
             '2' => self.stats.bind_complete(),
             _ => (),
         }
-
-        self.stream_buffer.shrink_to_fit();
 
         Ok(message)
     }

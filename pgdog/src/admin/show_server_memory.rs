@@ -26,7 +26,7 @@ impl Command for ShowServerMemory {
             Field::numeric("port"),
             Field::numeric("remote_pid"),
             Field::numeric("buffer_reallocs"),
-            Field::numeric("buffer_frees"),
+            Field::numeric("buffer_reclaims"),
             Field::numeric("buffer_bytes_used"),
             Field::numeric("buffer_bytes_alloc"),
             Field::numeric("prepared_statements_bytes"),
@@ -48,7 +48,7 @@ impl Command for ShowServerMemory {
                 .add(server.addr.port as i64)
                 .add(stats.id.pid as i64)
                 .add(memory.buffer.reallocs as i64)
-                .add(memory.buffer.frees as i64)
+                .add(memory.buffer.reclaims as i64)
                 .add(memory.buffer.bytes_used as i64)
                 .add(memory.buffer.bytes_alloc as i64)
                 .add(memory.prepared_statements as i64)

@@ -72,7 +72,7 @@ impl MessageBuffer {
             // I know this isn't exactly right, we could be reclaiming more.
             // But undercounting is better than overcounting.
             self.stats.bytes_used = self.stats.bytes_used.saturating_sub(amount);
-            self.stats.frees += 1;
+            self.stats.reclaims += 1;
         } else {
             self.buffer.reserve(amount);
             // Possibly undercounting.
@@ -138,7 +138,7 @@ impl MessageBuffer {
 #[derive(Debug, Copy, Clone, Default)]
 pub struct MessageBufferStats {
     pub reallocs: usize,
-    pub frees: usize,
+    pub reclaims: usize,
     pub bytes_used: usize,
     pub bytes_alloc: usize,
 }
@@ -149,7 +149,7 @@ impl Add for MessageBufferStats {
     fn add(self, rhs: Self) -> Self::Output {
         Self {
             reallocs: rhs.reallocs + self.reallocs,
-            frees: rhs.frees + self.frees,
+            reclaims: rhs.reclaims + self.reclaims,
             bytes_used: rhs.bytes_used + self.bytes_used,
             bytes_alloc: rhs.bytes_alloc + self.bytes_alloc,
         }
@@ -358,7 +358,7 @@ mod test {
         let capacity_before = buf.buffer.capacity();
         let reallocs_before = buf.stats.reallocs;
         let bytes_alloc_before = buf.stats.bytes_alloc;
-        let frees_before = buf.stats.frees;
+        let frees_before = buf.stats.reclaims;
 
         // Should not reallocate since we haven't exceeded BUFFER_SIZE
         assert!(!buf.shrink_to_fit());
@@ -367,6 +367,6 @@ mod test {
         assert_eq!(buf.buffer.capacity(), capacity_before);
         assert_eq!(buf.stats.reallocs, reallocs_before);
         assert_eq!(buf.stats.bytes_alloc, bytes_alloc_before);
-        assert_eq!(buf.stats.frees, frees_before);
+        assert_eq!(buf.stats.reclaims, frees_before);
     }
 }
