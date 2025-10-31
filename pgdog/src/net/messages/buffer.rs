@@ -3,7 +3,7 @@
 
 use std::io::Cursor;
 
-use bytes::{Buf, BytesMut};
+use bytes::{Buf, BufMut, BytesMut};
 use tokio::io::{AsyncRead, AsyncReadExt};
 
 use crate::net::stream::eof;
@@ -90,7 +90,10 @@ impl MessageBuffer {
     /// Re-allcoate buffer if it exceeds capacity.
     pub fn shrink_to_fit(&mut self) {
         if self.bytes_used > BUFFER_SIZE {
-            self.buffer = BytesMut::with_capacity(BUFFER_SIZE);
+            let mut buffer = BytesMut::with_capacity(BUFFER_SIZE);
+            buffer.extend_from_slice(&self.buffer);
+            self.bytes_used += self.buffer.len();
+            self.buffer = buffer;
         }
     }
 
