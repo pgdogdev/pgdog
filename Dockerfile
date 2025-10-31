@@ -20,6 +20,7 @@ RUN source ~/.cargo/env && \
 
 FROM ubuntu:latest
 ENV RUST_LOG=info
+ENV PSQL_VERSION=18
 RUN apt update && \
     apt install -y curl ca-certificates ssl-cert && \
     update-ca-certificates
@@ -29,7 +30,7 @@ RUN install -d /usr/share/postgresql-common/pgdg && \
     . /etc/os-release && \
     sh -c "echo 'deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $VERSION_CODENAME-pgdg main' > /etc/apt/sources.list.d/pgdg.list"
 
-RUN apt update && apt install -y postgresql-client-18
+RUN apt update && apt install -y postgresql-client-${PSQL_VERSION}
 RUN apt remove -y curl
 
 COPY --from=builder /build/target/release/pgdog /usr/local/bin/pgdog
