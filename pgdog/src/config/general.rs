@@ -63,6 +63,8 @@ pub struct General {
     pub tls_certificate: Option<PathBuf>,
     /// TLS private key.
     pub tls_private_key: Option<PathBuf>,
+    #[serde(default)]
+    pub tls_client_required: bool,
     /// TLS verification mode (for connecting to servers)
     #[serde(default = "General::default_tls_verify")]
     pub tls_verify: TlsVerifyMode,
@@ -182,6 +184,7 @@ impl Default for General {
             read_write_split: Self::read_write_split(),
             tls_certificate: Self::tls_certificate(),
             tls_private_key: Self::tls_private_key(),
+            tls_client_required: bool::default(),
             tls_verify: Self::default_tls_verify(),
             tls_server_ca_certificate: Self::tls_server_ca_certificate(),
             shutdown_timeout: Self::default_shutdown_timeout(),

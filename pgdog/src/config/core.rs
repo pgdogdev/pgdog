@@ -4,7 +4,7 @@ use std::fs::read_to_string;
 use std::path::PathBuf;
 use tracing::{info, warn};
 
-use crate::config::PreparedStatements;
+use crate::config::{PassthoughAuth, PreparedStatements};
 
 use super::database::Database;
 use super::error::Error;
@@ -285,6 +285,17 @@ impl Config {
                 "idle_healthcheck_interval ({}ms) should be shorter than ban_timeout ({}ms) to ensure health checks are triggered before a ban expires",
                 self.general.idle_healthcheck_interval, self.general.ban_timeout
             );
+        }
+
+        // Warn about plain auth and TLS
+        match self.general.passthrough_auth {
+            PassthoughAuth::Enabled if !self.general.tls_client_required => {
+                warn!("consider setting tls_client_required while passthrough_auth is enabled to prevent clients from exposing plaintext passwords");
+            }
+            PassthoughAuth::EnabledPlain => {
+                warn!("passthrough_auth plain is enabled - network traffic may expose plaintext passwords")
+            }
+            _ => (),
         }
     }
 

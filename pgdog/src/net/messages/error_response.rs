@@ -130,6 +130,18 @@ impl ErrorResponse {
         }
     }
 
+    pub fn tls_required() -> ErrorResponse {
+        Self {
+            severity: "FATAL".into(),
+            code: "08004".into(),
+            message: "only TLS connections are allowed".into(),
+            detail: None,
+            context: None,
+            file: None,
+            routine: None,
+        }
+    }
+
     pub fn from_err(err: &impl std::error::Error) -> Self {
         let message = err.to_string();
         Self {
