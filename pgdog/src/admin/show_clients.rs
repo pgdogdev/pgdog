@@ -45,7 +45,6 @@ impl Command for ShowClients {
             Field::numeric("bytes_sent"),
             Field::numeric("errors"),
             Field::text("application_name"),
-            Field::numeric("memory_used"),
             Field::bool("locked"),
             Field::numeric("prepared_statements"),
         ];
@@ -119,7 +118,6 @@ impl Command for ShowClients {
                     "application_name",
                     client.paramters.get_default("application_name", ""),
                 )
-                .add("memory_used", client.stats.memory_used)
                 .add("locked", client.stats.locked)
                 .add("prepared_statements", client.stats.prepared_statements)
                 .data_row();

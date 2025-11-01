@@ -38,7 +38,7 @@ pub use auth::{Authentication, Password};
 pub use backend_key::BackendKeyData;
 pub use bind::{Bind, Format, Parameter, ParameterWithFormat};
 pub use bind_complete::BindComplete;
-pub use buffer::MessageBuffer;
+pub use buffer::{MessageBuffer, MessageBufferStats};
 pub use close::Close;
 pub use close_complete::CloseComplete;
 pub use command_complete::CommandComplete;

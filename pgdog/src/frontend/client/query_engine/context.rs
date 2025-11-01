@@ -1,11 +1,10 @@
 use crate::{
-    backend::pool::connection::mirror::Mirror,
+    backend::pool::{connection::mirror::Mirror, stats::MemoryStats},
     frontend::{
         client::{timeouts::Timeouts, TransactionType},
         Client, ClientRequest, PreparedStatements,
     },
     net::{BackendKeyData, Parameters, Stream},
-    stats::memory::MemoryUsage,
 };
 
 #[allow(dead_code)]
@@ -30,7 +29,7 @@ pub struct QueryEngineContext<'a> {
     /// Cross shard  queries are disabled.
     pub(super) cross_shard_disabled: Option<bool>,
     /// Client memory usage.
-    pub(super) memory_usage: usize,
+    pub(super) memory_stats: MemoryStats,
     /// Is the client an admin.
     pub(super) admin: bool,
     /// Executing rollback statement.
@@ -39,7 +38,7 @@ pub struct QueryEngineContext<'a> {
 
 impl<'a> QueryEngineContext<'a> {
     pub fn new(client: &'a mut Client) -> Self {
-        let memory_usage = client.memory_usage();
+        let memory_stats = client.memory_stats();
 
         Self {
             id: &client.id,
@@ -50,7 +49,7 @@ impl<'a> QueryEngineContext<'a> {
             transaction: client.transaction,
             timeouts: client.timeouts,
             cross_shard_disabled: None,
-            memory_usage,
+            memory_stats,
             admin: client.admin,
             requests_left: 0,
             rollback: false,
@@ -74,7 +73,7 @@ impl<'a> QueryEngineContext<'a> {
             transaction: mirror.transaction,
             timeouts: mirror.timeouts,
             cross_shard_disabled: None,
-            memory_usage: 0,
+            memory_stats: MemoryStats::default(),
             admin: false,
             requests_left: 0,
             rollback: false,
