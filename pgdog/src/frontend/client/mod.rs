@@ -1,6 +1,7 @@
 //! Frontend client.
 
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use timeouts::Timeouts;
@@ -10,11 +11,12 @@ use tracing::{debug, enabled, error, info, trace, Level as LogLevel};
 use super::{ClientRequest, Comms, Error, PreparedStatements};
 use crate::auth::{md5, scram::Server};
 use crate::backend::maintenance_mode;
+use crate::backend::pool::stats::MemoryStats;
 use crate::backend::{
     databases,
     pool::{Connection, Request},
 };
-use crate::config::{self, config, AuthType};
+use crate::config::{self, config, AuthType, ConfigAndUsers};
 use crate::frontend::client::query_engine::{QueryEngine, QueryEngineContext};
 use crate::net::messages::{
     Authentication, BackendKeyData, ErrorResponse, FromBytes, Message, Password, Protocol,
@@ -101,11 +103,16 @@ impl Client {
         params: Parameters,
         addr: SocketAddr,
         comms: Comms,
+        config: Arc<ConfigAndUsers>,
     ) -> Result<(), Error> {
-        let login_timeout =
-            Duration::from_millis(config::config().config.general.client_login_timeout);
+        let login_timeout = Duration::from_millis(config.config.general.client_login_timeout);
 
-        match timeout(login_timeout, Self::login(stream, params, addr, comms)).await {
+        match timeout(
+            login_timeout,
+            Self::login(stream, params, addr, comms, config),
+        )
+        .await
+        {
             Ok(Ok(Some(mut client))) => {
                 if client.admin {
                     // Admin clients are not waited on during shutdown.
@@ -133,9 +140,8 @@ impl Client {
         params: Parameters,
         addr: SocketAddr,
         mut comms: Comms,
+        config: Arc<ConfigAndUsers>,
     ) -> Result<Option<Client>, Error> {
-        let config = config::config();
-
         // Bail immediately if TLS is required but the connection isn't using it.
         if config.config.general.tls_client_required && !stream.is_tls() {
             stream.fatal(ErrorResponse::tls_required()).await?;
@@ -305,7 +311,7 @@ impl Client {
             transaction: None,
             timeouts: Timeouts::from_config(&config.config.general),
             client_request: ClientRequest::new(),
-            stream_buffer: MessageBuffer::new(),
+            stream_buffer: MessageBuffer::new(config.config.memory.message_buffer),
             shutdown: false,
             passthrough_password,
         }))
@@ -332,7 +338,7 @@ impl Client {
             transaction: None,
             timeouts: Timeouts::from_config(&config().config.general),
             client_request: ClientRequest::new(),
-            stream_buffer: MessageBuffer::new(),
+            stream_buffer: MessageBuffer::new(4096),
             shutdown: false,
             passthrough_password: None,
         }
@@ -470,6 +476,9 @@ impl Client {
             }
         }
 
+        // Check buffer size once per request.
+        self.stream_buffer.shrink_to_fit();
+
         Ok(())
     }
 
@@ -544,6 +553,15 @@ impl Client {
 
     pub fn in_transaction(&self) -> bool {
         self.transaction.is_some()
+    }
+
+    /// Get client memory stats.
+    pub fn memory_stats(&self) -> MemoryStats {
+        MemoryStats {
+            buffer: *self.stream_buffer.stats(),
+            prepared_statements: self.prepared_statements.memory_used(),
+            stream: self.stream.memory_usage(),
+        }
     }
 }
 

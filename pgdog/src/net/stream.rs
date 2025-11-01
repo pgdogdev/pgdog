@@ -31,6 +31,7 @@ pub struct Stream {
     #[pin]
     inner: StreamInner,
     io_in_progress: bool,
+    capacity: usize,
 }
 
 impl AsyncRead for Stream {
@@ -88,19 +89,26 @@ impl AsyncWrite for Stream {
 }
 
 impl Stream {
+    /// Memory used by the stream buffers.
+    pub fn memory_usage(&self) -> usize {
+        self.capacity * 2
+    }
+
     /// Wrap an unencrypted TCP stream.
-    pub fn plain(stream: TcpStream) -> Self {
+    pub fn plain(stream: TcpStream, capacity: usize) -> Self {
         Self {
-            inner: StreamInner::Plain(BufStream::with_capacity(9126, 9126, stream)),
+            inner: StreamInner::Plain(BufStream::with_capacity(capacity, capacity, stream)),
             io_in_progress: false,
+            capacity,
         }
     }
 
     /// Wrap an encrypted TCP stream.
-    pub fn tls(stream: tokio_rustls::TlsStream<TcpStream>) -> Self {
+    pub fn tls(stream: tokio_rustls::TlsStream<TcpStream>, capacity: usize) -> Self {
         Self {
-            inner: StreamInner::Tls(BufStream::with_capacity(9126, 9126, stream)),
+            inner: StreamInner::Tls(BufStream::with_capacity(capacity, capacity, stream)),
             io_in_progress: false,
+            capacity,
         }
     }
 
@@ -109,6 +117,7 @@ impl Stream {
         Self {
             inner: StreamInner::DevNull,
             io_in_progress: false,
+            capacity: 0,
         }
     }
 
@@ -352,7 +361,7 @@ mod tests {
         let client = tokio::spawn(async move { TcpStream::connect(addr).await.unwrap() });
 
         let (server_stream, _) = listener.accept().await.unwrap();
-        let stream = Stream::plain(server_stream);
+        let stream = Stream::plain(server_stream, 4096);
 
         assert!(
             !stream.io_in_progress(),

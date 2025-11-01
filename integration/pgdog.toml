@@ -21,6 +21,10 @@ healthcheck_port = 8080
 tls_certificate = "integration/tls/cert.pem"
 tls_private_key = "integration/tls/key.pem"
 
+[memory]
+net_buffer = 8096
+message_buffer = 8096
+
 [rewrite]
 enabled = false
 shard_key = "ignore"

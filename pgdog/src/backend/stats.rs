@@ -11,7 +11,8 @@ use parking_lot::Mutex;
 use tokio::time::Instant;
 
 use crate::{
-    backend::ServerOptions,
+    backend::{pool::stats::MemoryStats, ServerOptions},
+    config::Memory,
     net::{messages::BackendKeyData, Parameters},
     state::State,
 };
@@ -65,7 +66,6 @@ pub struct Counts {
     pub bind: usize,
     pub healthchecks: usize,
     pub close: usize,
-    pub memory_used: usize,
     pub cleaned: usize,
     pub prepared_sync: usize,
 }
@@ -91,7 +91,6 @@ impl Add for Counts {
             close: self.close.saturating_add(rhs.close),
             cleaned: self.cleaned.saturating_add(rhs.cleaned),
             prepared_sync: self.prepared_sync.saturating_add(rhs.prepared_sync),
-            memory_used: self.memory_used, // It's a gauge.
         }
     }
 }
@@ -109,6 +108,7 @@ pub struct Stats {
     pub last_checkout: Counts,
     pub pool_id: u64,
     pub client_id: Option<BackendKeyData>,
+    pub memory: MemoryStats,
     query_timer: Option<Instant>,
     transaction_timer: Option<Instant>,
 }
@@ -120,6 +120,7 @@ impl Stats {
         addr: &Address,
         params: &Parameters,
         options: &ServerOptions,
+        config: &Memory,
     ) -> Self {
         let now = Instant::now();
         let stats = Stats {
@@ -135,6 +136,7 @@ impl Stats {
             transaction_timer: None,
             pool_id: options.pool_id,
             client_id: None,
+            memory: MemoryStats::new(config),
         };
 
         STATS.lock().insert(
@@ -287,9 +289,8 @@ impl Stats {
     }
 
     #[inline]
-    pub fn memory_used(&mut self, memory: usize) {
-        self.total.memory_used = memory;
-        self.last_checkout.memory_used = memory;
+    pub fn memory_used(&mut self, stats: MemoryStats) {
+        self.memory = stats;
     }
 
     #[inline]

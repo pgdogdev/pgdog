@@ -161,8 +161,9 @@ impl Listener {
 
     async fn handle_client(stream: TcpStream, addr: SocketAddr, comms: Comms) -> Result<(), Error> {
         tweak(&stream)?;
+        let config = config();
 
-        let mut stream = Stream::plain(stream);
+        let mut stream = Stream::plain(stream, config.config.memory.net_buffer);
 
         let tls = acceptor();
 
@@ -187,7 +188,10 @@ impl Listener {
                         stream.send_flush(&SslReply::Yes).await?;
                         let plain = stream.take()?;
                         let cipher = tls.accept(plain).await?;
-                        stream = Stream::tls(tokio_rustls::TlsStream::Server(cipher));
+                        stream = Stream::tls(
+                            tokio_rustls::TlsStream::Server(cipher),
+                            config.config.memory.net_buffer,
+                        );
                     } else {
                         stream.send_flush(&SslReply::No).await?;
                     }
@@ -199,7 +203,7 @@ impl Listener {
                 }
 
                 Startup::Startup { params } => {
-                    Client::spawn(stream, params, addr, comms).await?;
+                    Client::spawn(stream, params, addr, comms, config).await?;
                     break;
                 }
 

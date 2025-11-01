@@ -47,7 +47,7 @@ pub async fn parallel_test_client() -> (TcpStream, Client) {
     let port = stream.local_addr().unwrap().port();
     let connect_handle = tokio::spawn(async move {
         let (stream, addr) = stream.accept().await.unwrap();
-        let stream = Stream::plain(stream);
+        let stream = Stream::plain(stream, 4096);
 
         Client::new_test(stream, addr)
     });
@@ -719,13 +719,13 @@ async fn test_client_login_timeout() {
 
     let handle = tokio::spawn(async move {
         let (stream, addr) = stream.accept().await.unwrap();
-        let stream = Stream::plain(stream);
+        let stream = Stream::plain(stream, 4096);
 
         let mut params = crate::net::parameter::Parameters::default();
         params.insert("user", "pgdog");
         params.insert("database", "pgdog");
 
-        Client::spawn(stream, params, addr, comms()).await
+        Client::spawn(stream, params, addr, comms(), crate::config::config()).await
     });
 
     let conn = TcpStream::connect(&format!("127.0.0.1:{}", port))

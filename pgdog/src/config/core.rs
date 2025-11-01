@@ -4,7 +4,7 @@ use std::fs::read_to_string;
 use std::path::PathBuf;
 use tracing::{info, warn};
 
-use crate::config::{PassthoughAuth, PreparedStatements};
+use crate::config::{Memory, PassthoughAuth, PreparedStatements};
 
 use super::database::Database;
 use super::error::Error;
@@ -175,6 +175,10 @@ pub struct Config {
     /// Mirroring configurations.
     #[serde(default)]
     pub mirroring: Vec<Mirroring>,
+
+    /// Memory tweaks
+    #[serde(default)]
+    pub memory: Memory,
 }
 
 impl Config {

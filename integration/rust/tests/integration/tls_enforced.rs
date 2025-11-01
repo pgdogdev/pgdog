@@ -28,4 +28,6 @@ async fn test_tls_enforced() {
 
     opts_tls.connect().await.unwrap();
     assert!(opts_notls.connect().await.is_err());
+    // Reset settings.
+    admin.execute("RELOAD").await.unwrap();
 }

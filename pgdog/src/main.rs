@@ -16,13 +16,6 @@ use tracing::{error, info};
 
 use std::process::exit;
 
-#[cfg(not(target_env = "msvc"))]
-use tikv_jemallocator::Jemalloc;
-
-#[cfg(not(target_env = "msvc"))]
-#[global_allocator]
-static GLOBAL: Jemalloc = Jemalloc;
-
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = cli::Cli::parse();
 
