@@ -415,6 +415,7 @@ mod test {
                         centroid_probes: 1,
                         hasher: Hasher::Postgres,
                         mapping: None,
+                        ..Default::default()
                     }],
                     vec!["sharded_omni".into()],
                 ),

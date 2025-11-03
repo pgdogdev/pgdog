@@ -16,7 +16,11 @@ pub struct ShardedTable {
     pub database: String,
     /// Table name. If none specified, all tables with the specified
     /// column are considered sharded.
+    #[serde(default)]
     pub name: Option<String>,
+    /// Schema name. If not specified, will match all schemas.
+    #[serde(default)]
+    pub schema: Option<String>,
     /// Table sharded on this column.
     #[serde(default)]
     pub column: String,
