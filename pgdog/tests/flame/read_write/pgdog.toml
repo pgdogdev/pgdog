@@ -1,0 +1,11 @@
+[[databases]]
+name = "pgdog"
+host = "127.0.0.1"
+
+[[databases]]
+name = "pgdog"
+host = "127.0.0.1"
+role = "replica"
+
+[admin]
+password = "pgdog"
