@@ -1,18 +1,17 @@
-use pgdog_config::sharding::ShardedSchema;
-use pgdog_config::{PassthoughAuth, PoolerMode, PreparedStatements};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs::read_to_string;
 use std::path::PathBuf;
 use tracing::{info, warn};
 
-use crate::config::Memory;
+use crate::sharding::ShardedSchema;
+use crate::{Memory, PassthoughAuth, PreparedStatements};
 
 use super::database::Database;
 use super::error::Error;
 use super::general::General;
 use super::networking::{MultiTenant, Tcp};
-use super::pooling::Stats;
+use super::pooling::{PoolerMode, Stats};
 use super::replication::{MirrorConfig, Mirroring, ReplicaLag, Replication};
 use super::rewrite::Rewrite;
 use super::sharding::{ManualQuery, OmnishardedTables, ShardedMapping, ShardedTable};
@@ -312,10 +311,14 @@ impl Config {
         // Warn about plain auth and TLS
         match self.general.passthrough_auth {
             PassthoughAuth::Enabled if !self.general.tls_client_required => {
-                warn!("consider setting tls_client_required while passthrough_auth is enabled to prevent clients from exposing plaintext passwords");
+                warn!(
+                    "consider setting tls_client_required while passthrough_auth is enabled to prevent clients from exposing plaintext passwords"
+                );
             }
             PassthoughAuth::EnabledPlain => {
-                warn!("passthrough_auth plain is enabled - network traffic may expose plaintext passwords")
+                warn!(
+                    "passthrough_auth plain is enabled - network traffic may expose plaintext passwords"
+                )
             }
             _ => (),
         }
@@ -364,7 +367,7 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{PoolerMode, PreparedStatements};
+    use crate::{PoolerMode, PreparedStatements};
     use std::time::Duration;
 
     #[test]
@@ -445,7 +448,11 @@ column = "tenant_id"
         // Test transaction mode with disabled prepared statements - should remain disabled
         config.config.general.pooler_mode = PoolerMode::Transaction;
         config.config.general.prepared_statements = PreparedStatements::Disabled;
-        assert_eq!(config.prepared_statements(), PreparedStatements::Disabled, "Prepared statements should remain disabled when explicitly set to Disabled in transaction mode");
+        assert_eq!(
+            config.prepared_statements(),
+            PreparedStatements::Disabled,
+            "Prepared statements should remain disabled when explicitly set to Disabled in transaction mode"
+        );
     }
 
     #[test]

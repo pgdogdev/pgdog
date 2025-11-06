@@ -20,6 +20,22 @@ impl QueryParser {
         let table = stmt.relation.as_ref().map(Table::from);
 
         if let Some(table) = table {
+            // Schema-based sharding.
+            if let Some(schema) = table.schema {
+                if let Some(schema) = context.sharding_schema.schemas.get(schema) {
+                    let shard = Shard::Direct(schema.shard);
+
+                    if let Some(recorder) = self.recorder_mut() {
+                        recorder.record_entry(
+                            Some(shard.clone()),
+                            format!("UPDATE matched schema {}", schema.name),
+                        );
+                    }
+
+                    return Ok(Command::Query(Route::write(shard)));
+                }
+            }
+
             let shard_key_columns = Self::detect_shard_key_assignments(stmt, table, context);
             let columns_display =
                 (!shard_key_columns.is_empty()).then(|| shard_key_columns.join(", "));

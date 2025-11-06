@@ -5,8 +5,7 @@ use std::path::PathBuf;
 use tracing::{info, warn};
 
 use super::error::Error;
-use crate::frontend::router::sharding::Mapping;
-use crate::net::messages::Vector;
+use crate::Vector;
 
 /// Sharded table.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
@@ -41,9 +40,6 @@ pub struct ShardedTable {
     /// Hasher function.
     #[serde(default)]
     pub hasher: Hasher,
-    /// Explicit routing rules.
-    #[serde(skip, default)]
-    pub mapping: Option<Mapping>,
 }
 
 impl ShardedTable {
@@ -183,4 +179,14 @@ pub struct OmnishardedTables {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ManualQuery {
     pub fingerprint: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ShardedSchema {
+    /// Database name.
+    pub database: String,
+    /// Schema name.
+    pub name: String,
+    #[serde(default)]
+    pub shard: usize,
 }

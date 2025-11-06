@@ -1,0 +1,29 @@
+[general]
+expanded_explain = true
+
+[[databases]]
+name = "pgdog"
+host = "127.0.0.1"
+shard = 0
+database_name = "shard_0"
+
+[[databases]]
+name = "pgdog"
+host = "127.0.0.1"
+shard = 1
+database_name = "shard_1"
+
+[[sharded_schemas]]
+database = "pgdog"
+name = "shard_0"
+shard = 0
+
+[[sharded_schemas]]
+database = "pgdog"
+name = "shard_1"
+shard = 1
+
+[[sharded_schemas]]
+database = "pgdog"
+name = "acustomer"
+shard = 0

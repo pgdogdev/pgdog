@@ -1,7 +1,6 @@
 //! Configuration.
 
 // Submodules
-pub mod auth;
 pub mod convert;
 pub mod core;
 pub mod database;
@@ -17,37 +16,18 @@ pub mod sharding;
 pub mod url;
 pub mod users;
 
-// Re-export from error module
-pub use error::Error;
-
-// Re-export from overrides module
-pub use overrides::Overrides;
-
-// Re-export core configuration types
 pub use core::{Config, ConfigAndUsers};
-
-// Re-export from general module
+pub use database::{Database, Role};
+pub use error::Error;
 pub use general::General;
-
-// Re-export from rewrite module
-pub use rewrite::{Rewrite, RewriteMode};
-
-// Re-export from auth module
-pub use auth::{AuthType, PassthoughAuth};
-
-// Re-export from pooling module
-pub use pooling::{PoolerMode, PreparedStatements, Stats};
-
-// Re-export from database module
-pub use database::{Database, LoadBalancingStrategy, ReadWriteSplit, ReadWriteStrategy, Role};
-
-// Re-export from networking module
-pub use networking::{MultiTenant, Tcp, TlsVerifyMode};
-
-// Re-export from users module
-pub use users::{Admin, Plugin, User, Users};
-
 pub use memory::*;
+pub use networking::{MultiTenant, Tcp, TlsVerifyMode};
+pub use overrides::Overrides;
+pub use pgdog_config::auth::{AuthType, PassthoughAuth};
+pub use pgdog_config::{LoadBalancingStrategy, ReadWriteSplit, ReadWriteStrategy};
+pub use pooling::{PoolerMode, PreparedStatements, Stats};
+pub use rewrite::{Rewrite, RewriteMode};
+pub use users::{Admin, Plugin, User, Users};
 
 // Re-export from sharding module
 pub use sharding::{

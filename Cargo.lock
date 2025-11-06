@@ -2375,6 +2375,7 @@ dependencies = [
  "once_cell",
  "parking_lot",
  "pg_query",
+ "pgdog-config",
  "pgdog-plugin",
  "pin-project",
  "rand 0.8.5",
@@ -2399,6 +2400,21 @@ dependencies = [
  "toml 0.8.22",
  "tracing",
  "tracing-subscriber",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "pgdog-config"
+version = "0.1.0"
+dependencies = [
+ "rand 0.8.5",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.12",
+ "toml 0.8.22",
+ "tracing",
  "url",
  "uuid",
 ]

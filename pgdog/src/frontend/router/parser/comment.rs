@@ -146,6 +146,7 @@ mod tests {
         let schema = ShardingSchema {
             shards: 2,
             tables: ShardedTables::new(vec![], vec![]),
+            ..Default::default()
         };
 
         let query = "SELECT * FROM users /* pgdog_role: primary */";
@@ -160,6 +161,7 @@ mod tests {
         let schema = ShardingSchema {
             shards: 3,
             tables: ShardedTables::new(vec![], vec![]),
+            ..Default::default()
         };
 
         let query = "SELECT * FROM users /* pgdog_role: replica pgdog_shard: 2 */";
@@ -175,6 +177,7 @@ mod tests {
         let schema = ShardingSchema {
             shards: 2,
             tables: ShardedTables::new(vec![], vec![]),
+            ..Default::default()
         };
 
         let query = "SELECT * FROM users /* pgdog_role: replica */";
@@ -189,6 +192,7 @@ mod tests {
         let schema = ShardingSchema {
             shards: 2,
             tables: ShardedTables::new(vec![], vec![]),
+            ..Default::default()
         };
 
         let query = "SELECT * FROM users /* pgdog_role: invalid */";
@@ -203,6 +207,7 @@ mod tests {
         let schema = ShardingSchema {
             shards: 2,
             tables: ShardedTables::new(vec![], vec![]),
+            ..Default::default()
         };
 
         let query = "SELECT * FROM users";

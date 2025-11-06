@@ -3,7 +3,7 @@
 members = [
     "examples/demo",
     "integration/rust",
-    "pgdog", "pgdog-macros",
+    "pgdog", "pgdog-config", "pgdog-macros",
     "pgdog-plugin", "pgdog-plugin-build", "plugins/pgdog-example-plugin",
 ]
 resolver = "2"

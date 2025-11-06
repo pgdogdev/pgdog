@@ -157,6 +157,12 @@ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Erro
                 info!("🔄 entering setup mode");
                 cli::setup(database).await?;
             }
+
+            if let Commands::Route { .. } = command {
+                if let Err(err) = cli::route(command.clone()).await {
+                    error!("{}", err);
+                }
+            }
         }
     }
 

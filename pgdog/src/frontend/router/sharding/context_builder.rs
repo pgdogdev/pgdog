@@ -202,6 +202,7 @@ mod test {
                 }],
                 vec![],
             ),
+            ..Default::default()
         };
 
         let ctx = ContextBuilder::infer_from_from_and_config("test_value", &schema)
@@ -231,6 +232,7 @@ mod test {
                 }],
                 vec![],
             ),
+            ..Default::default()
         };
 
         let ctx = ContextBuilder::infer_from_from_and_config("15", &schema)
@@ -261,6 +263,7 @@ mod test {
                 }],
                 vec![],
             ),
+            ..Default::default()
         };
 
         let builder = ContextBuilder::infer_from_from_and_config("1", &schema).unwrap();

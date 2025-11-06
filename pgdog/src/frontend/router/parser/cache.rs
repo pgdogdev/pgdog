@@ -4,8 +4,11 @@
 
 use lru::LruCache;
 use once_cell::sync::Lazy;
-use pg_query::*;
-use std::collections::HashMap;
+use pg_query::{protobuf::ObjectType, *};
+use std::{
+    collections::{HashMap, HashSet},
+    ops::Deref,
+};
 
 use parking_lot::Mutex;
 use std::sync::Arc;
@@ -14,7 +17,7 @@ use tracing::debug;
 use crate::{
     backend::ShardingSchema,
     config::Role,
-    frontend::router::parser::{comment::comment, Shard},
+    frontend::router::parser::{comment::comment, Shard, Table},
 };
 
 use super::Route;
@@ -37,17 +40,30 @@ pub struct Stats {
 /// with statistics.
 #[derive(Debug, Clone)]
 pub struct CachedAst {
-    /// pg_query-produced AST.
-    pub ast: Arc<ParseResult>,
-    /// Statistics. Use a separate Mutex to avoid
-    /// contention when updating them.
-    pub stats: Arc<Mutex<Stats>>,
     /// Was this entry cached?
     pub cached: bool,
     /// Shard.
-    pub shard: Shard,
+    pub comment_shard: Shard,
     /// Role.
-    pub role: Option<Role>,
+    pub comment_role: Option<Role>,
+    /// Inner sync.
+    inner: Arc<CachedAstInner>,
+}
+
+#[derive(Debug)]
+pub struct CachedAstInner {
+    /// Cached AST.
+    pub ast: ParseResult,
+    /// AST stats.
+    pub stats: Mutex<Stats>,
+}
+
+impl Deref for CachedAst {
+    type Target = CachedAstInner;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
 }
 
 impl CachedAst {
@@ -58,19 +74,61 @@ impl CachedAst {
 
         Ok(Self {
             cached: true,
-            ast: Arc::new(ast),
-            shard,
-            role,
-            stats: Arc::new(Mutex::new(Stats {
-                hits: 1,
-                ..Default::default()
-            })),
+            comment_shard: shard,
+            comment_role: role,
+            inner: Arc::new(CachedAstInner {
+                stats: Mutex::new(Stats {
+                    hits: 1,
+                    ..Default::default()
+                }),
+                ast,
+            }),
         })
     }
 
     /// Get the reference to the AST.
     pub fn ast(&self) -> &ParseResult {
         &self.ast
+    }
+
+    /// Get a list of tables referenced by the query.
+    ///
+    /// This is better than pg_query's version because we
+    /// also handle `NodeRef::CreateStmt` and we handle identifiers correctly.
+    ///
+    pub fn tables<'a>(&'a self) -> Vec<Table<'a>> {
+        let mut tables = HashSet::new();
+
+        for node in self.ast.protobuf.nodes() {
+            match node.0 {
+                NodeRef::RangeVar(table) => {
+                    let table = Table::from(table);
+                    tables.insert(table);
+                }
+
+                NodeRef::CreateStmt(stmt) => {
+                    if let Some(ref stmt) = stmt.relation {
+                        tables.insert(Table::from(stmt));
+                    }
+                }
+
+                NodeRef::DropStmt(stmt) => {
+                    if stmt.remove_type() == ObjectType::ObjectTable {
+                        for object in &stmt.objects {
+                            if let Some(NodeEnum::List(ref list)) = object.node {
+                                if let Ok(table) = Table::try_from(list) {
+                                    tables.insert(table);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                _ => (),
+            }
+        }
+
+        tables.into_iter().collect()
     }
 
     /// Update stats for this statement, given the route
@@ -214,15 +272,14 @@ impl Cache {
                 guard
                     .queries
                     .iter()
-                    .map(|c| c.1.stats.clone())
+                    .map(|c| c.1.stats.lock().clone())
                     .collect::<Vec<_>>(),
                 guard.stats,
             )
         };
         for stat in query_stats {
-            let guard = stat.lock();
-            stats.direct += guard.direct;
-            stats.multi += guard.multi;
+            stats.direct += stat.direct;
+            stats.multi += stat.multi;
         }
         (stats, len)
     }
@@ -344,5 +401,20 @@ mod test {
         let q = "SELECT * FROM users WHERE id = 1";
         let normalized = normalize(q).unwrap();
         assert_eq!(normalized, "SELECT * FROM users WHERE id = $1");
+    }
+
+    #[test]
+    fn test_tables_list() {
+        for q in [
+            "CREATE TABLE private_schema.test (id BIGINT)",
+            "SELECT * FROM private_schema.test a INNER JOIN public_schema.test b ON a.id = b.id LIMIT 5",
+            "INSERT INTO public_schema.test VALUES ($1, $2)",
+            "DELETE FROM private_schema.test",
+            "DROP TABLE private_schema.test",
+        ] {
+            let ast = CachedAst::new(q, &ShardingSchema::default()).unwrap();
+            let tables = ast.tables();
+            println!("{:?}", tables);
+        }
     }
 }
