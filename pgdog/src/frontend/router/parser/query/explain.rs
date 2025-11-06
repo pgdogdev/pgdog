@@ -1,9 +1,11 @@
+use crate::frontend::router::parser::cache::CachedAst;
+
 use super::*;
 
 impl QueryParser {
     pub(super) fn explain(
         &mut self,
-        ast: &pg_query::ParseResult,
+        cached_ast: &CachedAst,
         stmt: &ExplainStmt,
         context: &mut QueryParserContext,
     ) -> Result<Command, Error> {
@@ -19,7 +21,7 @@ impl QueryParser {
         }
 
         let result = match node {
-            NodeEnum::SelectStmt(ref stmt) => self.select(ast, stmt, context),
+            NodeEnum::SelectStmt(ref stmt) => self.select(cached_ast, stmt, context),
             NodeEnum::InsertStmt(ref stmt) => self.insert(stmt, context),
             NodeEnum::UpdateStmt(ref stmt) => self.update(stmt, context),
             NodeEnum::DeleteStmt(ref stmt) => self.delete(stmt, context),

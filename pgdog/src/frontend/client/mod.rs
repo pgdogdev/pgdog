@@ -16,6 +16,7 @@ use crate::backend::{
     databases,
     pool::{Connection, Request},
 };
+use crate::config::convert::user_from_params;
 use crate::config::{self, config, AuthType, ConfigAndUsers};
 use crate::frontend::client::query_engine::{QueryEngine, QueryEngineContext};
 use crate::net::messages::{
@@ -173,7 +174,7 @@ impl Client {
             };
 
             if !exists {
-                let user = config::User::from_params(&params, &password).ok();
+                let user = user_from_params(&params, &password).ok();
                 if let Some(user) = user {
                     databases::add(user);
                 }

@@ -62,3 +62,8 @@ password = "pgdog"
 server_user = "pgdog"
 cross_shard_disabled = true
 min_pool_size = 0
+
+[[users]]
+name = "pgdog"
+password = "pgdog"
+database = "pgdog_schema"

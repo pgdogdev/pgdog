@@ -8,7 +8,7 @@ use tracing::{error, info};
 use crate::{
     backend::{
         databases::{databases, User as DatabaseUser},
-        replication::{ReplicationConfig, ShardedColumn},
+        replication::{ReplicationConfig, ShardedColumn, ShardedSchemas},
         Schema, ShardedTables,
     },
     config::{
@@ -38,6 +38,7 @@ pub struct Cluster {
     password: String,
     pooler_mode: PoolerMode,
     sharded_tables: ShardedTables,
+    sharded_schemas: ShardedSchemas,
     replication_sharding: Option<String>,
     schema: Arc<RwLock<Schema>>,
     multi_tenant: Option<MultiTenant>,
@@ -56,6 +57,8 @@ pub struct ShardingSchema {
     pub shards: usize,
     /// Sharded tables.
     pub tables: ShardedTables,
+    /// Scemas.
+    pub schemas: ShardedSchemas,
 }
 
 impl ShardingSchema {
@@ -86,6 +89,7 @@ pub struct ClusterConfig<'a> {
     pub cross_shard_disabled: bool,
     pub two_pc: bool,
     pub two_pc_auto: bool,
+    pub sharded_schemas: ShardedSchemas,
 }
 
 impl<'a> ClusterConfig<'a> {
@@ -95,6 +99,7 @@ impl<'a> ClusterConfig<'a> {
         shards: &'a [ClusterShardConfig],
         sharded_tables: ShardedTables,
         multi_tenant: &'a Option<MultiTenant>,
+        sharded_schemas: ShardedSchemas,
     ) -> Self {
         Self {
             name: &user.database,
@@ -116,6 +121,7 @@ impl<'a> ClusterConfig<'a> {
             two_pc_auto: user
                 .two_phase_commit_auto
                 .unwrap_or(general.two_phase_commit_auto.unwrap_or(false)), // Disable by default.
+            sharded_schemas,
         }
     }
 }
@@ -139,6 +145,7 @@ impl Cluster {
             cross_shard_disabled,
             two_pc,
             two_pc_auto,
+            sharded_schemas,
         } = config;
 
         Self {
@@ -153,6 +160,7 @@ impl Cluster {
             password: password.to_owned(),
             pooler_mode,
             sharded_tables,
+            sharded_schemas,
             replication_sharding,
             schema: Arc::new(RwLock::new(Schema::default())),
             multi_tenant: multi_tenant.clone(),
@@ -302,6 +310,7 @@ impl Cluster {
         ShardingSchema {
             shards: self.shards.len(),
             tables: self.sharded_tables.clone(),
+            schemas: self.sharded_schemas.clone(),
         }
     }
 
@@ -414,7 +423,7 @@ mod test {
                         centroids_path: None,
                         centroid_probes: 1,
                         hasher: Hasher::Postgres,
-                        mapping: None,
+                        ..Default::default()
                     }],
                     vec!["sharded_omni".into()],
                 ),

@@ -92,6 +92,11 @@ impl<'a> Insert<'a> {
         let tuples = self.tuples();
 
         if let Some(table) = table {
+            // Schema-based routing.
+            if let Some(schema) = schema.schemas.get(table.schema()) {
+                return Ok(InsertRouting::Routed(schema.shard().into()));
+            }
+
             if tables.sharded(table).is_some() && tuples.len() > 1 {
                 if rewrite_enabled && split_mode == RewriteMode::Rewrite {
                     return self.build_split_plan(&tables, schema, bind, table, &columns, &tuples);
@@ -548,6 +553,7 @@ mod test {
                 ],
                 vec![],
             ),
+            ..Default::default()
         };
 
         match &select.node {
@@ -650,6 +656,7 @@ mod test {
                 }],
                 vec![],
             ),
+            ..Default::default()
         };
 
         match &select.node {
@@ -684,6 +691,7 @@ mod test {
                 }],
                 vec![],
             ),
+            ..Default::default()
         };
 
         match &select.node {
@@ -716,6 +724,7 @@ mod test {
                 }],
                 vec![],
             ),
+            ..Default::default()
         };
 
         match &select.node {
@@ -750,6 +759,7 @@ mod test {
                 }],
                 vec![],
             ),
+            ..Default::default()
         };
 
         match &select.node {
@@ -781,6 +791,7 @@ mod test {
                 }],
                 vec![],
             ),
+            ..Default::default()
         };
 
         match &select.node {
@@ -813,6 +824,7 @@ mod test {
                 }],
                 vec![],
             ),
+            ..Default::default()
         };
 
         match &select.node {

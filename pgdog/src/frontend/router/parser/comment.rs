@@ -47,6 +47,9 @@ pub fn comment(query: &str, schema: &ShardingSchema) -> Result<(Shard, Option<Ro
             }
             if let Some(cap) = SHARDING_KEY.captures(comment) {
                 if let Some(sharding_key) = get_matched_value(&cap) {
+                    if let Some(schema) = schema.schemas.get(Some(sharding_key.into())) {
+                        return Ok((schema.shard().into(), role));
+                    }
                     let ctx = ContextBuilder::infer_from_from_and_config(sharding_key, schema)?
                         .shards(schema.shards)
                         .build()?;
@@ -146,6 +149,7 @@ mod tests {
         let schema = ShardingSchema {
             shards: 2,
             tables: ShardedTables::new(vec![], vec![]),
+            ..Default::default()
         };
 
         let query = "SELECT * FROM users /* pgdog_role: primary */";
@@ -160,6 +164,7 @@ mod tests {
         let schema = ShardingSchema {
             shards: 3,
             tables: ShardedTables::new(vec![], vec![]),
+            ..Default::default()
         };
 
         let query = "SELECT * FROM users /* pgdog_role: replica pgdog_shard: 2 */";
@@ -175,6 +180,7 @@ mod tests {
         let schema = ShardingSchema {
             shards: 2,
             tables: ShardedTables::new(vec![], vec![]),
+            ..Default::default()
         };
 
         let query = "SELECT * FROM users /* pgdog_role: replica */";
@@ -189,6 +195,7 @@ mod tests {
         let schema = ShardingSchema {
             shards: 2,
             tables: ShardedTables::new(vec![], vec![]),
+            ..Default::default()
         };
 
         let query = "SELECT * FROM users /* pgdog_role: invalid */";
@@ -203,6 +210,7 @@ mod tests {
         let schema = ShardingSchema {
             shards: 2,
             tables: ShardedTables::new(vec![], vec![]),
+            ..Default::default()
         };
 
         let query = "SELECT * FROM users";

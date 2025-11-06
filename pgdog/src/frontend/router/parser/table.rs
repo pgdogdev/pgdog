@@ -1,11 +1,15 @@
 use std::fmt::Display;
 
-use pg_query::{protobuf::RangeVar, Node, NodeEnum};
+use pg_query::{
+    protobuf::{List, RangeVar},
+    Node, NodeEnum,
+};
 
+use super::Schema;
 use crate::util::escape_identifier;
 
 /// Table name in a query.
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Default, Hash, Eq)]
 pub struct Table<'a> {
     /// Table name.
     pub name: &'a str,
@@ -49,6 +53,10 @@ impl<'a> Table<'a> {
 
     pub fn name_match(&self, name: &str) -> bool {
         Some(name) == self.alias || name == self.name
+    }
+
+    pub fn schema(&self) -> Option<Schema<'a>> {
+        self.schema.map(|s| s.into())
     }
 }
 
@@ -95,17 +103,67 @@ impl<'a> TryFrom<&'a Vec<Node>> for Table<'a> {
     type Error = ();
 
     fn try_from(value: &'a Vec<Node>) -> Result<Self, Self::Error> {
-        let table = value
-            .first()
-            .and_then(|node| {
-                node.node.as_ref().map(|node| match node {
-                    NodeEnum::RangeVar(var) => Some(Table::from(var)),
-                    _ => None,
-                })
-            })
-            .flatten()
-            .ok_or(())?;
-        Ok(table)
+        match value.len() {
+            1 => {
+                let table = value
+                    .first()
+                    .and_then(|node| {
+                        node.node.as_ref().map(|node| match node {
+                            NodeEnum::RangeVar(var) => Some(Ok(Table::from(var))),
+                            NodeEnum::List(list) => Some(Table::try_from(list)),
+                            NodeEnum::String(str) => Some(Ok(Table::from(str.sval.as_str()))),
+                            _ => None,
+                        })
+                    })
+                    .flatten()
+                    .ok_or(())?;
+                return Ok(table?);
+            }
+
+            2 => {
+                let schema = value
+                    .iter()
+                    .next()
+                    .unwrap()
+                    .node
+                    .as_ref()
+                    .map(|node| {
+                        if let NodeEnum::String(sval) = node {
+                            Some(sval.sval.as_str())
+                        } else {
+                            None
+                        }
+                    })
+                    .flatten();
+                let table = value
+                    .iter()
+                    .last()
+                    .unwrap()
+                    .node
+                    .as_ref()
+                    .map(|node| {
+                        if let NodeEnum::String(sval) = node {
+                            Some(sval.sval.as_str())
+                        } else {
+                            None
+                        }
+                    })
+                    .flatten();
+                if let Some(schema) = schema {
+                    if let Some(table) = table {
+                        return Ok(Table {
+                            name: table,
+                            schema: Some(schema),
+                            alias: None,
+                        });
+                    }
+                }
+            }
+
+            _ => (),
+        }
+
+        Err(())
     }
 }
 
@@ -124,6 +182,51 @@ impl<'a> From<&'a RangeVar> for Table<'a> {
                 None
             },
             alias,
+        }
+    }
+}
+
+impl<'a> TryFrom<&'a List> for Table<'a> {
+    type Error = ();
+    fn try_from(value: &'a List) -> Result<Self, Self::Error> {
+        fn str_value(list: &List, pos: usize) -> Option<&str> {
+            if let Some(NodeEnum::String(ref schema)) = list.items.get(pos).unwrap().node {
+                Some(schema.sval.as_str())
+            } else {
+                None
+            }
+        }
+
+        match value.items.len() {
+            2 => {
+                let schema = str_value(value, 0);
+                let name = str_value(value, 1).ok_or(())?;
+                Ok(Table {
+                    schema,
+                    name,
+                    alias: None,
+                })
+            }
+
+            1 => {
+                let name = str_value(value, 0).ok_or(())?;
+                Ok(Table {
+                    schema: None,
+                    name,
+                    alias: None,
+                })
+            }
+
+            _ => Err(()),
+        }
+    }
+}
+
+impl<'a> From<&'a str> for Table<'a> {
+    fn from(value: &'a str) -> Self {
+        Table {
+            name: value,
+            ..Default::default()
         }
     }
 }
