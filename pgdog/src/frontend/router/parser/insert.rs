@@ -93,10 +93,8 @@ impl<'a> Insert<'a> {
 
         if let Some(table) = table {
             // Schema-based routing.
-            if let Some(table_schema) = table.schema {
-                if let Some(schema) = schema.schemas.get(table_schema) {
-                    return Ok(InsertRouting::Routed(schema.shard().into()));
-                }
+            if let Some(schema) = schema.schemas.get(table.schema()) {
+                return Ok(InsertRouting::Routed(schema.shard().into()));
             }
 
             if tables.sharded(table).is_some() && tuples.len() > 1 {

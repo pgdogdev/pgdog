@@ -47,6 +47,12 @@ impl From<Option<usize>> for Shard {
     }
 }
 
+impl From<usize> for Shard {
+    fn from(value: usize) -> Self {
+        Shard::Direct(value)
+    }
+}
+
 impl From<Vec<usize>> for Shard {
     fn from(value: Vec<usize>) -> Self {
         Shard::Multi(value)
@@ -157,11 +163,11 @@ impl Route {
         &mut self.aggregate
     }
 
-    pub fn set_shard_mut(&mut self, shard: usize) {
-        self.shard = Shard::Direct(shard);
+    pub fn set_shard_mut(&mut self, shard: impl Into<Shard>) {
+        self.shard = shard.into();
     }
 
-    pub fn set_shard(mut self, shard: usize) -> Self {
+    pub fn set_shard(mut self, shard: impl Into<Shard>) -> Self {
         self.set_shard_mut(shard);
         self
     }

@@ -376,11 +376,13 @@ tables = ["sharded_omni"]
 name = "pgdog_schema"
 host = "127.0.0.1"
 database_name = "shard_0"
+shard = 0
 
 [[databases]]
 name = "pgdog_schema"
 host = "127.0.0.1"
 database_name = "shard_1"
+shard = 1
 
 [[sharded_schemas]]
 database = "pgdog_schema"
@@ -391,6 +393,11 @@ shard = 0
 database = "pgdog_schema"
 name = "shard_1"
 shard = 1
+
+# By default, all queries go to shard 0
+[[sharded_schemas]]
+database = "pgdog_schema"
+shard = 0
 
 
 # ------------------------------------------------------------------------------

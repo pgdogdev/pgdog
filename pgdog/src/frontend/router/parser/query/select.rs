@@ -61,16 +61,14 @@ impl QueryParser {
 
         // Schema-based sharding.
         for table in cached_ast.tables() {
-            if let Some(table_schema) = table.schema {
-                if let Some(schema) = context.sharding_schema.schemas.get(table_schema) {
-                    let shard: Shard = schema.shard().into();
-                    if shards.insert(shard.clone()) {
-                        if let Some(recorder) = self.recorder_mut() {
-                            recorder.record_entry(
-                                Some(shard),
-                                format!("SELECT matched schema {}", table_schema),
-                            );
-                        }
+            if let Some(schema) = context.sharding_schema.schemas.get(table.schema()) {
+                let shard: Shard = schema.shard().into();
+                if shards.insert(shard.clone()) {
+                    if let Some(recorder) = self.recorder_mut() {
+                        recorder.record_entry(
+                            Some(shard),
+                            format!("SELECT matched schema {}", schema.name()),
+                        );
                     }
                 }
             }

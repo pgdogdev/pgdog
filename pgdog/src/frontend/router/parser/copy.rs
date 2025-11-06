@@ -115,10 +115,8 @@ impl CopyParser {
             // The CopyParser is used for replicating
             // data during data-sync. This will ensure all rows
             // are sent to the right schema-based shard.
-            if let Some(schema) = table.schema {
-                if let Some(schema) = cluster.sharding_schema().schemas.get(schema) {
-                    parser.schema_shard = Some(schema.shard().into());
-                }
+            if let Some(schema) = cluster.sharding_schema().schemas.get(table.schema()) {
+                parser.schema_shard = Some(schema.shard().into());
             }
 
             if let Some(key) = Tables::new(&cluster.sharding_schema()).key(table, &columns) {

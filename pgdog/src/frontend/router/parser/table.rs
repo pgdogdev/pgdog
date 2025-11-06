@@ -5,6 +5,7 @@ use pg_query::{
     Node, NodeEnum,
 };
 
+use super::Schema;
 use crate::util::escape_identifier;
 
 /// Table name in a query.
@@ -52,6 +53,10 @@ impl<'a> Table<'a> {
 
     pub fn name_match(&self, name: &str) -> bool {
         Some(name) == self.alias || name == self.name
+    }
+
+    pub fn schema(&self) -> Option<Schema<'a>> {
+        self.schema.map(|s| s.into())
     }
 }
 
@@ -164,6 +169,15 @@ impl<'a> TryFrom<&'a List> for Table<'a> {
             }
 
             _ => Err(()),
+        }
+    }
+}
+
+impl<'a> From<&'a str> for Table<'a> {
+    fn from(value: &'a str) -> Self {
+        Table {
+            name: value,
+            ..Default::default()
         }
     }
 }

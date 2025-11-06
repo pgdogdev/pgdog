@@ -324,11 +324,12 @@ impl QueryParser {
         if !context.router_context.executable {
             if let Command::Query(ref query) = command {
                 if query.is_cross_shard() {
-                    return Ok(Command::Query(
-                        query
-                            .clone()
-                            .set_shard(round_robin::next() % context.shards),
-                    ));
+                    let shard = if self.shard == Shard::All {
+                        Shard::Direct(round_robin::next() % context.shards)
+                    } else {
+                        self.shard.clone()
+                    };
+                    return Ok(Command::Query(query.clone().set_shard(shard)));
                 }
             }
         }
@@ -431,13 +432,11 @@ impl QueryParser {
         //
         let table = stmt.relation.as_ref().map(Table::from);
         if let Some(table) = table {
-            if let Some(schema) = table.schema {
-                if let Some(schema) = context.sharding_schema.schemas.get(schema) {
-                    if !stmt.is_from {
-                        return Ok(Command::Query(Route::read(schema.shard())));
-                    } else {
-                        return Ok(Command::Query(Route::write(schema.shard())));
-                    }
+            if let Some(schema) = context.sharding_schema.schemas.get(table.schema()) {
+                if !stmt.is_from {
+                    return Ok(Command::Query(Route::read(schema.shard())));
+                } else {
+                    return Ok(Command::Query(Route::write(schema.shard())));
                 }
             }
         }

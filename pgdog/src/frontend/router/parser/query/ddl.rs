@@ -19,11 +19,8 @@ impl QueryParser {
                 ObjectType::ObjectTable | ObjectType::ObjectIndex => {
                     let table = Table::try_from(&stmt.objects).ok();
                     if let Some(table) = table {
-                        if let Some(table_schema) = table.schema {
-                            if let Some(schema) = context.sharding_schema.schemas.get(table_schema)
-                            {
-                                shard = schema.shard().into();
-                            }
+                        if let Some(schema) = context.sharding_schema.schemas.get(table.schema()) {
+                            shard = schema.shard().into();
                         }
                     }
                 }
@@ -33,7 +30,11 @@ impl QueryParser {
                         node: Some(NodeEnum::String(string)),
                     }) = stmt.objects.first()
                     {
-                        if let Some(schema) = context.sharding_schema.schemas.get(&string.sval) {
+                        if let Some(schema) = context
+                            .sharding_schema
+                            .schemas
+                            .get(Some(string.sval.as_str().into()))
+                        {
                             shard = schema.shard().into();
                         }
                     }
@@ -42,7 +43,11 @@ impl QueryParser {
                 _ => (),
             },
             Some(NodeEnum::CreateSchemaStmt(stmt)) => {
-                if let Some(schema) = context.sharding_schema.schemas.get(&stmt.schemaname) {
+                if let Some(schema) = context
+                    .sharding_schema
+                    .schemas
+                    .get(Some(stmt.schemaname.as_str().into()))
+                {
                     shard = schema.shard().into();
                 }
             }
@@ -73,6 +78,26 @@ impl QueryParser {
                 shard = self
                     .schema_shard_from_table(&stmt.relation, context)?
                     .unwrap_or(Shard::All);
+            }
+
+            Some(NodeEnum::TruncateStmt(stmt)) => {
+                let mut shards = HashSet::new();
+                for relation in &stmt.relations {
+                    if let Some(NodeEnum::RangeVar(ref relation)) = relation.node {
+                        shards.insert(
+                            self.schema_shard_from_table(&Some(relation.clone()), context)?
+                                .unwrap_or(Shard::All),
+                        );
+                    }
+                }
+
+                match shards.len() {
+                    0 => (),
+                    1 => {
+                        shard = shards.iter().next().unwrap().clone();
+                    }
+                    _ => return Err(Error::CrossShardTruncateSchemaSharding),
+                }
             }
 
             // All others are not handled.

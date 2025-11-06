@@ -12,19 +12,17 @@ impl QueryParser {
 
         if let Some(table) = table {
             // Schema-based sharding.
-            if let Some(schema) = table.schema {
-                if let Some(schema) = context.sharding_schema.schemas.get(schema) {
-                    let shard: Shard = schema.shard().into();
+            if let Some(schema) = context.sharding_schema.schemas.get(table.schema()) {
+                let shard: Shard = schema.shard().into();
 
-                    if let Some(recorder) = self.recorder_mut() {
-                        recorder.record_entry(
-                            Some(shard.clone()),
-                            format!("DELETE matched schema {}", schema.name()),
-                        );
-                    }
-
-                    return Ok(Command::Query(Route::write(shard)));
+                if let Some(recorder) = self.recorder_mut() {
+                    recorder.record_entry(
+                        Some(shard.clone()),
+                        format!("DELETE matched schema {}", schema.name()),
+                    );
                 }
+
+                return Ok(Command::Query(Route::write(shard)));
             }
 
             let source = TablesSource::from(table);

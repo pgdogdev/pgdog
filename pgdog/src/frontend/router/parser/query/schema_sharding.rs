@@ -9,10 +9,8 @@ impl QueryParser {
     ) -> Result<Option<Shard>, Error> {
         let table = range_var.as_ref().map(Table::from);
         if let Some(table) = table {
-            if let Some(schema) = table.schema {
-                if let Some(sharded_schema) = context.sharding_schema.schemas.get(schema) {
-                    return Ok(Some(sharded_schema.shard().into()));
-                }
+            if let Some(sharded_schema) = context.sharding_schema.schemas.get(table.schema()) {
+                return Ok(Some(sharded_schema.shard().into()));
             }
         }
 
