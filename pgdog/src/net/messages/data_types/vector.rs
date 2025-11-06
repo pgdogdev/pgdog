@@ -1,46 +1,15 @@
-use crate::{
-    frontend::router::sharding::vector::Distance,
-    net::{
-        messages::{Format, ToDataRowColumn},
-        Error,
-    },
+use std::str::from_utf8;
+
+use crate::net::{
+    messages::{Format, ToDataRowColumn},
+    Error,
 };
 use bytes::{Buf, BufMut, Bytes, BytesMut};
-use serde::{
-    de::{self, Visitor},
-    ser::SerializeSeq,
-    Deserialize, Serialize,
-};
-use std::{fmt::Debug, ops::Deref, str::from_utf8};
 
-use super::{Datum, Float, FromDataType};
+use super::{Datum, FromDataType};
+use pgdog_vector::Float;
 
-#[derive(Clone, PartialEq, PartialOrd, Ord, Eq, Hash)]
-#[repr(C)]
-pub struct Vector {
-    values: Vec<Float>,
-}
-
-impl Debug for Vector {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if self.values.len() > 3 {
-            f.debug_struct("Vector")
-                .field(
-                    "values",
-                    &format!(
-                        "[{}..{}]",
-                        self.values[0],
-                        self.values[self.values.len() - 1]
-                    ),
-                )
-                .finish()
-        } else {
-            f.debug_struct("Vector")
-                .field("values", &self.values)
-                .finish()
-        }
-    }
-}
+pub use pgdog_vector::Vector;
 
 impl FromDataType for Vector {
     fn decode(mut bytes: &[u8], encoding: Format) -> Result<Self, Error> {
@@ -92,75 +61,8 @@ impl ToDataRowColumn for Vector {
     }
 }
 
-impl Vector {
-    /// Length of the vector.
-    pub fn len(&self) -> usize {
-        self.values.len()
-    }
-
-    /// Is the vector empty?
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    /// Compute L2 distance between the vectors.
-    pub fn distance_l2(&self, other: &Self) -> f32 {
-        Distance::Euclidean(self, other).distance()
-    }
-}
-
-impl Deref for Vector {
-    type Target = Vec<Float>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.values
-    }
-}
-
-impl From<&[f64]> for Vector {
-    fn from(value: &[f64]) -> Self {
-        Self {
-            values: value.iter().map(|v| Float(*v as f32)).collect(),
-        }
-    }
-}
-
-impl From<&[f32]> for Vector {
-    fn from(value: &[f32]) -> Self {
-        Self {
-            values: value.iter().map(|v| Float(*v)).collect(),
-        }
-    }
-}
-
-impl From<Vec<f32>> for Vector {
-    fn from(value: Vec<f32>) -> Self {
-        Self {
-            values: value.into_iter().map(Float::from).collect(),
-        }
-    }
-}
-
-impl From<Vec<f64>> for Vector {
-    fn from(value: Vec<f64>) -> Self {
-        Self {
-            values: value.into_iter().map(|v| Float(v as f32)).collect(),
-        }
-    }
-}
-
-impl From<Vec<Float>> for Vector {
-    fn from(value: Vec<Float>) -> Self {
-        Self { values: value }
-    }
-}
-
-impl TryFrom<&str> for Vector {
-    type Error = Error;
-
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        Self::decode(value.as_bytes(), Format::Text)
-    }
+pub fn str_to_vector(value: &str) -> Result<Vector, Error> {
+    FromDataType::decode(value.as_bytes(), Format::Text)
 }
 
 impl From<Vector> for Datum {
@@ -178,50 +80,6 @@ impl TryFrom<Datum> for Vector {
             Datum::Unknown(data) => Vector::decode(&data, Format::Text), // Try decoding anyway.
             _ => Err(Error::UnexpectedPayload),
         }
-    }
-}
-
-struct VectorVisitor;
-
-impl<'de> Visitor<'de> for VectorVisitor {
-    type Value = Vector;
-
-    fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
-    where
-        A: de::SeqAccess<'de>,
-    {
-        let mut results = vec![];
-        while let Some(n) = seq.next_element::<f64>()? {
-            results.push(n);
-        }
-
-        Ok(Vector::from(results.as_slice()))
-    }
-
-    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-        formatter.write_str("expected a list of floating points")
-    }
-}
-
-impl<'de> Deserialize<'de> for Vector {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: de::Deserializer<'de>,
-    {
-        deserializer.deserialize_seq(VectorVisitor)
-    }
-}
-
-impl Serialize for Vector {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        let mut seq = serializer.serialize_seq(Some(self.len()))?;
-        for v in &self.values {
-            seq.serialize_element(v)?;
-        }
-        seq.end()
     }
 }
 
@@ -281,25 +139,5 @@ mod test {
         assert!(encoded_str.contains("NaN"));
         assert!(encoded_str.contains("Infinity"));
         assert!(encoded_str.contains("-Infinity"));
-    }
-
-    #[test]
-    fn test_vector_distance_with_special_values() {
-        // Test distance calculation with normal values
-        let v1 = Vector::from(&[3.0, 4.0][..]);
-        let v2 = Vector::from(&[0.0, 0.0][..]);
-        let distance = v1.distance_l2(&v2);
-        assert_eq!(distance, 5.0); // 3-4-5 triangle
-
-        // Test distance with NaN
-        let v_nan = Vector::from(vec![Float(f32::NAN), Float(1.0)]);
-        let v_normal = Vector::from(&[1.0, 1.0][..]);
-        let distance_nan = v_nan.distance_l2(&v_normal);
-        assert!(distance_nan.is_nan());
-
-        // Test distance with Infinity
-        let v_inf = Vector::from(vec![Float(f32::INFINITY), Float(1.0)]);
-        let distance_inf = v_inf.distance_l2(&v_normal);
-        assert!(distance_inf.is_infinite());
     }
 }

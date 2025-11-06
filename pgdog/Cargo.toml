@@ -62,6 +62,7 @@ hickory-resolver = "0.25.2"
 lazy_static = "1"
 dashmap = "6"
 pgdog-config = { path = "../pgdog-config" }
+pgdog-vector = { path = "../pgdog-vector" }
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 tikv-jemallocator = "0.6"

@@ -3,7 +3,10 @@ use uuid::Uuid;
 use crate::{
     backend::ShardingSchema,
     config::{DataType, ShardedTable},
-    net::messages::{Format, FromDataType, ParameterWithFormat, Vector},
+    net::{
+        messages::{Format, FromDataType, ParameterWithFormat, Vector},
+        vector::str_to_vector,
+    },
 };
 
 // pub mod context;
@@ -102,9 +105,13 @@ pub(crate) fn shard_value(
             .ok()
             .map(Shard::Direct)
             .unwrap_or(Shard::All),
-        DataType::Vector => Vector::try_from(value)
+        DataType::Vector => str_to_vector(value)
             .ok()
-            .map(|v| Centroids::from(centroids).shard(&v, shards, centroid_probes))
+            .map(|v| {
+                Centroids::from(centroids)
+                    .shard(&v, shards, centroid_probes)
+                    .into()
+            })
             .unwrap_or(Shard::All),
         DataType::Varchar => Shard::Direct(varchar(value.as_bytes()) as usize % shards),
     }
@@ -128,7 +135,11 @@ pub(crate) fn shard_binary(
             .unwrap_or(Shard::All),
         DataType::Vector => Vector::decode(bytes, Format::Binary)
             .ok()
-            .map(|v| Centroids::from(centroids).shard(&v, shards, centroid_probes))
+            .map(|v| {
+                Centroids::from(centroids)
+                    .shard(&v, shards, centroid_probes)
+                    .into()
+            })
             .unwrap_or(Shard::All),
         DataType::Varchar => Shard::Direct(varchar(bytes) as usize % shards),
     }

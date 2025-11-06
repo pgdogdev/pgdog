@@ -543,13 +543,19 @@ mod test {
             tables: ShardedTables::new(
                 vec![
                     ShardedTable {
-                        name: Some("sharded".into()),
-                        column: "id".into(),
+                        inner: pgdog_config::ShardedTable {
+                            name: Some("sharded".into()),
+                            column: "id".into(),
+                            ..Default::default()
+                        },
                         ..Default::default()
                     },
                     ShardedTable {
-                        name: None,
-                        column: "user_id".into(),
+                        inner: pgdog_config::ShardedTable {
+                            name: None,
+                            column: "user_id".into(),
+                            ..Default::default()
+                        },
                         ..Default::default()
                     },
                 ],
@@ -652,8 +658,11 @@ mod test {
             shards: 2,
             tables: ShardedTables::new(
                 vec![ShardedTable {
-                    name: Some("sharded".into()),
-                    column: "id".into(),
+                    inner: pgdog_config::ShardedTable {
+                        name: Some("sharded".into()),
+                        column: "id".into(),
+                        ..Default::default()
+                    },
                     ..Default::default()
                 }],
                 vec![],
@@ -687,8 +696,11 @@ mod test {
             shards: 2,
             tables: ShardedTables::new(
                 vec![ShardedTable {
-                    name: Some("sharded".into()),
-                    column: "id".into(),
+                    inner: pgdog_config::ShardedTable {
+                        name: Some("sharded".into()),
+                        column: "id".into(),
+                        ..Default::default()
+                    },
                     ..Default::default()
                 }],
                 vec![],
@@ -720,8 +732,11 @@ mod test {
             shards: 2,
             tables: ShardedTables::new(
                 vec![ShardedTable {
-                    name: Some("sharded".into()),
-                    column: "id".into(),
+                    inner: pgdog_config::ShardedTable {
+                        name: Some("sharded".into()),
+                        column: "id".into(),
+                        ..Default::default()
+                    },
                     ..Default::default()
                 }],
                 vec![],
@@ -755,8 +770,11 @@ mod test {
             shards: 2,
             tables: ShardedTables::new(
                 vec![ShardedTable {
-                    name: Some("sharded".into()),
-                    column: "id".into(),
+                    inner: pgdog_config::ShardedTable {
+                        name: Some("sharded".into()),
+                        column: "id".into(),
+                        ..Default::default()
+                    },
                     ..Default::default()
                 }],
                 vec![],
@@ -787,8 +805,11 @@ mod test {
             shards: 2,
             tables: ShardedTables::new(
                 vec![ShardedTable {
-                    name: Some("sharded".into()),
-                    column: "id".into(),
+                    inner: pgdog_config::ShardedTable {
+                        name: Some("sharded".into()),
+                        column: "id".into(),
+                        ..Default::default()
+                    },
                     ..Default::default()
                 }],
                 vec![],
@@ -820,8 +841,11 @@ mod test {
             shards: 2,
             tables: ShardedTables::new(
                 vec![ShardedTable {
-                    name: Some("sharded".into()),
-                    column: "id".into(),
+                    inner: pgdog_config::ShardedTable {
+                        name: Some("sharded".into()),
+                        column: "id".into(),
+                        ..Default::default()
+                    },
                     ..Default::default()
                 }],
                 vec![],

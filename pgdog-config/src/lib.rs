@@ -28,4 +28,5 @@ pub use overrides::Overrides;
 pub use pooling::{PoolerMode, PreparedStatements, Stats};
 pub use replication::*;
 pub use rewrite::{Rewrite, RewriteMode};
+pub use sharding::*;
 pub use users::{Admin, Plugin, User, Users};

@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use tracing::{info, warn};
 
 use super::error::Error;
-use crate::Vector;
+use pgdog_vector::Vector;
 
 /// Sharded table.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]

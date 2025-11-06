@@ -5,7 +5,7 @@ use pg_query::{
     NodeEnum,
 };
 
-use crate::net::messages::Vector;
+use crate::net::{messages::Vector, vector::str_to_vector};
 
 /// A value extracted from a query.
 #[derive(Debug, Clone, PartialEq)]
@@ -39,7 +39,7 @@ impl<'a> From<&'a AConst> for Value<'a> {
         match value.val.as_ref() {
             Some(Val::Sval(s)) => {
                 if s.sval.starts_with('[') && s.sval.ends_with(']') {
-                    if let Ok(vector) = Vector::try_from(s.sval.as_str()) {
+                    if let Ok(vector) = str_to_vector(s.sval.as_str()) {
                         Value::Vector(vector)
                     } else {
                         Value::String(s.sval.as_str())

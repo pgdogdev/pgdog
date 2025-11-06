@@ -1,5 +1,6 @@
 use std::{
     cmp::Ordering,
+    fmt::Display,
     hash::{Hash, Hasher},
 };
 
@@ -52,6 +53,22 @@ impl Hash for Float {
         } else {
             // Use bit representation for consistent hashing
             self.0.to_bits().hash(state);
+        }
+    }
+}
+
+impl Display for Float {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.0.is_nan() {
+            write!(f, "NaN")
+        } else if self.0.is_infinite() {
+            if self.0.is_sign_positive() {
+                write!(f, "Infinity")
+            } else {
+                write!(f, "-Infinity")
+            }
+        } else {
+            write!(f, "{}", self.0)
         }
     }
 }

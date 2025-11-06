@@ -85,7 +85,9 @@ impl QueryParser {
                             || table.name.as_deref() == from_clause.table_name())
                     {
                         let centroids = Centroids::from(&table.centroids);
-                        let shard = centroids.shard(vector, context.shards, table.centroid_probes);
+                        let shard: Shard = centroids
+                            .shard(vector, context.shards, table.centroid_probes)
+                            .into();
                         if let Some(recorder) = self.recorder_mut() {
                             recorder.record_entry(
                                 Some(shard.clone()),

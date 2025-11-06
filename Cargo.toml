@@ -4,7 +4,7 @@ members = [
     "examples/demo",
     "integration/rust",
     "pgdog", "pgdog-config", "pgdog-macros",
-    "pgdog-plugin", "pgdog-plugin-build", "plugins/pgdog-example-plugin",
+    "pgdog-plugin", "pgdog-plugin-build", "pgdog-vector", "plugins/pgdog-example-plugin",
 ]
 resolver = "2"
 

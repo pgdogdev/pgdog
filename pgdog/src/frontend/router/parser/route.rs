@@ -47,6 +47,12 @@ impl From<Option<usize>> for Shard {
     }
 }
 
+impl From<Vec<usize>> for Shard {
+    fn from(value: Vec<usize>) -> Self {
+        Shard::Multi(value)
+    }
+}
+
 /// Path a query should take and any transformations
 /// that should be applied along the way.
 #[derive(Debug, Clone, Default, PartialEq)]

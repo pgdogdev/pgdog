@@ -4,7 +4,7 @@ use url::Url;
 
 use super::{ConfigAndUsers, Database, Error, PoolerMode, Role, User, Users};
 
-fn database_name(url: &Url) -> String {
+pub fn database_name(url: &Url) -> String {
     let database = url.path().chars().skip(1).collect::<String>();
     if database.is_empty() {
         "postgres".into()

@@ -2377,6 +2377,7 @@ dependencies = [
  "pg_query",
  "pgdog-config",
  "pgdog-plugin",
+ "pgdog-vector",
  "pin-project",
  "rand 0.8.5",
  "ratatui",
@@ -2408,6 +2409,7 @@ dependencies = [
 name = "pgdog-config"
 version = "0.1.0"
 dependencies = [
+ "pgdog-vector",
  "rand 0.8.5",
  "serde",
  "serde_json",
@@ -2456,6 +2458,14 @@ name = "pgdog-plugin-build"
 version = "0.1.1"
 dependencies = [
  "toml 0.9.5",
+]
+
+[[package]]
+name = "pgdog-vector"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
