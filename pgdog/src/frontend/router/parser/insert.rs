@@ -543,19 +543,13 @@ mod test {
             tables: ShardedTables::new(
                 vec![
                     ShardedTable {
-                        inner: pgdog_config::ShardedTable {
-                            name: Some("sharded".into()),
-                            column: "id".into(),
-                            ..Default::default()
-                        },
+                        name: Some("sharded".into()),
+                        column: "id".into(),
                         ..Default::default()
                     },
                     ShardedTable {
-                        inner: pgdog_config::ShardedTable {
-                            name: None,
-                            column: "user_id".into(),
-                            ..Default::default()
-                        },
+                        name: None,
+                        column: "user_id".into(),
                         ..Default::default()
                     },
                 ],
@@ -658,11 +652,8 @@ mod test {
             shards: 2,
             tables: ShardedTables::new(
                 vec![ShardedTable {
-                    inner: pgdog_config::ShardedTable {
-                        name: Some("sharded".into()),
-                        column: "id".into(),
-                        ..Default::default()
-                    },
+                    name: Some("sharded".into()),
+                    column: "id".into(),
                     ..Default::default()
                 }],
                 vec![],
@@ -696,11 +687,8 @@ mod test {
             shards: 2,
             tables: ShardedTables::new(
                 vec![ShardedTable {
-                    inner: pgdog_config::ShardedTable {
-                        name: Some("sharded".into()),
-                        column: "id".into(),
-                        ..Default::default()
-                    },
+                    name: Some("sharded".into()),
+                    column: "id".into(),
                     ..Default::default()
                 }],
                 vec![],
@@ -732,11 +720,8 @@ mod test {
             shards: 2,
             tables: ShardedTables::new(
                 vec![ShardedTable {
-                    inner: pgdog_config::ShardedTable {
-                        name: Some("sharded".into()),
-                        column: "id".into(),
-                        ..Default::default()
-                    },
+                    name: Some("sharded".into()),
+                    column: "id".into(),
                     ..Default::default()
                 }],
                 vec![],
@@ -770,11 +755,8 @@ mod test {
             shards: 2,
             tables: ShardedTables::new(
                 vec![ShardedTable {
-                    inner: pgdog_config::ShardedTable {
-                        name: Some("sharded".into()),
-                        column: "id".into(),
-                        ..Default::default()
-                    },
+                    name: Some("sharded".into()),
+                    column: "id".into(),
                     ..Default::default()
                 }],
                 vec![],
@@ -805,11 +787,8 @@ mod test {
             shards: 2,
             tables: ShardedTables::new(
                 vec![ShardedTable {
-                    inner: pgdog_config::ShardedTable {
-                        name: Some("sharded".into()),
-                        column: "id".into(),
-                        ..Default::default()
-                    },
+                    name: Some("sharded".into()),
+                    column: "id".into(),
                     ..Default::default()
                 }],
                 vec![],
@@ -841,11 +820,8 @@ mod test {
             shards: 2,
             tables: ShardedTables::new(
                 vec![ShardedTable {
-                    inner: pgdog_config::ShardedTable {
-                        name: Some("sharded".into()),
-                        column: "id".into(),
-                        ..Default::default()
-                    },
+                    name: Some("sharded".into()),
+                    column: "id".into(),
                     ..Default::default()
                 }],
                 vec![],

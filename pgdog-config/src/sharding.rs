@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::collections::{hash_map::DefaultHasher, HashSet};
 use std::hash::{Hash, Hasher as StdHasher};
 use std::path::PathBuf;
@@ -40,6 +41,9 @@ pub struct ShardedTable {
     /// Hasher function.
     #[serde(default)]
     pub hasher: Hasher,
+    /// Explicit routing rules.
+    #[serde(skip, default)]
+    pub mapping: Option<Mapping>,
 }
 
 impl ShardedTable {
@@ -189,4 +193,77 @@ pub struct ShardedSchema {
     pub name: String,
     #[serde(default)]
     pub shard: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListShards {
+    mapping: HashMap<FlexibleType, usize>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub enum Mapping {
+    Range(Vec<ShardedMapping>), // TODO: optimize with a BTreeMap.
+    List(ListShards),           // Optimized.
+}
+
+impl Hash for ListShards {
+    fn hash<H: StdHasher>(&self, state: &mut H) {
+        // Hash the mapping in a deterministic way by XORing individual key-value hashes
+        let mut mapping_hash = 0u64;
+        for (key, value) in &self.mapping {
+            let mut hasher = DefaultHasher::new();
+            key.hash(&mut hasher);
+            value.hash(&mut hasher);
+            mapping_hash ^= hasher.finish();
+        }
+        mapping_hash.hash(state);
+    }
+}
+
+impl Mapping {
+    pub fn new(mappings: &[ShardedMapping]) -> Option<Self> {
+        let range = mappings
+            .iter()
+            .filter(|m| m.kind == ShardedMappingKind::Range)
+            .cloned()
+            .collect::<Vec<_>>();
+        let list = mappings.iter().any(|m| m.kind == ShardedMappingKind::List);
+
+        if !range.is_empty() {
+            Some(Self::Range(range))
+        } else if list {
+            Some(Self::List(ListShards::new(mappings)))
+        } else {
+            None
+        }
+    }
+}
+
+impl ListShards {
+    pub fn is_empty(&self) -> bool {
+        self.mapping.is_empty()
+    }
+
+    pub fn new(mappings: &[ShardedMapping]) -> Self {
+        let mut mapping = HashMap::new();
+
+        for map in mappings
+            .iter()
+            .filter(|m| m.kind == ShardedMappingKind::List)
+        {
+            for value in &map.values {
+                mapping.insert(value.clone(), map.shard);
+            }
+        }
+
+        Self { mapping }
+    }
+
+    pub fn shard(&self, value: &FlexibleType) -> Result<Option<usize>, Error> {
+        if let Some(shard) = self.mapping.get(value) {
+            Ok(Some(*shard))
+        } else {
+            Ok(None)
+        }
+    }
 }

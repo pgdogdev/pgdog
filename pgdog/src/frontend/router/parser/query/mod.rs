@@ -322,10 +322,14 @@ impl QueryParser {
 
         // e.g. Parse, Describe, Flush-style flow.
         if !context.router_context.executable {
-            if let Command::Query(query) = command {
-                return Ok(Command::Query(
-                    query.set_shard(round_robin::next() % context.shards),
-                ));
+            if let Command::Query(ref query) = command {
+                if query.is_cross_shard() {
+                    return Ok(Command::Query(
+                        query
+                            .clone()
+                            .set_shard(round_robin::next() % context.shards),
+                    ));
+                }
             }
         }
 
@@ -416,6 +420,15 @@ impl QueryParser {
     /// Handle COPY command.
     fn copy(stmt: &CopyStmt, context: &QueryParserContext) -> Result<Command, Error> {
         // Schema-based routing.
+        //
+        // We do this here as well because COPY <table> TO STDOUT
+        // doesn't use the CopyParser (doesn't need to, normally),
+        // so we need to handle this case here.
+        //
+        // The CopyParser itself has handling for schema-based sharding,
+        // but that's only used for logical replication during the first
+        // phase of data-sync.
+        //
         let table = stmt.relation.as_ref().map(Table::from);
         if let Some(table) = table {
             if let Some(schema) = table.schema {

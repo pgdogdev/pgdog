@@ -197,10 +197,8 @@ mod test {
             tables: ShardedTables::new(
                 vec![ShardedTable {
                     mapping: None,
-                    inner: pgdog_config::sharding::ShardedTable {
-                        data_type: DataType::Varchar,
-                        ..Default::default()
-                    },
+                    data_type: DataType::Varchar,
+                    ..Default::default()
                 }],
                 vec![],
             ),
@@ -222,10 +220,7 @@ mod test {
             shards: 2,
             tables: ShardedTables::new(
                 vec![ShardedTable {
-                    inner: pgdog_config::sharding::ShardedTable {
-                        data_type: DataType::Bigint,
-                        ..Default::default()
-                    },
+                    data_type: DataType::Bigint,
                     mapping: Some(Mapping::Range(vec![ShardedMapping {
                         start: Some(FlexibleType::Integer(1)),
                         end: Some(FlexibleType::Integer(25)),
@@ -255,10 +250,7 @@ mod test {
             shards: 2,
             tables: ShardedTables::new(
                 vec![ShardedTable {
-                    inner: pgdog_config::sharding::ShardedTable {
-                        data_type: DataType::Bigint,
-                        ..Default::default()
-                    },
+                    data_type: DataType::Bigint,
                     mapping: Some(Mapping::List(ListShards::new(&[ShardedMapping {
                         values: vec![FlexibleType::Integer(1), FlexibleType::Integer(2)]
                             .into_iter()

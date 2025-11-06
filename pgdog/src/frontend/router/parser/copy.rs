@@ -70,6 +70,8 @@ pub struct CopyParser {
     sharded_table: Option<ShardedTable>,
     /// The sharding column is in this position in each row.
     sharded_column: usize,
+    /// Schema shard.
+    schema_shard: Option<Shard>,
 }
 
 impl Default for CopyParser {
@@ -83,6 +85,7 @@ impl Default for CopyParser {
             sharding_schema: ShardingSchema::default(),
             sharded_table: None,
             sharded_column: 0,
+            schema_shard: None,
         }
     }
 }
@@ -108,6 +111,15 @@ impl CopyParser {
             }
 
             let table = Table::from(rel);
+
+            // The CopyParser is used for replicating
+            // data during data-sync. This will ensure all rows
+            // are sent to the right schema-based shard.
+            if let Some(schema) = table.schema {
+                if let Some(schema) = cluster.sharding_schema().schemas.get(schema) {
+                    parser.schema_shard = Some(Shard::Direct(schema.shard));
+                }
+            }
 
             if let Some(key) = Tables::new(&cluster.sharding_schema()).key(table, &columns) {
                 parser.sharded_table = Some(key.table.clone());
@@ -202,7 +214,10 @@ impl CopyParser {
                     if self.headers && self.is_from {
                         let headers = stream.headers()?;
                         if let Some(headers) = headers {
-                            rows.push(CopyRow::new(headers.to_string().as_bytes(), Shard::All));
+                            rows.push(CopyRow::new(
+                                headers.to_string().as_bytes(),
+                                self.schema_shard.clone().unwrap_or(Shard::All),
+                            ));
                         }
                         self.headers = false;
                     }
@@ -222,6 +237,8 @@ impl CopyParser {
                                 .build()?;
 
                             ctx.apply()?
+                        } else if let Some(schema_shard) = self.schema_shard.clone() {
+                            schema_shard
                         } else {
                             Shard::All
                         };
@@ -233,7 +250,10 @@ impl CopyParser {
                 CopyStream::Binary(stream) => {
                     if self.headers {
                         let header = stream.header()?;
-                        rows.push(CopyRow::new(&header.to_bytes()?, Shard::All));
+                        rows.push(CopyRow::new(
+                            &header.to_bytes()?,
+                            self.schema_shard.clone().unwrap_or(Shard::All),
+                        ));
                         self.headers = false;
                     }
 
@@ -241,7 +261,10 @@ impl CopyParser {
                         let tuple = tuple?;
                         if tuple.end() {
                             let terminator = (-1_i16).to_be_bytes();
-                            rows.push(CopyRow::new(&terminator, Shard::All));
+                            rows.push(CopyRow::new(
+                                &terminator,
+                                self.schema_shard.clone().unwrap_or(Shard::All),
+                            ));
                             break;
                         }
                         let shard = if let Some(table) = &self.sharded_table {
@@ -258,6 +281,8 @@ impl CopyParser {
                             } else {
                                 Shard::All
                             }
+                        } else if let Some(schema_shard) = self.schema_shard.clone() {
+                            schema_shard
                         } else {
                             Shard::All
                         };

@@ -414,18 +414,15 @@ mod test {
             Cluster {
                 sharded_tables: ShardedTables::new(
                     vec![ShardedTable {
-                        inner: pgdog_config::ShardedTable {
-                            database: "pgdog".into(),
-                            name: Some("sharded".into()),
-                            column: "id".into(),
-                            primary: true,
-                            centroids: vec![],
-                            data_type: DataType::Bigint,
-                            centroids_path: None,
-                            centroid_probes: 1,
-                            hasher: Hasher::Postgres,
-                            ..Default::default()
-                        },
+                        database: "pgdog".into(),
+                        name: Some("sharded".into()),
+                        column: "id".into(),
+                        primary: true,
+                        centroids: vec![],
+                        data_type: DataType::Bigint,
+                        centroids_path: None,
+                        centroid_probes: 1,
+                        hasher: Hasher::Postgres,
                         ..Default::default()
                     }],
                     vec!["sharded_omni".into()],

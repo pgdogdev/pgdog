@@ -525,14 +525,11 @@ mod tests {
         ];
 
         cfg.config.sharded_tables = vec![ShardedTable {
-            inner: pgdog_config::sharding::ShardedTable {
-                database: "pgdog_sharded".into(),
-                name: Some("sharded".into()),
-                column: "id".into(),
-                data_type: DataType::Bigint,
-                primary: true,
-                ..Default::default()
-            },
+            database: "pgdog_sharded".into(),
+            name: Some("sharded".into()),
+            column: "id".into(),
+            data_type: DataType::Bigint,
+            primary: true,
             ..Default::default()
         }];
 

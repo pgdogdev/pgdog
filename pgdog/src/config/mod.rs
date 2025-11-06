@@ -13,7 +13,6 @@ pub mod pooling;
 pub mod replication;
 pub mod rewrite;
 pub mod sharding;
-pub mod url;
 pub mod users;
 
 pub use core::{Config, ConfigAndUsers};

@@ -28,7 +28,16 @@ impl QueryParser {
                     }
                 }
 
-                ObjectType::ObjectSchema => {}
+                ObjectType::ObjectSchema => {
+                    if let Some(Node {
+                        node: Some(NodeEnum::String(string)),
+                    }) = stmt.objects.first()
+                    {
+                        if let Some(schema) = context.sharding_schema.schemas.get(&string.sval) {
+                            shard = Shard::Direct(schema.shard);
+                        }
+                    }
+                }
 
                 _ => (),
             },

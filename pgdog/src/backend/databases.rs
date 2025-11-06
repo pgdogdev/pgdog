@@ -13,6 +13,7 @@ use crate::backend::replication::ShardedSchemas;
 use crate::config::PoolerMode;
 use crate::frontend::client::query_engine::two_pc::Manager;
 use crate::frontend::router::parser::Cache;
+use crate::frontend::router::sharding::mapping::mapping_valid;
 use crate::frontend::router::sharding::Mapping;
 use crate::frontend::PreparedStatements;
 use crate::{
@@ -404,7 +405,7 @@ pub(crate) fn new_pool(
                 sharded_table.mapping = Mapping::new(mappings);
 
                 if let Some(ref mapping) = sharded_table.mapping {
-                    if !mapping.valid() {
+                    if !mapping_valid(mapping) {
                         warn!(
                             "sharded table name=\"{}\", column=\"{}\" has overlapping ranges",
                             sharded_table.name.as_ref().unwrap_or(&String::from("")),
