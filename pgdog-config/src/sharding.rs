@@ -185,14 +185,14 @@ pub struct ManualQuery {
     pub fingerprint: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub struct ShardedSchema {
     /// Database name.
     pub database: String,
     /// Schema name.
     pub name: Option<String>,
     #[serde(default)]
-    shard: usize,
+    pub shard: usize,
     /// All shards.
     #[serde(default)]
     pub all: bool,

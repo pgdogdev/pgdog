@@ -103,18 +103,67 @@ impl<'a> TryFrom<&'a Vec<Node>> for Table<'a> {
     type Error = ();
 
     fn try_from(value: &'a Vec<Node>) -> Result<Self, Self::Error> {
-        let table = value
-            .first()
-            .and_then(|node| {
-                node.node.as_ref().map(|node| match node {
-                    NodeEnum::RangeVar(var) => Some(Ok(Table::from(var))),
-                    NodeEnum::List(list) => Some(Table::try_from(list)),
-                    _ => None,
-                })
-            })
-            .flatten()
-            .ok_or(())?;
-        Ok(table?)
+        match value.len() {
+            1 => {
+                let table = value
+                    .first()
+                    .and_then(|node| {
+                        node.node.as_ref().map(|node| match node {
+                            NodeEnum::RangeVar(var) => Some(Ok(Table::from(var))),
+                            NodeEnum::List(list) => Some(Table::try_from(list)),
+                            NodeEnum::String(str) => Some(Ok(Table::from(str.sval.as_str()))),
+                            _ => None,
+                        })
+                    })
+                    .flatten()
+                    .ok_or(())?;
+                return Ok(table?);
+            }
+
+            2 => {
+                let schema = value
+                    .iter()
+                    .next()
+                    .unwrap()
+                    .node
+                    .as_ref()
+                    .map(|node| {
+                        if let NodeEnum::String(sval) = node {
+                            Some(sval.sval.as_str())
+                        } else {
+                            None
+                        }
+                    })
+                    .flatten();
+                let table = value
+                    .iter()
+                    .last()
+                    .unwrap()
+                    .node
+                    .as_ref()
+                    .map(|node| {
+                        if let NodeEnum::String(sval) = node {
+                            Some(sval.sval.as_str())
+                        } else {
+                            None
+                        }
+                    })
+                    .flatten();
+                if let Some(schema) = schema {
+                    if let Some(table) = table {
+                        return Ok(Table {
+                            name: table,
+                            schema: Some(schema),
+                            alias: None,
+                        });
+                    }
+                }
+            }
+
+            _ => (),
+        }
+
+        Err(())
     }
 }
 
