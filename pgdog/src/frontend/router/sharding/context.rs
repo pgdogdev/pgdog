@@ -27,7 +27,7 @@ impl Context<'_> {
             } => {
                 debug!("sharding using k-means");
                 if let Some(vector) = self.value.vector()? {
-                    return Ok(centroids.shard(&vector, *shards, *probes));
+                    return Ok(centroids.shard(&vector, *shards, *probes).into());
                 }
             }
 

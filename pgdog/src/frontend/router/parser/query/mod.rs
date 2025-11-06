@@ -24,9 +24,11 @@ use super::{
     explain_trace::{ExplainRecorder, ExplainSummary},
     *,
 };
+mod ddl;
 mod delete;
 mod explain;
 mod plugins;
+pub mod schema_sharding;
 mod select;
 mod set;
 mod shared;
@@ -196,18 +198,18 @@ impl QueryParser {
 
         // Parse hardcoded shard from a query comment.
         if context.router_needed || context.dry_run {
-            self.shard = statement.shard.clone();
-            let role_override = statement.role;
+            self.shard = statement.comment_shard.clone();
+            let role_override = statement.comment_role;
             if let Some(role) = role_override {
                 self.write_override = role == Role::Primary;
             }
             if let Some(recorder) = self.recorder_mut() {
-                if !matches!(statement.shard, Shard::All) || role_override.is_some() {
+                if !matches!(statement.comment_shard, Shard::All) || role_override.is_some() {
                     let role_str = role_override.map(|role| match role {
                         Role::Primary => "primary",
                         Role::Replica => "replica",
                     });
-                    recorder.record_comment_override(statement.shard.clone(), role_str);
+                    recorder.record_comment_override(statement.comment_shard.clone(), role_str);
                 }
             }
         }
@@ -261,7 +263,7 @@ impl QueryParser {
                 return Ok(Command::Deallocate);
             }
             // SELECT statements.
-            Some(NodeEnum::SelectStmt(ref stmt)) => self.select(statement.ast(), stmt, context),
+            Some(NodeEnum::SelectStmt(ref stmt)) => self.select(&statement, stmt, context),
             // COPY statements.
             Some(NodeEnum::CopyStmt(ref stmt)) => Self::copy(stmt, context),
             // INSERT statements.
@@ -307,12 +309,7 @@ impl QueryParser {
                 return Ok(Command::Unlisten(stmt.conditionname.clone()));
             }
 
-            Some(NodeEnum::ExplainStmt(ref stmt)) => self.explain(statement.ast(), stmt, context),
-
-            // VACUUM.
-            Some(NodeEnum::VacuumRelation(_)) | Some(NodeEnum::VacuumStmt(_)) => {
-                Ok(Command::Query(Route::write(None).set_maintenace()))
-            }
+            Some(NodeEnum::ExplainStmt(ref stmt)) => self.explain(&statement, stmt, context),
 
             Some(NodeEnum::DiscardStmt { .. }) => {
                 return Ok(Command::Discard {
@@ -320,17 +317,20 @@ impl QueryParser {
                 })
             }
 
-            // All others are not handled.
-            // They are sent to all shards concurrently.
-            _ => Ok(Command::Query(Route::write(None))),
+            _ => self.ddl(&root.node, context),
         }?;
 
         // e.g. Parse, Describe, Flush-style flow.
         if !context.router_context.executable {
-            if let Command::Query(query) = command {
-                return Ok(Command::Query(
-                    query.set_shard(round_robin::next() % context.shards),
-                ));
+            if let Command::Query(ref query) = command {
+                if query.is_cross_shard() {
+                    let shard = if self.shard == Shard::All {
+                        Shard::Direct(round_robin::next() % context.shards)
+                    } else {
+                        self.shard.clone()
+                    };
+                    return Ok(Command::Query(query.clone().set_shard(shard)));
+                }
             }
         }
 
@@ -420,6 +420,27 @@ impl QueryParser {
 
     /// Handle COPY command.
     fn copy(stmt: &CopyStmt, context: &QueryParserContext) -> Result<Command, Error> {
+        // Schema-based routing.
+        //
+        // We do this here as well because COPY <table> TO STDOUT
+        // doesn't use the CopyParser (doesn't need to, normally),
+        // so we need to handle this case here.
+        //
+        // The CopyParser itself has handling for schema-based sharding,
+        // but that's only used for logical replication during the first
+        // phase of data-sync.
+        //
+        let table = stmt.relation.as_ref().map(Table::from);
+        if let Some(table) = table {
+            if let Some(schema) = context.sharding_schema.schemas.get(table.schema()) {
+                if !stmt.is_from {
+                    return Ok(Command::Query(Route::read(schema.shard())));
+                } else {
+                    return Ok(Command::Query(Route::write(schema.shard())));
+                }
+            }
+        }
+
         let parser = CopyParser::new(stmt, context.router_context.cluster)?;
         if !stmt.is_from {
             Ok(Command::Query(Route::read(Shard::All)))

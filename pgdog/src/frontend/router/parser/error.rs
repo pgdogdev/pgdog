@@ -93,4 +93,7 @@ pub enum Error {
 
     #[error("multi-row INSERT into sharded table \"{table}\" cannot be rewritten: {reason}")]
     SplitInsertNotSupported { table: String, reason: String },
+
+    #[error("cross-shard truncate not supported when schema-sharding is used")]
+    CrossShardTruncateSchemaSharding,
 }

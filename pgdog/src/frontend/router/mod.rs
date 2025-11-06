@@ -1,5 +1,6 @@
 //! Query router.
 
+pub mod cli;
 pub mod context;
 pub mod copy;
 pub mod error;

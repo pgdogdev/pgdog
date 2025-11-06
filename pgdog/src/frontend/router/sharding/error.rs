@@ -39,4 +39,7 @@ pub enum Error {
 
     #[error("sharding key value isn't valid")]
     InvalidValue,
+
+    #[error("config error: {0}")]
+    ConfigError(#[from] pgdog_config::Error),
 }

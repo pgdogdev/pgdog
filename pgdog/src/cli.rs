@@ -5,12 +5,13 @@ use clap::{Parser, Subcommand};
 use std::fs::read_to_string;
 use thiserror::Error;
 use tokio::{select, signal::ctrl_c};
-use tracing::error;
+use tracing::{error, info};
 
 use crate::backend::schema::sync::config::ShardConfig;
 use crate::backend::schema::sync::pg_dump::{PgDump, SyncState};
 use crate::backend::{databases::databases, replication::logical::Publisher};
 use crate::config::{Config, Users};
+use crate::frontend::router::cli::RouterCli;
 
 /// PgDog is a PostgreSQL pooler, proxy, load balancer and query router.
 #[derive(Parser, Debug)]
@@ -53,6 +54,21 @@ pub enum Commands {
         query: Option<String>,
         #[arg(short, long)]
         path: Option<PathBuf>,
+    },
+
+    /// Execute the router on the queries.
+    Route {
+        /// User in users.toml.
+        #[arg(short, long)]
+        user: String,
+
+        /// Database in pgdog.toml.
+        #[arg(short, long)]
+        database: String,
+
+        /// Path to the file containing the queries.
+        #[arg(short, long)]
+        file: PathBuf,
     },
 
     /// Check configuration files for errors.
@@ -298,6 +314,24 @@ pub async fn setup(database: &str) -> Result<(), Box<dyn std::error::Error>> {
     let schema_owner = databases.schema_owner(database)?;
 
     ShardConfig::sync_all(&schema_owner).await?;
+
+    Ok(())
+}
+
+pub async fn route(commands: Commands) -> Result<(), Box<dyn std::error::Error>> {
+    if let Commands::Route {
+        user,
+        database,
+        file,
+    } = commands
+    {
+        let cli = RouterCli::new(&database, &user, file).await?;
+        let cmds = cli.run()?;
+
+        for cmd in cmds {
+            info!("{:?}", cmd);
+        }
+    }
 
     Ok(())
 }

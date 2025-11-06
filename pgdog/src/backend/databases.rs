@@ -9,9 +9,11 @@ use parking_lot::lock_api::MutexGuard;
 use parking_lot::{Mutex, RawMutex};
 use tracing::{debug, error, info, warn};
 
+use crate::backend::replication::ShardedSchemas;
 use crate::config::PoolerMode;
 use crate::frontend::client::query_engine::two_pc::Manager;
 use crate::frontend::router::parser::Cache;
+use crate::frontend::router::sharding::mapping::mapping_valid;
 use crate::frontend::router::sharding::Mapping;
 use crate::frontend::PreparedStatements;
 use crate::{
@@ -355,6 +357,7 @@ pub(crate) fn new_pool(
     let sharded_tables = config.sharded_tables();
     let omnisharded_tables = config.omnisharded_tables();
     let sharded_mappings = config.sharded_mappings();
+    let sharded_schemas = config.sharded_schemas();
     let general = &config.general;
     let databases = config.databases();
     let shards = databases.get(&user.database);
@@ -385,7 +388,11 @@ pub(crate) fn new_pool(
         let mut sharded_tables = sharded_tables
             .get(&user.database)
             .cloned()
-            .unwrap_or(vec![]);
+            .unwrap_or_default();
+        let sharded_schemas = sharded_schemas
+            .get(&user.database)
+            .cloned()
+            .unwrap_or_default();
 
         for sharded_table in &mut sharded_tables {
             let mappings = sharded_mappings.get(&(
@@ -398,7 +405,7 @@ pub(crate) fn new_pool(
                 sharded_table.mapping = Mapping::new(mappings);
 
                 if let Some(ref mapping) = sharded_table.mapping {
-                    if !mapping.valid() {
+                    if !mapping_valid(mapping) {
                         warn!(
                             "sharded table name=\"{}\", column=\"{}\" has overlapping ranges",
                             sharded_table.name.as_ref().unwrap_or(&String::from("")),
@@ -414,6 +421,7 @@ pub(crate) fn new_pool(
             .cloned()
             .unwrap_or(vec![]);
         let sharded_tables = ShardedTables::new(sharded_tables, omnisharded_tables);
+        let sharded_schemas = ShardedSchemas::new(sharded_schemas);
 
         let cluster_config = ClusterConfig::new(
             general,
@@ -421,6 +429,7 @@ pub(crate) fn new_pool(
             &shard_configs,
             sharded_tables,
             config.multi_tenant(),
+            sharded_schemas,
         );
 
         Some((

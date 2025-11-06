@@ -1,7 +1,7 @@
 import asyncpg
 import pytest
 from datetime import datetime
-from globals import normal_async, sharded_async, no_out_of_sync, admin
+from globals import normal_async, sharded_async, no_out_of_sync, admin, schema_sharded_async
 import random
 import string
 import pytest_asyncio
@@ -412,3 +412,74 @@ async def test_copy_jsonb():
     finally:
         await conn.execute("DROP TABLE IF EXISTS jsonb_copy_test")
         await conn.close()
+
+@pytest.mark.asyncio
+async def test_schema_sharding():
+    conn = await schema_sharded_async()
+
+    for _ in range(25):
+        for schema in ["shard_0", "shard_1"]:
+            await conn.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
+            await conn.execute(f"CREATE SCHEMA {schema}")
+        for shard in [0, 1]:
+            schema = f"shard_{shard}"
+            await conn.execute(f"CREATE TABLE {schema}.test(id BIGINT, created_at TIMESTAMPTZ DEFAULT NOW())")
+            await conn.fetch(f"SELECT * FROM {schema}.test WHERE id = $1", 1)
+
+            insert = await conn.fetch(f"INSERT INTO {schema}.test VALUES ($1, NOW()), ($2, NOW()) RETURNING *", 1, 2)
+            assert len(insert) == 2
+            assert insert[0][0] == 1
+            assert insert[1][0] == 2
+
+            update = await conn.fetch(f"UPDATE {schema}.test SET id = $1 WHERE id = $2 RETURNING *", 3, 2)
+            assert len(update) == 1
+            assert update[0][0] == 3
+
+            delete = await conn.execute(f"DELETE FROM {schema}.test WHERE id = $1", 3)
+            assert delete == "DELETE 1"
+
+            await conn.execute(f"TRUNCATE {schema}.test")
+
+@pytest.mark.asyncio
+async def test_schema_sharding_transactions():
+    conn = await schema_sharded_async()
+
+    for _ in range(25):
+        for schema in ["shard_0", "shard_1"]:
+            await conn.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
+            await conn.execute(f"CREATE SCHEMA {schema}")
+
+        for shard in [0, 1]:
+            async with conn.transaction():
+                await conn.execute("SET LOCAL statement_timeout TO '10s'")
+                schema = f"shard_{shard}"
+                await conn.execute(f"CREATE TABLE {schema}.test(id BIGINT, created_at TIMESTAMPTZ DEFAULT NOW())")
+                await conn.fetch(f"SELECT * FROM {schema}.test WHERE id = $1", 1)
+
+                insert = await conn.fetch(f"INSERT INTO {schema}.test VALUES ($1, NOW()), ($2, NOW()) RETURNING *", 1, 2)
+                assert len(insert) == 2
+                assert insert[0][0] == 1
+                assert insert[1][0] == 2
+
+                update = await conn.fetch(f"UPDATE {schema}.test SET id = $1 WHERE id = $2 RETURNING *", 3, 2)
+                assert len(update) == 1
+                assert update[0][0] == 3
+
+                delete = await conn.execute(f"DELETE FROM {schema}.test WHERE id = $1", 3)
+                assert delete == "DELETE 1"
+
+@pytest.mark.asyncio
+async def test_schema_sharding_default():
+    conn = await schema_sharded_async()
+
+    for _ in range(25):
+        # Note no schema specified.
+        await conn.execute("DROP TABLE IF EXISTS test_schema_sharding_default")
+        await conn.execute("CREATE TABLE test_schema_sharding_default(id BIGINT)")
+
+        await conn.execute("SELECT * FROM test_schema_sharding_default")
+        try:
+            await conn.execute("/* pgdog_shard: 1 */ SELECT * FROM test_schema_sharding_default")
+            raise Exception("table shouldn't exist on shard 1")
+        except Exception as e:
+            assert "relation \"test_schema_sharding_default\" does not exist" == str(e)

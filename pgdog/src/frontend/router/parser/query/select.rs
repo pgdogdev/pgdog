@@ -1,4 +1,6 @@
-use crate::frontend::router::parser::{from_clause::FromClause, where_clause::TablesSource};
+use crate::frontend::router::parser::{
+    cache::CachedAst, from_clause::FromClause, where_clause::TablesSource,
+};
 
 use super::*;
 
@@ -12,10 +14,11 @@ impl QueryParser {
     ///
     pub(super) fn select(
         &mut self,
-        ast: &pg_query::ParseResult,
+        cached_ast: &CachedAst,
         stmt: &SelectStmt,
         context: &mut QueryParserContext,
     ) -> Result<Command, Error> {
+        let ast = cached_ast.ast();
         let cte_writes = Self::cte_writes(stmt);
         let mut writes = Self::functions(stmt)?;
 
@@ -43,6 +46,7 @@ impl QueryParser {
 
         let order_by = Self::select_sort(&stmt.sort_clause, context.router_context.bind);
         let mut shards = HashSet::new();
+
         let from_clause = TablesSource::from(FromClause::new(&stmt.from_clause));
         let where_clause = WhereClause::new(&from_clause, &stmt.where_clause);
 
@@ -55,6 +59,21 @@ impl QueryParser {
             )?;
         }
 
+        // Schema-based sharding.
+        for table in cached_ast.tables() {
+            if let Some(schema) = context.sharding_schema.schemas.get(table.schema()) {
+                let shard: Shard = schema.shard().into();
+                if shards.insert(shard.clone()) {
+                    if let Some(recorder) = self.recorder_mut() {
+                        recorder.record_entry(
+                            Some(shard),
+                            format!("SELECT matched schema {}", schema.name()),
+                        );
+                    }
+                }
+            }
+        }
+
         // Shard by vector in ORDER BY clause.
         for order in &order_by {
             if let Some((vector, column_name)) = order.vector() {
@@ -64,7 +83,9 @@ impl QueryParser {
                             || table.name.as_deref() == from_clause.table_name())
                     {
                         let centroids = Centroids::from(&table.centroids);
-                        let shard = centroids.shard(vector, context.shards, table.centroid_probes);
+                        let shard: Shard = centroids
+                            .shard(vector, context.shards, table.centroid_probes)
+                            .into();
                         if let Some(recorder) = self.recorder_mut() {
                             recorder.record_entry(
                                 Some(shard.clone()),
