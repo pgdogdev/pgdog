@@ -190,9 +190,31 @@ pub struct ShardedSchema {
     /// Database name.
     pub database: String,
     /// Schema name.
-    pub name: String,
+    pub name: Option<String>,
     #[serde(default)]
-    pub shard: usize,
+    shard: usize,
+    /// All shards.
+    #[serde(default)]
+    pub all: bool,
+}
+
+impl ShardedSchema {
+    /// This schema mapping is used to route all other queries.
+    pub fn is_default(&self) -> bool {
+        self.name.is_none()
+    }
+
+    pub fn name(&self) -> &str {
+        self.name.as_ref().map(|name| name.as_str()).unwrap_or("*")
+    }
+
+    pub fn shard(&self) -> Option<usize> {
+        if self.all {
+            None
+        } else {
+            Some(self.shard)
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

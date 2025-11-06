@@ -117,7 +117,7 @@ impl CopyParser {
             // are sent to the right schema-based shard.
             if let Some(schema) = table.schema {
                 if let Some(schema) = cluster.sharding_schema().schemas.get(schema) {
-                    parser.schema_shard = Some(Shard::Direct(schema.shard));
+                    parser.schema_shard = Some(schema.shard().into());
                 }
             }
 

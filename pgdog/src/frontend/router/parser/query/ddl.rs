@@ -22,7 +22,7 @@ impl QueryParser {
                         if let Some(table_schema) = table.schema {
                             if let Some(schema) = context.sharding_schema.schemas.get(table_schema)
                             {
-                                shard = Shard::Direct(schema.shard);
+                                shard = schema.shard().into();
                             }
                         }
                     }
@@ -34,7 +34,7 @@ impl QueryParser {
                     }) = stmt.objects.first()
                     {
                         if let Some(schema) = context.sharding_schema.schemas.get(&string.sval) {
-                            shard = Shard::Direct(schema.shard);
+                            shard = schema.shard().into();
                         }
                     }
                 }
@@ -43,7 +43,7 @@ impl QueryParser {
             },
             Some(NodeEnum::CreateSchemaStmt(stmt)) => {
                 if let Some(schema) = context.sharding_schema.schemas.get(&stmt.schemaname) {
-                    shard = Shard::Direct(schema.shard);
+                    shard = schema.shard().into();
                 }
             }
 

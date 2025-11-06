@@ -47,6 +47,9 @@ pub fn comment(query: &str, schema: &ShardingSchema) -> Result<(Shard, Option<Ro
             }
             if let Some(cap) = SHARDING_KEY.captures(comment) {
                 if let Some(sharding_key) = get_matched_value(&cap) {
+                    if let Some(schema) = schema.schemas.get(sharding_key) {
+                        return Ok((schema.shard().into(), role));
+                    }
                     let ctx = ContextBuilder::infer_from_from_and_config(sharding_key, schema)?
                         .shards(schema.shards)
                         .build()?;

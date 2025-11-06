@@ -434,9 +434,9 @@ impl QueryParser {
             if let Some(schema) = table.schema {
                 if let Some(schema) = context.sharding_schema.schemas.get(schema) {
                     if !stmt.is_from {
-                        return Ok(Command::Query(Route::read(Shard::Direct(schema.shard))));
+                        return Ok(Command::Query(Route::read(schema.shard())));
                     } else {
-                        return Ok(Command::Query(Route::write(Shard::Direct(schema.shard))));
+                        return Ok(Command::Query(Route::write(schema.shard())));
                     }
                 }
             }

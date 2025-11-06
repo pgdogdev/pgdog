@@ -13,18 +13,19 @@ struct Inner {
 }
 
 impl Inner {
-    fn new(schemas: Vec<ShardedSchema>, default_shard: usize) -> Self {
-        let database = schemas.first().map(|schema| schema.database.clone());
+    fn new(schemas: Vec<ShardedSchema>) -> Self {
+        let without_default = schemas
+            .iter()
+            .filter(|schema| !schema.is_default())
+            .cloned();
+        let default_mapping = schemas.iter().find(|schema| schema.is_default()).cloned();
+
         Self {
-            schemas: schemas
+            schemas: without_default
                 .into_iter()
-                .map(|schema| (schema.name.clone(), schema))
+                .map(|schema| (schema.name().to_string(), schema))
                 .collect(),
-            default_mapping: database.map(|database| ShardedSchema {
-                database,
-                name: "*".into(),
-                shard: default_shard,
-            }),
+            default_mapping,
         }
     }
 }
@@ -48,7 +49,7 @@ impl ShardedSchemas {
 
     pub fn new(schemas: Vec<ShardedSchema>) -> Self {
         Self {
-            inner: Arc::new(Inner::new(schemas, 0)),
+            inner: Arc::new(Inner::new(schemas)),
         }
     }
 }

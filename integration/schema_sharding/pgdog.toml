@@ -27,3 +27,8 @@ shard = 1
 database = "pgdog"
 name = "acustomer"
 shard = 0
+
+# All other schemas go  to shard 0.
+[[sharded_schemas]]
+database = "pgdog"
+shard = 0

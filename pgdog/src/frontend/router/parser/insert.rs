@@ -95,7 +95,7 @@ impl<'a> Insert<'a> {
             // Schema-based routing.
             if let Some(table_schema) = table.schema {
                 if let Some(schema) = schema.schemas.get(table_schema) {
-                    return Ok(InsertRouting::Routed(Shard::Direct(schema.shard)));
+                    return Ok(InsertRouting::Routed(schema.shard().into()));
                 }
             }
 

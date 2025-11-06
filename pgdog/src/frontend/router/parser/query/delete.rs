@@ -14,12 +14,12 @@ impl QueryParser {
             // Schema-based sharding.
             if let Some(schema) = table.schema {
                 if let Some(schema) = context.sharding_schema.schemas.get(schema) {
-                    let shard = Shard::Direct(schema.shard);
+                    let shard: Shard = schema.shard().into();
 
                     if let Some(recorder) = self.recorder_mut() {
                         recorder.record_entry(
                             Some(shard.clone()),
-                            format!("DELETE matched schema {}", schema.name),
+                            format!("DELETE matched schema {}", schema.name()),
                         );
                     }
 

@@ -11,7 +11,7 @@ impl QueryParser {
         if let Some(table) = table {
             if let Some(schema) = table.schema {
                 if let Some(sharded_schema) = context.sharding_schema.schemas.get(schema) {
-                    return Ok(Some(Shard::Direct(sharded_schema.shard)));
+                    return Ok(Some(sharded_schema.shard().into()));
                 }
             }
         }
