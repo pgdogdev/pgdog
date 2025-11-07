@@ -161,6 +161,9 @@ pub struct General {
     /// Enable expanded EXPLAIN output.
     #[serde(default = "General::expanded_explain")]
     pub expanded_explain: bool,
+    /// Stats averaging period (in milliseconds).
+    #[serde(default = "General::stats_period")]
+    pub stats_period: u64,
 }
 
 impl Default for General {
@@ -219,6 +222,7 @@ impl Default for General {
             two_phase_commit_auto: None,
             expanded_explain: Self::expanded_explain(),
             server_lifetime: Self::server_lifetime(),
+            stats_period: Self::stats_period(),
         }
     }
 }
@@ -495,6 +499,10 @@ impl General {
             "PGDOG_SERVER_LIFETIME",
             Duration::from_secs(3600 * 24).as_millis() as u64,
         )
+    }
+
+    fn stats_period() -> u64 {
+        Self::env_or_default("PGDOG_STATS_PERIOD", 15_000)
     }
 
     fn default_passthrough_auth() -> PassthoughAuth {

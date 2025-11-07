@@ -45,6 +45,8 @@ impl Command for ShowStats {
                         Field::numeric(&format!("{}_errors", prefix)),
                         Field::numeric(&format!("{}_cleaned", prefix)),
                         Field::numeric(&format!("{}_rollbacks", prefix)),
+                        Field::numeric(&format!("{}_connect_time", prefix)),
+                        Field::numeric(&format!("{}_connect_count", prefix)),
                     ]
                 })
                 .collect::<Vec<Field>>(),
@@ -88,7 +90,9 @@ impl Command for ShowStats {
                             .add(stat.close)
                             .add(stat.errors)
                             .add(stat.cleaned)
-                            .add(stat.rollbacks);
+                            .add(stat.rollbacks)
+                            .add(stat.connect_time.as_millis() as u64)
+                            .add(stat.connect_count);
                     }
 
                     messages.push(dr.message()?);

@@ -218,10 +218,11 @@ impl Monitor {
     /// Replenish pool with one new connection.
     async fn replenish(&self) -> bool {
         if let Ok(conn) = Self::create_connection(&self.pool).await {
+            let now = Instant::now();
             let server = Box::new(conn);
             let mut guard = self.pool.lock();
             if guard.online {
-                guard.put(server, Instant::now());
+                guard.put(server, now);
             }
             true
         } else {
@@ -295,7 +296,7 @@ impl Monitor {
     }
 
     async fn stats(pool: Pool) {
-        let duration = Duration::from_secs(15);
+        let duration = pool.config().stats_period;
         let comms = pool.comms();
 
         loop {
@@ -321,6 +322,7 @@ impl Monitor {
         let options = pool.server_options();
 
         let mut error = Error::ServerError;
+        let now = Instant::now();
 
         for attempt in 0..connect_attempts {
             match timeout(
@@ -329,7 +331,15 @@ impl Monitor {
             )
             .await
             {
-                Ok(Ok(conn)) => return Ok(conn),
+                Ok(Ok(conn)) => {
+                    let elapsed = now.elapsed();
+                    {
+                        let mut guard = pool.lock();
+                        guard.stats.counts.connect_count += 1;
+                        guard.stats.counts.connect_time += elapsed;
+                    }
+                    return Ok(conn);
+                }
 
                 Ok(Err(err)) => {
                     error!(
