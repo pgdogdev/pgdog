@@ -1,7 +1,10 @@
 //! A collection of replicas and a primary.
 
 use parking_lot::{Mutex, RwLock};
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use tokio::spawn;
 use tracing::{error, info};
 
@@ -48,6 +51,7 @@ pub struct Cluster {
     cross_shard_disabled: bool,
     two_phase_commit: bool,
     two_phase_commit_auto: bool,
+    online: Arc<AtomicBool>,
 }
 
 /// Sharding configuration from the cluster.
@@ -170,6 +174,7 @@ impl Cluster {
             cross_shard_disabled,
             two_phase_commit: two_pc && shards.len() > 1,
             two_phase_commit_auto: two_pc_auto && shards.len() > 1,
+            online: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -371,6 +376,8 @@ impl Cluster {
                 }
             });
         }
+
+        self.online.store(true, Ordering::Relaxed);
     }
 
     /// Shutdown the connection pools.
@@ -378,6 +385,12 @@ impl Cluster {
         for shard in self.shards() {
             shard.shutdown();
         }
+
+        self.online.store(false, Ordering::Relaxed);
+    }
+
+    pub(crate) fn online(&self) -> bool {
+        self.online.load(Ordering::Relaxed)
     }
 
     /// Execute a query on every primary in the cluster.
