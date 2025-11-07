@@ -1,5 +1,6 @@
 [general]
 expanded_explain = true
+dry_run = true
 
 [[databases]]
 name = "pgdog"
@@ -32,3 +33,6 @@ shard = 0
 [[sharded_schemas]]
 database = "pgdog"
 shard = 0
+
+[admin]
+password = "pgdog"
