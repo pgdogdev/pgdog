@@ -29,6 +29,7 @@ impl FromStr for TlsVerifyMode {
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct Tcp {
     #[serde(default = "Tcp::default_keepalive")]
     keepalive: bool,
