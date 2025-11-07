@@ -13,7 +13,7 @@ impl QueryEngine {
                 let identifier = cluster.identifier();
 
                 // Reload cluster config.
-                self.backend.reload()?;
+                self.backend.safe_reload().await?;
 
                 match self.backend.cluster() {
                     Ok(cluster) => cluster,
