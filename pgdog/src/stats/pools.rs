@@ -71,6 +71,10 @@ impl Pools {
         let mut avg_cleaned = vec![];
         let mut total_rollbacks = vec![];
         let mut avg_rollbacks = vec![];
+        let mut total_connect_time = vec![];
+        let mut avg_connect_time = vec![];
+        let mut total_connect_count = vec![];
+        let mut avg_connect_count = vec![];
 
         for (user, cluster) in databases().all() {
             for (shard_num, shard) in cluster.shards().iter().enumerate() {
@@ -227,6 +231,26 @@ impl Pools {
                     avg_rollbacks.push(Measurement {
                         labels: labels.clone(),
                         measurement: averages.rollbacks.into(),
+                    });
+
+                    total_connect_time.push(Measurement {
+                        labels: labels.clone(),
+                        measurement: totals.connect_time.as_millis().into(),
+                    });
+
+                    avg_connect_time.push(Measurement {
+                        labels: labels.clone(),
+                        measurement: averages.connect_time.as_millis().into(),
+                    });
+
+                    total_connect_count.push(Measurement {
+                        labels: labels.clone(),
+                        measurement: totals.connect_count.into(),
+                    });
+
+                    avg_connect_count.push(Measurement {
+                        labels: labels.clone(),
+                        measurement: averages.connect_count.into(),
                     });
                 }
             }
@@ -459,6 +483,38 @@ impl Pools {
             help:
                 "Average number of abandoned transactions that had to be rolled back automatically."
                     .into(),
+            unit: None,
+            metric_type: None,
+        }));
+
+        metrics.push(Metric::new(PoolMetric {
+            name: "total_connect_time".into(),
+            measurements: total_connect_time,
+            help: "Total time spent connecting to servers.".into(),
+            unit: None,
+            metric_type: Some("counter".into()),
+        }));
+
+        metrics.push(Metric::new(PoolMetric {
+            name: "avg_connect_time".into(),
+            measurements: avg_connect_time,
+            help: "Average time spent connecting to servers.".into(),
+            unit: None,
+            metric_type: None,
+        }));
+
+        metrics.push(Metric::new(PoolMetric {
+            name: "total_connect_count".into(),
+            measurements: total_connect_count,
+            help: "Total number of connections established to servers.".into(),
+            unit: None,
+            metric_type: Some("counter".into()),
+        }));
+
+        metrics.push(Metric::new(PoolMetric {
+            name: "avg_connect_count".into(),
+            measurements: avg_connect_count,
+            help: "Average number of connections established to servers.".into(),
             unit: None,
             metric_type: None,
         }));

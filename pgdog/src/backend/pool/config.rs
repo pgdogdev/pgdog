@@ -57,6 +57,8 @@ pub struct Config {
     pub read_only: bool,
     /// Maximum prepared statements per connection.
     pub prepared_statements_limit: usize,
+    /// Stats averaging period.
+    pub stats_period: Duration,
 }
 
 impl Config {
@@ -182,6 +184,7 @@ impl Config {
                 .read_only
                 .unwrap_or(user.read_only.unwrap_or_default()),
             prepared_statements_limit: general.prepared_statements_limit,
+            stats_period: Duration::from_millis(general.stats_period),
             bannable: !is_only_replica,
             ..Default::default()
         }
@@ -214,6 +217,7 @@ impl Default for Config {
             pooler_mode: PoolerMode::default(),
             read_only: false,
             prepared_statements_limit: usize::MAX,
+            stats_period: Duration::from_millis(15_000),
             dns_ttl: Duration::from_millis(60_000),
         }
     }
