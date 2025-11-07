@@ -15,7 +15,11 @@ function admin() {
 # - protocol: simple|extended|prepared
 #
 function bench() {
-    PGPASSWORD=pgdog pgbench -h 127.0.0.1 -p 6432 -U pgdog pgdog --protocol ${1:-simple}
+    PGPASSWORD=pgdog pgbench -h 127.0.0.1 -p 6432 -U pgdog pgdog --protocol ${2:-simple} -t 100000 -c 10 -P 1 -S
+}
+
+function bench_init() {
+    PGPASSWORD=pgdog pgbench -h 127.0.0.1 -p 6432 -U pgdog pgdog -i
 }
 
 # Parse command
@@ -23,8 +27,11 @@ case "$1" in
     admin)
         admin
         ;;
+    binit)
+        bench_init
+        ;;
     bench)
-        bench $1
+        bench $2
         ;;
     *)
         echo "Usage: $0 {admin} {bench}"
