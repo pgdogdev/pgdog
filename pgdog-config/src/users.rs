@@ -9,6 +9,7 @@ use crate::util::random_string;
 
 /// pgDog plugin.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct Plugin {
     /// Plugin name.
     pub name: String,
