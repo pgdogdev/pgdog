@@ -9,7 +9,7 @@ impl QueryEngine {
     ) -> Result<bool, Error> {
         // Admin doesn't have a cluster.
         let cluster = if let Ok(cluster) = self.backend.cluster() {
-            if !cluster.online() {
+            if !context.in_transaction() && !cluster.online() {
                 let identifier = cluster.identifier();
 
                 // Reload cluster config.
