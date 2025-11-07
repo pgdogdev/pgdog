@@ -100,10 +100,7 @@ impl Connection {
                     debug!("detected configuration reload, reloading cluster");
 
                     // Wait to reload pools until they are ready.
-                    if let Some(wait) = reload_notify::ready() {
-                        wait.await;
-                    }
-                    self.reload()?;
+                    self.safe_reload().await?;
                     return self.try_conn(request, route).await;
                 }
                 Err(err) => {
@@ -314,8 +311,17 @@ impl Connection {
         Ok(())
     }
 
+    /// Reload synchronized with partial config changes.
+    pub async fn safe_reload(&mut self) -> Result<(), Error> {
+        if let Some(wait) = reload_notify::ready() {
+            wait.await;
+        }
+
+        self.reload()
+    }
+
     /// Fetch the cluster from the global database store.
-    pub(crate) fn reload(&mut self) -> Result<(), Error> {
+    fn reload(&mut self) -> Result<(), Error> {
         match self.binding {
             Binding::Direct(_) | Binding::MultiShard(_, _) => {
                 let user = (self.user.as_str(), self.database.as_str());
