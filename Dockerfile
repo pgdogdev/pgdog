@@ -20,7 +20,8 @@ RUN source ~/.cargo/env && \
 
 FROM ubuntu:latest
 ENV RUST_LOG=info
-ENV PSQL_VERSION=18
+ARG PSQL_VERSION=18
+ENV PSQL_VERSION=${PSQL_VERSION}
 RUN apt update && \
     apt install -y curl ca-certificates ssl-cert && \
     update-ca-certificates
