@@ -164,6 +164,13 @@ openmetrics_namespace = "pgdog_"
 # Default: extended
 prepared_statements = "extended"
 
+# Will override the default and enable query parsing. This can be useful if
+# you don't have a primary/replica, have one shard, and don't want
+# prepared_statements = 'full' but still want to enable query parsing
+# in order to synchronise your clients `set` commands for instance.
+# NOTE: true enables, and false will just fallback to default behaviour.
+query_parser_enabled = true
+
 # Limit on the number of prepared statements active on
 # any Postgres server connection.
 #

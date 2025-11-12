@@ -100,6 +100,10 @@ impl ConfigAndUsers {
         self.config.general.prepared_statements.full()
     }
 
+    pub fn query_parser_enabled(&self) -> bool {
+        self.config.general.query_parser_enabled
+    }
+
     pub fn pub_sub_enabled(&self) -> bool {
         self.config.general.pub_sub_channel_size > 0
     }
