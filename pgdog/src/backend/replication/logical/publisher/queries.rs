@@ -13,21 +13,33 @@ use crate::{
 use super::super::Error;
 
 /// Get list of tables in publication.
-static TABLES: &str = "SELECT DISTINCT n.nspname, c.relname, gpt.attrs
+static TABLES: &str = "SELECT DISTINCT
+  n.nspname,
+  c.relname,
+  gpt.attrs,
+  COALESCE(pn.nspname::text, '') AS parent_schema,
+  COALESCE(p.relname::text, '')  AS parent_table
 FROM pg_class c
 JOIN pg_namespace n ON n.oid = c.relnamespace
-JOIN ( SELECT (pg_get_publication_tables(VARIADIC array_agg(pubname::text))).*
-       FROM pg_publication
-       WHERE pubname IN ($1)) AS gpt
-    ON gpt.relid = c.oid
-ORDER BY n.nspname, c.relname";
+JOIN (
+  SELECT (pg_get_publication_tables(VARIADIC array_agg(pubname::text))).*
+  FROM pg_publication
+  WHERE pubname IN ($1)
+) AS gpt
+  ON gpt.relid = c.oid
+LEFT JOIN pg_inherits i     ON i.inhrelid = c.oid           -- only present if c is a child partition
+LEFT JOIN pg_class    p     ON p.oid = i.inhparent          -- immediate parent partitioned table
+LEFT JOIN pg_namespace pn   ON pn.oid = p.relnamespace
+ORDER BY n.nspname, c.relname;";
 
 /// Table included in a publication.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct PublicationTable {
     pub schema: String,
     pub name: String,
     pub attributes: String,
+    pub parent_schema: String,
+    pub parent_name: String,
 }
 
 impl Display for PublicationTable {
@@ -53,6 +65,8 @@ impl From<DataRow> for PublicationTable {
             schema: value.get(0, Format::Text).unwrap_or_default(),
             name: value.get(1, Format::Text).unwrap_or_default(),
             attributes: value.get(2, Format::Text).unwrap_or_default(),
+            parent_schema: value.get(3, Format::Text).unwrap_or_default(),
+            parent_name: value.get(4, Format::Text).unwrap_or_default(),
         }
     }
 }

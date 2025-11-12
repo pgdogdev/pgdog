@@ -2,6 +2,7 @@
 //! between N shards.
 
 use pg_query::NodeEnum;
+use tracing::debug;
 
 use crate::{
     backend::{replication::subscriber::ParallelConnection, Cluster},
@@ -100,6 +101,8 @@ impl CopySubscriber {
         }
 
         for server in &mut self.connections {
+            debug!("{} [{}]", stmt.query(), server.addr());
+
             server.send_one(&stmt.clone().into()).await?;
             server.flush().await?;
 
@@ -194,7 +197,7 @@ mod test {
     use bytes::Bytes;
 
     use crate::{
-        backend::pool::Request,
+        backend::{pool::Request, replication::publisher::PublicationTable},
         frontend::router::parser::binary::{header::Header, Data, Tuple},
     };
 
@@ -204,7 +207,13 @@ mod test {
     async fn test_subscriber() {
         crate::logger();
 
-        let copy = CopyStatement::new("pgdog", "sharded", &["id".into(), "value".into()]);
+        let table = PublicationTable {
+            schema: "pgdog".into(),
+            name: "sharded".into(),
+            ..Default::default()
+        };
+
+        let copy = CopyStatement::new(&table, &["id".into(), "value".into()]);
         let cluster = Cluster::new_test();
         cluster.launch();
 

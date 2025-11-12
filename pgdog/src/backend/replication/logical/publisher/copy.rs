@@ -2,7 +2,7 @@ use crate::{
     backend::Server,
     net::{CopyData, ErrorResponse, FromBytes, Protocol, Query, ToBytes},
 };
-use tracing::trace;
+use tracing::{debug, trace};
 
 use super::{
     super::{CopyStatement, Error},
@@ -17,8 +17,7 @@ pub struct Copy {
 impl Copy {
     pub fn new(table: &Table) -> Self {
         let stmt = CopyStatement::new(
-            &table.table.schema,
-            &table.table.name,
+            &table.table,
             &table
                 .columns
                 .iter()
@@ -34,9 +33,10 @@ impl Copy {
             return Err(Error::TransactionNotStarted);
         }
 
-        server
-            .send(&vec![Query::new(self.stmt.copy_out()).into()].into())
-            .await?;
+        let query = Query::new(self.stmt.copy_out());
+        debug!("{} [{}]", query.query(), server.addr());
+
+        server.send(&vec![query.into()].into()).await?;
         let result = server.read().await?;
         match result.code() {
             'E' => return Err(ErrorResponse::from_bytes(result.to_bytes()?)?.into()),
