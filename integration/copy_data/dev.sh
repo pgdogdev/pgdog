@@ -9,5 +9,4 @@ PGUSER=pgdog PGPASSWORD=pgdog psql -f init.sql
 
 ${PGDOG_BIN} schema-sync --from-database source --to-database destination --publication pgdog
 ${PGDOG_BIN} data-sync --sync-only --from-database source --to-database destination --publication pgdog --replication-slot copy_data
-
 popd
