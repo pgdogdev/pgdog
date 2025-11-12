@@ -16,10 +16,17 @@ use pg_query::{
 use tracing::{debug, trace};
 
 use super::super::{publisher::Table, Error};
+use super::StreamContext;
 use crate::{
     backend::{Cluster, Server, ShardingSchema},
     config::Role,
-    frontend::router::parser::{self, Insert, InsertRouting, Shard},
+    frontend::{
+        router::{
+            parser::{self, Insert, InsertRouting, Shard},
+            QueryParser,
+        },
+        Command, Router,
+    },
     net::{
         replication::{
             xlog_data::XLogPayload, Commit as XLogCommit, Insert as XLogInsert, Relation,
@@ -57,22 +64,25 @@ struct Statements {
 
 #[derive(Default, Debug, Clone)]
 struct Statement {
-    name: String,
-    query: String,
     ast: ParseResult,
+    parse: Parse,
 }
 
 impl Statement {
-    fn parse(&self) -> Parse {
-        Parse::named(&self.name, &self.query)
+    fn parse(&self) -> &Parse {
+        &self.parse
+    }
+
+    fn name(&self) -> &str {
+        self.parse.name()
     }
 
     fn new(query: &str) -> Result<Self, Error> {
         let ast = pg_query::parse(query)?.protobuf;
+        let name = statement_name();
         Ok(Self {
-            name: statement_name(),
-            query: query.to_string(),
             ast,
+            parse: Parse::named(name, query.to_string()),
         })
     }
 
@@ -97,7 +107,7 @@ impl Statement {
     }
 
     fn query(&self) -> &str {
-        &self.query
+        self.parse.query()
     }
 }
 #[derive(Debug)]
@@ -244,34 +254,56 @@ impl StreamSubscriber {
         if let Some(statements) = self.statements.get(&insert.oid) {
             // Convert TupleData into a Bind message. We can now insert that tuple
             // using a prepared statement.
-            let bind = insert.tuple_data.to_bind(&statements.upsert.name);
+            let mut context = StreamContext::new(
+                &self.cluster,
+                &insert.tuple_data,
+                &statements.upsert.parse(),
+            );
+            let bind = context.bind().clone();
 
-            // Upserts are idempotent. Even if we rewind the stream,
-            // we are able to replay changes we already applied safely.
-            if let Some(upsert) = statements.upsert.insert() {
-                let upsert = Insert::new(upsert);
-                let cfg = crate::config::config();
-                let rewrite_enabled = cfg.config.rewrite.enabled;
-                let split_mode = cfg.config.rewrite.split_inserts;
-                let routing = upsert.shard(
-                    &self.sharding_schema,
-                    Some(&bind),
-                    rewrite_enabled,
-                    split_mode,
-                )?;
-                match routing {
-                    InsertRouting::Routed(shard) => self.send(&shard, &bind).await?,
-                    InsertRouting::Split(plan) => {
-                        return Err(Error::Parser(parser::Error::SplitInsertNotSupported {
-                            table: plan.table().to_string(),
-                            reason: "logical replication does not support split inserts".into(),
-                        }))
-                    }
+            let shard = {
+                let router_context = context.router_context()?;
+                let mut router = Router::new();
+                let route = router.query(router_context)?;
+
+                if let Command::Query(route) = route {
+                    route.shard().clone()
+                } else {
+                    return Err(Error::IncorrectCommand);
                 }
-            }
+            };
+
+            self.send(&shard, &bind).await?;
 
             // Update table LSN.
             self.table_lsns.insert(insert.oid, self.lsn);
+
+            // Upserts are idempotent. Even if we rewind the stream,
+            // we are able to replay changes we already applied safely.
+            // if let Some(upsert) = statements.upsert.insert() {
+            //     let upsert = Insert::new(upsert);
+            //     let cfg = crate::config::config();
+            //     let rewrite_enabled = cfg.config.rewrite.enabled;
+            //     let split_mode = cfg.config.rewrite.split_inserts;
+            //     let routing = upsert.shard(
+            //         &self.sharding_schema,
+            //         Some(&bind),
+            //         rewrite_enabled,
+            //         split_mode,
+            //     )?;
+            //     match routing {
+            //         InsertRouting::Routed(shard) => self.send(&shard, &bind).await?,
+            //         InsertRouting::Split(plan) => {
+            //             return Err(Error::Parser(parser::Error::SplitInsertNotSupported {
+            //                 table: plan.table().to_string(),
+            //                 reason: "logical replication does not support split inserts".into(),
+            //             }))
+            //         }
+            //     }
+            // }
+
+            // Update table LSN.
+            // self.table_lsns.insert(insert.oid, self.lsn);
         }
 
         Ok(())
@@ -334,7 +366,14 @@ impl StreamSubscriber {
                 }
 
                 server
-                    .send(&vec![insert.parse().into(), upsert.parse().into(), Sync.into()].into())
+                    .send(
+                        &vec![
+                            insert.parse().clone().into(),
+                            upsert.parse().clone().into(),
+                            Sync.into(),
+                        ]
+                        .into(),
+                    )
                     .await?;
             }
 

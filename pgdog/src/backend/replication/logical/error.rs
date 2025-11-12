@@ -13,6 +13,9 @@ pub enum Error {
     Pool(#[from] crate::backend::pool::Error),
 
     #[error("{0}")]
+    Router(#[from] crate::frontend::router::Error),
+
+    #[error("{0}")]
     Net(#[from] crate::net::Error),
 
     #[error("transaction not started")]
@@ -68,6 +71,9 @@ pub enum Error {
 
     #[error("table {0} doesn't have a primary key")]
     NoPrimaryKey(PublicationTable),
+
+    #[error("router returned incorrect command")]
+    IncorrectCommand,
 }
 
 impl From<ErrorResponse> for Error {
