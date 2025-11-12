@@ -48,6 +48,9 @@ pub enum Error {
     #[error("lsn decode")]
     LsnDecode,
 
+    #[error("replication slot \"{0}\" doesn't exist, but it should")]
+    MissingReplicationSlot(String),
+
     #[error("parse int")]
     ParseInt(#[from] ParseIntError),
 
