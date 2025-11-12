@@ -91,6 +91,8 @@ pub struct General {
     /// Prepared statatements support.
     #[serde(default)]
     pub prepared_statements: PreparedStatements,
+    /// Parse Queries override.
+    pub query_parser_enabled: bool,
     /// Limit on the number of prepared statements in the server cache.
     #[serde(default = "General::prepared_statements_limit")]
     pub prepared_statements_limit: usize,
@@ -198,6 +200,7 @@ impl Default for General {
             openmetrics_port: Self::openmetrics_port(),
             openmetrics_namespace: Self::openmetrics_namespace(),
             prepared_statements: Self::prepared_statements(),
+            query_parser_enabled: Self::query_parser_enabled(),
             prepared_statements_limit: Self::prepared_statements_limit(),
             query_cache_limit: Self::query_cache_limit(),
             passthrough_auth: Self::default_passthrough_auth(),
@@ -398,6 +401,10 @@ impl General {
 
     fn prepared_statements() -> PreparedStatements {
         Self::env_enum_or_default("PGDOG_PREPARED_STATEMENTS")
+    }
+
+    fn query_parser_enabled() -> bool {
+        Self::env_bool_or_default("PGDOG_QUERY_PARSER_ENABLED", false)
     }
 
     fn auth_type() -> AuthType {
