@@ -91,8 +91,8 @@ pub struct ReplicationSlot {
 
 impl ReplicationSlot {
     /// Create replication slot used for streaming the WAL.
-    pub fn replication(publication: &str, address: &Address) -> Self {
-        let name = format!("__pgdog_repl_{}", random_string(19).to_lowercase());
+    pub fn replication(publication: &str, address: &Address, name: Option<String>) -> Self {
+        let name = name.unwrap_or(format!("__pgdog_repl_{}", random_string(19).to_lowercase()));
 
         Self {
             address: address.clone(),

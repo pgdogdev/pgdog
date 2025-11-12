@@ -1,5 +1,3 @@
-use std::num::NonZeroI16;
-
 use crate::net::replication::logical::tuple_data::Identifier;
 
 use super::super::super::code;
