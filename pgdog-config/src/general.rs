@@ -92,6 +92,7 @@ pub struct General {
     #[serde(default)]
     pub prepared_statements: PreparedStatements,
     /// Parse Queries override.
+    #[serde(default = "General::query_parser_enabled")]
     pub query_parser_enabled: bool,
     /// Limit on the number of prepared statements in the server cache.
     #[serde(default = "General::prepared_statements_limit")]
