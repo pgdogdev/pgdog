@@ -145,6 +145,34 @@ impl ReplicationSlot {
                 .await?;
         }
 
+        let query = format!(
+            "
+            SELECT
+                slot_name,
+                restart_lsn,
+                confirmed_flush_lsn
+            FROM
+                pg_replication_slots
+            WHERE slot_name = '{}'",
+            self.name
+        );
+
+        let exists: Option<DataRow> = self.server()?.fetch_all(query).await?.pop();
+        if let Some(lsn) = exists
+            .map(|slot| slot.get::<String>(2, Format::Text))
+            .flatten()
+        {
+            let lsn = Lsn::from_str(&lsn)?;
+            self.lsn = lsn;
+
+            debug!(
+                "using existing replication slot \"{}\" at lsn {} [{}]",
+                self.name, self.lsn, self.address,
+            );
+
+            return Ok(lsn);
+        }
+
         let start_replication = format!(
             r#"CREATE_REPLICATION_SLOT "{}" {} LOGICAL "pgoutput" (SNAPSHOT '{}')"#,
             self.name,

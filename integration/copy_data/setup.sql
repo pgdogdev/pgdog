@@ -5,7 +5,8 @@ CREATE TABLE IF NOT EXISTS copy_data.users (
    tenant_id BIGINT NOT NULL,
    email VARCHAR NOT NULL,
    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-   settings JSONB NOT NULL DEFAULT '{}'::jsonb
+   settings JSONB NOT NULL DEFAULT '{}'::jsonb,
+   PRIMARY KEY(id, tenant_id)
 ) PARTITION BY HASH(tenant_id);
 
 CREATE TABLE IF NOT EXISTS copy_data.users_0 PARTITION OF copy_data.users

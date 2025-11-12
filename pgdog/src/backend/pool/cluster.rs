@@ -1,6 +1,7 @@
 //! A collection of replicas and a primary.
 
 use parking_lot::{Mutex, RwLock};
+use pgdog_config::{PreparedStatements, Rewrite};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -52,6 +53,12 @@ pub struct Cluster {
     two_phase_commit: bool,
     two_phase_commit_auto: bool,
     online: Arc<AtomicBool>,
+    rewrite: Rewrite,
+    prepared_statements: PreparedStatements,
+    dry_run: bool,
+    expanded_explain: bool,
+    pub_sub_channel_size: usize,
+    query_parser_enabled: bool,
 }
 
 /// Sharding configuration from the cluster.
@@ -94,6 +101,12 @@ pub struct ClusterConfig<'a> {
     pub two_pc: bool,
     pub two_pc_auto: bool,
     pub sharded_schemas: ShardedSchemas,
+    pub rewrite: &'a Rewrite,
+    pub prepared_statements: &'a PreparedStatements,
+    pub dry_run: bool,
+    pub expanded_explain: bool,
+    pub pub_sub_channel_size: usize,
+    pub query_parser_enabled: bool,
 }
 
 impl<'a> ClusterConfig<'a> {
@@ -104,6 +117,7 @@ impl<'a> ClusterConfig<'a> {
         sharded_tables: ShardedTables,
         multi_tenant: &'a Option<MultiTenant>,
         sharded_schemas: ShardedSchemas,
+        rewrite: &'a Rewrite,
     ) -> Self {
         Self {
             name: &user.database,
@@ -126,6 +140,12 @@ impl<'a> ClusterConfig<'a> {
                 .two_phase_commit_auto
                 .unwrap_or(general.two_phase_commit_auto.unwrap_or(false)), // Disable by default.
             sharded_schemas,
+            rewrite,
+            prepared_statements: &general.prepared_statements,
+            dry_run: general.dry_run,
+            expanded_explain: general.expanded_explain,
+            pub_sub_channel_size: general.pub_sub_channel_size,
+            query_parser_enabled: general.query_parser_enabled,
         }
     }
 }
@@ -150,6 +170,12 @@ impl Cluster {
             two_pc,
             two_pc_auto,
             sharded_schemas,
+            rewrite,
+            prepared_statements,
+            dry_run,
+            expanded_explain,
+            pub_sub_channel_size,
+            query_parser_enabled,
         } = config;
 
         Self {
@@ -175,7 +201,21 @@ impl Cluster {
             two_phase_commit: two_pc && shards.len() > 1,
             two_phase_commit_auto: two_pc_auto && shards.len() > 1,
             online: Arc::new(AtomicBool::new(false)),
+            rewrite: rewrite.clone(),
+            prepared_statements: prepared_statements.clone(),
+            dry_run,
+            expanded_explain,
+            pub_sub_channel_size,
+            query_parser_enabled,
         }
+    }
+
+    /// Change config to work with logical replication streaming.
+    pub fn logical_stream(&self) -> Self {
+        let mut cluster = self.clone();
+        // Disable rewrites, we are only sending valid statements.
+        cluster.rewrite.enabled = false;
+        cluster
     }
 
     /// Get a connection to a primary of the given shard.
@@ -249,6 +289,31 @@ impl Cluster {
     // Get sharded tables if any.
     pub fn sharded_tables(&self) -> &[ShardedTable] {
         self.sharded_tables.tables()
+    }
+
+    /// Get query rewrite config.
+    pub fn rewrite(&self) -> &Rewrite {
+        &self.rewrite
+    }
+
+    pub fn query_parser_enabled(&self) -> bool {
+        self.query_parser_enabled
+    }
+
+    pub fn prepared_statements(&self) -> &PreparedStatements {
+        &self.prepared_statements
+    }
+
+    pub fn dry_run(&self) -> bool {
+        self.dry_run
+    }
+
+    pub fn expanded_explain(&self) -> bool {
+        self.expanded_explain
+    }
+
+    pub fn pub_sub_enabled(&self) -> bool {
+        self.pub_sub_channel_size > 0
     }
 
     /// Find sharded column position, if the table and columns match the configuration.

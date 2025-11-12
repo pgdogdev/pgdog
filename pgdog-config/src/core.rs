@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use tracing::{info, warn};
 
 use crate::sharding::ShardedSchema;
-use crate::{Memory, PassthoughAuth, PreparedStatements};
+use crate::{Memory, PassthoughAuth, PreparedStatements, RewriteMode};
 
 use super::database::Database;
 use super::error::Error;
@@ -325,6 +325,20 @@ impl Config {
                 )
             }
             _ => (),
+        }
+
+        if !self.general.two_phase_commit {
+            if self.rewrite.enabled {
+                if self.rewrite.shard_key == RewriteMode::Rewrite {
+                    warn!("rewrite.shard_key=rewrite will apply non-atomic shard-key rewrites; enabling two_phase_commit is strongly recommended"
+                    );
+                }
+
+                if self.rewrite.split_inserts == RewriteMode::Rewrite {
+                    warn!("rewrite.split_inserts=rewrite may commit partial multi-row INSERTs; enabling two_phase_commit is strongly recommended"
+                    );
+                }
+            }
         }
     }
 

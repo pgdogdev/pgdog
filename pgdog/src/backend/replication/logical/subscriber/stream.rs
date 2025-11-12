@@ -4,7 +4,8 @@
 //! into idempotent prepared statements.
 //!
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
+    fmt::Display,
     sync::atomic::{AtomicUsize, Ordering},
 };
 
@@ -45,6 +46,12 @@ fn statement_name() -> String {
 struct Key {
     schema: String,
     name: String,
+}
+
+impl Display for Key {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, r#""{}"."{}""#, self.schema, self.name)
+    }
 }
 
 #[derive(Default, Debug, Clone)]
@@ -116,6 +123,9 @@ pub struct StreamSubscriber {
     // Statements
     statements: HashMap<i32, Statements>,
 
+    // Partitioned tables dedup.
+    partitioned_dedup: HashSet<Key>,
+
     // LSNs for each table
     table_lsns: HashMap<i32, i64>,
 
@@ -132,10 +142,12 @@ pub struct StreamSubscriber {
 
 impl StreamSubscriber {
     pub fn new(cluster: &Cluster, tables: &[Table]) -> Self {
+        let cluster = cluster.logical_stream();
         Self {
-            cluster: cluster.clone(),
+            cluster,
             relations: HashMap::new(),
             statements: HashMap::new(),
+            partitioned_dedup: HashSet::new(),
             table_lsns: HashMap::new(),
             tables: tables
                 .iter()
@@ -261,13 +273,31 @@ impl StreamSubscriber {
         }
 
         if let Some(statements) = self.statements.get(&update.oid) {
-            // Make sure we aren't updating the primary key.
-            let mut context =
-                StreamContext::new(&self.cluster, &update.new, &statements.update.parse());
-            let bind = context.bind().clone();
-            let shard = context.shard()?;
+            // Primary key update.
+            //
+            // Convert it into a delete of the old row
+            // and an insert with the new row.
+            if let Some(key) = update.key {
+                let delete = XLogDelete {
+                    key: Some(key),
+                    oid: update.oid,
+                    old: None,
+                };
+                let insert = XLogInsert {
+                    xid: None,
+                    oid: update.oid,
+                    tuple_data: update.new,
+                };
+                self.delete(delete).await?;
+                self.insert(insert).await?;
+            } else {
+                let mut context =
+                    StreamContext::new(&self.cluster, &update.new, &statements.update.parse());
+                let bind = context.bind().clone();
+                let shard = context.shard()?;
 
-            self.send(&shard, &bind).await?;
+                self.send(&shard, &bind).await?;
+            }
         }
 
         // Update table LSN.
@@ -333,7 +363,7 @@ impl StreamSubscriber {
                     }
                     'Z' => break,
                     '2' | 'C' => continue,
-                    c => return Err(Error::OutOfSync(c)),
+                    c => return Err(Error::CommitOutOfSync(c)),
                 }
             }
         }
@@ -358,6 +388,16 @@ impl StreamSubscriber {
             // are much faster.
 
             table.valid()?;
+
+            let dest_key = Key {
+                schema: table.table.destination_schema().to_string(),
+                name: table.table.destination_name().to_string(),
+            };
+
+            if self.partitioned_dedup.contains(&dest_key) {
+                debug!("queries for table {} already prepared", dest_key);
+                return Ok(());
+            }
 
             let insert = Statement::new(&table.insert(false))?;
             let upsert = Statement::new(&table.insert(true))?;
@@ -396,7 +436,7 @@ impl StreamSubscriber {
                         }
                         'Z' => break,
                         '1' => continue,
-                        c => return Err(Error::OutOfSync(c)),
+                        c => return Err(Error::RelationOutOfSync(c)),
                     }
                 }
             }
@@ -414,6 +454,7 @@ impl StreamSubscriber {
             // Only record tables we expect to stream changes for.
             self.table_lsns.insert(relation.oid, table.lsn.lsn);
             self.relations.insert(relation.oid, relation);
+            self.partitioned_dedup.insert(dest_key);
         }
 
         Ok(())

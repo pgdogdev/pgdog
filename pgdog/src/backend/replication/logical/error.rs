@@ -24,6 +24,12 @@ pub enum Error {
     #[error("out of sync, got {0}")]
     OutOfSync(char),
 
+    #[error("out of sync during commit, got {0}")]
+    CommitOutOfSync(char),
+
+    #[error("out of sync during relation prepare, got {0}")]
+    RelationOutOfSync(char),
+
     #[error("missing data")]
     MissingData,
 
