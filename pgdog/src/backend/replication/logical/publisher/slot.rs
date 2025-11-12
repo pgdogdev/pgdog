@@ -191,7 +191,8 @@ impl ReplicationSlot {
 
             Err(err) => match err {
                 backend::Error::ExecutionError(err) => {
-                    if err.message.contains("already exists") {
+                    // duplicate object.
+                    if err.code == "42710" {
                         let exists: Option<DataRow> =
                             self.server()?.fetch_all(existing_slot).await?.pop();
 
