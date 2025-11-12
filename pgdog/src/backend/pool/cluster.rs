@@ -477,10 +477,12 @@ mod test {
     use std::sync::Arc;
 
     use crate::{
-        backend::pool::{Address, Config, PoolConfig},
-        backend::{Shard, ShardedTables},
+        backend::{
+            pool::{Address, Config, PoolConfig},
+            Shard, ShardedTables,
+        },
         config::{
-            DataType, Hasher, LoadBalancingStrategy, ReadWriteSplit, ReadWriteStrategy,
+            config, DataType, Hasher, LoadBalancingStrategy, ReadWriteSplit, ReadWriteStrategy,
             ShardedTable,
         },
     };
@@ -489,6 +491,7 @@ mod test {
 
     impl Cluster {
         pub fn new_test() -> Self {
+            let config = config();
             Cluster {
                 sharded_tables: ShardedTables::new(
                     vec![ShardedTable {
@@ -535,6 +538,13 @@ mod test {
                     user: "pgdog".into(),
                     database: "pgdog".into(),
                 }),
+                prepared_statements: config.config.general.prepared_statements,
+                dry_run: config.config.general.dry_run,
+                expanded_explain: config.config.general.expanded_explain,
+                query_parser_enabled: config.config.general.query_parser_enabled,
+                rewrite: config.config.rewrite.clone(),
+                two_phase_commit: config.config.general.two_phase_commit,
+                two_phase_commit_auto: config.config.general.two_phase_commit_auto.unwrap_or(false),
                 ..Default::default()
             }
         }

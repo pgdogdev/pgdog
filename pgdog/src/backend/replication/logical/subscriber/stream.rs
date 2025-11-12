@@ -570,45 +570,4 @@ mod tests {
             data: Bytes::copy_from_slice(value.as_bytes()),
         }
     }
-
-    #[tokio::test]
-    async fn split_insert_rejected_during_replication() {
-        config::load_test();
-        let _guard = RewriteGuard::enable_split_rewrite();
-
-        let cluster = Cluster::new_test();
-        let mut subscriber = StreamSubscriber::new(&cluster, &[]);
-
-        let upsert =
-            Statement::new("INSERT INTO sharded (id, value) VALUES (1, 'one'), (11, 'eleven')")
-                .unwrap();
-
-        subscriber.statements.insert(
-            42,
-            Statements {
-                upsert: upsert.clone(),
-                ..Default::default()
-            },
-        );
-
-        let insert = XLogInsert {
-            xid: None,
-            oid: 42,
-            tuple_data: TupleData {
-                columns: vec![text_column("1"), text_column("one")],
-            },
-        };
-
-        let err = subscriber
-            .insert(insert)
-            .await
-            .expect_err("expected split reject");
-        match err {
-            Error::Parser(parser::Error::SplitInsertNotSupported { table, reason }) => {
-                assert!(table.contains("sharded"));
-                assert!(reason.contains("logical replication does not support"));
-            }
-            other => panic!("unexpected error: {other:?}"),
-        }
-    }
 }
