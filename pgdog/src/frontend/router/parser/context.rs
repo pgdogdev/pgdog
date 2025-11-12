@@ -23,6 +23,8 @@ use super::Error;
 /// and its inputs.
 ///
 pub struct QueryParserContext<'a> {
+    /// whether query_parser_enabled has been set.
+    pub(super) query_parser_enabled: bool,
     /// Cluster is read-only, i.e. has no primary.
     pub(super) read_only: bool,
     /// Cluster has no replicas, only a primary.
@@ -91,6 +93,7 @@ impl<'a> QueryParserContext<'a> {
             sharding_schema: router_context.cluster.sharding_schema(),
             rw_strategy: router_context.cluster.read_write_strategy(),
             full_prepared_statements: config.prepared_statements_full(),
+            query_parser_enabled: config.query_parser_enabled(),
             router_needed: router_context.cluster.router_needed(),
             pub_sub_enabled: config.config.general.pub_sub_enabled(),
             multi_tenant: router_context.cluster.multi_tenant(),
@@ -120,7 +123,8 @@ impl<'a> QueryParserContext<'a> {
     ///
     /// Shortcut to avoid the overhead if we can.
     pub(super) fn use_parser(&self) -> bool {
-        self.full_prepared_statements
+        self.query_parser_enabled
+            || self.full_prepared_statements
             || self.router_needed
             || self.pub_sub_enabled
             || self.multi_tenant().is_some()
