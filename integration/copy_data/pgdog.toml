@@ -1,0 +1,21 @@
+[[databases]]
+name = "source"
+host = "127.0.0.1"
+database_name = "pgdog"
+
+[[databases]]
+name = "destination"
+host = "127.0.0.1"
+database_name = "pgdog1"
+shard = 0
+
+[[databases]]
+name = "destination"
+host = "127.0.0.1"
+database_name = "pgdog2"
+shard = 1
+
+[[sharded_tables]]
+database = "destination"
+column = "tenant_id"
+data_type = "bigint"

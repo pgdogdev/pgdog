@@ -2,11 +2,12 @@
 //! Generate COPY statement for table synchronization.
 //!
 
+use super::publisher::PublicationTable;
+
 /// COPY statement generator.
 #[derive(Debug, Clone)]
 pub struct CopyStatement {
-    schema: String,
-    table: String,
+    table: PublicationTable,
     columns: Vec<String>,
 }
 
@@ -19,10 +20,9 @@ impl CopyStatement {
     /// * `table`: Name of the table.
     /// * `columns`: Table column names.
     ///
-    pub fn new(schema: &str, table: &str, columns: &[String]) -> CopyStatement {
+    pub fn new(table: &PublicationTable, columns: &[String]) -> CopyStatement {
         CopyStatement {
-            schema: schema.to_owned(),
-            table: table.to_owned(),
+            table: table.clone(),
             columns: columns.to_vec(),
         }
     }
@@ -37,12 +37,36 @@ impl CopyStatement {
         self.copy(false)
     }
 
+    fn schema_name(&self, out: bool) -> &str {
+        if out {
+            &self.table.schema
+        } else {
+            if self.table.parent_schema.is_empty() {
+                &self.table.schema
+            } else {
+                &self.table.parent_schema
+            }
+        }
+    }
+
+    fn table_name(&self, out: bool) -> &str {
+        if out {
+            &self.table.name
+        } else {
+            if self.table.parent_name.is_empty() {
+                &self.table.name
+            } else {
+                &self.table.parent_name
+            }
+        }
+    }
+
     // Generate the statement.
     fn copy(&self, out: bool) -> String {
         format!(
             r#"COPY "{}"."{}" ({}) {} WITH (FORMAT binary)"#,
-            self.schema,
-            self.table,
+            self.schema_name(out),
+            self.table_name(out),
             self.columns
                 .iter()
                 .map(|c| format!(r#""{}""#, c))
@@ -59,16 +83,42 @@ mod test {
 
     #[test]
     fn test_copy_stmt() {
-        let copy = CopyStatement::new("public", "test", &["id".into(), "email".into()]).copy_in();
+        let table = PublicationTable {
+            schema: "public".into(),
+            name: "test".into(),
+            ..Default::default()
+        };
+
+        let copy = CopyStatement::new(&table, &["id".into(), "email".into()]);
+        let copy_in = copy.copy_in();
         assert_eq!(
-            copy.to_string(),
+            copy_in,
             r#"COPY "public"."test" ("id", "email") FROM STDIN WITH (FORMAT binary)"#
         );
 
-        let copy = CopyStatement::new("public", "test", &["id".into(), "email".into()]).copy_out();
         assert_eq!(
-            copy.to_string(),
+            copy.copy_out(),
             r#"COPY "public"."test" ("id", "email") TO STDOUT WITH (FORMAT binary)"#
+        );
+
+        let table = PublicationTable {
+            schema: "public".into(),
+            name: "test_0".into(),
+            parent_name: "test".into(),
+            parent_schema: "public".into(),
+            ..Default::default()
+        };
+
+        let copy = CopyStatement::new(&table, &["id".into(), "email".into()]);
+        let copy_in = copy.copy_in();
+        assert_eq!(
+            copy_in,
+            r#"COPY "public"."test" ("id", "email") FROM STDIN WITH (FORMAT binary)"#
+        );
+
+        assert_eq!(
+            copy.copy_out(),
+            r#"COPY "public"."test_0" ("id", "email") TO STDOUT WITH (FORMAT binary)"#
         );
     }
 }
