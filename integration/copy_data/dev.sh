@@ -3,9 +3,15 @@ set -e
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 PGDOG_BIN=${SCRIPT_DIR}/../../target/release/pgdog
 
+export PGUSER=pgdog
+export PGDATABASE=pgdog
+export PGHOST=127.0.0.1
+export PGPORT=5432
+export PGPASSWORD=pgdog
+
 pushd ${SCRIPT_DIR}
 
-PGUSER=pgdog PGPASSWORD=pgdog psql -f init.sql
+psql -f init.sql
 
 ${PGDOG_BIN} schema-sync --from-database source --to-database destination --publication pgdog
 ${PGDOG_BIN} data-sync --sync-only --from-database source --to-database destination --publication pgdog --replication-slot copy_data
