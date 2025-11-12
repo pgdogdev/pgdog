@@ -57,6 +57,22 @@ impl PublicationTable {
             .fetch_all(TABLES.replace("$1", &format!("'{}'", publication)))
             .await?)
     }
+
+    pub fn destination_name(&self) -> &str {
+        if self.parent_name.is_empty() {
+            &self.name
+        } else {
+            &self.parent_name
+        }
+    }
+
+    pub fn destination_schema(&self) -> &str {
+        if self.parent_schema.is_empty() {
+            &self.schema
+        } else {
+            &self.parent_schema
+        }
+    }
 }
 
 impl From<DataRow> for PublicationTable {

@@ -1,7 +1,9 @@
 use super::super::Error;
 use crate::{
     backend::Cluster,
-    frontend::{ClientRequest, PreparedStatements, RouterContext},
+    frontend::{
+        router::parser::Shard, ClientRequest, Command, PreparedStatements, Router, RouterContext,
+    },
     net::{replication::TupleData, Bind, Parameters, Parse},
 };
 
@@ -26,6 +28,18 @@ impl<'a> StreamContext<'a> {
             prepared_statements: PreparedStatements::new(),
             params: Parameters::default(),
             bind,
+        }
+    }
+
+    pub fn shard(&'a mut self) -> Result<Shard, Error> {
+        let router_context = self.router_context()?;
+        let mut router = Router::new();
+        let route = router.query(router_context)?;
+
+        if let Command::Query(route) = route {
+            Ok(route.shard().clone())
+        } else {
+            return Err(Error::IncorrectCommand);
         }
     }
 

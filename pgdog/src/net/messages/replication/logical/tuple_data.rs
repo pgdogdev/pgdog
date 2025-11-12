@@ -87,7 +87,7 @@ impl TupleData {
 }
 
 /// Explains what's inside the column.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Identifier {
     Format(Format),
     Null,
