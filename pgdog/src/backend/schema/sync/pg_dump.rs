@@ -367,7 +367,7 @@ impl PgDumpOutput {
                                         sequence,
                                         sql: original,
                                     });
-                                } else {
+                                } else if state == SyncState::Cutover {
                                     let sql = sequence
                                         .setval_from_column(&column)
                                         .map_err(|_| Error::MissingEntity)?;
@@ -438,10 +438,12 @@ impl PgDumpOutput {
 
                         NodeEnum::AlterOwnerStmt(stmt) => {
                             if stmt.object_type() != ObjectType::ObjectPublication {
-                                result.push(Statement::Other {
-                                    sql: original.to_string(),
-                                    idempotent: true,
-                                });
+                                if state == SyncState::PreData {
+                                    result.push(Statement::Other {
+                                        sql: original.to_string(),
+                                        idempotent: true,
+                                    });
+                                }
                             }
                         }
 
