@@ -430,6 +430,7 @@ pub(crate) fn new_pool(
             sharded_tables,
             config.multi_tenant(),
             sharded_schemas,
+            &config.rewrite,
         );
 
         Some((

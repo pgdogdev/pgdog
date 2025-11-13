@@ -1,7 +1,8 @@
 //! Shortcut the parser given the cluster config.
 
-use std::{os::raw::c_void, sync::Once};
+use std::os::raw::c_void;
 
+use pgdog_config::PreparedStatements as ConfigPreparedStatements;
 use pgdog_plugin::pg_query::protobuf::ParseResult;
 use pgdog_plugin::{PdParameters, PdRouterContext, PdStatement};
 
@@ -9,11 +10,9 @@ use crate::frontend::client::TransactionType;
 use crate::net::Bind;
 use crate::{
     backend::ShardingSchema,
-    config::{config, MultiTenant, ReadWriteStrategy, RewriteMode},
+    config::{MultiTenant, ReadWriteStrategy, RewriteMode},
     frontend::{BufferedQuery, PreparedStatements, RouterContext},
 };
-
-use tracing::warn;
 
 use super::Error;
 
@@ -58,50 +57,26 @@ pub struct QueryParserContext<'a> {
     pub(super) split_insert_mode: RewriteMode,
 }
 
-static SHARD_KEY_REWRITE_WARNING: Once = Once::new();
-static SPLIT_INSERT_REWRITE_WARNING: Once = Once::new();
-
 impl<'a> QueryParserContext<'a> {
     /// Create query parser context from router context.
     pub fn new(router_context: RouterContext<'a>) -> Self {
-        let config = config();
-        let rewrite_cfg = &config.config.rewrite;
-        if rewrite_cfg.shard_key == RewriteMode::Rewrite
-            && rewrite_cfg.enabled
-            && !config.config.general.two_phase_commit
-        {
-            SHARD_KEY_REWRITE_WARNING.call_once(|| {
-                warn!(
-                    "rewrite.shard_key=rewrite will apply non-atomic shard-key rewrites; enabling two_phase_commit is strongly recommended"
-                );
-            });
-        }
-        if rewrite_cfg.split_inserts == RewriteMode::Rewrite
-            && rewrite_cfg.enabled
-            && !config.config.general.two_phase_commit
-        {
-            SPLIT_INSERT_REWRITE_WARNING.call_once(|| {
-                warn!(
-                    "rewrite.split_inserts=rewrite may commit partial multi-row INSERTs; enabling two_phase_commit is strongly recommended"
-                );
-            });
-        }
         Self {
             read_only: router_context.cluster.read_only(),
             write_only: router_context.cluster.write_only(),
             shards: router_context.cluster.shards().len(),
             sharding_schema: router_context.cluster.sharding_schema(),
             rw_strategy: router_context.cluster.read_write_strategy(),
-            full_prepared_statements: config.prepared_statements_full(),
-            query_parser_enabled: config.query_parser_enabled(),
+            full_prepared_statements: router_context.cluster.prepared_statements()
+                == &ConfigPreparedStatements::Full,
+            query_parser_enabled: router_context.cluster.query_parser_enabled(),
             router_needed: router_context.cluster.router_needed(),
-            pub_sub_enabled: config.config.general.pub_sub_enabled(),
+            pub_sub_enabled: router_context.cluster.pub_sub_enabled(),
             multi_tenant: router_context.cluster.multi_tenant(),
-            dry_run: config.config.general.dry_run,
-            expanded_explain: config.config.general.expanded_explain,
-            rewrite_enabled: rewrite_cfg.enabled,
-            shard_key_update_mode: rewrite_cfg.shard_key,
-            split_insert_mode: rewrite_cfg.split_inserts,
+            dry_run: router_context.cluster.dry_run(),
+            expanded_explain: router_context.cluster.expanded_explain(),
+            rewrite_enabled: router_context.cluster.rewrite().enabled,
+            shard_key_update_mode: router_context.cluster.rewrite().shard_key,
+            split_insert_mode: router_context.cluster.rewrite().split_inserts,
             router_context,
         }
     }

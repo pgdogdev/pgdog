@@ -80,9 +80,7 @@ pub enum Commands {
         /// Source database name.
         #[arg(long)]
         from_database: String,
-        /// Source user name.
-        #[arg(long)]
-        from_user: String,
+
         /// Publication name.
         #[arg(long)]
         publication: String,
@@ -90,13 +88,18 @@ pub enum Commands {
         /// Destination database.
         #[arg(long)]
         to_database: String,
-        /// Destination user name.
-        #[arg(long)]
-        to_user: String,
 
         /// Replicate or copy data over.
         #[arg(long, default_value = "false")]
-        replicate: bool,
+        replicate_only: bool,
+
+        /// Replicate or copy data over.
+        #[arg(long, default_value = "false")]
+        sync_only: bool,
+
+        /// Name of the replication slot to create/use.
+        #[arg(long)]
+        replication_slot: Option<String>,
     },
 
     /// Copy schema from source to destination cluster.
@@ -220,31 +223,39 @@ pub fn config_check(
 }
 
 pub async fn data_sync(commands: Commands) -> Result<(), Box<dyn std::error::Error>> {
-    let (source, destination, publication, replicate) = if let Commands::DataSync {
-        from_database,
-        from_user,
-        to_database,
-        to_user,
-        publication,
-        replicate,
-    } = commands
-    {
-        let source = databases().cluster((from_user.as_str(), from_database.as_str()))?;
-        let dest = databases().cluster((to_user.as_str(), to_database.as_str()))?;
+    let (source, destination, publication, replicate_only, sync_only, replication_slot) =
+        if let Commands::DataSync {
+            from_database,
+            to_database,
+            publication,
+            replicate_only,
+            sync_only,
+            replication_slot,
+        } = commands
+        {
+            let source = databases().schema_owner(&from_database)?;
+            let dest = databases().schema_owner(&to_database)?;
 
-        (source, dest, publication, replicate)
-    } else {
-        return Ok(());
-    };
+            (
+                source,
+                dest,
+                publication,
+                replicate_only,
+                sync_only,
+                replication_slot,
+            )
+        } else {
+            return Ok(());
+        };
 
     let mut publication = Publisher::new(&source, &publication);
-    if replicate {
-        if let Err(err) = publication.replicate(&destination).await {
+    if replicate_only {
+        if let Err(err) = publication.replicate(&destination, replication_slot).await {
             error!("{}", err);
         }
     } else {
         select! {
-            result = publication.data_sync(&destination) => {
+            result = publication.data_sync(&destination, !sync_only, replication_slot) => {
                 if let Err(err) = result {
                     error!("{}", err);
                 }

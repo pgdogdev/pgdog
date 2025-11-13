@@ -59,11 +59,12 @@ impl Publisher {
     /// If you're doing a cross-shard transaction, parts of it can be lost.
     ///
     /// TODO: Add support for 2-phase commit.
-    async fn create_slots(&mut self) -> Result<(), Error> {
+    async fn create_slots(&mut self, slot_name: Option<String>) -> Result<(), Error> {
         for (number, shard) in self.cluster.shards().iter().enumerate() {
             let addr = shard.primary(&Request::default()).await?.addr().clone();
 
-            let mut slot = ReplicationSlot::replication(&self.publication, &addr);
+            let mut slot =
+                ReplicationSlot::replication(&self.publication, &addr, slot_name.clone());
             slot.create_slot().await?;
 
             self.slots.insert(number, slot);
@@ -76,7 +77,11 @@ impl Publisher {
     ///
     /// This uses a dedicated replication slot which will survive crashes and reboots.
     /// N.B.: The slot needs to be manually dropped!
-    pub async fn replicate(&mut self, dest: &Cluster) -> Result<(), Error> {
+    pub async fn replicate(
+        &mut self,
+        dest: &Cluster,
+        slot_name: Option<String>,
+    ) -> Result<(), Error> {
         // Replicate shards in parallel.
         let mut streams = vec![];
 
@@ -87,7 +92,7 @@ impl Publisher {
 
         // Create replication slots if we haven't already.
         if self.slots.is_empty() {
-            self.create_slots().await?;
+            self.create_slots(slot_name).await?;
         }
 
         for (number, _) in self.cluster.shards().iter().enumerate() {
@@ -166,9 +171,14 @@ impl Publisher {
     /// re-sharding the cluster in the process.
     ///
     /// TODO: Parallelize shard syncs.
-    pub async fn data_sync(&mut self, dest: &Cluster) -> Result<(), Error> {
+    pub async fn data_sync(
+        &mut self,
+        dest: &Cluster,
+        replicate: bool,
+        slot_name: Option<String>,
+    ) -> Result<(), Error> {
         // Create replication slots.
-        self.create_slots().await?;
+        self.create_slots(slot_name.clone()).await?;
 
         for (number, shard) in self.cluster.shards().iter().enumerate() {
             let mut primary = shard.primary(&Request::default()).await?;
@@ -199,8 +209,10 @@ impl Publisher {
             self.tables.insert(number, tables);
         }
 
-        // Replicate changes.
-        self.replicate(dest).await?;
+        if replicate {
+            // Replicate changes.
+            self.replicate(dest, slot_name).await?;
+        }
 
         Ok(())
     }

@@ -6,13 +6,16 @@ use crate::{backend::replication::publisher::PublicationTable, net::ErrorRespons
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("{0}")]
+    #[error("backend: {0}")]
     Backend(#[from] crate::backend::Error),
 
-    #[error("{0}")]
+    #[error("pool: {0}")]
     Pool(#[from] crate::backend::pool::Error),
 
-    #[error("{0}")]
+    #[error("router: {0}")]
+    Router(#[from] crate::frontend::router::Error),
+
+    #[error("net: {0}")]
     Net(#[from] crate::net::Error),
 
     #[error("transaction not started")]
@@ -20,6 +23,12 @@ pub enum Error {
 
     #[error("out of sync, got {0}")]
     OutOfSync(char),
+
+    #[error("out of sync during commit, got {0}")]
+    CommitOutOfSync(char),
+
+    #[error("out of sync during relation prepare, got {0}")]
+    RelationOutOfSync(char),
 
     #[error("missing data")]
     MissingData,
@@ -30,7 +39,7 @@ pub enum Error {
     #[error("copy error")]
     Copy,
 
-    #[error("{0}")]
+    #[error("pg_error: {0}")]
     PgError(Box<ErrorResponse>),
 
     #[error("table \"{0}\".\"{1}\" has no replica identity")]
@@ -39,13 +48,16 @@ pub enum Error {
     #[error("lsn decode")]
     LsnDecode,
 
+    #[error("replication slot \"{0}\" doesn't exist, but it should")]
+    MissingReplicationSlot(String),
+
     #[error("parse int")]
     ParseInt(#[from] ParseIntError),
 
     #[error("shard has no primary")]
     NoPrimary,
 
-    #[error("{0}")]
+    #[error("parser: {0}")]
     Parser(#[from] crate::frontend::router::parser::Error),
 
     #[error("not connected")]
@@ -68,6 +80,9 @@ pub enum Error {
 
     #[error("table {0} doesn't have a primary key")]
     NoPrimaryKey(PublicationTable),
+
+    #[error("router returned incorrect command")]
+    IncorrectCommand,
 }
 
 impl From<ErrorResponse> for Error {
