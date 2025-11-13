@@ -1,7 +1,8 @@
 #!/bin/bash
 set -e
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
-PGDOG_BIN=${SCRIPT_DIR}/../../target/release/pgdog
+DEFAULT_BIN="${SCRIPT_DIR}/../../target/release/pgdog"
+PGDOG_BIN=${PGDOG_BIN:-$DEFAULT_BIN}
 
 export PGUSER=pgdog
 export PGDATABASE=pgdog
