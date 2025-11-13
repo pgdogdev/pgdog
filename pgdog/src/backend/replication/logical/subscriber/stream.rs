@@ -4,7 +4,8 @@
 //! into idempotent prepared statements.
 //!
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
+    fmt::Display,
     sync::atomic::{AtomicUsize, Ordering},
 };
 
@@ -16,14 +17,15 @@ use pg_query::{
 use tracing::{debug, trace};
 
 use super::super::{publisher::Table, Error};
+use super::StreamContext;
 use crate::{
-    backend::{Cluster, Server, ShardingSchema},
+    backend::{Cluster, Server},
     config::Role,
-    frontend::router::parser::{self, Insert, InsertRouting, Shard},
+    frontend::router::parser::Shard,
     net::{
         replication::{
-            xlog_data::XLogPayload, Commit as XLogCommit, Insert as XLogInsert, Relation,
-            StatusUpdate,
+            xlog_data::XLogPayload, Commit as XLogCommit, Delete as XLogDelete,
+            Insert as XLogInsert, Relation, StatusUpdate, Update as XLogUpdate,
         },
         Bind, CopyData, ErrorResponse, Execute, Flush, FromBytes, Parse, Protocol, Sync, ToBytes,
     },
@@ -46,37 +48,43 @@ struct Key {
     name: String,
 }
 
+impl Display for Key {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, r#""{}"."{}""#, self.schema, self.name)
+    }
+}
+
 #[derive(Default, Debug, Clone)]
 struct Statements {
-    #[allow(dead_code)]
     insert: Statement,
-    upsert: Statement,
     #[allow(dead_code)]
+    upsert: Statement,
     update: Statement,
+    delete: Statement,
 }
 
 #[derive(Default, Debug, Clone)]
 struct Statement {
-    name: String,
-    query: String,
     ast: ParseResult,
+    parse: Parse,
 }
 
 impl Statement {
-    fn parse(&self) -> Parse {
-        Parse::named(&self.name, &self.query)
+    fn parse(&self) -> &Parse {
+        &self.parse
     }
 
     fn new(query: &str) -> Result<Self, Error> {
         let ast = pg_query::parse(query)?.protobuf;
+        let name = statement_name();
         Ok(Self {
-            name: statement_name(),
-            query: query.to_string(),
             ast,
+            parse: Parse::named(name, query.to_string()),
         })
     }
 
     #[allow(clippy::borrowed_box)]
+    #[allow(dead_code)]
     fn insert(&self) -> Option<&Box<InsertStmt>> {
         self.ast
             .stmts
@@ -97,16 +105,13 @@ impl Statement {
     }
 
     fn query(&self) -> &str {
-        &self.query
+        self.parse.query()
     }
 }
 #[derive(Debug)]
 pub struct StreamSubscriber {
     /// Destination cluster.
     cluster: Cluster,
-
-    /// Sharding schema.
-    sharding_schema: ShardingSchema,
 
     // Relation markers sent by the publisher.
     // Happens once per connection.
@@ -117,6 +122,9 @@ pub struct StreamSubscriber {
 
     // Statements
     statements: HashMap<i32, Statements>,
+
+    // Partitioned tables dedup.
+    partitioned_dedup: HashSet<Key>,
 
     // LSNs for each table
     table_lsns: HashMap<i32, i64>,
@@ -134,11 +142,12 @@ pub struct StreamSubscriber {
 
 impl StreamSubscriber {
     pub fn new(cluster: &Cluster, tables: &[Table]) -> Self {
+        let cluster = cluster.logical_stream();
         Self {
-            cluster: cluster.clone(),
-            sharding_schema: cluster.sharding_schema(),
+            cluster,
             relations: HashMap::new(),
             statements: HashMap::new(),
+            partitioned_dedup: HashSet::new(),
             table_lsns: HashMap::new(),
             tables: tables
                 .iter()
@@ -234,47 +243,102 @@ impl StreamSubscriber {
     // Convert Insert into an idempotent "upsert" and apply it to
     // the right shard(s).
     async fn insert(&mut self, insert: XLogInsert) -> Result<(), Error> {
-        if let Some(table_lsn) = self.table_lsns.get(&insert.oid) {
-            // Don't apply change if table is ahead.
-            if self.lsn < *table_lsn {
-                return Ok(());
-            }
+        if self.lsn_applied(&insert.oid) {
+            return Ok(());
         }
 
         if let Some(statements) = self.statements.get(&insert.oid) {
             // Convert TupleData into a Bind message. We can now insert that tuple
             // using a prepared statement.
-            let bind = insert.tuple_data.to_bind(&statements.upsert.name);
+            let mut context = StreamContext::new(
+                &self.cluster,
+                &insert.tuple_data,
+                &statements.insert.parse(),
+            );
+            let bind = context.bind().clone();
+            let shard = context.shard()?;
 
-            // Upserts are idempotent. Even if we rewind the stream,
-            // we are able to replay changes we already applied safely.
-            if let Some(upsert) = statements.upsert.insert() {
-                let upsert = Insert::new(upsert);
-                let cfg = crate::config::config();
-                let rewrite_enabled = cfg.config.rewrite.enabled;
-                let split_mode = cfg.config.rewrite.split_inserts;
-                let routing = upsert.shard(
-                    &self.sharding_schema,
-                    Some(&bind),
-                    rewrite_enabled,
-                    split_mode,
-                )?;
-                match routing {
-                    InsertRouting::Routed(shard) => self.send(&shard, &bind).await?,
-                    InsertRouting::Split(plan) => {
-                        return Err(Error::Parser(parser::Error::SplitInsertNotSupported {
-                            table: plan.table().to_string(),
-                            reason: "logical replication does not support split inserts".into(),
-                        }))
-                    }
-                }
-            }
-
-            // Update table LSN.
-            self.table_lsns.insert(insert.oid, self.lsn);
+            self.send(&shard, &bind).await?;
         }
 
+        // Update table LSN.
+        self.table_lsns.insert(insert.oid, self.lsn);
+
         Ok(())
+    }
+
+    async fn update(&mut self, update: XLogUpdate) -> Result<(), Error> {
+        if self.lsn_applied(&update.oid) {
+            return Ok(());
+        }
+
+        if let Some(statements) = self.statements.get(&update.oid) {
+            // Primary key update.
+            //
+            // Convert it into a delete of the old row
+            // and an insert with the new row.
+            if let Some(key) = update.key {
+                let delete = XLogDelete {
+                    key: Some(key),
+                    oid: update.oid,
+                    old: None,
+                };
+                let insert = XLogInsert {
+                    xid: None,
+                    oid: update.oid,
+                    tuple_data: update.new,
+                };
+                self.delete(delete).await?;
+                self.insert(insert).await?;
+            } else {
+                let mut context =
+                    StreamContext::new(&self.cluster, &update.new, &statements.update.parse());
+                let bind = context.bind().clone();
+                let shard = context.shard()?;
+
+                self.send(&shard, &bind).await?;
+            }
+        }
+
+        // Update table LSN.
+        self.table_lsns.insert(update.oid, self.lsn);
+
+        Ok(())
+    }
+
+    async fn delete(&mut self, delete: XLogDelete) -> Result<(), Error> {
+        if self.lsn_applied(&delete.oid) {
+            return Ok(());
+        }
+
+        if let Some(statements) = self.statements.get(&delete.oid) {
+            // Convert TupleData into a Bind message. We can now insert that tuple
+            // using a prepared statement.
+            if let Some(key) = delete.key_non_null() {
+                let mut context =
+                    StreamContext::new(&self.cluster, &key, &statements.delete.parse());
+                let bind = context.bind().clone();
+                let shard = context.shard()?;
+
+                self.send(&shard, &bind).await?;
+            }
+        }
+
+        // Update table LSN.
+        self.table_lsns.insert(delete.oid, self.lsn);
+
+        Ok(())
+    }
+
+    fn lsn_applied(&self, oid: &i32) -> bool {
+        if let Some(table_lsn) = self.table_lsns.get(oid) {
+            // Don't apply change if table is ahead.
+            if self.lsn < *table_lsn {
+                return true;
+            }
+        }
+
+        false
     }
 
     // Handle Commit message.
@@ -299,7 +363,7 @@ impl StreamSubscriber {
                     }
                     'Z' => break,
                     '2' | 'C' => continue,
-                    c => return Err(Error::OutOfSync(c)),
+                    c => return Err(Error::CommitOutOfSync(c)),
                 }
             }
         }
@@ -325,16 +389,37 @@ impl StreamSubscriber {
 
             table.valid()?;
 
+            let dest_key = Key {
+                schema: table.table.destination_schema().to_string(),
+                name: table.table.destination_name().to_string(),
+            };
+
+            if self.partitioned_dedup.contains(&dest_key) {
+                debug!("queries for table {} already prepared", dest_key);
+                return Ok(());
+            }
+
             let insert = Statement::new(&table.insert(false))?;
             let upsert = Statement::new(&table.insert(true))?;
+            let update = Statement::new(&table.update())?;
+            let delete = Statement::new(&table.delete())?;
 
             for server in &mut self.connections {
-                for stmt in &[&insert, &upsert] {
+                for stmt in &[&insert, &upsert, &update, &delete] {
                     debug!("preparing \"{}\" [{}]", stmt.query(), server.addr());
                 }
 
                 server
-                    .send(&vec![insert.parse().into(), upsert.parse().into(), Sync.into()].into())
+                    .send(
+                        &vec![
+                            insert.parse().clone().into(),
+                            upsert.parse().clone().into(),
+                            update.parse().clone().into(),
+                            delete.parse().clone().into(),
+                            Sync.into(),
+                        ]
+                        .into(),
+                    )
                     .await?;
             }
 
@@ -351,7 +436,7 @@ impl StreamSubscriber {
                         }
                         'Z' => break,
                         '1' => continue,
-                        c => return Err(Error::OutOfSync(c)),
+                        c => return Err(Error::RelationOutOfSync(c)),
                     }
                 }
             }
@@ -361,13 +446,15 @@ impl StreamSubscriber {
                 Statements {
                     insert,
                     upsert,
-                    update: Statement::default(),
+                    update,
+                    delete,
                 },
             );
 
             // Only record tables we expect to stream changes for.
             self.table_lsns.insert(relation.oid, table.lsn.lsn);
             self.relations.insert(relation.oid, relation);
+            self.partitioned_dedup.insert(dest_key);
         }
 
         Ok(())
@@ -388,6 +475,8 @@ impl StreamSubscriber {
             if let Some(payload) = xlog.payload() {
                 match payload {
                     XLogPayload::Insert(insert) => self.insert(insert).await?,
+                    XLogPayload::Update(update) => self.update(update).await?,
+                    XLogPayload::Delete(delete) => self.delete(delete).await?,
                     XLogPayload::Commit(commit) => {
                         self.commit(commit).await?;
                         status_update = Some(self.status_update());
@@ -439,87 +528,5 @@ impl StreamSubscriber {
     /// Lsn changed since the last time we updated it.
     pub fn lsn_changed(&self) -> bool {
         self.lsn_changed
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{
-        config::{self, config, ConfigAndUsers, RewriteMode},
-        net::messages::replication::logical::tuple_data::{Column, Identifier, TupleData},
-    };
-    use bytes::Bytes;
-    use std::ops::Deref;
-
-    struct RewriteGuard {
-        original: ConfigAndUsers,
-    }
-
-    impl RewriteGuard {
-        fn enable_split_rewrite() -> Self {
-            let original = config().deref().clone();
-            let mut updated = original.clone();
-            updated.config.rewrite.enabled = true;
-            updated.config.rewrite.split_inserts = RewriteMode::Rewrite;
-            config::set(updated).unwrap();
-            Self { original }
-        }
-    }
-
-    impl Drop for RewriteGuard {
-        fn drop(&mut self) {
-            config::set(self.original.clone()).unwrap();
-        }
-    }
-
-    fn text_column(value: &str) -> Column {
-        Column {
-            identifier: Identifier::Format(crate::net::messages::bind::Format::Text),
-            len: value.len() as i32,
-            data: Bytes::copy_from_slice(value.as_bytes()),
-        }
-    }
-
-    #[tokio::test]
-    async fn split_insert_rejected_during_replication() {
-        config::load_test();
-        let _guard = RewriteGuard::enable_split_rewrite();
-
-        let cluster = Cluster::new_test();
-        let mut subscriber = StreamSubscriber::new(&cluster, &[]);
-
-        let upsert =
-            Statement::new("INSERT INTO sharded (id, value) VALUES (1, 'one'), (11, 'eleven')")
-                .unwrap();
-
-        subscriber.statements.insert(
-            42,
-            Statements {
-                insert: Statement::default(),
-                upsert: upsert.clone(),
-                update: Statement::default(),
-            },
-        );
-
-        let insert = XLogInsert {
-            xid: None,
-            oid: 42,
-            tuple_data: TupleData {
-                columns: vec![text_column("1"), text_column("one")],
-            },
-        };
-
-        let err = subscriber
-            .insert(insert)
-            .await
-            .expect_err("expected split reject");
-        match err {
-            Error::Parser(parser::Error::SplitInsertNotSupported { table, reason }) => {
-                assert!(table.contains("sharded"));
-                assert!(reason.contains("logical replication does not support"));
-            }
-            other => panic!("unexpected error: {other:?}"),
-        }
     }
 }

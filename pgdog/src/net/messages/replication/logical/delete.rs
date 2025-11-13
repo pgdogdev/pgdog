@@ -1,3 +1,5 @@
+use crate::net::replication::logical::tuple_data::Identifier;
+
 use super::super::super::code;
 use super::super::super::prelude::*;
 use super::tuple_data::TupleData;
@@ -7,6 +9,23 @@ pub struct Delete {
     pub oid: i32,
     pub key: Option<TupleData>,
     pub old: Option<TupleData>,
+}
+
+impl Delete {
+    pub fn key_non_null(&self) -> Option<TupleData> {
+        if let Some(ref key) = self.key {
+            let columns = key
+                .columns
+                .clone()
+                .into_iter()
+                .filter(|column| column.identifier != Identifier::Null)
+                .collect();
+
+            Some(TupleData { columns })
+        } else {
+            None
+        }
+    }
 }
 
 impl FromBytes for Delete {

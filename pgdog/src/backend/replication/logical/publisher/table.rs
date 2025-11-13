@@ -100,7 +100,59 @@ impl Table {
 
         format!(
             "INSERT INTO \"{}\".\"{}\" {} {} {}",
-            self.table.schema, self.table.name, names, values, on_conflict
+            self.table.destination_schema(),
+            self.table.destination_name(),
+            names,
+            values,
+            on_conflict
+        )
+    }
+
+    /// Update record in table.
+    pub fn update(&self) -> String {
+        let set_clause = self
+            .columns
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| !c.identity)
+            .map(|(i, c)| format!("\"{}\" = ${}", c.name, i + 1))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let where_clause = self
+            .columns
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.identity)
+            .map(|(i, c)| format!("\"{}\" = ${}", c.name, i + 1))
+            .collect::<Vec<_>>()
+            .join(" AND ");
+
+        format!(
+            "UPDATE \"{}\".\"{}\" SET {} WHERE {}",
+            self.table.destination_schema(),
+            self.table.destination_name(),
+            set_clause,
+            where_clause
+        )
+    }
+
+    /// Delete record from table.
+    pub fn delete(&self) -> String {
+        let where_clause = self
+            .columns
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.identity)
+            .map(|(i, c)| format!("\"{}\" = ${}", c.name, i + 1))
+            .collect::<Vec<_>>()
+            .join(" AND ");
+
+        format!(
+            "DELETE FROM \"{}\".\"{}\" WHERE {}",
+            self.table.destination_schema(),
+            self.table.destination_name(),
+            where_clause
         )
     }
 
@@ -197,6 +249,12 @@ mod test {
         for table in tables {
             let upsert = table.insert(true);
             assert!(pg_query::parse(&upsert).is_ok());
+
+            let update = table.update();
+            assert!(pg_query::parse(&update).is_ok());
+
+            let delete = table.delete();
+            assert!(pg_query::parse(&delete).is_ok());
         }
 
         publication.cleanup().await;

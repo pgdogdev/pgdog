@@ -1,6 +1,6 @@
 use super::super::Error;
 use crate::{
-    backend::{pool::Address, Server, ServerOptions},
+    backend::{self, pool::Address, Server, ServerOptions},
     net::{
         replication::StatusUpdate, CopyData, CopyDone, DataRow, ErrorResponse, Format, FromBytes,
         Protocol, Query, ToBytes,
@@ -91,8 +91,8 @@ pub struct ReplicationSlot {
 
 impl ReplicationSlot {
     /// Create replication slot used for streaming the WAL.
-    pub fn replication(publication: &str, address: &Address) -> Self {
-        let name = format!("__pgdog_repl_{}", random_string(19).to_lowercase());
+    pub fn replication(publication: &str, address: &Address, name: Option<String>) -> Self {
+        let name = name.unwrap_or(format!("__pgdog_repl_{}", random_string(19).to_lowercase()));
 
         Self {
             address: address.clone(),
@@ -156,26 +156,70 @@ impl ReplicationSlot {
             self.snapshot
         );
 
-        let result = self
-            .server()?
-            .fetch_all::<DataRow>(&start_replication)
-            .await?
-            .pop()
-            .ok_or(Error::MissingData)?;
-
-        let lsn = result
-            .get::<String>(1, Format::Text)
-            .ok_or(Error::MissingData)?;
-
-        let lsn = Lsn::from_str(&lsn)?;
-        self.lsn = lsn;
-
-        debug!(
-            "replication slot \"{}\" at lsn {} created [{}]",
-            self.name, self.lsn, self.address,
+        let existing_slot = format!(
+            "
+            SELECT
+                slot_name,
+                restart_lsn,
+                confirmed_flush_lsn
+            FROM
+                pg_replication_slots
+            WHERE slot_name = '{}'",
+            self.name
         );
 
-        Ok(lsn)
+        match self
+            .server()?
+            .fetch_all::<DataRow>(&start_replication)
+            .await
+        {
+            Ok(mut result) => {
+                let result = result.pop().ok_or(Error::MissingData)?;
+                let lsn = result
+                    .get::<String>(1, Format::Text)
+                    .ok_or(Error::MissingData)?;
+                let lsn = Lsn::from_str(&lsn)?;
+                self.lsn = lsn;
+
+                debug!(
+                    "replication slot \"{}\" at lsn {} created [{}]",
+                    self.name, self.lsn, self.address,
+                );
+
+                Ok(lsn)
+            }
+
+            Err(err) => match err {
+                backend::Error::ExecutionError(err) => {
+                    // duplicate object.
+                    if err.code == "42710" {
+                        let exists: Option<DataRow> =
+                            self.server()?.fetch_all(existing_slot).await?.pop();
+
+                        if let Some(lsn) = exists
+                            .map(|slot| slot.get::<String>(2, Format::Text))
+                            .flatten()
+                        {
+                            let lsn = Lsn::from_str(&lsn)?;
+                            self.lsn = lsn;
+
+                            debug!(
+                                "using existing replication slot \"{}\" at lsn {} [{}]",
+                                self.name, self.lsn, self.address,
+                            );
+
+                            Ok(lsn)
+                        } else {
+                            Err(Error::MissingReplicationSlot(self.name.clone()))
+                        }
+                    } else {
+                        Err(backend::Error::ExecutionError(err).into())
+                    }
+                }
+
+                err => Err(err.into()),
+            },
+        }
     }
 
     /// Drop the slot.
