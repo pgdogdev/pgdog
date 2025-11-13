@@ -97,6 +97,7 @@ pub enum Commands {
         #[arg(long, default_value = "false")]
         sync_only: bool,
 
+        /// Name of the replication slot to create/use.
         #[arg(long)]
         replication_slot: Option<String>,
     },
