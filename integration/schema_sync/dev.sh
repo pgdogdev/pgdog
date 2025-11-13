@@ -24,6 +24,13 @@ ${PGDOG_BIN_PATH} \
     --publication pgdog \
     --data-sync-complete
 
+${PGDOG_BIN_PATH} \
+    schema-sync \
+    --from-database source \
+    --to-database destination \
+    --publication pgdog \
+    --cutover
+
 pg_dump \
     --schema-only \
     --exclude-schema pgdog \

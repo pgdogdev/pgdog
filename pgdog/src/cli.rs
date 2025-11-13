@@ -126,6 +126,10 @@ pub enum Commands {
         /// Data sync has been complete.
         #[arg(long)]
         data_sync_complete: bool,
+
+        /// Execute cutover statements.
+        #[arg(long)]
+        cutover: bool,
     },
 
     /// Perform cluster configuration steps
@@ -271,7 +275,7 @@ pub async fn data_sync(commands: Commands) -> Result<(), Box<dyn std::error::Err
 
 #[allow(clippy::print_stdout)]
 pub async fn schema_sync(commands: Commands) -> Result<(), Box<dyn std::error::Error>> {
-    let (source, destination, publication, dry_run, ignore_errors, data_sync_complete) =
+    let (source, destination, publication, dry_run, ignore_errors, data_sync_complete, cutover) =
         if let Commands::SchemaSync {
             from_database,
             to_database,
@@ -279,6 +283,7 @@ pub async fn schema_sync(commands: Commands) -> Result<(), Box<dyn std::error::E
             dry_run,
             ignore_errors,
             data_sync_complete,
+            cutover,
         } = commands
         {
             let source = databases().schema_owner(&from_database)?;
@@ -291,6 +296,7 @@ pub async fn schema_sync(commands: Commands) -> Result<(), Box<dyn std::error::E
                 dry_run,
                 ignore_errors,
                 data_sync_complete,
+                cutover,
             )
         } else {
             return Ok(());
@@ -300,6 +306,8 @@ pub async fn schema_sync(commands: Commands) -> Result<(), Box<dyn std::error::E
     let output = dump.dump().await?;
     let state = if data_sync_complete {
         SyncState::PostData
+    } else if cutover {
+        SyncState::Cutover
     } else {
         SyncState::PreData
     };
