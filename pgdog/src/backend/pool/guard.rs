@@ -66,12 +66,12 @@ impl Guard {
             // No need to delay checkin unless we have to.
             if needs_cleanup && !force_close {
                 let rollback_timeout = pool.inner().config.rollback_timeout;
-                let conn_cleanup = pool.inner().config.connection_recovery;
+                let conn_recovery = pool.inner().config.connection_recovery;
 
                 spawn(async move {
                     match timeout(
                         rollback_timeout,
-                        Self::cleanup_internal(&mut server, cleanup, conn_cleanup),
+                        Self::cleanup_internal(&mut server, cleanup, conn_recovery),
                     )
                     .await
                     {
