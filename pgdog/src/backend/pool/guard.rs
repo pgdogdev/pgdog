@@ -2,6 +2,7 @@
 
 use std::ops::{Deref, DerefMut};
 
+use pgdog_config::pooling::ConnectionRecovery;
 use tokio::time::timeout;
 use tokio::{spawn, time::Instant};
 use tracing::{debug, error};
@@ -64,11 +65,13 @@ impl Guard {
 
             // No need to delay checkin unless we have to.
             if needs_cleanup && !force_close {
-                let rollback_timeout = pool.inner().config.rollback_timeout();
+                let rollback_timeout = pool.inner().config.rollback_timeout;
+                let conn_cleanup = pool.inner().config.connection_recovery;
+
                 spawn(async move {
                     match timeout(
                         rollback_timeout,
-                        Self::cleanup_internal(&mut server, cleanup),
+                        Self::cleanup_internal(&mut server, cleanup, conn_cleanup),
                     )
                     .await
                     {
@@ -98,31 +101,44 @@ impl Guard {
         }
     }
 
-    async fn cleanup_internal(server: &mut Box<Server>, cleanup: Cleanup) -> Result<(), Error> {
+    async fn cleanup_internal(
+        server: &mut Box<Server>,
+        cleanup: Cleanup,
+        conn_recovery: ConnectionRecovery,
+    ) -> Result<(), Error> {
         let schema_changed = server.schema_changed();
         let sync_prepared = server.sync_prepared();
         let needs_drain = server.needs_drain();
 
         if needs_drain {
-            // Receive whatever data the client left before disconnecting.
-            debug!(
-                "[cleanup] draining data from \"{}\" server [{}]",
-                server.stats().state,
-                server.addr()
-            );
-            server.drain().await?;
+            if conn_recovery.can_recover() {
+                // Receive whatever data the client left before disconnecting.
+                debug!(
+                    "[cleanup] draining data from \"{}\" server [{}]",
+                    server.stats().state,
+                    server.addr()
+                );
+                server.drain().await?;
+            } else {
+                server.stats_mut().state(State::ForceClose);
+            }
         }
+
         let rollback = server.in_transaction();
 
         // Rollback any unfinished transactions,
         // but only if the server is in sync (protocol-wise).
         if rollback {
-            debug!(
-                "[cleanup] rolling back server transaction, in \"{}\" state [{}]",
-                server.stats().state,
-                server.addr(),
-            );
-            server.rollback().await?;
+            if conn_recovery.can_rollback() {
+                debug!(
+                    "[cleanup] rolling back server transaction, in \"{}\" state [{}]",
+                    server.stats().state,
+                    server.addr(),
+                );
+                server.rollback().await?;
+            } else {
+                server.stats_mut().state(State::ForceClose);
+            }
         }
 
         if cleanup.needed() {
@@ -191,6 +207,7 @@ impl Drop for Guard {
 mod test {
     use std::time::Duration;
 
+    use pgdog_config::pooling::ConnectionRecovery;
     use tokio::time::{sleep, timeout, Instant};
 
     use crate::{
@@ -368,7 +385,9 @@ mod test {
         assert_eq!(cleanup.close().len(), 4);
         assert!(server.needs_drain());
 
-        Guard::cleanup_internal(&mut server, cleanup).await.unwrap();
+        Guard::cleanup_internal(&mut server, cleanup, ConnectionRecovery::Recover)
+            .await
+            .unwrap();
 
         assert!(server.done());
         assert!(!server.needs_drain());
@@ -390,5 +409,255 @@ mod test {
         assert!(res.is_err());
         assert!(server.force_close());
         assert!(server.io_in_progress())
+    }
+
+    #[tokio::test]
+    async fn test_conn_recovery_recover_with_needs_drain() {
+        crate::logger();
+
+        let mut server = Guard::new(
+            Pool::new_test(),
+            Box::new(test_server().await),
+            Instant::now(),
+        );
+        server.prepared_statements_mut().set_capacity(1);
+
+        server
+            .send(
+                &vec![
+                    ProtocolMessage::from(Parse::named("test_0", "SELECT 1")),
+                    Flush.into(),
+                ]
+                .into(),
+            )
+            .await
+            .unwrap();
+
+        let ok = server.read().await.unwrap();
+        assert_eq!(ok.code(), '1');
+        assert!(server.done());
+
+        server
+            .send(&vec![Query::new("SHOW prepared_statements").into()].into())
+            .await
+            .unwrap();
+
+        let mut guard = server;
+        let mut server = guard.server.take().unwrap();
+        let cleanup = Cleanup::new(&guard, &mut server);
+
+        assert!(server.needs_drain());
+
+        Guard::cleanup_internal(&mut server, cleanup, ConnectionRecovery::Recover)
+            .await
+            .unwrap();
+
+        assert!(server.done());
+        assert!(!server.needs_drain());
+
+        let one: Vec<i32> = server.fetch_all("SELECT 1").await.unwrap();
+        assert_eq!(one[0], 1);
+    }
+
+    #[tokio::test]
+    async fn test_conn_recovery_rollback_only_with_needs_drain() {
+        crate::logger();
+
+        let mut server = Guard::new(
+            Pool::new_test(),
+            Box::new(test_server().await),
+            Instant::now(),
+        );
+        server.prepared_statements_mut().set_capacity(1);
+
+        server
+            .send(
+                &vec![
+                    ProtocolMessage::from(Parse::named("test_0", "SELECT 1")),
+                    Flush.into(),
+                ]
+                .into(),
+            )
+            .await
+            .unwrap();
+
+        let ok = server.read().await.unwrap();
+        assert_eq!(ok.code(), '1');
+        assert!(server.done());
+
+        server
+            .send(&vec![Query::new("SHOW prepared_statements").into()].into())
+            .await
+            .unwrap();
+
+        let mut guard = server;
+        let mut server = guard.server.take().unwrap();
+        let cleanup = Cleanup::new(&guard, &mut server);
+
+        assert!(server.needs_drain());
+
+        Guard::cleanup_internal(&mut server, cleanup, ConnectionRecovery::RollbackOnly)
+            .await
+            .unwrap();
+
+        use crate::state::State;
+        assert_eq!(server.stats().state, State::ForceClose);
+    }
+
+    #[tokio::test]
+    async fn test_conn_recovery_drop_with_needs_drain() {
+        crate::logger();
+
+        let mut server = Guard::new(
+            Pool::new_test(),
+            Box::new(test_server().await),
+            Instant::now(),
+        );
+        server.prepared_statements_mut().set_capacity(1);
+
+        server
+            .send(
+                &vec![
+                    ProtocolMessage::from(Parse::named("test_0", "SELECT 1")),
+                    Flush.into(),
+                ]
+                .into(),
+            )
+            .await
+            .unwrap();
+
+        let ok = server.read().await.unwrap();
+        assert_eq!(ok.code(), '1');
+        assert!(server.done());
+
+        server
+            .send(&vec![Query::new("SHOW prepared_statements").into()].into())
+            .await
+            .unwrap();
+
+        let mut guard = server;
+        let mut server = guard.server.take().unwrap();
+        let cleanup = Cleanup::new(&guard, &mut server);
+
+        assert!(server.needs_drain());
+
+        Guard::cleanup_internal(&mut server, cleanup, ConnectionRecovery::Drop)
+            .await
+            .unwrap();
+
+        use crate::state::State;
+        assert_eq!(server.stats().state, State::ForceClose);
+    }
+
+    #[tokio::test]
+    async fn test_conn_recovery_recover_with_rollback() {
+        crate::logger();
+
+        let mut server = Guard::new(
+            Pool::new_test(),
+            Box::new(test_server().await),
+            Instant::now(),
+        );
+
+        server
+            .send(&vec![Query::new("BEGIN").into()].into())
+            .await
+            .unwrap();
+
+        loop {
+            let msg = server.read().await.unwrap();
+            if msg.code() == 'Z' {
+                break;
+            }
+        }
+
+        assert!(server.in_transaction());
+
+        let mut guard = server;
+        let mut server = guard.server.take().unwrap();
+        let cleanup = Cleanup::new(&guard, &mut server);
+
+        Guard::cleanup_internal(&mut server, cleanup, ConnectionRecovery::Recover)
+            .await
+            .unwrap();
+
+        assert!(!server.in_transaction());
+
+        let one: Vec<i32> = server.fetch_all("SELECT 1").await.unwrap();
+        assert_eq!(one[0], 1);
+    }
+
+    #[tokio::test]
+    async fn test_conn_recovery_rollback_only_with_rollback() {
+        crate::logger();
+
+        let mut server = Guard::new(
+            Pool::new_test(),
+            Box::new(test_server().await),
+            Instant::now(),
+        );
+
+        server
+            .send(&vec![Query::new("BEGIN").into()].into())
+            .await
+            .unwrap();
+
+        loop {
+            let msg = server.read().await.unwrap();
+            if msg.code() == 'Z' {
+                break;
+            }
+        }
+
+        assert!(server.in_transaction());
+
+        let mut guard = server;
+        let mut server = guard.server.take().unwrap();
+        let cleanup = Cleanup::new(&guard, &mut server);
+
+        Guard::cleanup_internal(&mut server, cleanup, ConnectionRecovery::RollbackOnly)
+            .await
+            .unwrap();
+
+        assert!(!server.in_transaction());
+
+        let one: Vec<i32> = server.fetch_all("SELECT 1").await.unwrap();
+        assert_eq!(one[0], 1);
+    }
+
+    #[tokio::test]
+    async fn test_conn_recovery_drop_with_rollback() {
+        crate::logger();
+
+        let mut server = Guard::new(
+            Pool::new_test(),
+            Box::new(test_server().await),
+            Instant::now(),
+        );
+
+        server
+            .send(&vec![Query::new("BEGIN").into()].into())
+            .await
+            .unwrap();
+
+        loop {
+            let msg = server.read().await.unwrap();
+            if msg.code() == 'Z' {
+                break;
+            }
+        }
+
+        assert!(server.in_transaction());
+
+        let mut guard = server;
+        let mut server = guard.server.take().unwrap();
+        let cleanup = Cleanup::new(&guard, &mut server);
+
+        Guard::cleanup_internal(&mut server, cleanup, ConnectionRecovery::Drop)
+            .await
+            .unwrap();
+
+        use crate::state::State;
+        assert_eq!(server.stats().state, State::ForceClose);
     }
 }
