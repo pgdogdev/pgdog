@@ -504,6 +504,7 @@ mod test {
 
         use crate::state::State;
         assert_eq!(server.stats().state, State::ForceClose);
+        assert!(server.needs_drain());
     }
 
     #[tokio::test]
@@ -549,6 +550,7 @@ mod test {
 
         use crate::state::State;
         assert_eq!(server.stats().state, State::ForceClose);
+        assert!(server.needs_drain());
     }
 
     #[tokio::test]
@@ -661,5 +663,68 @@ mod test {
 
         use crate::state::State;
         assert_eq!(server.stats().state, State::ForceClose);
+        assert!(server.in_transaction());
+    }
+
+    #[tokio::test]
+    async fn test_conn_recovery_drop_with_needs_drain_and_rollback() {
+        crate::logger();
+
+        let mut server = Guard::new(
+            Pool::new_test(),
+            Box::new(test_server().await),
+            Instant::now(),
+        );
+        server.prepared_statements_mut().set_capacity(1);
+
+        server
+            .send(
+                &vec![
+                    ProtocolMessage::from(Parse::named("test_0", "SELECT 1")),
+                    Flush.into(),
+                ]
+                .into(),
+            )
+            .await
+            .unwrap();
+
+        let ok = server.read().await.unwrap();
+        assert_eq!(ok.code(), '1');
+        assert!(server.done());
+
+        server
+            .send(&vec![Query::new("BEGIN").into()].into())
+            .await
+            .unwrap();
+
+        loop {
+            let msg = server.read().await.unwrap();
+            if msg.code() == 'Z' {
+                break;
+            }
+        }
+
+        assert!(server.in_transaction());
+
+        server
+            .send(&vec![Query::new("SHOW prepared_statements").into()].into())
+            .await
+            .unwrap();
+
+        let mut guard = server;
+        let mut server = guard.server.take().unwrap();
+        let cleanup = Cleanup::new(&guard, &mut server);
+
+        assert!(server.needs_drain());
+        assert!(server.in_transaction());
+
+        Guard::cleanup_internal(&mut server, cleanup, ConnectionRecovery::Drop)
+            .await
+            .unwrap();
+
+        use crate::state::State;
+        assert_eq!(server.stats().state, State::ForceClose);
+        assert!(server.needs_drain());
+        assert!(server.in_transaction());
     }
 }
