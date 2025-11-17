@@ -24,7 +24,7 @@ pub use networking::{MultiTenant, Tcp, TlsVerifyMode};
 pub use overrides::Overrides;
 pub use pgdog_config::auth::{AuthType, PassthoughAuth};
 pub use pgdog_config::{LoadBalancingStrategy, ReadWriteSplit, ReadWriteStrategy};
-pub use pooling::{PoolerMode, PreparedStatements, Stats};
+pub use pooling::{ConnectionRecovery, PoolerMode, PreparedStatements, Stats};
 pub use rewrite::{Rewrite, RewriteMode};
 pub use users::{Admin, Plugin, User, Users};
 

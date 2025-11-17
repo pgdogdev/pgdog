@@ -2,6 +2,7 @@
 
 use std::time::Duration;
 
+use pgdog_config::pooling::ConnectionRecovery;
 use serde::{Deserialize, Serialize};
 
 use crate::config::{Database, General, PoolerMode, User};
@@ -59,6 +60,8 @@ pub struct Config {
     pub prepared_statements_limit: usize,
     /// Stats averaging period.
     pub stats_period: Duration,
+    /// Recovery algo.
+    pub connection_recovery: ConnectionRecovery,
 }
 
 impl Config {
@@ -186,6 +189,7 @@ impl Config {
             prepared_statements_limit: general.prepared_statements_limit,
             stats_period: Duration::from_millis(general.stats_period),
             bannable: !is_only_replica,
+            connection_recovery: general.connection_recovery,
             ..Default::default()
         }
     }
@@ -219,6 +223,7 @@ impl Default for Config {
             prepared_statements_limit: usize::MAX,
             stats_period: Duration::from_millis(15_000),
             dns_ttl: Duration::from_millis(60_000),
+            connection_recovery: ConnectionRecovery::Recover,
         }
     }
 }
