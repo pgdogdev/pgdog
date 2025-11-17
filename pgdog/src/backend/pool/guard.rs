@@ -121,6 +121,7 @@ impl Guard {
                 server.drain().await?;
             } else {
                 server.stats_mut().state(State::ForceClose);
+                return Ok(());
             }
         }
 
@@ -138,6 +139,7 @@ impl Guard {
                 server.rollback().await?;
             } else {
                 server.stats_mut().state(State::ForceClose);
+                return Ok(());
             }
         }
 
