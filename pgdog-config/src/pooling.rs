@@ -71,3 +71,38 @@ impl FromStr for PoolerMode {
         }
     }
 }
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, Ord, PartialOrd)]
+#[serde(rename_all = "snake_case")]
+pub enum ConnectionRecovery {
+    #[default]
+    Recover,
+    RollbackOnly,
+    Drop,
+}
+
+impl ConnectionRecovery {
+    pub fn can_recover(&self) -> bool {
+        matches!(self, ConnectionRecovery::Recover)
+    }
+
+    pub fn can_rollback(&self) -> bool {
+        matches!(
+            self,
+            ConnectionRecovery::Recover | ConnectionRecovery::RollbackOnly
+        )
+    }
+}
+
+impl FromStr for ConnectionRecovery {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "recover" => Ok(Self::Recover),
+            "rollbackonly" => Ok(Self::RollbackOnly),
+            "drop" => Ok(Self::Drop),
+            _ => Err(format!("Invalid pooler mode: {}", s)),
+        }
+    }
+}

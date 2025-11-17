@@ -16,7 +16,8 @@ use crate::{
         Schema, ShardedTables,
     },
     config::{
-        General, MultiTenant, PoolerMode, ReadWriteSplit, ReadWriteStrategy, ShardedTable, User,
+        ConnectionRecovery, General, MultiTenant, PoolerMode, ReadWriteSplit, ReadWriteStrategy,
+        ShardedTable, User,
     },
     net::{messages::BackendKeyData, Query},
 };
@@ -59,6 +60,7 @@ pub struct Cluster {
     expanded_explain: bool,
     pub_sub_channel_size: usize,
     query_parser_enabled: bool,
+    connection_recovery: ConnectionRecovery,
 }
 
 /// Sharding configuration from the cluster.
@@ -107,6 +109,7 @@ pub struct ClusterConfig<'a> {
     pub expanded_explain: bool,
     pub pub_sub_channel_size: usize,
     pub query_parser_enabled: bool,
+    pub connection_recovery: ConnectionRecovery,
 }
 
 impl<'a> ClusterConfig<'a> {
@@ -146,6 +149,7 @@ impl<'a> ClusterConfig<'a> {
             expanded_explain: general.expanded_explain,
             pub_sub_channel_size: general.pub_sub_channel_size,
             query_parser_enabled: general.query_parser_enabled,
+            connection_recovery: general.connection_recovery,
         }
     }
 }
@@ -176,6 +180,7 @@ impl Cluster {
             expanded_explain,
             pub_sub_channel_size,
             query_parser_enabled,
+            connection_recovery,
         } = config;
 
         Self {
@@ -207,6 +212,7 @@ impl Cluster {
             expanded_explain,
             pub_sub_channel_size,
             query_parser_enabled,
+            connection_recovery,
         }
     }
 
@@ -302,6 +308,10 @@ impl Cluster {
 
     pub fn prepared_statements(&self) -> &PreparedStatements {
         &self.prepared_statements
+    }
+
+    pub fn connection_recovery(&self) -> &ConnectionRecovery {
+        &self.connection_recovery
     }
 
     pub fn dry_run(&self) -> bool {

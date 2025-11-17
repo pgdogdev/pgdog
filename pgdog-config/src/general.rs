@@ -4,6 +4,8 @@ use std::net::Ipv4Addr;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use crate::pooling::ConnectionRecovery;
+
 use super::auth::{AuthType, PassthoughAuth};
 use super::database::{LoadBalancingStrategy, ReadWriteSplit, ReadWriteStrategy};
 use super::networking::TlsVerifyMode;
@@ -167,6 +169,9 @@ pub struct General {
     /// Stats averaging period (in milliseconds).
     #[serde(default = "General::stats_period")]
     pub stats_period: u64,
+    /// Connection cleanup algorithm.
+    #[serde(default = "General::connection_recovery")]
+    pub connection_recovery: ConnectionRecovery,
 }
 
 impl Default for General {
@@ -227,6 +232,7 @@ impl Default for General {
             expanded_explain: Self::expanded_explain(),
             server_lifetime: Self::server_lifetime(),
             stats_period: Self::stats_period(),
+            connection_recovery: Self::connection_recovery(),
         }
     }
 }
@@ -507,6 +513,10 @@ impl General {
             "PGDOG_SERVER_LIFETIME",
             Duration::from_secs(3600 * 24).as_millis() as u64,
         )
+    }
+
+    pub fn connection_recovery() -> ConnectionRecovery {
+        Self::env_enum_or_default("PGDOG_CONNECTION_RECOVERY")
     }
 
     fn stats_period() -> u64 {
