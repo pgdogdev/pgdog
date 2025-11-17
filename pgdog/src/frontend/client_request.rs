@@ -2,6 +2,7 @@
 use std::ops::{Deref, DerefMut};
 
 use lazy_static::lazy_static;
+use regex::Regex;
 
 use crate::{
     frontend::router::parser::RewritePlan,
@@ -106,6 +107,26 @@ impl ClientRequest {
         }
 
         Ok(None)
+    }
+
+    pub fn is_begin(&self) -> bool {
+        lazy_static! {
+            static ref BEGIN: Regex = Regex::new("(?i)^BEGIN").unwrap();
+        }
+
+        for message in &self.messages {
+            let query = match message {
+                ProtocolMessage::Parse(parse) => parse.query(),
+                ProtocolMessage::Query(query) => query.query(),
+                _ => continue,
+            };
+
+            if BEGIN.is_match(query) {
+                return true;
+            }
+        }
+
+        false
     }
 
     /// If this buffer contains bound parameters, retrieve them.
@@ -461,5 +482,17 @@ mod test {
         assert_eq!(second_slice[1].code(), 'E'); // Execute
         assert_eq!(second_slice[2].code(), 'H'); // Flush
         assert_eq!(second_slice[3].code(), 'S'); // Sync
+    }
+
+    #[test]
+    fn test_detect_begin() {
+        for query in [
+            ProtocolMessage::Query(Query::new("begin")),
+            ProtocolMessage::Query(Query::new("BEGIN WORK REPEATABLE READ")),
+            ProtocolMessage::Parse(Parse::new_anonymous("BEGIN")),
+        ] {
+            let req = ClientRequest::from(vec![query]);
+            assert!(req.is_begin());
+        }
     }
 }

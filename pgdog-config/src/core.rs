@@ -302,6 +302,21 @@ impl Config {
             }
         }
 
+        // Check pooler mode.
+        let mut pooler_mode = HashMap::<String, Option<PoolerMode>>::new();
+        for database in &self.databases {
+            if let Some(mode) = pooler_mode.get(&database.name) {
+                if mode != &database.pooler_mode {
+                    warn!(
+                        "database \"{}\" (shard={}, role={}) has a different \"pooler_mode\" setting, ignoring",
+                        database.name, database.shard, database.role,
+                    );
+                }
+            } else {
+                pooler_mode.insert(database.name.clone(), database.pooler_mode.clone());
+            }
+        }
+
         // Check that idle_healthcheck_interval is shorter than ban_timeout.
         if self.general.ban_timeout > 0
             && self.general.idle_healthcheck_interval >= self.general.ban_timeout
@@ -316,12 +331,12 @@ impl Config {
         match self.general.passthrough_auth {
             PassthoughAuth::Enabled if !self.general.tls_client_required => {
                 warn!(
-                    "consider setting tls_client_required while passthrough_auth is enabled to prevent clients from exposing plaintext passwords"
+                    "consider setting \"tls_client_required\" while \"passthrough_auth\" is enabled to prevent clients from exposing plaintext passwords"
                 );
             }
             PassthoughAuth::EnabledPlain => {
                 warn!(
-                    "passthrough_auth plain is enabled - network traffic may expose plaintext passwords"
+                    "\"passthrough_auth\" is set to \"plain\", network traffic may expose plaintext passwords"
                 )
             }
             _ => (),

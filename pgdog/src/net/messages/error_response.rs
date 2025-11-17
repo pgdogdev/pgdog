@@ -73,6 +73,16 @@ impl ErrorResponse {
         }
     }
 
+    pub fn transaction_statement_mode() -> ErrorResponse {
+        ErrorResponse {
+            severity: "ERROR".into(),
+            code: "58000".into(),
+            message: "transaction control statements are not supported in statement pooler mode"
+                .into(),
+            ..Default::default()
+        }
+    }
+
     pub fn client_idle_timeout(duration: Duration) -> ErrorResponse {
         ErrorResponse {
             severity: "FATAL".into(),

@@ -402,18 +402,17 @@ impl Connection {
         self.cluster.as_ref().ok_or(Error::NotConnected)
     }
 
-    /// Transaction mode pooling.
+    /// Pooler is in session mode.
     #[inline]
-    pub(crate) fn transaction_mode(&self) -> bool {
+    pub(crate) fn session_mode(&self) -> bool {
         self.cluster()
-            .map(|c| c.pooler_mode() == PoolerMode::Transaction)
+            .map(|c| c.pooler_mode() == PoolerMode::Session)
             .unwrap_or(true)
     }
 
-    /// Pooler is in session mod
     #[inline]
-    pub(crate) fn session_mode(&self) -> bool {
-        !self.transaction_mode()
+    pub(crate) fn pooler_mode(&self) -> PoolerMode {
+        self.cluster().map(|c| c.pooler_mode()).unwrap_or_default()
     }
 
     /// This is an admin DB connection.
