@@ -9,7 +9,7 @@ use crate::{
     state::State,
 };
 
-use tracing::debug;
+use tracing::{debug, error};
 
 use super::*;
 
@@ -264,7 +264,7 @@ impl QueryEngine {
 
             // Release the connection back into the pool before flushing data to client.
             // Flushing can take a minute and we don't want to block the connection from being reused.
-            if self.backend.transaction_mode() && context.requests_left == 0 {
+            if !self.backend.session_mode() && context.requests_left == 0 {
                 self.backend.disconnect();
             }
 
@@ -312,18 +312,14 @@ impl QueryEngine {
             && !context.admin
             && context.client_request.executable()
         {
-            let bytes_sent = context
-                .stream
-                .error(
-                    ErrorResponse::cross_shard_disabled(),
-                    context.in_transaction(),
-                )
-                .await?;
-            self.stats.sent(bytes_sent);
+            let error = ErrorResponse::cross_shard_disabled();
+
+            self.error_response(context, error).await?;
 
             if self.backend.connected() && self.backend.done() {
                 self.backend.disconnect();
             }
+
             Ok(false)
         } else {
             Ok(true)
@@ -367,18 +363,30 @@ impl QueryEngine {
         {
             let error = ErrorResponse::in_failed_transaction();
 
-            self.hooks.on_engine_error(context, &error)?;
-
-            let bytes_sent = context
-                .stream
-                .error(error, context.in_transaction())
-                .await?;
-            self.stats.sent(bytes_sent);
+            self.error_response(context, error).await?;
 
             Ok(false)
         } else {
             Ok(true)
         }
+    }
+
+    pub(super) async fn error_response(
+        &mut self,
+        context: &mut QueryEngineContext<'_>,
+        error: ErrorResponse,
+    ) -> Result<(), Error> {
+        error!("{:?} [{:?}]", error.message, context.stream.peer_addr());
+
+        self.hooks.on_engine_error(context, &error)?;
+
+        let bytes_sent = context
+            .stream
+            .error(error, context.in_transaction())
+            .await?;
+        self.stats.sent(bytes_sent);
+
+        return Ok(());
     }
 }
 

@@ -1,5 +1,6 @@
 use std::time::{Duration, Instant};
 
+use pgdog_config::PoolerMode;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
@@ -10,7 +11,10 @@ use bytes::{Buf, BufMut, BytesMut};
 
 use crate::{
     backend::databases::databases,
-    config::{config, load_test, load_test_replicas, set, PreparedStatements, Role},
+    config::{
+        config, load_test, load_test_replicas, load_test_with_pooler_mode, set, PreparedStatements,
+        Role,
+    },
     frontend::{
         client::{BufferEvent, QueryEngine},
         prepared_statements, Client,
@@ -737,6 +741,25 @@ async fn test_client_login_timeout() {
     drop(conn);
 
     handle.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn test_statement_mode() {
+    crate::logger();
+
+    load_test_with_pooler_mode(PoolerMode::Statement);
+    let (mut conn, mut client) = parallel_test_client().await;
+
+    let _ = tokio::spawn(async move {
+        client.run().await.unwrap();
+    });
+
+    let req = buffer!({ Query::new("BEGIN") });
+    conn.write_all(&req).await.unwrap();
+
+    let msgs = read!(conn, ['E', 'Z']);
+    let error = ErrorResponse::from_bytes(msgs[0].clone().freeze()).unwrap();
+    assert_eq!(error.code, "58000");
 }
 
 #[tokio::test]

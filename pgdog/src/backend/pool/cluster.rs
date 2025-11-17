@@ -85,6 +85,21 @@ pub struct ClusterShardConfig {
     pub replicas: Vec<PoolConfig>,
 }
 
+impl ClusterShardConfig {
+    pub fn pooler_mode(&self) -> PoolerMode {
+        // One of these will exist.
+
+        if let Some(ref primary) = self.primary {
+            return primary.config.pooler_mode;
+        }
+
+        self.replicas
+            .first()
+            .map(|replica| replica.config.pooler_mode)
+            .unwrap_or_default()
+    }
+}
+
 /// Cluster creation config.
 pub struct ClusterConfig<'a> {
     pub name: &'a str,
@@ -122,12 +137,17 @@ impl<'a> ClusterConfig<'a> {
         sharded_schemas: ShardedSchemas,
         rewrite: &'a Rewrite,
     ) -> Self {
+        let pooler_mode = shards
+            .first()
+            .map(|shard| shard.pooler_mode())
+            .unwrap_or(user.pooler_mode.unwrap_or(general.pooler_mode));
+
         Self {
             name: &user.database,
             password: user.password(),
             user: &user.name,
             replication_sharding: user.replication_sharding.clone(),
-            pooler_mode: user.pooler_mode.unwrap_or(general.pooler_mode),
+            pooler_mode,
             lb_strategy: general.load_balancing_strategy,
             shards,
             sharded_tables,
