@@ -144,6 +144,11 @@ pub fn overrides(overrides: Overrides) {
 // Test helper functions
 #[cfg(test)]
 pub fn load_test() {
+    load_test_with_pooler_mode(PoolerMode::Transaction)
+}
+
+#[cfg(test)]
+pub fn load_test_with_pooler_mode(pooler_mode: PoolerMode) {
     use crate::backend::databases::init;
 
     let mut config = ConfigAndUsers::default();
@@ -151,12 +156,14 @@ pub fn load_test() {
         name: "pgdog".into(),
         host: "127.0.0.1".into(),
         port: 5432,
+        pooler_mode: Some(pooler_mode),
         ..Default::default()
     }];
     config.users.users = vec![User {
         name: "pgdog".into(),
         database: "pgdog".into(),
         password: Some("pgdog".into()),
+        pooler_mode: Some(pooler_mode),
         ..Default::default()
     }];
 

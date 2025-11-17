@@ -49,6 +49,7 @@ pub enum PoolerMode {
     #[default]
     Transaction,
     Session,
+    Statement,
 }
 
 impl std::fmt::Display for PoolerMode {
@@ -56,6 +57,7 @@ impl std::fmt::Display for PoolerMode {
         match self {
             Self::Transaction => write!(f, "transaction"),
             Self::Session => write!(f, "session"),
+            Self::Statement => write!(f, "statement"),
         }
     }
 }

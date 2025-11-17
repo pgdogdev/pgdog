@@ -1,4 +1,5 @@
-use tracing::{error, trace};
+use pgdog_config::PoolerMode;
+use tracing::trace;
 
 use super::*;
 
@@ -7,6 +8,14 @@ impl QueryEngine {
         &mut self,
         context: &mut QueryEngineContext<'_>,
     ) -> Result<bool, Error> {
+        // Check that we can route this transaction at all.
+        if self.backend.pooler_mode() == PoolerMode::Statement && context.client_request.is_begin()
+        {
+            self.error_response(context, ErrorResponse::transaction_statement_mode())
+                .await?;
+            return Ok(false);
+        }
+
         // Admin doesn't have a cluster.
         let cluster = if let Ok(cluster) = self.backend.cluster() {
             if !context.in_transaction() && !cluster.online() {
@@ -17,18 +26,14 @@ impl QueryEngine {
 
                 match self.backend.cluster() {
                     Ok(cluster) => cluster,
-                    Err(err) => {
+                    Err(_) => {
                         // Cluster is gone.
-                        error!("{:?} [{:?}]", err, context.stream.peer_addr());
-                        let error =
-                            ErrorResponse::connection(&identifier.user, &identifier.database);
-                        self.hooks.on_engine_error(context, &error)?;
+                        self.error_response(
+                            context,
+                            ErrorResponse::connection(&identifier.user, &identifier.database),
+                        )
+                        .await?;
 
-                        let bytes_sent = context
-                            .stream
-                            .error(error, context.in_transaction())
-                            .await?;
-                        self.stats.sent(bytes_sent);
                         return Ok(false);
                     }
                 }
@@ -55,17 +60,9 @@ impl QueryEngine {
                 );
             }
             Err(err) => {
-                error!("{:?} [{:?}]", err, context.stream.peer_addr());
-
-                let error = ErrorResponse::syntax(err.to_string().as_str());
-
-                self.hooks.on_engine_error(context, &error)?;
-
-                let bytes_sent = context
-                    .stream
-                    .error(error, context.in_transaction())
+                self.error_response(context, ErrorResponse::syntax(err.to_string().as_str()))
                     .await?;
-                self.stats.sent(bytes_sent);
+
                 return Ok(false);
             }
         }
