@@ -172,6 +172,15 @@ pub struct General {
     /// Connection cleanup algorithm.
     #[serde(default = "General::connection_recovery")]
     pub connection_recovery: ConnectionRecovery,
+    /// LSN check interval.
+    #[serde(default = "General::lsn_check_interval")]
+    pub lsn_check_interval: u64,
+    /// LSN check timeout.
+    #[serde(default = "General::lsn_check_timeout")]
+    pub lsn_check_timeout: u64,
+    /// LSN check delay.
+    #[serde(default = "General::lsn_check_delay")]
+    pub lsn_check_delay: u64,
 }
 
 impl Default for General {
@@ -233,6 +242,9 @@ impl Default for General {
             server_lifetime: Self::server_lifetime(),
             stats_period: Self::stats_period(),
             connection_recovery: Self::connection_recovery(),
+            lsn_check_interval: Self::lsn_check_interval(),
+            lsn_check_timeout: Self::lsn_check_timeout(),
+            lsn_check_delay: Self::lsn_check_delay(),
         }
     }
 }
@@ -396,6 +408,18 @@ impl General {
 
     fn pooler_mode() -> PoolerMode {
         Self::env_enum_or_default("PGDOG_POOLER_MODE")
+    }
+
+    fn lsn_check_timeout() -> u64 {
+        Self::env_or_default("PGDOG_LSN_CHECK_TIMEOUT", 5_000)
+    }
+
+    fn lsn_check_interval() -> u64 {
+        Self::env_or_default("PGDOG_LSN_CHECK_INTERVAL", 5_000)
+    }
+
+    fn lsn_check_delay() -> u64 {
+        Self::env_or_default("PGDOG_LSN_CHECK_DELAY", Duration::MAX.as_millis() as u64)
     }
 
     fn read_write_strategy() -> ReadWriteStrategy {

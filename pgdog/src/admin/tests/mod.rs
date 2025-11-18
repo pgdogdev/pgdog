@@ -118,7 +118,6 @@ async fn show_pools_reports_schema_admin_flag() {
         "out_of_sync",
         "force_closed",
         "online",
-        "replica_lag",
         "schema_admin",
     ];
     assert_eq!(actual_names, expected_names);

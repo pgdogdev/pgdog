@@ -84,6 +84,21 @@ macro_rules! assign {
 }
 
 impl Timestamp {
+    /// Convert Postgres timestamp to timestamp without timezone.
+    pub fn to_naive_datetime(&self) -> NaiveDateTime {
+        NaiveDateTime::new(
+            NaiveDate::from_ymd_opt(self.year as i32, self.month as u32, self.day as u32)
+                .unwrap_or_default(),
+            NaiveTime::from_hms_micro_opt(
+                self.hour as u32,
+                self.minute as u32,
+                self.second as u32,
+                self.micros as u32,
+            )
+            .unwrap_or_default(),
+        )
+    }
+
     /// Create a timestamp representing positive infinity
     pub fn infinity() -> Self {
         Self {

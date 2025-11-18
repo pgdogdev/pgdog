@@ -191,6 +191,7 @@ impl Publisher {
                 .filter(|(r, _)| match *r {
                     Role::Replica => true,
                     Role::Primary => include_primary,
+                    Role::Auto => false,
                 })
                 .map(|(_, p)| p)
                 .collect::<Vec<_>>();

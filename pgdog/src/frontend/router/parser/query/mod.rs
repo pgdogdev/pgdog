@@ -206,7 +206,7 @@ impl QueryParser {
             if let Some(recorder) = self.recorder_mut() {
                 if !matches!(statement.comment_shard, Shard::All) || role_override.is_some() {
                     let role_str = role_override.map(|role| match role {
-                        Role::Primary => "primary",
+                        Role::Primary | Role::Auto => "primary",
                         Role::Replica => "replica",
                     });
                     recorder.record_comment_override(statement.comment_shard.clone(), role_str);

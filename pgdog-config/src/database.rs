@@ -128,6 +128,7 @@ pub enum Role {
     #[default]
     Primary,
     Replica,
+    Auto,
 }
 
 impl std::fmt::Display for Role {
@@ -135,6 +136,7 @@ impl std::fmt::Display for Role {
         match self {
             Self::Primary => write!(f, "primary"),
             Self::Replica => write!(f, "replica"),
+            Self::Auto => write!(f, "auto"),
         }
     }
 }
@@ -146,6 +148,7 @@ impl FromStr for Role {
         match s.to_lowercase().as_str() {
             "primary" => Ok(Self::Primary),
             "replica" => Ok(Self::Replica),
+            "auto" => Ok(Self::Auto),
             _ => Err(format!("Invalid role: {}", s)),
         }
     }
