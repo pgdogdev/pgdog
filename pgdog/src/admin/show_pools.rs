@@ -44,6 +44,8 @@ impl Command for ShowPools {
             Field::bool("online"),
             Field::text("replica_lag"),
             Field::bool("schema_admin"),
+            Field::text("pg_lsn"),
+            Field::text("pg_is_in_recovery"),
         ]);
         let mut messages = vec![rd.message()?];
         for (user, cluster) in databases().all() {
@@ -77,7 +79,9 @@ impl Command for ShowPools {
                         .add(state.force_close)
                         .add(state.online)
                         .add(state.replica_lag.simple_display())
-                        .add(cluster.schema_admin());
+                        .add(cluster.schema_admin())
+                        .add(state.lsn_stats.lsn.to_string())
+                        .add(state.lsn_stats.replica);
 
                     messages.push(row.message()?);
                 }

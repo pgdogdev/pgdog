@@ -8,7 +8,7 @@ use crate::net::messages::BackendKeyData;
 
 use tokio::time::Instant;
 
-use super::{Config, Error, Mapping, Oids, Pool, Request, Stats, Taken, Waiter};
+use super::{Config, Error, LsnStats, Mapping, Oids, Pool, Request, Stats, Taken, Waiter};
 
 /// Pool internals protected by a mutex.
 #[derive(Default)]
@@ -42,8 +42,12 @@ pub(super) struct Inner {
     /// The pool has been changed and connections should be returned
     /// to the new pool.
     moved: Option<Pool>,
+    /// Unique pool identifier.
     id: u64,
+    /// Replica lag.
     pub(super) replica_lag: ReplicaLag,
+    /// Lsn stats.
+    pub(super) lsn_stats: LsnStats,
 }
 
 impl std::fmt::Debug for Inner {
@@ -54,6 +58,7 @@ impl std::fmt::Debug for Inner {
             .field("idle_connections", &self.idle_connections.len())
             .field("waiting", &self.waiting.len())
             .field("online", &self.online)
+            .field("lsn_stats", &self.lsn_stats)
             .finish()
     }
 }
@@ -77,6 +82,7 @@ impl Inner {
             moved: None,
             id,
             replica_lag: ReplicaLag::default(),
+            lsn_stats: LsnStats::default(),
         }
     }
     /// Total number of connections managed by the pool.

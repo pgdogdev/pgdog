@@ -9,6 +9,8 @@ split_inserts = "error"
 [[databases]]
 name = "pgdog"
 host = "127.0.0.1"
+pooler_mode = "statement"
+
 
 [admin]
 password = "pgdog"

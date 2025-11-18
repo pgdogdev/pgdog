@@ -96,4 +96,7 @@ pub enum Error {
 
     #[error("not a boolean")]
     NotBoolean,
+
+    #[error("not a pg_lsn")]
+    NotPgLsn,
 }

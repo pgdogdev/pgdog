@@ -17,8 +17,8 @@ use crate::net::{Parameter, Parameters};
 use super::inner::CheckInResult;
 use super::inner::ReplicaLag;
 use super::{
-    replicas::TargetHealth, Address, Comms, Config, Error, Guard, Healtcheck, Inner, Monitor, Oids,
-    PoolConfig, Request, State, Waiting,
+    lsn_monitor::LsnMonitor, replicas::TargetHealth, Address, Comms, Config, Error, Guard,
+    Healtcheck, Inner, Monitor, Oids, PoolConfig, Request, State, Waiting,
 };
 
 static ID_COUNTER: Lazy<Arc<AtomicU64>> = Lazy::new(|| Arc::new(AtomicU64::new(0)));
@@ -92,6 +92,7 @@ impl Pool {
         if !guard.online {
             guard.online = true;
             Monitor::run(self);
+            LsnMonitor::run(self);
         }
     }
 

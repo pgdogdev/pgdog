@@ -75,7 +75,7 @@ impl Monitor {
         let pool = self.pool.clone();
         spawn(async move { Self::stats(pool).await });
 
-        // Delay starting healthchecks to give
+        // Delay starting health checks to give
         // time for the pool to spin up.
         let pool = self.pool.clone();
         let (delay, replication_mode) = {
@@ -137,14 +137,14 @@ impl Monitor {
         debug!("maintenance loop is shut down [{}]", self.pool.addr());
     }
 
-    /// The healthcheck loop.
+    /// The health check loop.
     ///
-    /// Runs regularly and ensures the pool triggers healthchecks on idle connections.
+    /// Runs regularly and ensures the pool triggers health checks on idle connections.
     async fn healthchecks(pool: Pool) {
         let mut tick = interval(pool.lock().config().idle_healthcheck_interval());
         let comms = pool.comms();
 
-        debug!("healthchecks running [{}]", pool.addr());
+        debug!("health checks running [{}]", pool.addr());
 
         loop {
             select! {
@@ -157,7 +157,7 @@ impl Monitor {
                             break;
                         }
 
-                        // Pool is paused, skip healtcheck.
+                        // Pool is paused, skip health check.
                         if guard.paused {
                             continue;
                         }
@@ -171,7 +171,7 @@ impl Monitor {
             }
         }
 
-        debug!("healthchecks stopped [{}]", pool.addr());
+        debug!("health checks stopped [{}]", pool.addr());
     }
 
     /// Perform maintenance on the pool periodically.

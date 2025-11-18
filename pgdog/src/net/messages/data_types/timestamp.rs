@@ -4,7 +4,7 @@ use super::*;
 
 use super::interval::bigint;
 use bytes::{Buf, Bytes};
-use chrono::{Datelike, NaiveDate, NaiveDateTime, NaiveTime, Timelike};
+use chrono::{DateTime, Datelike, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
 
 // PostgreSQL epoch is 2000-01-01 00:00:00 UTC, which is 946684800 seconds after Unix epoch
 const POSTGRES_EPOCH_MICROS: i64 = 946684800000000; // microseconds
@@ -84,6 +84,21 @@ macro_rules! assign {
 }
 
 impl Timestamp {
+    /// Convert Postgres timestamp to timestamp without timezone.
+    pub fn to_naive_datetime(&self) -> NaiveDateTime {
+        NaiveDateTime::new(
+            NaiveDate::from_ymd_opt(self.year as i32, self.month as u32, self.day as u32)
+                .unwrap_or_default(),
+            NaiveTime::from_hms_micro_opt(
+                self.hour as u32,
+                self.minute as u32,
+                self.second as u32,
+                self.micros as u32,
+            )
+            .unwrap_or_default(),
+        )
+    }
+
     /// Create a timestamp representing positive infinity
     pub fn infinity() -> Self {
         Self {
