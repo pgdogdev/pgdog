@@ -42,7 +42,6 @@ impl Command for ShowPools {
             Field::numeric("out_of_sync"),
             Field::numeric("force_closed"),
             Field::bool("online"),
-            Field::text("replica_lag"),
             Field::bool("schema_admin"),
         ]);
         let mut messages = vec![rd.message()?];
@@ -76,7 +75,6 @@ impl Command for ShowPools {
                         .add(state.out_of_sync)
                         .add(state.force_close)
                         .add(state.online)
-                        .add(state.replica_lag.simple_display())
                         .add(cluster.schema_admin());
 
                     messages.push(row.message()?);

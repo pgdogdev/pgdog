@@ -3,15 +3,16 @@ use crate::{
     backend::{self, pool::Address, Server, ServerOptions},
     net::{
         replication::StatusUpdate, CopyData, CopyDone, DataRow, ErrorResponse, Format, FromBytes,
-        Protocol, Query, ToBytes,
+        FromDataType, Protocol, Query, ToBytes,
     },
     util::random_string,
 };
+use bytes::Bytes;
 use std::{fmt::Display, str::FromStr, time::Duration};
 use tokio::time::timeout;
 use tracing::{debug, trace};
 
-#[derive(Debug, Clone, Default, Copy)]
+#[derive(Debug, Clone, Default, Copy, Eq, PartialEq, Ord, PartialOrd)]
 pub struct Lsn {
     pub high: i64,
     pub low: i64,
@@ -24,6 +25,20 @@ impl Lsn {
         let high = ((lsn >> 32) as u32) as i64;
         let low = ((lsn & 0xFFFF_FFFF) as u32) as i64;
         Self { high, low, lsn }
+    }
+}
+
+impl FromDataType for Lsn {
+    fn decode(bytes: &[u8], encoding: Format) -> Result<Self, crate::net::Error> {
+        let val = String::decode(bytes, encoding)?;
+        Self::from_str(&val).map_err(|_| crate::net::Error::NotPgLsn)
+    }
+
+    fn encode(&self, encoding: Format) -> Result<bytes::Bytes, crate::net::Error> {
+        match encoding {
+            Format::Text => Ok(Bytes::from(self.to_string())),
+            Format::Binary => todo!(),
+        }
     }
 }
 

@@ -2,9 +2,12 @@
 
 use parking_lot::{Mutex, RwLock};
 use pgdog_config::{PreparedStatements, Rewrite};
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc,
+use std::{
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    time::Duration,
 };
 use tokio::spawn;
 use tracing::{error, info};
@@ -22,7 +25,7 @@ use crate::{
     net::{messages::BackendKeyData, Query},
 };
 
-use super::{Address, Config, Error, Guard, MirrorStats, Request, Shard};
+use super::{Address, Config, Error, Guard, MirrorStats, Request, Shard, ShardConfig};
 use crate::config::LoadBalancingStrategy;
 
 #[derive(Clone, Debug)]
@@ -125,6 +128,7 @@ pub struct ClusterConfig<'a> {
     pub pub_sub_channel_size: usize,
     pub query_parser_enabled: bool,
     pub connection_recovery: ConnectionRecovery,
+    pub lsn_check_interval: Duration,
 }
 
 impl<'a> ClusterConfig<'a> {
@@ -170,6 +174,7 @@ impl<'a> ClusterConfig<'a> {
             pub_sub_channel_size: general.pub_sub_channel_size,
             query_parser_enabled: general.query_parser_enabled,
             connection_recovery: general.connection_recovery,
+            lsn_check_interval: Duration::from_millis(general.lsn_check_interval),
         }
     }
 }
@@ -201,16 +206,30 @@ impl Cluster {
             pub_sub_channel_size,
             query_parser_enabled,
             connection_recovery,
+            lsn_check_interval,
         } = config;
 
+        let identifier = Arc::new(DatabaseUser {
+            user: user.to_owned(),
+            database: name.to_owned(),
+        });
+
         Self {
-            identifier: Arc::new(DatabaseUser {
-                user: user.to_owned(),
-                database: name.to_owned(),
-            }),
+            identifier: identifier.clone(),
             shards: shards
                 .iter()
-                .map(|config| Shard::new(&config.primary, &config.replicas, lb_strategy, rw_split))
+                .enumerate()
+                .map(|(number, config)| {
+                    Shard::new(ShardConfig {
+                        number,
+                        primary: &config.primary,
+                        replicas: &config.replicas,
+                        lb_strategy,
+                        rw_split,
+                        identifier: identifier.clone(),
+                        lsn_check_interval,
+                    })
+                })
                 .collect(),
             password: password.to_owned(),
             pooler_mode,
@@ -504,11 +523,11 @@ impl Cluster {
 
 #[cfg(test)]
 mod test {
-    use std::sync::Arc;
+    use std::{sync::Arc, time::Duration};
 
     use crate::{
         backend::{
-            pool::{Address, Config, PoolConfig},
+            pool::{Address, Config, PoolConfig, ShardConfig},
             Shard, ShardedTables,
         },
         config::{
@@ -522,6 +541,34 @@ mod test {
     impl Cluster {
         pub fn new_test() -> Self {
             let config = config();
+            let identifier = Arc::new(DatabaseUser {
+                user: "pgdog".into(),
+                database: "pgdog".into(),
+            });
+            let primary = &Some(PoolConfig {
+                address: Address::new_test(),
+                config: Config::default(),
+            });
+            let replicas = &[PoolConfig {
+                address: Address::new_test(),
+                config: Config::default(),
+            }];
+
+            let shards = (0..2)
+                .into_iter()
+                .map(|number| {
+                    Shard::new(ShardConfig {
+                        number,
+                        primary,
+                        replicas,
+                        lb_strategy: LoadBalancingStrategy::Random,
+                        rw_split: ReadWriteSplit::IncludePrimary,
+                        identifier: identifier.clone(),
+                        lsn_check_interval: Duration::MAX,
+                    })
+                })
+                .collect::<Vec<_>>();
+
             Cluster {
                 sharded_tables: ShardedTables::new(
                     vec![ShardedTable {
@@ -538,36 +585,8 @@ mod test {
                     }],
                     vec!["sharded_omni".into()],
                 ),
-                shards: vec![
-                    Shard::new(
-                        &Some(PoolConfig {
-                            address: Address::new_test(),
-                            config: Config::default(),
-                        }),
-                        &[PoolConfig {
-                            address: Address::new_test(),
-                            config: Config::default(),
-                        }],
-                        LoadBalancingStrategy::Random,
-                        ReadWriteSplit::default(),
-                    ),
-                    Shard::new(
-                        &Some(PoolConfig {
-                            address: Address::new_test(),
-                            config: Config::default(),
-                        }),
-                        &[PoolConfig {
-                            address: Address::new_test(),
-                            config: Config::default(),
-                        }],
-                        LoadBalancingStrategy::Random,
-                        ReadWriteSplit::default(),
-                    ),
-                ],
-                identifier: Arc::new(DatabaseUser {
-                    user: "pgdog".into(),
-                    database: "pgdog".into(),
-                }),
+                shards,
+                identifier,
                 prepared_statements: config.config.general.prepared_statements,
                 dry_run: config.config.general.dry_run,
                 expanded_explain: config.config.general.expanded_explain,

@@ -3,7 +3,7 @@ use std::time::Duration;
 use crate::config::PoolerMode;
 use tokio::time::Instant;
 
-use super::{inner::ReplicaLag, Config, Pool, Stats};
+use super::{Config, LsnStats, Pool, Stats};
 
 /// Pool state.
 #[derive(Debug)]
@@ -37,9 +37,11 @@ pub struct State {
     /// Pool mode
     pub pooler_mode: PoolerMode,
     /// Lag
-    pub replica_lag: ReplicaLag,
+    pub replica_lag: Duration,
     /// Force closed.
     pub force_close: usize,
+    /// LSN stats.
+    pub lsn_stats: LsnStats,
 }
 
 impl State {
@@ -69,6 +71,7 @@ impl State {
             pooler_mode: guard.config().pooler_mode,
             replica_lag: guard.replica_lag,
             force_close: guard.force_close,
+            lsn_stats: guard.lsn_stats,
         }
     }
 }

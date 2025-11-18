@@ -382,6 +382,7 @@ async fn test_client_with_replicas() {
                 assert!(state.stats.counts.healthchecks <= idle + 1); // TODO: same
                 pool_sent -= (healthcheck_len_sent * state.stats.counts.healthchecks) as isize;
             }
+            Role::Auto => unreachable!("role auto"),
         }
     }
 
