@@ -16,6 +16,7 @@ pooler_mode = "transaction"
 load_balancing_strategy = "round_robin"
 auth_type = "trust"
 read_write_split = "exclude_primary"
+lsn_check_delay = 5_000
 
 [rewrite]
 enabled = false

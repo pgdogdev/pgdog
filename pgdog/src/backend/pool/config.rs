@@ -66,6 +66,8 @@ pub struct Config {
     pub lsn_check_interval: Duration,
     /// LSN check timeout.
     pub lsn_check_timeout: Duration,
+    /// LSN check delay.
+    pub lsn_check_delay: Duration,
 }
 
 impl Config {
@@ -194,8 +196,9 @@ impl Config {
             stats_period: Duration::from_millis(general.stats_period),
             bannable: !is_only_replica,
             connection_recovery: general.connection_recovery,
-            lsn_check_interval: Duration::from_millis(1_000),
-            lsn_check_timeout: Duration::from_millis(5_000),
+            lsn_check_interval: Duration::from_millis(general.lsn_check_interval),
+            lsn_check_timeout: Duration::from_millis(general.lsn_check_timeout),
+            lsn_check_delay: Duration::from_millis(general.lsn_check_delay),
             ..Default::default()
         }
     }
@@ -230,8 +233,9 @@ impl Default for Config {
             stats_period: Duration::from_millis(15_000),
             dns_ttl: Duration::from_millis(60_000),
             connection_recovery: ConnectionRecovery::Recover,
-            lsn_check_interval: Duration::from_millis(1_000),
+            lsn_check_interval: Duration::from_millis(5_000),
             lsn_check_timeout: Duration::from_millis(5_000),
+            lsn_check_delay: Duration::from_millis(5_000),
         }
     }
 }

@@ -4,21 +4,37 @@ use std::ops::Deref;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::broadcast;
-use tokio::time::{interval, sleep};
-use tokio::{join, select, spawn, sync::Notify};
-use tracing::{debug, error};
+use tokio::{select, spawn, sync::Notify};
+use tracing::debug;
 
+use crate::backend::databases::User;
 use crate::backend::pool::replicas::ban::Ban;
 use crate::backend::PubSubListener;
 use crate::config::{config, LoadBalancingStrategy, ReadWriteSplit, Role};
 use crate::net::messages::BackendKeyData;
 use crate::net::NotificationResponse;
 
-use super::inner::ReplicaLag;
 use super::{Error, Guard, Pool, PoolConfig, Replicas, Request};
 
 pub mod monitor;
 use monitor::*;
+
+pub(super) struct ShardConfig<'a> {
+    /// Shard number.
+    pub(super) number: usize,
+    /// Shard primary database, if any.
+    pub(super) primary: &'a Option<PoolConfig>,
+    /// Shard replica databases.
+    pub(super) replicas: &'a [PoolConfig],
+    /// Load balancing strategy for replicas.
+    pub(super) lb_strategy: LoadBalancingStrategy,
+    /// Primary/replica read/write split strategy.
+    pub(super) rw_split: ReadWriteSplit,
+    /// Cluster identifier (user/password).
+    pub(super) identifier: Arc<User>,
+    /// LSN check interval
+    pub(super) lsn_check_interval: Duration,
+}
 
 /// Connection pools for a single database shard.
 ///
@@ -38,14 +54,9 @@ impl Shard {
     /// * `lb_strategy`: Query load balancing strategy, e.g., random, round robin, etc.
     /// * `rw_split`: Read/write traffic splitting strategy.
     ///
-    pub fn new(
-        primary: &Option<PoolConfig>,
-        replicas: &[PoolConfig],
-        lb_strategy: LoadBalancingStrategy,
-        rw_split: ReadWriteSplit,
-    ) -> Self {
+    pub(super) fn new(config: ShardConfig<'_>) -> Self {
         Self {
-            inner: Arc::new(ShardInner::new(primary, replicas, lb_strategy, rw_split)),
+            inner: Arc::new(ShardInner::new(config)),
         }
     }
 
@@ -215,6 +226,14 @@ impl Shard {
     fn comms(&self) -> &ShardComms {
         &self.comms
     }
+
+    pub fn number(&self) -> usize {
+        self.number
+    }
+
+    pub fn identifier(&self) -> &User {
+        &self.identifier
+    }
 }
 
 impl Deref for Shard {
@@ -229,23 +248,30 @@ impl Deref for Shard {
 /// and internal state.
 #[derive(Default, Debug)]
 pub struct ShardInner {
+    number: usize,
     primary: Option<Pool>,
     replicas: Replicas,
     comms: ShardComms,
     pub_sub: Option<PubSubListener>,
+    identifier: Arc<User>,
 }
 
 impl ShardInner {
-    fn new(
-        primary: &Option<PoolConfig>,
-        replicas: &[PoolConfig],
-        lb_strategy: LoadBalancingStrategy,
-        rw_split: ReadWriteSplit,
-    ) -> Self {
+    fn new(shard: ShardConfig) -> Self {
+        let ShardConfig {
+            number,
+            primary,
+            replicas,
+            lb_strategy,
+            rw_split,
+            identifier,
+            lsn_check_interval,
+        } = shard;
         let primary = primary.as_ref().map(Pool::new);
         let replicas = Replicas::new(&primary, replicas, lb_strategy, rw_split);
         let comms = ShardComms {
             shutdown: Notify::new(),
+            lsn_check_interval,
         };
         let pub_sub = if config().pub_sub_enabled() {
             primary.as_ref().map(PubSubListener::new)
@@ -254,10 +280,12 @@ impl ShardInner {
         };
 
         Self {
+            number,
             primary,
             replicas,
             comms,
             pub_sub,
+            identifier,
         }
     }
 }
@@ -284,12 +312,18 @@ mod test {
             config: Config::default(),
         }];
 
-        let shard = Shard::new(
+        let shard = Shard::new(ShardConfig {
+            number: 0,
             primary,
             replicas,
-            LoadBalancingStrategy::Random,
-            ReadWriteSplit::ExcludePrimary,
-        );
+            lb_strategy: LoadBalancingStrategy::Random,
+            rw_split: ReadWriteSplit::ExcludePrimary,
+            identifier: Arc::new(User {
+                user: "pgdog".into(),
+                database: "pgdog".into(),
+            }),
+            lsn_check_interval: Duration::MAX,
+        });
         shard.launch();
 
         for _ in 0..25 {
@@ -316,12 +350,18 @@ mod test {
             config: Config::default(),
         }];
 
-        let shard = Shard::new(
+        let shard = Shard::new(ShardConfig {
+            number: 0,
             primary,
             replicas,
-            LoadBalancingStrategy::Random,
-            ReadWriteSplit::IncludePrimary,
-        );
+            lb_strategy: LoadBalancingStrategy::Random,
+            rw_split: ReadWriteSplit::IncludePrimary,
+            identifier: Arc::new(User {
+                user: "pgdog".into(),
+                database: "pgdog".into(),
+            }),
+            lsn_check_interval: Duration::MAX,
+        });
         shard.launch();
         let mut ids = BTreeSet::new();
 

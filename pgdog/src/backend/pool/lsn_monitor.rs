@@ -1,6 +1,8 @@
+use std::time::Duration;
+
 use tokio::{
-    spawn,
-    time::{sleep, timeout},
+    select, spawn,
+    time::{sleep, timeout, Instant},
 };
 use tracing::{debug, error, trace};
 
@@ -23,8 +25,8 @@ SELECT
     CASE
         WHEN pg_is_in_recovery() THEN
             COALESCE(
-                pg_last_wal_receive_lsn(),
-                pg_last_wal_replay_lsn()
+                pg_last_wal_replay_lsn(),
+                pg_last_wal_receive_lsn()
             )
         ELSE
             pg_current_wal_lsn()
@@ -32,8 +34,8 @@ SELECT
     CASE
         WHEN pg_is_in_recovery() THEN
             COALESCE(
-                pg_last_wal_receive_lsn(),
-                pg_last_wal_replay_lsn()
+                pg_last_wal_replay_lsn(),
+                pg_last_wal_receive_lsn()
             ) - '0/0'::pg_lsn
         ELSE
             pg_current_wal_lsn() - '0/0'::pg_lsn
@@ -46,14 +48,32 @@ SELECT
     END AS timestamp
 ";
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy)]
 pub struct LsnStats {
     pub replica: bool,
     pub lsn: Lsn,
     pub offset_bytes: i64,
     pub timestamp: TimestampTz,
+    pub fetched: Instant,
 }
 
+impl Default for LsnStats {
+    fn default() -> Self {
+        Self {
+            replica: bool::default(),
+            lsn: Lsn::default(),
+            offset_bytes: 0,
+            timestamp: TimestampTz::default(),
+            fetched: Instant::now(),
+        }
+    }
+}
+
+impl LsnStats {
+    pub fn lsn_age(&self) -> Duration {
+        self.fetched.elapsed()
+    }
+}
 impl From<DataRow> for LsnStats {
     fn from(value: DataRow) -> Self {
         Self {
@@ -61,6 +81,7 @@ impl From<DataRow> for LsnStats {
             lsn: value.get(1, Format::Text).unwrap_or_default(),
             offset_bytes: value.get(2, Format::Text).unwrap_or_default(),
             timestamp: value.get(3, Format::Text).unwrap_or_default(),
+            fetched: Instant::now(),
         }
     }
 }
@@ -79,10 +100,18 @@ impl LsnMonitor {
     }
 
     async fn spawn(&self) {
+        select! {
+            _ = sleep(self.pool.config().lsn_check_delay) => {},
+            _ = self.pool.comms().shutdown.notified() => { return; }
+        }
+
         debug!("lsn monitor loop is running [{}]", self.pool.addr());
 
         loop {
-            sleep(self.pool.config().lsn_check_interval).await;
+            select! {
+                _ = sleep(self.pool.config().lsn_check_interval) => {},
+                _ = self.pool.comms().shutdown.notified() => { break;}
+            }
 
             let mut conn = match self.pool.get(&Request::default()).await {
                 Ok(conn) => conn,

@@ -46,6 +46,7 @@ pub use stats::Stats;
 use comms::Comms;
 use inner::Inner;
 use mapping::Mapping;
+use shard::ShardConfig;
 use taken::Taken;
 use waiting::{Waiter, Waiting};
 

@@ -2,6 +2,7 @@
 
 use std::cmp::max;
 use std::collections::VecDeque;
+use std::time::Duration;
 
 use crate::backend::{stats::Counts as BackendCounts, Server};
 use crate::net::messages::BackendKeyData;
@@ -45,7 +46,7 @@ pub(super) struct Inner {
     /// Unique pool identifier.
     id: u64,
     /// Replica lag.
-    pub(super) replica_lag: ReplicaLag,
+    pub(super) replica_lag: Duration,
     /// Lsn stats.
     pub(super) lsn_stats: LsnStats,
 }
@@ -81,7 +82,7 @@ impl Inner {
             oids: None,
             moved: None,
             id,
-            replica_lag: ReplicaLag::default(),
+            replica_lag: Duration::ZERO,
             lsn_stats: LsnStats::default(),
         }
     }
@@ -370,66 +371,6 @@ impl Inner {
 pub(super) struct CheckInResult {
     pub(super) server_error: bool,
     pub(super) replenish: bool,
-}
-
-/// Replica lag measurement.
-#[derive(Clone, Copy, Debug)]
-pub enum ReplicaLag {
-    NonApplicable,
-    Duration(std::time::Duration),
-    Bytes(u64),
-    Unknown,
-}
-
-impl ReplicaLag {
-    pub fn simple_display(&self) -> String {
-        match self {
-            Self::NonApplicable => "n/a".to_string(),
-            Self::Duration(d) => {
-                let total_secs = d.as_secs();
-                let minutes = total_secs / 60;
-                let seconds = total_secs % 60;
-
-                if minutes > 0 {
-                    return if seconds > 0 {
-                        format!("{}m{}s", minutes, seconds)
-                    } else {
-                        format!("{}m", minutes)
-                    };
-                }
-
-                if total_secs > 0 {
-                    return format!("{}s", total_secs);
-                }
-
-                let millis = d.as_millis();
-                if millis > 0 {
-                    return format!("{}ms", millis);
-                }
-
-                "<1ms".to_string()
-            }
-            Self::Bytes(b) => format!("{}b", b),
-            Self::Unknown => "unknown".to_string(),
-        }
-    }
-}
-
-impl Default for ReplicaLag {
-    fn default() -> Self {
-        Self::Unknown
-    }
-}
-
-impl std::fmt::Display for ReplicaLag {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::NonApplicable => write!(f, "n/a"),
-            Self::Duration(d) => write!(f, "{}ms", d.as_millis()),
-            Self::Bytes(b) => write!(f, "{}b)", b),
-            Self::Unknown => write!(f, "unknown"),
-        }
-    }
 }
 
 #[cfg(test)]

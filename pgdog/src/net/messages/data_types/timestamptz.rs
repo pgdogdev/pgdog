@@ -44,12 +44,15 @@ impl ToDataRowColumn for TimestampTz {
 
 #[cfg(test)]
 mod test {
+    use chrono::{Datelike, Timelike};
+
     use super::*;
 
     #[test]
     fn test_timestamptz() {
         let ts = "2025-03-05 14:55:02.436109-08".as_bytes();
         let ts = TimestampTz::decode(ts, Format::Text).unwrap();
+        let time = ts.to_naive_datetime();
 
         assert_eq!(ts.year, 2025);
         assert_eq!(ts.month, 3);
@@ -59,5 +62,12 @@ mod test {
         assert_eq!(ts.second, 2);
         assert_eq!(ts.micros, 436109);
         assert_eq!(ts.offset, Some(-8));
+
+        assert_eq!(time.date().year(), 2025);
+        assert_eq!(time.date().month(), 3);
+        assert_eq!(time.date().day(), 5);
+        assert_eq!(time.time().hour(), 14);
+        assert_eq!(time.time().minute(), 55);
+        assert_eq!(time.time().second(), 2);
     }
 }

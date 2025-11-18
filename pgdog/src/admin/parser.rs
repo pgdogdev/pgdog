@@ -7,9 +7,10 @@ use super::{
     show_client_memory::ShowClientMemory, show_clients::ShowClients, show_config::ShowConfig,
     show_instance_id::ShowInstanceId, show_lists::ShowLists, show_mirrors::ShowMirrors,
     show_peers::ShowPeers, show_pools::ShowPools, show_prepared_statements::ShowPreparedStatements,
-    show_query_cache::ShowQueryCache, show_server_memory::ShowServerMemory,
-    show_servers::ShowServers, show_stats::ShowStats, show_transactions::ShowTransactions,
-    show_version::ShowVersion, shutdown::Shutdown, Command, Error,
+    show_query_cache::ShowQueryCache, show_replication::ShowReplication,
+    show_server_memory::ShowServerMemory, show_servers::ShowServers, show_stats::ShowStats,
+    show_transactions::ShowTransactions, show_version::ShowVersion, shutdown::Shutdown, Command,
+    Error,
 };
 
 use tracing::debug;
@@ -35,6 +36,7 @@ pub enum ParseResult {
     Shutdown(Shutdown),
     ShowLists(ShowLists),
     ShowPrepared(ShowPreparedStatements),
+    ShowReplication(ShowReplication),
     ShowServerMemory(ShowServerMemory),
     ShowClientMemory(ShowClientMemory),
     Set(Set),
@@ -69,6 +71,7 @@ impl ParseResult {
             Shutdown(shutdown) => shutdown.execute().await,
             ShowLists(show_lists) => show_lists.execute().await,
             ShowPrepared(cmd) => cmd.execute().await,
+            ShowReplication(show_replication) => show_replication.execute().await,
             ShowServerMemory(show_server_memory) => show_server_memory.execute().await,
             ShowClientMemory(show_client_memory) => show_client_memory.execute().await,
             Set(set) => set.execute().await,
@@ -103,6 +106,7 @@ impl ParseResult {
             Shutdown(shutdown) => shutdown.name(),
             ShowLists(show_lists) => show_lists.name(),
             ShowPrepared(show) => show.name(),
+            ShowReplication(show_replication) => show_replication.name(),
             ShowServerMemory(show_server_memory) => show_server_memory.name(),
             ShowClientMemory(show_client_memory) => show_client_memory.name(),
             Set(set) => set.name(),
@@ -158,6 +162,7 @@ impl Parser {
                 "instance_id" => ParseResult::ShowInstanceId(ShowInstanceId::parse(&sql)?),
                 "lists" => ParseResult::ShowLists(ShowLists::parse(&sql)?),
                 "prepared" => ParseResult::ShowPrepared(ShowPreparedStatements::parse(&sql)?),
+                "replication" => ParseResult::ShowReplication(ShowReplication::parse(&sql)?),
                 command => {
                     debug!("unknown admin show command: '{}'", command);
                     return Err(Error::Syntax);

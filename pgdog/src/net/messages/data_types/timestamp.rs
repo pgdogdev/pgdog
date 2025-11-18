@@ -4,7 +4,7 @@ use super::*;
 
 use super::interval::bigint;
 use bytes::{Buf, Bytes};
-use chrono::{DateTime, Datelike, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
+use chrono::{Datelike, NaiveDate, NaiveDateTime, NaiveTime, Timelike};
 
 // PostgreSQL epoch is 2000-01-01 00:00:00 UTC, which is 946684800 seconds after Unix epoch
 const POSTGRES_EPOCH_MICROS: i64 = 946684800000000; // microseconds
