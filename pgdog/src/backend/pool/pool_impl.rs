@@ -164,7 +164,7 @@ impl Pool {
             {
                 Ok(conn) => return Ok(conn),
                 // Try another connection.
-                Err(Error::DatabaseClosedConnection) => continue,
+                Err(Error::HealthcheckError) => continue,
                 Err(err) => return Err(err),
             }
         }
@@ -198,15 +198,9 @@ impl Pool {
         );
 
         if let Err(err) = healthcheck.healthcheck().await {
-            println!("healthcheck error: {:?}", err);
             drop(conn);
-            match err {
-                Error::DatabaseClosedConnection => return Err(err),
-                err => {
-                    self.inner.health.toggle(false);
-                    return Err(err);
-                }
-            }
+            self.inner.health.toggle(false);
+            return Err(err);
         } else if !self.inner.health.healthy() {
             self.inner.health.toggle(true);
         }

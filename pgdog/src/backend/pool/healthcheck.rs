@@ -7,7 +7,7 @@ use tokio::time::Instant;
 use tracing::error;
 
 use super::{Error, Pool};
-use crate::backend::{Error as BackendError, Server};
+use crate::backend::Server;
 
 /// Perform a healtcheck on a connection.
 pub struct Healtcheck<'a> {
@@ -52,20 +52,12 @@ impl<'a> Healtcheck<'a> {
         let health_check_age = self.conn.healthcheck_age(self.now);
 
         if health_check_age < self.healthcheck_interval {
-            println!("skipping health check");
             return Ok(());
         }
-
-        println!("running health check");
 
         match timeout(self.healthcheck_timeout, self.conn.healthcheck(";")).await {
             Ok(Ok(())) => Ok(()),
             Ok(Err(err)) => {
-                if let BackendError::ExecutionError(ref err) = err {
-                    if err.code == "57P01" {
-                        return Err(Error::DatabaseClosedConnection);
-                    }
-                }
                 error!("health check server error: {} [{}]", err, self.pool.addr());
                 Err(Error::HealthcheckError)
             }

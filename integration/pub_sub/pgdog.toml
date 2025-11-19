@@ -1,6 +1,5 @@
 [general]
 pub_sub_channel_size = 4098
-healthcheck_interval = 500
 
 [rewrite]
 enabled = false

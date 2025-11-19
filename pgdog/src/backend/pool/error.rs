@@ -65,7 +65,4 @@ pub enum Error {
 
     #[error("pool is not healthy")]
     PoolUnhealthy,
-
-    #[error("connection has been closed by the database")]
-    DatabaseClosedConnection,
 }
