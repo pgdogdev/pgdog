@@ -1,12 +1,7 @@
-use std::ops::Deref;
-
 use crate::backend::Server;
 
 use super::{Error, Guard, Pool, Request};
-use tokio::{
-    sync::oneshot::*,
-    time::{timeout, Instant},
-};
+use tokio::{sync::oneshot::*, time::Instant};
 
 pub(super) struct Waiting {
     pool: Pool,
@@ -24,6 +19,10 @@ impl Drop for Waiting {
 }
 
 impl Waiting {
+    /// Create new waiter.
+    ///
+    /// N.B. You must call and await `Waiting::wait`, otherwise you'll leak waiters.
+    ///
     pub(super) fn new(pool: Pool, request: &Request) -> Result<Self, Error> {
         let request = *request;
         let (tx, rx) = channel();
@@ -49,68 +48,27 @@ impl Waiting {
 
     /// Wait for connection from the pool.
     pub(super) async fn wait(&mut self) -> Result<(Guard, Instant), Error> {
-        let checkout_timeout = self.pool.inner().config.checkout_timeout;
         let rx = self.rx.take().expect("waiter rx taken");
 
-        // Make this cancellation-safe.
-        let mut wait_guard = WaitGuard::new(self);
-        let server = timeout(checkout_timeout, rx).await;
-        wait_guard.disarm();
-        drop(wait_guard);
+        // Can be cancelled. Drop will remove the waiter from the queue.
+        let server = rx.await;
+
+        // Disarm the guard. We can't be cancelled beyond this point.
+        self.waiting = false;
 
         let now = Instant::now();
         match server {
-            Ok(Ok(server)) => {
+            Ok(server) => {
                 let server = server?;
                 Ok((Guard::new(self.pool.clone(), server, now), now))
             }
 
-            Err(_err) => {
-                let mut guard = self.pool.lock();
-                guard.remove_waiter(&self.request.id);
-                self.pool.inner().health.toggle(false);
+            Err(_) => {
+                // Should not be possible.
+                // This means someone else removed my waiter from the wait queue,
+                // indicating a bug in the pool.
                 Err(Error::CheckoutTimeout)
             }
-
-            // Should not be possible.
-            // This means someone else removed my waiter from the wait queue,
-            // indicating a bug in the pool.
-            Ok(Err(_)) => Err(Error::CheckoutTimeout),
-        }
-    }
-}
-
-struct WaitGuard<'a> {
-    waiting: &'a Waiting,
-    armed: bool,
-}
-
-impl<'a> Deref for WaitGuard<'a> {
-    type Target = &'a Waiting;
-
-    fn deref(&self) -> &Self::Target {
-        &self.waiting
-    }
-}
-
-impl<'a> WaitGuard<'a> {
-    fn new(waiting: &'a Waiting) -> Self {
-        Self {
-            waiting,
-            armed: true,
-        }
-    }
-
-    fn disarm(&mut self) {
-        self.armed = false;
-    }
-}
-
-impl Drop for WaitGuard<'_> {
-    fn drop(&mut self) {
-        if self.armed {
-            let id = self.waiting.request.id;
-            self.waiting.pool.lock().remove_waiter(&id);
         }
     }
 }
@@ -126,7 +84,7 @@ mod tests {
     use super::*;
     use crate::backend::pool::Pool;
     use crate::net::messages::BackendKeyData;
-    use tokio::time::{sleep, Duration};
+    use tokio::time::{sleep, timeout, Duration};
 
     #[tokio::test]
     async fn test_cancellation_safety() {
@@ -200,12 +158,14 @@ mod tests {
         let _conn = pool.get(&Request::default()).await.unwrap();
 
         let request = Request::new(BackendKeyData::new());
-        let mut waiting = Waiting::new(pool.clone(), &request).unwrap();
-
-        let result = waiting.wait().await;
+        let waiter_pool = pool.clone();
+        let get_conn = async move {
+            let mut waiting = Waiting::new(waiter_pool.clone(), &request).unwrap();
+            waiting.wait().await
+        };
+        let result = timeout(Duration::from_millis(100), get_conn).await;
 
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), Error::CheckoutTimeout));
 
         let pool_guard = pool.lock();
         assert!(
