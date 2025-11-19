@@ -180,6 +180,15 @@ impl ToUser for (&str, Option<&str>) {
     }
 }
 
+impl ToUser for &pgdog_config::User {
+    fn to_user(&self) -> User {
+        User {
+            user: self.name.clone(),
+            database: self.database.clone(),
+        }
+    }
+}
+
 /// Databases.
 #[derive(Default, Clone)]
 pub struct Databases {
@@ -354,13 +363,37 @@ pub(crate) fn new_pool(
     user: &crate::config::User,
     config: &crate::config::Config,
 ) -> Option<(User, Cluster)> {
+    let role_mapping = databases()
+        .cluster(user)
+        .ok()
+        .map(|cluster| cluster.redetect_roles());
+
     let sharded_tables = config.sharded_tables();
     let omnisharded_tables = config.omnisharded_tables();
     let sharded_mappings = config.sharded_mappings();
     let sharded_schemas = config.sharded_schemas();
     let general = &config.general;
     let databases = config.databases();
-    let shards = databases.get(&user.database);
+    let mut shards = databases.get(&user.database).cloned();
+
+    // Override role with automatically detected one.
+    if let Some(role_mapping) = role_mapping {
+        if let Some(ref mut shards) = shards {
+            for (shard_number, databases) in shards.iter_mut().enumerate() {
+                let shard_roles = role_mapping.get(shard_number);
+                if let Some(shard_roles) = shard_roles {
+                    for database in databases {
+                        if database.role == Role::Auto {
+                            database.role = shard_roles
+                                .get(&database.number)
+                                .cloned()
+                                .unwrap_or(Role::Replica);
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     if let Some(shards) = shards {
         let mut shard_configs = vec![];
@@ -370,14 +403,14 @@ pub(crate) fn new_pool(
                 .iter()
                 .find(|d| d.role == Role::Primary)
                 .map(|primary| PoolConfig {
-                    address: Address::new(primary, user),
+                    address: Address::new(primary, user, primary.number),
                     config: Config::new(general, primary, user, has_single_replica),
                 });
             let replicas = user_databases
                 .iter()
-                .filter(|d| d.role == Role::Replica)
+                .filter(|d| matches!(d.role, Role::Replica | Role::Auto))
                 .map(|replica| PoolConfig {
-                    address: Address::new(replica, user),
+                    address: Address::new(replica, user, replica.number),
                     config: Config::new(general, replica, user, has_single_replica),
                 })
                 .collect::<Vec<_>>();

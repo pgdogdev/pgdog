@@ -9,6 +9,7 @@ use parking_lot::{lock_api::MutexGuard, Mutex, RawMutex};
 use tokio::time::{timeout, Instant};
 use tracing::error;
 
+use crate::backend::pool::LsnStats;
 use crate::backend::{Server, ServerOptions};
 use crate::config::PoolerMode;
 use crate::net::messages::BackendKeyData;
@@ -264,6 +265,18 @@ impl Pool {
     pub fn available(&self) -> bool {
         let guard = self.lock();
         !guard.paused && guard.online
+    }
+
+    /// Is the database behind this connection pool in recovery?
+    ///
+    /// If we haven't detected it yet, return None.
+    pub fn lsn_stats(&self) -> Option<LsnStats> {
+        let guard = self.lock();
+        if guard.lsn_stats.lsn.lsn > 0 {
+            Some(guard.lsn_stats.clone())
+        } else {
+            None
+        }
     }
 
     /// Connection pool unique identifier.

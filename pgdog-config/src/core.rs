@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use tracing::{info, warn};
 
 use crate::sharding::ShardedSchema;
-use crate::{Memory, PassthoughAuth, PreparedStatements, RewriteMode};
+use crate::{EnumeratedDatabase, Memory, PassthoughAuth, PreparedStatements, RewriteMode};
 
 use super::database::Database;
 use super::error::Error;
@@ -191,8 +191,9 @@ pub struct Config {
 
 impl Config {
     /// Organize all databases by name for quicker retrieval.
-    pub fn databases(&self) -> HashMap<String, Vec<Vec<Database>>> {
+    pub fn databases(&self) -> HashMap<String, Vec<Vec<EnumeratedDatabase>>> {
         let mut databases = HashMap::new();
+        let mut number = 0;
         for database in &self.databases {
             let entry = databases
                 .entry(database.name.clone())
@@ -203,7 +204,11 @@ impl Config {
             entry
                 .get_mut(database.shard)
                 .unwrap()
-                .push(database.clone());
+                .push(EnumeratedDatabase {
+                    number,
+                    database: database.clone(),
+                });
+            number += 1;
         }
         databases
     }

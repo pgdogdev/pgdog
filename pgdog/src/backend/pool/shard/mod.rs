@@ -1,5 +1,6 @@
 //! A shard is a collection of replicas and an optional primary.
 
+use std::collections::HashMap;
 use std::ops::Deref;
 use std::sync::Arc;
 use std::time::Duration;
@@ -234,6 +235,12 @@ impl Shard {
     pub fn identifier(&self) -> &User {
         &self.identifier
     }
+
+    /// Re-detect primary/replica roles and re-build
+    /// the shard routing logic.
+    pub fn redetect_roles(&self) -> HashMap<usize, Role> {
+        self.replicas.redetect_roles()
+    }
 }
 
 impl Deref for Shard {
@@ -246,12 +253,12 @@ impl Deref for Shard {
 
 /// Shard connection pools
 /// and internal state.
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 pub struct ShardInner {
     number: usize,
     primary: Option<Pool>,
     replicas: Replicas,
-    comms: ShardComms,
+    comms: Arc<ShardComms>,
     pub_sub: Option<PubSubListener>,
     identifier: Arc<User>,
 }
@@ -269,10 +276,10 @@ impl ShardInner {
         } = shard;
         let primary = primary.as_ref().map(Pool::new);
         let replicas = Replicas::new(&primary, replicas, lb_strategy, rw_split);
-        let comms = ShardComms {
+        let comms = Arc::new(ShardComms {
             shutdown: Notify::new(),
             lsn_check_interval,
-        };
+        });
         let pub_sub = if config().pub_sub_enabled() {
             primary.as_ref().map(PubSubListener::new)
         } else {
@@ -294,7 +301,7 @@ impl ShardInner {
 mod test {
     use std::collections::BTreeSet;
 
-    use crate::backend::pool::{Address, Config};
+    use crate::backend::pool::Address;
 
     use super::*;
 
@@ -304,12 +311,12 @@ mod test {
 
         let primary = &Some(PoolConfig {
             address: Address::new_test(),
-            config: Config::default(),
+            ..Default::default()
         });
 
         let replicas = &[PoolConfig {
             address: Address::new_test(),
-            config: Config::default(),
+            ..Default::default()
         }];
 
         let shard = Shard::new(ShardConfig {
@@ -342,12 +349,12 @@ mod test {
 
         let primary = &Some(PoolConfig {
             address: Address::new_test(),
-            config: Config::default(),
+            ..Default::default()
         });
 
         let replicas = &[PoolConfig {
             address: Address::new_test(),
-            config: Config::default(),
+            ..Default::default()
         }];
 
         let shard = Shard::new(ShardConfig {

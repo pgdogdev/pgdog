@@ -1,6 +1,7 @@
 //! Replicas pool.
 
 use std::{
+    collections::HashMap,
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
@@ -97,6 +98,45 @@ impl Replicas {
             maintenance: Arc::new(Notify::new()),
             rw_split,
         }
+    }
+
+    /// Detect database roles from pg_is_in_recovery() and
+    /// return new primary (if any), and replicas.
+    pub fn redetect_roles(&self) -> HashMap<usize, Role> {
+        let mut targets = self
+            .replicas
+            .clone()
+            .into_iter()
+            .map(|target| (target.pool.lsn_stats(), target))
+            .collect::<Vec<_>>();
+
+        if let Some(primary) = self.primary.clone() {
+            targets.push((primary.pool.lsn_stats(), primary));
+        }
+
+        // Pick primary by latest data.
+        targets.sort_by_cached_key(|target| {
+            target.0.map(|target| target.lsn_age()).unwrap_or_default()
+        });
+
+        let primary = targets
+            .iter()
+            .find(|target| target.0.map(|target| !target.replica).unwrap_or(false))
+            .map(|target| target.1.clone());
+        let replicas = targets
+            .iter()
+            .filter(|target| target.0.map(|lsn| lsn.replica).unwrap_or(true))
+            .map(|target| target.1.clone())
+            .collect::<Vec<_>>();
+
+        let mut numbers: HashMap<_, _> = replicas
+            .iter()
+            .map(|replica| (replica.pool.addr().database_number, Role::Replica))
+            .collect();
+        if let Some(primary) = primary {
+            numbers.insert(primary.pool.addr().database_number, Role::Primary);
+        }
+        numbers
     }
 
     /// Launch replica pools and start the monitor.

@@ -1,8 +1,9 @@
 //! A collection of replicas and a primary.
 
 use parking_lot::{Mutex, RwLock};
-use pgdog_config::{PreparedStatements, Rewrite};
+use pgdog_config::{PreparedStatements, Rewrite, Role};
 use std::{
+    collections::HashMap,
     sync::{
         atomic::{AtomicU8, Ordering},
         Arc,
@@ -28,7 +29,7 @@ use crate::{
 use super::{Address, Config, Error, Guard, MirrorStats, Request, Shard, ShardConfig};
 use crate::config::LoadBalancingStrategy;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 /// Database configuration.
 pub struct PoolConfig {
     /// Database address.
@@ -259,6 +260,10 @@ impl Cluster {
             query_parser_enabled,
             connection_recovery,
         }
+    }
+
+    pub fn new_from_detected_roles(self) -> Cluster {
+        todo!()
     }
 
     /// Change config to work with logical replication streaming.
@@ -531,6 +536,14 @@ impl Cluster {
         }
 
         Ok(())
+    }
+
+    /// Re-detect primary/replica roles, with shard numbers.
+    pub fn redetect_roles(&self) -> Vec<HashMap<usize, Role>> {
+        self.shards
+            .iter()
+            .map(|shard| shard.redetect_roles())
+            .collect()
     }
 }
 
