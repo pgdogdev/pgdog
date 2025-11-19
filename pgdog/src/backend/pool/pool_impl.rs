@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use once_cell::sync::{Lazy, OnceCell};
 use parking_lot::{lock_api::MutexGuard, Mutex, RawMutex};
-use tokio::time::Instant;
+use tokio::time::{timeout, Instant};
 use tracing::error;
 
 use crate::backend::{Server, ServerOptions};
@@ -96,60 +96,78 @@ impl Pool {
     }
 
     pub async fn get(&self, request: &Request) -> Result<Guard, Error> {
-        self.get_internal(request).await
+        match timeout(self.config().checkout_timeout, self.get_internal(request)).await {
+            Ok(Ok(conn)) => Ok(conn),
+            Err(_) => {
+                self.inner.health.toggle(false);
+                Err(Error::CheckoutTimeout)
+            }
+            Ok(Err(err)) => {
+                self.inner.health.toggle(false);
+                Err(err.into())
+            }
+        }
     }
 
     /// Get a connection from the pool.
     async fn get_internal(&self, request: &Request) -> Result<Guard, Error> {
-        let pool = self.clone();
+        loop {
+            let pool = self.clone();
 
-        // Fast path, idle connection probably available.
-        let (server, granted_at, paused) = {
-            // Ask for time before we acquire the lock
-            // and only if we actually waited for a connection.
-            let granted_at = request.created_at;
-            let elapsed = granted_at.saturating_duration_since(request.created_at);
-            let mut guard = self.lock();
+            // Fast path, idle connection probably available.
+            let (server, granted_at, paused) = {
+                // Ask for time before we acquire the lock
+                // and only if we actually waited for a connection.
+                let granted_at = request.created_at;
+                let elapsed = granted_at.saturating_duration_since(request.created_at);
+                let mut guard = self.lock();
 
-            if !guard.online {
-                return Err(Error::Offline);
+                if !guard.online {
+                    return Err(Error::Offline);
+                }
+
+                let conn = guard.take(request);
+
+                if conn.is_some() {
+                    guard.stats.counts.wait_time += elapsed;
+                    guard.stats.counts.server_assignment_count += 1;
+                }
+
+                (conn, granted_at, guard.paused)
+            };
+
+            if paused {
+                self.comms().ready.notified().await;
             }
 
-            let conn = guard.take(request);
+            let (server, granted_at) = if let Some(mut server) = server {
+                server
+                    .prepared_statements_mut()
+                    .set_capacity(self.inner.config.prepared_statements_limit);
+                server.set_pooler_mode(self.inner.config.pooler_mode);
+                (Guard::new(pool, server, granted_at), granted_at)
+            } else {
+                // Slow path, pool is empty, will create new connection
+                // or wait for one to be returned if the pool is maxed out.
+                let mut waiting = Waiting::new(pool, request)?;
+                waiting.wait().await?
+            };
 
-            if conn.is_some() {
-                guard.stats.counts.wait_time += elapsed;
-                guard.stats.counts.server_assignment_count += 1;
+            match self
+                .maybe_healthcheck(
+                    server,
+                    self.inner.config.healthcheck_timeout,
+                    self.inner.config.healthcheck_interval,
+                    granted_at,
+                )
+                .await
+            {
+                Ok(conn) => return Ok(conn),
+                // Try another connection.
+                Err(Error::HealthcheckError) => continue,
+                Err(err) => return Err(err),
             }
-
-            (conn, granted_at, guard.paused)
-        };
-
-        if paused {
-            self.comms().ready.notified().await;
         }
-
-        let (server, granted_at) = if let Some(mut server) = server {
-            server
-                .prepared_statements_mut()
-                .set_capacity(self.inner.config.prepared_statements_limit);
-            server.set_pooler_mode(self.inner.config.pooler_mode);
-            (Guard::new(pool, server, granted_at), granted_at)
-        } else {
-            // Slow path, pool is empty, will create new connection
-            // or wait for one to be returned if the pool is maxed out.
-            let mut waiting = Waiting::new(pool, request)?;
-            waiting.wait().await?
-        };
-
-        return self
-            .maybe_healthcheck(
-                server,
-                self.inner.config.healthcheck_timeout,
-                self.inner.config.healthcheck_interval,
-                granted_at,
-            )
-            .await;
     }
 
     /// Get server parameters, fetch them if necessary.
