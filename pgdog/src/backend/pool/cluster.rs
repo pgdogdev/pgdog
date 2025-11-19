@@ -4,7 +4,7 @@ use parking_lot::{Mutex, RwLock};
 use pgdog_config::{PreparedStatements, Rewrite};
 use std::{
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicU8, Ordering},
         Arc,
     },
     time::Duration,
@@ -37,6 +37,12 @@ pub struct PoolConfig {
     pub(crate) config: Config,
 }
 
+#[derive(Clone, Debug, Default)]
+struct ClusterVersion {
+    version: u8,
+    global: Arc<AtomicU8>,
+}
+
 /// A collection of sharded replicas and primaries
 /// belonging to the same database cluster.
 #[derive(Clone, Default, Debug)]
@@ -56,7 +62,7 @@ pub struct Cluster {
     cross_shard_disabled: bool,
     two_phase_commit: bool,
     two_phase_commit_auto: bool,
-    online: Arc<AtomicBool>,
+    version: ClusterVersion,
     rewrite: Rewrite,
     prepared_statements: PreparedStatements,
     dry_run: bool,
@@ -244,7 +250,7 @@ impl Cluster {
             cross_shard_disabled,
             two_phase_commit: two_pc && shards.len() > 1,
             two_phase_commit_auto: two_pc_auto && shards.len() > 1,
-            online: Arc::new(AtomicBool::new(false)),
+            version: ClusterVersion::default(),
             rewrite: rewrite.clone(),
             prepared_statements: prepared_statements.clone(),
             dry_run,
@@ -490,21 +496,28 @@ impl Cluster {
                 }
             });
         }
-
-        self.online.store(true, Ordering::Relaxed);
     }
 
-    /// Shutdown the connection pools.
+    /// Shutdown the connection pools and tell
+    /// clients to re-fetch the cluster object.
     pub(crate) fn shutdown(&self) {
         for shard in self.shards() {
             shard.shutdown();
         }
 
-        self.online.store(false, Ordering::Relaxed);
+        self.force_reload();
     }
 
+    /// Bump global version, telling clients they should
+    /// re-fetch cluster object from databases().
+    pub(crate) fn force_reload(&self) {
+        self.version.global.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// The cluster is online and can be used for queries.
     pub(crate) fn online(&self) -> bool {
-        self.online.load(Ordering::Relaxed)
+        let global = self.version.global.load(Ordering::Relaxed);
+        self.version.version == global
     }
 
     /// Execute a query on every primary in the cluster.
