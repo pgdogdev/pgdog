@@ -49,6 +49,14 @@ impl ShardMonitor {
             self.shard.identifier()
         );
 
+        let mut lsn_stats = self
+            .shard
+            .pools()
+            .iter()
+            .map(|pool| pool.lsn_stats())
+            .enumerate()
+            .collect::<HashMap<_, _>>();
+
         loop {
             select! {
                 _ = maintenance.tick() => {},

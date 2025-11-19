@@ -71,6 +71,16 @@ pub fn reconnect() -> Result<(), Error> {
     Ok(())
 }
 
+/// Re-create databases from existing config,
+/// preserving connections.
+pub fn reload_from_existing() -> Result<(), Error> {
+    let config = config();
+    let databases = from_config(&config);
+
+    replace_databases(databases, true);
+    Ok(())
+}
+
 /// Initialize the databases for the first time.
 pub fn init() {
     let config = config();
