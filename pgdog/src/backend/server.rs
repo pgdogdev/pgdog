@@ -653,6 +653,7 @@ impl Server {
         debug!("running healthcheck \"{}\" [{}]", query, self.addr);
 
         self.execute(query).await?;
+
         self.stats.healthcheck();
 
         Ok(())

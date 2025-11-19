@@ -514,6 +514,33 @@ async fn test_idle_healthcheck_loop() {
 }
 
 #[tokio::test]
+async fn test_checkout_timeout() {
+    crate::logger();
+
+    let config = Config {
+        max: 1,
+        min: 1,
+        checkout_timeout: Duration::from_millis(100),
+        ..Default::default()
+    };
+
+    let pool = Pool::new(&PoolConfig {
+        address: Address::new_test(),
+        config,
+    });
+    pool.launch();
+
+    // Hold the only connection
+    let _conn = pool.get(&Request::default()).await.unwrap();
+
+    // Try to get another connection - should timeout
+    let result = pool.get(&Request::default()).await;
+    assert!(result.is_err());
+    assert_eq!(result.unwrap_err(), Error::CheckoutTimeout);
+    assert!(pool.lock().waiting.is_empty());
+}
+
+#[tokio::test]
 async fn test_move_conns_to() {
     crate::logger();
 
