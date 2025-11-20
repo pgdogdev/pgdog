@@ -112,6 +112,8 @@ impl QueryEngine {
         self.stats
             .received(context.client_request.total_message_len());
 
+        self.comms.stats(self.stats);
+
         // Rewrite prepared statements.
         self.rewrite_extended(context)?;
 
