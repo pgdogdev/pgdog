@@ -1,4 +1,4 @@
-use pg_query::{parse, parse_plpgsql};
+use pg_query::parse;
 
 use super::*;
 
