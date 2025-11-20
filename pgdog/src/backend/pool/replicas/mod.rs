@@ -1,6 +1,7 @@
 //! Replicas pool.
 
 use std::{
+    collections::HashMap,
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
@@ -9,17 +10,26 @@ use std::{
 };
 
 use rand::seq::SliceRandom;
-use tokio::{sync::Notify, time::timeout};
+use tokio::{
+    sync::Notify,
+    time::{timeout, Instant},
+};
 
-use crate::config::{LoadBalancingStrategy, ReadWriteSplit, Role};
 use crate::net::messages::BackendKeyData;
+use crate::{
+    backend::pool::shard::role_detector::DetectedRoles,
+    config::{LoadBalancingStrategy, ReadWriteSplit, Role},
+};
 
 use super::{Error, Guard, Pool, PoolConfig, Request};
 
 pub mod ban;
+pub mod detected_role;
 pub mod monitor;
 pub mod target_health;
+
 use ban::Ban;
+pub use detected_role::*;
 use monitor::*;
 pub use target_health::*;
 
@@ -97,6 +107,92 @@ impl Replicas {
             maintenance: Arc::new(Notify::new()),
             rw_split,
         }
+    }
+
+    /// Get current database roles.
+    pub fn current_roles(&self) -> DetectedRoles {
+        let mut roles = self
+            .replicas
+            .iter()
+            .map(|replica| {
+                let role = DetectedRole::from_read_target(replica);
+                (role.database_number, role)
+            })
+            .collect::<HashMap<_, _>>();
+
+        if let Some(ref primary) = self.primary {
+            let role = DetectedRole::from_read_target(primary);
+            roles.insert(role.database_number, role);
+        }
+
+        roles.into()
+    }
+
+    /// Detect database roles from pg_is_in_recovery() and
+    /// return new primary (if any), and replicas.
+    pub fn redetect_roles(&self) -> Option<DetectedRoles> {
+        let mut targets = self
+            .replicas
+            .clone()
+            .into_iter()
+            .map(|target| (target.pool.lsn_stats(), target))
+            .collect::<Vec<_>>();
+
+        // Only detect roles if the LSN detector is running.
+        if !targets.iter().all(|target| target.0.valid()) {
+            return None;
+        }
+
+        if let Some(primary) = self.primary.clone() {
+            targets.push((primary.pool.lsn_stats(), primary));
+        }
+
+        // Pick primary by latest data. The one with the most
+        // up-to-date lsn number and pg_is_in_recovery() = false
+        // is the new primary.
+        //
+        // The old primary is still part of the config and will be demoted
+        // to replica. If it's down, it will be banned from serving traffic.
+        //
+        let now = Instant::now();
+        targets.sort_by_cached_key(|target| target.0.lsn_age(now));
+
+        let primary = targets
+            .iter()
+            .find(|target| target.0.valid() && !target.0.replica);
+        let replicas = targets
+            .iter()
+            .filter(|target| target.0.replica)
+            .collect::<Vec<_>>();
+
+        let mut numbers: HashMap<_, _> = replicas
+            .iter()
+            .map(|target| {
+                let database_number = target.1.pool.addr().database_number;
+                (
+                    database_number,
+                    DetectedRole {
+                        role: Role::Replica,
+                        as_of: target.0.fetched,
+                        database_number,
+                    },
+                )
+            })
+            .collect();
+        if let Some(primary) = primary {
+            let database_number = primary.1.pool.addr().database_number;
+
+            numbers.insert(
+                database_number,
+                DetectedRole {
+                    role: Role::Primary,
+                    as_of: primary.0.fetched,
+                    database_number,
+                },
+            );
+        }
+
+        Some(numbers.into())
     }
 
     /// Launch replica pools and start the monitor.

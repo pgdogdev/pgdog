@@ -15,6 +15,7 @@ use tracing::{error, info};
 use crate::{
     backend::{
         databases::{databases, User as DatabaseUser},
+        pool::shard::role_detector::DetectedRoles,
         replication::{ReplicationConfig, ShardedColumn, ShardedSchemas},
         Schema, ShardedTables,
     },
@@ -28,7 +29,7 @@ use crate::{
 use super::{Address, Config, Error, Guard, MirrorStats, Request, Shard, ShardConfig};
 use crate::config::LoadBalancingStrategy;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 /// Database configuration.
 pub struct PoolConfig {
     /// Database address.
@@ -83,9 +84,11 @@ impl ShardingSchema {
     }
 }
 
+#[derive(Debug)]
 pub struct ClusterShardConfig {
     pub primary: Option<PoolConfig>,
     pub replicas: Vec<PoolConfig>,
+    pub role_detector: bool,
 }
 
 impl ClusterShardConfig {
@@ -104,6 +107,7 @@ impl ClusterShardConfig {
 }
 
 /// Cluster creation config.
+#[derive(Debug)]
 pub struct ClusterConfig<'a> {
     pub name: &'a str,
     pub shards: &'a [ClusterShardConfig],
@@ -228,6 +232,7 @@ impl Cluster {
                         rw_split,
                         identifier: identifier.clone(),
                         lsn_check_interval,
+                        role_detector: config.role_detector,
                     })
                 })
                 .collect(),
@@ -519,6 +524,14 @@ impl Cluster {
 
         Ok(())
     }
+
+    /// Re-detect primary/replica roles, with shard numbers.
+    pub fn redetect_roles(&self) -> Vec<Option<DetectedRoles>> {
+        self.shards
+            .iter()
+            .map(|shard| shard.redetect_roles())
+            .collect()
+    }
 }
 
 #[cfg(test)]
@@ -565,6 +578,7 @@ mod test {
                         rw_split: ReadWriteSplit::IncludePrimary,
                         identifier: identifier.clone(),
                         lsn_check_interval: Duration::MAX,
+                        role_detector: false,
                     })
                 })
                 .collect::<Vec<_>>();

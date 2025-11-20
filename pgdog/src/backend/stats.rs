@@ -62,6 +62,7 @@ pub struct Counts {
     pub prepared_statements: usize,
     pub query_time: Duration,
     pub transaction_time: Duration,
+    pub idle_in_transaction_time: Duration,
     pub parse: usize,
     pub bind: usize,
     pub healthchecks: usize,
@@ -85,6 +86,9 @@ impl Add for Counts {
             prepared_statements: rhs.prepared_statements, // It's a gauge.
             query_time: self.query_time.saturating_add(rhs.query_time),
             transaction_time: self.query_time.saturating_add(rhs.transaction_time),
+            idle_in_transaction_time: self
+                .idle_in_transaction_time
+                .saturating_add(rhs.idle_in_transaction_time),
             parse: self.parse.saturating_add(rhs.parse),
             bind: self.bind.saturating_add(rhs.bind),
             healthchecks: self.healthchecks.saturating_add(rhs.healthchecks),
@@ -111,6 +115,7 @@ pub struct Stats {
     pub memory: MemoryStats,
     query_timer: Option<Instant>,
     transaction_timer: Option<Instant>,
+    idle_in_transaction_timer: Option<Instant>,
 }
 
 impl Stats {
@@ -137,6 +142,7 @@ impl Stats {
             pool_id: options.pool_id,
             client_id: None,
             memory: MemoryStats::new(config),
+            idle_in_transaction_timer: None,
         };
 
         STATS.lock().insert(
@@ -231,9 +237,14 @@ impl Stats {
     }
 
     /// A query has been completed.
-    pub fn query(&mut self, now: Instant) {
+    pub fn query(&mut self, now: Instant, idle_in_transaction: bool) {
         self.total.queries += 1;
         self.last_checkout.queries += 1;
+
+        if idle_in_transaction {
+            self.idle_in_transaction_timer = Some(now);
+        }
+
         if let Some(query_timer) = self.query_timer.take() {
             let duration = now.duration_since(query_timer);
             self.total.query_time += duration;
@@ -257,6 +268,7 @@ impl Stats {
     }
 
     fn activate(&mut self) {
+        // Client started a query/transaction.
         if self.state == State::Active {
             let now = Instant::now();
             if self.transaction_timer.is_none() {
@@ -264,6 +276,11 @@ impl Stats {
             }
             if self.query_timer.is_none() {
                 self.query_timer = Some(now);
+            }
+            if let Some(idle_in_transaction_timer) = self.idle_in_transaction_timer.take() {
+                let elapsed = now.duration_since(idle_in_transaction_timer);
+                self.last_checkout.idle_in_transaction_time += elapsed;
+                self.total.idle_in_transaction_time += elapsed;
             }
         }
     }

@@ -17,6 +17,7 @@ pub struct Counts {
     pub received: usize,
     pub sent: usize,
     pub xact_time: Duration,
+    pub idle_xact_time: Duration,
     pub query_time: Duration,
     pub wait_time: Duration,
     pub parse_count: usize,
@@ -45,6 +46,7 @@ impl Sub for Counts {
             received: self.received.saturating_sub(rhs.received),
             sent: self.sent.saturating_sub(rhs.sent),
             xact_time: self.xact_time.saturating_sub(rhs.xact_time),
+            idle_xact_time: self.idle_xact_time.saturating_sub(rhs.idle_xact_time),
             query_time: self.query_time.saturating_sub(rhs.query_time),
             wait_time: self.wait_time.saturating_sub(rhs.wait_time),
             parse_count: self.parse_count.saturating_sub(rhs.parse_count),
@@ -73,6 +75,10 @@ impl Div<usize> for Counts {
             received: self.received.checked_div(rhs).unwrap_or(0),
             sent: self.sent.checked_div(rhs).unwrap_or(0),
             xact_time: self.xact_time.checked_div(rhs as u32).unwrap_or_default(),
+            idle_xact_time: self
+                .idle_xact_time
+                .checked_div(rhs as u32)
+                .unwrap_or_default(),
             query_time: self.query_time.checked_div(rhs as u32).unwrap_or_default(),
             wait_time: self.wait_time.checked_div(rhs as u32).unwrap_or_default(),
             parse_count: self.parse_count.checked_div(rhs).unwrap_or(0),
@@ -105,6 +111,7 @@ impl Add<BackendCounts> for Counts {
             sent: self.sent + rhs.bytes_sent,
             query_time: self.query_time + rhs.query_time,
             xact_time: self.xact_time + rhs.transaction_time,
+            idle_xact_time: self.idle_xact_time + rhs.idle_in_transaction_time,
             wait_time: self.wait_time,
             parse_count: self.parse_count + rhs.parse,
             bind_count: self.bind_count + rhs.bind,
@@ -145,6 +152,7 @@ impl Add for Counts {
             received: self.received.saturating_add(rhs.received),
             sent: self.sent.saturating_add(rhs.sent),
             xact_time: self.xact_time.saturating_add(rhs.xact_time),
+            idle_xact_time: self.idle_xact_time.saturating_add(rhs.idle_xact_time),
             query_time: self.query_time.saturating_add(rhs.query_time),
             wait_time: self.wait_time.saturating_add(rhs.wait_time),
             parse_count: self.parse_count.saturating_add(rhs.parse_count),
@@ -219,6 +227,7 @@ mod tests {
             received: 1000,
             sent: 2000,
             xact_time: Duration::from_secs(5),
+            idle_xact_time: Duration::from_secs(3),
             query_time: Duration::from_secs(3),
             wait_time: Duration::from_secs(2),
             parse_count: 15,
@@ -241,6 +250,7 @@ mod tests {
             received: 500,
             sent: 1000,
             xact_time: Duration::from_secs(2),
+            idle_xact_time: Duration::from_secs(5),
             query_time: Duration::from_secs(1),
             wait_time: Duration::from_secs(1),
             parse_count: 8,
@@ -264,6 +274,7 @@ mod tests {
         assert_eq!(result.received, 1500);
         assert_eq!(result.sent, 3000);
         assert_eq!(result.xact_time, Duration::from_secs(7));
+        assert_eq!(result.idle_xact_time, Duration::from_secs(8));
         assert_eq!(result.query_time, Duration::from_secs(4));
         assert_eq!(result.wait_time, Duration::from_secs(3));
         assert_eq!(result.parse_count, 23);
@@ -288,6 +299,7 @@ mod tests {
             received: 1000,
             sent: 2000,
             xact_time: Duration::from_secs(5),
+            idle_xact_time: Duration::from_secs(3),
             query_time: Duration::from_secs(3),
             wait_time: Duration::from_secs(2),
             parse_count: 15,
@@ -310,6 +322,7 @@ mod tests {
             received: 500,
             sent: 1000,
             xact_time: Duration::from_secs(2),
+            idle_xact_time: Duration::from_secs(2),
             query_time: Duration::from_secs(1),
             wait_time: Duration::from_secs(1),
             parse_count: 8,
@@ -333,6 +346,7 @@ mod tests {
         assert_eq!(result.received, 500);
         assert_eq!(result.sent, 1000);
         assert_eq!(result.xact_time, Duration::from_secs(3));
+        assert_eq!(result.idle_xact_time, Duration::from_secs(1));
         assert_eq!(result.query_time, Duration::from_secs(2));
         assert_eq!(result.wait_time, Duration::from_secs(1));
         assert_eq!(result.parse_count, 7);
@@ -377,6 +391,7 @@ mod tests {
             received: 1000,
             sent: 2000,
             xact_time: Duration::from_secs(10),
+            idle_xact_time: Duration::from_secs(20),
             query_time: Duration::from_secs(6),
             wait_time: Duration::from_secs(4),
             parse_count: 15,
@@ -400,6 +415,7 @@ mod tests {
         assert_eq!(result.received, 500);
         assert_eq!(result.sent, 1000);
         assert_eq!(result.xact_time, Duration::from_secs(5));
+        assert_eq!(result.idle_xact_time, Duration::from_secs(10));
         assert_eq!(result.query_time, Duration::from_secs(3));
         assert_eq!(result.wait_time, Duration::from_secs(2));
         assert_eq!(result.parse_count, 7);
@@ -438,6 +454,7 @@ mod tests {
             received: 1000,
             sent: 2000,
             xact_time: Duration::from_secs(5),
+            idle_xact_time: Duration::from_secs(10),
             query_time: Duration::from_secs(3),
             wait_time: Duration::from_secs(2),
             parse_count: 15,
@@ -463,6 +480,7 @@ mod tests {
             prepared_statements: 0,
             query_time: Duration::from_secs(2),
             transaction_time: Duration::from_secs(3),
+            idle_in_transaction_time: Duration::from_secs(5),
             parse: 7,
             bind: 8,
             healthchecks: 3,
@@ -480,6 +498,7 @@ mod tests {
         assert_eq!(result.received, 1300);
         assert_eq!(result.sent, 2500);
         assert_eq!(result.xact_time, Duration::from_secs(8));
+        assert_eq!(result.idle_xact_time, Duration::from_secs(15));
         assert_eq!(result.query_time, Duration::from_secs(5));
         assert_eq!(result.wait_time, Duration::from_secs(2));
         assert_eq!(result.parse_count, 22);

@@ -24,6 +24,7 @@ fn create_test_pool_config(host: &str, port: u16) -> PoolConfig {
             ban_timeout: Duration::from_millis(100),
             ..Default::default()
         },
+        ..Default::default()
     }
 }
 
@@ -703,6 +704,7 @@ async fn test_monitor_does_not_ban_with_zero_ban_timeout() {
             ban_timeout: Duration::ZERO,
             ..Default::default()
         },
+        ..Default::default()
     };
 
     let pool_config2 = PoolConfig {
@@ -720,6 +722,7 @@ async fn test_monitor_does_not_ban_with_zero_ban_timeout() {
             ban_timeout: Duration::ZERO,
             ..Default::default()
         },
+        ..Default::default()
     };
 
     let replicas = Replicas::new(

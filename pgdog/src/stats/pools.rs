@@ -61,6 +61,8 @@ impl Pools {
         let mut avg_received = vec![];
         let mut total_xact_time = vec![];
         let mut avg_xact_time = vec![];
+        let mut total_idle_xact_time = vec![];
+        let mut avg_idle_xact_time = vec![];
         let mut total_query_time = vec![];
         let mut avg_query_time = vec![];
         let mut total_close = vec![];
@@ -181,6 +183,16 @@ impl Pools {
                     avg_xact_time.push(Measurement {
                         labels: labels.clone(),
                         measurement: averages.xact_time.as_millis().into(),
+                    });
+
+                    total_idle_xact_time.push(Measurement {
+                        labels: labels.clone(),
+                        measurement: totals.idle_xact_time.as_millis().into(),
+                    });
+
+                    avg_idle_xact_time.push(Measurement {
+                        labels: labels.clone(),
+                        measurement: averages.idle_xact_time.as_millis().into(),
                     });
 
                     total_query_time.push(Measurement {
@@ -397,6 +409,22 @@ impl Pools {
             name: "avg_xact_time".into(),
             measurements: avg_xact_time,
             help: "Average time spent executing transactions.".into(),
+            unit: None,
+            metric_type: None,
+        }));
+
+        metrics.push(Metric::new(PoolMetric {
+            name: "total_idle_xact_time".into(),
+            measurements: total_idle_xact_time,
+            help: "Total time spent idling inside transactions.".into(),
+            unit: None,
+            metric_type: Some("counter".into()),
+        }));
+
+        metrics.push(Metric::new(PoolMetric {
+            name: "avg_idle_xact_time".into(),
+            measurements: avg_idle_xact_time,
+            help: "Average time spent idling inside transactions.".into(),
             unit: None,
             metric_type: None,
         }));

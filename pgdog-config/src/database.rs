@@ -1,5 +1,8 @@
 use serde::{Deserialize, Serialize};
-use std::str::FromStr;
+use std::{
+    ops::{Deref, DerefMut},
+    str::FromStr,
+};
 
 use super::pooling::PoolerMode;
 
@@ -151,5 +154,27 @@ impl FromStr for Role {
             "auto" => Ok(Self::Auto),
             _ => Err(format!("Invalid role: {}", s)),
         }
+    }
+}
+
+/// Database with a unique number, identifying it
+/// in the config.
+#[derive(Debug, Clone)]
+pub struct EnumeratedDatabase {
+    pub number: usize,
+    pub database: Database,
+}
+
+impl Deref for EnumeratedDatabase {
+    type Target = Database;
+
+    fn deref(&self) -> &Self::Target {
+        &self.database
+    }
+}
+
+impl DerefMut for EnumeratedDatabase {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.database
     }
 }
