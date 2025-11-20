@@ -1,3 +1,5 @@
+use pg_query::{parse, parse_plpgsql};
+
 use super::*;
 
 impl QueryParser {
@@ -111,6 +113,23 @@ impl QueryParser {
                 shard = Self::shard_ddl_table(&stmt.sequence, schema)?.unwrap_or(Shard::All);
             }
 
+            Some(NodeEnum::LockStmt(stmt)) => {
+                if let Some(node) = stmt.relations.first() {
+                    match node.node {
+                        Some(NodeEnum::RangeVar(ref table)) => {
+                            let table = Table::from(table);
+                            shard = schema
+                                .schemas
+                                .get(table.schema())
+                                .map(|schema| schema.shard().into())
+                                .unwrap_or(Shard::All);
+                        }
+
+                        _ => (),
+                    }
+                }
+            }
+
             Some(NodeEnum::VacuumStmt(stmt)) => {
                 for rel in &stmt.rels {
                     if let Some(NodeEnum::VacuumRelation(ref stmt)) = rel.node {
@@ -122,6 +141,42 @@ impl QueryParser {
 
             Some(NodeEnum::VacuumRelation(stmt)) => {
                 shard = Self::shard_ddl_table(&stmt.relation, schema)?.unwrap_or(Shard::All);
+            }
+
+            // DO $$ BEGIN ... END
+            Some(NodeEnum::DoStmt(stmt)) => {
+                if let Some(inner) = stmt.args.first() {
+                    if let Some(NodeEnum::DefElem(ref elem)) = inner.node {
+                        if let Some(ref arg) = elem.arg {
+                            if let Some(NodeEnum::String(ref string)) = arg.node {
+                                // Parse each statement individually.
+                                // The first DDL statement to return a direct shard will be used.
+                                // TODO: handle non-DDL statements in here as well,
+                                // need a full recursive call back to QueryParser::query basically, but that requires a refactor.
+                                for stmt in string.sval.lines() {
+                                    if let Ok(stmt) = parse(stmt) {
+                                        if let Some(node) = stmt
+                                            .protobuf
+                                            .stmts
+                                            .first()
+                                            .map(|stmt| &stmt.stmt)
+                                            .cloned()
+                                            .flatten()
+                                        {
+                                            let command = Self::shard_ddl(&node.node, schema)?;
+                                            if let Command::Query(query) = command {
+                                                if !query.is_cross_shard() {
+                                                    shard = query.shard().clone();
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
             Some(NodeEnum::TruncateStmt(stmt)) => {
@@ -313,6 +368,23 @@ mod test {
         let root = parse_stmt("CREATE INDEX test_idx ON shard_1.test (id)");
         let command = QueryParser::shard_ddl(&root, &test_schema()).unwrap();
         assert_eq!(command.route().shard(), &Shard::Direct(1));
+
+        let root = parse_stmt("CREATE UNIQUE INDEX test_idx ON shard_1.test (id)");
+        let command = QueryParser::shard_ddl(&root, &test_schema()).unwrap();
+        assert_eq!(command.route().shard(), &Shard::Direct(1));
+    }
+
+    #[test]
+    fn test_do_begin() {
+        let root = parse_stmt(
+            r#"DO $$ BEGIN
+         ALTER TABLE "shard_1"."foo" ADD CONSTRAINT "foo_id_foo2_id_fk" FOREIGN KEY ("id") REFERENCES "shard_1"."foo2"("id") ON DELETE cascade ON UPDATE cascade;
+        EXCEPTION
+         WHEN duplicate_object THEN null;
+        END $$;"#,
+        );
+        let command = QueryParser::shard_ddl(&root, &test_schema()).unwrap();
+        assert_eq!(command.route().shard(), &Shard::Direct(1));
     }
 
     #[test]
@@ -348,6 +420,13 @@ mod test {
         let root = parse_stmt("CREATE TABLE public.new_table AS SELECT * FROM other");
         let command = QueryParser::shard_ddl(&root, &test_schema()).unwrap();
         assert_eq!(command.route().shard(), &Shard::All);
+    }
+
+    #[test]
+    fn test_lock_table() {
+        let root = parse_stmt(r#"LOCK TABLE "shard_1"."__migrations_table""#);
+        let command = QueryParser::shard_ddl(&root, &test_schema()).unwrap();
+        assert_eq!(command.route().shard(), &Shard::Direct(1));
     }
 
     #[test]
