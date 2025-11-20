@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use tokio::{
     select, spawn,
-    time::{sleep, timeout, Instant},
+    time::{interval, sleep, timeout, Instant},
 };
 use tracing::{debug, error, trace};
 
@@ -13,12 +13,6 @@ use crate::{
 
 use super::*;
 
-// Fields are as follows:
-//
-// - 1. true if replica, false otherwise
-// - 2. bytes offset in WAL
-// - 4. timestamp of last transaction if replica, now if primary
-//
 static QUERY: &'static str = "
 SELECT
     pg_is_in_recovery() AS replica,
@@ -48,12 +42,18 @@ SELECT
     END AS timestamp
 ";
 
+/// LSN information.
 #[derive(Debug, Clone, Copy)]
 pub struct LsnStats {
+    /// pg_is_in_recovery()
     pub replica: bool,
+    /// Replay LSN oon replica, current LSN on primary
     pub lsn: Lsn,
+    /// LSN position in bytes from 0
     pub offset_bytes: i64,
+    /// Server timestamp.
     pub timestamp: TimestampTz,
+    /// Our timestamp.
     pub fetched: Instant,
 }
 
@@ -92,6 +92,7 @@ impl From<DataRow> for LsnStats {
     }
 }
 
+/// LSN monitor loop.
 pub(super) struct LsnMonitor {
     pool: Pool,
 }
@@ -113,10 +114,12 @@ impl LsnMonitor {
 
         debug!("lsn monitor loop is running [{}]", self.pool.addr());
 
+        let mut interval = interval(self.pool.config().lsn_check_interval);
+
         loop {
             select! {
-                _ = sleep(self.pool.config().lsn_check_interval) => {},
-                _ = self.pool.comms().shutdown.notified() => { break;}
+                _ = interval.tick() => {},
+                _ = self.pool.comms().shutdown.notified() => { break; }
             }
 
             let mut conn = match self.pool.get(&Request::default()).await {
@@ -146,6 +149,7 @@ impl LsnMonitor {
                     continue;
                 }
             };
+            drop(conn);
 
             if let Some(stats) = stats.pop() {
                 {

@@ -392,35 +392,23 @@ pub(crate) fn new_pool(
         return None;
     };
 
-    // Override role with automatically detected one.
-    if let Some(role_mapping) = existing_roles {
-        for (shard_number, databases) in shards.iter_mut().enumerate() {
-            let shard_roles = role_mapping.get(shard_number);
-            if let Some(shard_roles) = shard_roles {
-                for database in databases {
-                    if database.role == Role::Auto {
-                        database.role = shard_roles
-                            .as_ref()
-                            .map(|shard_roles| shard_roles.get(&database.number))
-                            .flatten()
-                            .cloned()
-                            .map(|role| role.role)
-                            .unwrap_or(Role::Replica);
-                    }
+    let mut shard_configs = vec![];
+    for (shard_number, user_databases) in shards.iter_mut().enumerate() {
+        let role_detector = user_databases.iter().any(|d| d.role == Role::Auto);
+
+        if let Some(ref shard_roles) = existing_roles
+            .as_ref()
+            .map(|existing_roles| existing_roles.get(shard_number).cloned())
+            .flatten()
+            .flatten()
+        {
+            for user_database in user_databases.iter_mut() {
+                // Override role with automatically detected one.
+                if let Some(role) = shard_roles.get(&user_database.number) {
+                    user_database.role = role.role;
                 }
             }
         }
-    }
-
-    let mut shard_configs = vec![];
-    for (shard_number, mut user_databases) in shards.iter_mut().enumerate() {
-        let role_detector = user_databases.iter().any(|d| d.role == Role::Auto);
-
-        if let Some(shard_roles) = existing_roles
-            .as_ref()
-            .map(|existing_roles| existing_roles.get(&shard_number))
-            .flatten()
-        {}
 
         let has_single_replica = user_databases.len() == 1;
         let primary = user_databases
@@ -438,7 +426,6 @@ pub(crate) fn new_pool(
                 config: Config::new(general, replica, user, has_single_replica),
             })
             .collect::<Vec<_>>();
-        let role_detector = user_databases.iter().any(|d| d.role == Role::Auto);
 
         shard_configs.push(ClusterShardConfig {
             primary,

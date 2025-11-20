@@ -59,7 +59,7 @@ impl ShardMonitor {
 
         if detector_enabled {
             info!(
-                "failover detection enabled for shard {} [{}]",
+                "failover enabled for shard {} [{}]",
                 self.shard.number(),
                 self.shard.identifier()
             );
@@ -76,7 +76,7 @@ impl ShardMonitor {
             if detector_enabled {
                 if detector.changed() {
                     warn!(
-                        "detected database role change in shard {} [{}]",
+                        "database role changed in shard {} [{}]",
                         self.shard.number(),
                         self.shard.identifier()
                     );
