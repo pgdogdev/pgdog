@@ -405,7 +405,9 @@ pub(crate) fn new_pool(
             for user_database in user_databases.iter_mut() {
                 // Override role with automatically detected one.
                 if let Some(role) = shard_roles.get(&user_database.number) {
-                    user_database.role = role.role;
+                    if user_database.role == Role::Auto {
+                        user_database.role = role.role;
+                    }
                 }
             }
         }

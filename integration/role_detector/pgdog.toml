@@ -1,23 +1,23 @@
 [general]
-lsn_check_delay = 1000000
+lsn_check_delay = 0
 lsn_check_interval = 5_000
 idle_timeout = 1_000
 
 [[databases]]
 name = "postgres"
-role = "primary"
+role = "auto"
 host = "127.0.0.1"
 port = 45000
 
 [[databases]]
 name = "postgres"
-role = "replica"
+role = "auto"
 host = "127.0.0.1"
 port = 45001
 
 [[databases]]
 name = "postgres"
-role = "replica"
+role = "auto"
 host = "127.0.0.1"
 port = 45002
 
