@@ -60,7 +60,7 @@ pub struct LsnStats {
 impl Default for LsnStats {
     fn default() -> Self {
         Self {
-            replica: bool::default(),
+            replica: true, // Replica unless proven otherwise.
             lsn: Lsn::default(),
             offset_bytes: 0,
             timestamp: TimestampTz::default(),
@@ -70,8 +70,14 @@ impl Default for LsnStats {
 }
 
 impl LsnStats {
-    pub fn lsn_age(&self) -> Duration {
-        self.fetched.elapsed()
+    /// How old the stats are.
+    pub fn lsn_age(&self, now: Instant) -> Duration {
+        now.duration_since(self.fetched)
+    }
+
+    /// Stats contain real data.
+    pub fn valid(&self) -> bool {
+        self.lsn.lsn > 0
     }
 }
 impl From<DataRow> for LsnStats {
@@ -143,7 +149,7 @@ impl LsnMonitor {
 
             if let Some(stats) = stats.pop() {
                 {
-                    self.pool.lock().lsn_stats = stats;
+                    *self.pool.inner().lsn_stats.write() = stats;
                 }
                 trace!("lsn monitor stats updated [{}]", self.pool.addr());
             }

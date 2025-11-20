@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use once_cell::sync::{Lazy, OnceCell};
+use parking_lot::RwLock;
 use parking_lot::{lock_api::MutexGuard, Mutex, RawMutex};
 use tokio::time::{timeout, Instant};
 use tracing::error;
@@ -40,6 +41,7 @@ pub(crate) struct InnerSync {
     pub(super) config: Config,
     pub(super) health: TargetHealth,
     pub(super) params: OnceCell<Parameters>,
+    pub(super) lsn_stats: RwLock<LsnStats>,
 }
 
 impl std::fmt::Debug for Pool {
@@ -63,6 +65,7 @@ impl Pool {
                 config: config.config,
                 health: TargetHealth::new(id),
                 params: OnceCell::new(),
+                lsn_stats: RwLock::new(LsnStats::default()),
             }),
         }
     }
@@ -267,18 +270,6 @@ impl Pool {
         !guard.paused && guard.online
     }
 
-    /// Is the database behind this connection pool in recovery?
-    ///
-    /// If we haven't detected it yet, return None.
-    pub fn lsn_stats(&self) -> Option<LsnStats> {
-        let guard = self.lock();
-        if guard.lsn_stats.lsn.lsn > 0 {
-            Some(guard.lsn_stats.clone())
-        } else {
-            None
-        }
-    }
-
     /// Connection pool unique identifier.
     pub(crate) fn id(&self) -> u64 {
         self.inner.id
@@ -417,6 +408,11 @@ impl Pool {
     /// Pool state.
     pub fn state(&self) -> State {
         State::get(self)
+    }
+
+    /// LSN stats
+    pub fn lsn_stats(&self) -> LsnStats {
+        self.inner().lsn_stats.read().clone()
     }
 
     /// Update pool configuration used in internals.

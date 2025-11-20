@@ -1,6 +1,5 @@
 //! A shard is a collection of replicas and an optional primary.
 
-use std::collections::HashMap;
 use std::ops::Deref;
 use std::sync::Arc;
 use std::time::Duration;
@@ -18,7 +17,10 @@ use crate::net::NotificationResponse;
 use super::{Error, Guard, Pool, PoolConfig, Replicas, Request};
 
 pub mod monitor;
+pub mod role_detector;
+
 use monitor::*;
+use role_detector::*;
 
 pub(super) struct ShardConfig<'a> {
     /// Shard number.
@@ -35,6 +37,8 @@ pub(super) struct ShardConfig<'a> {
     pub(super) identifier: Arc<User>,
     /// LSN check interval
     pub(super) lsn_check_interval: Duration,
+    /// Role detector is enabled.
+    pub(super) role_detector: bool,
 }
 
 /// Connection pools for a single database shard.
@@ -238,8 +242,13 @@ impl Shard {
 
     /// Re-detect primary/replica roles and re-build
     /// the shard routing logic.
-    pub fn redetect_roles(&self) -> HashMap<usize, Role> {
+    pub fn redetect_roles(&self) -> Option<DetectedRoles> {
         self.replicas.redetect_roles()
+    }
+
+    /// Get current roles.
+    pub fn current_roles(&self) -> DetectedRoles {
+        self.replicas.current_roles()
     }
 }
 
@@ -273,12 +282,14 @@ impl ShardInner {
             rw_split,
             identifier,
             lsn_check_interval,
+            role_detector,
         } = shard;
         let primary = primary.as_ref().map(Pool::new);
         let replicas = Replicas::new(&primary, replicas, lb_strategy, rw_split);
         let comms = Arc::new(ShardComms {
             shutdown: Notify::new(),
             lsn_check_interval,
+            role_detector,
         });
         let pub_sub = if config().pub_sub_enabled() {
             primary.as_ref().map(PubSubListener::new)
@@ -330,6 +341,7 @@ mod test {
                 database: "pgdog".into(),
             }),
             lsn_check_interval: Duration::MAX,
+            role_detector: false,
         });
         shard.launch();
 
@@ -368,6 +380,7 @@ mod test {
                 database: "pgdog".into(),
             }),
             lsn_check_interval: Duration::MAX,
+            role_detector: false,
         });
         shard.launch();
         let mut ids = BTreeSet::new();

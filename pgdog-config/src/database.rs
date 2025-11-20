@@ -157,6 +157,8 @@ impl FromStr for Role {
     }
 }
 
+/// Database with a unique number, identifying it
+/// in the config.
 #[derive(Debug, Clone)]
 pub struct EnumeratedDatabase {
     pub number: usize,

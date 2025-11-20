@@ -73,12 +73,13 @@ pub fn reconnect() -> Result<(), Error> {
 
 /// Re-create databases from existing config,
 /// preserving connections.
-pub fn reload_from_existing() -> Result<(), Error> {
+pub fn reload_from_existing() {
+    let _lock = lock();
+
     let config = config();
     let databases = from_config(&config);
 
     replace_databases(databases, true);
-    Ok(())
 }
 
 /// Initialize the databases for the first time.
@@ -373,7 +374,7 @@ pub(crate) fn new_pool(
     user: &crate::config::User,
     config: &crate::config::Config,
 ) -> Option<(User, Cluster)> {
-    let role_mapping = databases()
+    let existing_roles = databases()
         .cluster(user)
         .ok()
         .map(|cluster| cluster.redetect_roles());
@@ -384,108 +385,123 @@ pub(crate) fn new_pool(
     let sharded_schemas = config.sharded_schemas();
     let general = &config.general;
     let databases = config.databases();
-    let mut shards = databases.get(&user.database).cloned();
+
+    let mut shards = if let Some(shards) = databases.get(&user.database).cloned() {
+        shards
+    } else {
+        return None;
+    };
 
     // Override role with automatically detected one.
-    if let Some(role_mapping) = role_mapping {
-        if let Some(ref mut shards) = shards {
-            for (shard_number, databases) in shards.iter_mut().enumerate() {
-                let shard_roles = role_mapping.get(shard_number);
-                if let Some(shard_roles) = shard_roles {
-                    for database in databases {
-                        if database.role == Role::Auto {
-                            database.role = shard_roles
-                                .get(&database.number)
-                                .cloned()
-                                .unwrap_or(Role::Replica);
-                        }
+    if let Some(role_mapping) = existing_roles {
+        for (shard_number, databases) in shards.iter_mut().enumerate() {
+            let shard_roles = role_mapping.get(shard_number);
+            if let Some(shard_roles) = shard_roles {
+                for database in databases {
+                    if database.role == Role::Auto {
+                        database.role = shard_roles
+                            .as_ref()
+                            .map(|shard_roles| shard_roles.get(&database.number))
+                            .flatten()
+                            .cloned()
+                            .map(|role| role.role)
+                            .unwrap_or(Role::Replica);
                     }
                 }
             }
         }
     }
 
-    if let Some(shards) = shards {
-        let mut shard_configs = vec![];
-        for user_databases in shards {
-            let has_single_replica = user_databases.len() == 1;
-            let primary = user_databases
-                .iter()
-                .find(|d| d.role == Role::Primary)
-                .map(|primary| PoolConfig {
-                    address: Address::new(primary, user, primary.number),
-                    config: Config::new(general, primary, user, has_single_replica),
-                });
-            let replicas = user_databases
-                .iter()
-                .filter(|d| matches!(d.role, Role::Replica | Role::Auto))
-                .map(|replica| PoolConfig {
-                    address: Address::new(replica, user, replica.number),
-                    config: Config::new(general, replica, user, has_single_replica),
-                })
-                .collect::<Vec<_>>();
+    let mut shard_configs = vec![];
+    for (shard_number, mut user_databases) in shards.iter_mut().enumerate() {
+        let role_detector = user_databases.iter().any(|d| d.role == Role::Auto);
 
-            shard_configs.push(ClusterShardConfig { primary, replicas });
-        }
+        if let Some(shard_roles) = existing_roles
+            .as_ref()
+            .map(|existing_roles| existing_roles.get(&shard_number))
+            .flatten()
+        {}
 
-        let mut sharded_tables = sharded_tables
-            .get(&user.database)
-            .cloned()
-            .unwrap_or_default();
-        let sharded_schemas = sharded_schemas
-            .get(&user.database)
-            .cloned()
-            .unwrap_or_default();
+        let has_single_replica = user_databases.len() == 1;
+        let primary = user_databases
+            .iter()
+            .find(|d| d.role == Role::Primary)
+            .map(|primary| PoolConfig {
+                address: Address::new(primary, user, primary.number),
+                config: Config::new(general, primary, user, has_single_replica),
+            });
+        let replicas = user_databases
+            .iter()
+            .filter(|d| matches!(d.role, Role::Replica | Role::Auto))
+            .map(|replica| PoolConfig {
+                address: Address::new(replica, user, replica.number),
+                config: Config::new(general, replica, user, has_single_replica),
+            })
+            .collect::<Vec<_>>();
+        let role_detector = user_databases.iter().any(|d| d.role == Role::Auto);
 
-        for sharded_table in &mut sharded_tables {
-            let mappings = sharded_mappings.get(&(
-                sharded_table.database.clone(),
-                sharded_table.column.clone(),
-                sharded_table.name.clone(),
-            ));
+        shard_configs.push(ClusterShardConfig {
+            primary,
+            replicas,
+            role_detector,
+        });
+    }
 
-            if let Some(mappings) = mappings {
-                sharded_table.mapping = Mapping::new(mappings);
+    let mut sharded_tables = sharded_tables
+        .get(&user.database)
+        .cloned()
+        .unwrap_or_default();
+    let sharded_schemas = sharded_schemas
+        .get(&user.database)
+        .cloned()
+        .unwrap_or_default();
 
-                if let Some(ref mapping) = sharded_table.mapping {
-                    if !mapping_valid(mapping) {
-                        warn!(
-                            "sharded table name=\"{}\", column=\"{}\" has overlapping ranges",
-                            sharded_table.name.as_ref().unwrap_or(&String::from("")),
-                            sharded_table.column
-                        );
-                    }
+    for sharded_table in &mut sharded_tables {
+        let mappings = sharded_mappings.get(&(
+            sharded_table.database.clone(),
+            sharded_table.column.clone(),
+            sharded_table.name.clone(),
+        ));
+
+        if let Some(mappings) = mappings {
+            sharded_table.mapping = Mapping::new(mappings);
+
+            if let Some(ref mapping) = sharded_table.mapping {
+                if !mapping_valid(mapping) {
+                    warn!(
+                        "sharded table name=\"{}\", column=\"{}\" has overlapping ranges",
+                        sharded_table.name.as_ref().unwrap_or(&String::from("")),
+                        sharded_table.column
+                    );
                 }
             }
         }
-
-        let omnisharded_tables = omnisharded_tables
-            .get(&user.database)
-            .cloned()
-            .unwrap_or(vec![]);
-        let sharded_tables = ShardedTables::new(sharded_tables, omnisharded_tables);
-        let sharded_schemas = ShardedSchemas::new(sharded_schemas);
-
-        let cluster_config = ClusterConfig::new(
-            general,
-            user,
-            &shard_configs,
-            sharded_tables,
-            config.multi_tenant(),
-            sharded_schemas,
-            &config.rewrite,
-        );
-
-        Some((
-            User {
-                user: user.name.clone(),
-                database: user.database.clone(),
-            },
-            Cluster::new(cluster_config),
-        ))
-    } else {
-        None
     }
+
+    let omnisharded_tables = omnisharded_tables
+        .get(&user.database)
+        .cloned()
+        .unwrap_or(vec![]);
+    let sharded_tables = ShardedTables::new(sharded_tables, omnisharded_tables);
+    let sharded_schemas = ShardedSchemas::new(sharded_schemas);
+
+    let cluster_config = ClusterConfig::new(
+        general,
+        user,
+        &shard_configs,
+        sharded_tables,
+        config.multi_tenant(),
+        sharded_schemas,
+        &config.rewrite,
+    );
+
+    Some((
+        User {
+            user: user.name.clone(),
+            database: user.database.clone(),
+        },
+        Cluster::new(cluster_config),
+    ))
 }
 
 /// Load databases from config.

@@ -1,12 +1,16 @@
+use crate::backend::databases;
+
 use super::*;
 
 use tokio::time::interval;
+use tracing::{info, warn};
 
 /// Shard communication primitives.
 #[derive(Debug)]
 pub(super) struct ShardComms {
     pub(super) shutdown: Notify,
     pub(super) lsn_check_interval: Duration,
+    pub(super) role_detector: bool,
 }
 
 impl Default for ShardComms {
@@ -14,6 +18,7 @@ impl Default for ShardComms {
         Self {
             shutdown: Notify::new(),
             lsn_check_interval: Duration::MAX,
+            role_detector: false,
         }
     }
 }
@@ -49,13 +54,16 @@ impl ShardMonitor {
             self.shard.identifier()
         );
 
-        let mut lsn_stats = self
-            .shard
-            .pools()
-            .iter()
-            .map(|pool| pool.lsn_stats())
-            .enumerate()
-            .collect::<HashMap<_, _>>();
+        let mut detector = RoleDetector::new(&self.shard);
+        let detector_enabled = self.shard.comms().role_detector;
+
+        if detector_enabled {
+            info!(
+                "failover detection enabled for shard {} [{}]",
+                self.shard.number(),
+                self.shard.identifier()
+            );
+        }
 
         loop {
             select! {
@@ -65,11 +73,23 @@ impl ShardMonitor {
                 },
             }
 
+            if detector_enabled {
+                if detector.changed() {
+                    warn!(
+                        "detected database role change in shard {} [{}]",
+                        self.shard.number(),
+                        self.shard.identifier()
+                    );
+                    databases::reload_from_existing();
+                    break;
+                }
+            }
+
             let pool_with_stats = self
                 .shard
                 .pools()
                 .iter()
-                .map(|pool| (pool.clone(), pool.lock().lsn_stats))
+                .map(|pool| (pool.clone(), pool.lsn_stats()))
                 .collect::<Vec<_>>();
 
             let primary = pool_with_stats.iter().find(|pair| !pair.1.replica);
