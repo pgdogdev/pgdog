@@ -32,7 +32,7 @@ impl Command for ShowReplication {
             Field::numeric("port"),
             Field::numeric("shard"),
             Field::text("role"),
-            Field::text("pg_replica_lag"),
+            Field::text("replica_lag"),
             Field::text("pg_lsn"),
             Field::text("lsn_age"),
             Field::text("pg_is_in_recovery"),

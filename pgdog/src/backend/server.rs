@@ -385,10 +385,10 @@ impl Server {
         match message.code() {
             'Z' => {
                 let now = Instant::now();
-                self.stats.query(now);
-                self.stats.memory_used(self.memory_stats());
-
                 let rfq = ReadyForQuery::from_bytes(message.payload())?;
+
+                self.stats.query(now, rfq.status == 'T');
+                self.stats.memory_used(self.memory_stats());
 
                 match rfq.status {
                     'I' => {
@@ -1086,7 +1086,11 @@ pub mod test {
                 assert_eq!(msg.code(), c);
             }
 
-            assert!(server.done())
+            assert!(server.done());
+            assert_eq!(
+                server.stats().total.idle_in_transaction_time,
+                Duration::ZERO
+            );
         }
     }
 
@@ -2224,5 +2228,65 @@ pub mod test {
             assert!(!server.error(), "Server should not be in error state");
             assert!(server.done(), "Server should be done after drain");
         }
+    }
+
+    #[tokio::test]
+    async fn test_idle_in_transaction() {
+        let mut server = test_server().await;
+
+        server.execute("SELECT 1").await.unwrap();
+        assert_eq!(
+            server.stats().total.idle_in_transaction_time,
+            Duration::ZERO,
+        );
+        assert_eq!(
+            server.stats().last_checkout.idle_in_transaction_time,
+            Duration::ZERO,
+        );
+
+        server.execute("BEGIN").await.unwrap();
+        assert_eq!(
+            server.stats().total.idle_in_transaction_time,
+            Duration::ZERO,
+        );
+
+        server.execute("SELECT 1").await.unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        server.execute("SELECT 2").await.unwrap();
+
+        let idle_time = server.stats().total.idle_in_transaction_time;
+        assert!(
+            idle_time >= Duration::from_millis(50),
+            "Expected idle time >= 50ms, got {:?}",
+            idle_time
+        );
+        assert!(
+            idle_time < Duration::from_millis(200),
+            "Expected idle time < 200ms, got {:?}",
+            idle_time
+        );
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        server.execute("COMMIT").await.unwrap();
+
+        let final_idle_time = server.stats().total.idle_in_transaction_time;
+        assert!(
+            final_idle_time >= Duration::from_millis(150),
+            "Expected final idle time >= 150ms, got {:?}",
+            final_idle_time
+        );
+        assert!(
+            final_idle_time < Duration::from_millis(400),
+            "Expected final idle time < 400ms, got {:?}",
+            final_idle_time
+        );
+
+        server.execute("SELECT 3").await.unwrap();
+        assert_eq!(
+            server.stats().total.idle_in_transaction_time,
+            final_idle_time,
+        );
     }
 }

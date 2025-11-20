@@ -36,6 +36,7 @@ impl Command for ShowStats {
                         Field::numeric(&format!("{}_received", prefix)),
                         Field::numeric(&format!("{}_sent", prefix)),
                         Field::numeric(&format!("{}_xact_time", prefix)),
+                        Field::numeric(&format!("{}_idle_xact_time", prefix)),
                         Field::numeric(&format!("{}_query_time", prefix)),
                         Field::numeric(&format!("{}_wait_time", prefix)),
                         // Field::numeric(&format!("{}_client_parse_count", prefix)),
@@ -83,6 +84,7 @@ impl Command for ShowStats {
                             .add(stat.received)
                             .add(stat.sent)
                             .add(stat.xact_time.as_millis() as u64)
+                            .add(stat.idle_xact_time.as_millis() as u64)
                             .add(stat.query_time.as_millis() as u64)
                             .add(stat.wait_time.as_millis() as u64)
                             .add(stat.parse_count)

@@ -47,6 +47,7 @@ pub struct State {
 impl State {
     pub(super) fn get(pool: &Pool) -> Self {
         let now = Instant::now();
+        let lsn_stats = pool.lsn_stats();
         let guard = pool.lock();
 
         State {
@@ -71,7 +72,7 @@ impl State {
             pooler_mode: guard.config().pooler_mode,
             replica_lag: guard.replica_lag,
             force_close: guard.force_close,
-            lsn_stats: guard.lsn_stats,
+            lsn_stats,
         }
     }
 }

@@ -20,11 +20,13 @@ pub struct Address {
     pub user: String,
     /// Password.
     pub password: String,
+    /// Database number (in the config).
+    pub database_number: usize,
 }
 
 impl Address {
     /// Create new address from config values.
-    pub fn new(database: &Database, user: &User) -> Self {
+    pub fn new(database: &Database, user: &User, database_number: usize) -> Self {
         Address {
             host: database.host.clone(),
             port: database.port,
@@ -47,6 +49,7 @@ impl Address {
             } else {
                 user.password().to_string()
             },
+            database_number,
         }
     }
 
@@ -74,6 +77,7 @@ impl Address {
             user: "pgdog".into(),
             password: "pgdog".into(),
             database_name: "pgdog".into(),
+            database_number: 0,
         }
     }
 }
@@ -100,6 +104,7 @@ impl TryFrom<Url> for Address {
             password,
             user,
             database_name,
+            database_number: 0,
         })
     }
 }
@@ -124,7 +129,7 @@ mod test {
             ..Default::default()
         };
 
-        let address = Address::new(&database, &user);
+        let address = Address::new(&database, &user, 0);
 
         assert_eq!(address.host, "127.0.0.1");
         assert_eq!(address.port, 6432);
@@ -136,7 +141,7 @@ mod test {
         database.password = Some("hunter3".into());
         database.user = Some("alice".into());
 
-        let address = Address::new(&database, &user);
+        let address = Address::new(&database, &user, 0);
 
         assert_eq!(address.database_name, "not_pgdog");
         assert_eq!(address.user, "alice");

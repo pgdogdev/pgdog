@@ -19,7 +19,9 @@ pub mod util;
 pub use auth::{AuthType, PassthoughAuth};
 pub use core::{Config, ConfigAndUsers};
 pub use data_types::*;
-pub use database::{Database, LoadBalancingStrategy, ReadWriteSplit, ReadWriteStrategy, Role};
+pub use database::{
+    Database, EnumeratedDatabase, LoadBalancingStrategy, ReadWriteSplit, ReadWriteStrategy, Role,
+};
 pub use error::Error;
 pub use general::General;
 pub use memory::*;
