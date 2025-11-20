@@ -260,10 +260,6 @@ impl Cluster {
         }
     }
 
-    pub fn new_from_detected_roles(self) -> Cluster {
-        todo!()
-    }
-
     /// Change config to work with logical replication streaming.
     pub fn logical_stream(&self) -> Self {
         let mut cluster = self.clone();
