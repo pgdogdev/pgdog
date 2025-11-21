@@ -128,6 +128,10 @@ jobs:
           prefix-key: ci-v2
           shared-key: ${{ hashFiles('**/Cargo.lock') }}
           key: ${{ github.sha }}
+      - name: Install mold linker
+        run: |
+          sudo apt update
+          sudo apt install -y mold
       - name: Run documentation tests
         run: cargo test --doc
   integration-prepare:
