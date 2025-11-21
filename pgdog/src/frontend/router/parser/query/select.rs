@@ -105,25 +105,35 @@ impl QueryParser {
 
         let mut query = Route::select(shard, order_by, aggregates, limit, distinct);
 
-        let mut omni = false;
-
+        // Omnisharded tables check.
         if query.is_all_shards() {
-            omni = from_clause.tables().iter().all(|table| {
+            let tables = from_clause.tables();
+            let omni = tables.iter().all(|table| {
                 context
                     .sharding_schema
                     .tables
                     .omnishards()
                     .contains(table.name)
             });
-        }
 
-        if omni {
-            let shard = round_robin::next() % context.shards;
+            if omni {
+                let shard = round_robin::next() % context.shards;
 
-            query.set_shard_mut(shard);
+                query.set_shard_mut(shard);
 
-            if let Some(recorder) = self.recorder_mut() {
-                recorder.record_entry(Some(shard.into()), "SELECT matched all omnisharded tables");
+                if let Some(recorder) = self.recorder_mut() {
+                    recorder.record_entry(
+                        Some(shard.into()),
+                        format!(
+                            "SELECT matched omnisharded tables: {}",
+                            tables
+                                .iter()
+                                .map(|table| table.name)
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ),
+                    );
+                }
             }
         }
 
