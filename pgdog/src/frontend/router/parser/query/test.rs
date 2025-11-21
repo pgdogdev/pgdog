@@ -5,7 +5,7 @@ use std::{
 
 use crate::{
     config::{self, config, ConfigAndUsers, RewriteMode},
-    frontend::{client::TransactionType, router::parser::cache::CachedAst},
+    frontend::client::TransactionType,
     net::{
         messages::{parse::Parse, Parameter},
         Close, Format, Sync,
@@ -334,11 +334,33 @@ fn test_prepared_stddev_rewrite_plan() {
 
 #[test]
 fn test_omni() {
-    let q = "SELECT sharded_omni.* FROM sharded_omni WHERE sharded_omni.id = $1";
-    let route = query!(q);
-    assert!(matches!(route.shard(), Shard::Direct(_)));
-    let (_, qp) = command!(q);
-    assert!(!qp.in_transaction);
+    let mut omni_round_robin = HashSet::new();
+    let q = "SELECT sharded_omni.* FROM sharded_omni WHERE sharded_omni.id = 1";
+
+    for _ in 0..10 {
+        let route = query!(q);
+        assert!(matches!(route.shard(), Shard::Direct(_)));
+        let (_, qp) = command!(q);
+        assert!(!qp.in_transaction);
+        omni_round_robin.insert(route.shard().clone());
+    }
+
+    assert_eq!(omni_round_robin.len(), 2);
+
+    // Test sticky routing
+    let mut omni_sticky = HashSet::new();
+    let q =
+        "SELECT sharded_omni_sticky.* FROM sharded_omni_sticky WHERE sharded_omni_sticky.id = $1";
+
+    for _ in 0..10 {
+        let route = query!(q);
+        assert!(matches!(route.shard(), Shard::Direct(_)));
+        let (_, qp) = command!(q);
+        assert!(!qp.in_transaction);
+        omni_sticky.insert(route.shard().clone());
+    }
+
+    assert_eq!(omni_sticky.len(), 1);
 
     // Test that sharded tables take priority.
     let q = "

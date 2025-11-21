@@ -117,9 +117,9 @@ impl QueryParser {
             let tables = from_clause.tables();
             let mut sticky = false;
             let omni = tables.iter().all(|table| {
-                let table = context.sharding_schema.tables.omnishards().get(table.name);
+                let is_sticky = context.sharding_schema.tables.omnishards().get(table.name);
 
-                if let Some(is_sticky) = table {
+                if let Some(is_sticky) = is_sticky {
                     if *is_sticky {
                         sticky = true;
                     }
