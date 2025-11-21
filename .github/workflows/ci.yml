@@ -283,6 +283,11 @@ jobs:
           bash integration/toxi/setup.sh
           sudo curl -SL https://github.com/docker/compose/releases/download/v2.36.1/docker-compose-linux-x86_64 -o /usr/local/bin/docker-compose
           sudo chmod +x /usr/local/bin/docker-compose
+          python3 -m venv integration/python/venv
+          source integration/python/venv/bin/activate
+          pip install --upgrade pip
+          pip install -r integration/python/requirements.txt
+          deactivate
       - name: Run ${{ matrix.suite.name }} suite
         run: bash ${{ matrix.suite.script }}
       - name: Upload coverage profiles
