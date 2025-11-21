@@ -74,6 +74,10 @@ impl QueryParser {
             }
         }
 
+        if let Some(Shard::Direct(number)) = self.check_search_path_for_shard(context)? {
+            return Ok(Command::Query(Route::read(number).set_write(writes)));
+        }
+
         // Shard by vector in ORDER BY clause.
         for order in &order_by {
             if let Some((vector, column_name)) = order.vector() {

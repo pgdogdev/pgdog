@@ -28,7 +28,7 @@ mod ddl;
 mod delete;
 mod explain;
 mod plugins;
-pub mod schema_sharding;
+mod schema_sharding;
 mod select;
 mod set;
 mod shared;
@@ -382,6 +382,46 @@ impl QueryParser {
             // with the fingerprint.
             //
             if route.shard().all() {
+                // Check search_path for schema.
+                let search_path = context.router_context.params.get("search_path");
+
+                // Quick inline function to shard query
+                // based on schema in search_path.
+                fn shard_from_search_path(
+                    search_path: &str,
+                    context: &QueryParserContext<'_>,
+                    query_parser: &mut QueryParser,
+                    route: &mut Route,
+                ) {
+                    let schema = Schema::from(search_path);
+
+                    if let Some(schema) = context.sharding_schema.schemas.get(Some(schema)) {
+                        let shard: Shard = schema.shard().into();
+
+                        if let Some(recorder) = query_parser.recorder_mut() {
+                            recorder.record_entry(
+                                Some(shard.clone()),
+                                format!("matched schema {} in search_path", schema.name()),
+                            );
+                        }
+                        route.set_shard_mut(shard);
+                    }
+                }
+
+                match search_path {
+                    Some(ParameterValue::String(search_path)) => {
+                        shard_from_search_path(search_path, context, self, route);
+                    }
+
+                    Some(ParameterValue::Tuple(search_paths)) => {
+                        for schema in search_paths {
+                            shard_from_search_path(schema, context, self, route);
+                        }
+                    }
+
+                    None => (),
+                }
+
                 let databases = databases();
                 // Only fingerprint the query if some manual queries are configured.
                 // Otherwise, we're wasting time parsing SQL.
