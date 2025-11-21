@@ -10,7 +10,7 @@ use crate::frontend::router::parser::{from_clause::FromClause, Table};
 
 use super::Key;
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub enum TablesSource<'a> {
     Table(Table<'a>),
     FromClause(FromClause<'a>),
@@ -52,6 +52,13 @@ impl<'a> TablesSource<'a> {
         match self {
             Self::Table(table) => Some(table.name),
             Self::FromClause(fc) => fc.table_name(),
+        }
+    }
+
+    pub fn tables(&'a self) -> Vec<Table<'a>> {
+        match self {
+            Self::Table(table) => vec![*table],
+            Self::FromClause(from_clause) => from_clause.tables(),
         }
     }
 }
