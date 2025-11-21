@@ -15,6 +15,11 @@ jobs:
         with:
           toolchain: stable
           override: true
+      - uses: useblacksmith/rust-cache@v3
+        with:
+          prefix-key: ci-v2
+          shared-key: ${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ github.sha }}
       - name: Install CMake 3.31
         run: |
           sudo apt update && sudo apt install mold -y
@@ -34,17 +39,37 @@ jobs:
         with:
           toolchain: stable
           override: true
+      - uses: useblacksmith/rust-cache@v3
+        with:
+          prefix-key: ci-v2
+          shared-key: ${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ github.sha }}
       - name: Install CMake 3.31
         run: |
           sudo apt update && sudo apt install mold -y
           sudo apt remove cmake
           sudo pip3 install cmake==3.31.6
           cmake --version
+      - name: Cargo fetch
+        run: cargo fetch
       - name: Build
         run: cargo build
-      - name: Check release
-        run: cargo check --release
+      - name: Build release
+        run: cargo build --release
+      - name: Package build outputs
+        run: |
+          mkdir -p artifacts/release
+          if [ -f target/release/pgdog ]; then
+            cp target/release/pgdog artifacts/release/
+          fi
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: pgdog-release-${{ github.sha }}
+          path: artifacts/release
+          if-no-files-found: error
   tests:
+    needs: build
     runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v4
@@ -55,7 +80,12 @@ jobs:
           components: llvm-tools-preview
       - uses: useblacksmith/rust-cache@v3
         with:
-          prefix-key: "v1" # Change this when updating tooling
+          prefix-key: ci-v2
+          shared-key: ${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ github.sha }}
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9.78,cargo-llvm-cov@0.6.10
       - name: Setup PostgreSQL
         run: |
           sudo service postgresql start
@@ -69,20 +99,13 @@ jobs:
           sudo apt remove -y cmake
           sudo pip3 install cmake==3.31.6
           cmake --version
-          cargo install cargo-nextest --version "0.9.78" --locked
           bash integration/toxi/setup.sh
-      - name: Install test dependencies
-        run: cargo install cargo-nextest --version "0.9.78" --locked
-      - name: Install coverage tooling
-        run: cargo install cargo-llvm-cov --locked --version "0.6.10"
       - name: Run tests with coverage
         env:
           RUSTFLAGS: "-C link-dead-code"
         run: |
           cargo llvm-cov clean --workspace
           cargo llvm-cov nextest --lcov --output-path lcov.info --no-fail-fast --test-threads=1 --filter-expr "package(pgdog) | package(pgdog-config) | package(pgdog-vector)"
-      - name: Run documentation tests
-        run: cargo test --doc
       # Requires CODECOV_TOKEN secret for upload
       - uses: codecov/codecov-action@v4
         env:
@@ -91,7 +114,24 @@ jobs:
           files: lcov.info
           flags: unit
           fail_ci_if_error: true
+  doc-tests:
+    needs: build
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+      - uses: useblacksmith/rust-cache@v3
+        with:
+          prefix-key: ci-v2
+          shared-key: ${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ github.sha }}
+      - name: Run documentation tests
+        run: cargo test --doc
   integration:
+    needs: build
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 30
     env:
@@ -105,7 +145,22 @@ jobs:
           components: llvm-tools-preview
       - uses: useblacksmith/rust-cache@v3
         with:
-          prefix-key: release-1
+          prefix-key: ci-v2
+          shared-key: ${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ github.sha }}
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9.78,cargo-llvm-cov@0.6.10
+      - uses: actions/download-artifact@v4
+        with:
+          name: pgdog-release-${{ github.sha }}
+          path: artifacts/release
+      - name: Restore release binary
+        run: |
+          if [ -f artifacts/release/pgdog ]; then
+            mkdir -p target/release
+            cp artifacts/release/pgdog target/release/
+          fi
       - name: Setup dependencies
         run: |
           sudo service postgresql start
@@ -121,12 +176,9 @@ jobs:
           sudo apt remove -y cmake
           sudo pip3 install cmake==3.31.6
           cmake --version
-          cargo install cargo-nextest --version "0.9.78" --locked
           bash integration/toxi/setup.sh
           sudo curl -SL https://github.com/docker/compose/releases/download/v2.36.1/docker-compose-linux-x86_64 -o /usr/local/bin/docker-compose
           sudo chmod +x /usr/local/bin/docker-compose
-      - name: Install coverage tooling
-        run: cargo install cargo-llvm-cov --locked --version "0.6.10"
       - name: Prepare instrumented PgDog build
         env:
           RUSTFLAGS: "-C link-dead-code"
@@ -191,6 +243,7 @@ jobs:
           flags: integration
           fail_ci_if_error: true
   plugin-unit-tests:
+    needs: build
     runs-on: blacksmith-4vcpu-ubuntu-2404
     continue-on-error: true
     timeout-minutes: 30
@@ -202,18 +255,22 @@ jobs:
           override: true
       - uses: useblacksmith/rust-cache@v3
         with:
-          prefix-key: "plugin-unit-v1"
+          prefix-key: ci-v2
+          shared-key: ${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ github.sha }}
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9.78
       - name: Install CMake 3.31
         run: |
           sudo apt-get install -y mold
           sudo apt remove cmake
           sudo pip3 install cmake==3.31.6
           cmake --version
-      - name: Install test dependencies
-        run: cargo install cargo-nextest --version "0.9.78" --locked
       - name: Run plugin unit tests
         run: cargo nextest run -E 'package(pgdog-example-plugin)' --no-fail-fast
   plugin-integration-tests:
+    needs: build
     runs-on: blacksmith-4vcpu-ubuntu-2404
     continue-on-error: true
     timeout-minutes: 30
@@ -225,7 +282,22 @@ jobs:
           override: true
       - uses: useblacksmith/rust-cache@v3
         with:
-          prefix-key: "plugin-integration-v1"
+          prefix-key: ci-v2
+          shared-key: ${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ github.sha }}
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9.78
+      - uses: actions/download-artifact@v4
+        with:
+          name: pgdog-release-${{ github.sha }}
+          path: artifacts/release
+      - name: Restore release binary
+        run: |
+          if [ -f artifacts/release/pgdog ]; then
+            mkdir -p target/release
+            cp artifacts/release/pgdog target/release/
+          fi
       - name: Setup PostgreSQL
         run: |
           sudo service postgresql start
@@ -239,7 +311,6 @@ jobs:
           sudo apt remove -y cmake
           sudo pip3 install cmake==3.31.6
           cmake --version
-          cargo install cargo-nextest --version "0.9.78" --locked
       - name: Build plugin
         run: |
           cargo build --release
