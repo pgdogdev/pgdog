@@ -2,7 +2,7 @@
 
 - `cargo check` to test that the code compiles. It shouldn't contain warnings. This is quicker than `cargo build`.
 - `cargo fmt` to reformat code according to Rust standards.
-- `cargo nextest run --test-threads=1 <test name>` to run a specific test
+- `cargo nextest run --test-threads=1 <test name>` to run a specific test. Run `pgdog` tests from the `pgdog` directory (`cd pgdog` first).
 - `cargo nextest run --test-threads=1 --no-fail-fast` to run all tests. Make sure to use `--test-threads=1` because some tests conflict with each other.
 
 # Code style

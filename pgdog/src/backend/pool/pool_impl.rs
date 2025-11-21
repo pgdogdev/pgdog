@@ -421,6 +421,12 @@ impl Pool {
         self.lock().config = config;
     }
 
+    /// Set LSN stats for testing.
+    #[cfg(test)]
+    pub(crate) fn set_lsn_stats(&self, stats: LsnStats) {
+        *self.inner().lsn_stats.write() = stats;
+    }
+
     /// Fetch OIDs for user-defined data types.
     pub fn oids(&self) -> Option<Oids> {
         self.lock().oids
