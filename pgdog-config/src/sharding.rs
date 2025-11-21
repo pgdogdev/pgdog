@@ -177,6 +177,14 @@ impl From<String> for FlexibleType {
 pub struct OmnishardedTables {
     pub database: String,
     pub tables: Vec<String>,
+    #[serde(default)]
+    pub sticky: bool,
+}
+
+#[derive(PartialEq, Debug, Clone, Default)]
+pub struct OmnishardedTable {
+    pub name: String,
+    pub sticky_routing: bool,
 }
 
 /// Queries with manual routing rules.

@@ -3,6 +3,7 @@ use crate::frontend::router::parser::{
 };
 
 use super::*;
+use shared::ConvergeAlgorithm;
 
 impl QueryParser {
     /// Handle SELECT statement.
@@ -63,15 +64,21 @@ impl QueryParser {
         for table in cached_ast.tables() {
             if let Some(schema) = context.sharding_schema.schemas.get(table.schema()) {
                 let shard: Shard = schema.shard().into();
+
                 if shards.insert(shard.clone()) {
                     if let Some(recorder) = self.recorder_mut() {
                         recorder.record_entry(
-                            Some(shard),
+                            Some(shard.clone()),
                             format!("SELECT matched schema {}", schema.name()),
                         );
                     }
                 }
             }
+
+            // Converge to the first direct shard.
+            let shard = Self::converge(shards.clone(), ConvergeAlgorithm::FirstDirect);
+            shards = HashSet::new();
+            shards.insert(shard);
         }
 
         // Shard by vector in ORDER BY clause.
@@ -98,7 +105,7 @@ impl QueryParser {
             }
         }
 
-        let shard = Self::converge(shards);
+        let shard = Self::converge(shards, ConvergeAlgorithm::default());
         let aggregates = Aggregate::parse(stmt)?;
         let limit = LimitClause::new(stmt, context.router_context.bind).limit_offset()?;
         let distinct = Distinct::new(stmt).distinct()?;
@@ -108,16 +115,26 @@ impl QueryParser {
         // Omnisharded tables check.
         if query.is_all_shards() {
             let tables = from_clause.tables();
+            let mut sticky = false;
             let omni = tables.iter().all(|table| {
-                context
-                    .sharding_schema
-                    .tables
-                    .omnishards()
-                    .contains(table.name)
+                let is_sticky = context.sharding_schema.tables.omnishards().get(table.name);
+
+                if let Some(is_sticky) = is_sticky {
+                    if *is_sticky {
+                        sticky = true;
+                    }
+                    true
+                } else {
+                    false
+                }
             });
 
             if omni {
-                let shard = round_robin::next() % context.shards;
+                let shard = if sticky {
+                    context.router_context.omni_sticky_index
+                } else {
+                    round_robin::next()
+                } % context.shards;
 
                 query.set_shard_mut(shard);
 
