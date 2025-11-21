@@ -106,14 +106,25 @@ impl QueryParser {
         let mut query = Route::select(shard, order_by, aggregates, limit, distinct);
 
         let mut omni = false;
+
         if query.is_all_shards() {
-            if let Some(name) = from_clause.table_name() {
-                omni = context.sharding_schema.tables.omnishards().contains(name);
-            }
+            omni = from_clause.tables().iter().all(|table| {
+                context
+                    .sharding_schema
+                    .tables
+                    .omnishards()
+                    .contains(table.name)
+            });
         }
 
         if omni {
-            query.set_shard_mut(round_robin::next() % context.shards);
+            let shard = round_robin::next() % context.shards;
+
+            query.set_shard_mut(shard);
+
+            if let Some(recorder) = self.recorder_mut() {
+                recorder.record_entry(Some(shard.into()), "SELECT matched all omnisharded tables");
+            }
         }
 
         // Only rewrite if query is cross-shard.
