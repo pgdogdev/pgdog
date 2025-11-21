@@ -70,6 +70,19 @@ fn lock_config_mode() -> MutexGuard<'static, ()> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
+fn parse_query(query: &str) -> Command {
+    let mut query_parser = QueryParser::default();
+    let client_request = ClientRequest::from(vec![Query::new(query).into()]);
+    let cluster = Cluster::new_test();
+    let mut stmt = PreparedStatements::default();
+    let params = Parameters::default();
+
+    let context =
+        RouterContext::new(&client_request, &cluster, &mut stmt, &params, None, 1).unwrap();
+    let command = query_parser.parse(context).unwrap().clone();
+    command
+}
+
 macro_rules! command {
     ($query:expr) => {{
         command!($query, false)
@@ -87,8 +100,15 @@ macro_rules! command {
         } else {
             None
         };
-        let context =
-            RouterContext::new(&client_request, &cluster, &mut stmt, &params, transaction).unwrap();
+        let context = RouterContext::new(
+            &client_request,
+            &cluster,
+            &mut stmt,
+            &params,
+            transaction,
+            1,
+        )
+        .unwrap();
         let command = query_parser.parse(context).unwrap().clone();
 
         (command, query_parser)
@@ -131,6 +151,7 @@ macro_rules! query_parser {
             &mut prep_stmts,
             &params,
             maybe_transaction,
+            1,
         )
         .unwrap();
 
@@ -165,6 +186,7 @@ macro_rules! parse {
                     &mut PreparedStatements::default(),
                     &Parameters::default(),
                     None,
+                    1,
                 )
                 .unwrap(),
             )
@@ -188,7 +210,7 @@ fn parse_with_parameters(query: &str, params: Parameters) -> Result<Command, Err
     let client_request: ClientRequest = vec![Query::new(query).into()].into();
     let cluster = Cluster::new_test();
     let router_context =
-        RouterContext::new(&client_request, &cluster, &mut prep_stmts, &params, None).unwrap();
+        RouterContext::new(&client_request, &cluster, &mut prep_stmts, &params, None, 1).unwrap();
     QueryParser::default().parse(router_context)
 }
 
@@ -209,6 +231,7 @@ fn parse_with_bind(query: &str, params: &[&[u8]]) -> Result<Command, Error> {
         &mut prep_stmts,
         &parameters,
         None,
+        1,
     )
     .unwrap();
 
@@ -324,11 +347,41 @@ fn test_prepared_stddev_rewrite_plan() {
 
 #[test]
 fn test_omni() {
-    let q = "SELECT sharded_omni.* FROM sharded_omni WHERE sharded_omni.id = $1";
-    let route = query!(q);
-    assert!(matches!(route.shard(), Shard::Direct(_)));
-    let (_, qp) = command!(q);
-    assert!(!qp.in_transaction);
+    let mut omni_round_robin = HashSet::new();
+    let q = "SELECT sharded_omni.* FROM sharded_omni WHERE sharded_omni.id = 1";
+
+    for _ in 0..10 {
+        let command = parse_query(q);
+        match command {
+            Command::Query(query) => {
+                assert!(matches!(query.shard(), Shard::Direct(_)));
+                omni_round_robin.insert(query.shard().clone());
+            }
+
+            _ => {}
+        }
+    }
+
+    assert_eq!(omni_round_robin.len(), 2);
+
+    // Test sticky routing
+    let mut omni_sticky = HashSet::new();
+    let q =
+        "SELECT sharded_omni_sticky.* FROM sharded_omni_sticky WHERE sharded_omni_sticky.id = $1";
+
+    for _ in 0..10 {
+        let command = parse_query(q);
+        match command {
+            Command::Query(query) => {
+                assert!(matches!(query.shard(), Shard::Direct(_)));
+                omni_sticky.insert(query.shard().clone());
+            }
+
+            _ => {}
+        }
+    }
+
+    assert_eq!(omni_sticky.len(), 1);
 
     // Test that sharded tables take priority.
     let q = "
@@ -438,7 +491,7 @@ fn test_set() {
     let params = Parameters::default();
     let transaction = Some(TransactionType::ReadWrite);
     let router_context =
-        RouterContext::new(&buffer, &cluster, &mut prep_stmts, &params, transaction).unwrap();
+        RouterContext::new(&buffer, &cluster, &mut prep_stmts, &params, transaction, 1).unwrap();
     let mut context = QueryParserContext::new(router_context);
 
     for read_only in [true, false] {
@@ -519,7 +572,7 @@ fn update_sharding_key_errors_by_default() {
     let client_request: ClientRequest = vec![Query::new(query).into()].into();
     let cluster = Cluster::new_test();
     let router_context =
-        RouterContext::new(&client_request, &cluster, &mut prep_stmts, &params, None).unwrap();
+        RouterContext::new(&client_request, &cluster, &mut prep_stmts, &params, None, 1).unwrap();
 
     let result = QueryParser::default().parse(router_context);
     assert!(
@@ -539,7 +592,7 @@ fn update_sharding_key_ignore_mode_allows() {
     let client_request: ClientRequest = vec![Query::new(query).into()].into();
     let cluster = Cluster::new_test();
     let router_context =
-        RouterContext::new(&client_request, &cluster, &mut prep_stmts, &params, None).unwrap();
+        RouterContext::new(&client_request, &cluster, &mut prep_stmts, &params, None, 1).unwrap();
 
     let command = QueryParser::default().parse(router_context).unwrap();
     assert!(matches!(command, Command::Query(_)));
@@ -556,7 +609,7 @@ fn update_sharding_key_rewrite_mode_not_supported() {
     let client_request: ClientRequest = vec![Query::new(query).into()].into();
     let cluster = Cluster::new_test();
     let router_context =
-        RouterContext::new(&client_request, &cluster, &mut prep_stmts, &params, None).unwrap();
+        RouterContext::new(&client_request, &cluster, &mut prep_stmts, &params, None, 1).unwrap();
 
     let result = QueryParser::default().parse(router_context);
     assert!(
@@ -576,7 +629,7 @@ fn update_sharding_key_rewrite_plan_detected() {
     let client_request: ClientRequest = vec![Query::new(query).into()].into();
     let cluster = Cluster::new_test();
     let router_context =
-        RouterContext::new(&client_request, &cluster, &mut prep_stmts, &params, None).unwrap();
+        RouterContext::new(&client_request, &cluster, &mut prep_stmts, &params, None, 1).unwrap();
 
     let command = QueryParser::default().parse(router_context).unwrap();
     match command {
@@ -752,7 +805,7 @@ WHERE t2.account = (
     .into();
     let transaction = Some(TransactionType::ReadWrite);
     let router_context =
-        RouterContext::new(&buffer, &cluster, &mut prep_stmts, &params, transaction).unwrap();
+        RouterContext::new(&buffer, &cluster, &mut prep_stmts, &params, transaction, 1).unwrap();
     let mut context = QueryParserContext::new(router_context);
     let route = qp.query(&mut context).unwrap();
     match route {
@@ -813,7 +866,7 @@ fn test_close_direct_one_shard() {
     let params = Parameters::default();
     let transaction = None;
 
-    let context = RouterContext::new(&buf, &cluster, &mut pp, &params, transaction).unwrap();
+    let context = RouterContext::new(&buf, &cluster, &mut pp, &params, transaction, 1).unwrap();
 
     let cmd = qp.parse(context).unwrap();
 

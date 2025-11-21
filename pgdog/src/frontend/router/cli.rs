@@ -55,6 +55,7 @@ impl RouterCli {
                 &mut stmt,
                 &mut params,
                 None,
+                1,
             )?)?;
             result.push(cmd);
         }

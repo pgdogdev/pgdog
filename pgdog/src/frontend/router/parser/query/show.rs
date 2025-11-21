@@ -38,7 +38,7 @@ mod test_show {
         // First call
         let query = "SHOW TRANSACTION ISOLATION LEVEL";
         let buffer = ClientRequest::from(vec![Query::new(query).into()]);
-        let context = RouterContext::new(&buffer, &c, &mut ps, &p, None).unwrap();
+        let context = RouterContext::new(&buffer, &c, &mut ps, &p, None, 1).unwrap();
 
         let first = parser.parse(context).unwrap().clone();
         let first_shard = first.route().shard();
@@ -47,7 +47,7 @@ mod test_show {
         // Second call
         let query = "SHOW TRANSACTION ISOLATION LEVEL";
         let buffer = ClientRequest::from(vec![Query::new(query).into()]);
-        let context = RouterContext::new(&buffer, &c, &mut ps, &p, None).unwrap();
+        let context = RouterContext::new(&buffer, &c, &mut ps, &p, None, 1).unwrap();
 
         let second = parser.parse(context).unwrap().clone();
         let second_shard = second.route().shard();

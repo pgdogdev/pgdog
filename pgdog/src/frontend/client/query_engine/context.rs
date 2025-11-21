@@ -1,3 +1,5 @@
+use rand::{thread_rng, Rng};
+
 use crate::{
     backend::pool::{connection::mirror::Mirror, stats::MemoryStats},
     frontend::{
@@ -34,6 +36,8 @@ pub struct QueryEngineContext<'a> {
     pub(super) admin: bool,
     /// Executing rollback statement.
     pub(super) rollback: bool,
+    /// Omnisharded modulo.
+    pub(super) omni_sticky_index: usize,
 }
 
 impl<'a> QueryEngineContext<'a> {
@@ -53,6 +57,7 @@ impl<'a> QueryEngineContext<'a> {
             admin: client.admin,
             requests_left: 0,
             rollback: false,
+            omni_sticky_index: client.omni_sticky_index,
         }
     }
 
@@ -77,6 +82,7 @@ impl<'a> QueryEngineContext<'a> {
             admin: false,
             requests_left: 0,
             rollback: false,
+            omni_sticky_index: thread_rng().gen_range(1..usize::MAX),
         }
     }
 

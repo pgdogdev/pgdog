@@ -5,7 +5,9 @@ use std::path::PathBuf;
 use tracing::{info, warn};
 
 use crate::sharding::ShardedSchema;
-use crate::{EnumeratedDatabase, Memory, PassthoughAuth, PreparedStatements, RewriteMode};
+use crate::{
+    EnumeratedDatabase, Memory, OmnishardedTable, PassthoughAuth, PreparedStatements, RewriteMode,
+};
 
 use super::database::Database;
 use super::error::Error;
@@ -227,7 +229,7 @@ impl Config {
         tables
     }
 
-    pub fn omnisharded_tables(&self) -> HashMap<String, Vec<String>> {
+    pub fn omnisharded_tables(&self) -> HashMap<String, Vec<OmnishardedTable>> {
         let mut tables = HashMap::new();
 
         for table in &self.omnisharded_tables {
@@ -235,7 +237,10 @@ impl Config {
                 .entry(table.database.clone())
                 .or_insert_with(Vec::new);
             for t in &table.tables {
-                entry.push(t.clone());
+                entry.push(OmnishardedTable {
+                    name: t.clone(),
+                    sticky_routing: table.sticky,
+                });
             }
         }
 
@@ -646,5 +651,59 @@ password = "users_admin_password"
             "users_admin_password"
         );
         assert!(config_and_users.users.admin.is_none());
+    }
+
+    #[test]
+    fn test_omnisharded_tables() {
+        let source = r#"
+[general]
+host = "0.0.0.0"
+port = 6432
+
+[[databases]]
+name = "db1"
+host = "127.0.0.1"
+port = 5432
+
+[[databases]]
+name = "db2"
+host = "127.0.0.1"
+port = 5433
+
+[[omnisharded_tables]]
+database = "db1"
+tables = ["table_a", "table_b"]
+
+[[omnisharded_tables]]
+database = "db1"
+tables = ["table_c"]
+sticky = true
+
+[[omnisharded_tables]]
+database = "db2"
+tables = ["table_x"]
+"#;
+
+        let config: Config = toml::from_str(source).unwrap();
+
+        assert_eq!(config.omnisharded_tables.len(), 3);
+
+        let tables = config.omnisharded_tables();
+
+        assert_eq!(tables.len(), 2);
+
+        let db1_tables = tables.get("db1").unwrap();
+        assert_eq!(db1_tables.len(), 3);
+        assert_eq!(db1_tables[0].name, "table_a");
+        assert!(!db1_tables[0].sticky_routing);
+        assert_eq!(db1_tables[1].name, "table_b");
+        assert!(!db1_tables[1].sticky_routing);
+        assert_eq!(db1_tables[2].name, "table_c");
+        assert!(db1_tables[2].sticky_routing);
+
+        let db2_tables = tables.get("db2").unwrap();
+        assert_eq!(db2_tables.len(), 1);
+        assert_eq!(db2_tables[0].name, "table_x");
+        assert!(!db2_tables[0].sticky_routing);
     }
 }

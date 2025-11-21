@@ -68,7 +68,7 @@ impl Deref for CachedAst {
 
 impl CachedAst {
     /// Create new cache entry from pg_query's AST.
-    fn new(query: &str, schema: &ShardingSchema) -> std::result::Result<Self, super::Error> {
+    pub fn new(query: &str, schema: &ShardingSchema) -> std::result::Result<Self, super::Error> {
         let ast = parse(query).map_err(super::Error::PgQuery)?;
         let (shard, role) = comment(query, schema)?;
 

@@ -9,6 +9,7 @@ use crate::{
 };
 use pg_query::protobuf::ColumnRef;
 
+use super::shared::ConvergeAlgorithm;
 use super::*;
 
 impl QueryParser {
@@ -57,7 +58,7 @@ impl QueryParser {
                     context.router_context.bind,
                     &mut self.explain_recorder,
                 )?;
-                let shard = Self::converge(shards);
+                let shard = Self::converge(shards, ConvergeAlgorithm::default());
                 if let Some(recorder) = self.recorder_mut() {
                     recorder.record_entry(
                         Some(shard.clone()),

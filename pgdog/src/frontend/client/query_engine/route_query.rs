@@ -50,6 +50,7 @@ impl QueryEngine {
             context.prepared_statements,
             context.params,
             context.transaction,
+            context.omni_sticky_index,
         )?;
         match self.router.query(router_context) {
             Ok(cmd) => {
