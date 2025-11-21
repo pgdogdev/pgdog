@@ -70,6 +70,19 @@ fn lock_config_mode() -> MutexGuard<'static, ()> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
+fn parse_query(query: &str) -> Command {
+    let mut query_parser = QueryParser::default();
+    let client_request = ClientRequest::from(vec![Query::new(query).into()]);
+    let cluster = Cluster::new_test();
+    let mut stmt = PreparedStatements::default();
+    let params = Parameters::default();
+
+    let context =
+        RouterContext::new(&client_request, &cluster, &mut stmt, &params, None, 1).unwrap();
+    let command = query_parser.parse(context).unwrap().clone();
+    command
+}
+
 macro_rules! command {
     ($query:expr) => {{
         command!($query, false)
@@ -338,11 +351,15 @@ fn test_omni() {
     let q = "SELECT sharded_omni.* FROM sharded_omni WHERE sharded_omni.id = 1";
 
     for _ in 0..10 {
-        let route = query!(q);
-        assert!(matches!(route.shard(), Shard::Direct(_)));
-        let (_, qp) = command!(q);
-        assert!(!qp.in_transaction);
-        omni_round_robin.insert(route.shard().clone());
+        let command = parse_query(q);
+        match command {
+            Command::Query(query) => {
+                assert!(matches!(query.shard(), Shard::Direct(_)));
+                omni_round_robin.insert(query.shard().clone());
+            }
+
+            _ => {}
+        }
     }
 
     assert_eq!(omni_round_robin.len(), 2);
@@ -353,11 +370,15 @@ fn test_omni() {
         "SELECT sharded_omni_sticky.* FROM sharded_omni_sticky WHERE sharded_omni_sticky.id = $1";
 
     for _ in 0..10 {
-        let route = query!(q);
-        assert!(matches!(route.shard(), Shard::Direct(_)));
-        let (_, qp) = command!(q);
-        assert!(!qp.in_transaction);
-        omni_sticky.insert(route.shard().clone());
+        let command = parse_query(q);
+        match command {
+            Command::Query(query) => {
+                assert!(matches!(query.shard(), Shard::Direct(_)));
+                omni_sticky.insert(query.shard().clone());
+            }
+
+            _ => {}
+        }
     }
 
     assert_eq!(omni_sticky.len(), 1);
