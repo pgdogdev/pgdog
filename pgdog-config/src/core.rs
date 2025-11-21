@@ -652,4 +652,58 @@ password = "users_admin_password"
         );
         assert!(config_and_users.users.admin.is_none());
     }
+
+    #[test]
+    fn test_omnisharded_tables() {
+        let source = r#"
+[general]
+host = "0.0.0.0"
+port = 6432
+
+[[databases]]
+name = "db1"
+host = "127.0.0.1"
+port = 5432
+
+[[databases]]
+name = "db2"
+host = "127.0.0.1"
+port = 5433
+
+[[omnisharded_tables]]
+database = "db1"
+tables = ["table_a", "table_b"]
+
+[[omnisharded_tables]]
+database = "db1"
+tables = ["table_c"]
+sticky_routing = true
+
+[[omnisharded_tables]]
+database = "db2"
+tables = ["table_x"]
+"#;
+
+        let config: Config = toml::from_str(source).unwrap();
+
+        assert_eq!(config.omnisharded_tables.len(), 3);
+
+        let tables = config.omnisharded_tables();
+
+        assert_eq!(tables.len(), 2);
+
+        let db1_tables = tables.get("db1").unwrap();
+        assert_eq!(db1_tables.len(), 3);
+        assert_eq!(db1_tables[0].name, "table_a");
+        assert!(!db1_tables[0].sticky_routing);
+        assert_eq!(db1_tables[1].name, "table_b");
+        assert!(!db1_tables[1].sticky_routing);
+        assert_eq!(db1_tables[2].name, "table_c");
+        assert!(db1_tables[2].sticky_routing);
+
+        let db2_tables = tables.get("db2").unwrap();
+        assert_eq!(db2_tables.len(), 1);
+        assert_eq!(db2_tables[0].name, "table_x");
+        assert!(!db2_tables[0].sticky_routing);
+    }
 }
