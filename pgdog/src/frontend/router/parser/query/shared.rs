@@ -1,9 +1,20 @@
 use super::{explain_trace::ExplainRecorder, *};
 use std::string::String as StdString;
 
+#[derive(Debug, Clone, Default, Copy, PartialEq)]
+pub(super) enum ConvergeAlgorithm {
+    // Take the first direct shard we find
+    FirstDirect,
+    // If All is present, make it cross-shard.
+    // If multiple shards are present, make it multi.
+    // Else, make it direct.
+    #[default]
+    AllFirstElseMulti,
+}
+
 impl QueryParser {
     /// Converge to a single route given multiple shards.
-    pub(super) fn converge(shards: HashSet<Shard>) -> Shard {
+    pub(super) fn converge(shards: HashSet<Shard>, algorithm: ConvergeAlgorithm) -> Shard {
         let shard = if shards.len() == 1 {
             shards.iter().next().cloned().unwrap()
         } else {
@@ -19,6 +30,14 @@ impl QueryParser {
                     Shard::Multi(m) => multi.extend(m),
                 };
             }
+
+            if algorithm == ConvergeAlgorithm::FirstDirect {
+                let direct = shards.iter().find(|shard| shard.is_direct());
+                if let Some(direct) = direct {
+                    return direct.clone();
+                }
+            }
+
             if all || shards.is_empty() {
                 Shard::All
             } else {

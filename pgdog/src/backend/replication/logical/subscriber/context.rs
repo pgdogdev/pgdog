@@ -56,6 +56,7 @@ impl<'a> StreamContext<'a> {
             &mut self.prepared_statements,
             &self.params,
             None,
+            1,
         )?)
     }
 }

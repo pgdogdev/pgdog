@@ -1,15 +1,20 @@
 //! Tables sharded in the database.
+use pgdog_config::OmnishardedTable;
+
 use crate::{
     config::{DataType, ShardedTable},
     frontend::router::sharding::Mapping,
     net::messages::Vector,
 };
-use std::{collections::HashSet, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 #[derive(Default, Debug)]
 struct Inner {
     tables: Vec<ShardedTable>,
-    omnisharded: HashSet<String>,
+    omnisharded: HashMap<String, bool>, // Name <-> sticky routing
     /// This is set only if we have the same sharding scheme
     /// across all tables, i.e., 3 tables with the same data type
     /// and list/range/hash function.
@@ -46,7 +51,7 @@ impl From<&[ShardedTable]> for ShardedTables {
 }
 
 impl ShardedTables {
-    pub fn new(tables: Vec<ShardedTable>, omnisharded_tables: Vec<String>) -> Self {
+    pub fn new(tables: Vec<ShardedTable>, omnisharded_tables: Vec<OmnishardedTable>) -> Self {
         let mut common_mapping = HashSet::new();
         for table in &tables {
             common_mapping.insert((
@@ -69,7 +74,10 @@ impl ShardedTables {
         Self {
             inner: Arc::new(Inner {
                 tables,
-                omnisharded: omnisharded_tables.into_iter().collect(),
+                omnisharded: omnisharded_tables
+                    .into_iter()
+                    .map(|table| (table.name, table.sticky_routing))
+                    .collect(),
                 common_mapping,
             }),
         }
@@ -79,7 +87,7 @@ impl ShardedTables {
         &self.inner.tables
     }
 
-    pub fn omnishards(&self) -> &HashSet<String> {
+    pub fn omnishards(&self) -> &HashMap<String, bool> {
         &self.inner.omnisharded
     }
 

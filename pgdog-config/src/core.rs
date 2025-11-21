@@ -5,7 +5,9 @@ use std::path::PathBuf;
 use tracing::{info, warn};
 
 use crate::sharding::ShardedSchema;
-use crate::{EnumeratedDatabase, Memory, PassthoughAuth, PreparedStatements, RewriteMode};
+use crate::{
+    EnumeratedDatabase, Memory, OmnishardedTable, PassthoughAuth, PreparedStatements, RewriteMode,
+};
 
 use super::database::Database;
 use super::error::Error;
@@ -227,7 +229,7 @@ impl Config {
         tables
     }
 
-    pub fn omnisharded_tables(&self) -> HashMap<String, Vec<String>> {
+    pub fn omnisharded_tables(&self) -> HashMap<String, Vec<OmnishardedTable>> {
         let mut tables = HashMap::new();
 
         for table in &self.omnisharded_tables {
@@ -235,7 +237,10 @@ impl Config {
                 .entry(table.database.clone())
                 .or_insert_with(Vec::new);
             for t in &table.tables {
-                entry.push(t.clone());
+                entry.push(OmnishardedTable {
+                    name: t.clone(),
+                    sticky_routing: table.sticky_routing,
+                });
             }
         }
 

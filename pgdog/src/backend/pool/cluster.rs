@@ -538,6 +538,8 @@ impl Cluster {
 mod test {
     use std::{sync::Arc, time::Duration};
 
+    use pgdog_config::OmnishardedTable;
+
     use crate::{
         backend::{
             pool::{Address, Config, PoolConfig, ShardConfig},
@@ -597,7 +599,16 @@ mod test {
                         hasher: Hasher::Postgres,
                         ..Default::default()
                     }],
-                    vec!["sharded_omni".into()],
+                    vec![
+                        OmnishardedTable {
+                            name: "sharded_omni".into(),
+                            sticky_routing: false,
+                        },
+                        OmnishardedTable {
+                            name: "sharded_omni_sticky".into(),
+                            sticky_routing: true,
+                        },
+                    ],
                 ),
                 shards,
                 identifier,

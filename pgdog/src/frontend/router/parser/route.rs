@@ -35,6 +35,10 @@ impl Shard {
     pub fn direct(shard: usize) -> Self {
         Self::Direct(shard)
     }
+
+    pub fn is_direct(&self) -> bool {
+        matches!(self, Self::Direct(_))
+    }
 }
 
 impl From<Option<usize>> for Shard {
