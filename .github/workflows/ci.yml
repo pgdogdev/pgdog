@@ -327,6 +327,18 @@ jobs:
           if [ -d instrumentation/target/llvm-cov-target ]; then
             cp -R instrumentation/target/llvm-cov-target/* target/llvm-cov-target/
           fi
+          mkdir -p target/release
+      - uses: actions/download-artifact@v4
+        with:
+          name: pgdog-release-${{ github.sha }}
+          path: artifacts/release
+      - name: Restore release binaries
+        run: |
+          mkdir -p target/release
+          if [ -d artifacts/release ]; then
+            cp -R artifacts/release/* target/release/
+            chmod +x target/release/pgdog || true
+          fi
       - uses: actions/download-artifact@v4
         with:
           pattern: ${{ format('integration-profiles-*-{0}', github.sha) }}
