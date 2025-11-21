@@ -28,6 +28,10 @@ async fn test_transaction_state_transitions() {
         .batch_execute(&format!("SET application_name TO '{}';", APP_NAME))
         .await
         .unwrap();
+    client
+        .batch_execute("SET statement_timeout TO '10s';")
+        .await
+        .unwrap();
     client.batch_execute("SELECT 1;").await.unwrap();
 
     wait_for_client_state(&admin, APP_NAME, "idle").await;
@@ -36,7 +40,7 @@ async fn test_transaction_state_transitions() {
     wait_for_client_state(&admin, APP_NAME, "idle in transaction").await;
 
     {
-        let query = client.simple_query("SELECT pg_sleep(2);");
+        let query = client.simple_query("SELECT pg_sleep(0.25);");
         tokio::pin!(query);
 
         let deadline = Instant::now() + Duration::from_secs(5);
@@ -47,7 +51,7 @@ async fn test_transaction_state_transitions() {
                     result.unwrap();
                     break;
                 }
-                _ = sleep(Duration::from_millis(25)) => {
+                _ = sleep(Duration::from_millis(10)) => {
                     if let Some(state) = fetch_client_state(&admin, APP_NAME).await {
                         if state == "active" {
                             saw_active = true;
