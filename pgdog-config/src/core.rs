@@ -239,7 +239,7 @@ impl Config {
             for t in &table.tables {
                 entry.push(OmnishardedTable {
                     name: t.clone(),
-                    sticky_routing: table.sticky_routing,
+                    sticky_routing: table.sticky,
                 });
             }
         }
@@ -677,7 +677,7 @@ tables = ["table_a", "table_b"]
 [[omnisharded_tables]]
 database = "db1"
 tables = ["table_c"]
-sticky_routing = true
+sticky = true
 
 [[omnisharded_tables]]
 database = "db2"

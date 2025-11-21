@@ -178,7 +178,7 @@ pub struct OmnishardedTables {
     pub database: String,
     pub tables: Vec<String>,
     #[serde(default)]
-    pub sticky_routing: bool,
+    pub sticky: bool,
 }
 
 #[derive(PartialEq, Debug, Clone, Default)]
