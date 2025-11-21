@@ -2,12 +2,12 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use rand::Rng;
 use tokio::spawn;
 use tokio::task::yield_now;
-use tokio::time::{sleep, timeout};
+use tokio::time::{sleep, timeout, Instant};
 use tokio_util::task::TaskTracker;
 
 use crate::net::ProtocolMessage;
@@ -601,4 +601,51 @@ async fn test_move_conns_to() {
 
     assert_eq!(destination.lock().idle(), 2);
     assert_eq!(destination.lock().checked_out(), 0);
+}
+
+#[tokio::test]
+async fn test_lsn_monitor() {
+    crate::logger();
+
+    let config = Config {
+        max: 1,
+        min: 1,
+        lsn_check_delay: Duration::from_millis(10),
+        lsn_check_interval: Duration::from_millis(50),
+        lsn_check_timeout: Duration::from_millis(5_000),
+        ..Default::default()
+    };
+
+    let pool = Pool::new(&PoolConfig {
+        address: Address::new_test(),
+        config,
+    });
+
+    let initial_stats = pool.lsn_stats();
+    assert!(!initial_stats.valid());
+
+    pool.launch();
+
+    sleep(Duration::from_millis(200)).await;
+
+    let stats = pool.lsn_stats();
+    assert!(
+        stats.valid(),
+        "LSN stats should be valid after monitor runs"
+    );
+    assert!(!stats.replica, "Local PostgreSQL should not be a replica");
+    assert!(stats.lsn.lsn > 0, "LSN should be greater than 0");
+    assert!(
+        stats.offset_bytes > 0,
+        "Offset bytes should be greater than 0"
+    );
+
+    let age = stats.lsn_age(Instant::now());
+    assert!(
+        age < Duration::from_millis(300),
+        "LSN stats age should be recent, got {:?}",
+        age
+    );
+
+    pool.shutdown();
 }
