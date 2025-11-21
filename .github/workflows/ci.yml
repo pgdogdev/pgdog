@@ -8,18 +8,16 @@ on:
 
 jobs:
   fmt:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
           override: true
-      - uses: useblacksmith/rust-cache@v3
+      - uses: Swatinem/rust-cache@v2
         with:
-          prefix-key: ci-v2
           shared-key: ${{ hashFiles('**/Cargo.lock') }}
-          key: ${{ github.sha }}
       - name: Install CMake 3.31
         run: |
           sudo apt update && sudo apt install mold -y
@@ -32,18 +30,16 @@ jobs:
         working-directory: pgdog
         run: cargo clippy
   build:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
           override: true
-      - uses: useblacksmith/rust-cache@v3
+      - uses: Swatinem/rust-cache@v2
         with:
-          prefix-key: ci-v2
           shared-key: ${{ hashFiles('**/Cargo.lock') }}
-          key: ${{ github.sha }}
       - name: Install CMake 3.31
         run: |
           sudo apt update && sudo apt install mold -y
@@ -70,7 +66,7 @@ jobs:
           if-no-files-found: error
   tests:
     needs: build
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rs/toolchain@v1
@@ -78,11 +74,9 @@ jobs:
           toolchain: stable
           override: true
           components: llvm-tools-preview
-      - uses: useblacksmith/rust-cache@v3
+      - uses: Swatinem/rust-cache@v2
         with:
-          prefix-key: ci-v2
           shared-key: ${{ hashFiles('**/Cargo.lock') }}
-          key: ${{ github.sha }}
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest@0.9.78,cargo-llvm-cov@0.6.10
@@ -116,18 +110,16 @@ jobs:
           fail_ci_if_error: true
   doc-tests:
     needs: build
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
           override: true
-      - uses: useblacksmith/rust-cache@v3
+      - uses: Swatinem/rust-cache@v2
         with:
-          prefix-key: ci-v2
           shared-key: ${{ hashFiles('**/Cargo.lock') }}
-          key: ${{ github.sha }}
       - name: Install mold linker
         run: |
           sudo apt update
@@ -136,7 +128,7 @@ jobs:
         run: cargo test --doc
   integration-prepare:
     needs: build
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rs/toolchain@v1
@@ -144,11 +136,9 @@ jobs:
           toolchain: stable
           override: true
           components: llvm-tools-preview
-      - uses: useblacksmith/rust-cache@v3
+      - uses: Swatinem/rust-cache@v2
         with:
-          prefix-key: ci-v2
           shared-key: ${{ hashFiles('**/Cargo.lock') }}
-          key: ${{ github.sha }}
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-llvm-cov@0.6.10
@@ -179,7 +169,7 @@ jobs:
 
   integration-suite:
     needs: integration-prepare
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -236,11 +226,9 @@ jobs:
           toolchain: stable
           override: true
           components: llvm-tools-preview
-      - uses: useblacksmith/rust-cache@v3
+      - uses: Swatinem/rust-cache@v2
         with:
-          prefix-key: ci-v2
           shared-key: ${{ hashFiles('**/Cargo.lock') }}
-          key: ${{ github.sha }}
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest@0.9.78
@@ -301,7 +289,7 @@ jobs:
     needs:
       - integration-prepare
       - integration-suite
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rs/toolchain@v1
@@ -309,11 +297,9 @@ jobs:
           toolchain: stable
           override: true
           components: llvm-tools-preview
-      - uses: useblacksmith/rust-cache@v3
+      - uses: Swatinem/rust-cache@v2
         with:
-          prefix-key: ci-v2
           shared-key: ${{ hashFiles('**/Cargo.lock') }}
-          key: ${{ github.sha }}
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-llvm-cov@0.6.10
@@ -364,7 +350,7 @@ jobs:
           fail_ci_if_error: true
   plugin-unit-tests:
     needs: build
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     continue-on-error: true
     timeout-minutes: 30
     steps:
@@ -373,11 +359,9 @@ jobs:
         with:
           toolchain: stable
           override: true
-      - uses: useblacksmith/rust-cache@v3
+      - uses: Swatinem/rust-cache@v2
         with:
-          prefix-key: ci-v2
           shared-key: ${{ hashFiles('**/Cargo.lock') }}
-          key: ${{ github.sha }}
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest@0.9.78
@@ -391,7 +375,7 @@ jobs:
         run: cargo nextest run -E 'package(pgdog-example-plugin)' --no-fail-fast
   plugin-integration-tests:
     needs: build
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     continue-on-error: true
     timeout-minutes: 30
     steps:
@@ -400,11 +384,9 @@ jobs:
         with:
           toolchain: stable
           override: true
-      - uses: useblacksmith/rust-cache@v3
+      - uses: Swatinem/rust-cache@v2
         with:
-          prefix-key: ci-v2
           shared-key: ${{ hashFiles('**/Cargo.lock') }}
-          key: ${{ github.sha }}
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest@0.9.78
