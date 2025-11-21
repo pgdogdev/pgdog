@@ -329,6 +329,33 @@ fn test_omni() {
     assert!(matches!(route.shard(), Shard::Direct(_)));
     let (_, qp) = command!(q);
     assert!(!qp.in_transaction);
+
+    // Test that sharded tables take priority.
+    let q = "
+        SELECT
+            sharded_omni.*,
+            sharded.*
+        FROM
+            sharded_omni
+        INNER JOIN
+            sharded
+        ON sharded_omni.id = sharded.i
+    WHERE sharded.id = 5";
+
+    let route = query!(q);
+    let shard = route.shard().clone();
+
+    for _ in 0..5 {
+        let route = query!(q);
+        // Test that shard doesn't change (i.e. not round robin)
+        assert_eq!(&shard, route.shard());
+        assert!(matches!(shard, Shard::Direct(_)));
+    }
+
+    // Test that all tables have to be omnisharded.
+    let q = "SELECT * FROM sharded_omni INNER JOIN not_sharded ON sharded_omni.id = not_sharded.id WHERE sharded_omni = $1";
+    let route = query!(q);
+    assert!(matches!(route.shard(), Shard::All));
 }
 
 #[test]
