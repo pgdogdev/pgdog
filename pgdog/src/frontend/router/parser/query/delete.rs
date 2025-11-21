@@ -26,6 +26,10 @@ impl QueryParser {
                 return Ok(Command::Query(Route::write(shard)));
             }
 
+            if let Some(shard) = self.check_search_path_for_shard(context)? {
+                return Ok(Command::Query(Route::write(shard)));
+            }
+
             let source = TablesSource::from(table);
             let where_clause = WhereClause::new(&source, &stmt.where_clause);
 

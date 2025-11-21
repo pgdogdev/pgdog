@@ -73,6 +73,7 @@ impl ExplainEntry {
     }
 }
 
+/// EXPLAIN recorder.
 #[derive(Debug, Default)]
 pub struct ExplainRecorder {
     entries: Vec<ExplainEntry>,
@@ -87,6 +88,12 @@ impl ExplainRecorder {
 
     pub fn record_entry(&mut self, shard: Option<Shard>, description: impl Into<String>) {
         self.entries.push(ExplainEntry::new(shard, description));
+    }
+
+    pub fn clear(&mut self) {
+        self.entries.clear();
+        self.comment = None;
+        self.plugin = None;
     }
 
     pub fn record_comment_override(&mut self, shard: Shard, role: Option<&str>) {

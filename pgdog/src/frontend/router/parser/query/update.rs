@@ -35,6 +35,10 @@ impl QueryParser {
                 return Ok(Command::Query(Route::write(shard)));
             }
 
+            if let Some(shard) = self.check_search_path_for_shard(context)? {
+                return Ok(Command::Query(Route::write(shard)));
+            }
+
             let shard_key_columns = Self::detect_shard_key_assignments(stmt, table, context);
             let columns_display =
                 (!shard_key_columns.is_empty()).then(|| shard_key_columns.join(", "));
