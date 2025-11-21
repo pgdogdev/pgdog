@@ -109,6 +109,9 @@ impl QueryEngine {
 
     /// Handle client request.
     pub async fn handle(&mut self, context: &mut QueryEngineContext<'_>) -> Result<(), Error> {
+        // ensure that when we are handling a client request, it shows as active
+        self.update_stats(context);
+
         self.stats
             .received(context.client_request.total_message_len());
 
