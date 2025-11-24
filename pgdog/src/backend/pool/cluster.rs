@@ -1,7 +1,7 @@
 //! A collection of replicas and a primary.
 
 use parking_lot::{Mutex, RwLock};
-use pgdog_config::{PreparedStatements, Rewrite};
+use pgdog_config::{PreparedStatements, Rewrite, RewriteMode};
 use std::{
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -265,6 +265,8 @@ impl Cluster {
         let mut cluster = self.clone();
         // Disable rewrites, we are only sending valid statements.
         cluster.rewrite.enabled = false;
+        cluster.rewrite.shard_key = RewriteMode::Ignore;
+        cluster.rewrite.split_inserts = RewriteMode::Ignore;
         cluster
     }
 
