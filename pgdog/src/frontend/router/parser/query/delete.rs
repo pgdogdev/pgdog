@@ -11,6 +11,10 @@ impl QueryParser {
     ) -> Result<Command, Error> {
         let table = stmt.relation.as_ref().map(Table::from);
 
+        if let Some(shard) = self.check_search_path_for_shard(context)? {
+            return Ok(Command::Query(Route::write(shard)));
+        }
+
         if let Some(table) = table {
             // Schema-based sharding.
             if let Some(schema) = context.sharding_schema.schemas.get(table.schema()) {
@@ -23,10 +27,6 @@ impl QueryParser {
                     );
                 }
 
-                return Ok(Command::Query(Route::write(shard)));
-            }
-
-            if let Some(shard) = self.check_search_path_for_shard(context)? {
                 return Ok(Command::Query(Route::write(shard)));
             }
 
