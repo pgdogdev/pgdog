@@ -721,6 +721,7 @@ impl Server {
 
         let count = self.prepared_statements.len();
         self.stats.set_prepared_statements(count);
+        self.sync_prepared = false;
 
         Ok(())
     }

@@ -24,6 +24,7 @@ pub enum HandleResult {
     Forward,
     Drop,
     Prepend(ProtocolMessage),
+    Prepare(ProtocolMessage),
 }
 
 /// Server-specific prepared statements.
@@ -174,10 +175,12 @@ impl PreparedStatements {
                     self.state.add('3');
                 }
             }
-            ProtocolMessage::Prepare { name, .. } => {
+            ProtocolMessage::Prepare { name, statement } => {
                 if self.contains(name) {
                     return Ok(HandleResult::Drop);
                 } else {
+                    println!("ignoring prepared: {}", statement);
+                    self.parses.push_back(name.clone());
                     self.state.add_ignore('C');
                     self.state.add_ignore('Z');
                 }
@@ -225,7 +228,7 @@ impl PreparedStatements {
                 self.describes.pop_front();
             }
 
-            '1' => {
+            '1' | 'C' => {
                 if let Some(name) = self.parses.pop_front() {
                     self.prepared(&name);
                 }

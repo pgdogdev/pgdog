@@ -119,6 +119,14 @@ impl PreparedStatements {
         self.local.get(name)
     }
 
+    /// Get globally-prepared statement by local name.
+    pub fn parse(&self, name: &str) -> Option<Parse> {
+        self.local
+            .get(name)
+            .map(|name| self.global.read().parse(name))
+            .flatten()
+    }
+
     /// Number of prepared statements in the local cache.
     pub fn len_local(&self) -> usize {
         self.local.len()
