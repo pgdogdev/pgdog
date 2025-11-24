@@ -134,5 +134,20 @@ SELECT
     ir.item_refunded_at
 FROM items_raw ir;
 
+CREATE TABLE copy_data.log_actions (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT,
+    action VARCHAR,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+INSERT INTO copy_data.log_actions (tenant_id, action)
+SELECT
+    CASE WHEN random() < 0.2 THEN NULL ELSE (floor(random() * 10000) + 1)::bigint END AS tenant_id,
+    (ARRAY['login', 'logout', 'click', 'purchase', 'view', 'error'])[
+        floor(random() * 6 + 1)::int
+    ] AS action
+FROM generate_series(1, 10000);
+
 DROP PUBLICATION IF EXISTS pgdog;
 CREATE PUBLICATION pgdog FOR TABLES IN SCHEMA copy_data;
