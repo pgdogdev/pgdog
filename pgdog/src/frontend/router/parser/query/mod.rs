@@ -510,7 +510,12 @@ impl QueryParser {
         )?;
 
         match routing {
-            InsertRouting::Routed(shard) => {
+            InsertRouting::Routed(mut shard) => {
+                if shard.all() {
+                    if let Some(schema_shard) = self.check_search_path_for_shard(context)? {
+                        shard = schema_shard;
+                    }
+                }
                 if let Some(recorder) = self.recorder_mut() {
                     match &shard {
                         Shard::Direct(_) => recorder
