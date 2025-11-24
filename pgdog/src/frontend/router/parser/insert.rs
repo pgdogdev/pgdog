@@ -849,4 +849,34 @@ mod test {
             _ => panic!("not an insert"),
         }
     }
+
+    #[test]
+    fn test_null_sharding_key_routes_to_all() {
+        let query = parse("INSERT INTO sharded (id, value) VALUES ($1, 'test')").unwrap();
+        let select = query.protobuf.stmts.first().unwrap().stmt.as_ref().unwrap();
+        let schema = ShardingSchema {
+            shards: 3,
+            tables: ShardedTables::new(
+                vec![ShardedTable {
+                    name: Some("sharded".into()),
+                    column: "id".into(),
+                    ..Default::default()
+                }],
+                vec![],
+            ),
+            ..Default::default()
+        };
+
+        match &select.node {
+            Some(NodeEnum::InsertStmt(stmt)) => {
+                let insert = Insert::new(stmt);
+                let bind = Bind::new_params("", &[Parameter::new_null()]);
+                let routing = insert
+                    .shard(&schema, Some(&bind), false, RewriteMode::Error)
+                    .unwrap();
+                assert!(matches!(routing.shard(), Shard::All));
+            }
+            _ => panic!("not an insert"),
+        }
+    }
 }
