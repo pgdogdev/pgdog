@@ -116,13 +116,17 @@ impl<'a> Insert<'a> {
         if let Some(key) = key {
             if let Some(bind) = bind {
                 if let Ok(Some(param)) = bind.parameter(key.position) {
-                    // Arrays not supported as sharding keys at the moment.
-                    let value = ShardingValue::from_param(&param, key.table.data_type)?;
-                    let ctx = ContextBuilder::new(key.table)
-                        .value(value)
-                        .shards(schema.shards)
-                        .build()?;
-                    return Ok(InsertRouting::Routed(ctx.apply()?));
+                    if param.is_null() {
+                        return Ok(InsertRouting::Routed(Shard::All));
+                    } else {
+                        // Arrays not supported as sharding keys at the moment.
+                        let value = ShardingValue::from_param(&param, key.table.data_type)?;
+                        let ctx = ContextBuilder::new(key.table)
+                            .value(value)
+                            .shards(schema.shards)
+                            .build()?;
+                        return Ok(InsertRouting::Routed(ctx.apply()?));
+                    }
                 }
             }
 

@@ -74,7 +74,7 @@ impl TupleData {
             .columns
             .iter()
             .map(|c| {
-                if c.data.is_empty() {
+                if c.identifier == Identifier::Null {
                     Parameter::new_null()
                 } else {
                     Parameter::new(&c.data)

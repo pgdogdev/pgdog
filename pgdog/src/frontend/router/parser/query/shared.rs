@@ -105,26 +105,44 @@ impl QueryParser {
                             break;
                         } else if let Some(params) = params {
                             if let Some(param) = params.parameter(pos)? {
-                                let value = ShardingValue::from_param(&param, table.data_type)?;
-                                let ctx = ContextBuilder::new(table)
-                                    .value(value)
-                                    .shards(sharding_schema.shards)
-                                    .build()?;
-                                let shard = ctx.apply()?;
-                                record_column(
-                                    recorder,
-                                    Some(shard.clone()),
-                                    table_name,
-                                    &table.column,
-                                    |col| {
-                                        format!(
-                                            "matched sharding key {} using parameter ${}",
-                                            col,
-                                            pos + 1
-                                        )
-                                    },
-                                );
-                                shards.insert(shard);
+                                if param.is_null() {
+                                    let shard = Shard::All;
+                                    shards.insert(shard.clone());
+                                    record_column(
+                                        recorder,
+                                        Some(shard),
+                                        table_name,
+                                        &table.column,
+                                        |col| {
+                                            format!(
+                                                "sharding key {} (parameter ${}) is null",
+                                                col,
+                                                pos + 1
+                                            )
+                                        },
+                                    );
+                                } else {
+                                    let value = ShardingValue::from_param(&param, table.data_type)?;
+                                    let ctx = ContextBuilder::new(table)
+                                        .value(value)
+                                        .shards(sharding_schema.shards)
+                                        .build()?;
+                                    let shard = ctx.apply()?;
+                                    record_column(
+                                        recorder,
+                                        Some(shard.clone()),
+                                        table_name,
+                                        &table.column,
+                                        |col| {
+                                            format!(
+                                                "matched sharding key {} using parameter ${}",
+                                                col,
+                                                pos + 1
+                                            )
+                                        },
+                                    );
+                                    shards.insert(shard);
+                                }
                             }
                         }
                     }
