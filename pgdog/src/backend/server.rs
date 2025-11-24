@@ -451,11 +451,9 @@ impl Server {
     ) -> Result<usize, Error> {
         // Sync application_name parameter
         // and update it in the stats.
-        let default_name = "PgDog";
-        let server_name = self
-            .client_params
-            .get_default("application_name", default_name);
-        let client_name = params.get_default("application_name", default_name);
+        let server_name = self.client_params.get_default("application_name", "PgDog");
+        let client_name = params.get_default("application_name", "PgDog");
+
         self.stats.link_client(client_name, server_name, id);
 
         // Clear any params previously tracked by SET.
@@ -463,14 +461,31 @@ impl Server {
 
         // Compare client and server params.
         if !params.identical(&self.client_params) {
+            // Construct client parameter SET queries.
             let tracked = params.tracked();
+            // Construct RESET queries to reset any current params
+            // to their default values.
             let mut queries = self.client_params.reset_queries();
+
+            // Combine both to create a new, fresh session state
+            // on this connection.
             queries.extend(tracked.set_queries());
+
+            // Set state on the connection only if
+            // there are any params to change.
             if !queries.is_empty() {
                 debug!("syncing {} params", queries.len());
+
                 self.execute_batch(&queries).await?;
+
+                // We can receive ParameterStatus messages here,
+                // but we should ignore them since we are managing the session state.
+                self.changed_params.clear();
             }
+
+            // Update params on this connection.
             self.client_params = tracked;
+
             Ok(queries.len())
         } else {
             Ok(0)

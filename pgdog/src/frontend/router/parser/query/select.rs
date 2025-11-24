@@ -60,6 +60,10 @@ impl QueryParser {
             )?;
         }
 
+        if let Some(Shard::Direct(number)) = self.check_search_path_for_shard(context)? {
+            return Ok(Command::Query(Route::read(number).set_write(writes)));
+        }
+
         // Schema-based sharding.
         for table in cached_ast.tables() {
             if let Some(schema) = context.sharding_schema.schemas.get(table.schema()) {
