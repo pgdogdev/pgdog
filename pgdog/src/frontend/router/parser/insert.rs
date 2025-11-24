@@ -112,6 +112,7 @@ impl<'a> Insert<'a> {
         }
 
         let key = table.and_then(|table| tables.key(table, &columns));
+        println!("key: {:#?}", key);
 
         if let Some(key) = key {
             if let Some(bind) = bind {
