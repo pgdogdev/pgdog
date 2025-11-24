@@ -5,8 +5,8 @@ use super::{Command, Error};
 mod insert_split;
 mod shard_key;
 
-use crate::frontend::PreparedStatements;
 use crate::net::Parse;
+use crate::{frontend::PreparedStatements, net::Query};
 pub use insert_split::{InsertSplitPlan, InsertSplitRow};
 pub use shard_key::{Assignment, AssignmentValue, ShardKeyRewritePlan};
 
@@ -51,6 +51,11 @@ impl<'a> Rewrite<'a> {
                             let mut parse = Parse::named(&stmt.name, &statement);
                             prepared_statements.insert_anyway(&mut parse);
                             stmt.name = parse.name().to_string();
+
+                            return Ok(Command::Rewrite(vec![Query::new(
+                                ast.deparse().map_err(|_| Error::EmptyQuery)?,
+                            )
+                            .into()]));
                         }
 
                         NodeEnum::ExecuteStmt(ref mut stmt) => {

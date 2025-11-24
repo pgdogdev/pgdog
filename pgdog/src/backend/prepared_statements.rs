@@ -174,7 +174,14 @@ impl PreparedStatements {
                     self.state.add('3');
                 }
             }
-            ProtocolMessage::Prepare { .. } => (),
+            ProtocolMessage::Prepare { name, .. } => {
+                if self.contains(name) {
+                    return Ok(HandleResult::Drop);
+                } else {
+                    self.state.add_ignore('C');
+                    self.state.add_ignore('Z');
+                }
+            }
             ProtocolMessage::CopyDone(_) => {
                 self.state.action('c')?;
             }

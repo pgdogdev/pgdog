@@ -102,6 +102,8 @@ impl PreparedStatements {
         self.global.read().rewrite_plan(name)
     }
 
+    /// Set rewrite plan for UPDATE / INSERT statement
+    /// rewrites used in rewritten cross-shard queries.
     pub fn update_and_set_rewrite_plan(
         &mut self,
         name: &str,
