@@ -70,9 +70,18 @@ impl QueryEngine {
 
         self.hooks.after_connected(context, &self.backend)?;
 
-        self.backend
+        self.inflight = true;
+        self.update_stats(context);
+
+        if let Err(err) = self
+            .backend
             .handle_client_request(context.client_request, &mut self.router, self.streaming)
-            .await?;
+            .await
+        {
+            self.inflight = false;
+            self.update_stats(context);
+            return Err(err.into());
+        }
 
         while self.backend.has_more_messages()
             && !self.backend.copy_mode()
@@ -90,10 +99,16 @@ impl QueryEngine {
                     // Close the conn, it could be stuck executing a query
                     // or dead.
                     self.backend.force_close();
+                    self.inflight = false;
+                    self.update_stats(context);
                     return Err(err.into());
                 }
             };
-            self.server_message(context, message).await?;
+            if let Err(err) = self.server_message(context, message).await {
+                self.inflight = false;
+                self.update_stats(context);
+                return Err(err);
+            }
         }
 
         Ok(())
@@ -209,6 +224,9 @@ impl QueryEngine {
             if !context.in_transaction() {
                 self.stats.transaction(two_pc_auto);
             }
+
+            self.inflight = false;
+            self.update_stats(context);
         }
 
         self.stats.sent(message.len());

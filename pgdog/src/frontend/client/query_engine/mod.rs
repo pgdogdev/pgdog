@@ -48,6 +48,7 @@ pub struct QueryEngine {
     stats: Stats,
     backend: Connection,
     streaming: bool,
+    inflight: bool,
     client_id: BackendKeyData,
     test_mode: bool,
     set_route: Option<Route>,
@@ -246,7 +247,7 @@ impl QueryEngine {
     }
 
     fn update_stats(&mut self, context: &mut QueryEngineContext<'_>) {
-        let state = if self.backend.has_more_messages() {
+        let state = if self.inflight || self.backend.has_more_messages() {
             State::Active
         } else {
             match context.in_transaction() {

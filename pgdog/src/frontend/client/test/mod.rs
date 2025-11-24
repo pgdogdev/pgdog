@@ -10,13 +10,13 @@ use tokio::{
 use bytes::{Buf, BufMut, BytesMut};
 
 use crate::{
-    backend::databases::databases,
+    backend::{databases::databases, pool::Connection},
     config::{
         config, load_test, load_test_replicas, load_test_with_pooler_mode, set, PreparedStatements,
         Role,
     },
     frontend::{
-        client::{BufferEvent, QueryEngine},
+        client::{BufferEvent, QueryEngine, QueryEngineContext, TransactionType},
         prepared_statements, Client,
     },
     net::{
@@ -113,6 +113,17 @@ macro_rules! read {
     }};
 }
 
+async fn drain_until_ready(client: &mut Client, engine: &mut QueryEngine) {
+    loop {
+        let message = engine.backend().read().await.unwrap();
+        let code = message.code();
+        client.server_message(engine, message).await.unwrap();
+        if code == 'Z' {
+            break;
+        }
+    }
+}
+
 #[tokio::test]
 async fn test_test_client() {
     let (mut conn, mut client, mut engine) = new_client!(false);
@@ -159,6 +170,77 @@ async fn test_test_client() {
         let len = bytes.get_i32() - 4; // Len includes self which we just read.
         let _bytes = bytes.split_to(len as usize);
     }
+}
+
+#[tokio::test]
+async fn test_query_in_transaction_sets_active_state() {
+    crate::logger();
+    let (mut conn, mut client) = test_client(false).await;
+    client.comms = client
+        .comms
+        .connect(&client.id, client.addr, &client.params);
+    let mut engine = QueryEngine::from_client(&client).unwrap();
+
+    conn.write_all(&buffer!({ Query::new("BEGIN") }))
+        .await
+        .unwrap();
+
+    client.buffer(State::Idle).await.unwrap();
+    client.client_messages(&mut engine).await.unwrap();
+    drain_until_ready(&mut client, &mut engine).await;
+
+    assert!(client.in_transaction());
+
+    conn.write_all(&buffer!({ Query::new("SELECT pg_sleep(1)") }))
+        .await
+        .unwrap();
+
+    client.buffer(State::IdleInTransaction).await.unwrap();
+    client.client_messages(&mut engine).await.unwrap();
+
+    let connected = client.comms.clients();
+    let stats = connected.get(&client.id).unwrap().stats;
+    assert_eq!(stats.state, State::Active);
+
+    drain_until_ready(&mut client, &mut engine).await;
+
+    conn.write_all(&buffer!({ Query::new("ROLLBACK") }))
+        .await
+        .unwrap();
+
+    client.buffer(State::IdleInTransaction).await.unwrap();
+    client.client_messages(&mut engine).await.unwrap();
+    drain_until_ready(&mut client, &mut engine).await;
+}
+
+#[tokio::test]
+async fn test_update_stats_uses_inflight_state() {
+    crate::logger();
+    let (_conn, mut client) = test_client(false).await;
+    client.comms = client
+        .comms
+        .connect(&client.id, client.addr, &client.params);
+    client.transaction = Some(TransactionType::ReadWrite);
+
+    let mut engine = QueryEngine::from_client(&client).unwrap();
+    *engine.backend() = Connection::default();
+
+    {
+        let mut context = QueryEngineContext::new(&mut client);
+        engine.update_stats_for_test(&mut context);
+    }
+
+    let idle_stats = client.comms.clients().get(&client.id).unwrap().stats;
+    assert_eq!(idle_stats.state, State::IdleInTransaction);
+
+    {
+        let mut context = QueryEngineContext::new(&mut client);
+        engine.set_inflight(true);
+        engine.update_stats_for_test(&mut context);
+    }
+
+    let active_stats = client.comms.clients().get(&client.id).unwrap().stats;
+    assert_eq!(active_stats.state, State::Active);
 }
 
 #[tokio::test]
