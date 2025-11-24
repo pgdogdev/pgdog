@@ -48,7 +48,7 @@ impl QueryParser {
                         if let Some(recorder) = self.recorder_mut() {
                             recorder.record_entry(
                                 Some(candidate.0.clone()),
-                                format!("matched schema \"{}\" in search_path", schema),
+                                format!("matched schema mult \"{}\" in search_path", schema),
                             );
                         }
                     }
