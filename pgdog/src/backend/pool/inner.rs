@@ -94,6 +94,11 @@ impl Inner {
         self.idle_connections.len()
     }
 
+    #[cfg(test)]
+    pub(super) fn idle_conns(&self) -> &[Box<Server>] {
+        &self.idle_connections
+    }
+
     /// Number of connections checked out of the pool
     /// by clients.
     #[inline]

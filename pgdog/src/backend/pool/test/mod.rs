@@ -594,6 +594,10 @@ async fn test_move_conns_to() {
     assert!(destination.lock().online);
     assert_eq!(destination.lock().total(), 2);
     assert_eq!(source.lock().total(), 0);
+    let new_pool_id = destination.id();
+    for conn in destination.lock().idle_conns() {
+        assert_eq!(conn.stats().pool_id, new_pool_id);
+    }
 
     drop(conn2);
 
