@@ -1,4 +1,4 @@
-use crate::backend::databases::databases;
+use crate::backend::{self, databases::databases};
 
 use super::{Measurement, Metric, OpenMetric};
 
@@ -77,6 +77,7 @@ impl Pools {
         let mut avg_connect_time = vec![];
         let mut total_connect_count = vec![];
         let mut avg_connect_count = vec![];
+        let mut total_sv_xact_idle = vec![];
 
         for (user, cluster) in databases().all() {
             for (shard_num, shard) in cluster.shards().iter().enumerate() {
@@ -263,6 +264,11 @@ impl Pools {
                     avg_connect_count.push(Measurement {
                         labels: labels.clone(),
                         measurement: averages.connect_count.into(),
+                    });
+
+                    total_sv_xact_idle.push(Measurement {
+                        labels: labels.clone(),
+                        measurement: backend::stats::idle_in_transaction(&pool).into(),
                     });
                 }
             }
@@ -543,6 +549,14 @@ impl Pools {
             name: "avg_connect_count".into(),
             measurements: avg_connect_count,
             help: "Average number of connections established to servers.".into(),
+            unit: None,
+            metric_type: None,
+        }));
+
+        metrics.push(Metric::new(PoolMetric {
+            name: "sv_idle_xact".into(),
+            measurements: total_sv_xact_idle,
+            help: "Servers currently idle in transaction.".into(),
             unit: None,
             metric_type: None,
         }));
