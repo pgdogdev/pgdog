@@ -377,7 +377,7 @@ impl PgDumpOutput {
                                                         }
                                                     }
                                                 }
-                                            } else {
+                                            } else if state == SyncState::PreData {
                                                 result.push(original.into());
                                             }
                                         }
@@ -690,5 +690,7 @@ ALTER TABLE ONLY public.users
         }
         let statements = output.statements(SyncState::PreData).unwrap();
         assert!(!statements.is_empty());
+        let statements = output.statements(SyncState::PostData).unwrap();
+        assert!(statements.is_empty());
     }
 }
