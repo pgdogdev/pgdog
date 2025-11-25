@@ -73,16 +73,14 @@ impl ShardMonitor {
                 },
             }
 
-            if detector_enabled {
-                if detector.changed() {
-                    warn!(
-                        "database role changed in shard {} [{}]",
-                        self.shard.number(),
-                        self.shard.identifier()
-                    );
-                    databases::reload_from_existing();
-                    break;
-                }
+            if detector_enabled && detector.changed() {
+                warn!(
+                    "database role changed in shard {} [{}]",
+                    self.shard.number(),
+                    self.shard.identifier()
+                );
+                databases::reload_from_existing();
+                break;
             }
 
             let pool_with_stats = self

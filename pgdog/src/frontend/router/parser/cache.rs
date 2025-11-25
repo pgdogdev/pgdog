@@ -272,7 +272,7 @@ impl Cache {
                 guard
                     .queries
                     .iter()
-                    .map(|c| c.1.stats.lock().clone())
+                    .map(|c| *c.1.stats.lock())
                     .collect::<Vec<_>>(),
                 guard.stats,
             )

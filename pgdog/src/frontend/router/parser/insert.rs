@@ -22,7 +22,7 @@ use super::{Column, Error, Route, Shard, Table, Tuple, Value};
 #[derive(Debug, Clone)]
 pub enum InsertRouting {
     Routed(Shard),
-    Split(InsertSplitPlan),
+    Split(Box<InsertSplitPlan>),
 }
 
 impl InsertRouting {
@@ -204,13 +204,13 @@ impl<'a> Insert<'a> {
 
         let columns_sql = columns
             .iter()
-            .map(|column| StdString::from(format!("\"{}\"", escape_identifier(column.name))))
+            .map(|column| format!("\"{}\"", escape_identifier(column.name)))
             .collect::<Vec<_>>();
 
         let shard_vec = unique.iter().copied().collect::<Vec<_>>();
         let route = Route::write(Shard::Multi(shard_vec));
         let plan = InsertSplitPlan::new(route, OwnedTable::from(table), columns_sql, rows);
-        Ok(InsertRouting::Split(plan))
+        Ok(InsertRouting::Split(Box::new(plan)))
     }
 
     fn compute_tuple_shard(
@@ -309,8 +309,7 @@ impl<'a> Insert<'a> {
                         })
                     }
                     Format::Text => {
-                        let shard = sharding::shard_param(&parameter, key.table, schema.shards);
-                        shard
+                        sharding::shard_param(&parameter, key.table, schema.shards)
                     }
                 }
             }

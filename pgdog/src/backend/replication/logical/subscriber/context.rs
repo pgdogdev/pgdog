@@ -39,7 +39,7 @@ impl<'a> StreamContext<'a> {
         if let Command::Query(route) = route {
             Ok(route.shard().clone())
         } else {
-            return Err(Error::IncorrectCommand);
+            Err(Error::IncorrectCommand)
         }
     }
 

@@ -125,17 +125,13 @@ impl QueryParser {
 
             Some(NodeEnum::LockStmt(stmt)) => {
                 if let Some(node) = stmt.relations.first() {
-                    match node.node {
-                        Some(NodeEnum::RangeVar(ref table)) => {
-                            let table = Table::from(table);
-                            shard = schema
-                                .schemas
-                                .get(table.schema())
-                                .map(|schema| schema.shard().into())
-                                .unwrap_or(Shard::All);
-                        }
-
-                        _ => (),
+                    if let Some(NodeEnum::RangeVar(ref table)) = node.node {
+                        let table = Table::from(table);
+                        shard = schema
+                            .schemas
+                            .get(table.schema())
+                            .map(|schema| schema.shard().into())
+                            .unwrap_or(Shard::All);
                     }
                 }
             }

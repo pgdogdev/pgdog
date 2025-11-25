@@ -201,7 +201,7 @@ impl ClientRequest {
         for message in self.messages.iter_mut() {
             if let ProtocolMessage::Parse(parse) = message {
                 parse.set_query(query);
-                prepared.update_and_set_rewrite_plan(&parse.name(), query, plan.clone());
+                prepared.update_and_set_rewrite_plan(parse.name(), query, plan.clone());
                 updated = true;
             }
         }

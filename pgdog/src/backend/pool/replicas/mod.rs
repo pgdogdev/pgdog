@@ -198,7 +198,7 @@ impl Replicas {
     /// Launch replica pools and start the monitor.
     pub fn launch(&self) {
         self.replicas.iter().for_each(|target| target.pool.launch());
-        Monitor::new(self);
+        Monitor::spawn(self);
     }
 
     /// Get a live connection from the pool.

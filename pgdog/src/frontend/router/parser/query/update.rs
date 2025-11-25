@@ -90,7 +90,7 @@ impl QueryParser {
                             columns,
                             display,
                         )?;
-                        return Ok(Command::ShardKeyRewrite(plan));
+                        return Ok(Command::ShardKeyRewrite(Box::new(plan)));
                     }
                 }
 
@@ -169,7 +169,7 @@ impl QueryParser {
                     });
                 }
 
-                assignments.push(Assignment::new(column.into(), value));
+                assignments.push(Assignment::new(column, value));
             }
         }
 
@@ -303,7 +303,7 @@ impl QueryParser {
         if let Some(val) = &res.val {
             if let Some(NodeEnum::ColumnRef(column_ref)) = val.node.as_ref() {
                 if let Some(name) = Self::column_ref_name(column_ref) {
-                    return Ok(AssignmentValue::Column(name.into()));
+                    return Ok(AssignmentValue::Column(name));
                 }
                 return Err(());
             }
@@ -408,10 +408,7 @@ impl QueryParser {
         for target in &stmt.target_list {
             if let Some(NodeEnum::ResTarget(res)) = target.node.as_ref() {
                 if let Some(column) = Self::res_target_column(res) {
-                    if sharding_columns
-                        .iter()
-                        .any(|candidate| *candidate == column.as_str())
-                    {
+                    if sharding_columns.contains(&column.as_str()) {
                         assigned.push(column);
                     }
                 }

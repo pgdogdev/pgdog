@@ -210,6 +210,16 @@ impl<'a> TryFrom<&Option<&'a Node>> for Column<'a> {
     }
 }
 
+impl<'a> From<&'a str> for Column<'a> {
+    fn from(value: &'a str) -> Self {
+        Column {
+            name: value,
+            table: None,
+            schema: None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
     use pg_query::{parse, NodeEnum};

@@ -148,7 +148,7 @@ impl Stats {
         STATS.lock().insert(
             id,
             ConnectedServer {
-                stats: stats.clone(),
+                stats,
                 addr: addr.clone(),
                 application_name: params.get_default("application_name", "PgDog").to_owned(),
                 client: None,
@@ -172,7 +172,7 @@ impl Stats {
     }
 
     pub fn link_client(&mut self, client_name: &str, server_server: &str, id: &BackendKeyData) {
-        self.client_id = Some(id.clone());
+        self.client_id = Some(*id);
         if client_name != server_server {
             let mut guard = STATS.lock();
             if let Some(entry) = guard.get_mut(&self.id) {

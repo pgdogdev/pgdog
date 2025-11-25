@@ -149,5 +149,13 @@ SELECT
     ] AS action
 FROM generate_series(1, 10000);
 
+CREATE TABLE copy_data.with_identity(
+    id BIGINT GENERATED ALWAYS AS identity,
+    tenant_id BIGINT NOT NULL
+);
+
+INSERT INTO copy_data.with_identity (tenant_id)
+SELECT floor(random() * 10000)::bigint FROM generate_series(1, 10000);
+
 DROP PUBLICATION IF EXISTS pgdog;
 CREATE PUBLICATION pgdog FOR TABLES IN SCHEMA copy_data;

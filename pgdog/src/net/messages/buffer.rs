@@ -4,7 +4,7 @@
 use std::{io::Cursor, ops::Add};
 
 use bytes::{Buf, BytesMut};
-use tokio::io::{AsyncRead, AsyncReadExt};
+use tokio::io::AsyncReadExt;
 
 use crate::net::stream::eof;
 
@@ -40,7 +40,7 @@ impl MessageBuffer {
 
     async fn read_internal(
         &mut self,
-        stream: &mut (impl AsyncRead + Unpin + AsyncReadExt),
+        stream: &mut (impl Unpin + AsyncReadExt),
     ) -> Result<Message, Error> {
         loop {
             if let Some(size) = self.message_size() {
@@ -91,7 +91,7 @@ impl MessageBuffer {
             let mut cur = Cursor::new(&self.buffer);
             let _code = cur.get_u8();
             let len = cur.get_i32() as usize + 1;
-            Some(len as usize)
+            Some(len)
         } else {
             None
         }
@@ -129,7 +129,7 @@ impl MessageBuffer {
     ///
     pub async fn read(
         &mut self,
-        stream: &mut (impl AsyncRead + Unpin + AsyncReadExt),
+        stream: &mut (impl Unpin + AsyncReadExt),
     ) -> Result<Message, Error> {
         self.read_internal(stream).await
     }
