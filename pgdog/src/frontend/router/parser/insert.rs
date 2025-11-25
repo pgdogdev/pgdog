@@ -116,8 +116,6 @@ impl<'a> Insert<'a> {
             }
         }
 
-        let key = table.and_then(|table| tables.key(table, &columns));
-
         if let Some(key) = key {
             if let Some(bind) = bind {
                 if let Ok(Some(param)) = bind.parameter(key.position) {
