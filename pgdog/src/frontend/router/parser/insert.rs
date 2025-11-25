@@ -244,6 +244,16 @@ impl<'a> Insert<'a> {
                 .shards(schema.shards)
                 .build()?
                 .apply()?,
+            Value::Float(_) => {
+                return Err(Error::SplitInsertNotSupported {
+                    table: table.name.to_owned(),
+                    reason: format!(
+                        "row {} uses a float/decimal value for sharding column \"{}\", which is not supported as a sharding key",
+                        tuple_index + 1,
+                        key.table.column
+                    ),
+                })
+            }
             Value::Null => {
                 return Err(Error::SplitInsertNotSupported {
                     table: table.name.to_owned(),
@@ -364,6 +374,7 @@ impl<'a> Insert<'a> {
     ) -> Result<StdString, Error> {
         match value {
             Value::Integer(int) => Ok(int.to_string()),
+            Value::Float(float) => Ok((*float).to_string()),
             Value::String(string) => Ok(format_literal(string)),
             Value::Boolean(boolean) => Ok(if *boolean {
                 StdString::from("TRUE")
@@ -874,6 +885,189 @@ mod test {
                     .shard(&schema, Some(&bind), false, RewriteMode::Error)
                     .unwrap();
                 assert!(matches!(routing.shard(), Shard::All));
+            }
+            _ => panic!("not an insert"),
+        }
+    }
+
+    #[test]
+    fn split_insert_preserves_decimal_values() {
+        let query = parse(
+            "INSERT INTO transactions (txn_id, user_id, amount, status) VALUES \
+             (1001, 1, 50.00, 'completed'), \
+             (1002, 2, 20.00, 'failed'), \
+             (1003, 3, 25.75, 'pending')",
+        )
+        .unwrap();
+        let select = query.protobuf.stmts.first().unwrap().stmt.as_ref().unwrap();
+        let schema = ShardingSchema {
+            shards: 2,
+            tables: ShardedTables::new(
+                vec![ShardedTable {
+                    name: Some("transactions".into()),
+                    column: "user_id".into(),
+                    ..Default::default()
+                }],
+                vec![],
+            ),
+            ..Default::default()
+        };
+
+        match &select.node {
+            Some(NodeEnum::InsertStmt(stmt)) => {
+                let insert = Insert::new(stmt);
+                let routing = insert
+                    .shard(&schema, None, true, RewriteMode::Rewrite)
+                    .unwrap();
+
+                match routing {
+                    InsertRouting::Split(plan) => {
+                        let rows = plan.rows();
+                        // Check that decimal values are preserved without quotes
+                        assert_eq!(rows[0].values()[2], "50.00");
+                        assert_eq!(rows[1].values()[2], "20.00");
+                        assert_eq!(rows[2].values()[2], "25.75");
+
+                        // Verify strings are quoted
+                        assert_eq!(rows[0].values()[3], "'completed'");
+                        assert_eq!(rows[1].values()[3], "'failed'");
+                        assert_eq!(rows[2].values()[3], "'pending'");
+                    }
+                    InsertRouting::Routed(_) => panic!("expected split plan"),
+                }
+            }
+            _ => panic!("not an insert"),
+        }
+    }
+
+    #[test]
+    fn split_insert_with_quoted_decimal_values() {
+        let query = parse(
+            "INSERT INTO transactions (txn_id, user_id, amount, status) VALUES \
+             (1001, 1, '50.00', 'completed'), \
+             (1002, 2, '20.00', 'failed'), \
+             (1003, 3, '25.75', 'pending')",
+        )
+        .unwrap();
+        let select = query.protobuf.stmts.first().unwrap().stmt.as_ref().unwrap();
+        let schema = ShardingSchema {
+            shards: 2,
+            tables: ShardedTables::new(
+                vec![ShardedTable {
+                    name: Some("transactions".into()),
+                    column: "user_id".into(),
+                    ..Default::default()
+                }],
+                vec![],
+            ),
+            ..Default::default()
+        };
+
+        match &select.node {
+            Some(NodeEnum::InsertStmt(stmt)) => {
+                let insert = Insert::new(stmt);
+                let routing = insert
+                    .shard(&schema, None, true, RewriteMode::Rewrite)
+                    .unwrap();
+
+                match routing {
+                    InsertRouting::Split(plan) => {
+                        let rows = plan.rows();
+                        // Quoted decimals should be preserved as strings
+                        assert_eq!(rows[0].values()[2], "'50.00'");
+                        assert_eq!(rows[1].values()[2], "'20.00'");
+                        assert_eq!(rows[2].values()[2], "'25.75'");
+
+                        // Verify strings are quoted
+                        assert_eq!(rows[0].values()[3], "'completed'");
+                        assert_eq!(rows[1].values()[3], "'failed'");
+                        assert_eq!(rows[2].values()[3], "'pending'");
+                    }
+                    InsertRouting::Routed(_) => panic!("expected split plan"),
+                }
+            }
+            _ => panic!("not an insert"),
+        }
+    }
+
+    #[test]
+    fn debug_decimal_parsing() {
+        let query = parse(
+            "INSERT INTO transactions (txn_id, user_id, amount, status) VALUES \
+             (1001, 101, 50.00, 'completed')",
+        )
+        .unwrap();
+        let select = query.protobuf.stmts.first().unwrap().stmt.as_ref().unwrap();
+
+        match &select.node {
+            Some(NodeEnum::InsertStmt(stmt)) => {
+                let insert = Insert::new(stmt);
+                let tuples = insert.tuples();
+                println!("Tuples: {:?}", tuples);
+                assert_eq!(tuples.len(), 1);
+                println!("Values: {:?}", tuples[0].values);
+            }
+            _ => panic!("not an insert"),
+        }
+    }
+
+    #[test]
+    fn reproduce_decimal_null_issue() {
+        let query = parse(
+            "INSERT INTO transactions (txn_id, user_id, amount, status) VALUES \
+             (1001, 101, 50.00, 'completed')",
+        )
+        .unwrap();
+        let select = query.protobuf.stmts.first().unwrap().stmt.as_ref().unwrap();
+
+        match &select.node {
+            Some(NodeEnum::InsertStmt(stmt)) => {
+                let insert = Insert::new(stmt);
+                let tuples = insert.tuples();
+                println!("Values: {:?}", tuples[0].values);
+
+                // After fix, this should be Float("50.00"), not Null
+                assert_eq!(tuples[0].values[2], Value::Float("50.00"));
+            }
+            _ => panic!("not an insert"),
+        }
+    }
+
+    #[test]
+    fn split_insert_rejects_float_sharding_key() {
+        let query = parse(
+            "INSERT INTO transactions (txn_id, amount, status) VALUES \
+             (1001, 50.00, 'completed'), \
+             (1002, 20.00, 'failed')",
+        )
+        .unwrap();
+        let select = query.protobuf.stmts.first().unwrap().stmt.as_ref().unwrap();
+        let schema = ShardingSchema {
+            shards: 2,
+            tables: ShardedTables::new(
+                vec![ShardedTable {
+                    name: Some("transactions".into()),
+                    column: "amount".into(),
+                    ..Default::default()
+                }],
+                vec![],
+            ),
+            ..Default::default()
+        };
+
+        match &select.node {
+            Some(NodeEnum::InsertStmt(stmt)) => {
+                let insert = Insert::new(stmt);
+                let result = insert.shard(&schema, None, true, RewriteMode::Rewrite);
+
+                match result {
+                    Err(Error::SplitInsertNotSupported { table, reason }) => {
+                        assert_eq!(table, "transactions");
+                        assert!(reason.contains("float/decimal"));
+                        assert!(reason.contains("not supported as a sharding key"));
+                    }
+                    other => panic!("expected error for float sharding key, got {:?}", other),
+                }
             }
             _ => panic!("not an insert"),
         }

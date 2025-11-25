@@ -12,6 +12,7 @@ use crate::net::{messages::Vector, vector::str_to_vector};
 pub enum Value<'a> {
     String(&'a str),
     Integer(i64),
+    Float(&'a str),
     Boolean(bool),
     Null,
     Placeholder(i32),
@@ -53,13 +54,7 @@ impl<'a> From<&'a AConst> for Value<'a> {
             }
             Some(Val::Boolval(b)) => Value::Boolean(b.boolval),
             Some(Val::Ival(i)) => Value::Integer(i.ival as i64),
-            Some(Val::Fval(Float { fval })) => {
-                if let Ok(val) = fval.parse() {
-                    Value::Integer(val)
-                } else {
-                    Value::Null
-                }
-            }
+            Some(Val::Fval(Float { fval })) => Value::Float(fval.as_str()),
             _ => Value::Null,
         }
     }
