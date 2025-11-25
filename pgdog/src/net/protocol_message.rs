@@ -104,7 +104,9 @@ impl ToBytes for ProtocolMessage {
             Self::Bind(bind) => bind.to_bytes(),
             Self::Parse(parse) => parse.to_bytes(),
             Self::Describe(describe) => describe.to_bytes(),
-            Self::Prepare { statement, .. } => Query::new(statement).to_bytes(),
+            Self::Prepare { statement, name } => {
+                Query::new(format!("PREPARE {} AS {}", name, statement)).to_bytes()
+            }
             Self::Execute(execute) => execute.to_bytes(),
             Self::Close(close) => close.to_bytes(),
             Self::Query(query) => query.to_bytes(),

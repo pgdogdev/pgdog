@@ -721,6 +721,7 @@ impl Server {
 
         let count = self.prepared_statements.len();
         self.stats.set_prepared_statements(count);
+        self.sync_prepared = false;
 
         Ok(())
     }
@@ -2302,6 +2303,42 @@ pub mod test {
         assert_eq!(
             server.stats().total.idle_in_transaction_time,
             final_idle_time,
+        );
+    }
+
+    #[tokio::test]
+    async fn test_prepare_forces_sync_prepared_flag() {
+        let mut server = test_server().await;
+
+        assert!(!server.sync_prepared());
+
+        server
+            .send(&vec![Query::new("PREPARE test_stmt AS SELECT $1::bigint").into()].into())
+            .await
+            .unwrap();
+
+        for c in ['C', 'Z'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), c);
+        }
+
+        assert!(
+            server.sync_prepared(),
+            "sync_prepared flag should be set after PREPARE command"
+        );
+
+        server.sync_prepared_statements().await.unwrap();
+
+        assert!(
+            !server.sync_prepared(),
+            "sync_prepared flag should be cleared after sync_prepared_statements()"
+        );
+
+        server.execute("SELECT 1").await.unwrap();
+
+        assert!(
+            !server.sync_prepared(),
+            "sync_prepared flag should remain false after regular queries"
         );
     }
 }

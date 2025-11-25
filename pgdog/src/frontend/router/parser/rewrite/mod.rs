@@ -5,8 +5,8 @@ use super::{Command, Error};
 mod insert_split;
 mod shard_key;
 
-use crate::frontend::PreparedStatements;
-use crate::net::Parse;
+use crate::net::{Parse, ProtocolMessage};
+use crate::{frontend::PreparedStatements, net::Query};
 pub use insert_split::{InsertSplitPlan, InsertSplitRow};
 pub use shard_key::{Assignment, AssignmentValue, ShardKeyRewritePlan};
 
@@ -46,17 +46,38 @@ impl<'a> Rewrite<'a> {
                 if let Some(ref mut node) = stmt.node {
                     match node {
                         NodeEnum::PrepareStmt(ref mut stmt) => {
-                            let statement = stmt.query.as_ref().ok_or(Error::EmptyQuery)?;
-                            let statement = statement.deparse().map_err(|_| Error::EmptyQuery)?;
+                            let statement = stmt
+                                .query
+                                .as_ref()
+                                .ok_or(Error::EmptyQuery)?
+                                .deparse()
+                                .map_err(|_| Error::EmptyQuery)?;
+
                             let mut parse = Parse::named(&stmt.name, &statement);
                             prepared_statements.insert_anyway(&mut parse);
                             stmt.name = parse.name().to_string();
+
+                            return Ok(Command::Rewrite(vec![Query::new(
+                                ast.deparse().map_err(|_| Error::EmptyQuery)?,
+                            )
+                            .into()]));
                         }
 
                         NodeEnum::ExecuteStmt(ref mut stmt) => {
-                            let name = prepared_statements.name(&stmt.name);
-                            if let Some(name) = name {
-                                stmt.name = name.to_string();
+                            let parse = prepared_statements.parse(&stmt.name);
+                            if let Some(parse) = parse {
+                                stmt.name = parse.name().to_string();
+
+                                return Ok(Command::Rewrite(vec![
+                                    ProtocolMessage::Prepare {
+                                        name: stmt.name.clone(),
+                                        statement: parse.query().to_string(),
+                                    },
+                                    Query::new(ast.deparse().map_err(|_| Error::EmptyQuery)?)
+                                        .into(),
+                                ]));
+                            } else {
+                                return Err(Error::PreparedStatementDoesntExist(stmt.name.clone()));
                             }
                         }
 
@@ -68,9 +89,7 @@ impl<'a> Rewrite<'a> {
             }
         }
 
-        Ok(Command::Rewrite(
-            ast.deparse().map_err(|_| Error::EmptyQuery)?,
-        ))
+        Err(Error::EmptyQuery)
     }
 }
 
@@ -78,17 +97,22 @@ impl<'a> Rewrite<'a> {
 mod test {
     use std::sync::Arc;
 
+    use crate::net::{FromBytes, ToBytes};
+
     use super::*;
 
     #[test]
     fn test_rewrite_prepared() {
-        let ast = pg_query::parse("BEGIN; PREPARE test AS SELECT $1, $2, $3; PREPARE test2 AS SELECT * FROM my_table WHERE id = $1; COMMIT;").unwrap();
+        let ast = pg_query::parse("PREPARE test AS SELECT $1, $2, $3").unwrap();
         let rewrite = Rewrite::new(&ast);
         assert!(rewrite.needs_rewrite());
         let mut prepared_statements = PreparedStatements::new();
         let queries = rewrite.rewrite(&mut prepared_statements).unwrap();
         match queries {
-            Command::Rewrite(queries) => assert_eq!(queries, "BEGIN; PREPARE __pgdog_1 AS SELECT $1, $2, $3; PREPARE __pgdog_2 AS SELECT * FROM my_table WHERE id = $1; COMMIT"),
+            Command::Rewrite(messages) => {
+                let message = Query::from_bytes(messages[0].to_bytes().unwrap()).unwrap();
+                assert_eq!(message.query(), "PREPARE __pgdog_1 AS SELECT $1, $2, $3");
+            }
             _ => panic!("not a rewrite"),
         }
     }

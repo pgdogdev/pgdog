@@ -7,7 +7,7 @@ use regex::Regex;
 use crate::{
     frontend::router::parser::RewritePlan,
     net::{
-        messages::{Bind, CopyData, Protocol, Query},
+        messages::{Bind, CopyData, Protocol},
         Error, Flush, ProtocolMessage,
     },
     stats::memory::MemoryUsage,
@@ -180,12 +180,12 @@ impl ClientRequest {
     }
 
     /// Rewrite query in buffer.
-    pub fn rewrite(&mut self, query: &str) -> Result<(), Error> {
+    pub fn rewrite(&mut self, request: &[ProtocolMessage]) -> Result<(), Error> {
         if self.messages.iter().any(|c| c.code() != 'Q') {
             return Err(Error::OnlySimpleForRewrites);
         }
         self.messages.clear();
-        self.messages.push(Query::new(query).into());
+        self.messages.extend(request.to_vec());
         Ok(())
     }
 
@@ -316,7 +316,7 @@ impl DerefMut for ClientRequest {
 
 #[cfg(test)]
 mod test {
-    use crate::net::{Describe, Execute, Parse, Sync};
+    use crate::net::{Describe, Execute, Parse, Query, Sync};
 
     use super::*;
 
