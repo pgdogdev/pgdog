@@ -688,5 +688,7 @@ ALTER TABLE ONLY public.users
 
             _ => panic!("not a set sequence max"),
         }
+        let statements = output.statements(SyncState::PreData).unwrap();
+        assert!(!statements.is_empty());
     }
 }
