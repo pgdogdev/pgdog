@@ -421,6 +421,7 @@ fn apply_assignments(
 
         let new_value = match assignment.value() {
             AssignmentValue::Integer(value) => Some(value.to_string()),
+            AssignmentValue::Float(value) => Some(value.clone()),
             AssignmentValue::String(value) => Some(value.clone()),
             AssignmentValue::Boolean(value) => Some(value.to_string()),
             AssignmentValue::Null => None,

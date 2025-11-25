@@ -8,6 +8,7 @@ use super::super::table::OwnedTable;
 pub enum AssignmentValue {
     Parameter(i32),
     Integer(i64),
+    Float(String),
     String(String),
     Boolean(bool),
     Null,
