@@ -11,7 +11,7 @@ use parking_lot::Mutex;
 use tokio::time::Instant;
 
 use crate::{
-    backend::{pool::stats::MemoryStats, ServerOptions},
+    backend::{pool::stats::MemoryStats, Pool, ServerOptions},
     config::Memory,
     net::{messages::BackendKeyData, Parameters},
     state::State,
@@ -25,6 +25,17 @@ static STATS: Lazy<Mutex<HashMap<BackendKeyData, ConnectedServer>>> =
 /// Get a copy of latest stats.
 pub fn stats() -> HashMap<BackendKeyData, ConnectedServer> {
     STATS.lock().clone()
+}
+
+/// Get idle-in-transaction server connections for connection pool.
+pub fn idle_in_transaction(pool: &Pool) -> usize {
+    STATS
+        .lock()
+        .values()
+        .filter(|stat| {
+            stat.stats.pool_id == pool.id() && stat.stats.state == State::IdleInTransaction
+        })
+        .count()
 }
 
 /// Update stats to latest version.

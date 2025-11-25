@@ -1,7 +1,7 @@
 //! Handle INSERT statements.
 use pg_query::{protobuf::*, NodeEnum};
 use std::{collections::BTreeSet, string::String as StdString};
-use tracing::debug;
+use tracing::{debug, trace};
 
 use crate::frontend::router::parser::rewrite::{InsertSplitPlan, InsertSplitRow};
 use crate::frontend::router::parser::table::OwnedTable;
@@ -91,15 +91,20 @@ impl<'a> Insert<'a> {
         let table = self.table();
         let tuples = self.tuples();
 
+        let key = table.and_then(|table| tables.key(table, &columns));
+
         if let Some(table) = table {
             // Schema-based routing.
             if let Some(schema) = schema.schemas.get(table.schema()) {
                 return Ok(InsertRouting::Routed(schema.shard().into()));
             }
 
-            if tables.sharded(table).is_some() && tuples.len() > 1 {
+            if key.is_some() && tuples.len() > 1 {
                 if rewrite_enabled && split_mode == RewriteMode::Rewrite {
-                    return self.build_split_plan(&tables, schema, bind, table, &columns, &tuples);
+                    let plan =
+                        self.build_split_plan(&tables, schema, bind, table, &columns, &tuples);
+                    trace!("rewrite plan: {:#?}", plan);
+                    return plan;
                 }
 
                 if split_mode == RewriteMode::Error {
