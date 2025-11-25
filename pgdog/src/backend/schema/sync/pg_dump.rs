@@ -51,8 +51,7 @@ impl PgDump {
             .first()
             .ok_or(Error::NoDatabases)?
             .pools()
-            .iter()
-            .next()
+            .first()
             .ok_or(Error::NoDatabases)?
             .addr()
             .clone();
@@ -330,44 +329,50 @@ impl PgDumpOutput {
                                                     )) = node.node
                                                     {
                                                         for option in &constraint.options {
-                                                            match option.node {
-                                                                Some(NodeEnum::DefElem(
-                                                                    ref elem,
-                                                                )) => {
-                                                                    if elem.defname
-                                                                        == "sequence_name"
+                                                            if let Some(NodeEnum::DefElem(
+                                                                ref elem,
+                                                            )) = option.node
+                                                            {
+                                                                if elem.defname == "sequence_name" {
+                                                                    if let Some(ref node) = elem.arg
                                                                     {
-                                                                        if let Some(ref node) =
-                                                                            elem.arg
+                                                                        if let Some(
+                                                                            NodeEnum::List(
+                                                                                ref list,
+                                                                            ),
+                                                                        ) = node.node
                                                                         {
-                                                                            match node.node {
-                                                                                Some(
-                                                                                    NodeEnum::List(
-                                                                                        ref list,
-                                                                                    ),
-                                                                                ) => {
-                                                                                    let table = Table::try_from(list).map_err(|_| Error::MissingEntity)?;
-                                                                                    let sequence = Sequence::from(table);
-                                                                                    let table = stmt.relation.as_ref().map(Table::from);
-                                                                                    let schema = table.map(|table| table.schema).flatten();
-                                                                                    let table = table.map(|table| table.name);
-                                                                                    let column = Column {
-                                                                                        table,
-                                                                                        name: &cmd.name.as_str(),
-                                                                                        schema,
-                                                                                    };
-                                                                                    let sql = sequence.setval_from_column(&column).map_err(|_| Error::MissingEntity)?;
+                                                                            let table = Table::try_from(list).map_err(|_| Error::MissingEntity)?;
+                                                                            let sequence =
+                                                                                Sequence::from(
+                                                                                    table,
+                                                                                );
+                                                                            let table = stmt
+                                                                                .relation
+                                                                                .as_ref()
+                                                                                .map(Table::from);
+                                                                            let schema = table
+                                                                                .and_then(
+                                                                                    |table| {
+                                                                                        table.schema
+                                                                                    },
+                                                                                );
+                                                                            let table = table.map(
+                                                                                |table| table.name,
+                                                                            );
+                                                                            let column = Column {
+                                                                                table,
+                                                                                name: cmd
+                                                                                    .name
+                                                                                    .as_str(),
+                                                                                schema,
+                                                                            };
+                                                                            let sql = sequence.setval_from_column(&column).map_err(|_| Error::MissingEntity)?;
 
-                                                                                    result.push(Statement::SequenceSetMax { sequence, sql });
-                                                                                }
-
-                                                                                _ => (),
-                                                                            }
+                                                                            result.push(Statement::SequenceSetMax { sequence, sql });
                                                                         }
                                                                     }
                                                                 }
-
-                                                                _ => (),
                                                             }
                                                         }
                                                     }
@@ -490,13 +495,13 @@ impl PgDumpOutput {
                         }
 
                         NodeEnum::AlterOwnerStmt(stmt) => {
-                            if stmt.object_type() != ObjectType::ObjectPublication {
-                                if state == SyncState::PreData {
-                                    result.push(Statement::Other {
-                                        sql: original.to_string(),
-                                        idempotent: true,
-                                    });
-                                }
+                            if stmt.object_type() != ObjectType::ObjectPublication
+                                && state == SyncState::PreData
+                            {
+                                result.push(Statement::Other {
+                                    sql: original.to_string(),
+                                    idempotent: true,
+                                });
                             }
                         }
 

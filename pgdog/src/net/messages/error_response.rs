@@ -106,8 +106,7 @@ impl ErrorResponse {
             message: format!(
                 r#"connection pool for user "{}" and database "{}" is down"#,
                 user, database
-            )
-            .into(),
+            ),
             detail: None,
             context: None,
             file: None,

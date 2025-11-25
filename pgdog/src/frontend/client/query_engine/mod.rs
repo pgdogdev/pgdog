@@ -221,8 +221,10 @@ impl QueryEngine {
                 context.client_request.rewrite(query)?;
                 self.execute(context, &route).await?;
             }
-            Command::InsertSplit(plan) => self.insert_split(context, plan.clone()).await?,
-            Command::ShardKeyRewrite(plan) => self.shard_key_rewrite(context, plan.clone()).await?,
+            Command::InsertSplit(plan) => self.insert_split(context, *plan.clone()).await?,
+            Command::ShardKeyRewrite(plan) => {
+                self.shard_key_rewrite(context, *plan.clone()).await?
+            }
             Command::Deallocate => self.deallocate(context).await?,
             Command::Discard { extended } => self.discard(context, *extended).await?,
             command => self.unknown_command(context, command.clone()).await?,

@@ -533,7 +533,7 @@ impl QueryParser {
                         "INSERT split across shards",
                     );
                 }
-                Ok(Command::InsertSplit(plan))
+                Ok(Command::InsertSplit(Box::new(plan)))
             }
         }
     }

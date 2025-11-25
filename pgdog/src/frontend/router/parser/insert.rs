@@ -204,7 +204,7 @@ impl<'a> Insert<'a> {
 
         let columns_sql = columns
             .iter()
-            .map(|column| StdString::from(format!("\"{}\"", escape_identifier(column.name))))
+            .map(|column| format!("\"{}\"", escape_identifier(column.name)))
             .collect::<Vec<_>>();
 
         let shard_vec = unique.iter().copied().collect::<Vec<_>>();
@@ -309,8 +309,7 @@ impl<'a> Insert<'a> {
                         })
                     }
                     Format::Text => {
-                        let shard = sharding::shard_param(&parameter, key.table, schema.shards);
-                        shard
+                        sharding::shard_param(&parameter, key.table, schema.shards)
                     }
                 }
             }

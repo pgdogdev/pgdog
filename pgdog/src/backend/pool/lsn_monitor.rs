@@ -13,7 +13,7 @@ use crate::{
 
 use super::*;
 
-static QUERY: &'static str = "
+static QUERY: &str = "
 SELECT
     pg_is_in_recovery() AS replica,
     CASE

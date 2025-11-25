@@ -221,7 +221,9 @@ impl Shard {
     /// Shutdown every pool and maintenance task in this shard.
     pub fn shutdown(&self) {
         self.comms.shutdown.notify_waiters();
-        self.primary.as_ref().map(|pool| pool.shutdown());
+        if let Some(pool) = self.primary.as_ref() {
+            pool.shutdown()
+        }
         if let Some(ref listener) = self.pub_sub {
             listener.shutdown();
         }

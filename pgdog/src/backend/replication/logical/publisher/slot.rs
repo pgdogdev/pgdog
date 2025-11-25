@@ -211,9 +211,8 @@ impl ReplicationSlot {
                         let exists: Option<DataRow> =
                             self.server()?.fetch_all(existing_slot).await?.pop();
 
-                        if let Some(lsn) = exists
-                            .map(|slot| slot.get::<String>(2, Format::Text))
-                            .flatten()
+                        if let Some(lsn) =
+                            exists.and_then(|slot| slot.get::<String>(2, Format::Text))
                         {
                             let lsn = Lsn::from_str(&lsn)?;
                             self.lsn = lsn;

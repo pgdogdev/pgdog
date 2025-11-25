@@ -108,7 +108,7 @@ impl Pool {
             }
             Ok(Err(err)) => {
                 self.inner.health.toggle(false);
-                Err(err.into())
+                Err(err)
             }
         }
     }
@@ -412,7 +412,7 @@ impl Pool {
 
     /// LSN stats
     pub fn lsn_stats(&self) -> LsnStats {
-        self.inner().lsn_stats.read().clone()
+        *self.inner().lsn_stats.read()
     }
 
     /// Update pool configuration used in internals.

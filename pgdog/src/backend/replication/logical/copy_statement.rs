@@ -38,26 +38,18 @@ impl CopyStatement {
     }
 
     fn schema_name(&self, out: bool) -> &str {
-        if out {
+        if out || self.table.parent_schema.is_empty() {
             &self.table.schema
         } else {
-            if self.table.parent_schema.is_empty() {
-                &self.table.schema
-            } else {
-                &self.table.parent_schema
-            }
+            &self.table.parent_schema
         }
     }
 
     fn table_name(&self, out: bool) -> &str {
-        if out {
+        if out || self.table.parent_name.is_empty() {
             &self.table.name
         } else {
-            if self.table.parent_name.is_empty() {
-                &self.table.name
-            } else {
-                &self.table.parent_name
-            }
+            &self.table.parent_name
         }
     }
 
