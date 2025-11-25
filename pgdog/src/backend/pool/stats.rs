@@ -1,4 +1,9 @@
-//! Pool stats.
+//!
+//! Pool statistics.
+//!
+//! Used in SHOW POOLS admin database command
+//! and in Prometheus metrics.
+//!
 
 use crate::{backend::stats::Counts as BackendCounts, config::Memory, net::MessageBufferStats};
 
@@ -8,27 +13,53 @@ use std::{
     time::Duration,
 };
 
+/// Pool statistics.
+///
+/// These are updated after each connection check-in.
+///
 #[derive(Debug, Clone, Default, Copy)]
 pub struct Counts {
+    /// Number of committed transactions.
     pub xact_count: usize,
+    /// Number of transactions committed with 2-phase commit.
     pub xact_2pc_count: usize,
+    /// Number of executed queries.
     pub query_count: usize,
+    /// How many times a server has been given to a client.
+    /// In transaction mode, this equals to `xact_count`.
     pub server_assignment_count: usize,
+    /// Number of bytes received by server connections.
     pub received: usize,
+    /// Number of bytes sent to server connections.
     pub sent: usize,
+    /// Total duration of all transactions.
     pub xact_time: Duration,
+    /// Total time spent idling inside transactions.
     pub idle_xact_time: Duration,
+    /// Total time spent executing queries.
     pub query_time: Duration,
+    /// Total time clients spent waiting for a connection from the pool.
     pub wait_time: Duration,
+    /// Total count of Parse messages sent to server connections.
     pub parse_count: usize,
+    /// Total count of Bind messages sent to server connections.
     pub bind_count: usize,
+    /// Number of times the pool had to rollback unfinished transactions.
     pub rollbacks: usize,
+    /// Number of times the pool sent the health check query.
     pub healthchecks: usize,
+    /// Total count of Close messages sent to server connections.
     pub close: usize,
+    /// Total number of network-related errors detected on server connections.
     pub errors: usize,
+    /// Total number of server connections that were cleaned after a dirty session.
     pub cleaned: usize,
+    /// Total number of times servers had to synchronize prepared statements from Postgres'
+    /// pg_prepared_statements view.
     pub prepared_sync: usize,
+    /// Total time spent creating server connections.
     pub connect_time: Duration,
+    /// Total number of times the pool attempted to create server connections.
     pub connect_count: usize,
 }
 
@@ -173,6 +204,7 @@ impl Add for Counts {
 pub struct Stats {
     // Total counts.
     pub counts: Counts,
+    /// Counts since last average calculation.
     last_counts: Counts,
     // Average counts.
     pub averages: Counts,
@@ -189,14 +221,20 @@ impl Stats {
     }
 }
 
+/// Statistics calculated for the network buffer used
+/// by clients and servers.
 #[derive(Debug, Clone, Default, Copy)]
 pub struct MemoryStats {
+    /// Message buffer stats.
     pub buffer: MessageBufferStats,
+    /// Memory used by prepared statements.
     pub prepared_statements: usize,
+    /// Memory used by the network stream buffer.
     pub stream: usize,
 }
 
 impl MemoryStats {
+    /// Create new memory stats tracker.
     pub fn new(config: &Memory) -> Self {
         Self {
             buffer: MessageBufferStats {
@@ -208,6 +246,7 @@ impl MemoryStats {
         }
     }
 
+    /// Calculate total memory usage.
     pub fn total(&self) -> usize {
         self.buffer.bytes_alloc + self.prepared_statements + self.stream
     }
