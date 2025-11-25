@@ -727,4 +727,53 @@ mod test {
         assert!(server.needs_drain());
         assert!(server.in_transaction());
     }
+
+    #[tokio::test]
+    async fn test_cleanup_syncs_prepared_statements() {
+        crate::logger();
+
+        let mut server = Guard::new(
+            Pool::new_test(),
+            Box::new(test_server().await),
+            Instant::now(),
+        );
+
+        assert!(!server.sync_prepared());
+
+        server
+            .send(&vec![Query::new("PREPARE test_stmt AS SELECT $1::bigint").into()].into())
+            .await
+            .unwrap();
+
+        for c in ['C', 'Z'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), c);
+        }
+
+        assert!(
+            server.sync_prepared(),
+            "sync_prepared flag should be set after PREPARE command"
+        );
+
+        let mut guard = server;
+        let mut server = guard.server.take().unwrap();
+        let cleanup = Cleanup::new(&guard, &mut server);
+
+        Guard::cleanup_internal(&mut server, cleanup, ConnectionRecovery::Recover)
+            .await
+            .unwrap();
+
+        assert!(
+            !server.sync_prepared(),
+            "sync_prepared flag should be cleared after cleanup"
+        );
+
+        assert!(
+            server.prepared_statements_mut().contains("test_stmt"),
+            "Statement should be in local cache after sync"
+        );
+
+        let one: Vec<i32> = server.fetch_all("SELECT 1").await.unwrap();
+        assert_eq!(one[0], 1);
+    }
 }

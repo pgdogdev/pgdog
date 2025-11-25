@@ -314,6 +314,27 @@ impl Server {
             HandleResult::Drop => [None, None],
             HandleResult::Prepend(ref prepare) => [Some(prepare), Some(message)],
             HandleResult::Forward => [Some(message), None],
+            HandleResult::Prepare { name, statement } => {
+                debug!("preparing statement \"{}\" [{}]", name, self.addr());
+
+                // Async recursion requires boxing.
+                self.stream().send_flush(&statement).await?;
+
+                for _ in ['C', 'Z'] {
+                    let msg = self
+                        .stream_buffer
+                        .read(self.stream.as_mut().unwrap())
+                        .await?;
+                    if msg.code() == 'E' {
+                        return Err(Error::ExecutionError(Box::new(ErrorResponse::from_bytes(
+                            msg.to_bytes()?,
+                        )?)));
+                    }
+                }
+
+                self.prepared_statements.prepared(&name);
+                [None, None]
+            }
         };
 
         for message in queue.into_iter().flatten() {
@@ -2303,6 +2324,42 @@ pub mod test {
         assert_eq!(
             server.stats().total.idle_in_transaction_time,
             final_idle_time,
+        );
+    }
+
+    #[tokio::test]
+    async fn test_prepare_forces_sync_prepared_flag() {
+        let mut server = test_server().await;
+
+        assert!(!server.sync_prepared());
+
+        server
+            .send(&vec![Query::new("PREPARE test_stmt AS SELECT $1::bigint").into()].into())
+            .await
+            .unwrap();
+
+        for c in ['C', 'Z'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), c);
+        }
+
+        assert!(
+            server.sync_prepared(),
+            "sync_prepared flag should be set after PREPARE command"
+        );
+
+        server.sync_prepared_statements().await.unwrap();
+
+        assert!(
+            !server.sync_prepared(),
+            "sync_prepared flag should be cleared after sync_prepared_statements()"
+        );
+
+        server.execute("SELECT 1").await.unwrap();
+
+        assert!(
+            !server.sync_prepared(),
+            "sync_prepared flag should remain false after regular queries"
         );
     }
 }

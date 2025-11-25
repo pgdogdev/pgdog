@@ -96,4 +96,7 @@ pub enum Error {
 
     #[error("cross-shard truncate not supported when schema-sharding is used")]
     CrossShardTruncateSchemaSharding,
+
+    #[error("prepared statement \"{0}\" doesn't exist")]
+    PreparedStatementDoesntExist(String),
 }

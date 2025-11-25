@@ -316,7 +316,7 @@ impl DerefMut for ClientRequest {
 
 #[cfg(test)]
 mod test {
-    use crate::net::{Describe, Execute, Parse, Sync};
+    use crate::net::{Describe, Execute, Parse, Query, Sync};
 
     use super::*;
 

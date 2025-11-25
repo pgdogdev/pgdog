@@ -71,6 +71,8 @@ impl<'a> Rewrite<'a> {
                                     Query::new(ast.deparse().map_err(|_| Error::EmptyQuery)?)
                                         .into(),
                                 ]));
+                            } else {
+                                return Err(Error::PreparedStatementDoesntExist(stmt.name.clone()));
                             }
                         }
 
@@ -90,17 +92,22 @@ impl<'a> Rewrite<'a> {
 mod test {
     use std::sync::Arc;
 
+    use crate::net::{FromBytes, ToBytes};
+
     use super::*;
 
     #[test]
     fn test_rewrite_prepared() {
-        let ast = pg_query::parse("BEGIN; PREPARE test AS SELECT $1, $2, $3; PREPARE test2 AS SELECT * FROM my_table WHERE id = $1; COMMIT;").unwrap();
+        let ast = pg_query::parse("PREPARE test AS SELECT $1, $2, $3").unwrap();
         let rewrite = Rewrite::new(&ast);
         assert!(rewrite.needs_rewrite());
         let mut prepared_statements = PreparedStatements::new();
         let queries = rewrite.rewrite(&mut prepared_statements).unwrap();
         match queries {
-            Command::Rewrite(queries) => assert_eq!(queries, "BEGIN; PREPARE __pgdog_1 AS SELECT $1, $2, $3; PREPARE __pgdog_2 AS SELECT * FROM my_table WHERE id = $1; COMMIT"),
+            Command::Rewrite(messages) => {
+                let message = Query::from_bytes(messages[0].to_bytes().unwrap()).unwrap();
+                assert_eq!(message.query(), "PREPARE __pgdog_1 AS SELECT $1, $2, $3");
+            }
             _ => panic!("not a rewrite"),
         }
     }

@@ -7,7 +7,7 @@ use crate::{
     frontend::{self, prepared_statements::GlobalCache},
     net::{
         messages::{parse::Parse, RowDescription},
-        Close, CloseComplete, FromBytes, Message, ParseComplete, Protocol, ProtocolMessage,
+        Close, CloseComplete, FromBytes, Message, ParseComplete, Protocol, ProtocolMessage, Query,
         ToBytes,
     },
     stats::memory::MemoryUsage,
@@ -24,7 +24,7 @@ pub enum HandleResult {
     Forward,
     Drop,
     Prepend(ProtocolMessage),
-    Prepare(ProtocolMessage),
+    Prepare { name: String, statement: Query },
 }
 
 /// Server-specific prepared statements.
@@ -179,10 +179,10 @@ impl PreparedStatements {
                 if self.contains(name) {
                     return Ok(HandleResult::Drop);
                 } else {
-                    println!("ignoring prepared: {}", statement);
-                    self.parses.push_back(name.clone());
-                    self.state.add_ignore('C');
-                    self.state.add_ignore('Z');
+                    return Ok(HandleResult::Prepare {
+                        name: name.clone(),
+                        statement: Query::new(format!("PREPARE {} AS {}", name, statement)),
+                    });
                 }
             }
             ProtocolMessage::CopyDone(_) => {
