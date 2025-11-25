@@ -1,5 +1,5 @@
 use crate::{
-    backend::databases::databases,
+    backend::{self, databases::databases},
     net::messages::{DataRow, Field, Protocol, RowDescription},
 };
 
@@ -30,6 +30,7 @@ impl Command for ShowPools {
             Field::numeric("cl_waiting"),
             Field::numeric("sv_idle"),
             Field::numeric("sv_active"),
+            Field::numeric("sv_idle_xact"),
             Field::numeric("sv_total"),
             Field::numeric("maxwait"),
             Field::numeric("maxwait_us"),
@@ -52,6 +53,7 @@ impl Command for ShowPools {
                     let state = pool.state();
                     let maxwait = state.maxwait.as_secs() as i64;
                     let maxwait_us = state.maxwait.subsec_micros() as i64;
+                    let idle_in_transaction = backend::stats::idle_in_transaction(&pool);
 
                     row.add(pool.id() as i64)
                         .add(user.database.as_str())
@@ -63,6 +65,7 @@ impl Command for ShowPools {
                         .add(state.waiting)
                         .add(state.idle)
                         .add(state.checked_out)
+                        .add(idle_in_transaction)
                         .add(state.total)
                         .add(maxwait)
                         .add(maxwait_us)

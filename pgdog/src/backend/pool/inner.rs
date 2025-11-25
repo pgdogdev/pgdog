@@ -94,6 +94,11 @@ impl Inner {
         self.idle_connections.len()
     }
 
+    #[cfg(test)]
+    pub(super) fn idle_conns(&self) -> &[Box<Server>] {
+        &self.idle_connections
+    }
+
     /// Number of connections checked out of the pool
     /// by clients.
     #[inline]
@@ -246,17 +251,21 @@ impl Inner {
     #[allow(clippy::vec_box)] // Server is a very large struct, reading it when moving between containers is expensive.
     pub(super) fn move_conns_to(&mut self, destination: &Pool) -> (Vec<Box<Server>>, Taken) {
         self.moved = Some(destination.clone());
-        let idle = std::mem::take(&mut self.idle_connections);
+        let mut idle = std::mem::take(&mut self.idle_connections);
         let taken = std::mem::take(&mut self.taken);
+
+        for conn in idle.iter_mut() {
+            conn.stats_mut().pool_id = destination.id();
+        }
 
         (idle, taken)
     }
 
-    #[inline(always)]
     /// Check a connection back into the pool if it's ok to do so.
     /// Otherwise, drop the connection and close it.
     ///
     /// Return: true if the pool should be banned, false otherwise.
+    #[inline(always)]
     pub(super) fn maybe_check_in(
         &mut self,
         mut server: Box<Server>,

@@ -1,0 +1,22 @@
+[[databases]]
+name = "pgdog"
+shard = 0
+host = "127.0.0.1"
+database_name = "shard_0"
+
+[[databases]]
+name = "pgdog"
+shard = 1
+host = "127.0.0.1"
+database_name = "shard_1"
+
+[[sharded_tables]]
+column = "org_id"
+database = "pgdog"
+
+[rewrite]
+enabled = true
+split_inserts = "rewrite"
+
+[admin]
+password = "pgdog"
