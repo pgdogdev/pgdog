@@ -377,6 +377,8 @@ impl PgDumpOutput {
                                                         }
                                                     }
                                                 }
+                                            } else if state == SyncState::PreData {
+                                                result.push(original.into());
                                             }
                                         }
                                         // AlterTableType::AtChangeOwner => {
@@ -686,5 +688,9 @@ ALTER TABLE ONLY public.users
 
             _ => panic!("not a set sequence max"),
         }
+        let statements = output.statements(SyncState::PreData).unwrap();
+        assert!(!statements.is_empty());
+        let statements = output.statements(SyncState::PostData).unwrap();
+        assert!(statements.is_empty());
     }
 }

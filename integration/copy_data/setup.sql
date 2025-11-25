@@ -134,7 +134,7 @@ SELECT
     ir.item_refunded_at
 FROM items_raw ir;
 
-CREATE TABLE copy_data.log_actions (
+CREATE TABLE copy_data.log_actions(
     id BIGSERIAL PRIMARY KEY,
     tenant_id BIGINT,
     action VARCHAR,
