@@ -7,7 +7,7 @@ use crate::{
     frontend::{self, prepared_statements::GlobalCache},
     net::{
         messages::{parse::Parse, RowDescription},
-        Close, CloseComplete, FromBytes, Message, ParseComplete, Protocol, ProtocolMessage, Query,
+        Close, CloseComplete, FromBytes, Message, ParseComplete, Protocol, ProtocolMessage,
         ToBytes,
     },
     stats::memory::MemoryUsage,
@@ -24,7 +24,6 @@ pub enum HandleResult {
     Forward,
     Drop,
     Prepend(ProtocolMessage),
-    Prepare { name: String, statement: Query },
 }
 
 /// Server-specific prepared statements.
@@ -175,14 +174,14 @@ impl PreparedStatements {
                     self.state.add('3');
                 }
             }
-            ProtocolMessage::Prepare { name, statement } => {
+            ProtocolMessage::Prepare { name, .. } => {
                 if self.contains(name) {
                     return Ok(HandleResult::Drop);
                 } else {
-                    return Ok(HandleResult::Prepare {
-                        name: name.clone(),
-                        statement: Query::new(format!("PREPARE {} AS {}", name, statement)),
-                    });
+                    self.parses.push_back(name.clone());
+                    self.state.add_ignore('C');
+                    self.state.add_ignore('Z');
+                    return Ok(HandleResult::Forward);
                 }
             }
             ProtocolMessage::CopyDone(_) => {
@@ -228,7 +227,7 @@ impl PreparedStatements {
                 self.describes.pop_front();
             }
 
-            '1' => {
+            '1' | 'C' => {
                 if let Some(name) = self.parses.pop_front() {
                     self.prepared(&name);
                 }

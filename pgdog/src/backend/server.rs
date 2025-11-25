@@ -314,30 +314,6 @@ impl Server {
             HandleResult::Drop => [None, None],
             HandleResult::Prepend(ref prepare) => [Some(prepare), Some(message)],
             HandleResult::Forward => [Some(message), None],
-            HandleResult::Prepare { name, statement } => {
-                debug!("preparing statement \"{}\" [{}]", name, self.addr());
-
-                // Async recursion requires boxing.
-                // We are using the simple protocol to prepare
-                // a statement here because the client is using it also,
-                // and we can't start an extended exhange without closing it.
-                self.stream().send_flush(&statement).await?;
-
-                for _ in ['C', 'Z'] {
-                    let msg = self
-                        .stream_buffer
-                        .read(self.stream.as_mut().unwrap())
-                        .await?;
-                    if msg.code() == 'E' {
-                        return Err(Error::ExecutionError(Box::new(ErrorResponse::from_bytes(
-                            msg.to_bytes()?,
-                        )?)));
-                    }
-                }
-
-                self.prepared_statements.prepared(&name);
-                [None, None]
-            }
         };
 
         for message in queue.into_iter().flatten() {
