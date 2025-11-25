@@ -673,7 +673,7 @@ ALTER TABLE ONLY public.users
         let statements = output.statements(SyncState::Cutover).unwrap();
         match statements.first() {
             Some(Statement::SequenceSetMax { sequence, sql }) => {
-                assert_eq!(sequence.table.name, "users");
+                assert_eq!(sequence.table.name, "users_id_seq");
                 assert_eq!(
                     sequence.table.schema().map(|schema| schema.name),
                     Some("public")
