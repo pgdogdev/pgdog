@@ -1039,6 +1039,45 @@ mod test {
     }
 
     #[test]
+    fn split_insert_multi_tuple_without_table_name_in_schema() {
+        // Test that we detect the sharding key in a multi-tuple insert
+        // when the sharded table config has name: None (applies to any table)
+        let query =
+            parse("INSERT INTO orders (user_id, value) VALUES (1, 'a'), (11, 'b')").unwrap();
+        let select = query.protobuf.stmts.first().unwrap().stmt.as_ref().unwrap();
+        let schema = ShardingSchema {
+            shards: 2,
+            tables: ShardedTables::new(
+                vec![ShardedTable {
+                    name: None, // No table name specified - applies to any table
+                    column: "user_id".into(),
+                    ..Default::default()
+                }],
+                vec![],
+            ),
+            ..Default::default()
+        };
+
+        match &select.node {
+            Some(NodeEnum::InsertStmt(stmt)) => {
+                let insert = Insert::new(stmt);
+                let routing = insert
+                    .shard(&schema, None, true, RewriteMode::Rewrite)
+                    .unwrap();
+                match routing {
+                    InsertRouting::Split(plan) => {
+                        assert_eq!(plan.rows().len(), 2);
+                        // user_id=1 and user_id=11 should hash to different shards with 2 shards
+                        assert!(plan.shard_list().len() > 1);
+                    }
+                    InsertRouting::Routed(_) => panic!("expected split plan"),
+                }
+            }
+            _ => panic!("not an insert"),
+        }
+    }
+
+    #[test]
     fn split_insert_rejects_float_sharding_key() {
         let query = parse(
             "INSERT INTO transactions (txn_id, amount, status) VALUES \
