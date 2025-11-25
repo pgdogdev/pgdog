@@ -377,6 +377,8 @@ impl PgDumpOutput {
                                                         }
                                                     }
                                                 }
+                                            } else {
+                                                result.push(original.into());
                                             }
                                         }
                                         // AlterTableType::AtChangeOwner => {
