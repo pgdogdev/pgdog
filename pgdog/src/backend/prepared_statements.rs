@@ -228,7 +228,7 @@ impl PreparedStatements {
                 self.describes.pop_front();
             }
 
-            '1' | 'C' => {
+            '1' => {
                 if let Some(name) = self.parses.pop_front() {
                     self.prepared(&name);
                 }
