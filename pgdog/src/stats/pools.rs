@@ -556,7 +556,7 @@ impl Pools {
         metrics.push(Metric::new(PoolMetric {
             name: "sv_idle_xact".into(),
             measurements: total_sv_xact_idle,
-            help: "Number of servers currently idle in transaction.".into(),
+            help: "Servers currently idle in transaction.".into(),
             unit: None,
             metric_type: None,
         }));
