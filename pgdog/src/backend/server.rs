@@ -318,6 +318,9 @@ impl Server {
                 debug!("preparing statement \"{}\" [{}]", name, self.addr());
 
                 // Async recursion requires boxing.
+                // We are using the simple protocol to prepare
+                // a statement here because the client is using it also,
+                // and we can't start an extended exhange without closing it.
                 self.stream().send_flush(&statement).await?;
 
                 for _ in ['C', 'Z'] {

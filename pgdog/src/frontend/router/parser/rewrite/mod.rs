@@ -46,8 +46,13 @@ impl<'a> Rewrite<'a> {
                 if let Some(ref mut node) = stmt.node {
                     match node {
                         NodeEnum::PrepareStmt(ref mut stmt) => {
-                            let statement = stmt.query.as_ref().ok_or(Error::EmptyQuery)?;
-                            let statement = statement.deparse().map_err(|_| Error::EmptyQuery)?;
+                            let statement = stmt
+                                .query
+                                .as_ref()
+                                .ok_or(Error::EmptyQuery)?
+                                .deparse()
+                                .map_err(|_| Error::EmptyQuery)?;
+
                             let mut parse = Parse::named(&stmt.name, &statement);
                             prepared_statements.insert_anyway(&mut parse);
                             stmt.name = parse.name().to_string();
