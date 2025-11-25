@@ -174,7 +174,16 @@ impl PreparedStatements {
                     self.state.add('3');
                 }
             }
-            ProtocolMessage::Prepare { .. } => (),
+            ProtocolMessage::Prepare { name, .. } => {
+                if self.contains(name) {
+                    return Ok(HandleResult::Drop);
+                } else {
+                    self.parses.push_back(name.clone());
+                    self.state.add_ignore('C');
+                    self.state.add_ignore('Z');
+                    return Ok(HandleResult::Forward);
+                }
+            }
             ProtocolMessage::CopyDone(_) => {
                 self.state.action('c')?;
             }
@@ -218,7 +227,7 @@ impl PreparedStatements {
                 self.describes.pop_front();
             }
 
-            '1' => {
+            '1' | 'C' => {
                 if let Some(name) = self.parses.pop_front() {
                     self.prepared(&name);
                 }

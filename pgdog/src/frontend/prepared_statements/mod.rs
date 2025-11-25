@@ -102,6 +102,8 @@ impl PreparedStatements {
         self.global.read().rewrite_plan(name)
     }
 
+    /// Set rewrite plan for UPDATE / INSERT statement
+    /// rewrites used in rewritten cross-shard queries.
     pub fn update_and_set_rewrite_plan(
         &mut self,
         name: &str,
@@ -115,6 +117,14 @@ impl PreparedStatements {
     /// Get global statement counter.
     pub fn name(&self, name: &str) -> Option<&String> {
         self.local.get(name)
+    }
+
+    /// Get globally-prepared statement by local name.
+    pub fn parse(&self, name: &str) -> Option<Parse> {
+        self.local
+            .get(name)
+            .map(|name| self.global.read().parse(name))
+            .flatten()
     }
 
     /// Number of prepared statements in the local cache.
