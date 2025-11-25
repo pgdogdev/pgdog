@@ -1,7 +1,7 @@
 //! Handle INSERT statements.
 use pg_query::{protobuf::*, NodeEnum};
 use std::{collections::BTreeSet, string::String as StdString};
-use tracing::debug;
+use tracing::{debug, trace};
 
 use crate::frontend::router::parser::rewrite::{InsertSplitPlan, InsertSplitRow};
 use crate::frontend::router::parser::table::OwnedTable;
@@ -91,15 +91,20 @@ impl<'a> Insert<'a> {
         let table = self.table();
         let tuples = self.tuples();
 
+        let key = table.and_then(|table| tables.key(table, &columns));
+
         if let Some(table) = table {
             // Schema-based routing.
             if let Some(schema) = schema.schemas.get(table.schema()) {
                 return Ok(InsertRouting::Routed(schema.shard().into()));
             }
 
-            if tables.sharded(table).is_some() && tuples.len() > 1 {
+            if key.is_some() && tuples.len() > 1 {
                 if rewrite_enabled && split_mode == RewriteMode::Rewrite {
-                    return self.build_split_plan(&tables, schema, bind, table, &columns, &tuples);
+                    let plan =
+                        self.build_split_plan(&tables, schema, bind, table, &columns, &tuples);
+                    trace!("rewrite plan: {:#?}", plan);
+                    return plan;
                 }
 
                 if split_mode == RewriteMode::Error {
@@ -1028,6 +1033,45 @@ mod test {
 
                 // After fix, this should be Float("50.00"), not Null
                 assert_eq!(tuples[0].values[2], Value::Float("50.00"));
+            }
+            _ => panic!("not an insert"),
+        }
+    }
+
+    #[test]
+    fn split_insert_multi_tuple_without_table_name_in_schema() {
+        // Test that we detect the sharding key in a multi-tuple insert
+        // when the sharded table config has name: None (applies to any table)
+        let query =
+            parse("INSERT INTO orders (user_id, value) VALUES (1, 'a'), (11, 'b')").unwrap();
+        let select = query.protobuf.stmts.first().unwrap().stmt.as_ref().unwrap();
+        let schema = ShardingSchema {
+            shards: 2,
+            tables: ShardedTables::new(
+                vec![ShardedTable {
+                    name: None, // No table name specified - applies to any table
+                    column: "user_id".into(),
+                    ..Default::default()
+                }],
+                vec![],
+            ),
+            ..Default::default()
+        };
+
+        match &select.node {
+            Some(NodeEnum::InsertStmt(stmt)) => {
+                let insert = Insert::new(stmt);
+                let routing = insert
+                    .shard(&schema, None, true, RewriteMode::Rewrite)
+                    .unwrap();
+                match routing {
+                    InsertRouting::Split(plan) => {
+                        assert_eq!(plan.rows().len(), 2);
+                        // user_id=1 and user_id=11 should hash to different shards with 2 shards
+                        assert!(plan.shard_list().len() > 1);
+                    }
+                    InsertRouting::Routed(_) => panic!("expected split plan"),
+                }
             }
             _ => panic!("not an insert"),
         }

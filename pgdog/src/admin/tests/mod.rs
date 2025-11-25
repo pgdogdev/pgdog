@@ -106,6 +106,7 @@ async fn show_pools_reports_schema_admin_flag() {
         "cl_waiting",
         "sv_idle",
         "sv_active",
+        "sv_idle_xact",
         "sv_total",
         "maxwait",
         "maxwait_us",

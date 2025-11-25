@@ -271,6 +271,7 @@ impl Pool {
     }
 
     /// Connection pool unique identifier.
+    #[inline]
     pub(crate) fn id(&self) -> u64 {
         self.inner.id
     }
