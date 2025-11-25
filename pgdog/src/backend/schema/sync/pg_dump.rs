@@ -51,8 +51,7 @@ impl PgDump {
             .first()
             .ok_or(Error::NoDatabases)?
             .pools()
-            .iter()
-            .next()
+            .first()
             .ok_or(Error::NoDatabases)?
             .addr()
             .clone();
@@ -321,6 +320,65 @@ impl PgDumpOutput {
                                                 result.push(original.into())
                                             }
                                         }
+
+                                        AlterTableType::AtAddIdentity => {
+                                            if state == SyncState::Cutover {
+                                                if let Some(ref node) = cmd.def {
+                                                    if let Some(NodeEnum::Constraint(
+                                                        ref constraint,
+                                                    )) = node.node
+                                                    {
+                                                        for option in &constraint.options {
+                                                            if let Some(NodeEnum::DefElem(
+                                                                ref elem,
+                                                            )) = option.node
+                                                            {
+                                                                if elem.defname == "sequence_name" {
+                                                                    if let Some(ref node) = elem.arg
+                                                                    {
+                                                                        if let Some(
+                                                                            NodeEnum::List(
+                                                                                ref list,
+                                                                            ),
+                                                                        ) = node.node
+                                                                        {
+                                                                            let table = Table::try_from(list).map_err(|_| Error::MissingEntity)?;
+                                                                            let sequence =
+                                                                                Sequence::from(
+                                                                                    table,
+                                                                                );
+                                                                            let table = stmt
+                                                                                .relation
+                                                                                .as_ref()
+                                                                                .map(Table::from);
+                                                                            let schema = table
+                                                                                .and_then(
+                                                                                    |table| {
+                                                                                        table.schema
+                                                                                    },
+                                                                                );
+                                                                            let table = table.map(
+                                                                                |table| table.name,
+                                                                            );
+                                                                            let column = Column {
+                                                                                table,
+                                                                                name: cmd
+                                                                                    .name
+                                                                                    .as_str(),
+                                                                                schema,
+                                                                            };
+                                                                            let sql = sequence.setval_from_column(&column).map_err(|_| Error::MissingEntity)?;
+
+                                                                            result.push(Statement::SequenceSetMax { sequence, sql });
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
                                         // AlterTableType::AtChangeOwner => {
                                         //     continue; // Don't change owners, for now.
                                         // }
@@ -437,13 +495,13 @@ impl PgDumpOutput {
                         }
 
                         NodeEnum::AlterOwnerStmt(stmt) => {
-                            if stmt.object_type() != ObjectType::ObjectPublication {
-                                if state == SyncState::PreData {
-                                    result.push(Statement::Other {
-                                        sql: original.to_string(),
-                                        idempotent: true,
-                                    });
-                                }
+                            if stmt.object_type() != ObjectType::ObjectPublication
+                                && state == SyncState::PreData
+                            {
+                                result.push(Statement::Other {
+                                    sql: original.to_string(),
+                                    idempotent: true,
+                                });
                             }
                         }
 
@@ -595,5 +653,38 @@ ALTER TABLE ONLY public.users
 \unrestrict nu6jB5ogH2xGMn2dB3dMyMbSZ2PsVDqB2IaWK6zZVjngeba0UrnmxMy6s63SwzR
 "#;
         let _parse = pg_query::parse(&PgDump::clean(&dump)).unwrap();
+    }
+
+    #[test]
+    fn test_generated_identity() {
+        let q = "ALTER TABLE public.users ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
+            SEQUENCE NAME public.users_id_seq
+            START WITH 1
+            INCREMENT BY 1
+            NO MINVALUE
+            NO MAXVALUE
+            CACHE 1
+        );";
+        let parse = pg_query::parse(q).unwrap();
+        let output = PgDumpOutput {
+            stmts: parse.protobuf,
+            original: q.to_string(),
+        };
+        let statements = output.statements(SyncState::Cutover).unwrap();
+        match statements.first() {
+            Some(Statement::SequenceSetMax { sequence, sql }) => {
+                assert_eq!(sequence.table.name, "users_id_seq");
+                assert_eq!(
+                    sequence.table.schema().map(|schema| schema.name),
+                    Some("public")
+                );
+                assert_eq!(
+                    sql,
+                    r#"SELECT setval('"public"."users_id_seq"', COALESCE((SELECT MAX("id") FROM "public"."users"), 1), true);"#
+                );
+            }
+
+            _ => panic!("not a set sequence max"),
+        }
     }
 }

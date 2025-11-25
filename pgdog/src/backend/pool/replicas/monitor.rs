@@ -14,7 +14,7 @@ pub(super) struct Monitor {
 
 impl Monitor {
     /// Create new replica targets monitor.
-    pub(super) fn new(replicas: &Replicas) -> JoinHandle<()> {
+    pub(super) fn spawn(replicas: &Replicas) -> JoinHandle<()> {
         let monitor = Self {
             replicas: replicas.clone(),
         };

@@ -250,11 +250,8 @@ impl StreamSubscriber {
         if let Some(statements) = self.statements.get(&insert.oid) {
             // Convert TupleData into a Bind message. We can now insert that tuple
             // using a prepared statement.
-            let mut context = StreamContext::new(
-                &self.cluster,
-                &insert.tuple_data,
-                &statements.insert.parse(),
-            );
+            let mut context =
+                StreamContext::new(&self.cluster, &insert.tuple_data, statements.insert.parse());
             let bind = context.bind().clone();
             let shard = context.shard()?;
 
@@ -292,7 +289,7 @@ impl StreamSubscriber {
                 self.insert(insert).await?;
             } else {
                 let mut context =
-                    StreamContext::new(&self.cluster, &update.new, &statements.update.parse());
+                    StreamContext::new(&self.cluster, &update.new, statements.update.parse());
                 let bind = context.bind().clone();
                 let shard = context.shard()?;
 
@@ -316,7 +313,7 @@ impl StreamSubscriber {
             // using a prepared statement.
             if let Some(key) = delete.key_non_null() {
                 let mut context =
-                    StreamContext::new(&self.cluster, &key, &statements.delete.parse());
+                    StreamContext::new(&self.cluster, &key, statements.delete.parse());
                 let bind = context.bind().clone();
                 let shard = context.shard()?;
 

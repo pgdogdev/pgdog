@@ -386,11 +386,7 @@ pub(crate) fn new_pool(
     let general = &config.general;
     let databases = config.databases();
 
-    let mut shards = if let Some(shards) = databases.get(&user.database).cloned() {
-        shards
-    } else {
-        return None;
-    };
+    let mut shards = databases.get(&user.database).cloned()?;
 
     let mut shard_configs = vec![];
     for (shard_number, user_databases) in shards.iter_mut().enumerate() {
@@ -398,8 +394,7 @@ pub(crate) fn new_pool(
 
         if let Some(ref shard_roles) = existing_roles
             .as_ref()
-            .map(|existing_roles| existing_roles.get(shard_number).cloned())
-            .flatten()
+            .and_then(|existing_roles| existing_roles.get(shard_number).cloned())
             .flatten()
         {
             for user_database in user_databases.iter_mut() {

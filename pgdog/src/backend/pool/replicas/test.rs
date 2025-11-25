@@ -604,7 +604,7 @@ async fn test_monitor_shuts_down_on_notify() {
         .replicas
         .iter()
         .for_each(|target| target.pool.launch());
-    let monitor_handle = Monitor::new(&replicas);
+    let monitor_handle = Monitor::spawn(&replicas);
 
     // Give monitor time to start and register notified() future
     sleep(Duration::from_millis(10)).await;

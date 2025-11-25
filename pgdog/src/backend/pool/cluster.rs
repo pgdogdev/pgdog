@@ -251,7 +251,7 @@ impl Cluster {
             two_phase_commit_auto: two_pc_auto && shards.len() > 1,
             online: Arc::new(AtomicBool::new(false)),
             rewrite: rewrite.clone(),
-            prepared_statements: prepared_statements.clone(),
+            prepared_statements: *prepared_statements,
             dry_run,
             expanded_explain,
             pub_sub_channel_size,

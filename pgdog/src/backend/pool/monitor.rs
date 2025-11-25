@@ -253,7 +253,7 @@ impl Monitor {
 
             Err(err) => {
                 pool.inner().health.toggle(false);
-                return Err(err);
+                Err(err)
             }
         }
     }

@@ -117,38 +117,24 @@ impl<'a> TryFrom<&'a Vec<Node>> for Table<'a> {
                     })
                     .flatten()
                     .ok_or(())?;
-                return Ok(table?);
+                return table;
             }
 
             2 => {
-                let schema = value
-                    .iter()
-                    .next()
-                    .unwrap()
-                    .node
-                    .as_ref()
-                    .map(|node| {
-                        if let NodeEnum::String(sval) = node {
-                            Some(sval.sval.as_str())
-                        } else {
-                            None
-                        }
-                    })
-                    .flatten();
-                let table = value
-                    .iter()
-                    .last()
-                    .unwrap()
-                    .node
-                    .as_ref()
-                    .map(|node| {
-                        if let NodeEnum::String(sval) = node {
-                            Some(sval.sval.as_str())
-                        } else {
-                            None
-                        }
-                    })
-                    .flatten();
+                let schema = value.iter().next().unwrap().node.as_ref().and_then(|node| {
+                    if let NodeEnum::String(sval) = node {
+                        Some(sval.sval.as_str())
+                    } else {
+                        None
+                    }
+                });
+                let table = value.iter().last().unwrap().node.as_ref().and_then(|node| {
+                    if let NodeEnum::String(sval) = node {
+                        Some(sval.sval.as_str())
+                    } else {
+                        None
+                    }
+                });
                 if let Some(schema) = schema {
                     if let Some(table) = table {
                         return Ok(Table {

@@ -45,8 +45,8 @@ pub enum Command {
     },
     Unlisten(String),
     SetRoute(Route),
-    ShardKeyRewrite(ShardKeyRewritePlan),
-    InsertSplit(InsertSplitPlan),
+    ShardKeyRewrite(Box<ShardKeyRewritePlan>),
+    InsertSplit(Box<InsertSplitPlan>),
 }
 
 impl Command {

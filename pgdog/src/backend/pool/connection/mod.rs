@@ -216,7 +216,7 @@ impl Connection {
                         }
                     }
                 }
-                return Err(Error::Pool(pool::Error::AllReplicasDown));
+                Err(Error::Pool(pool::Error::AllReplicasDown))
             }
         }
     }

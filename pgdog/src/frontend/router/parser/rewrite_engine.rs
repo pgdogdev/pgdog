@@ -53,10 +53,9 @@ impl RewriteEngine {
                 matches!(other.function(), AggregateFunction::Count)
                     && other.expr_id() == target.expr_id()
                     && other.is_distinct() == target.is_distinct()
-            }) {
-                if matches!(target.function(), AggregateFunction::Avg) {
-                    continue;
-                }
+            }) && matches!(target.function(), AggregateFunction::Avg)
+            {
+                continue;
             }
 
             let Some(node) = select.target_list.get(target.column()) else {

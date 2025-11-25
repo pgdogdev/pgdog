@@ -386,7 +386,7 @@ impl QueryEngine {
             .await?;
         self.stats.sent(bytes_sent);
 
-        return Ok(());
+        Ok(())
     }
 }
 
