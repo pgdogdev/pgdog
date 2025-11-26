@@ -4,7 +4,7 @@ use chrono::{DateTime, Local, Utc};
 use once_cell::sync::Lazy;
 use pgdog_plugin::comp;
 use rand::{distributions::Alphanumeric, Rng};
-use std::{ops::Deref, time::Duration};
+use std::{env, num::ParseIntError, ops::Deref, time::Duration};
 
 use crate::net::Parameters; // 0.8
 
@@ -76,19 +76,30 @@ pub fn random_string(n: usize) -> String {
 
 // Generate a unique 8-character hex instance ID on first access
 static INSTANCE_ID: Lazy<String> = Lazy::new(|| {
-    let mut rng = rand::thread_rng();
-    (0..8)
-        .map(|_| {
-            let n: u8 = rng.gen_range(0..16);
-            format!("{:x}", n)
-        })
-        .collect()
+    if let Ok(node_id) = env::var("NODE_ID") {
+        node_id
+    } else {
+        let mut rng = rand::thread_rng();
+        (0..8)
+            .map(|_| {
+                let n: u8 = rng.gen_range(0..16);
+                format!("{:x}", n)
+            })
+            .collect()
+    }
 });
 
 /// Get the instance ID for this pgdog instance.
 /// This is generated once at startup and persists for the lifetime of the process.
 pub fn instance_id() -> &'static str {
     &INSTANCE_ID
+}
+
+/// Get an externally assigned, unique, node identifier
+/// for this instance of PgDog.
+pub fn node_id() -> Result<u64, ParseIntError> {
+    // split always returns at least one element.
+    instance_id().split("-").last().unwrap().parse()
 }
 
 /// Escape PostgreSQL identifiers by doubling any embedded quotes.
@@ -116,6 +127,8 @@ pub fn user_database_from_params(params: &Parameters) -> (&str, &str) {
 
 #[cfg(test)]
 mod test {
+
+    use std::env::set_var;
 
     use super::*;
 
@@ -169,5 +182,19 @@ mod test {
         let id1 = instance_id();
         let id2 = instance_id();
         assert_eq!(id1, id2); // Should be the same for lifetime of process
+    }
+
+    #[test]
+    fn test_node_id_error() {
+        assert!(node_id().is_err());
+    }
+
+    // These should run in separate processes (if using nextest).
+    #[test]
+    fn test_node_id_set() {
+        unsafe {
+            set_var("NODE_ID", "pgdog-1");
+        }
+        assert_eq!(node_id(), Ok(1));
     }
 }

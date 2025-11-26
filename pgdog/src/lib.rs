@@ -16,6 +16,7 @@ pub mod state;
 pub mod stats;
 #[cfg(feature = "tui")]
 pub mod tui;
+pub mod unique_id;
 pub mod util;
 
 use tracing::level_filters::LevelFilter;
