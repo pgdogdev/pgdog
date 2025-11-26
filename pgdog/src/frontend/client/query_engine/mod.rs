@@ -20,6 +20,7 @@ pub mod end_transaction;
 pub mod hooks;
 pub mod incomplete_requests;
 pub mod insert_split;
+pub mod internal_values;
 pub mod notify_buffer;
 pub mod prepared_statements;
 pub mod pub_sub;
@@ -27,7 +28,6 @@ pub mod query;
 pub mod route_query;
 pub mod set;
 pub mod shard_key_rewrite;
-pub mod show_shards;
 pub mod start_transaction;
 #[cfg(test)]
 mod testing;
@@ -155,7 +155,11 @@ impl QueryEngine {
         context.client_request.route = Some(route.clone());
 
         match command {
-            Command::Shards(shards) => self.show_shards(context, *shards).await?,
+            Command::InternalField { name, value } => {
+                self.show_internal_value(context, name.clone(), value.clone())
+                    .await?
+            }
+            Command::UniqueId => self.unique_id(context).await?,
             Command::StartTransaction {
                 query,
                 transaction_type,

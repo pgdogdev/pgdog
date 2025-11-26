@@ -750,7 +750,7 @@ fn test_begin_extended() {
 #[test]
 fn test_show_shards() {
     let (cmd, qp) = command!("SHOW pgdog.shards");
-    assert!(matches!(cmd, Command::Shards(2)));
+    assert!(matches!(cmd, Command::InternalField { .. }));
     assert!(!qp.in_transaction);
 }
 

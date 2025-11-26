@@ -4,6 +4,8 @@ use std::io::ErrorKind;
 
 use thiserror::Error;
 
+use crate::unique_id;
+
 /// Frontend error.
 #[derive(Debug, Error)]
 pub enum Error {
@@ -45,6 +47,9 @@ pub enum Error {
 
     #[error("join error")]
     Join(#[from] tokio::task::JoinError),
+
+    #[error("unique id: {0}")]
+    UniqueId(#[from] unique_id::Error),
 }
 
 impl Error {

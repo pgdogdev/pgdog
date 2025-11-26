@@ -9,7 +9,11 @@ impl QueryParser {
         context: &QueryParserContext,
     ) -> Result<Command, Error> {
         match stmt.name.as_str() {
-            "pgdog.shards" => Ok(Command::Shards(context.shards)),
+            "pgdog.shards" => Ok(Command::InternalField {
+                name: "shards".into(),
+                value: context.shards.to_string(),
+            }),
+            "pgdog.unique_id" => Ok(Command::UniqueId),
             _ => {
                 let shard = Shard::Direct(round_robin::next() % context.shards);
                 let route = Route::write(shard).set_read(context.read_only);
