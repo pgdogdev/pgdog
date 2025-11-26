@@ -181,6 +181,9 @@ pub struct General {
     /// LSN check delay.
     #[serde(default = "General::lsn_check_delay")]
     pub lsn_check_delay: u64,
+    /// Minimum ID for unique ID generator.
+    #[serde(default)]
+    pub unique_id_min: u64,
 }
 
 impl Default for General {
@@ -245,6 +248,7 @@ impl Default for General {
             lsn_check_interval: Self::lsn_check_interval(),
             lsn_check_timeout: Self::lsn_check_timeout(),
             lsn_check_delay: Self::lsn_check_delay(),
+            unique_id_min: u64::default(),
         }
     }
 }

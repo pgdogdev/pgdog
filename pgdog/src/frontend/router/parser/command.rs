@@ -29,7 +29,10 @@ pub enum Command {
     },
     PreparedStatement(Prepare),
     Rewrite(Vec<ProtocolMessage>),
-    Shards(usize),
+    InternalField {
+        name: String,
+        value: String,
+    },
     Deallocate,
     Discard {
         extended: bool,
@@ -47,6 +50,7 @@ pub enum Command {
     SetRoute(Route),
     ShardKeyRewrite(Box<ShardKeyRewritePlan>),
     InsertSplit(Box<InsertSplitPlan>),
+    UniqueId,
 }
 
 impl Command {
