@@ -13,4 +13,16 @@ pub enum Error {
 
     #[error("net: {0}")]
     Net(#[from] crate::net::Error),
+
+    #[error("rewrite engine didn't rewrite bind")]
+    NoBind,
+
+    #[error("empty query")]
+    EmptyQuery,
+
+    #[error("no rewrite")]
+    NoRewrite,
+
+    #[error("prepared statement not found: {0}")]
+    PreparedStatementNotFound(String),
 }

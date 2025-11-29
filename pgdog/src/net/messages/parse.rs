@@ -38,10 +38,10 @@ impl Parse {
     }
 
     /// New anonymous prepared statement.
-    pub fn new_anonymous(query: &str) -> Self {
+    pub fn new_anonymous(query: impl ToString) -> Self {
         Self {
             name: Bytes::from("\0"),
-            query: Bytes::from(query.to_owned() + "\0"),
+            query: Bytes::from(query.to_string() + "\0"),
             data_types: Bytes::copy_from_slice(&0i16.to_be_bytes()),
             original: None,
         }

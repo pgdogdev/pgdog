@@ -8,6 +8,7 @@ use crate::{
         router::{
             context::RouterContext,
             parser::{rewrite::Rewrite, OrderBy, Shard},
+            rewrite::{self, RewriteModule},
             round_robin,
             sharding::{Centroids, ContextBuilder, Value as ShardingValue},
         },
@@ -16,6 +17,7 @@ use crate::{
     net::{
         messages::{Bind, Vector},
         parameter::ParameterValue,
+        ProtocolMessage,
     },
     plugin::plugins,
 };
@@ -195,6 +197,23 @@ impl QueryParser {
             }
         };
 
+        let mut input = rewrite::Input::new(&statement.ast().protobuf, context.router_context.bind);
+        rewrite::Rewrite::new(context.prepared_statements()).rewrite(&mut input)?;
+
+        match input.build()? {
+            rewrite::Output::NoOp => (),
+            rewrite::Output::Extended { parse, bind } => {
+                return Ok(Command::Rewrite(vec![
+                    ProtocolMessage::from(parse),
+                    bind.into(),
+                ]))
+            }
+            rewrite::Output::Simple { query } => {
+                return Ok(Command::Rewrite(vec![ProtocolMessage::from(query)]))
+            }
+            _ => todo!("multi rewrite not supported yet"),
+        }
+
         self.ensure_explain_recorder(statement.ast(), context);
 
         // Parse hardcoded shard from a query comment.
@@ -217,12 +236,6 @@ impl QueryParser {
 
         debug!("{}", context.query()?.query());
         trace!("{:#?}", statement);
-
-        let rewrite = Rewrite::new(statement.ast());
-        if rewrite.needs_rewrite() {
-            debug!("rewrite needed");
-            return rewrite.rewrite(context.prepared_statements());
-        }
 
         if let Some(multi_tenant) = context.multi_tenant() {
             debug!("running multi-tenant check");

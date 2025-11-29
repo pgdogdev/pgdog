@@ -181,11 +181,15 @@ impl ClientRequest {
 
     /// Rewrite query in buffer.
     pub fn rewrite(&mut self, request: &[ProtocolMessage]) -> Result<(), Error> {
-        if self.messages.iter().any(|c| c.code() != 'Q') {
-            return Err(Error::OnlySimpleForRewrites);
+        for new_message in request {
+            if let Some(pos) = self
+                .messages
+                .iter()
+                .position(|message| message.code() == new_message.code())
+            {
+                self.messages[pos] = new_message.clone();
+            }
         }
-        self.messages.clear();
-        self.messages.extend(request.to_vec());
         Ok(())
     }
 
