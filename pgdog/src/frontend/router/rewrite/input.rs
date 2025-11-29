@@ -2,7 +2,7 @@
 
 use pg_query::protobuf::{ParseResult, RawStmt};
 
-use super::Error;
+use super::{Error, StepOutput};
 use crate::{
     frontend::PreparedStatements,
     net::{Bind, Parse, Query},
@@ -80,9 +80,9 @@ impl<'a> Input<'a> {
     }
 
     /// Assemble statement and add it to the global prepared statements cache.
-    pub fn build(mut self) -> Result<Output, Error> {
+    pub fn build(mut self) -> Result<StepOutput, Error> {
         if self.rewrite.is_none() {
-            Ok(Output::NoOp)
+            Ok(StepOutput::NoOp)
         } else {
             let bind = self.rewrite_bind.take();
             let stmt = self.rewrite.take().ok_or(Error::NoRewrite)?.deparse()?;
@@ -90,37 +90,18 @@ impl<'a> Input<'a> {
             if let Some(mut bind) = bind {
                 let mut parse = Parse::new_anonymous(stmt);
                 if bind.anonymous() {
-                    Ok(Output::Extended { parse, bind })
+                    Ok(StepOutput::Extended { parse, bind })
                 } else {
                     let (_, name) = PreparedStatements::global().write().insert(&parse);
                     parse.rename_fast(&name);
                     bind.rename(name);
-                    Ok(Output::Extended { parse, bind })
+                    Ok(StepOutput::Extended { parse, bind })
                 }
             } else {
-                Ok(Output::Simple {
+                Ok(StepOutput::Simple {
                     query: Query::new(stmt),
                 })
             }
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub enum Output {
-    NoOp,
-    Extended { parse: Parse, bind: Bind },
-    Simple { query: Query },
-    Multi(Vec<Box<Self>>),
-}
-
-impl Output {
-    /// Get rewritten query, if any.
-    pub fn query(&self) -> Result<&str, ()> {
-        match self {
-            Self::Extended { parse, .. } => Ok(parse.query()),
-            Self::Simple { query } => Ok(query.query()),
-            _ => Err(()),
         }
     }
 }

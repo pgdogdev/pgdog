@@ -1,4 +1,7 @@
-use pg_query::{protobuf::ParamRef, NodeEnum};
+use pg_query::{
+    protobuf::{InsertStmt, ParamRef},
+    NodeEnum,
+};
 
 use super::{
     super::{Error, Input, RewriteModule},
@@ -13,58 +16,40 @@ use crate::{
 #[derive(Default)]
 pub struct InsertUniqueIdRewrite {}
 
-impl RewriteModule for InsertUniqueIdRewrite {
-    /// Handle statement rewrite
-    fn rewrite(&mut self, input: &mut Input<'_>) -> Result<(), Error> {
-        let mut need_rewrite = false;
+impl InsertUniqueIdRewrite {
+    pub fn needs_rewrite(stmt: &InsertStmt) -> bool {
+        let wrapper = Insert::new(stmt);
 
-        if let Some(NodeEnum::InsertStmt(stmt)) = input
-            .stmt()?
-            .stmt
-            .as_ref()
-            .and_then(|stmt| stmt.node.as_ref())
-        {
-            let wrapper = Insert::new(stmt);
-
-            for tuple in wrapper.tuples() {
-                for value in tuple.values {
-                    if let Value::Function(ref func) = value {
-                        if *func == "pgdog.unique_id" {
-                            need_rewrite = true;
-                        }
+        for tuple in wrapper.tuples() {
+            for value in tuple.values {
+                if let Value::Function(ref func) = value {
+                    if *func == "pgdog.unique_id" {
+                        return true;
                     }
                 }
             }
-
-            if !need_rewrite {
-                return Ok(());
-            }
         }
 
-        let mut bind = input.bind_take();
+        false
+    }
 
-        let select = if let Some(NodeEnum::InsertStmt(stmt)) = input
-            .stmt_mut()?
-            .stmt
+    pub fn rewrite_insert(
+        stmt: &mut InsertStmt,
+        bind: &mut Option<crate::net::Bind>,
+    ) -> Result<(), Error> {
+        let select = stmt
+            .select_stmt
             .as_mut()
-            .and_then(|stmt| stmt.node.as_mut())
-        {
-            stmt.select_stmt
-                .as_mut()
-                .ok_or(Error::ParserError)?
-                .node
-                .as_mut()
-                .ok_or(Error::ParserError)?
-        } else {
-            return Ok(());
-        };
+            .ok_or(Error::ParserError)?
+            .node
+            .as_mut()
+            .ok_or(Error::ParserError)?;
 
         if let NodeEnum::SelectStmt(stmt) = select {
             for tuple in stmt.values_lists.iter_mut() {
                 if let Some(NodeEnum::List(ref mut tuple)) = tuple.node {
                     for column in tuple.items.iter_mut() {
                         if let Ok(Value::Function(name)) = Value::try_from(&column.node) {
-                            // Replace function call with value.
                             if name == "pgdog.unique_id" {
                                 let id = unique_id::UniqueId::generator()?.next_id();
 
@@ -83,6 +68,38 @@ impl RewriteModule for InsertUniqueIdRewrite {
                     }
                 }
             }
+        }
+
+        Ok(())
+    }
+}
+
+impl RewriteModule for InsertUniqueIdRewrite {
+    fn rewrite(&mut self, input: &mut Input<'_>) -> Result<(), Error> {
+        let need_rewrite = if let Some(NodeEnum::InsertStmt(stmt)) = input
+            .stmt()?
+            .stmt
+            .as_ref()
+            .and_then(|stmt| stmt.node.as_ref())
+        {
+            Self::needs_rewrite(stmt)
+        } else {
+            false
+        };
+
+        if !need_rewrite {
+            return Ok(());
+        }
+
+        let mut bind = input.bind_take();
+
+        if let Some(NodeEnum::InsertStmt(stmt)) = input
+            .stmt_mut()?
+            .stmt
+            .as_mut()
+            .and_then(|stmt| stmt.node.as_mut())
+        {
+            Self::rewrite_insert(stmt, &mut bind)?;
         }
 
         input.bind_put(bind);

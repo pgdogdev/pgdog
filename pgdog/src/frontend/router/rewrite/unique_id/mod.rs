@@ -5,9 +5,15 @@ use pg_query::{
     NodeEnum,
 };
 
+pub mod explain;
 pub mod insert;
 pub mod select;
 pub mod update;
+
+pub use explain::ExplainUniqueIdRewrite;
+pub use insert::InsertUniqueIdRewrite;
+pub use select::SelectUniqueIdRewrite;
+pub use update::UpdateUniqueIdRewrite;
 
 pub struct UniqueIdRewrite;
 

@@ -8,13 +8,16 @@
 //!
 pub mod error;
 pub mod input;
+pub mod insert_split;
 pub mod interface;
+pub mod output;
 pub mod prepared;
 pub mod unique_id;
 
 pub use error::Error;
-pub use input::{Input, Output};
+pub use input::Input;
 pub use interface::RewriteModule;
+pub use output::StepOutput;
 
 use crate::frontend::PreparedStatements;
 
@@ -38,10 +41,11 @@ impl RewriteModule for Rewrite<'_> {
         // First, we need to inject the unique ID into the query. Once that's done,
         // we can proceed with additional rewrites.
 
-        // Unique ID rewrites
-        unique_id::insert::InsertUniqueIdRewrite::default().rewrite(input)?;
-        unique_id::update::UpdateUniqueIdRewrite::default().rewrite(input)?;
-        unique_id::select::SelectUniqueIdRewrite::default().rewrite(input)?;
+        // Unique ID rewrites (including EXPLAIN wrappers)
+        unique_id::ExplainUniqueIdRewrite::default().rewrite(input)?;
+        unique_id::InsertUniqueIdRewrite::default().rewrite(input)?;
+        unique_id::UpdateUniqueIdRewrite::default().rewrite(input)?;
+        unique_id::SelectUniqueIdRewrite::default().rewrite(input)?;
 
         // Prepared statement rewrites
         prepared::PreparedRewrite::new(self.prepared_statements).rewrite(input)?;

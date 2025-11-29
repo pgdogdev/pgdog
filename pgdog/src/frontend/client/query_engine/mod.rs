@@ -22,6 +22,7 @@ pub mod incomplete_requests;
 pub mod insert_split;
 pub mod internal_values;
 pub mod notify_buffer;
+pub mod output;
 pub mod prepared_statements;
 pub mod pub_sub;
 pub mod query;
@@ -37,6 +38,7 @@ pub mod unknown_command;
 use self::query::ExplainResponseState;
 pub use context::QueryEngineContext;
 use notify_buffer::NotifyBuffer;
+pub use output::QueryEngineOutput;
 pub use two_pc::phase::TwoPcPhase;
 use two_pc::TwoPc;
 
@@ -108,7 +110,10 @@ impl QueryEngine {
     }
 
     /// Handle client request.
-    pub async fn handle(&mut self, context: &mut QueryEngineContext<'_>) -> Result<(), Error> {
+    pub async fn handle(
+        &mut self,
+        context: &mut QueryEngineContext<'_>,
+    ) -> Result<QueryEngineOutput, Error> {
         self.stats
             .received(context.client_request.total_message_len());
         self.set_state(State::Active); // Client is active.
@@ -119,14 +124,14 @@ impl QueryEngine {
         // Intercept commands we don't have to forward to a server.
         if self.intercept_incomplete(context).await? {
             self.update_stats(context);
-            return Ok(());
+            return Ok(QueryEngineOutput::Executed);
         }
 
         // Route transaction to the right servers.
         if !self.route_transaction(context).await? {
             self.update_stats(context);
             debug!("transaction has nowhere to go");
-            return Ok(());
+            return Ok(QueryEngineOutput::Executed);
         }
 
         self.hooks.before_execution(context)?;
@@ -246,7 +251,7 @@ impl QueryEngine {
 
         self.update_stats(context);
 
-        Ok(())
+        Ok(QueryEngineOutput::Executed)
     }
 
     fn update_stats(&mut self, context: &mut QueryEngineContext<'_>) {

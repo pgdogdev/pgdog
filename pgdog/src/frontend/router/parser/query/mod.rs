@@ -201,17 +201,16 @@ impl QueryParser {
         rewrite::Rewrite::new(context.prepared_statements()).rewrite(&mut input)?;
 
         match input.build()? {
-            rewrite::Output::NoOp => (),
-            rewrite::Output::Extended { parse, bind } => {
+            rewrite::StepOutput::NoOp => (),
+            rewrite::StepOutput::Extended { parse, bind } => {
                 return Ok(Command::Rewrite(vec![
                     ProtocolMessage::from(parse),
                     bind.into(),
                 ]))
             }
-            rewrite::Output::Simple { query } => {
+            rewrite::StepOutput::Simple { query } => {
                 return Ok(Command::Rewrite(vec![ProtocolMessage::from(query)]))
             }
-            _ => todo!("multi rewrite not supported yet"),
         }
 
         self.ensure_explain_recorder(statement.ast(), context);

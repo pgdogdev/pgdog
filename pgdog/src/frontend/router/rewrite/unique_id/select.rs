@@ -15,7 +15,7 @@ use crate::{frontend::router::parser::Value, net::Datum, unique_id};
 pub struct SelectUniqueIdRewrite {}
 
 impl SelectUniqueIdRewrite {
-    fn needs_rewrite(stmt: &SelectStmt) -> bool {
+    pub fn needs_rewrite(stmt: &SelectStmt) -> bool {
         // Check target_list (SELECT columns)
         for target in &stmt.target_list {
             if let Some(NodeEnum::ResTarget(res)) = target.node.as_ref() {
@@ -91,7 +91,7 @@ impl SelectUniqueIdRewrite {
         }
     }
 
-    fn rewrite_select(
+    pub fn rewrite_select(
         stmt: &mut SelectStmt,
         bind: &mut Option<crate::net::Bind>,
     ) -> Result<(), Error> {
@@ -308,6 +308,6 @@ mod test {
         let mut input = Input::new(&stmt, None);
         rewrite.rewrite(&mut input).unwrap();
         let output = input.build().unwrap();
-        assert!(matches!(output, super::super::super::Output::NoOp));
+        assert!(matches!(output, super::super::super::StepOutput::NoOp));
     }
 }
