@@ -19,8 +19,7 @@ impl RewriteModule for UpdateUniqueIdRewrite {
             .stmt()?
             .stmt
             .as_ref()
-            .map(|stmt| stmt.node.as_ref())
-            .flatten()
+            .and_then(|stmt| stmt.node.as_ref())
         {
             for target in &stmt.target_list {
                 if let Some(NodeEnum::ResTarget(res)) = target.node.as_ref() {
@@ -46,8 +45,7 @@ impl RewriteModule for UpdateUniqueIdRewrite {
             .stmt_mut()?
             .stmt
             .as_mut()
-            .map(|stmt| stmt.node.as_mut())
-            .flatten()
+            .and_then(|stmt| stmt.node.as_mut())
         {
             for target in stmt.target_list.iter_mut() {
                 if let Some(NodeEnum::ResTarget(ref mut res)) = target.node {

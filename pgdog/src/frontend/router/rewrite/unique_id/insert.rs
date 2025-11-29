@@ -22,8 +22,7 @@ impl RewriteModule for InsertUniqueIdRewrite {
             .stmt()?
             .stmt
             .as_ref()
-            .map(|stmt| stmt.node.as_ref())
-            .flatten()
+            .and_then(|stmt| stmt.node.as_ref())
         {
             let wrapper = Insert::new(stmt);
 
@@ -48,8 +47,7 @@ impl RewriteModule for InsertUniqueIdRewrite {
             .stmt_mut()?
             .stmt
             .as_mut()
-            .map(|stmt| stmt.node.as_mut())
-            .flatten()
+            .and_then(|stmt| stmt.node.as_mut())
         {
             stmt.select_stmt
                 .as_mut()

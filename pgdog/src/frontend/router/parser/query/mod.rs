@@ -7,7 +7,7 @@ use crate::{
     frontend::{
         router::{
             context::RouterContext,
-            parser::{rewrite::Rewrite, OrderBy, Shard},
+            parser::{OrderBy, Shard},
             rewrite::{self, RewriteModule},
             round_robin,
             sharding::{Centroids, ContextBuilder, Value as ShardingValue},

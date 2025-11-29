@@ -76,7 +76,7 @@ impl<'a> Input<'a> {
             self.rewrite.as_mut().unwrap()
         };
 
-        Ok(stmt.stmts.first_mut().ok_or(Error::EmptyQuery)?)
+        stmt.stmts.first_mut().ok_or(Error::EmptyQuery)
     }
 
     /// Assemble statement and add it to the global prepared statements cache.

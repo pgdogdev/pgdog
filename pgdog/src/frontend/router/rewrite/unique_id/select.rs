@@ -80,11 +80,11 @@ impl SelectUniqueIdRewrite {
                 let left = join
                     .larg
                     .as_ref()
-                    .map_or(false, |n| Self::needs_rewrite_from_node(n));
+                    .is_some_and(|n| Self::needs_rewrite_from_node(n));
                 let right = join
                     .rarg
                     .as_ref()
-                    .map_or(false, |n| Self::needs_rewrite_from_node(n));
+                    .is_some_and(|n| Self::needs_rewrite_from_node(n));
                 left || right
             }
             _ => false,

@@ -58,7 +58,7 @@ impl<'a> Insert<'a> {
     }
 
     pub fn stmt(&'a self) -> &'a InsertStmt {
-        &self.stmt
+        self.stmt
     }
 
     /// Get table name, if specified (should always be).
