@@ -5,6 +5,7 @@ pub mod context;
 pub mod copy;
 pub mod error;
 pub mod parser;
+pub mod rewrite;
 pub mod round_robin;
 pub mod search_path;
 pub mod sharding;

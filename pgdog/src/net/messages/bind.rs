@@ -1,5 +1,6 @@
 //! Bind (F) message.
 use crate::net::c_string_buf_len;
+use crate::net::Datum;
 use uuid::Uuid;
 
 use super::code;
@@ -201,6 +202,28 @@ impl Bind {
     /// Format codes, if any.
     pub fn codes(&self) -> &[Format] {
         &self.codes
+    }
+
+    /// Add parameter and return its placeholder number.
+    pub fn add_parameter(&mut self, data: Datum) -> Result<i32, Error> {
+        let format = {
+            let codes = self.codes();
+            if codes.is_empty() {
+                Format::Text
+            } else if codes.len() == 1 {
+                codes[0]
+            } else {
+                self.codes.push(Format::Text);
+                Format::Text
+            }
+        };
+        let bytes = data.encode(format)?;
+        self.params.push(Parameter {
+            len: bytes.len() as i32,
+            data: bytes,
+        });
+        // Param codes are 1-indexed.
+        Ok(self.params.len() as i32)
     }
 
     pub fn new_statement(name: &str) -> Self {

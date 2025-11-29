@@ -57,6 +57,10 @@ impl<'a> Insert<'a> {
             .unwrap_or(vec![])
     }
 
+    pub fn stmt(&'a self) -> &'a InsertStmt {
+        &self.stmt
+    }
+
     /// Get table name, if specified (should always be).
     pub fn table(&'a self) -> Option<Table<'a>> {
         self.stmt.relation.as_ref().map(Table::from)

@@ -38,7 +38,6 @@ impl Parse {
     }
 
     /// New anonymous prepared statement.
-    #[cfg(test)]
     pub fn new_anonymous(query: &str) -> Self {
         Self {
             name: Bytes::from("\0"),
