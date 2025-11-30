@@ -92,7 +92,7 @@ impl<'a> Input<'a> {
                 if bind.anonymous() {
                     Ok(StepOutput::Extended { parse, bind })
                 } else {
-                    let (_, name) = PreparedStatements::global().write().insert(&parse);
+                    let name = PreparedStatements::cache_rewritten(&parse);
                     parse.rename_fast(&name);
                     bind.rename(name);
                     Ok(StepOutput::Extended { parse, bind })

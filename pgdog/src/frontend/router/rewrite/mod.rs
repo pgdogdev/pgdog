@@ -41,7 +41,7 @@ impl RewriteModule for Rewrite<'_> {
         // First, we need to inject the unique ID into the query. Once that's done,
         // we can proceed with additional rewrites.
 
-        // Unique ID rewrites (including EXPLAIN wrappers)
+        // Unique ID rewrites.
         unique_id::ExplainUniqueIdRewrite::default().rewrite(input)?;
         unique_id::InsertUniqueIdRewrite::default().rewrite(input)?;
         unique_id::UpdateUniqueIdRewrite::default().rewrite(input)?;

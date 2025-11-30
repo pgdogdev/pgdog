@@ -280,6 +280,16 @@ impl GlobalCache {
         self.names.get(name).map(|p| p.parse.clone())
     }
 
+    /// Get global prepared statement name.
+    pub fn name(&self, parse: &Parse) -> Option<String> {
+        let cache_key = CacheKey {
+            query: parse.query_ref(),
+            data_types: parse.data_types_ref(),
+            version: 0,
+        };
+        self.statements.get(&cache_key).map(|stmt| stmt.name())
+    }
+
     /// Get the RowDescription message for the prepared statement.
     ///
     /// It can be used to decode results received from executing the prepared

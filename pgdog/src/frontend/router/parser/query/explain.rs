@@ -69,13 +69,13 @@ mod tests {
     // Helper function to route a plain SQL statement and return its `Route`.
     fn route(sql: &str) -> Route {
         enable_expanded_explain();
-        let buffer = ClientRequest::from(vec![Query::new(sql).into()]);
+        let mut buffer = ClientRequest::from(vec![Query::new(sql).into()]);
 
         let cluster = Cluster::new_test();
         let mut stmts = PreparedStatements::default();
         let params = Parameters::default();
 
-        let ctx = RouterContext::new(&buffer, &cluster, &mut stmts, &params, None, 1).unwrap();
+        let ctx = RouterContext::new(&mut buffer, &cluster, &mut stmts, &params, None, 1).unwrap();
 
         match QueryParser::default().parse(ctx).unwrap().clone() {
             Command::Query(route) => route,
@@ -96,13 +96,13 @@ mod tests {
             .collect::<Vec<_>>();
 
         let bind = Bind::new_params("", &parameters);
-        let buffer: ClientRequest = vec![parse_msg.into(), bind.into()].into();
+        let mut buffer: ClientRequest = vec![parse_msg.into(), bind.into()].into();
 
         let cluster = Cluster::new_test();
         let mut stmts = PreparedStatements::default();
         let params = Parameters::default();
 
-        let ctx = RouterContext::new(&buffer, &cluster, &mut stmts, &params, None, 1).unwrap();
+        let ctx = RouterContext::new(&mut buffer, &cluster, &mut stmts, &params, None, 1).unwrap();
 
         match QueryParser::default().parse(ctx).unwrap().clone() {
             Command::Query(route) => route,

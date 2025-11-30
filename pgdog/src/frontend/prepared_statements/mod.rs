@@ -97,6 +97,17 @@ impl PreparedStatements {
         parse.rename_fast(&name)
     }
 
+    /// Store a rewritten statement in the global cache forever.
+    pub fn cache_rewritten(parse: &Parse) -> String {
+        let exists = Self::global().read().name(parse);
+        if let Some(exists) = exists {
+            exists
+        } else {
+            let (_, name) = Self::global().write().insert(parse);
+            name
+        }
+    }
+
     /// Retrieve stored rewrite plan for a prepared statement, if any.
     pub fn rewrite_plan(&self, name: &str) -> Option<RewritePlan> {
         self.global.read().rewrite_plan(name)

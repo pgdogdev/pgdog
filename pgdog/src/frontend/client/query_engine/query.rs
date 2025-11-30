@@ -48,7 +48,10 @@ impl QueryEngine {
         }
 
         if let Some(sql) = route.rewritten_sql() {
-            match context.client_request.rewrite(&[Query::new(sql).into()]) {
+            match context
+                .client_request
+                .rewrite_simple(&[Query::new(sql).into()])
+            {
                 Ok(()) => (),
                 Err(crate::net::Error::OnlySimpleForRewrites) => {
                     context.client_request.rewrite_prepared(
