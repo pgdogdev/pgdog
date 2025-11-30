@@ -198,19 +198,22 @@ impl QueryParser {
         };
 
         let mut input = rewrite::Input::new(&statement.ast().protobuf, context.router_context.bind);
-        rewrite::Rewrite::new(context.router_context.prepared_statements).rewrite(&mut input)?;
-
-        match input.build()? {
-            rewrite::StepOutput::NoOp => (),
-            rewrite::StepOutput::Extended { parse, bind } => {
-                return Ok(Command::Rewrite(vec![
-                    ProtocolMessage::from(parse),
-                    bind.into(),
-                ]))
-            }
-            rewrite::StepOutput::Simple { query } => {
-                return Ok(Command::Rewrite(vec![ProtocolMessage::from(query)]))
-            }
+        match rewrite::Rewrite::new(context.router_context.prepared_statements).rewrite(&mut input)
+        {
+            Ok(()) => match input.build()? {
+                rewrite::StepOutput::NoOp => (),
+                rewrite::StepOutput::Extended { parse, bind } => {
+                    return Ok(Command::Rewrite(vec![
+                        ProtocolMessage::from(parse),
+                        bind.into(),
+                    ]))
+                }
+                rewrite::StepOutput::Simple { query } => {
+                    return Ok(Command::Rewrite(vec![ProtocolMessage::from(query)]))
+                }
+            },
+            Err(rewrite::Error::EmptyQuery) => (), // We handle empty queries below.
+            Err(err) => return Err(err.into()),
         }
 
         self.ensure_explain_recorder(statement.ast(), context);
