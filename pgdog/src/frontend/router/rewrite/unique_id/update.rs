@@ -1,13 +1,10 @@
 //! UPDATE statement rewriter for unique_id.
 
-use pg_query::{
-    protobuf::{ParamRef, UpdateStmt},
-    NodeEnum,
-};
+use pg_query::{protobuf::UpdateStmt, NodeEnum};
 
 use super::{
     super::{Error, Input, RewriteModule},
-    bigint_const,
+    bigint_const, bigint_param,
 };
 use crate::{frontend::router::parser::Value, net::Datum, unique_id};
 
@@ -42,10 +39,7 @@ impl UpdateUniqueIdRewrite {
                             let id = unique_id::UniqueId::generator()?.next_id();
 
                             let node = if let Some(ref mut bind) = bind {
-                                NodeEnum::ParamRef(ParamRef {
-                                    number: bind.add_parameter(Datum::Bigint(id))?,
-                                    ..Default::default()
-                                })
+                                bigint_param(bind.add_parameter(Datum::Bigint(id))?)
                             } else {
                                 bigint_const(id)
                             };
@@ -146,7 +140,7 @@ mod test {
         let output = input.build().unwrap();
         assert_eq!(
             output.query().unwrap(),
-            "UPDATE omnisharded SET id = $3, settings = $1 WHERE old_id = $2"
+            "UPDATE omnisharded SET id = $3::bigint, settings = $1 WHERE old_id = $2"
         );
     }
 }

@@ -1,13 +1,13 @@
 //! SELECT statement rewriter for unique_id.
 
 use pg_query::{
-    protobuf::{Node, ParamRef, SelectStmt},
+    protobuf::{Node, SelectStmt},
     NodeEnum,
 };
 
 use super::{
     super::{Error, Input, RewriteModule},
-    bigint_const,
+    bigint_const, bigint_param,
 };
 use crate::{frontend::router::parser::Value, net::Datum, unique_id};
 
@@ -104,10 +104,7 @@ impl SelectUniqueIdRewrite {
                             let id = unique_id::UniqueId::generator()?.next_id();
 
                             let node = if let Some(ref mut bind) = bind {
-                                NodeEnum::ParamRef(ParamRef {
-                                    number: bind.add_parameter(Datum::Bigint(id))?,
-                                    ..Default::default()
-                                })
+                                bigint_param(bind.add_parameter(Datum::Bigint(id))?)
                             } else {
                                 bigint_const(id)
                             };
@@ -250,7 +247,10 @@ mod test {
             .rewrite(&mut input)
             .unwrap();
         let output = input.build().unwrap();
-        assert_eq!(output.query().unwrap(), "SELECT $2 AS id, $1 AS name");
+        assert_eq!(
+            output.query().unwrap(),
+            "SELECT $2::bigint AS id, $1 AS name"
+        );
     }
 
     #[test]

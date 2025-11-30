@@ -1,11 +1,8 @@
-use pg_query::{
-    protobuf::{InsertStmt, ParamRef},
-    NodeEnum,
-};
+use pg_query::{protobuf::InsertStmt, NodeEnum};
 
 use super::{
     super::{Error, Input, RewriteModule},
-    bigint_const,
+    bigint_const, bigint_param,
 };
 use crate::{
     frontend::router::parser::{Insert, Value},
@@ -54,10 +51,7 @@ impl InsertUniqueIdRewrite {
                                 let id = unique_id::UniqueId::generator()?.next_id();
 
                                 let node = if let Some(ref mut bind) = bind {
-                                    NodeEnum::ParamRef(ParamRef {
-                                        number: bind.add_parameter(Datum::Bigint(id))?,
-                                        ..Default::default()
-                                    })
+                                    bigint_param(bind.add_parameter(Datum::Bigint(id))?)
                                 } else {
                                     bigint_const(id)
                                 };
@@ -175,7 +169,7 @@ mod test {
         let output = input.build().unwrap();
         assert_eq!(
             output.query().unwrap(),
-            "INSERT INTO omnisharded (id, settings) VALUES ($3, $1::jsonb), ($4, $2::jsonb)"
+            "INSERT INTO omnisharded (id, settings) VALUES ($3::bigint, $1::jsonb), ($4::bigint, $2::jsonb)"
         );
     }
 }

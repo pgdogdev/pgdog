@@ -1,7 +1,7 @@
 //! Unique ID rewrite engine.
 
 use pg_query::{
-    protobuf::{a_const::Val, AConst, Node, TypeCast, TypeName},
+    protobuf::{a_const::Val, AConst, Node, ParamRef, TypeCast, TypeName},
     NodeEnum,
 };
 
@@ -16,6 +16,34 @@ pub use select::SelectUniqueIdRewrite;
 pub use update::UpdateUniqueIdRewrite;
 
 pub struct UniqueIdRewrite;
+
+/// Create a bigint-typed parameter reference node.
+fn bigint_param(number: i32) -> NodeEnum {
+    NodeEnum::TypeCast(Box::new(TypeCast {
+        arg: Some(Box::new(Node {
+            node: Some(NodeEnum::ParamRef(ParamRef {
+                number,
+                ..Default::default()
+            })),
+        })),
+        type_name: Some(TypeName {
+            names: vec![
+                Node {
+                    node: Some(NodeEnum::String(pg_query::protobuf::String {
+                        sval: "pg_catalog".to_string(),
+                    })),
+                },
+                Node {
+                    node: Some(NodeEnum::String(pg_query::protobuf::String {
+                        sval: "int8".to_string(),
+                    })),
+                },
+            ],
+            ..Default::default()
+        }),
+        ..Default::default()
+    }))
+}
 
 /// Create a bigint-typed constant node for the given ID.
 fn bigint_const(id: i64) -> NodeEnum {
