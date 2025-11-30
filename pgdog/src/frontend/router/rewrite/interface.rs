@@ -1,6 +1,6 @@
 //! Rewrite module interface.
 
-use super::{Error, Input};
+use super::{Context, Error};
 
 /// Rewrite trait.
 ///
@@ -10,5 +10,5 @@ pub trait RewriteModule {
     ///
     /// If a rewrite is needed, the module should mutate the statement
     /// and update the Bind message.
-    fn rewrite(&mut self, input: &mut Input<'_>) -> Result<(), Error>;
+    fn rewrite(&mut self, input: &mut Context<'_>) -> Result<(), Error>;
 }

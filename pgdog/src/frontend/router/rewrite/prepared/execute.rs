@@ -2,8 +2,8 @@
 
 use pg_query::NodeEnum;
 
-use super::super::{Error, Input, RewriteModule};
-use crate::frontend::PreparedStatements;
+use super::super::{Context, Error, RewriteModule};
+use crate::{frontend::PreparedStatements, net::ProtocolMessage};
 
 /// Rewriter for EXECUTE statements.
 ///
@@ -21,7 +21,7 @@ impl<'a> ExecuteRewrite<'a> {
 }
 
 impl RewriteModule for ExecuteRewrite<'_> {
-    fn rewrite(&mut self, input: &mut Input<'_>) -> Result<(), Error> {
+    fn rewrite(&mut self, input: &mut Context<'_>) -> Result<(), Error> {
         if let Some(NodeEnum::ExecuteStmt(stmt)) = input
             .stmt()?
             .stmt
@@ -41,8 +41,13 @@ impl RewriteModule for ExecuteRewrite<'_> {
                 .as_mut()
                 .and_then(|stmt| stmt.node.as_mut())
             {
-                stmt.name = new_name;
+                stmt.name = new_name.clone();
             }
+
+            input.prepend(ProtocolMessage::Prepare {
+                name: new_name,
+                statement: parse.query().to_string(),
+            });
         }
 
         Ok(())
@@ -62,18 +67,17 @@ mod test {
 
         // First prepare the statement
         let mut prepare_rewrite = PrepareRewrite::new(&mut prepared_statements);
-        let mut input = Input::new(&prepare_stmt, None);
+        let mut input = Context::new(&prepare_stmt, None);
         prepare_rewrite.rewrite(&mut input).unwrap();
 
         // Now execute it
         let execute_stmt = pg_query::parse("EXECUTE test(1, 2, 3)").unwrap().protobuf;
         let mut execute_rewrite = ExecuteRewrite::new(&prepared_statements);
-        let mut input = Input::new(&execute_stmt, None);
+        let mut input = Context::new(&execute_stmt, None);
         execute_rewrite.rewrite(&mut input).unwrap();
         let output = input.build().unwrap();
         let query = output.query().unwrap();
-        assert!(query.contains("__pgdog_"));
-        assert!(!query.contains("EXECUTE test"));
+        assert_eq!(query, "EXECUTE __pgdog_1(1, 2, 3)");
     }
 
     #[test]
@@ -83,7 +87,7 @@ mod test {
             .protobuf;
         let prepared_statements = PreparedStatements::default();
         let mut execute_rewrite = ExecuteRewrite::new(&prepared_statements);
-        let mut input = Input::new(&execute_stmt, None);
+        let mut input = Context::new(&execute_stmt, None);
         let result = execute_rewrite.rewrite(&mut input);
         assert!(result.is_err());
     }

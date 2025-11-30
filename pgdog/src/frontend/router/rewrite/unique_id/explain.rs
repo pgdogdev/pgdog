@@ -3,7 +3,7 @@
 use pg_query::NodeEnum;
 
 use super::{
-    super::{Error, Input, RewriteModule},
+    super::{Context, Error, RewriteModule},
     InsertUniqueIdRewrite, SelectUniqueIdRewrite, UpdateUniqueIdRewrite,
 };
 
@@ -11,7 +11,7 @@ use super::{
 pub struct ExplainUniqueIdRewrite {}
 
 impl RewriteModule for ExplainUniqueIdRewrite {
-    fn rewrite(&mut self, input: &mut Input<'_>) -> Result<(), Error> {
+    fn rewrite(&mut self, input: &mut Context<'_>) -> Result<(), Error> {
         // Check if this is an EXPLAIN statement
         let is_explain = matches!(
             input
@@ -56,7 +56,7 @@ impl RewriteModule for ExplainUniqueIdRewrite {
 }
 
 impl ExplainUniqueIdRewrite {
-    fn rewrite_explain_select(&mut self, input: &mut Input<'_>) -> Result<(), Error> {
+    fn rewrite_explain_select(&mut self, input: &mut Context<'_>) -> Result<(), Error> {
         // Check if the inner SELECT needs rewriting
         let needs_rewrite = if let Some(NodeEnum::ExplainStmt(stmt)) = input
             .stmt()?
@@ -98,7 +98,7 @@ impl ExplainUniqueIdRewrite {
         Ok(())
     }
 
-    fn rewrite_explain_insert(&mut self, input: &mut Input<'_>) -> Result<(), Error> {
+    fn rewrite_explain_insert(&mut self, input: &mut Context<'_>) -> Result<(), Error> {
         // Check if the inner INSERT needs rewriting
         let needs_rewrite = if let Some(NodeEnum::ExplainStmt(stmt)) = input
             .stmt()?
@@ -140,7 +140,7 @@ impl ExplainUniqueIdRewrite {
         Ok(())
     }
 
-    fn rewrite_explain_update(&mut self, input: &mut Input<'_>) -> Result<(), Error> {
+    fn rewrite_explain_update(&mut self, input: &mut Context<'_>) -> Result<(), Error> {
         // Check if the inner UPDATE needs rewriting
         let needs_rewrite = if let Some(NodeEnum::ExplainStmt(stmt)) = input
             .stmt()?
@@ -197,7 +197,7 @@ mod test {
             .unwrap()
             .protobuf;
         let mut rewrite = ExplainUniqueIdRewrite::default();
-        let mut input = Input::new(&stmt, None);
+        let mut input = Context::new(&stmt, None);
         rewrite.rewrite(&mut input).unwrap();
         let output = input.build().unwrap();
         let query = output.query().unwrap();
@@ -215,7 +215,7 @@ mod test {
             .unwrap()
             .protobuf;
         let mut rewrite = ExplainUniqueIdRewrite::default();
-        let mut input = Input::new(&stmt, None);
+        let mut input = Context::new(&stmt, None);
         rewrite.rewrite(&mut input).unwrap();
         let output = input.build().unwrap();
         let query = output.query().unwrap();
@@ -234,7 +234,7 @@ mod test {
                 .unwrap()
                 .protobuf;
         let mut rewrite = ExplainUniqueIdRewrite::default();
-        let mut input = Input::new(&stmt, None);
+        let mut input = Context::new(&stmt, None);
         rewrite.rewrite(&mut input).unwrap();
         let output = input.build().unwrap();
         let query = output.query().unwrap();
@@ -252,7 +252,7 @@ mod test {
             .unwrap()
             .protobuf;
         let mut rewrite = ExplainUniqueIdRewrite::default();
-        let mut input = Input::new(&stmt, None);
+        let mut input = Context::new(&stmt, None);
         rewrite.rewrite(&mut input).unwrap();
         let output = input.build().unwrap();
         let query = output.query().unwrap();
@@ -265,7 +265,7 @@ mod test {
     fn test_explain_no_unique_id() {
         let stmt = pg_query::parse(r#"EXPLAIN SELECT 1"#).unwrap().protobuf;
         let mut rewrite = ExplainUniqueIdRewrite::default();
-        let mut input = Input::new(&stmt, None);
+        let mut input = Context::new(&stmt, None);
         rewrite.rewrite(&mut input).unwrap();
         let output = input.build().unwrap();
         assert!(matches!(output, super::super::super::StepOutput::NoOp));

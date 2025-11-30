@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
-    frontend::{client::TransactionType, BufferedQuery},
-    net::{parameter::ParameterValue, ProtocolMessage},
+    frontend::{client::TransactionType, router::rewrite::RewriteAction, BufferedQuery},
+    net::parameter::ParameterValue,
 };
 use lazy_static::lazy_static;
 
@@ -28,7 +28,7 @@ pub enum Command {
         value: ParameterValue,
     },
     PreparedStatement(Prepare),
-    Rewrite(Vec<ProtocolMessage>),
+    Rewrite(Vec<RewriteAction>),
     InternalField {
         name: String,
         value: String,

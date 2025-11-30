@@ -1,7 +1,7 @@
 use pg_query::{protobuf::InsertStmt, NodeEnum};
 
 use super::{
-    super::{Error, Input, RewriteModule},
+    super::{Context, Error, RewriteModule},
     bigint_const, bigint_param,
 };
 use crate::{
@@ -69,7 +69,7 @@ impl InsertUniqueIdRewrite {
 }
 
 impl RewriteModule for InsertUniqueIdRewrite {
-    fn rewrite(&mut self, input: &mut Input<'_>) -> Result<(), Error> {
+    fn rewrite(&mut self, input: &mut Context<'_>) -> Result<(), Error> {
         let need_rewrite = if let Some(NodeEnum::InsertStmt(stmt)) = input
             .stmt()?
             .stmt
@@ -123,7 +123,7 @@ mod test {
         .unwrap()
         .protobuf;
         let mut insert = InsertUniqueIdRewrite::default();
-        let mut input = Input::new(&stmt, None);
+        let mut input = Context::new(&stmt, None);
         insert.rewrite(&mut input).unwrap();
         let output = input.build().unwrap();
         let query = output.query().unwrap();
@@ -162,7 +162,7 @@ mod test {
                 },
             ],
         );
-        let mut input = Input::new(&stmt, Some(&bind));
+        let mut input = Context::new(&stmt, Some(&bind));
         InsertUniqueIdRewrite::default()
             .rewrite(&mut input)
             .unwrap();

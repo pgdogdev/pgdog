@@ -1,6 +1,6 @@
 use crate::{
     frontend::ClientRequest,
-    net::{Bind, Describe, Error, FromBytes, Parse, Protocol, ProtocolMessage, Query, ToBytes},
+    net::{Protocol, ProtocolMessage},
 };
 
 #[derive(Debug, Clone)]
@@ -10,50 +10,56 @@ pub struct RewrittenRequest {
     pub renamed: Option<String>,
 }
 
-impl RewrittenRequest {
-    /// Rewrite client request in-place,
-    /// making sure all messages use new prepared statement names.
-    pub fn rewrite_in_place(&self, request: &mut ClientRequest) -> Result<(), Error> {
-        for message in &self.messages {
-            let code = message.code();
-            if let Some(pos) = request.messages.iter().position(|p| p.code() == code) {
-                request.messages[pos] = message.clone();
-            }
-        }
+#[derive(Debug, Clone)]
+pub struct RewriteAction {
+    pub(super) message: ProtocolMessage,
+    pub(super) action: RewriteActionKind,
+}
 
-        if let Some(ref renamed) = self.renamed {
-            for message in request.messages.iter_mut() {
-                // Rename describe to the new prepared statement.
-                if message.code() == 'D' {
-                    let mut describe = Describe::from_bytes(message.to_bytes()?)?;
-                    if !describe.is_statement() {
-                        describe.rename(renamed);
-                    }
-
-                    *message = ProtocolMessage::from(describe);
+impl RewriteAction {
+    /// Execute rewrite action.
+    pub fn execute(&self, request: &mut ClientRequest) {
+        match self.action {
+            RewriteActionKind::Append => request.push(self.message.clone()),
+            RewriteActionKind::Replace => {
+                if let Some(pos) = request.iter().position(|p| p.code() == self.message.code()) {
+                    request[pos] = self.message.clone();
                 }
             }
+            RewriteActionKind::Prepend => request.insert(0, self.message.clone()),
         }
-
-        Ok(())
     }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(super) enum RewriteActionKind {
+    Replace,
+    Prepend,
+    #[allow(dead_code)]
+    Append,
 }
 
 /// Output of a single rewrite step.
 #[derive(Debug, Clone)]
 pub enum StepOutput {
     NoOp,
-    Extended { parse: Parse, bind: Bind },
-    Simple { query: Query },
+    Rewrite(Vec<RewriteAction>),
 }
 
 impl StepOutput {
     /// Get rewritten query, if any.
     pub fn query(&self) -> Result<&str, ()> {
         match self {
-            Self::Extended { parse, .. } => Ok(parse.query()),
-            Self::Simple { query } => Ok(query.query()),
-            _ => Err(()),
+            Self::NoOp => Err(()),
+            Self::Rewrite(actions) => {
+                for action in actions {
+                    if let Some(query) = action.message.query() {
+                        return Ok(query);
+                    }
+                }
+
+                Err(())
+            }
         }
     }
 }

@@ -3,7 +3,7 @@
 use pg_query::{protobuf::UpdateStmt, NodeEnum};
 
 use super::{
-    super::{Error, Input, RewriteModule},
+    super::{Context, Error, RewriteModule},
     bigint_const, bigint_param,
 };
 use crate::{frontend::router::parser::Value, net::Datum, unique_id};
@@ -55,7 +55,7 @@ impl UpdateUniqueIdRewrite {
 }
 
 impl RewriteModule for UpdateUniqueIdRewrite {
-    fn rewrite(&mut self, input: &mut Input<'_>) -> Result<(), Error> {
+    fn rewrite(&mut self, input: &mut Context<'_>) -> Result<(), Error> {
         let need_rewrite = if let Some(NodeEnum::UpdateStmt(stmt)) = input
             .stmt()?
             .stmt
@@ -104,7 +104,7 @@ mod test {
                 .unwrap()
                 .protobuf;
         let mut update = UpdateUniqueIdRewrite::default();
-        let mut input = Input::new(&stmt, None);
+        let mut input = Context::new(&stmt, None);
         update.rewrite(&mut input).unwrap();
         let output = input.build().unwrap();
         assert!(!output.query().unwrap().contains("pgdog.unique_id"));
@@ -133,7 +133,7 @@ mod test {
                 },
             ],
         );
-        let mut input = Input::new(&stmt, Some(&bind));
+        let mut input = Context::new(&stmt, Some(&bind));
         UpdateUniqueIdRewrite::default()
             .rewrite(&mut input)
             .unwrap();

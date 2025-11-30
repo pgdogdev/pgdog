@@ -2,14 +2,14 @@
 
 use pg_query::protobuf::{ParseResult, RawStmt};
 
-use super::{Error, StepOutput};
+use super::{output::RewriteActionKind, Error, RewriteAction, StepOutput};
 use crate::{
     frontend::PreparedStatements,
-    net::{Bind, Parse, Query},
+    net::{Bind, Parse, ProtocolMessage, Query},
 };
 
 #[derive(Debug, Clone)]
-pub struct Input<'a> {
+pub struct Context<'a> {
     // Most requeries won't require a rewrite.
     // This is a clone-free way to check.
     original: &'a ParseResult,
@@ -19,9 +19,11 @@ pub struct Input<'a> {
     bind: Option<&'a Bind>,
     /// Bind rewritten.
     rewrite_bind: Option<Bind>,
+    /// Additional messages to add to the request.
+    result: Vec<RewriteAction>,
 }
 
-impl<'a> Input<'a> {
+impl<'a> Context<'a> {
     /// Create new input.
     pub fn new(original: &'a ParseResult, bind: Option<&'a Bind>) -> Self {
         Self {
@@ -29,6 +31,7 @@ impl<'a> Input<'a> {
             bind,
             rewrite: None,
             rewrite_bind: None,
+            result: vec![],
         }
     }
 
@@ -79,6 +82,14 @@ impl<'a> Input<'a> {
         stmt.stmts.first_mut().ok_or(Error::EmptyQuery)
     }
 
+    /// New request mutable reference.
+    pub fn prepend(&mut self, message: ProtocolMessage) {
+        self.result.push(RewriteAction {
+            message,
+            action: RewriteActionKind::Prepend,
+        });
+    }
+
     /// Assemble statement and add it to the global prepared statements cache.
     pub fn build(mut self) -> Result<StepOutput, Error> {
         if self.rewrite.is_none() {
@@ -86,22 +97,40 @@ impl<'a> Input<'a> {
         } else {
             let bind = self.rewrite_bind.take();
             let stmt = self.rewrite.take().ok_or(Error::NoRewrite)?.deparse()?;
+            let mut result = self.result;
 
             if let Some(mut bind) = bind {
                 let mut parse = Parse::new_anonymous(stmt);
                 if bind.anonymous() {
-                    Ok(StepOutput::Extended { parse, bind })
+                    result.push(RewriteAction {
+                        message: parse.into(),
+                        action: RewriteActionKind::Replace,
+                    });
+                    result.push(RewriteAction {
+                        message: bind.into(),
+                        action: RewriteActionKind::Replace,
+                    });
                 } else {
                     let name = PreparedStatements::cache_rewritten(&parse);
                     parse.rename_fast(&name);
                     bind.rename(name);
-                    Ok(StepOutput::Extended { parse, bind })
+                    result.push(RewriteAction {
+                        message: parse.into(),
+                        action: RewriteActionKind::Replace,
+                    });
+                    result.push(RewriteAction {
+                        message: bind.into(),
+                        action: RewriteActionKind::Replace,
+                    });
                 }
             } else {
-                Ok(StepOutput::Simple {
-                    query: Query::new(stmt),
-                })
+                result.push(RewriteAction {
+                    message: Query::new(stmt).into(),
+                    action: RewriteActionKind::Replace,
+                });
             }
+
+            Ok(StepOutput::Rewrite(result))
         }
     }
 }

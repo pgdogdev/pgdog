@@ -6,18 +6,18 @@
 //! 2. Multi-tuple INSERT: rewrite to send multiple INSERTs
 //! 3. pgdog.unique_id() call: inject a unique ID
 //!
+pub mod context;
 pub mod error;
-pub mod input;
 pub mod insert_split;
 pub mod interface;
 pub mod output;
 pub mod prepared;
 pub mod unique_id;
 
+pub use context::Context;
 pub use error::Error;
-pub use input::Input;
 pub use interface::RewriteModule;
-pub use output::StepOutput;
+pub use output::{RewriteAction, StepOutput};
 
 use crate::frontend::PreparedStatements;
 
@@ -35,7 +35,7 @@ impl<'a> Rewrite<'a> {
 }
 
 impl RewriteModule for Rewrite<'_> {
-    fn rewrite(&mut self, input: &mut Input<'_>) -> Result<(), Error> {
+    fn rewrite(&mut self, input: &mut Context<'_>) -> Result<(), Error> {
         // N.B.: the ordering here matters!
         //
         // First, we need to inject the unique ID into the query. Once that's done,

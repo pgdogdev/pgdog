@@ -197,6 +197,8 @@ impl ClientRequest {
                 .position(|p| p.code() == new_message.code())
             {
                 self.messages[pos] = new_message.clone();
+            } else {
+                self.messages.insert(0, new_message.clone());
             }
         }
 

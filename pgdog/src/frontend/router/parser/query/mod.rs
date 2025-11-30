@@ -17,7 +17,6 @@ use crate::{
     net::{
         messages::{Bind, Vector},
         parameter::ParameterValue,
-        ProtocolMessage,
     },
     plugin::plugins,
 };
@@ -197,19 +196,14 @@ impl QueryParser {
             }
         };
 
-        let mut input = rewrite::Input::new(&statement.ast().protobuf, context.router_context.bind);
+        let mut input =
+            rewrite::Context::new(&statement.ast().protobuf, context.router_context.bind);
         match rewrite::Rewrite::new(context.router_context.prepared_statements).rewrite(&mut input)
         {
             Ok(()) => match input.build()? {
                 rewrite::StepOutput::NoOp => (),
-                rewrite::StepOutput::Extended { parse, bind } => {
-                    return Ok(Command::Rewrite(vec![
-                        ProtocolMessage::from(parse),
-                        bind.into(),
-                    ]))
-                }
-                rewrite::StepOutput::Simple { query } => {
-                    return Ok(Command::Rewrite(vec![ProtocolMessage::from(query)]))
+                rewrite::StepOutput::Rewrite(req) => {
+                    return Ok(Command::Rewrite(req));
                 }
             },
             Err(rewrite::Error::EmptyQuery) => (), // We handle empty queries below.

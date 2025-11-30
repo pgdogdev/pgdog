@@ -6,7 +6,7 @@ use pg_query::{
 };
 
 use super::{
-    super::{Error, Input, RewriteModule},
+    super::{Context, Error, RewriteModule},
     bigint_const, bigint_param,
 };
 use crate::{frontend::router::parser::Value, net::Datum, unique_id};
@@ -172,7 +172,7 @@ impl SelectUniqueIdRewrite {
 }
 
 impl RewriteModule for SelectUniqueIdRewrite {
-    fn rewrite(&mut self, input: &mut Input<'_>) -> Result<(), Error> {
+    fn rewrite(&mut self, input: &mut Context<'_>) -> Result<(), Error> {
         let need_rewrite = if let Some(NodeEnum::SelectStmt(stmt)) = input
             .stmt()?
             .stmt
@@ -220,7 +220,7 @@ mod test {
             .unwrap()
             .protobuf;
         let mut rewrite = SelectUniqueIdRewrite::default();
-        let mut input = Input::new(&stmt, None);
+        let mut input = Context::new(&stmt, None);
         rewrite.rewrite(&mut input).unwrap();
         let output = input.build().unwrap();
         println!("output: {}", output.query().unwrap());
@@ -242,7 +242,7 @@ mod test {
                 data: "test".into(),
             }],
         );
-        let mut input = Input::new(&stmt, Some(&bind));
+        let mut input = Context::new(&stmt, Some(&bind));
         SelectUniqueIdRewrite::default()
             .rewrite(&mut input)
             .unwrap();
@@ -263,7 +263,7 @@ mod test {
                 .unwrap()
                 .protobuf;
         let mut rewrite = SelectUniqueIdRewrite::default();
-        let mut input = Input::new(&stmt, None);
+        let mut input = Context::new(&stmt, None);
         rewrite.rewrite(&mut input).unwrap();
         let output = input.build().unwrap();
         assert!(!output.query().unwrap().contains("pgdog.unique_id"));
@@ -278,7 +278,7 @@ mod test {
             .unwrap()
             .protobuf;
         let mut rewrite = SelectUniqueIdRewrite::default();
-        let mut input = Input::new(&stmt, None);
+        let mut input = Context::new(&stmt, None);
         rewrite.rewrite(&mut input).unwrap();
         let output = input.build().unwrap();
         assert!(!output.query().unwrap().contains("pgdog.unique_id"));
@@ -295,7 +295,7 @@ mod test {
         .unwrap()
         .protobuf;
         let mut rewrite = SelectUniqueIdRewrite::default();
-        let mut input = Input::new(&stmt, None);
+        let mut input = Context::new(&stmt, None);
         rewrite.rewrite(&mut input).unwrap();
         let output = input.build().unwrap();
         assert!(!output.query().unwrap().contains("pgdog.unique_id"));
@@ -305,7 +305,7 @@ mod test {
     fn test_no_rewrite_when_no_unique_id() {
         let stmt = pg_query::parse(r#"SELECT id FROM users"#).unwrap().protobuf;
         let mut rewrite = SelectUniqueIdRewrite::default();
-        let mut input = Input::new(&stmt, None);
+        let mut input = Context::new(&stmt, None);
         rewrite.rewrite(&mut input).unwrap();
         let output = input.build().unwrap();
         assert!(matches!(output, super::super::super::StepOutput::NoOp));

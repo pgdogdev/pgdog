@@ -2,7 +2,7 @@
 
 use pg_query::NodeEnum;
 
-use super::super::{Error, Input, RewriteModule};
+use super::super::{Context, Error, RewriteModule};
 use crate::frontend::PreparedStatements;
 
 /// Rewriter for PREPARE statements.
@@ -21,7 +21,7 @@ impl<'a> PrepareRewrite<'a> {
 }
 
 impl RewriteModule for PrepareRewrite<'_> {
-    fn rewrite(&mut self, input: &mut Input<'_>) -> Result<(), Error> {
+    fn rewrite(&mut self, input: &mut Context<'_>) -> Result<(), Error> {
         if let Some(NodeEnum::PrepareStmt(stmt)) = input
             .stmt()?
             .stmt
@@ -64,11 +64,10 @@ mod test {
             .protobuf;
         let mut prepared_statements = PreparedStatements::default();
         let mut rewrite = PrepareRewrite::new(&mut prepared_statements);
-        let mut input = Input::new(&stmt, None);
+        let mut input = Context::new(&stmt, None);
         rewrite.rewrite(&mut input).unwrap();
         let output = input.build().unwrap();
         let query = output.query().unwrap();
-        assert!(query.contains("__pgdog_"));
-        assert!(!query.contains("PREPARE test"));
+        assert_eq!(query, "PREPARE __pgdog_1 AS SELECT $1, $2, $3");
     }
 }
