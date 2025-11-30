@@ -227,7 +227,7 @@ impl QueryEngine {
             }
             Command::Copy(_) => self.execute(context, &route).await?,
             Command::Rewrite(requests) => {
-                context.client_request.rewrite_extended(&requests)?;
+                context.client_request.rewrite_extended(requests)?;
                 self.execute(context, &route).await?;
             }
             Command::InsertSplit(plan) => self.insert_split(context, *plan.clone()).await?,

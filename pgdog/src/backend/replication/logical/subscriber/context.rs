@@ -51,7 +51,7 @@ impl<'a> StreamContext<'a> {
     /// Construct router context.
     pub fn router_context(&'a mut self) -> Result<RouterContext<'a>, Error> {
         Ok(RouterContext::new(
-            &mut self.request,
+            &self.request,
             self.cluster,
             &mut self.prepared_statements,
             &self.params,

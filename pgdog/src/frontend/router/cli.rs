@@ -49,7 +49,7 @@ impl RouterCli {
             let mut qp = QueryParser::default();
             let req = vec![ProtocolMessage::from(Query::new(query))];
             let cmd = qp.parse(RouterContext::new(
-                &mut req.into(),
+                &req.into(),
                 &cluster,
                 &mut stmt,
                 &params,
