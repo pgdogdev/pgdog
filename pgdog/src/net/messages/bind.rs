@@ -226,6 +226,23 @@ impl Bind {
         Ok(self.params.len() as i32)
     }
 
+    /// Add parameter with provided format.
+    pub fn add_existing(&mut self, param: ParameterWithFormat<'_>) -> Result<i32, Error> {
+        let format = param.format;
+        let existing = self.codes.get(0).cloned();
+        match (format, existing) {
+            (Format::Text, None)
+            | (Format::Text, Some(Format::Text))
+            | (Format::Binary, Some(Format::Binary)) => (),
+            (Format::Binary, None) => self.codes.push(format),
+            (Format::Binary, Some(Format::Text)) | (Format::Text, Some(Format::Binary)) => {
+                return Err(Error::MultipleBindFormats);
+            }
+        }
+        self.params.push(param.parameter.clone());
+        Ok(self.params.len() as i32)
+    }
+
     pub fn new_statement(name: &str) -> Self {
         Self {
             statement: Bytes::from(name.to_string() + "\0"),

@@ -13,7 +13,7 @@ pub struct Context<'a> {
     // Most requeries won't require a rewrite.
     // This is a clone-free way to check.
     original: &'a ParseResult,
-    // If a rewrite was done, the statement is saved here.
+    // If an in-place rewrite was done, the statement is saved here.
     rewrite: Option<ParseResult>,
     /// Original bind message, if any.
     bind: Option<&'a Bind>,
@@ -80,6 +80,10 @@ impl<'a> Context<'a> {
         };
 
         stmt.stmts.first_mut().ok_or(Error::EmptyQuery)
+    }
+
+    pub fn proto_version(&self) -> i32 {
+        self.original.version
     }
 
     /// New request mutable reference.

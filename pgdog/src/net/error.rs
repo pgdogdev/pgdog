@@ -99,4 +99,7 @@ pub enum Error {
 
     #[error("not a pg_lsn")]
     NotPgLsn,
+
+    #[error("multiple parameter formats in same bind message")]
+    MultipleBindFormats,
 }
