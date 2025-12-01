@@ -48,8 +48,7 @@ impl RewriteModule for InsertSplitRewrite {
                             if let Some(NodeEnum::ParamRef(param)) = value.node.as_mut() {
                                 let parameter = input
                                     .bind()
-                                    .map(|bind| bind.parameter(param.number as usize - 1).ok())
-                                    .flatten()
+                                    .and_then(|bind| bind.parameter(param.number as usize - 1).ok())
                                     .flatten();
                                 if let Some(parameter) = parameter {
                                     param.number = new_bind.add_existing(parameter)?;

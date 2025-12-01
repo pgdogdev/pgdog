@@ -229,7 +229,7 @@ impl Bind {
     /// Add parameter with provided format.
     pub fn add_existing(&mut self, param: ParameterWithFormat<'_>) -> Result<i32, Error> {
         let format = param.format;
-        let existing = self.codes.get(0).cloned();
+        let existing = self.codes.first().cloned();
         match (format, existing) {
             (Format::Text, None)
             | (Format::Text, Some(Format::Text))
