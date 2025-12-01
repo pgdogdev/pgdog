@@ -201,7 +201,7 @@ impl QueryParser {
         match rewrite::Rewrite::new(context.router_context.prepared_statements).rewrite(&mut input)
         {
             Ok(()) => match input.build()? {
-                rewrite::StepOutput::NoOp => (),
+                rewrite::StepOutput::NoOp => {}
                 rewrite::StepOutput::Rewrite(req) => {
                     return Ok(Command::Rewrite(req));
                 }

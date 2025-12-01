@@ -1,7 +1,6 @@
-use crate::{
-    frontend::ClientRequest,
-    net::{Protocol, ProtocolMessage},
-};
+use crate::{frontend::ClientRequest, net::ProtocolMessage};
+
+use std::mem::discriminant;
 
 #[derive(Debug, Clone)]
 pub struct RewrittenRequest {
@@ -22,7 +21,10 @@ impl RewriteAction {
         match self.action {
             RewriteActionKind::Append => request.push(self.message.clone()),
             RewriteActionKind::Replace => {
-                if let Some(pos) = request.iter().position(|p| p.code() == self.message.code()) {
+                if let Some(pos) = request
+                    .iter()
+                    .position(|p| discriminant(p) == discriminant(&self.message))
+                {
                     request[pos] = self.message.clone();
                 }
             }
