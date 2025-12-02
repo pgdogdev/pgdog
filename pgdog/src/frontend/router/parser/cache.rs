@@ -55,7 +55,7 @@ pub struct CachedAstInner {
     /// Cached AST.
     pub ast: ParseResult,
     /// AST stats.
-    pub stats: Mutex<Stats>,
+    pub stats: Arc<Mutex<Stats>>,
 }
 
 impl Deref for CachedAst {
@@ -70,6 +70,15 @@ impl CachedAst {
     /// Create new cache entry from pg_query's AST.
     pub fn new(query: &str, schema: &ShardingSchema) -> std::result::Result<Self, super::Error> {
         let ast = parse(query).map_err(super::Error::PgQuery)?;
+        Self::new_parsed(query, ast, schema)
+    }
+
+    /// Create new cached ast entry with the AST already pre-parsed.
+    pub fn new_parsed(
+        query: &str,
+        ast: ParseResult,
+        schema: &ShardingSchema,
+    ) -> std::result::Result<Self, super::Error> {
         let (shard, role) = comment(query, schema)?;
 
         Ok(Self {
@@ -77,10 +86,10 @@ impl CachedAst {
             comment_shard: shard,
             comment_role: role,
             inner: Arc::new(CachedAstInner {
-                stats: Mutex::new(Stats {
+                stats: Arc::new(Mutex::new(Stats {
                     hits: 1,
                     ..Default::default()
-                }),
+                })),
                 ast,
             }),
         })
@@ -185,6 +194,26 @@ impl Cache {
         debug!("ast cache size set to {}", capacity);
     }
 
+    /// Save a pre-parsed query into the cache.
+    pub fn save(
+        &self,
+        query: &str,
+        ast: ParseResult,
+        schema: &ShardingSchema,
+    ) -> std::result::Result<CachedAst, super::Error> {
+        if let Some(exists) = self.check_existing(query) {
+            return Ok(exists);
+        }
+
+        let entry = CachedAst::new_parsed(query, ast, schema)?;
+
+        let mut guard = self.inner.lock();
+        guard.queries.put(query.to_owned(), entry.clone());
+        guard.stats.misses += 1;
+
+        Ok(entry)
+    }
+
     /// Parse a statement by either getting it from cache
     /// or using pg_query parser.
     ///
@@ -196,16 +225,8 @@ impl Cache {
         query: &str,
         schema: &ShardingSchema,
     ) -> std::result::Result<CachedAst, super::Error> {
-        {
-            let mut guard = self.inner.lock();
-            let ast = guard.queries.get_mut(query).map(|entry| {
-                entry.stats.lock().hits += 1; // No contention on this.
-                entry.clone()
-            });
-            if let Some(ast) = ast {
-                guard.stats.hits += 1;
-                return Ok(ast);
-            }
+        if let Some(exists) = self.check_existing(query) {
+            return Ok(exists);
         }
 
         // Parse query without holding lock.
@@ -216,6 +237,21 @@ impl Cache {
         guard.stats.misses += 1;
 
         Ok(entry)
+    }
+
+    /// Check existing entry and return it if exists.
+    fn check_existing(&self, query: &str) -> Option<CachedAst> {
+        let mut guard = self.inner.lock();
+        let ast = guard.queries.get_mut(query).map(|entry| {
+            entry.stats.lock().hits += 1; // No contention on this.
+            entry.clone()
+        });
+        if let Some(ast) = ast {
+            guard.stats.hits += 1;
+            Some(ast)
+        } else {
+            None
+        }
     }
 
     /// Parse a statement but do not store it in the cache.

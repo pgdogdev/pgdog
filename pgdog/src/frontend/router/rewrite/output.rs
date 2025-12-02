@@ -1,3 +1,5 @@
+use pg_query::protobuf::ParseResult;
+
 use crate::{frontend::ClientRequest, net::ProtocolMessage};
 
 use std::mem::discriminant;
@@ -45,7 +47,11 @@ pub(super) enum RewriteActionKind {
 #[derive(Debug, Clone)]
 pub enum StepOutput {
     NoOp,
-    Rewrite(Vec<RewriteAction>),
+    RewriteInPlace {
+        actions: Vec<RewriteAction>,
+        ast: ParseResult,
+        stmt: String,
+    },
 }
 
 impl StepOutput {
@@ -53,15 +59,7 @@ impl StepOutput {
     pub fn query(&self) -> Result<&str, ()> {
         match self {
             Self::NoOp => Err(()),
-            Self::Rewrite(actions) => {
-                for action in actions {
-                    if let Some(query) = action.message.query() {
-                        return Ok(query);
-                    }
-                }
-
-                Err(())
-            }
+            Self::RewriteInPlace { stmt, .. } => Ok(stmt.as_str()),
         }
     }
 }

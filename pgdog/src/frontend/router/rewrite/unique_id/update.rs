@@ -4,7 +4,7 @@ use pg_query::{protobuf::UpdateStmt, NodeEnum};
 
 use super::{
     super::{Context, Error, RewriteModule},
-    bigint_const, bigint_param,
+    bigint_const, bigint_param, max_param_number,
 };
 use crate::{frontend::router::parser::Value, net::Datum, unique_id};
 
@@ -30,6 +30,8 @@ impl UpdateUniqueIdRewrite {
     pub fn rewrite_update(
         stmt: &mut UpdateStmt,
         bind: &mut Option<crate::net::Bind>,
+        extended: bool,
+        param_counter: &mut i32,
     ) -> Result<(), Error> {
         for target in stmt.target_list.iter_mut() {
             if let Some(NodeEnum::ResTarget(ref mut res)) = target.node {
@@ -38,8 +40,15 @@ impl UpdateUniqueIdRewrite {
                         if name == "pgdog.unique_id" {
                             let id = unique_id::UniqueId::generator()?.next_id();
 
-                            let node = if let Some(ref mut bind) = bind {
-                                bigint_param(bind.add_parameter(Datum::Bigint(id))?)
+                            let node = if extended {
+                                *param_counter += 1;
+                                if let Some(ref mut bind) = bind {
+                                    let count = bind.add_parameter(Datum::Bigint(id))?;
+                                    if count != *param_counter {
+                                        return Err(Error::ParameterCountMismatch);
+                                    }
+                                }
+                                bigint_param(*param_counter)
                             } else {
                                 bigint_const(id)
                             };
@@ -72,6 +81,8 @@ impl RewriteModule for UpdateUniqueIdRewrite {
         }
 
         let mut bind = input.bind_take();
+        let extended = input.extended();
+        let mut param_counter = max_param_number(input.parse_result());
 
         if let Some(NodeEnum::UpdateStmt(stmt)) = input
             .stmt_mut()?
@@ -79,7 +90,7 @@ impl RewriteModule for UpdateUniqueIdRewrite {
             .as_mut()
             .and_then(|stmt| stmt.node.as_mut())
         {
-            Self::rewrite_update(stmt, &mut bind)?;
+            Self::rewrite_update(stmt, &mut bind, extended, &mut param_counter)?;
         }
 
         input.bind_put(bind);
@@ -104,7 +115,7 @@ mod test {
                 .unwrap()
                 .protobuf;
         let mut update = UpdateUniqueIdRewrite::default();
-        let mut input = Context::new(&stmt, None);
+        let mut input = Context::new(&stmt, None, None);
         update.rewrite(&mut input).unwrap();
         let output = input.build().unwrap();
         assert!(!output.query().unwrap().contains("pgdog.unique_id"));
@@ -133,7 +144,7 @@ mod test {
                 },
             ],
         );
-        let mut input = Context::new(&stmt, Some(&bind));
+        let mut input = Context::new(&stmt, Some(&bind), None);
         UpdateUniqueIdRewrite::default()
             .rewrite(&mut input)
             .unwrap();

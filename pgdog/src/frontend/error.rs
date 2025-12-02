@@ -50,6 +50,9 @@ pub enum Error {
 
     #[error("unique id: {0}")]
     UniqueId(#[from] unique_id::Error),
+
+    #[error("rewrite: {0}")]
+    Rewrite(#[from] crate::frontend::router::rewrite::Error),
 }
 
 impl Error {

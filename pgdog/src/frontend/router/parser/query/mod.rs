@@ -8,7 +8,6 @@ use crate::{
         router::{
             context::RouterContext,
             parser::{OrderBy, Shard},
-            rewrite::{self, RewriteModule},
             round_robin,
             sharding::{Centroids, ContextBuilder, Value as ShardingValue},
         },
@@ -178,42 +177,32 @@ impl QueryParser {
         let cache = Cache::get();
 
         // Get the AST from cache or parse the statement live.
-        let statement = match context.query()? {
-            // Only prepared statements (or just extended) are cached.
-            BufferedQuery::Prepared(query) => {
-                cache.parse(query.query(), &context.sharding_schema)?
-            }
-            // Don't cache simple queries.
-            //
-            // They contain parameter values, which makes the cache
-            // too large to be practical.
-            //
-            // Make your clients use prepared statements
-            // or at least send statements with placeholders using the
-            // extended protocol.
-            BufferedQuery::Query(query) => {
-                cache.parse_uncached(query.query(), &context.sharding_schema)?
+        let statement = if let Some(ast) = context.router_context.ast.cloned() {
+            ast // The AST was already parsed by the rewriter module.
+        } else {
+            match context.query()? {
+                // Only prepared statements (or just extended) are cached.
+                BufferedQuery::Prepared(query) => {
+                    cache.parse(query.query(), &context.sharding_schema)?
+                }
+                // Don't cache simple queries.
+                //
+                // They contain parameter values, which makes the cache
+                // too large to be practical.
+                //
+                // Make your clients use prepared statements
+                // or at least send statements with placeholders using the
+                // extended protocol.
+                BufferedQuery::Query(query) => {
+                    cache.parse_uncached(query.query(), &context.sharding_schema)?
+                }
             }
         };
-
-        let mut input =
-            rewrite::Context::new(&statement.ast().protobuf, context.router_context.bind);
-        match rewrite::Rewrite::new(context.router_context.prepared_statements).rewrite(&mut input)
-        {
-            Ok(()) => match input.build()? {
-                rewrite::StepOutput::NoOp => {}
-                rewrite::StepOutput::Rewrite(req) => {
-                    return Ok(Command::Rewrite(req));
-                }
-            },
-            Err(rewrite::Error::EmptyQuery) => (), // We handle empty queries below.
-            Err(err) => return Err(err.into()),
-        }
 
         self.ensure_explain_recorder(statement.ast(), context);
 
         // Parse hardcoded shard from a query comment.
-        if context.router_needed || context.dry_run {
+        if context.use_parser() {
             self.shard = statement.comment_shard.clone();
             let role_override = statement.comment_role;
             if let Some(role) = role_override {

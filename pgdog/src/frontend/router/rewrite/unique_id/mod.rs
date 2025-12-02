@@ -1,8 +1,8 @@
 //! Unique ID rewrite engine.
 
 use pg_query::{
-    protobuf::{a_const::Val, AConst, Node, ParamRef, TypeCast, TypeName},
-    NodeEnum,
+    protobuf::{a_const::Val, AConst, Node, ParamRef, ParseResult, TypeCast, TypeName},
+    NodeEnum, NodeRef,
 };
 
 pub mod explain;
@@ -73,4 +73,20 @@ fn bigint_const(id: i64) -> NodeEnum {
         }),
         ..Default::default()
     }))
+}
+
+/// Find the maximum parameter number ($N) in a parse result.
+pub fn max_param_number(result: &ParseResult) -> i32 {
+    result
+        .nodes()
+        .iter()
+        .filter_map(|(node, _, _, _)| {
+            if let NodeRef::ParamRef(p) = node {
+                Some(p.number)
+            } else {
+                None
+            }
+        })
+        .max()
+        .unwrap_or(0)
 }

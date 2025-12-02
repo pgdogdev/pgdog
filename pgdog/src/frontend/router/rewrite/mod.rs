@@ -12,12 +12,15 @@ pub mod insert_split;
 pub mod interface;
 pub mod output;
 pub mod prepared;
+pub mod request;
+pub mod state;
 pub mod unique_id;
 
 pub use context::Context;
 pub use error::Error;
 pub use interface::RewriteModule;
 pub use output::{RewriteAction, StepOutput};
+pub use request::RewriteRequest;
 
 use crate::frontend::PreparedStatements;
 

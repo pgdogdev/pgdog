@@ -99,7 +99,4 @@ pub enum Error {
 
     #[error("prepared statement \"{0}\" doesn't exist")]
     PreparedStatementDoesntExist(String),
-
-    #[error("rewrite: {0}")]
-    Rewrite(#[from] super::super::rewrite::Error),
 }

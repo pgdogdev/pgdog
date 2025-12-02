@@ -57,6 +57,7 @@ impl<'a> StreamContext<'a> {
             &self.params,
             None,
             1,
+            None,
         )?)
     }
 }

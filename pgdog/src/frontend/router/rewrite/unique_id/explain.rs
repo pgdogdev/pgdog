@@ -80,6 +80,8 @@ impl ExplainUniqueIdRewrite {
         }
 
         let mut bind = input.bind_take();
+        let extended = input.extended();
+        let mut parameter_counter = 0;
 
         if let Some(NodeEnum::ExplainStmt(stmt)) = input
             .stmt_mut()?
@@ -90,7 +92,12 @@ impl ExplainUniqueIdRewrite {
             if let Some(NodeEnum::SelectStmt(select)) =
                 stmt.query.as_mut().and_then(|q| q.node.as_mut())
             {
-                SelectUniqueIdRewrite::rewrite_select(select, &mut bind)?;
+                SelectUniqueIdRewrite::rewrite_select(
+                    select,
+                    &mut bind,
+                    extended,
+                    &mut parameter_counter,
+                )?;
             }
         }
 
@@ -122,6 +129,7 @@ impl ExplainUniqueIdRewrite {
         }
 
         let mut bind = input.bind_take();
+        let extended = input.extended();
 
         if let Some(NodeEnum::ExplainStmt(stmt)) = input
             .stmt_mut()?
@@ -132,7 +140,7 @@ impl ExplainUniqueIdRewrite {
             if let Some(NodeEnum::InsertStmt(insert)) =
                 stmt.query.as_mut().and_then(|q| q.node.as_mut())
             {
-                InsertUniqueIdRewrite::rewrite_insert(insert, &mut bind)?;
+                InsertUniqueIdRewrite::rewrite_insert(insert, &mut bind, extended)?;
             }
         }
 
@@ -164,6 +172,8 @@ impl ExplainUniqueIdRewrite {
         }
 
         let mut bind = input.bind_take();
+        let extended = input.extended();
+        let mut param_counter = super::max_param_number(input.parse_result());
 
         if let Some(NodeEnum::ExplainStmt(stmt)) = input
             .stmt_mut()?
@@ -174,7 +184,12 @@ impl ExplainUniqueIdRewrite {
             if let Some(NodeEnum::UpdateStmt(update)) =
                 stmt.query.as_mut().and_then(|q| q.node.as_mut())
             {
-                UpdateUniqueIdRewrite::rewrite_update(update, &mut bind)?;
+                UpdateUniqueIdRewrite::rewrite_update(
+                    update,
+                    &mut bind,
+                    extended,
+                    &mut param_counter,
+                )?;
             }
         }
 
@@ -197,7 +212,7 @@ mod test {
             .unwrap()
             .protobuf;
         let mut rewrite = ExplainUniqueIdRewrite::default();
-        let mut input = Context::new(&stmt, None);
+        let mut input = Context::new(&stmt, None, None);
         rewrite.rewrite(&mut input).unwrap();
         let output = input.build().unwrap();
         let query = output.query().unwrap();
@@ -215,7 +230,7 @@ mod test {
             .unwrap()
             .protobuf;
         let mut rewrite = ExplainUniqueIdRewrite::default();
-        let mut input = Context::new(&stmt, None);
+        let mut input = Context::new(&stmt, None, None);
         rewrite.rewrite(&mut input).unwrap();
         let output = input.build().unwrap();
         let query = output.query().unwrap();
@@ -234,7 +249,7 @@ mod test {
                 .unwrap()
                 .protobuf;
         let mut rewrite = ExplainUniqueIdRewrite::default();
-        let mut input = Context::new(&stmt, None);
+        let mut input = Context::new(&stmt, None, None);
         rewrite.rewrite(&mut input).unwrap();
         let output = input.build().unwrap();
         let query = output.query().unwrap();
@@ -252,7 +267,7 @@ mod test {
             .unwrap()
             .protobuf;
         let mut rewrite = ExplainUniqueIdRewrite::default();
-        let mut input = Context::new(&stmt, None);
+        let mut input = Context::new(&stmt, None, None);
         rewrite.rewrite(&mut input).unwrap();
         let output = input.build().unwrap();
         let query = output.query().unwrap();
@@ -265,7 +280,7 @@ mod test {
     fn test_explain_no_unique_id() {
         let stmt = pg_query::parse(r#"EXPLAIN SELECT 1"#).unwrap().protobuf;
         let mut rewrite = ExplainUniqueIdRewrite::default();
-        let mut input = Context::new(&stmt, None);
+        let mut input = Context::new(&stmt, None, None);
         rewrite.rewrite(&mut input).unwrap();
         let output = input.build().unwrap();
         assert!(matches!(output, super::super::super::StepOutput::NoOp));

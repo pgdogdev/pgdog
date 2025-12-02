@@ -67,13 +67,13 @@ mod test {
 
         // First prepare the statement
         let mut prepare_rewrite = PrepareRewrite::new(&mut prepared_statements);
-        let mut input = Context::new(&prepare_stmt, None);
+        let mut input = Context::new(&prepare_stmt, None, None);
         prepare_rewrite.rewrite(&mut input).unwrap();
 
         // Now execute it
         let execute_stmt = pg_query::parse("EXECUTE test(1, 2, 3)").unwrap().protobuf;
         let mut execute_rewrite = ExecuteRewrite::new(&prepared_statements);
-        let mut input = Context::new(&execute_stmt, None);
+        let mut input = Context::new(&execute_stmt, None, None);
         execute_rewrite.rewrite(&mut input).unwrap();
         let output = input.build().unwrap();
         let query = output.query().unwrap();
@@ -87,7 +87,7 @@ mod test {
             .protobuf;
         let prepared_statements = PreparedStatements::default();
         let mut execute_rewrite = ExecuteRewrite::new(&prepared_statements);
-        let mut input = Context::new(&execute_stmt, None);
+        let mut input = Context::new(&execute_stmt, None, None);
         let result = execute_rewrite.rewrite(&mut input);
         assert!(result.is_err());
     }

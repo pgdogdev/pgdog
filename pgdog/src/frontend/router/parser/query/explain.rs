@@ -75,7 +75,8 @@ mod tests {
         let mut stmts = PreparedStatements::default();
         let params = Parameters::default();
 
-        let ctx = RouterContext::new(&mut buffer, &cluster, &mut stmts, &params, None, 1).unwrap();
+        let ctx =
+            RouterContext::new(&mut buffer, &cluster, &mut stmts, &params, None, 1, None).unwrap();
 
         match QueryParser::default().parse(ctx).unwrap().clone() {
             Command::Query(route) => route,
@@ -102,7 +103,8 @@ mod tests {
         let mut stmts = PreparedStatements::default();
         let params = Parameters::default();
 
-        let ctx = RouterContext::new(&mut buffer, &cluster, &mut stmts, &params, None, 1).unwrap();
+        let ctx =
+            RouterContext::new(&mut buffer, &cluster, &mut stmts, &params, None, 1, None).unwrap();
 
         match QueryParser::default().parse(ctx).unwrap().clone() {
             Command::Query(route) => route,

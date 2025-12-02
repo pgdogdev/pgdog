@@ -9,7 +9,7 @@ use tracing::debug;
 
 use crate::{
     config::{config, PreparedStatements as PreparedStatementsLevel},
-    frontend::router::parser::RewritePlan,
+    frontend::router::parser::{cache::CachedAst, RewritePlan},
     net::{Parse, ProtocolMessage},
     stats::memory::MemoryUsage,
 };
@@ -31,6 +31,7 @@ pub struct PreparedStatements {
     pub(super) local: HashMap<String, String>,
     pub(super) level: PreparedStatementsLevel,
     pub(super) memory_used: usize,
+    pub(super) rewrite: HashMap<String, CachedAst>,
 }
 
 impl MemoryUsage for PreparedStatements {
@@ -49,6 +50,7 @@ impl Default for PreparedStatements {
             local: HashMap::default(),
             level: PreparedStatementsLevel::Extended,
             memory_used: 0,
+            rewrite: HashMap::new(),
         }
     }
 }
@@ -97,15 +99,15 @@ impl PreparedStatements {
         parse.rename_fast(&name)
     }
 
-    /// Store a rewritten statement in the global cache forever.
-    pub fn cache_rewritten(parse: &Parse) -> String {
-        let exists = Self::global().read().name(parse);
-        if let Some(exists) = exists {
-            exists
-        } else {
-            let (_, name) = Self::global().write().insert(parse);
-            name
-        }
+    /// Get original AST for a prepared statement
+    /// we have rewritten.
+    pub fn get_original_ast(&self, name: &str) -> Option<&CachedAst> {
+        self.rewrite.get(name)
+    }
+
+    /// Save original AST for re-use by subsequent Bind messages.
+    pub fn save_original_ast(&mut self, name: &str, ast: &CachedAst) {
+        self.rewrite.insert(name.to_string(), ast.clone());
     }
 
     /// Retrieve stored rewrite plan for a prepared statement, if any.

@@ -1,9 +1,41 @@
 use pgdog_config::PoolerMode;
 use tracing::trace;
 
+use crate::backend::Cluster;
+
 use super::*;
 
 impl QueryEngine {
+    pub fn cluster(&self) -> Result<&Cluster, Error> {
+        Ok(self.backend.cluster()?)
+    }
+
+    /// Check that cluster still exists.
+    pub async fn ensure_cluster(&mut self, in_transaction: bool) -> Option<ErrorResponse> {
+        if let Ok(cluster) = self.backend.cluster() {
+            let identifier = cluster.identifier();
+
+            if !in_transaction && !cluster.online() {
+                // Reload cluster config.
+                if let Err(_) = self.backend.safe_reload().await {
+                    return Some(ErrorResponse::connection(
+                        &identifier.user,
+                        &identifier.database,
+                    ));
+                }
+
+                if let Err(_) = self.backend.cluster() {
+                    return Some(ErrorResponse::connection(
+                        &identifier.user,
+                        &identifier.database,
+                    ));
+                }
+            }
+        }
+
+        None
+    }
+
     pub(super) async fn route_transaction(
         &mut self,
         context: &mut QueryEngineContext<'_>,
@@ -18,28 +50,7 @@ impl QueryEngine {
 
         // Admin doesn't have a cluster.
         let cluster = if let Ok(cluster) = self.backend.cluster() {
-            if !context.in_transaction() && !cluster.online() {
-                let identifier = cluster.identifier();
-
-                // Reload cluster config.
-                self.backend.safe_reload().await?;
-
-                match self.backend.cluster() {
-                    Ok(cluster) => cluster,
-                    Err(_) => {
-                        // Cluster is gone.
-                        self.error_response(
-                            context,
-                            ErrorResponse::connection(&identifier.user, &identifier.database),
-                        )
-                        .await?;
-
-                        return Ok(false);
-                    }
-                }
-            } else {
-                cluster
-            }
+            cluster
         } else {
             return Ok(true);
         };
@@ -51,6 +62,7 @@ impl QueryEngine {
             context.params,
             context.transaction,
             context.omni_sticky_index,
+            context.ast.as_ref(),
         )?;
         match self.router.query(router_context) {
             Ok(cmd) => {

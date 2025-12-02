@@ -3,7 +3,11 @@ use crate::{
     config::config,
     frontend::{
         client::query_engine::hooks::QueryEngineHooks,
-        router::{parser::Shard, Route},
+        router::{
+            parser::Shard,
+            rewrite::{self, RewriteRequest},
+            Route,
+        },
         BufferedQuery, Client, Command, Comms, Error, Router, RouterContext, Stats,
     },
     net::{BackendKeyData, ErrorResponse, Message, Parameters},
@@ -114,6 +118,28 @@ impl QueryEngine {
         &mut self,
         context: &mut QueryEngineContext<'_>,
     ) -> Result<QueryEngineOutput, Error> {
+        // Check that we have the latest version of the config.
+        if let Some(error) = self.ensure_cluster(context.in_transaction()).await {
+            self.error_response(context, error).await?;
+            return Ok(QueryEngineOutput::Executed);
+        }
+
+        if let Ok(cluster) = self.backend.cluster() {
+            if cluster.use_parser() && context.ast.is_none() {
+                // Execute request rewrite, if needed.
+                let mut rewrite = RewriteRequest::new(
+                    context.client_request,
+                    self.backend.cluster()?,
+                    context.prepared_statements,
+                );
+                match rewrite.execute() {
+                    Ok(ast) => context.ast = Some(ast),
+                    Err(rewrite::Error::EmptyQuery) => (),
+                    Err(err) => return Err(err.into()),
+                }
+            }
+        }
+
         self.stats
             .received(context.client_request.total_message_len());
         self.set_state(State::Active); // Client is active.

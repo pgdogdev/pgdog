@@ -64,7 +64,7 @@ mod test {
             .protobuf;
         let mut prepared_statements = PreparedStatements::default();
         let mut rewrite = PrepareRewrite::new(&mut prepared_statements);
-        let mut input = Context::new(&stmt, None);
+        let mut input = Context::new(&stmt, None, None);
         rewrite.rewrite(&mut input).unwrap();
         let output = input.build().unwrap();
         let query = output.query().unwrap();

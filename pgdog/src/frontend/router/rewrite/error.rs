@@ -25,4 +25,10 @@ pub enum Error {
 
     #[error("prepared statement not found: {0}")]
     PreparedStatementNotFound(String),
+
+    #[error("statement parameters and bind count mismatch")]
+    ParameterCountMismatch,
+
+    #[error("parser: {0}")]
+    Parser(#[from] crate::frontend::router::parser::Error),
 }

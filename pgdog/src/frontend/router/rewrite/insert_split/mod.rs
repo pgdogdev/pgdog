@@ -106,7 +106,7 @@ mod test {
                 },
             ],
         );
-        let mut context = Context::new(&stmt.protobuf, Some(&bind));
+        let mut context = Context::new(&stmt.protobuf, Some(&bind), None);
         let mut module = InsertSplitRewrite::default();
         module.rewrite(&mut context).unwrap();
     }

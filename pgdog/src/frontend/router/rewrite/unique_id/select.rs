@@ -9,7 +9,11 @@ use super::{
     super::{Context, Error, RewriteModule},
     bigint_const, bigint_param,
 };
-use crate::{frontend::router::parser::Value, net::Datum, unique_id};
+use crate::{
+    frontend::router::{parser::Value, rewrite::unique_id::max_param_number},
+    net::Datum,
+    unique_id,
+};
 
 #[derive(Default)]
 pub struct SelectUniqueIdRewrite {}
@@ -94,6 +98,8 @@ impl SelectUniqueIdRewrite {
     pub fn rewrite_select(
         stmt: &mut SelectStmt,
         bind: &mut Option<crate::net::Bind>,
+        extended: bool,
+        paramter_counter: &mut i32,
     ) -> Result<(), Error> {
         // Rewrite target_list
         for target in stmt.target_list.iter_mut() {
@@ -103,8 +109,17 @@ impl SelectUniqueIdRewrite {
                         if name == "pgdog.unique_id" {
                             let id = unique_id::UniqueId::generator()?.next_id();
 
-                            let node = if let Some(ref mut bind) = bind {
-                                bigint_param(bind.add_parameter(Datum::Bigint(id))?)
+                            let node = if extended {
+                                *paramter_counter += 1;
+
+                                if let Some(bind) = bind {
+                                    let counter = bind.add_parameter(Datum::Bigint(id))?;
+                                    if counter != *paramter_counter {
+                                        return Err(Error::ParameterCountMismatch);
+                                    }
+                                }
+
+                                bigint_param(*paramter_counter)
                             } else {
                                 bigint_const(id)
                             };
@@ -122,7 +137,7 @@ impl SelectUniqueIdRewrite {
                 if let Some(NodeEnum::CommonTableExpr(ref mut expr)) = cte.node {
                     if let Some(ref mut query) = expr.ctequery {
                         if let Some(NodeEnum::SelectStmt(ref mut inner)) = query.node {
-                            Self::rewrite_select(inner, bind)?;
+                            Self::rewrite_select(inner, bind, extended, paramter_counter)?;
                         }
                     }
                 }
@@ -131,15 +146,15 @@ impl SelectUniqueIdRewrite {
 
         // Rewrite subqueries in FROM clause
         for from in stmt.from_clause.iter_mut() {
-            Self::rewrite_from_node(from, bind)?;
+            Self::rewrite_from_node(from, bind, extended, paramter_counter)?;
         }
 
         // Rewrite UNION/INTERSECT/EXCEPT (larg/rarg are Box<SelectStmt>)
         if let Some(ref mut larg) = stmt.larg {
-            Self::rewrite_select(larg, bind)?;
+            Self::rewrite_select(larg, bind, extended, paramter_counter)?;
         }
         if let Some(ref mut rarg) = stmt.rarg {
-            Self::rewrite_select(rarg, bind)?;
+            Self::rewrite_select(rarg, bind, extended, paramter_counter)?;
         }
 
         Ok(())
@@ -148,21 +163,23 @@ impl SelectUniqueIdRewrite {
     fn rewrite_from_node(
         node: &mut Node,
         bind: &mut Option<crate::net::Bind>,
+        extended: bool,
+        paramter_counter: &mut i32,
     ) -> Result<(), Error> {
         match node.node.as_mut() {
             Some(NodeEnum::RangeSubselect(ref mut subselect)) => {
                 if let Some(ref mut subquery) = subselect.subquery {
                     if let Some(NodeEnum::SelectStmt(ref mut inner)) = subquery.node {
-                        Self::rewrite_select(inner, bind)?;
+                        Self::rewrite_select(inner, bind, extended, paramter_counter)?;
                     }
                 }
             }
             Some(NodeEnum::JoinExpr(ref mut join)) => {
                 if let Some(ref mut larg) = join.larg {
-                    Self::rewrite_from_node(larg, bind)?;
+                    Self::rewrite_from_node(larg, bind, extended, paramter_counter)?;
                 }
                 if let Some(ref mut rarg) = join.rarg {
-                    Self::rewrite_from_node(rarg, bind)?;
+                    Self::rewrite_from_node(rarg, bind, extended, paramter_counter)?;
                 }
             }
             _ => {}
@@ -189,6 +206,8 @@ impl RewriteModule for SelectUniqueIdRewrite {
         }
 
         let mut bind = input.bind_take();
+        let extended = input.extended();
+        let mut parameter_counter = max_param_number(input.parse_result());
 
         if let Some(NodeEnum::SelectStmt(stmt)) = input
             .stmt_mut()?
@@ -196,7 +215,7 @@ impl RewriteModule for SelectUniqueIdRewrite {
             .as_mut()
             .and_then(|stmt| stmt.node.as_mut())
         {
-            Self::rewrite_select(stmt, &mut bind)?;
+            Self::rewrite_select(stmt, &mut bind, extended, &mut parameter_counter)?;
         }
 
         input.bind_put(bind);
@@ -220,7 +239,7 @@ mod test {
             .unwrap()
             .protobuf;
         let mut rewrite = SelectUniqueIdRewrite::default();
-        let mut input = Context::new(&stmt, None);
+        let mut input = Context::new(&stmt, None, None);
         rewrite.rewrite(&mut input).unwrap();
         let output = input.build().unwrap();
         println!("output: {}", output.query().unwrap());
@@ -242,7 +261,7 @@ mod test {
                 data: "test".into(),
             }],
         );
-        let mut input = Context::new(&stmt, Some(&bind));
+        let mut input = Context::new(&stmt, Some(&bind), None);
         SelectUniqueIdRewrite::default()
             .rewrite(&mut input)
             .unwrap();
@@ -263,7 +282,7 @@ mod test {
                 .unwrap()
                 .protobuf;
         let mut rewrite = SelectUniqueIdRewrite::default();
-        let mut input = Context::new(&stmt, None);
+        let mut input = Context::new(&stmt, None, None);
         rewrite.rewrite(&mut input).unwrap();
         let output = input.build().unwrap();
         assert!(!output.query().unwrap().contains("pgdog.unique_id"));
@@ -278,7 +297,7 @@ mod test {
             .unwrap()
             .protobuf;
         let mut rewrite = SelectUniqueIdRewrite::default();
-        let mut input = Context::new(&stmt, None);
+        let mut input = Context::new(&stmt, None, None);
         rewrite.rewrite(&mut input).unwrap();
         let output = input.build().unwrap();
         assert!(!output.query().unwrap().contains("pgdog.unique_id"));
@@ -295,7 +314,7 @@ mod test {
         .unwrap()
         .protobuf;
         let mut rewrite = SelectUniqueIdRewrite::default();
-        let mut input = Context::new(&stmt, None);
+        let mut input = Context::new(&stmt, None, None);
         rewrite.rewrite(&mut input).unwrap();
         let output = input.build().unwrap();
         assert!(!output.query().unwrap().contains("pgdog.unique_id"));
@@ -305,7 +324,7 @@ mod test {
     fn test_no_rewrite_when_no_unique_id() {
         let stmt = pg_query::parse(r#"SELECT id FROM users"#).unwrap().protobuf;
         let mut rewrite = SelectUniqueIdRewrite::default();
-        let mut input = Context::new(&stmt, None);
+        let mut input = Context::new(&stmt, None, None);
         rewrite.rewrite(&mut input).unwrap();
         let output = input.build().unwrap();
         assert!(matches!(output, super::super::super::StepOutput::NoOp));

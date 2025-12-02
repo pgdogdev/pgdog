@@ -413,10 +413,14 @@ impl Cluster {
         self.stats.clone()
     }
 
-    /// We'll need the query router to figure out
-    /// where a query should go.
-    pub fn router_needed(&self) -> bool {
+    /// We need to parse the query using pg_query.
+    pub fn use_parser(&self) -> bool {
         !(self.shards().len() == 1 && (self.read_only() || self.write_only()))
+            || self.query_parser_enabled
+            || self.multi_tenant.is_some()
+            || self.pub_sub_enabled()
+            || self.prepared_statements() == &PreparedStatements::Full
+            || self.dry_run
     }
 
     /// Multi-tenant config.

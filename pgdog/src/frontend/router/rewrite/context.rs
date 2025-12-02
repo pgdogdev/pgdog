@@ -3,10 +3,7 @@
 use pg_query::protobuf::{ParseResult, RawStmt};
 
 use super::{output::RewriteActionKind, Error, RewriteAction, StepOutput};
-use crate::{
-    frontend::PreparedStatements,
-    net::{Bind, Parse, ProtocolMessage, Query},
-};
+use crate::net::{Bind, Parse, ProtocolMessage, Query};
 
 #[derive(Debug, Clone)]
 pub struct Context<'a> {
@@ -21,18 +18,35 @@ pub struct Context<'a> {
     rewrite_bind: Option<Bind>,
     /// Additional messages to add to the request.
     result: Vec<RewriteAction>,
+    /// Extended protocol.
+    parse: Option<&'a Parse>,
 }
 
 impl<'a> Context<'a> {
     /// Create new input.
-    pub fn new(original: &'a ParseResult, bind: Option<&'a Bind>) -> Self {
+    pub(super) fn new(
+        original: &'a ParseResult,
+        bind: Option<&'a Bind>,
+        parse: Option<&'a Parse>,
+    ) -> Self {
         Self {
             original,
             bind,
             rewrite: None,
             rewrite_bind: None,
             result: vec![],
+            parse,
         }
+    }
+
+    /// Get Parse reference.
+    pub fn parse(&'a self) -> Option<&'a Parse> {
+        self.parse
+    }
+
+    /// We are rewriting an extended protocol request.
+    pub fn extended(&self) -> bool {
+        self.parse().is_some() || self.bind().is_some()
     }
 
     /// Get the Bind message, if set.
@@ -55,6 +69,7 @@ impl<'a> Context<'a> {
         self.rewrite_bind.take()
     }
 
+    /// Put the bind message back.
     pub fn bind_put(&mut self, bind: Option<Bind>) {
         self.rewrite_bind = bind;
     }
@@ -82,11 +97,17 @@ impl<'a> Context<'a> {
         stmt.stmts.first_mut().ok_or(Error::EmptyQuery)
     }
 
+    /// Get protocol version from the original statement.
     pub fn proto_version(&self) -> i32 {
         self.original.version
     }
 
-    /// New request mutable reference.
+    /// Get the parse result (original or rewritten).
+    pub fn parse_result(&self) -> &ParseResult {
+        self.rewrite.as_ref().unwrap_or(&self.original)
+    }
+
+    /// Prepend new message to rewritten request.
     pub fn prepend(&mut self, message: ProtocolMessage) {
         self.result.push(RewriteAction {
             message,
@@ -94,47 +115,42 @@ impl<'a> Context<'a> {
         });
     }
 
-    /// Assemble statement and add it to the global prepared statements cache.
+    /// Assemble rewrite instructions.
     pub fn build(mut self) -> Result<StepOutput, Error> {
         if self.rewrite.is_none() {
             Ok(StepOutput::NoOp)
         } else {
             let bind = self.rewrite_bind.take();
-            let stmt = self.rewrite.take().ok_or(Error::NoRewrite)?.deparse()?;
-            let mut result = self.result;
+            let ast = self.rewrite.take().ok_or(Error::NoRewrite)?;
+            let stmt = ast.deparse()?;
+            let extended = self.extended();
+            let mut parse = self.parse().cloned();
 
-            if let Some(mut bind) = bind {
-                let mut parse = Parse::new_anonymous(stmt);
-                if bind.anonymous() {
-                    result.push(RewriteAction {
+            let mut actions = self.result;
+
+            if extended {
+                if let Some(mut parse) = parse.take() {
+                    parse.set_query(&stmt);
+                    actions.push(RewriteAction {
                         message: parse.into(),
                         action: RewriteActionKind::Replace,
                     });
-                    result.push(RewriteAction {
-                        message: bind.into(),
-                        action: RewriteActionKind::Replace,
-                    });
-                } else {
-                    let name = PreparedStatements::cache_rewritten(&parse);
-                    parse.rename_fast(&name);
-                    bind.rename(name);
-                    result.push(RewriteAction {
-                        message: parse.into(),
-                        action: RewriteActionKind::Replace,
-                    });
-                    result.push(RewriteAction {
+                }
+
+                if let Some(bind) = bind {
+                    actions.push(RewriteAction {
                         message: bind.into(),
                         action: RewriteActionKind::Replace,
                     });
                 }
             } else {
-                result.push(RewriteAction {
-                    message: Query::new(stmt).into(),
+                actions.push(RewriteAction {
+                    message: Query::new(stmt.clone()).into(),
                     action: RewriteActionKind::Replace,
                 });
             }
 
-            Ok(StepOutput::Rewrite(result))
+            Ok(StepOutput::RewriteInPlace { stmt, ast, actions })
         }
     }
 }

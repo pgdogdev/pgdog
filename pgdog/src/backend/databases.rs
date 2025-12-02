@@ -359,9 +359,9 @@ impl Databases {
         for cluster in self.all().values() {
             cluster.launch();
 
-            if cluster.pooler_mode() == PoolerMode::Session && cluster.router_needed() {
+            if cluster.pooler_mode() == PoolerMode::Session && cluster.use_parser() {
                 warn!(
-                    r#"user "{}" for database "{}" requires transaction mode to route queries"#,
+                    r#"user "{}" for database "{}" requires transaction mode to parse and route queries"#,
                     cluster.user(),
                     cluster.name()
                 );
