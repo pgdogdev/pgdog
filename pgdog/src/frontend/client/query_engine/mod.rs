@@ -5,7 +5,7 @@ use crate::{
         client::query_engine::hooks::QueryEngineHooks,
         router::{
             parser::Shard,
-            rewrite::{self, RewriteRequest},
+            rewrite::{self, RewriteRequest, RewriteState},
             Route,
         },
         BufferedQuery, Client, Command, Comms, Error, Router, RouterContext, Stats,
@@ -61,6 +61,7 @@ pub struct QueryEngine {
     notify_buffer: NotifyBuffer,
     pending_explain: Option<ExplainResponseState>,
     hooks: QueryEngineHooks,
+    rewrite_state: RewriteState,
 }
 
 impl QueryEngine {
@@ -131,6 +132,7 @@ impl QueryEngine {
                     context.client_request,
                     self.backend.cluster()?,
                     context.prepared_statements,
+                    &mut self.rewrite_state,
                 );
                 match rewrite.execute() {
                     Ok(ast) => context.ast = Some(ast),

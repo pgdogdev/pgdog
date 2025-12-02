@@ -24,7 +24,7 @@ impl MirrorStatsMetrics {
         for (user, cluster) in databases().all() {
             let stats = cluster.stats();
             let stats = stats.lock();
-            let counts = stats.counts;
+            let counts = stats.mirrors;
 
             // Per-cluster metrics with labels
             let labels = vec![

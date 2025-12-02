@@ -1,8 +1,8 @@
-//! Rewrite input and output types.
+//! Context passed throughout the rewrite engine.
 
 use pg_query::protobuf::{ParseResult, RawStmt};
 
-use super::{output::RewriteActionKind, Error, RewriteAction, StepOutput};
+use super::{output::RewriteActionKind, stats::RewriteStats, Error, RewriteAction, StepOutput};
 use crate::net::{Bind, Parse, ProtocolMessage, Query};
 
 #[derive(Debug, Clone)]
@@ -104,7 +104,7 @@ impl<'a> Context<'a> {
 
     /// Get the parse result (original or rewritten).
     pub fn parse_result(&self) -> &ParseResult {
-        self.rewrite.as_ref().unwrap_or(&self.original)
+        self.rewrite.as_ref().unwrap_or(self.original)
     }
 
     /// Prepend new message to rewritten request.
@@ -120,6 +120,7 @@ impl<'a> Context<'a> {
         if self.rewrite.is_none() {
             Ok(StepOutput::NoOp)
         } else {
+            let mut stats = RewriteStats::default();
             let bind = self.rewrite_bind.take();
             let ast = self.rewrite.take().ok_or(Error::NoRewrite)?;
             let stmt = ast.deparse()?;
@@ -135,6 +136,7 @@ impl<'a> Context<'a> {
                         message: parse.into(),
                         action: RewriteActionKind::Replace,
                     });
+                    stats.parse += 1;
                 }
 
                 if let Some(bind) = bind {
@@ -142,15 +144,22 @@ impl<'a> Context<'a> {
                         message: bind.into(),
                         action: RewriteActionKind::Replace,
                     });
+                    stats.bind += 1;
                 }
             } else {
                 actions.push(RewriteAction {
                     message: Query::new(stmt.clone()).into(),
                     action: RewriteActionKind::Replace,
                 });
+                stats.simple += 1;
             }
 
-            Ok(StepOutput::RewriteInPlace { stmt, ast, actions })
+            Ok(StepOutput::RewriteInPlace {
+                stmt,
+                ast,
+                actions,
+                stats,
+            })
         }
     }
 }

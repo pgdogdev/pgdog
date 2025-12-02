@@ -1,14 +1,11 @@
 use pg_query::ParseResult;
 use tracing::debug;
 
-use super::{Context, Error, Rewrite, StepOutput};
+use super::{Context, Error, Rewrite, RewriteModule, RewriteState, StepOutput};
 use crate::{
     backend::Cluster,
     frontend::{
-        router::{
-            parser::{cache::CachedAst, Cache},
-            rewrite::RewriteModule,
-        },
+        router::parser::{cache::CachedAst, Cache},
         ClientRequest, PreparedStatements,
     },
     net::ProtocolMessage,
@@ -18,6 +15,7 @@ pub struct RewriteRequest<'a> {
     request: &'a mut ClientRequest,
     cluster: &'a Cluster,
     prepared_statements: &'a mut PreparedStatements,
+    state: &'a mut RewriteState,
 }
 
 impl<'a> RewriteRequest<'a> {
@@ -26,11 +24,13 @@ impl<'a> RewriteRequest<'a> {
         request: &'a mut ClientRequest,
         cluster: &'a Cluster,
         prepared_statements: &'a mut PreparedStatements,
+        state: &'a mut RewriteState,
     ) -> Self {
         Self {
             request,
             cluster,
             prepared_statements,
+            state,
         }
     }
 
@@ -49,8 +49,7 @@ impl<'a> RewriteRequest<'a> {
                 match message {
                     ProtocolMessage::Parse(p) => {
                         ast = Some(Cache::get().parse(p.query(), &schema)?);
-                        self.prepared_statements
-                            .save_original_ast(p.name(), ast.as_ref().unwrap());
+                        self.state.save(p.name(), ast.as_ref().unwrap());
                         parse = Some(p);
                     }
 
@@ -59,10 +58,16 @@ impl<'a> RewriteRequest<'a> {
                     }
 
                     ProtocolMessage::Bind(b) => {
-                        let existing = self.prepared_statements.get_original_ast(b.statement());
+                        let existing = self.state.get(b.statement());
                         if let Some(existing) = existing {
                             ast = Some(existing.clone());
                             bind = Some(b);
+                        }
+                    }
+
+                    ProtocolMessage::Close(close) => {
+                        if close.is_statement() {
+                            self.state.remove(close.name());
                         }
                     }
 
@@ -89,10 +94,21 @@ impl<'a> RewriteRequest<'a> {
                 debug!("rewrite was a no-op");
                 ast
             }
-            StepOutput::RewriteInPlace { stmt, ast, actions } => {
+            StepOutput::RewriteInPlace {
+                stmt,
+                ast,
+                actions,
+                stats,
+            } => {
                 debug!("rewrite in-place: {}", stmt);
                 for action in actions {
                     action.execute(self.request);
+                }
+                // Update stats.
+                {
+                    let cluster_stats = self.cluster.stats();
+                    let mut lock = cluster_stats.lock();
+                    lock.rewrite = lock.rewrite.clone() + stats;
                 }
                 let ast = ParseResult::new(ast, "".into());
                 // Cache new rewritten prepared statement.

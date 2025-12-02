@@ -14,6 +14,7 @@ pub mod output;
 pub mod prepared;
 pub mod request;
 pub mod state;
+pub mod stats;
 pub mod unique_id;
 
 pub use context::Context;
@@ -21,6 +22,7 @@ pub use error::Error;
 pub use interface::RewriteModule;
 pub use output::{RewriteAction, StepOutput};
 pub use request::RewriteRequest;
+pub use state::RewriteState;
 
 use crate::frontend::PreparedStatements;
 

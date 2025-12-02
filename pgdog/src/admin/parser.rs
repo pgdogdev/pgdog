@@ -7,7 +7,7 @@ use super::{
     show_client_memory::ShowClientMemory, show_clients::ShowClients, show_config::ShowConfig,
     show_instance_id::ShowInstanceId, show_lists::ShowLists, show_mirrors::ShowMirrors,
     show_peers::ShowPeers, show_pools::ShowPools, show_prepared_statements::ShowPreparedStatements,
-    show_query_cache::ShowQueryCache, show_replication::ShowReplication,
+    show_query_cache::ShowQueryCache, show_replication::ShowReplication, show_rewrite::ShowRewrite,
     show_server_memory::ShowServerMemory, show_servers::ShowServers, show_stats::ShowStats,
     show_transactions::ShowTransactions, show_version::ShowVersion, shutdown::Shutdown, Command,
     Error,
@@ -30,6 +30,7 @@ pub enum ParseResult {
     ShowStats(ShowStats),
     ShowTransactions(ShowTransactions),
     ShowMirrors(ShowMirrors),
+    ShowRewrite(ShowRewrite),
     ShowVersion(ShowVersion),
     ShowInstanceId(ShowInstanceId),
     SetupSchema(SetupSchema),
@@ -65,6 +66,7 @@ impl ParseResult {
             ShowStats(show_stats) => show_stats.execute().await,
             ShowTransactions(show_transactions) => show_transactions.execute().await,
             ShowMirrors(show_mirrors) => show_mirrors.execute().await,
+            ShowRewrite(show_rewrite) => show_rewrite.execute().await,
             ShowVersion(show_version) => show_version.execute().await,
             ShowInstanceId(show_instance_id) => show_instance_id.execute().await,
             SetupSchema(setup_schema) => setup_schema.execute().await,
@@ -100,6 +102,7 @@ impl ParseResult {
             ShowStats(show_stats) => show_stats.name(),
             ShowTransactions(show_transactions) => show_transactions.name(),
             ShowMirrors(show_mirrors) => show_mirrors.name(),
+            ShowRewrite(show_rewrite) => show_rewrite.name(),
             ShowVersion(show_version) => show_version.name(),
             ShowInstanceId(show_instance_id) => show_instance_id.name(),
             SetupSchema(setup_schema) => setup_schema.name(),
@@ -163,6 +166,7 @@ impl Parser {
                 "lists" => ParseResult::ShowLists(ShowLists::parse(&sql)?),
                 "prepared" => ParseResult::ShowPrepared(ShowPreparedStatements::parse(&sql)?),
                 "replication" => ParseResult::ShowReplication(ShowReplication::parse(&sql)?),
+                "rewrite" => ParseResult::ShowRewrite(ShowRewrite::parse(&sql)?),
                 command => {
                     debug!("unknown admin show command: '{}'", command);
                     return Err(Error::Syntax);

@@ -119,14 +119,14 @@ impl Mirror {
                             // Decrement queue_length when we receive a message from the channel
                             {
                                 let mut stats = stats_for_errors.lock();
-                                stats.counts.queue_length = stats.counts.queue_length.saturating_sub(1);
+                                stats.mirrors.queue_length = stats.mirrors.queue_length.saturating_sub(1);
                             }
                             // TODO: timeout these.
                             if let Err(err) = mirror.handle(&mut req, &mut query_engine).await {
                                 error!("mirror error: {}", err);
                                 // Increment error count on mirror handling error
                                 let mut stats = stats_for_errors.lock();
-                                stats.counts.error_count += 1;
+                                stats.mirrors.error_count += 1;
                             }
                         } else {
                             debug!("mirror client shutting down");
@@ -170,12 +170,12 @@ mod test {
 
     #[tokio::test]
     async fn test_mirror_exposure() {
-        use crate::backend::pool::MirrorStats;
+        use crate::backend::pool::ClusterStats;
         use parking_lot::Mutex;
         use std::sync::Arc;
 
         let (tx, rx) = channel(25);
-        let stats = Arc::new(Mutex::new(MirrorStats::default()));
+        let stats = Arc::new(Mutex::new(ClusterStats::default()));
         let mut handle = MirrorHandler::new(tx.clone(), 1.0, stats.clone());
 
         for _ in 0..25 {
@@ -189,7 +189,7 @@ mod test {
         assert_eq!(rx.len(), 25);
 
         let (tx, rx) = channel(25);
-        let stats2 = Arc::new(Mutex::new(MirrorStats::default()));
+        let stats2 = Arc::new(Mutex::new(ClusterStats::default()));
         let mut handle = MirrorHandler::new(tx.clone(), 0.5, stats2);
         let dropped = (0..25)
             .into_iter()
@@ -270,7 +270,7 @@ mod test {
         let initial_stats = {
             let stats_arc = cluster.stats();
             let stats = stats_arc.lock();
-            stats.counts
+            stats.mirrors
         };
 
         let mut mirror = Mirror::spawn("pgdog", &cluster, None).unwrap();
@@ -290,7 +290,7 @@ mod test {
         let final_stats = {
             let stats_arc = cluster.stats();
             let stats = stats_arc.lock();
-            stats.counts
+            stats.mirrors
         };
 
         assert_eq!(

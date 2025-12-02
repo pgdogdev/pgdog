@@ -5,8 +5,10 @@ use std::{
     ops::{Add, Div, Sub},
 };
 
+use crate::frontend::router::rewrite::stats::RewriteStats;
+
 #[derive(Debug, Clone, Default, Copy)]
-pub struct Counts {
+pub struct MirrorStats {
     pub total_count: usize,
     pub mirrored_count: usize,
     pub dropped_count: usize,
@@ -14,8 +16,8 @@ pub struct Counts {
     pub queue_length: usize,
 }
 
-impl Sub for Counts {
-    type Output = Counts;
+impl Sub for MirrorStats {
+    type Output = MirrorStats;
 
     fn sub(self, rhs: Self) -> Self::Output {
         Self {
@@ -28,8 +30,8 @@ impl Sub for Counts {
     }
 }
 
-impl Div<usize> for Counts {
-    type Output = Counts;
+impl Div<usize> for MirrorStats {
+    type Output = MirrorStats;
 
     fn div(self, rhs: usize) -> Self::Output {
         Self {
@@ -42,11 +44,11 @@ impl Div<usize> for Counts {
     }
 }
 
-impl Add for Counts {
-    type Output = Counts;
+impl Add for MirrorStats {
+    type Output = MirrorStats;
 
-    fn add(self, rhs: Counts) -> Self::Output {
-        Counts {
+    fn add(self, rhs: MirrorStats) -> Self::Output {
+        MirrorStats {
             total_count: self.total_count + rhs.total_count,
             mirrored_count: self.mirrored_count + rhs.mirrored_count,
             dropped_count: self.dropped_count + rhs.dropped_count,
@@ -56,9 +58,9 @@ impl Add for Counts {
     }
 }
 
-impl Sum for Counts {
+impl Sum for MirrorStats {
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
-        let mut result = Counts::default();
+        let mut result = MirrorStats::default();
         for next in iter {
             result = result + next;
         }
@@ -68,8 +70,9 @@ impl Sum for Counts {
 }
 
 #[derive(Debug, Clone, Default, Copy)]
-pub struct MirrorStats {
-    pub counts: Counts,
+pub struct ClusterStats {
+    pub mirrors: MirrorStats,
+    pub rewrite: RewriteStats,
 }
 
 #[cfg(test)]
@@ -78,16 +81,16 @@ mod tests {
 
     #[test]
     fn test_queue_length_default_is_zero() {
-        let stats = MirrorStats::default();
+        let stats = ClusterStats::default();
         assert_eq!(
-            stats.counts.queue_length, 0,
+            stats.mirrors.queue_length, 0,
             "queue_length should be 0 by default"
         );
     }
 
     #[test]
     fn test_queue_length_arithmetic_operations() {
-        let counts1 = Counts {
+        let counts1 = MirrorStats {
             total_count: 10,
             mirrored_count: 5,
             dropped_count: 3,
@@ -95,7 +98,7 @@ mod tests {
             queue_length: 7,
         };
 
-        let counts2 = Counts {
+        let counts2 = MirrorStats {
             total_count: 5,
             mirrored_count: 3,
             dropped_count: 1,
@@ -127,7 +130,7 @@ mod tests {
 
     #[test]
     fn test_queue_length_saturating_sub() {
-        let counts1 = Counts {
+        let counts1 = MirrorStats {
             total_count: 10,
             mirrored_count: 5,
             dropped_count: 3,
@@ -135,7 +138,7 @@ mod tests {
             queue_length: 3,
         };
 
-        let counts2 = Counts {
+        let counts2 = MirrorStats {
             total_count: 5,
             mirrored_count: 3,
             dropped_count: 1,
