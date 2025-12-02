@@ -1,3 +1,5 @@
+use crate::frontend::router::sharding::SchemaSharder;
+
 use super::*;
 
 impl QueryParser {
@@ -12,16 +14,17 @@ impl QueryParser {
 
         // Check search_path for schema.
         let search_path = context.router_context.params.get("search_path");
+        let mut schema_sharder = SchemaSharder::default();
 
         match search_path {
             Some(ParameterValue::String(search_path)) => {
                 let schema = Schema::from(search_path.as_str());
-                if let Some(schema) = context.sharding_schema.schemas.get(Some(schema)) {
-                    let shard: Shard = schema.shard().into();
+                schema_sharder.resolve(Some(schema), &context.sharding_schema.schemas);
+                if let Some((shard, schema)) = schema_sharder.get() {
                     if let Some(recorder) = self.recorder_mut() {
                         recorder.record_entry(
                             Some(shard.clone()),
-                            format!("matched schema \"{}\" in search_path", schema.name()),
+                            format!("matched schema {} in search_path", schema),
                         );
                     }
                     return Ok(Some(shard));
@@ -29,30 +32,19 @@ impl QueryParser {
             }
 
             Some(ParameterValue::Tuple(search_paths)) => {
-                let mut candidates = vec![];
-
-                for (idx, schema) in search_paths.iter().enumerate() {
+                for schema in search_paths {
                     let schema = Schema::from(schema.as_str());
-                    if let Some(schema) = context.sharding_schema.schemas.get(Some(schema)) {
-                        let shard: Shard = schema.shard().into();
-                        let catch_all = schema.is_default();
-                        candidates.push((shard, catch_all, idx));
-                    }
+                    schema_sharder.resolve(Some(schema), &context.sharding_schema.schemas);
                 }
 
-                // false < true
-                // Catch-all schemas go first, more qualified ones go last.
-                candidates.sort_by_key(|cand| !cand.1);
-                if let Some(candidate) = candidates.pop() {
-                    if let Some(schema) = search_paths.get(candidate.2) {
-                        if let Some(recorder) = self.recorder_mut() {
-                            recorder.record_entry(
-                                Some(candidate.0.clone()),
-                                format!("matched schema mult \"{}\" in search_path", schema),
-                            );
-                        }
+                if let Some((shard, schema)) = schema_sharder.get() {
+                    if let Some(recorder) = self.recorder_mut() {
+                        recorder.record_entry(
+                            Some(shard.clone()),
+                            format!("matched schema {} in search_path", schema),
+                        );
                     }
-                    return Ok(Some(candidate.0));
+                    return Ok(Some(shard));
                 }
             }
 
