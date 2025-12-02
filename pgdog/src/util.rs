@@ -128,7 +128,7 @@ pub fn user_database_from_params(params: &Parameters) -> (&str, &str) {
 #[cfg(test)]
 mod test {
 
-    use std::env::set_var;
+    use std::env::{remove_var, set_var};
 
     use super::*;
 
@@ -186,6 +186,9 @@ mod test {
 
     #[test]
     fn test_node_id_error() {
+        unsafe {
+            remove_var("NODE_ID");
+        }
         assert!(node_id().is_err());
     }
 
