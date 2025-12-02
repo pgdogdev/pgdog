@@ -24,7 +24,7 @@ impl QueryParser {
                     if let Some(recorder) = self.recorder_mut() {
                         recorder.record_entry(
                             Some(shard.clone()),
-                            format!("matched schema \"{}\" in search_path", schema),
+                            format!("matched schema {} in search_path", schema),
                         );
                     }
                     return Ok(Some(shard));
@@ -41,7 +41,7 @@ impl QueryParser {
                     if let Some(recorder) = self.recorder_mut() {
                         recorder.record_entry(
                             Some(shard.clone()),
-                            format!("matched schema \"{}\" in search_path", schema),
+                            format!("matched schema {} in search_path", schema),
                         );
                     }
                     return Ok(Some(shard));
