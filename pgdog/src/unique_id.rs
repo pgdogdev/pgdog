@@ -249,7 +249,7 @@ mod test {
         let extracted_node2 = (id2 >> NODE_SHIFT) & MAX_NODE_ID;
 
         assert_eq!(extracted_node2, node);
-        assert!(extracted_seq2 >= 1); // Sequence incremented (or time advanced and reset to 0)
+        assert!(matches!(extracted_seq2, 1 | 0)); // Sequence incremented (or time advanced and reset to 0)
     }
 
     #[tokio::test]
