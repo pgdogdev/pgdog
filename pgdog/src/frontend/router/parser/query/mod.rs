@@ -383,30 +383,6 @@ impl QueryParser {
             // with the fingerprint.
             //
             if route.shard().all() {
-                // Check search_path for schema.
-                let search_path = context.router_context.params.get("search_path");
-                let schemas = match search_path {
-                    None => vec![],
-                    Some(ParameterValue::String(search_path)) => {
-                        vec![Some(Schema::from(search_path.as_str()))]
-                    }
-                    Some(ParameterValue::Tuple(search_paths)) => search_paths
-                        .iter()
-                        .map(|path| Some(Schema::from(path.as_str())))
-                        .collect(),
-                };
-                let schema = context.sharding_schema.schemas.resolve(&schemas);
-                if let Some(schema) = schema {
-                    let shard: Shard = schema.shard().into();
-                    if let Some(recorder) = self.recorder_mut() {
-                        recorder.record_entry(
-                            Some(shard.clone()),
-                            format!("matched schema {} in search_path", schema.name()),
-                        );
-                    }
-                    route.set_shard_mut(shard);
-                }
-
                 let databases = databases();
                 // Only fingerprint the query if some manual queries are configured.
                 // Otherwise, we're wasting time parsing SQL.
