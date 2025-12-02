@@ -68,6 +68,7 @@ pub struct QueryParser {
     shard: Shard,
     // Plugin read override.
     plugin_output: PluginOutput,
+    // Record explain output.
     explain_recorder: Option<ExplainRecorder>,
 }
 
@@ -384,42 +385,26 @@ impl QueryParser {
             if route.shard().all() {
                 // Check search_path for schema.
                 let search_path = context.router_context.params.get("search_path");
-
-                // Quick inline function to shard query
-                // based on schema in search_path.
-                fn shard_from_search_path(
-                    search_path: &str,
-                    context: &QueryParserContext<'_>,
-                    query_parser: &mut QueryParser,
-                    route: &mut Route,
-                ) {
-                    let schema = Schema::from(search_path);
-
-                    if let Some(schema) = context.sharding_schema.schemas.get(Some(schema)) {
-                        let shard: Shard = schema.shard().into();
-
-                        if let Some(recorder) = query_parser.recorder_mut() {
-                            recorder.record_entry(
-                                Some(shard.clone()),
-                                format!("matched schema {} in search_path", schema.name()),
-                            );
-                        }
-                        route.set_shard_mut(shard);
-                    }
-                }
-
-                match search_path {
+                let schemas = match search_path {
+                    None => vec![],
                     Some(ParameterValue::String(search_path)) => {
-                        shard_from_search_path(search_path, context, self, route);
+                        vec![Some(Schema::from(search_path.as_str()))]
                     }
-
-                    Some(ParameterValue::Tuple(search_paths)) => {
-                        for schema in search_paths {
-                            shard_from_search_path(schema, context, self, route);
-                        }
+                    Some(ParameterValue::Tuple(search_paths)) => search_paths
+                        .iter()
+                        .map(|path| Some(Schema::from(path.as_str())))
+                        .collect(),
+                };
+                let schema = context.sharding_schema.schemas.resolve(&schemas);
+                if let Some(schema) = schema {
+                    let shard: Shard = schema.shard().into();
+                    if let Some(recorder) = self.recorder_mut() {
+                        recorder.record_entry(
+                            Some(shard.clone()),
+                            format!("matched schema {} in search_path", schema.name()),
+                        );
                     }
-
-                    None => (),
+                    route.set_shard_mut(shard);
                 }
 
                 let databases = databases();

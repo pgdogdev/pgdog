@@ -22,6 +22,7 @@ pub mod list;
 pub mod mapping;
 pub mod operator;
 pub mod range;
+pub mod schema;
 pub mod tables;
 #[cfg(test)]
 pub mod test;
@@ -33,6 +34,7 @@ pub use context_builder::*;
 pub use error::Error;
 pub use hasher::Hasher;
 pub use operator::*;
+pub use schema::SchemaSharder;
 pub use tables::*;
 pub use value::*;
 pub use vector::{Centroids, Distance};

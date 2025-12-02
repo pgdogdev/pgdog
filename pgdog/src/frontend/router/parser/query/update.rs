@@ -62,7 +62,7 @@ impl QueryParser {
                     context.router_context.bind,
                     &mut self.explain_recorder,
                 )?;
-                let shard = Self::converge(shards, ConvergeAlgorithm::default());
+                let shard = Self::converge(&shards, ConvergeAlgorithm::default());
                 if let Some(recorder) = self.recorder_mut() {
                     recorder.record_entry(
                         Some(shard.clone()),

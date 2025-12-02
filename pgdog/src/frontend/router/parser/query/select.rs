@@ -1,5 +1,6 @@
-use crate::frontend::router::parser::{
-    cache::CachedAst, from_clause::FromClause, where_clause::TablesSource,
+use crate::frontend::router::{
+    parser::{cache::CachedAst, from_clause::FromClause, where_clause::TablesSource},
+    sharding::SchemaSharder,
 };
 
 use super::*;
@@ -65,23 +66,18 @@ impl QueryParser {
         }
 
         // Schema-based sharding.
+        let mut schema_sharder = SchemaSharder::default();
         for table in cached_ast.tables() {
-            if let Some(schema) = context.sharding_schema.schemas.get(table.schema()) {
-                let shard: Shard = schema.shard().into();
-
-                if shards.insert(shard.clone()) {
-                    if let Some(recorder) = self.recorder_mut() {
-                        recorder.record_entry(
-                            Some(shard.clone()),
-                            format!("SELECT matched schema {}", schema.name()),
-                        );
-                    }
-                }
+            let schema = table.schema();
+            schema_sharder.resolve(schema, &context.sharding_schema.schemas);
+        }
+        if let Some((shard, schema)) = schema_sharder.get() {
+            if let Some(recorder) = self.recorder_mut() {
+                recorder.record_entry(
+                    Some(shard.clone()),
+                    format!("SELECT matched schema {}", schema),
+                );
             }
-
-            // Converge to the first direct shard.
-            let shard = Self::converge(shards.clone(), ConvergeAlgorithm::FirstDirect);
-            shards = HashSet::new();
             shards.insert(shard);
         }
 
@@ -109,7 +105,7 @@ impl QueryParser {
             }
         }
 
-        let shard = Self::converge(shards, ConvergeAlgorithm::default());
+        let shard = Self::converge(&shards, ConvergeAlgorithm::default());
         let aggregates = Aggregate::parse(stmt)?;
         let limit = LimitClause::new(stmt, context.router_context.bind).limit_offset()?;
         let distinct = Distinct::new(stmt).distinct()?;
