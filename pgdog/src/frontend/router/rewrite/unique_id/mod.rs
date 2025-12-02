@@ -2,7 +2,7 @@
 
 use pg_query::{
     protobuf::{a_const::Val, AConst, Node, ParamRef, ParseResult, TypeCast, TypeName},
-    NodeEnum, NodeRef,
+    NodeEnum,
 };
 
 pub mod explain;
@@ -77,16 +77,131 @@ fn bigint_const(id: i64) -> NodeEnum {
 
 /// Find the maximum parameter number ($N) in a parse result.
 pub fn max_param_number(result: &ParseResult) -> i32 {
-    result
-        .nodes()
-        .iter()
-        .filter_map(|(node, _, _, _)| {
-            if let NodeRef::ParamRef(p) = node {
-                Some(p.number)
-            } else {
-                None
+    let mut max = 0;
+    for stmt in &result.stmts {
+        if let Some(ref stmt) = stmt.stmt {
+            find_max_param(&stmt.node, &mut max);
+        }
+    }
+    max
+}
+
+fn find_max_param(node: &Option<NodeEnum>, max: &mut i32) {
+    let Some(node) = node else {
+        return;
+    };
+
+    match node {
+        NodeEnum::ParamRef(param) => {
+            if param.number > *max {
+                *max = param.number;
             }
-        })
-        .max()
-        .unwrap_or(0)
+        }
+        NodeEnum::TypeCast(cast) => {
+            if let Some(ref arg) = cast.arg {
+                find_max_param(&arg.node, max);
+            }
+        }
+        NodeEnum::FuncCall(func) => {
+            for arg in &func.args {
+                find_max_param(&arg.node, max);
+            }
+        }
+        NodeEnum::AExpr(expr) => {
+            if let Some(ref lexpr) = expr.lexpr {
+                find_max_param(&lexpr.node, max);
+            }
+            if let Some(ref rexpr) = expr.rexpr {
+                find_max_param(&rexpr.node, max);
+            }
+        }
+        NodeEnum::SelectStmt(stmt) => {
+            for item in &stmt.target_list {
+                find_max_param(&item.node, max);
+            }
+            for item in &stmt.values_lists {
+                find_max_param(&item.node, max);
+            }
+            for item in &stmt.from_clause {
+                find_max_param(&item.node, max);
+            }
+            if let Some(ref clause) = stmt.where_clause {
+                find_max_param(&clause.node, max);
+            }
+            if let Some(ref limit) = stmt.limit_count {
+                find_max_param(&limit.node, max);
+            }
+            if let Some(ref offset) = stmt.limit_offset {
+                find_max_param(&offset.node, max);
+            }
+        }
+        NodeEnum::InsertStmt(stmt) => {
+            if let Some(ref select) = stmt.select_stmt {
+                find_max_param(&select.node, max);
+            }
+        }
+        NodeEnum::UpdateStmt(stmt) => {
+            for item in &stmt.target_list {
+                find_max_param(&item.node, max);
+            }
+            if let Some(ref clause) = stmt.where_clause {
+                find_max_param(&clause.node, max);
+            }
+        }
+        NodeEnum::DeleteStmt(stmt) => {
+            if let Some(ref clause) = stmt.where_clause {
+                find_max_param(&clause.node, max);
+            }
+        }
+        NodeEnum::ResTarget(res) => {
+            if let Some(ref val) = res.val {
+                find_max_param(&val.node, max);
+            }
+        }
+        NodeEnum::List(list) => {
+            for item in &list.items {
+                find_max_param(&item.node, max);
+            }
+        }
+        NodeEnum::CoalesceExpr(coalesce) => {
+            for arg in &coalesce.args {
+                find_max_param(&arg.node, max);
+            }
+        }
+        NodeEnum::CaseExpr(case) => {
+            if let Some(ref arg) = case.arg {
+                find_max_param(&arg.node, max);
+            }
+            for when in &case.args {
+                find_max_param(&when.node, max);
+            }
+            if let Some(ref defresult) = case.defresult {
+                find_max_param(&defresult.node, max);
+            }
+        }
+        NodeEnum::CaseWhen(when) => {
+            if let Some(ref expr) = when.expr {
+                find_max_param(&expr.node, max);
+            }
+            if let Some(ref result) = when.result {
+                find_max_param(&result.node, max);
+            }
+        }
+        NodeEnum::BoolExpr(expr) => {
+            for arg in &expr.args {
+                find_max_param(&arg.node, max);
+            }
+        }
+        NodeEnum::NullTest(test) => {
+            if let Some(ref arg) = test.arg {
+                find_max_param(&arg.node, max);
+            }
+        }
+        NodeEnum::ExplainStmt(stmt) => {
+            if let Some(ref query) = stmt.query {
+                find_max_param(&query.node, max);
+            }
+        }
+        _ => {}
+    }
 }

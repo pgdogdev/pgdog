@@ -4,7 +4,7 @@ use pg_query::NodeEnum;
 
 use super::{
     super::{Context, Error, RewriteModule},
-    InsertUniqueIdRewrite, SelectUniqueIdRewrite, UpdateUniqueIdRewrite,
+    max_param_number, InsertUniqueIdRewrite, SelectUniqueIdRewrite, UpdateUniqueIdRewrite,
 };
 
 #[derive(Default)]
@@ -81,7 +81,7 @@ impl ExplainUniqueIdRewrite {
 
         let mut bind = input.bind_take();
         let extended = input.extended();
-        let mut parameter_counter = 0;
+        let mut parameter_counter = max_param_number(input.parse_result());
 
         if let Some(NodeEnum::ExplainStmt(stmt)) = input
             .stmt_mut()?
@@ -130,6 +130,7 @@ impl ExplainUniqueIdRewrite {
 
         let mut bind = input.bind_take();
         let extended = input.extended();
+        let mut param_counter = max_param_number(input.parse_result());
 
         if let Some(NodeEnum::ExplainStmt(stmt)) = input
             .stmt_mut()?
@@ -140,7 +141,12 @@ impl ExplainUniqueIdRewrite {
             if let Some(NodeEnum::InsertStmt(insert)) =
                 stmt.query.as_mut().and_then(|q| q.node.as_mut())
             {
-                InsertUniqueIdRewrite::rewrite_insert(insert, &mut bind, extended)?;
+                InsertUniqueIdRewrite::rewrite_insert(
+                    insert,
+                    &mut bind,
+                    extended,
+                    &mut param_counter,
+                )?;
             }
         }
 
