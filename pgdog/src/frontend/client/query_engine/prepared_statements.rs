@@ -35,6 +35,8 @@ impl QueryEngine {
             }
         }
 
+        println!("req: {:#?}", context.client_request);
+
         Ok(())
     }
 }

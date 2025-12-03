@@ -226,6 +226,7 @@ impl Bind {
             len: bytes.len() as i32,
             data: bytes,
         });
+        self.original = None;
         // Param codes are 1-indexed.
         Ok(self.params.len() as i32)
     }
@@ -244,6 +245,7 @@ impl Bind {
             }
         }
         self.params.push(param.parameter.clone());
+        self.original = None;
         Ok(self.params.len() as i32)
     }
 
@@ -505,5 +507,54 @@ mod test {
         assert_eq!(decoded.codes().len(), 0);
         assert_eq!(decoded.statement(), "__pgdog_large");
         assert_eq!(bytes.len(), decoded.len());
+    }
+
+    #[test]
+    fn test_add_parameter_produces_correct_bind() {
+        // Start with an existing Bind message parsed from bytes
+        let original_bind = Bind::new_params_codes(
+            "original_stmt",
+            &[Parameter::new(b"original_value")],
+            &[Format::Text],
+        );
+        let original_bytes = original_bind.to_bytes().unwrap();
+        let mut bind = Bind::from_bytes(original_bytes.clone()).unwrap();
+
+        // Verify original is set after parsing
+        assert!(bind.original.is_some());
+
+        // Add a new parameter - this should clear original
+        bind.add_parameter(Datum::Text("added_param".to_string()))
+            .unwrap();
+
+        // Verify original is now None
+        assert!(bind.original.is_none());
+
+        // Serialize to bytes
+        let new_bytes = bind.to_bytes().unwrap();
+
+        // The new bytes should be different from original (new param added)
+        assert_ne!(original_bytes, new_bytes);
+
+        // Deserialize and verify the message is correct
+        let decoded = Bind::from_bytes(new_bytes.clone()).unwrap();
+
+        // Verify statement name preserved
+        assert_eq!(decoded.statement(), "original_stmt");
+
+        // Verify we have 2 parameters now (original + added)
+        assert_eq!(decoded.params_raw().len(), 2);
+
+        // Verify first parameter (original)
+        let param0 = decoded.parameter(0).unwrap().unwrap();
+        assert_eq!(param0.text(), Some("original_value"));
+
+        // Verify second parameter (added)
+        let param1 = decoded.parameter(1).unwrap().unwrap();
+        assert_eq!(param1.text(), Some("added_param"));
+
+        // Verify round-trip produces identical bytes
+        let re_encoded = decoded.to_bytes().unwrap();
+        assert_eq!(new_bytes, re_encoded);
     }
 }
