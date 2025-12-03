@@ -1,4 +1,4 @@
-use std::{collections::HashMap, ops::Deref};
+use std::{collections::BTreeMap, ops::Deref};
 
 use super::Shard;
 use crate::backend::pool::replicas::DetectedRole;
@@ -7,19 +7,19 @@ pub type DatabaseNumber = usize;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DetectedRoles {
-    roles: HashMap<DatabaseNumber, DetectedRole>,
+    roles: BTreeMap<DatabaseNumber, DetectedRole>,
 }
 
 impl Deref for DetectedRoles {
-    type Target = HashMap<DatabaseNumber, DetectedRole>;
+    type Target = BTreeMap<DatabaseNumber, DetectedRole>;
 
     fn deref(&self) -> &Self::Target {
         &self.roles
     }
 }
 
-impl From<HashMap<DatabaseNumber, DetectedRole>> for DetectedRoles {
-    fn from(value: HashMap<DatabaseNumber, DetectedRole>) -> Self {
+impl From<BTreeMap<DatabaseNumber, DetectedRole>> for DetectedRoles {
+    fn from(value: BTreeMap<DatabaseNumber, DetectedRole>) -> Self {
         Self { roles: value }
     }
 }
