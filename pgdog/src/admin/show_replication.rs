@@ -45,7 +45,7 @@ impl Command for ShowReplication {
                     let mut row = DataRow::new();
                     let state = pool.state();
 
-                    let lsn_read = state.lsn_stats.lsn.lsn > 0;
+                    let valid = state.lsn_stats.valid();
                     let lsn_age = now.duration_since(state.lsn_stats.fetched);
 
                     row.add(pool.id() as i64)
@@ -55,7 +55,7 @@ impl Command for ShowReplication {
                         .add(pool.addr().port as i64)
                         .add(shard_num as i64)
                         .add(role.to_string())
-                        .add(if lsn_read {
+                        .add(if valid {
                             state
                                 .replica_lag
                                 .as_millis()
@@ -64,17 +64,17 @@ impl Command for ShowReplication {
                         } else {
                             Data::null()
                         })
-                        .add(if lsn_read {
+                        .add(if valid {
                             state.lsn_stats.lsn.to_string().to_data_row_column()
                         } else {
                             Data::null()
                         })
-                        .add(if lsn_read {
+                        .add(if valid {
                             lsn_age.as_millis().to_string().to_data_row_column()
                         } else {
                             Data::null()
                         })
-                        .add(if lsn_read {
+                        .add(if valid {
                             state.lsn_stats.replica.to_data_row_column()
                         } else {
                             Data::null()
