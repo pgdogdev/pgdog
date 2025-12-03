@@ -1,8 +1,10 @@
-use pg_query::protobuf::Integer;
-use pg_query::protobuf::{a_const::Val, SelectStmt};
+use pg_query::protobuf::{Integer, ResTarget};
+use pg_query::protobuf::{a_const::Val, SelectStmt, String as PgQueryString, Node, ColumnRef};
 use pg_query::NodeEnum;
 
 use crate::frontend::router::parser::{ExpressionRegistry, Function};
+
+use tracing::{debug, error, info, trace, warn};
 
 use super::Error;
 
@@ -67,6 +69,42 @@ pub struct Aggregate {
     group_by: Vec<usize>,
 }
 
+// finds a column name in the target list and returns the index.
+fn target_list_to_index(stmt: &SelectStmt, column_name: &String) -> Option<usize> {
+    for (idx, node) in stmt.target_list.iter().enumerate() {
+        if let Some(node) = node.node.as_ref() {
+            match node {
+                NodeEnum::ResTarget(res_target_box) => {
+                    let res_target = res_target_box.as_ref();
+                    if let Some(node_box) = res_target.val.as_ref() {
+                        if let Some(inner_enum) = node_box.node.as_ref() {
+                            match inner_enum {
+                                NodeEnum::ColumnRef(column_ref) => {
+                                    if column_ref.fields.iter().any(
+                                        |field_node|
+                                        if let Some(node_box) = field_node.node.as_ref() {
+                                            match node_box {
+                                                NodeEnum::String(PgQueryString{ sval: found_column_name, .. }) => { found_column_name == column_name},
+                                                _ => false
+
+                                            }
+                                        } else { false }
+                                    ) {
+                                        return Some(idx);
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                },
+                _ => {}
+            }
+        }
+    }
+    return None
+}
+
 impl Aggregate {
     /// Figure out what aggregates are present and which ones PgDog supports.
     pub fn parse(stmt: &SelectStmt) -> Result<Self, Error> {
@@ -81,7 +119,14 @@ impl Aggregate {
                         Val::Ival(Integer { ival }) => Some(*ival as usize - 1), // We use 0-indexed arrays, Postgres uses 1-indexed.
                         _ => None,
                     }),
-                    _ => None,
+                    NodeEnum::ColumnRef(column_ref) => column_ref.fields.iter().map(|node| match node {
+                        Node{node: Some(NodeEnum::String(PgQueryString{sval: column_name}))} => {
+                            trace!("MIKE: found column name: {}", column_name);
+                            target_list_to_index(stmt, column_name)
+                        }
+                        _ => None
+                    }).next(), // NOTE: should be a vec we're going into here.
+                    _ => None
                 })
             })
             .flatten()
