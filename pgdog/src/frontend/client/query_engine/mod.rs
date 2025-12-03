@@ -125,7 +125,7 @@ impl QueryEngine {
         self.set_state(State::Active); // Client is active.
 
         // Rewrite prepared statements.
-        self.rewrite(context)?;
+        self.rewrite_request(context)?;
 
         // Intercept commands we don't have to forward to a server.
         if self.intercept_incomplete(context).await? {

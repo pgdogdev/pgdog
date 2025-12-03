@@ -4,7 +4,10 @@ use super::*;
 
 impl QueryEngine {
     /// Rewrite extended protocol messages.
-    pub(super) fn rewrite(&mut self, context: &mut QueryEngineContext<'_>) -> Result<(), Error> {
+    pub(super) fn rewrite_request(
+        &mut self,
+        context: &mut QueryEngineContext<'_>,
+    ) -> Result<(), Error> {
         // Rewrite prepared statements to use global names.
         for message in context.client_request.iter_mut() {
             if message.extended() {
@@ -31,8 +34,6 @@ impl QueryEngine {
                 context.ast = rewrite.execute()?;
             }
         }
-
-        println!("after: {:#?}", context.client_request);
 
         Ok(())
     }
