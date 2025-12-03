@@ -17,7 +17,7 @@ impl QueryEngine {
 
             if !in_transaction && !cluster.online() {
                 // Reload cluster config.
-                self.backend.safe_reload().await.is_err() {
+                if self.backend.safe_reload().await.is_err() {
                     return Some(ErrorResponse::connection(
                         &identifier.user,
                         &identifier.database,
