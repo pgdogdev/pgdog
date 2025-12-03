@@ -70,7 +70,7 @@ impl<'a> RewriteRequest<'a> {
                 {
                     let cluster_stats = self.cluster.stats();
                     let mut lock = cluster_stats.lock();
-                    lock.rewrite = lock.rewrite.clone() + stats;
+                    lock.rewrite = lock.rewrite + stats;
                 }
 
                 let ast = ParseResult::new(ast, "".into());
@@ -117,7 +117,7 @@ impl<'a> RewriteRequest<'a> {
                 {
                     let cluster_stats = self.cluster.stats();
                     let mut lock = cluster_stats.lock();
-                    lock.rewrite = lock.rewrite.clone() + stats;
+                    lock.rewrite = lock.rewrite + stats;
                 }
 
                 let ast = ParseResult::new(ast, "".into());

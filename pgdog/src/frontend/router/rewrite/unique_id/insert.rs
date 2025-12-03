@@ -112,7 +112,7 @@ impl RewriteModule for InsertUniqueIdRewrite {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::net::bind::{Bind, Parameter};
+    use crate::net::Parse;
     use std::env::set_var;
 
     #[test]
@@ -130,7 +130,7 @@ mod test {
         .unwrap()
         .protobuf;
         let mut insert = InsertUniqueIdRewrite::default();
-        let mut input = Context::new(&stmt, None, None);
+        let mut input = Context::new(&stmt, None);
         insert.rewrite(&mut input).unwrap();
         let output = input.build().unwrap();
         let query = output.query().unwrap();
@@ -147,29 +147,14 @@ mod test {
         unsafe {
             set_var("NODE_ID", "pgdog-prod-1");
         }
-        let stmt = pg_query::parse(
-            r#"
+        let query = r#"
             INSERT INTO omnisharded (id, settings)
             VALUES
                 (pgdog.unique_id(), $1::JSONB),
-                (pgdog.unique_id(), $2::JSONB)"#,
-        )
-        .unwrap()
-        .protobuf;
-        let bind = Bind::new_params(
-            "",
-            &[
-                Parameter {
-                    len: 2,
-                    data: "{}".into(),
-                },
-                Parameter {
-                    len: 2,
-                    data: "{}".into(),
-                },
-            ],
-        );
-        let mut input = Context::new(&stmt, Some(&bind), None);
+                (pgdog.unique_id(), $2::JSONB)"#;
+        let stmt = pg_query::parse(query).unwrap().protobuf;
+        let parse = Parse::new_anonymous(query);
+        let mut input = Context::new(&stmt, Some(&parse));
         InsertUniqueIdRewrite::default()
             .rewrite(&mut input)
             .unwrap();
@@ -178,5 +163,10 @@ mod test {
             output.query().unwrap(),
             "INSERT INTO omnisharded (id, settings) VALUES ($3::bigint, $1::jsonb), ($4::bigint, $2::jsonb)"
         );
+        // Verify the rewrite plan has the correct parameters
+        let plan = output.plan().unwrap();
+        assert_eq!(plan.unique_ids.len(), 2);
+        assert_eq!(plan.unique_ids[0].param_ref, 3);
+        assert_eq!(plan.unique_ids[1].param_ref, 4);
     }
 }

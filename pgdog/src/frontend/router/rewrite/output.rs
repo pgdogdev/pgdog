@@ -66,6 +66,14 @@ impl StepOutput {
             Self::RewriteInPlace { stmt, .. } => Ok(stmt.as_str()),
         }
     }
+
+    /// Get the rewrite plan, if any.
+    pub fn plan(&self) -> Result<&ImmutableRewritePlan, ()> {
+        match self {
+            Self::NoOp => Err(()),
+            Self::RewriteInPlace { plan, .. } => Ok(plan),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

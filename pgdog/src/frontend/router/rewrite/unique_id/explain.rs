@@ -203,7 +203,7 @@ mod test {
             .unwrap()
             .protobuf;
         let mut rewrite = ExplainUniqueIdRewrite::default();
-        let mut input = Context::new(&stmt, None, None);
+        let mut input = Context::new(&stmt, None);
         rewrite.rewrite(&mut input).unwrap();
         let output = input.build().unwrap();
         let query = output.query().unwrap();
@@ -221,7 +221,7 @@ mod test {
             .unwrap()
             .protobuf;
         let mut rewrite = ExplainUniqueIdRewrite::default();
-        let mut input = Context::new(&stmt, None, None);
+        let mut input = Context::new(&stmt, None);
         rewrite.rewrite(&mut input).unwrap();
         let output = input.build().unwrap();
         let query = output.query().unwrap();
@@ -240,7 +240,7 @@ mod test {
                 .unwrap()
                 .protobuf;
         let mut rewrite = ExplainUniqueIdRewrite::default();
-        let mut input = Context::new(&stmt, None, None);
+        let mut input = Context::new(&stmt, None);
         rewrite.rewrite(&mut input).unwrap();
         let output = input.build().unwrap();
         let query = output.query().unwrap();
@@ -258,7 +258,7 @@ mod test {
             .unwrap()
             .protobuf;
         let mut rewrite = ExplainUniqueIdRewrite::default();
-        let mut input = Context::new(&stmt, None, None);
+        let mut input = Context::new(&stmt, None);
         rewrite.rewrite(&mut input).unwrap();
         let output = input.build().unwrap();
         let query = output.query().unwrap();
@@ -271,7 +271,7 @@ mod test {
     fn test_explain_no_unique_id() {
         let stmt = pg_query::parse(r#"EXPLAIN SELECT 1"#).unwrap().protobuf;
         let mut rewrite = ExplainUniqueIdRewrite::default();
-        let mut input = Context::new(&stmt, None, None);
+        let mut input = Context::new(&stmt, None);
         rewrite.rewrite(&mut input).unwrap();
         let output = input.build().unwrap();
         assert!(matches!(output, super::super::super::StepOutput::NoOp));

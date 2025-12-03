@@ -5,7 +5,7 @@ use pg_query::protobuf::{ParseResult, RawStmt};
 use super::{
     output::RewriteActionKind, stats::RewriteStats, Error, RewriteAction, RewritePlan, StepOutput,
 };
-use crate::net::{Bind, Parse, ProtocolMessage, Query};
+use crate::net::{Parse, ProtocolMessage, Query};
 
 #[derive(Debug, Clone)]
 pub struct Context<'a> {

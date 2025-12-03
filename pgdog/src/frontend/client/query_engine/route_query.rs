@@ -17,14 +17,14 @@ impl QueryEngine {
 
             if !in_transaction && !cluster.online() {
                 // Reload cluster config.
-                if let Err(_) = self.backend.safe_reload().await {
+                self.backend.safe_reload().await.is_err() {
                     return Some(ErrorResponse::connection(
                         &identifier.user,
                         &identifier.database,
                     ));
                 }
 
-                if let Err(_) = self.backend.cluster() {
+                if self.backend.cluster().is_err() {
                     return Some(ErrorResponse::connection(
                         &identifier.user,
                         &identifier.database,

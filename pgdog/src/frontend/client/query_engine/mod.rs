@@ -5,7 +5,7 @@ use crate::{
         client::query_engine::hooks::QueryEngineHooks,
         router::{
             parser::Shard,
-            rewrite::{self, RewriteRequest, RewriteState},
+            rewrite::{RewriteRequest, RewriteState},
             Route,
         },
         BufferedQuery, Client, Command, Comms, Error, Router, RouterContext, Stats,

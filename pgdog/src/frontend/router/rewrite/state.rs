@@ -5,10 +5,7 @@ use std::collections::HashMap;
 use bytes::Bytes;
 
 use super::{Error, ImmutableRewritePlan};
-use crate::{
-    frontend::router::parser::cache::CachedAst,
-    net::{Bind, Parse},
-};
+use crate::net::{Bind, Parse};
 
 #[derive(Debug, Default, Clone)]
 pub struct RewriteState {

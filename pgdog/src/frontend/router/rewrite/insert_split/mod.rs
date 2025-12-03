@@ -79,31 +79,17 @@ impl RewriteModule for InsertSplitRewrite {
 
 #[cfg(test)]
 mod test {
-    use crate::net::bind::Parameter;
+    use crate::net::Parse;
 
     use super::*;
 
     #[test]
     fn test_insert_split() {
-        let stmt = pg_query::parse(
-            "INSERT INTO users (id, email, created_at)
-            VALUES ($1, 'test@test.com', NOW()), (123, $2, '2025-01-01') RETURNING *",
-        )
-        .unwrap();
-        let bind = Bind::new_params(
-            "",
-            &[
-                Parameter {
-                    len: 4,
-                    data: "1234".into(),
-                },
-                Parameter {
-                    len: 14,
-                    data: "hello@test.com".into(),
-                },
-            ],
-        );
-        let mut context = Context::new(&stmt.protobuf, Some(&bind), None);
+        let query = "INSERT INTO users (id, email, created_at)
+            VALUES ($1, 'test@test.com', NOW()), (123, $2, '2025-01-01') RETURNING *";
+        let stmt = pg_query::parse(query).unwrap();
+        let parse = Parse::new_anonymous(query);
+        let mut context = Context::new(&stmt.protobuf, Some(&parse));
         let mut module = InsertSplitRewrite::default();
         module.rewrite(&mut context).unwrap();
     }

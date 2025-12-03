@@ -99,7 +99,7 @@ impl RewriteModule for UpdateUniqueIdRewrite {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::net::{bind::Parameter, Bind};
+    use crate::net::Parse;
     use std::env::set_var;
 
     #[test]
@@ -112,7 +112,7 @@ mod test {
                 .unwrap()
                 .protobuf;
         let mut update = UpdateUniqueIdRewrite::default();
-        let mut input = Context::new(&stmt, None, None);
+        let mut input = Context::new(&stmt, None);
         update.rewrite(&mut input).unwrap();
         let output = input.build().unwrap();
         assert!(!output.query().unwrap().contains("pgdog.unique_id"));
@@ -123,25 +123,11 @@ mod test {
         unsafe {
             set_var("NODE_ID", "pgdog-prod-1");
         }
-        let stmt = pg_query::parse(
-            r#"UPDATE omnisharded SET id = pgdog.unique_id(), settings = $1 WHERE old_id = $2"#,
-        )
-        .unwrap()
-        .protobuf;
-        let bind = Bind::new_params(
-            "",
-            &[
-                Parameter {
-                    len: 2,
-                    data: "{}".into(),
-                },
-                Parameter {
-                    len: 3,
-                    data: "123".into(),
-                },
-            ],
-        );
-        let mut input = Context::new(&stmt, Some(&bind), None);
+        let query =
+            r#"UPDATE omnisharded SET id = pgdog.unique_id(), settings = $1 WHERE old_id = $2"#;
+        let stmt = pg_query::parse(query).unwrap().protobuf;
+        let parse = Parse::new_anonymous(query);
+        let mut input = Context::new(&stmt, Some(&parse));
         UpdateUniqueIdRewrite::default()
             .rewrite(&mut input)
             .unwrap();
@@ -150,5 +136,9 @@ mod test {
             output.query().unwrap(),
             "UPDATE omnisharded SET id = $3::bigint, settings = $1 WHERE old_id = $2"
         );
+        // Verify the rewrite plan has the correct parameters
+        let plan = output.plan().unwrap();
+        assert_eq!(plan.unique_ids.len(), 1);
+        assert_eq!(plan.unique_ids[0].param_ref, 3);
     }
 }

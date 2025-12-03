@@ -221,7 +221,7 @@ impl RewriteModule for SelectUniqueIdRewrite {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::net::{bind::Parameter, Bind};
+    use crate::net::Parse;
     use std::env::set_var;
 
     #[test]
@@ -233,7 +233,7 @@ mod test {
             .unwrap()
             .protobuf;
         let mut rewrite = SelectUniqueIdRewrite::default();
-        let mut input = Context::new(&stmt, None, None);
+        let mut input = Context::new(&stmt, None);
         rewrite.rewrite(&mut input).unwrap();
         let output = input.build().unwrap();
         println!("output: {}", output.query().unwrap());
@@ -241,21 +241,14 @@ mod test {
     }
 
     #[test]
-    fn test_unique_id_select_with_bind() {
+    fn test_unique_id_select_with_parse() {
         unsafe {
             set_var("NODE_ID", "pgdog-prod-1");
         }
-        let stmt = pg_query::parse(r#"SELECT pgdog.unique_id() AS id, $1 AS name"#)
-            .unwrap()
-            .protobuf;
-        let bind = Bind::new_params(
-            "",
-            &[Parameter {
-                len: 4,
-                data: "test".into(),
-            }],
-        );
-        let mut input = Context::new(&stmt, Some(&bind), None);
+        let query = r#"SELECT pgdog.unique_id() AS id, $1 AS name"#;
+        let stmt = pg_query::parse(query).unwrap().protobuf;
+        let parse = Parse::new_anonymous(query);
+        let mut input = Context::new(&stmt, Some(&parse));
         SelectUniqueIdRewrite::default()
             .rewrite(&mut input)
             .unwrap();
@@ -264,6 +257,10 @@ mod test {
             output.query().unwrap(),
             "SELECT $2::bigint AS id, $1 AS name"
         );
+        // Verify the rewrite plan has the correct parameters
+        let plan = output.plan().unwrap();
+        assert_eq!(plan.unique_ids.len(), 1);
+        assert_eq!(plan.unique_ids[0].param_ref, 2);
     }
 
     #[test]
@@ -276,7 +273,7 @@ mod test {
                 .unwrap()
                 .protobuf;
         let mut rewrite = SelectUniqueIdRewrite::default();
-        let mut input = Context::new(&stmt, None, None);
+        let mut input = Context::new(&stmt, None);
         rewrite.rewrite(&mut input).unwrap();
         let output = input.build().unwrap();
         assert!(!output.query().unwrap().contains("pgdog.unique_id"));
@@ -291,7 +288,7 @@ mod test {
             .unwrap()
             .protobuf;
         let mut rewrite = SelectUniqueIdRewrite::default();
-        let mut input = Context::new(&stmt, None, None);
+        let mut input = Context::new(&stmt, None);
         rewrite.rewrite(&mut input).unwrap();
         let output = input.build().unwrap();
         assert!(!output.query().unwrap().contains("pgdog.unique_id"));
@@ -308,7 +305,7 @@ mod test {
         .unwrap()
         .protobuf;
         let mut rewrite = SelectUniqueIdRewrite::default();
-        let mut input = Context::new(&stmt, None, None);
+        let mut input = Context::new(&stmt, None);
         rewrite.rewrite(&mut input).unwrap();
         let output = input.build().unwrap();
         assert!(!output.query().unwrap().contains("pgdog.unique_id"));
@@ -318,7 +315,7 @@ mod test {
     fn test_no_rewrite_when_no_unique_id() {
         let stmt = pg_query::parse(r#"SELECT id FROM users"#).unwrap().protobuf;
         let mut rewrite = SelectUniqueIdRewrite::default();
-        let mut input = Context::new(&stmt, None, None);
+        let mut input = Context::new(&stmt, None);
         rewrite.rewrite(&mut input).unwrap();
         let output = input.build().unwrap();
         assert!(matches!(output, super::super::super::StepOutput::NoOp));
