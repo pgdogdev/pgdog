@@ -13,7 +13,9 @@ use crate::{
 
 use super::*;
 
-static QUERY: &str = "
+static AURORA_DETECTION_QUERY: &str = "SELECT aurora_version()";
+
+static LSN_QUERY: &str = "
 SELECT
     pg_is_in_recovery() AS replica,
     CASE
@@ -35,11 +37,19 @@ SELECT
             pg_current_wal_lsn() - '0/0'::pg_lsn
     END AS offset_bytes,
     CASE
-    WHEN pg_is_in_recovery() THEN
-        COALESCE(pg_last_xact_replay_timestamp(), now())
-    ELSE
-        now()
+        WHEN pg_is_in_recovery() THEN
+            COALESCE(pg_last_xact_replay_timestamp(), now())
+        ELSE
+            now()
     END AS timestamp
+";
+
+static AURORA_LSN_QUERY: &str = "
+SELECT
+    pg_is_in_recovery() AS replica,
+    '0/0'::pg_lsn AS lsn,
+    0::bigint AS offset_bytes,
+    now() AS timestamp
 ";
 
 /// LSN information.
@@ -47,14 +57,16 @@ SELECT
 pub struct LsnStats {
     /// pg_is_in_recovery()
     pub replica: bool,
-    /// Replay LSN oon replica, current LSN on primary
+    /// Replay LSN on replica, current LSN on primary.
     pub lsn: Lsn,
-    /// LSN position in bytes from 0
+    /// LSN position in bytes from 0.
     pub offset_bytes: i64,
     /// Server timestamp.
     pub timestamp: TimestampTz,
     /// Our timestamp.
     pub fetched: Instant,
+    /// Running on Aurora.
+    pub aurora: bool,
 }
 
 impl Default for LsnStats {
@@ -65,6 +77,7 @@ impl Default for LsnStats {
             offset_bytes: 0,
             timestamp: TimestampTz::default(),
             fetched: Instant::now(),
+            aurora: false,
         }
     }
 }
@@ -77,17 +90,18 @@ impl LsnStats {
 
     /// Stats contain real data.
     pub fn valid(&self) -> bool {
-        self.lsn.lsn > 0
+        self.aurora || self.lsn.lsn > 0
     }
 }
-impl From<DataRow> for LsnStats {
-    fn from(value: DataRow) -> Self {
+impl LsnStats {
+    fn from_row(value: DataRow, aurora: bool) -> Self {
         Self {
             replica: value.get(0, Format::Text).unwrap_or_default(),
             lsn: value.get(1, Format::Text).unwrap_or_default(),
             offset_bytes: value.get(2, Format::Text).unwrap_or_default(),
             timestamp: value.get(3, Format::Text).unwrap_or_default(),
             fetched: Instant::now(),
+            aurora,
         }
     }
 }
@@ -106,6 +120,50 @@ impl LsnMonitor {
         });
     }
 
+    async fn run_query(&self, conn: &mut Guard, query: &str) -> Option<DataRow> {
+        match timeout(self.pool.config().lsn_check_timeout, conn.fetch_all(query)).await {
+            Ok(Ok(rows)) => rows.into_iter().next(),
+            Ok(Err(err)) => {
+                error!("lsn monitor query error: {} [{}]", err, self.pool.addr());
+                None
+            }
+            Err(_) => {
+                error!("lsn monitor query timeout [{}]", self.pool.addr());
+                None
+            }
+        }
+    }
+
+    async fn detect_aurora(&self, conn: &mut Guard) -> Option<bool> {
+        match timeout(
+            self.pool.config().lsn_check_timeout,
+            conn.fetch_all::<DataRow>(AURORA_DETECTION_QUERY),
+        )
+        .await
+        {
+            Ok(Ok(_)) => {
+                debug!("aurora detected [{}]", self.pool.addr());
+                Some(true)
+            }
+            Ok(Err(crate::backend::Error::ExecutionError(_))) => Some(false),
+            Ok(Err(err)) => {
+                error!(
+                    "lsn monitor aurora detection error: {} [{}]",
+                    err,
+                    self.pool.addr()
+                );
+                None
+            }
+            Err(_) => {
+                error!(
+                    "lsn monitor aurora detection timeout [{}]",
+                    self.pool.addr()
+                );
+                None
+            }
+        }
+    }
+
     async fn spawn(&self) {
         select! {
             _ = sleep(self.pool.config().lsn_check_delay) => {},
@@ -114,6 +172,7 @@ impl LsnMonitor {
 
         debug!("lsn monitor loop is running [{}]", self.pool.addr());
 
+        let mut aurora_detected: Option<bool> = None;
         let mut interval = interval(self.pool.config().lsn_check_interval);
 
         loop {
@@ -131,34 +190,63 @@ impl LsnMonitor {
                 }
             };
 
-            let mut stats = match timeout(
-                self.pool.config().lsn_check_timeout,
-                conn.fetch_all::<LsnStats>(QUERY),
-            )
-            .await
-            {
-                Ok(Ok(stats)) => stats,
+            if aurora_detected.is_none() {
+                aurora_detected = self.detect_aurora(&mut conn).await;
+            }
 
-                Ok(Err(err)) => {
-                    error!("lsn monitor query error: {} [{}]", err, self.pool.addr());
-                    continue;
-                }
-
-                Err(_) => {
-                    error!("lsn monitor query timeout [{}]", self.pool.addr());
-                    continue;
-                }
+            let Some(aurora) = aurora_detected else {
+                continue;
             };
-            drop(conn);
 
-            if let Some(stats) = stats.pop() {
-                {
-                    *self.pool.inner().lsn_stats.write() = stats;
-                }
+            let query = if aurora { AURORA_LSN_QUERY } else { LSN_QUERY };
+
+            if let Some(row) = self.run_query(&mut conn, query).await {
+                drop(conn);
+                let stats = LsnStats::from_row(row, aurora);
+                *self.pool.inner().lsn_stats.write() = stats;
                 trace!("lsn monitor stats updated [{}]", self.pool.addr());
             }
         }
 
         debug!("lsn monitor shutdown [{}]", self.pool.addr());
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_aurora_stats_valid_with_zero_lsn() {
+        let stats = LsnStats {
+            replica: true,
+            lsn: Lsn::default(),
+            offset_bytes: 0,
+            timestamp: TimestampTz::default(),
+            fetched: Instant::now(),
+            aurora: true,
+        };
+
+        assert!(
+            stats.valid(),
+            "Aurora stats should be valid even with zero LSN"
+        );
+    }
+
+    #[test]
+    fn test_non_aurora_stats_invalid_with_zero_lsn() {
+        let stats = LsnStats {
+            replica: true,
+            lsn: Lsn::default(),
+            offset_bytes: 0,
+            timestamp: TimestampTz::default(),
+            fetched: Instant::now(),
+            aurora: false,
+        };
+
+        assert!(
+            !stats.valid(),
+            "Non-Aurora stats should be invalid with zero LSN"
+        );
     }
 }

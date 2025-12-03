@@ -1239,6 +1239,7 @@ mod tests {
                 offset_bytes: 1000,
                 timestamp: Default::default(),
                 fetched: Instant::now(),
+                aurora: false,
             };
             pool.set_lsn_stats(lsn_stats);
         }
@@ -1330,6 +1331,7 @@ mod tests {
                 offset_bytes: 1000,
                 timestamp: Default::default(),
                 fetched: Instant::now(),
+                aurora: false,
             };
             pool.set_lsn_stats(lsn_stats);
         }
@@ -1434,6 +1436,7 @@ mod tests {
                 offset_bytes: 1000,
                 timestamp: Default::default(),
                 fetched: Instant::now(),
+                aurora: false,
             };
             pool.set_lsn_stats(lsn_stats);
         }
@@ -1446,6 +1449,7 @@ mod tests {
                 offset_bytes: 1000,
                 timestamp: Default::default(),
                 fetched: Instant::now(),
+                aurora: false,
             };
             pool.set_lsn_stats(lsn_stats);
         }
