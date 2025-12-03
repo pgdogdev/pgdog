@@ -8,7 +8,7 @@ use crate::{
         router::parser::{cache::CachedAst, Cache},
         ClientRequest, PreparedStatements,
     },
-    net::ProtocolMessage,
+    net::{Protocol, ProtocolMessage},
 };
 
 pub struct RewriteRequest<'a> {
@@ -34,91 +34,117 @@ impl<'a> RewriteRequest<'a> {
         }
     }
 
-    /// Execute rewrite and return the query AST.
-    pub fn execute(&'a mut self) -> Result<CachedAst, Error> {
-        let schema = self.cluster.sharding_schema();
-
-        let (result, ast, extended) = {
-            let mut parse = None;
-            let mut bind = None;
-            let mut ast = None;
-
-            let schema = self.cluster.sharding_schema();
-
-            for message in self.request.iter() {
-                match message {
-                    ProtocolMessage::Parse(p) => {
-                        ast = Some(Cache::get().parse(p.query(), &schema)?);
-                        self.state.save(p.name(), ast.as_ref().unwrap());
-                        parse = Some(p);
-                    }
-
-                    ProtocolMessage::Query(query) => {
-                        ast = Some(Cache::get().parse_uncached(query.query(), &schema)?);
-                    }
-
-                    ProtocolMessage::Bind(b) => {
-                        let existing = self.state.get(b.statement());
-                        if let Some(existing) = existing {
-                            ast = Some(existing.clone());
-                            bind = Some(b);
-                        }
-                    }
-
-                    ProtocolMessage::Close(close) => {
-                        if close.is_statement() {
-                            self.state.remove(close.name());
-                        }
-                    }
-
-                    _ => (),
-                }
-            }
-
-            let ast = ast.ok_or(Error::EmptyQuery)?;
-
-            let mut context = Context::new(&ast.ast().protobuf, bind, parse);
-            let mut rewrite = Rewrite::new(self.prepared_statements);
-
-            let result = match rewrite.rewrite(&mut context) {
-                Ok(_) => context.build()?,
-                Err(Error::EmptyQuery) => StepOutput::NoOp,
-                Err(err) => return Err(err),
-            };
-
-            (result, ast, parse.is_some())
+    fn handle_parse(&mut self) -> Result<CachedAst, Error> {
+        let parse = self.request.iter().find(|p| p.code() == 'P');
+        let parse = if let Some(ProtocolMessage::Parse(parse)) = parse {
+            parse
+        } else {
+            return Err(Error::EmptyQuery);
         };
 
-        let ast = match result {
-            StepOutput::NoOp => {
-                debug!("rewrite was a no-op");
-                ast
-            }
+        let schema = self.cluster.sharding_schema();
+        let ast = Cache::get().parse(parse.query(), &schema)?;
+
+        let mut context = Context::new(&ast.ast().protobuf, Some(parse));
+        Rewrite::new(self.prepared_statements).rewrite(&mut context)?;
+        let output = context.build()?;
+
+        let ast = match output {
+            StepOutput::NoOp => ast,
             StepOutput::RewriteInPlace {
-                stmt,
-                ast,
                 actions,
+                ast,
+                stmt,
                 stats,
+                plan,
             } => {
-                debug!("rewrite in-place: {}", stmt);
+                debug!("rewrite (extended): {}", stmt);
+
+                self.state.save_plan(Some(parse), plan);
+
                 for action in actions {
                     action.execute(self.request);
                 }
+
                 // Update stats.
                 {
                     let cluster_stats = self.cluster.stats();
                     let mut lock = cluster_stats.lock();
                     lock.rewrite = lock.rewrite.clone() + stats;
                 }
+
                 let ast = ParseResult::new(ast, "".into());
-                // Cache new rewritten prepared statement.
-                if extended {
-                    Cache::get().save(&stmt, ast, &schema).unwrap()
-                } else {
-                    CachedAst::new_parsed(&stmt, ast, &schema).unwrap()
-                }
+                Cache::get().save(&stmt, ast, &schema)?
             }
         };
+
+        Ok(ast)
+    }
+
+    fn handle_query(&mut self) -> Result<CachedAst, Error> {
+        let query = self.request.iter().find(|p| p.code() == 'Q');
+        let query = if let Some(ProtocolMessage::Query(query)) = query {
+            query
+        } else {
+            return Err(Error::EmptyQuery);
+        };
+
+        let schema = self.cluster.sharding_schema();
+        let ast = Cache::get().parse_uncached(query.query(), &schema)?;
+
+        let mut context = Context::new(&ast.ast().protobuf, None);
+        Rewrite::new(self.prepared_statements).rewrite(&mut context)?;
+        let output = context.build()?;
+
+        let ast = match output {
+            StepOutput::NoOp => ast,
+            StepOutput::RewriteInPlace {
+                actions,
+                ast,
+                stmt,
+                stats,
+                plan,
+            } => {
+                debug!("rewrite (simple): {}", stmt);
+
+                self.state.save_plan(None, plan);
+
+                for action in actions {
+                    action.execute(self.request);
+                }
+
+                // Update stats.
+                {
+                    let cluster_stats = self.cluster.stats();
+                    let mut lock = cluster_stats.lock();
+                    lock.rewrite = lock.rewrite.clone() + stats;
+                }
+
+                let ast = ParseResult::new(ast, "".into());
+                CachedAst::new_parsed(&stmt, ast, &schema)?
+            }
+        };
+
+        Ok(ast)
+    }
+
+    /// Execute rewrite and return the query AST.
+    pub fn execute(&mut self) -> Result<Option<CachedAst>, Error> {
+        let mut ast: Option<CachedAst> = None;
+
+        for result in [self.handle_parse(), self.handle_query()] {
+            match result {
+                Ok(a) => ast = Some(a),
+                Err(Error::EmptyQuery) => continue,
+                Err(err) => return Err(err),
+            }
+        }
+        let parameters = self.request.parameters_mut()?;
+        if let Some(parameters) = parameters {
+            let plan = self.state.activate_plan(parameters)?;
+            plan.apply_bind(parameters)?;
+        }
+
         Ok(ast)
     }
 }

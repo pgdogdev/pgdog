@@ -11,6 +11,7 @@ pub mod error;
 pub mod insert_split;
 pub mod interface;
 pub mod output;
+pub mod plan;
 pub mod prepared;
 pub mod request;
 pub mod state;
@@ -21,6 +22,7 @@ pub use context::Context;
 pub use error::Error;
 pub use interface::RewriteModule;
 pub use output::{RewriteAction, StepOutput};
+pub use plan::{ImmutableRewritePlan, RewritePlan, UniqueIdPlan};
 pub use request::RewriteRequest;
 pub use state::RewriteState;
 

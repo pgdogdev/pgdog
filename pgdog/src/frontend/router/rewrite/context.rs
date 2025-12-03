@@ -2,7 +2,9 @@
 
 use pg_query::protobuf::{ParseResult, RawStmt};
 
-use super::{output::RewriteActionKind, stats::RewriteStats, Error, RewriteAction, StepOutput};
+use super::{
+    output::RewriteActionKind, stats::RewriteStats, Error, RewriteAction, RewritePlan, StepOutput,
+};
 use crate::net::{Bind, Parse, ProtocolMessage, Query};
 
 #[derive(Debug, Clone)]
@@ -12,30 +14,23 @@ pub struct Context<'a> {
     original: &'a ParseResult,
     // If an in-place rewrite was done, the statement is saved here.
     rewrite: Option<ParseResult>,
-    /// Original bind message, if any.
-    bind: Option<&'a Bind>,
-    /// Bind rewritten.
-    rewrite_bind: Option<Bind>,
     /// Additional messages to add to the request.
     result: Vec<RewriteAction>,
     /// Extended protocol.
     parse: Option<&'a Parse>,
+    /// Rewrite plan.
+    plan: RewritePlan,
 }
 
 impl<'a> Context<'a> {
     /// Create new input.
-    pub(super) fn new(
-        original: &'a ParseResult,
-        bind: Option<&'a Bind>,
-        parse: Option<&'a Parse>,
-    ) -> Self {
+    pub(super) fn new(original: &'a ParseResult, parse: Option<&'a Parse>) -> Self {
         Self {
             original,
-            bind,
             rewrite: None,
-            rewrite_bind: None,
             result: vec![],
             parse,
+            plan: RewritePlan::default(),
         }
     }
 
@@ -46,32 +41,12 @@ impl<'a> Context<'a> {
 
     /// We are rewriting an extended protocol request.
     pub fn extended(&self) -> bool {
-        self.parse().is_some() || self.bind().is_some()
+        self.parse().is_some()
     }
 
-    /// Get the Bind message, if set.
-    pub fn bind(&'a self) -> Option<&'a Bind> {
-        if let Some(ref rewrite_bind) = self.rewrite_bind {
-            Some(rewrite_bind)
-        } else {
-            self.bind
-        }
-    }
-
-    /// Take the Bind message for modification.
-    /// Don't forget to return it.
-    #[must_use]
-    pub fn bind_take(&mut self) -> Option<Bind> {
-        if self.rewrite_bind.is_none() {
-            self.rewrite_bind = self.bind.cloned();
-        }
-
-        self.rewrite_bind.take()
-    }
-
-    /// Put the bind message back.
-    pub fn bind_put(&mut self, bind: Option<Bind>) {
-        self.rewrite_bind = bind;
+    /// Get reference to rewrite plan for modification.
+    pub fn plan(&mut self) -> &mut RewritePlan {
+        &mut self.plan
     }
 
     /// Get the original (or modified) statement.
@@ -121,31 +96,19 @@ impl<'a> Context<'a> {
             Ok(StepOutput::NoOp)
         } else {
             let mut stats = RewriteStats::default();
-            let bind = self.rewrite_bind.take();
             let ast = self.rewrite.take().ok_or(Error::NoRewrite)?;
             let stmt = ast.deparse()?;
-            let extended = self.extended();
             let mut parse = self.parse().cloned();
 
             let mut actions = self.result;
 
-            if extended {
-                if let Some(mut parse) = parse.take() {
-                    parse.set_query(&stmt);
-                    actions.push(RewriteAction {
-                        message: parse.into(),
-                        action: RewriteActionKind::Replace,
-                    });
-                    stats.parse += 1;
-                }
-
-                if let Some(bind) = bind {
-                    actions.push(RewriteAction {
-                        message: bind.into(),
-                        action: RewriteActionKind::Replace,
-                    });
-                    stats.bind += 1;
-                }
+            if let Some(mut parse) = parse.take() {
+                parse.set_query(&stmt);
+                actions.push(RewriteAction {
+                    message: parse.into(),
+                    action: RewriteActionKind::Replace,
+                });
+                stats.parse += 1;
             } else {
                 actions.push(RewriteAction {
                     message: Query::new(stmt.clone()).into(),
@@ -159,6 +122,7 @@ impl<'a> Context<'a> {
                 ast,
                 actions,
                 stats,
+                plan: self.plan.freeze(),
             })
         }
     }

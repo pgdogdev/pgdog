@@ -134,11 +134,7 @@ impl QueryEngine {
                     context.prepared_statements,
                     &mut self.rewrite_state,
                 );
-                match rewrite.execute() {
-                    Ok(ast) => context.ast = Some(ast),
-                    Err(rewrite::Error::EmptyQuery) => (),
-                    Err(err) => return Err(err.into()),
-                }
+                context.ast = rewrite.execute()?;
             }
         }
 

@@ -1,6 +1,7 @@
 use pg_query::protobuf::ParseResult;
 
 use super::stats::RewriteStats;
+use super::ImmutableRewritePlan;
 use crate::{frontend::ClientRequest, net::ProtocolMessage};
 
 use std::mem::discriminant;
@@ -53,6 +54,7 @@ pub enum StepOutput {
         ast: ParseResult,
         stmt: String,
         stats: RewriteStats,
+        plan: ImmutableRewritePlan,
     },
 }
 

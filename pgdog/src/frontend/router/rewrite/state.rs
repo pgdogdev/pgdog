@@ -2,36 +2,43 @@
 
 use std::collections::HashMap;
 
-use crate::frontend::router::parser::cache::CachedAst;
+use bytes::Bytes;
+
+use super::{Error, ImmutableRewritePlan};
+use crate::{
+    frontend::router::parser::cache::CachedAst,
+    net::{Bind, Parse},
+};
 
 #[derive(Debug, Default, Clone)]
 pub struct RewriteState {
-    originals: HashMap<String, CachedAst>,
+    plans: HashMap<Bytes, ImmutableRewritePlan>,
+    active_plan: Option<ImmutableRewritePlan>,
 }
 
 impl RewriteState {
-    /// Save original AST into rewrite state.
-    ///
-    /// We use it to rewrite Bind messages. Instead of encapsulating
-    /// complex rewrite rules in an enum, we walk the AST and
-    /// perform whatever changes we need.
-    ///
-    pub fn save(&mut self, name: &str, ast: &CachedAst) {
-        self.originals.insert(name.to_string(), ast.clone());
+    /// Save rewrite plan for later use and active it for
+    /// this request.
+    pub fn save_plan(&mut self, parse: Option<&Parse>, plan: ImmutableRewritePlan) {
+        if let Some(parse) = parse {
+            self.plans.insert(parse.name_ref(), plan.clone());
+        }
+
+        self.active_plan = Some(plan);
     }
 
-    /// Get the original AST by statement name.
-    pub fn get(&self, name: &str) -> Option<&CachedAst> {
-        self.originals.get(name)
+    /// Activate plan for Bind, or error out if plan doesn't exist.
+    pub fn activate_plan(&mut self, bind: &Bind) -> Result<&ImmutableRewritePlan, Error> {
+        if let Some(plan) = self.plans.get(bind.statement_ref()) {
+            self.active_plan = Some(plan.clone());
+            self.plan()
+        } else {
+            Err(Error::NoRewrite)
+        }
     }
 
-    /// Remove AST from state.
-    pub fn remove(&mut self, name: &str) -> bool {
-        self.originals.remove(name).is_some()
-    }
-
-    /// Number of ASTs in the state.
-    pub fn len(&self) -> usize {
-        self.originals.len()
+    /// Get currently active rewrite plan.
+    pub fn plan(&self) -> Result<&ImmutableRewritePlan, Error> {
+        self.active_plan.as_ref().ok_or(Error::NoActiveRewritePlan)
     }
 }

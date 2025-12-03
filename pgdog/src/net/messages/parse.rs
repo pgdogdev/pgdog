@@ -67,6 +67,10 @@ impl Parse {
         unsafe { from_utf8_unchecked(&self.query[0..self.query.len() - 1]) }
     }
 
+    pub fn name_ref(&self) -> Bytes {
+        self.name.clone()
+    }
+
     /// Get query reference.
     pub fn query_ref(&self) -> Bytes {
         self.query.clone()

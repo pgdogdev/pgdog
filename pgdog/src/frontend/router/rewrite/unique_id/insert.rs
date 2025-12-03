@@ -5,8 +5,10 @@ use super::{
     bigint_const, bigint_param, max_param_number,
 };
 use crate::{
-    frontend::router::parser::{Insert, Value},
-    net::Datum,
+    frontend::router::{
+        parser::{Insert, Value},
+        rewrite::UniqueIdPlan,
+    },
     unique_id,
 };
 
@@ -32,10 +34,10 @@ impl InsertUniqueIdRewrite {
 
     pub fn rewrite_insert(
         stmt: &mut InsertStmt,
-        bind: &mut Option<crate::net::Bind>,
         extended: bool,
         param_counter: &mut i32,
-    ) -> Result<(), Error> {
+    ) -> Result<Vec<UniqueIdPlan>, Error> {
+        let mut plans = vec![];
         let select = stmt
             .select_stmt
             .as_mut()
@@ -54,13 +56,9 @@ impl InsertUniqueIdRewrite {
 
                                 let node = if extended {
                                     *param_counter += 1;
-                                    if let Some(ref mut bind) = bind {
-                                        let count = bind.add_parameter(Datum::Bigint(id))?;
-                                        // The number of parameters in the query doesn't match what's in the bind message.
-                                        if count != *param_counter {
-                                            return Err(Error::ParameterCountMismatch);
-                                        }
-                                    }
+                                    plans.push(UniqueIdPlan {
+                                        param_ref: *param_counter,
+                                    });
                                     bigint_param(*param_counter)
                                 } else {
                                     bigint_const(id)
@@ -74,7 +72,7 @@ impl InsertUniqueIdRewrite {
             }
         }
 
-        Ok(())
+        Ok(plans)
     }
 }
 
@@ -95,7 +93,6 @@ impl RewriteModule for InsertUniqueIdRewrite {
             return Ok(());
         }
 
-        let mut bind = input.bind_take();
         let extended = input.extended();
         let mut param_counter = max_param_number(input.parse_result());
 
@@ -105,10 +102,8 @@ impl RewriteModule for InsertUniqueIdRewrite {
             .as_mut()
             .and_then(|stmt| stmt.node.as_mut())
         {
-            Self::rewrite_insert(stmt, &mut bind, extended, &mut param_counter)?;
+            input.plan().unique_ids = Self::rewrite_insert(stmt, extended, &mut param_counter)?;
         }
-
-        input.bind_put(bind);
 
         Ok(())
     }

@@ -199,6 +199,10 @@ impl Bind {
         unsafe { from_utf8_unchecked(&self.statement[0..self.statement.len() - 1]) }
     }
 
+    pub fn statement_ref(&self) -> &Bytes {
+        &self.statement
+    }
+
     /// Format codes, if any.
     pub fn codes(&self) -> &[Format] {
         &self.codes

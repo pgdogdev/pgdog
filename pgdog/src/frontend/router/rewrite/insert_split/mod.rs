@@ -3,8 +3,6 @@ use pg_query::{
     Node, NodeEnum,
 };
 
-use crate::net::Bind;
-
 use super::*;
 
 #[derive(Default)]
@@ -39,20 +37,19 @@ impl RewriteModule for InsertSplitRewrite {
                     let mut new_insert = proto_insert.clone();
                     let mut new_select = proto_select.clone();
                     let mut new_values = values.clone();
-                    let mut new_bind = Bind::default();
 
                     // Rewrite the parameter references
                     // and create new Bind message for each INSERT statement.
                     if let Some(NodeEnum::List(list)) = new_values.node.as_mut() {
                         for value in list.items.iter_mut() {
-                            if let Some(NodeEnum::ParamRef(param)) = value.node.as_mut() {
-                                let parameter = input
-                                    .bind()
-                                    .and_then(|bind| bind.parameter(param.number as usize - 1).ok())
-                                    .flatten();
-                                if let Some(parameter) = parameter {
-                                    param.number = new_bind.add_existing(parameter)?;
-                                }
+                            if let Some(NodeEnum::ParamRef(_)) = value.node.as_mut() {
+                                // let parameter = input
+                                //     .bind()
+                                //     .and_then(|bind| bind.parameter(param.number as usize - 1).ok())
+                                //     .flatten();
+                                // if let Some(parameter) = parameter {
+                                //     param.number = new_bind.add_existing(parameter)?;
+                                // }
                             }
                         }
                     }
@@ -69,7 +66,7 @@ impl RewriteModule for InsertSplitRewrite {
                             ..Default::default()
                         }],
                     };
-                    inserts.push((result, new_bind));
+                    inserts.push(result);
                 }
             }
         }

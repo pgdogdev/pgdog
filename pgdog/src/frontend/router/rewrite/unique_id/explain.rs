@@ -79,7 +79,6 @@ impl ExplainUniqueIdRewrite {
             return Ok(());
         }
 
-        let mut bind = input.bind_take();
         let extended = input.extended();
         let mut parameter_counter = max_param_number(input.parse_result());
 
@@ -92,16 +91,14 @@ impl ExplainUniqueIdRewrite {
             if let Some(NodeEnum::SelectStmt(select)) =
                 stmt.query.as_mut().and_then(|q| q.node.as_mut())
             {
-                SelectUniqueIdRewrite::rewrite_select(
+                input.plan().unique_ids = SelectUniqueIdRewrite::rewrite_select(
                     select,
-                    &mut bind,
                     extended,
                     &mut parameter_counter,
                 )?;
             }
         }
 
-        input.bind_put(bind);
         Ok(())
     }
 
@@ -128,7 +125,6 @@ impl ExplainUniqueIdRewrite {
             return Ok(());
         }
 
-        let mut bind = input.bind_take();
         let extended = input.extended();
         let mut param_counter = max_param_number(input.parse_result());
 
@@ -141,16 +137,11 @@ impl ExplainUniqueIdRewrite {
             if let Some(NodeEnum::InsertStmt(insert)) =
                 stmt.query.as_mut().and_then(|q| q.node.as_mut())
             {
-                InsertUniqueIdRewrite::rewrite_insert(
-                    insert,
-                    &mut bind,
-                    extended,
-                    &mut param_counter,
-                )?;
+                input.plan().unique_ids =
+                    InsertUniqueIdRewrite::rewrite_insert(insert, extended, &mut param_counter)?;
             }
         }
 
-        input.bind_put(bind);
         Ok(())
     }
 
@@ -177,7 +168,6 @@ impl ExplainUniqueIdRewrite {
             return Ok(());
         }
 
-        let mut bind = input.bind_take();
         let extended = input.extended();
         let mut param_counter = super::max_param_number(input.parse_result());
 
@@ -190,16 +180,11 @@ impl ExplainUniqueIdRewrite {
             if let Some(NodeEnum::UpdateStmt(update)) =
                 stmt.query.as_mut().and_then(|q| q.node.as_mut())
             {
-                UpdateUniqueIdRewrite::rewrite_update(
-                    update,
-                    &mut bind,
-                    extended,
-                    &mut param_counter,
-                )?;
+                input.plan().unique_ids =
+                    UpdateUniqueIdRewrite::rewrite_update(update, extended, &mut param_counter)?;
             }
         }
 
-        input.bind_put(bind);
         Ok(())
     }
 }

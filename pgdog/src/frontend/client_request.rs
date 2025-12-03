@@ -140,6 +140,17 @@ impl ClientRequest {
         Ok(None)
     }
 
+    /// Get mutable reference to parameters, if any.
+    pub fn parameters_mut(&mut self) -> Result<Option<&mut Bind>, Error> {
+        for message in self.messages.iter_mut() {
+            if let ProtocolMessage::Bind(bind) = message {
+                return Ok(Some(bind));
+            }
+        }
+
+        Ok(None)
+    }
+
     /// Get all CopyData messages.
     pub fn copy_data(&self) -> Result<Vec<CopyData>, Error> {
         let mut rows = vec![];

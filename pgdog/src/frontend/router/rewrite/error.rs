@@ -31,4 +31,7 @@ pub enum Error {
 
     #[error("parser: {0}")]
     Parser(#[from] crate::frontend::router::parser::Error),
+
+    #[error("no active rewrite plan set")]
+    NoActiveRewritePlan,
 }

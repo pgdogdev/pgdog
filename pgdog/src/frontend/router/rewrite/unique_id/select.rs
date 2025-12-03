@@ -6,12 +6,11 @@ use pg_query::{
 };
 
 use super::{
-    super::{Context, Error, RewriteModule},
+    super::{Context, Error, RewriteModule, UniqueIdPlan},
     bigint_const, bigint_param,
 };
 use crate::{
     frontend::router::{parser::Value, rewrite::unique_id::max_param_number},
-    net::Datum,
     unique_id,
 };
 
@@ -97,10 +96,11 @@ impl SelectUniqueIdRewrite {
 
     pub fn rewrite_select(
         stmt: &mut SelectStmt,
-        bind: &mut Option<crate::net::Bind>,
         extended: bool,
         paramter_counter: &mut i32,
-    ) -> Result<(), Error> {
+    ) -> Result<Vec<UniqueIdPlan>, Error> {
+        let mut plans = vec![];
+
         // Rewrite target_list
         for target in stmt.target_list.iter_mut() {
             if let Some(NodeEnum::ResTarget(ref mut res)) = target.node {
@@ -111,13 +111,9 @@ impl SelectUniqueIdRewrite {
 
                             let node = if extended {
                                 *paramter_counter += 1;
-
-                                if let Some(bind) = bind {
-                                    let counter = bind.add_parameter(Datum::Bigint(id))?;
-                                    if counter != *paramter_counter {
-                                        return Err(Error::ParameterCountMismatch);
-                                    }
-                                }
+                                plans.push(UniqueIdPlan {
+                                    param_ref: *paramter_counter,
+                                });
 
                                 bigint_param(*paramter_counter)
                             } else {
@@ -137,7 +133,7 @@ impl SelectUniqueIdRewrite {
                 if let Some(NodeEnum::CommonTableExpr(ref mut expr)) = cte.node {
                     if let Some(ref mut query) = expr.ctequery {
                         if let Some(NodeEnum::SelectStmt(ref mut inner)) = query.node {
-                            Self::rewrite_select(inner, bind, extended, paramter_counter)?;
+                            Self::rewrite_select(inner, extended, paramter_counter)?;
                         }
                     }
                 }
@@ -146,45 +142,45 @@ impl SelectUniqueIdRewrite {
 
         // Rewrite subqueries in FROM clause
         for from in stmt.from_clause.iter_mut() {
-            Self::rewrite_from_node(from, bind, extended, paramter_counter)?;
+            Self::rewrite_from_node(from, extended, paramter_counter)?;
         }
 
         // Rewrite UNION/INTERSECT/EXCEPT (larg/rarg are Box<SelectStmt>)
         if let Some(ref mut larg) = stmt.larg {
-            Self::rewrite_select(larg, bind, extended, paramter_counter)?;
+            plans.extend(Self::rewrite_select(larg, extended, paramter_counter)?);
         }
         if let Some(ref mut rarg) = stmt.rarg {
-            Self::rewrite_select(rarg, bind, extended, paramter_counter)?;
+            plans.extend(Self::rewrite_select(rarg, extended, paramter_counter)?);
         }
 
-        Ok(())
+        Ok(plans)
     }
 
     fn rewrite_from_node(
         node: &mut Node,
-        bind: &mut Option<crate::net::Bind>,
         extended: bool,
         paramter_counter: &mut i32,
-    ) -> Result<(), Error> {
+    ) -> Result<Vec<UniqueIdPlan>, Error> {
+        let mut plans = vec![];
         match node.node.as_mut() {
             Some(NodeEnum::RangeSubselect(ref mut subselect)) => {
                 if let Some(ref mut subquery) = subselect.subquery {
                     if let Some(NodeEnum::SelectStmt(ref mut inner)) = subquery.node {
-                        Self::rewrite_select(inner, bind, extended, paramter_counter)?;
+                        plans.extend(Self::rewrite_select(inner, extended, paramter_counter)?);
                     }
                 }
             }
             Some(NodeEnum::JoinExpr(ref mut join)) => {
                 if let Some(ref mut larg) = join.larg {
-                    Self::rewrite_from_node(larg, bind, extended, paramter_counter)?;
+                    plans.extend(Self::rewrite_from_node(larg, extended, paramter_counter)?);
                 }
                 if let Some(ref mut rarg) = join.rarg {
-                    Self::rewrite_from_node(rarg, bind, extended, paramter_counter)?;
+                    plans.extend(Self::rewrite_from_node(rarg, extended, paramter_counter)?);
                 }
             }
             _ => {}
         }
-        Ok(())
+        Ok(plans)
     }
 }
 
@@ -205,7 +201,6 @@ impl RewriteModule for SelectUniqueIdRewrite {
             return Ok(());
         }
 
-        let mut bind = input.bind_take();
         let extended = input.extended();
         let mut parameter_counter = max_param_number(input.parse_result());
 
@@ -215,10 +210,9 @@ impl RewriteModule for SelectUniqueIdRewrite {
             .as_mut()
             .and_then(|stmt| stmt.node.as_mut())
         {
-            Self::rewrite_select(stmt, &mut bind, extended, &mut parameter_counter)?;
+            let plans = Self::rewrite_select(stmt, extended, &mut parameter_counter)?;
+            input.plan().unique_ids = plans;
         }
-
-        input.bind_put(bind);
 
         Ok(())
     }
