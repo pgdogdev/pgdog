@@ -3,11 +3,7 @@ use crate::{
     config::config,
     frontend::{
         client::query_engine::hooks::QueryEngineHooks,
-        router::{
-            parser::Shard,
-            rewrite::{RewriteRequest, RewriteState},
-            Route,
-        },
+        router::{parser::Shard, rewrite::RewriteRequest, Route},
         BufferedQuery, Client, Command, Comms, Error, Router, RouterContext, Stats,
     },
     net::{BackendKeyData, ErrorResponse, Message, Parameters},
@@ -61,7 +57,6 @@ pub struct QueryEngine {
     notify_buffer: NotifyBuffer,
     pending_explain: Option<ExplainResponseState>,
     hooks: QueryEngineHooks,
-    rewrite_state: RewriteState,
 }
 
 impl QueryEngine {
@@ -125,25 +120,12 @@ impl QueryEngine {
             return Ok(QueryEngineOutput::Executed);
         }
 
-        if let Ok(cluster) = self.backend.cluster() {
-            if cluster.use_parser() && context.ast.is_none() {
-                // Execute request rewrite, if needed.
-                let mut rewrite = RewriteRequest::new(
-                    context.client_request,
-                    self.backend.cluster()?,
-                    context.prepared_statements,
-                    &mut self.rewrite_state,
-                );
-                context.ast = rewrite.execute()?;
-            }
-        }
-
         self.stats
             .received(context.client_request.total_message_len());
         self.set_state(State::Active); // Client is active.
 
         // Rewrite prepared statements.
-        self.rewrite_extended(context)?;
+        self.rewrite(context)?;
 
         // Intercept commands we don't have to forward to a server.
         if self.intercept_incomplete(context).await? {

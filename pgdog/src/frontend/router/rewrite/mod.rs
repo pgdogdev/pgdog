@@ -14,7 +14,6 @@ pub mod output;
 pub mod plan;
 pub mod prepared;
 pub mod request;
-pub mod state;
 pub mod stats;
 pub mod unique_id;
 
@@ -24,7 +23,6 @@ pub use interface::RewriteModule;
 pub use output::{RewriteAction, StepOutput};
 pub use plan::{ImmutableRewritePlan, RewritePlan, UniqueIdPlan};
 pub use request::RewriteRequest;
-pub use state::RewriteState;
 
 use crate::frontend::PreparedStatements;
 

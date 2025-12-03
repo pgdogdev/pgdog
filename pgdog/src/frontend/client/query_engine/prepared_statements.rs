@@ -4,10 +4,8 @@ use super::*;
 
 impl QueryEngine {
     /// Rewrite extended protocol messages.
-    pub(super) fn rewrite_extended(
-        &mut self,
-        context: &mut QueryEngineContext<'_>,
-    ) -> Result<(), Error> {
+    pub(super) fn rewrite(&mut self, context: &mut QueryEngineContext<'_>) -> Result<(), Error> {
+        // Rewrite prepared statements to use global names.
         for message in context.client_request.iter_mut() {
             if message.extended() {
                 let level = context.prepared_statements.level;
@@ -20,6 +18,22 @@ impl QueryEngine {
                 }
             }
         }
+
+        // Rewrite the statement itself.
+        if let Ok(cluster) = self.backend.cluster() {
+            if cluster.use_parser() && context.ast.is_none() {
+                // Execute request rewrite, if needed.
+                let mut rewrite = RewriteRequest::new(
+                    context.client_request,
+                    cluster,
+                    context.prepared_statements,
+                );
+                context.ast = rewrite.execute()?;
+            }
+        }
+
+        println!("after: {:#?}", context.client_request);
+
         Ok(())
     }
 }

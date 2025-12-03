@@ -1,7 +1,7 @@
 use bytes::Bytes;
 
 use crate::{
-    frontend::router::parser::RewritePlan,
+    frontend::router::{parser::RewritePlan, rewrite::ImmutableRewritePlan},
     net::messages::{Parse, RowDescription},
     stats::memory::MemoryUsage,
 };
@@ -17,13 +17,26 @@ fn global_name(counter: usize) -> String {
 
 #[derive(Debug, Clone)]
 pub struct Statement {
+    /// The rewritten Parse message.
     parse: Parse,
+    /// Saved RowDescription received from a backend.
     row_description: Option<RowDescription>,
+    /// Version used to force-insert identical prepared
+    /// statements into the cache.
     #[allow(dead_code)]
     version: usize,
+    /// Rewrite plan used by the query parser.
+    /// TODO: Move this to the `crate::frontend::rewrite` module.
     rewrite_plan: Option<RewritePlan>,
+    /// The statement cache key, used to remove it from the other HashMap.
     cache_key: CacheKey,
+    /// Remove the statement from the cache upon closing it.
+    /// This is for one-time rewrites done by the parser rewrite module.
+    /// TODO: Remove this once code is moved
+    /// to the `crate::frontend::rewrite` module.
     evict_on_close: bool,
+    /// Rewrite engine.
+    rewrite_engine_plan: Option<ImmutableRewritePlan>,
 }
 
 impl MemoryUsage for Statement {
@@ -176,6 +189,7 @@ impl GlobalCache {
                     rewrite_plan: None,
                     cache_key,
                     evict_on_close: false,
+                    rewrite_engine_plan: None,
                 },
             );
 
@@ -215,6 +229,7 @@ impl GlobalCache {
                 rewrite_plan: None,
                 cache_key: key,
                 evict_on_close: false,
+                rewrite_engine_plan: None,
             },
         );
 
@@ -252,8 +267,33 @@ impl GlobalCache {
         }
     }
 
+    /// Get a copy of the rewrite plan.
     pub fn rewrite_plan(&self, name: &str) -> Option<RewritePlan> {
         self.names.get(name).and_then(|s| s.rewrite_plan.clone())
+    }
+
+    /// Get a mutable reference to the rewrite plan.
+    pub fn rewrite_plan_mut(&mut self, name: &str) -> Option<&mut RewritePlan> {
+        self.names
+            .get_mut(name)
+            .and_then(|statement| statement.rewrite_plan.as_mut())
+    }
+
+    /// Get the rewrite module rewrite plan by statement name.
+    pub fn rewrite_engine_plan(&self, name: &str) -> Option<ImmutableRewritePlan> {
+        self.names
+            .get(name)
+            .and_then(|statement| statement.rewrite_engine_plan.clone())
+    }
+
+    /// Set the rewrite module rewrite plan for the given statement.
+    pub fn set_rewrite(&mut self, parse: &Parse, plan: ImmutableRewritePlan) {
+        if let Some(statement) = self.names.get_mut(parse.name()) {
+            if statement.rewrite_engine_plan.is_none() {
+                statement.rewrite_engine_plan = Some(plan);
+                statement.parse = parse.clone();
+            }
+        }
     }
 
     pub fn reset(&mut self) {

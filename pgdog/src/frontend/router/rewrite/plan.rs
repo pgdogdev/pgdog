@@ -6,19 +6,19 @@ use crate::{
     unique_id::UniqueId,
 };
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct UniqueIdPlan {
     /// Parameter number.
     pub(super) param_ref: i32,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct RewritePlan {
     /// How many unique IDs to add to the Bind message.
     pub(super) unique_ids: Vec<UniqueIdPlan>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct ImmutableRewritePlan {
     /// Compiled rewrite plan, that cannot be modified further.
     pub(super) plan: Arc<RewritePlan>,

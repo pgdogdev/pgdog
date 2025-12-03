@@ -24,31 +24,39 @@ pub struct RewritePlan {
 }
 
 impl RewritePlan {
+    /// Create new rewrite plan.
     pub fn new() -> Self {
-        Self {
-            drop_columns: Vec::new(),
-            helpers: Vec::new(),
-        }
+        Self::default()
     }
 
+    /// The plan doesn't do anything.
+    ///
+    /// N.B. This is a noop used inside the parser. As we move the
+    /// rewrite logic to its own rewrite module, the no_op will be updated
+    /// to include `unique_ids`.
+    ///
     pub fn is_noop(&self) -> bool {
         self.drop_columns.is_empty() && self.helpers.is_empty()
     }
 
+    /// Get column positions that should be removed from DataRows.
     pub fn drop_columns(&self) -> &[usize] {
         &self.drop_columns
     }
 
+    /// Add column to be removed from DataRows.
     pub fn add_drop_column(&mut self, column: usize) {
         if !self.drop_columns.contains(&column) {
             self.drop_columns.push(column);
         }
     }
 
+    /// Get per-column helpers, used for aggregation.
     pub fn helpers(&self) -> &[HelperMapping] {
         &self.helpers
     }
 
+    /// Add per-column aggregate helper.
     pub fn add_helper(&mut self, mapping: HelperMapping) {
         self.helpers.push(mapping);
     }

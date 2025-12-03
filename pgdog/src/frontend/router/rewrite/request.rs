@@ -1,11 +1,14 @@
 use pg_query::ParseResult;
 use tracing::debug;
 
-use super::{Context, Error, Rewrite, RewriteModule, RewriteState, StepOutput};
+use super::{Context, Error, Rewrite, RewriteModule, StepOutput};
 use crate::{
     backend::Cluster,
     frontend::{
-        router::parser::{cache::CachedAst, Cache},
+        router::{
+            parser::{cache::CachedAst, Cache},
+            rewrite::ImmutableRewritePlan,
+        },
         ClientRequest, PreparedStatements,
     },
     net::{Protocol, ProtocolMessage},
@@ -15,7 +18,7 @@ pub struct RewriteRequest<'a> {
     request: &'a mut ClientRequest,
     cluster: &'a Cluster,
     prepared_statements: &'a mut PreparedStatements,
-    state: &'a mut RewriteState,
+    plan: Option<ImmutableRewritePlan>,
 }
 
 impl<'a> RewriteRequest<'a> {
@@ -24,13 +27,12 @@ impl<'a> RewriteRequest<'a> {
         request: &'a mut ClientRequest,
         cluster: &'a Cluster,
         prepared_statements: &'a mut PreparedStatements,
-        state: &'a mut RewriteState,
     ) -> Self {
         Self {
             request,
             cluster,
             prepared_statements,
-            state,
+            plan: None,
         }
     }
 
@@ -50,7 +52,10 @@ impl<'a> RewriteRequest<'a> {
         let output = context.build()?;
 
         let ast = match output {
-            StepOutput::NoOp => ast,
+            StepOutput::NoOp => {
+                debug!("rewrite (extended) is a no-op");
+                ast
+            }
             StepOutput::RewriteInPlace {
                 actions,
                 ast,
@@ -60,11 +65,22 @@ impl<'a> RewriteRequest<'a> {
             } => {
                 debug!("rewrite (extended): {}", stmt);
 
-                self.state.save_plan(Some(parse), plan);
-
                 for action in actions {
                     action.execute(self.request);
+
+                    // Update the rewritten parse in the global cache
+                    // and save its rewrite plan.
+                    if let ProtocolMessage::Parse(parse) = action.message {
+                        if !parse.anonymous() {
+                            self.prepared_statements
+                                .global
+                                .write()
+                                .set_rewrite(&parse, plan.clone());
+                        }
+                    }
                 }
+
+                self.plan = Some(plan);
 
                 // Update stats.
                 {
@@ -97,17 +113,18 @@ impl<'a> RewriteRequest<'a> {
         let output = context.build()?;
 
         let ast = match output {
-            StepOutput::NoOp => ast,
+            StepOutput::NoOp => {
+                debug!("rewrite (simple) is a no-op");
+                ast
+            }
             StepOutput::RewriteInPlace {
                 actions,
                 ast,
                 stmt,
                 stats,
-                plan,
+                plan: _,
             } => {
                 debug!("rewrite (simple): {}", stmt);
-
-                self.state.save_plan(None, plan);
 
                 for action in actions {
                     action.execute(self.request);
@@ -141,7 +158,15 @@ impl<'a> RewriteRequest<'a> {
         }
         let parameters = self.request.parameters_mut()?;
         if let Some(parameters) = parameters {
-            if let Some(plan) = self.state.activate_plan(parameters) {
+            if self.plan.is_none() {
+                self.plan = self
+                    .prepared_statements
+                    .global
+                    .read()
+                    .rewrite_engine_plan(parameters.statement());
+            }
+
+            if let Some(plan) = self.plan.take() {
                 plan.apply_bind(parameters)?;
             }
         }
