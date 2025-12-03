@@ -4,6 +4,8 @@
 #       correctly.
 #
 COMMON_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+export NODE_ID=pgdog-dev-0
+
 function wait_for_pgdog() {
     echo "Waiting for PgDog"
     while ! pg_isready -h 127.0.0.1 -p 6432 -U pgdog -d pgdog > /dev/null; do
