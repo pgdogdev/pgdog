@@ -69,7 +69,7 @@ pub struct Aggregate {
 }
 
 // finds a column name in the target list and returns the index.
-fn target_list_to_index(stmt: &SelectStmt, column_names: HashSet<String>) -> Option<usize> {
+fn target_list_to_index(stmt: &SelectStmt, column_names: HashSet<&String>) -> Option<usize> {
     for (idx, node) in stmt.target_list.iter().enumerate() {
         if let Some(node) = node.node.as_ref() {
             match node {
@@ -127,7 +127,7 @@ impl Aggregate {
                     NodeEnum::ColumnRef(column_ref) => {
                         let column_names = column_ref.fields.iter().filter_map(|node| match node {
                             Node{node: Some(NodeEnum::String(PgQueryString{sval: column_name}))} => {
-                                Some(column_name.clone())
+                                Some(column_name)
                             }
                             _ => None
                         }).collect();
