@@ -1,10 +1,9 @@
-use pg_query::protobuf::{Integer, ResTarget};
-use pg_query::protobuf::{a_const::Val, SelectStmt, String as PgQueryString, Node, ColumnRef};
+use pg_query::protobuf::{Integer};
+use pg_query::protobuf::{a_const::Val, SelectStmt, String as PgQueryString, Node};
 use pg_query::NodeEnum;
+use std::collections::HashSet;
 
 use crate::frontend::router::parser::{ExpressionRegistry, Function};
-
-use tracing::{debug, error, info, trace, warn};
 
 use super::Error;
 
@@ -70,7 +69,7 @@ pub struct Aggregate {
 }
 
 // finds a column name in the target list and returns the index.
-fn target_list_to_index(stmt: &SelectStmt, column_name: &String) -> Option<usize> {
+fn target_list_to_index(stmt: &SelectStmt, column_names: HashSet<String>) -> Option<usize> {
     for (idx, node) in stmt.target_list.iter().enumerate() {
         if let Some(node) = node.node.as_ref() {
             match node {
@@ -80,11 +79,17 @@ fn target_list_to_index(stmt: &SelectStmt, column_name: &String) -> Option<usize
                         if let Some(inner_enum) = node_box.node.as_ref() {
                             match inner_enum {
                                 NodeEnum::ColumnRef(column_ref) => {
-                                    if column_ref.fields.iter().any(
+                                    if column_ref.fields.iter().all(
                                         |field_node|
                                         if let Some(node_box) = field_node.node.as_ref() {
                                             match node_box {
-                                                NodeEnum::String(PgQueryString{ sval: found_column_name, .. }) => { found_column_name == column_name},
+                                                // NOTE: if we have example.user_id, there are two things here, we expect them to match exactly
+                                                // this is more restrictive than actual postgres, where you can have
+                                                // the group by say user_id, and the select say table_name.user_id
+                                                // I don't know if we can do better than this without looking at the structure of the schema.
+                                                // I'm also technically not checking the order of these here, where I should be
+                                                // but this is quick n' dirty.
+                                                NodeEnum::String(PgQueryString{ sval: found_column_name, .. }) => { column_names.contains(found_column_name)},
                                                 _ => false
 
                                             }
@@ -119,13 +124,15 @@ impl Aggregate {
                         Val::Ival(Integer { ival }) => Some(*ival as usize - 1), // We use 0-indexed arrays, Postgres uses 1-indexed.
                         _ => None,
                     }),
-                    NodeEnum::ColumnRef(column_ref) => column_ref.fields.iter().map(|node| match node {
-                        Node{node: Some(NodeEnum::String(PgQueryString{sval: column_name}))} => {
-                            trace!("MIKE: found column name: {}", column_name);
-                            target_list_to_index(stmt, column_name)
-                        }
-                        _ => None
-                    }).next(), // NOTE: should be a vec we're going into here.
+                    NodeEnum::ColumnRef(column_ref) => {
+                        let column_names = column_ref.fields.iter().filter_map(|node| match node {
+                            Node{node: Some(NodeEnum::String(PgQueryString{sval: column_name}))} => {
+                                Some(column_name.clone())
+                            }
+                            _ => None
+                        }).collect();
+                        Some(target_list_to_index(stmt, column_names))
+                    },
                     _ => None
                 })
             })
