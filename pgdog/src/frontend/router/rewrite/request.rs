@@ -141,8 +141,9 @@ impl<'a> RewriteRequest<'a> {
         }
         let parameters = self.request.parameters_mut()?;
         if let Some(parameters) = parameters {
-            let plan = self.state.activate_plan(parameters)?;
-            plan.apply_bind(parameters)?;
+            if let Some(plan) = self.state.activate_plan(parameters) {
+                plan.apply_bind(parameters)?;
+            }
         }
 
         Ok(ast)

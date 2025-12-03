@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use bytes::Bytes;
 
-use super::{Error, ImmutableRewritePlan};
+use super::ImmutableRewritePlan;
 use crate::net::{Bind, Parse};
 
 #[derive(Debug, Default, Clone)]
@@ -25,17 +25,16 @@ impl RewriteState {
     }
 
     /// Activate plan for Bind, or error out if plan doesn't exist.
-    pub fn activate_plan(&mut self, bind: &Bind) -> Result<&ImmutableRewritePlan, Error> {
+    pub fn activate_plan(&mut self, bind: &Bind) -> Option<&ImmutableRewritePlan> {
         if let Some(plan) = self.plans.get(bind.statement_ref()) {
             self.active_plan = Some(plan.clone());
-            self.plan()
-        } else {
-            Err(Error::NoRewrite)
         }
+
+        self.plan()
     }
 
     /// Get currently active rewrite plan.
-    pub fn plan(&self) -> Result<&ImmutableRewritePlan, Error> {
-        self.active_plan.as_ref().ok_or(Error::NoActiveRewritePlan)
+    pub fn plan(&self) -> Option<&ImmutableRewritePlan> {
+        self.active_plan.as_ref()
     }
 }
