@@ -9,13 +9,7 @@ impl QueryParser {
         node: &Option<NodeEnum>,
         context: &mut QueryParserContext<'_>,
     ) -> Result<Command, Error> {
-        let mut command = Self::shard_ddl(node, &context.sharding_schema)?;
-
-        if let Command::Query(ref mut route) = command {
-            if let Some(shard) = self.check_search_path_for_shard(context)? {
-                route.set_shard_mut(shard);
-            }
-        }
+        let command = Self::shard_ddl(node, &context.sharding_schema)?;
 
         Ok(command)
     }

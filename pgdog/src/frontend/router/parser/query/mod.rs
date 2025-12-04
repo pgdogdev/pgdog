@@ -140,7 +140,16 @@ impl QueryParser {
             if !matches!(query.shard(), Shard::Direct(_)) && qp_context.shards == 1 {
                 query.set_shard_mut(0);
             }
+
+            // Check search_path and override.
+            if let Some(shard) = self.check_search_path_for_shard(&qp_context)? {
+                query.set_shard_mut(shard);
+            }
         }
+
+        debug!("query router decision: {:#?}", command);
+
+        self.attach_explain(&mut command);
 
         Ok(command)
     }
@@ -400,8 +409,6 @@ impl QueryParser {
             }
         }
 
-        debug!("query router decision: {:#?}", command);
-
         statement.update_stats(command.route());
 
         if context.dry_run {
@@ -469,10 +476,6 @@ impl QueryParser {
             context.rewrite_enabled(),
             context.split_insert_mode(),
         )?;
-
-        if let Some(shard) = self.check_search_path_for_shard(context)? {
-            return Ok(Command::Query(Route::write(shard)));
-        }
 
         match routing {
             InsertRouting::Routed(shard) => {

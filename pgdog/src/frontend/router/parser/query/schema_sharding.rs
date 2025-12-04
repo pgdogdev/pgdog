@@ -22,6 +22,7 @@ impl QueryParser {
                 schema_sharder.resolve(Some(schema), &context.sharding_schema.schemas);
                 if let Some((shard, schema)) = schema_sharder.get() {
                     if let Some(recorder) = self.recorder_mut() {
+                        recorder.clear();
                         recorder.record_entry(
                             Some(shard.clone()),
                             format!("matched schema {} in search_path", schema),
@@ -39,6 +40,7 @@ impl QueryParser {
 
                 if let Some((shard, schema)) = schema_sharder.get() {
                     if let Some(recorder) = self.recorder_mut() {
+                        recorder.clear();
                         recorder.record_entry(
                             Some(shard.clone()),
                             format!("matched schema {} in search_path", schema),
