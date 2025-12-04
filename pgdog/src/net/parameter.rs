@@ -176,10 +176,17 @@ impl Parameters {
         self.hash == other.hash
     }
 
-    pub fn set_queries(&self) -> Vec<Query> {
+    pub fn set_queries(&self, local: bool) -> Vec<Query> {
         self.params
             .iter()
-            .map(|(name, value)| Query::new(format!(r#"SET "{}" TO {}"#, name, value)))
+            .map(|(name, value)| {
+                Query::new(format!(
+                    r#"{} "{}" TO {}"#,
+                    if local { "SET LOCAL" } else { "SET" },
+                    name,
+                    value
+                ))
+            })
             .collect()
     }
 

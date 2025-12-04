@@ -55,6 +55,7 @@ pub struct QueryEngine {
     notify_buffer: NotifyBuffer,
     pending_explain: Option<ExplainResponseState>,
     hooks: QueryEngineHooks,
+    transaction_params: Parameters,
 }
 
 impl QueryEngine {
@@ -210,11 +211,16 @@ impl QueryEngine {
                     .await?
             }
             Command::Unlisten(channel) => self.unlisten(context, &channel.clone()).await?,
-            Command::Set { name, value } => {
+            Command::Set {
+                name,
+                value,
+                in_transaction,
+            } => {
                 if self.backend.connected() {
                     self.execute(context, &route).await?
                 } else {
-                    self.set(context, name.clone(), value.clone()).await?
+                    self.set(context, name.clone(), value.clone(), *in_transaction)
+                        .await?
                 }
             }
             Command::SetRoute(route) => {

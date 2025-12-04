@@ -26,6 +26,7 @@ pub enum Command {
     Set {
         name: String,
         value: ParameterValue,
+        in_transaction: bool,
     },
     PreparedStatement(Prepare),
     Rewrite(Vec<ProtocolMessage>),

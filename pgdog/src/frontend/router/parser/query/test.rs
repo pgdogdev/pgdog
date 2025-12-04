@@ -434,7 +434,7 @@ fn test_set() {
         command!("SET TIME ZONE 'UTC'"),
     ] {
         match command {
-            Command::Set { name, value } => {
+            Command::Set { name, value, .. } => {
                 assert_eq!(name, "timezone");
                 assert_eq!(value, ParameterValue::from("UTC"));
             }
@@ -445,7 +445,7 @@ fn test_set() {
 
     let (command, qp) = command!("SET statement_timeout TO 3000");
     match command {
-        Command::Set { name, value } => {
+        Command::Set { name, value, .. } => {
             assert_eq!(name, "statement_timeout");
             assert_eq!(value, ParameterValue::from("3000"));
         }
@@ -457,7 +457,7 @@ fn test_set() {
     // The server will report an error on synchronization.
     let (command, qp) = command!("SET is_superuser TO true");
     match command {
-        Command::Set { name, value } => {
+        Command::Set { name, value, .. } => {
             assert_eq!(name, "is_superuser");
             assert_eq!(value, ParameterValue::from("true"));
         }
@@ -468,14 +468,14 @@ fn test_set() {
     let (_, mut qp) = command!("BEGIN");
     assert!(qp.write_override);
     let command = query_parser!(qp, Query::new(r#"SET statement_timeout TO 3000"#), true);
-    match command {
-        Command::Query(q) => assert!(q.is_write()),
-        _ => panic!("set should trigger binding"),
-    }
+    assert!(
+        matches!(command, Command::Set { .. }),
+        "set must be intercepted inside transactions"
+    );
 
     let (command, _) = command!("SET search_path TO \"$user\", public, \"APPLES\"");
     match command {
-        Command::Set { name, value } => {
+        Command::Set { name, value, .. } => {
             assert_eq!(name, "search_path");
             assert_eq!(
                 value,
@@ -502,10 +502,8 @@ fn test_set() {
         let route = qp.query(&mut context).unwrap();
 
         match route {
-            Command::Query(route) => {
-                assert_eq!(route.is_read(), read_only);
-            }
-            cmd => panic!("not a query: {:?}", cmd),
+            Command::Set { .. } => {}
+            _ => panic!("set must be intercepted"),
         }
     }
 }
@@ -546,8 +544,14 @@ fn test_transaction() {
         cluster.clone()
     );
     match route {
-        Command::Query(q) => {
-            assert!(q.is_write());
+        Command::Set {
+            name,
+            value,
+            in_transaction,
+        } => {
+            assert!(in_transaction);
+            assert_eq!(name, "application_name");
+            assert_eq!(value.as_str().unwrap(), "test");
             assert!(!cluster.read_only());
         }
 
@@ -962,5 +966,5 @@ fn test_set_comments() {
         Query::new("SET statement_timeout TO 1"),
         true
     );
-    assert_eq!(command.route().shard(), &Shard::All);
+    assert!(matches!(command, Command::Set { .. }));
 }

@@ -28,11 +28,11 @@ fn create_test_pool_config(host: &str, port: u16) -> PoolConfig {
     }
 }
 
-fn setup_test_replicas() -> Replicas {
+fn setup_test_replicas() -> LoadBalancer {
     let pool_config1 = create_test_pool_config("127.0.0.1", 5432);
     let pool_config2 = create_test_pool_config("localhost", 5432);
 
-    let replicas = Replicas::new(
+    let replicas = LoadBalancer::new(
         &None,
         &[pool_config1, pool_config2],
         LoadBalancingStrategy::Random,
@@ -47,7 +47,7 @@ async fn test_replica_ban_recovery_after_timeout() {
     let replicas = setup_test_replicas();
 
     // Ban the first replica with very short timeout
-    let ban = &replicas.replicas[0].ban;
+    let ban = &replicas.targets[0].ban;
     ban.ban(Error::ServerError, Duration::from_millis(50));
 
     assert!(ban.banned());
@@ -70,7 +70,7 @@ async fn test_replica_manual_unban() {
     let replicas = setup_test_replicas();
 
     // Ban the first replica
-    let ban = &replicas.replicas[0].ban;
+    let ban = &replicas.targets[0].ban;
     ban.ban(Error::ServerError, Duration::from_millis(1000));
 
     assert!(ban.banned());
@@ -87,7 +87,7 @@ async fn test_replica_manual_unban() {
 async fn test_replica_ban_error_retrieval() {
     let replicas = setup_test_replicas();
 
-    let ban = &replicas.replicas[0].ban;
+    let ban = &replicas.targets[0].ban;
 
     // No error initially
     assert!(ban.error().is_none());
@@ -108,7 +108,7 @@ async fn test_multiple_replica_banning() {
 
     // Ban both replicas
     for i in 0..2 {
-        let ban = &replicas.replicas[i].ban;
+        let ban = &replicas.targets[i].ban;
         ban.ban(Error::ServerError, Duration::from_millis(100));
 
         assert!(ban.banned());
@@ -116,7 +116,7 @@ async fn test_multiple_replica_banning() {
 
     // Both should be banned
     assert_eq!(
-        replicas.replicas.iter().filter(|r| r.ban.banned()).count(),
+        replicas.targets.iter().filter(|r| r.ban.banned()).count(),
         2
     );
 
@@ -127,7 +127,7 @@ async fn test_multiple_replica_banning() {
 async fn test_replica_ban_idempotency() {
     let replicas = setup_test_replicas();
 
-    let ban = &replicas.replicas[0].ban;
+    let ban = &replicas.targets[0].ban;
 
     // First ban should succeed
     let first_ban = ban.ban(Error::ServerError, Duration::from_millis(100));
@@ -170,7 +170,7 @@ async fn test_primary_pool_banning() {
 
     let replica_configs = [create_test_pool_config("localhost", 5432)];
 
-    let replicas = Replicas::new(
+    let replicas = LoadBalancer::new(
         &Some(primary_pool),
         &replica_configs,
         LoadBalancingStrategy::Random,
@@ -179,9 +179,9 @@ async fn test_primary_pool_banning() {
     replicas.launch();
 
     // Test primary ban exists
-    assert!(replicas.primary.is_some());
+    assert!(replicas.primary_target().is_some());
 
-    let primary_ban = &replicas.primary.as_ref().unwrap().ban;
+    let primary_ban = &replicas.primary_target().unwrap().ban;
 
     // Ban primary for reads
     primary_ban.ban(Error::ServerError, Duration::from_millis(100));
@@ -198,7 +198,6 @@ async fn test_primary_pool_banning() {
     assert!(has_primary);
 
     // Shutdown both primary and replicas
-    replicas.primary.as_ref().unwrap().pool.shutdown();
     replicas.shutdown();
 }
 
@@ -206,7 +205,7 @@ async fn test_primary_pool_banning() {
 async fn test_ban_timeout_not_expired() {
     let replicas = setup_test_replicas();
 
-    let ban = &replicas.replicas[0].ban;
+    let ban = &replicas.targets[0].ban;
     ban.ban(Error::ServerError, Duration::from_millis(1000)); // Long timeout
 
     assert!(ban.banned());
@@ -225,8 +224,8 @@ async fn test_ban_timeout_not_expired() {
 async fn test_unban_if_expired_checks_pool_health() {
     let replicas = setup_test_replicas();
 
-    let ban = &replicas.replicas[0].ban;
-    let pool = &replicas.replicas[0].pool;
+    let ban = &replicas.targets[0].ban;
+    let pool = &replicas.targets[0].pool;
 
     ban.ban(Error::ServerError, Duration::from_millis(50));
     assert!(ban.banned());
@@ -271,7 +270,7 @@ async fn test_replica_ban_clears_idle_connections() {
         idle_before
     );
 
-    let ban = &replicas.replicas[0].ban;
+    let ban = &replicas.targets[0].ban;
 
     // Ban should trigger dump_idle() on the pool
     ban.ban(Error::ServerError, Duration::from_millis(100));
@@ -294,7 +293,7 @@ async fn test_monitor_automatic_ban_expiration() {
     let replicas = setup_test_replicas();
 
     // Ban the first replica with very short timeout
-    let ban = &replicas.replicas[0].ban;
+    let ban = &replicas.targets[0].ban;
     ban.ban(Error::ServerError, Duration::from_millis(100));
 
     assert!(ban.banned());
@@ -327,7 +326,7 @@ async fn test_read_write_split_exclude_primary() {
         create_test_pool_config("127.0.0.1", 5432),
     ];
 
-    let replicas = Replicas::new(
+    let replicas = LoadBalancer::new(
         &Some(primary_pool),
         &replica_configs,
         LoadBalancingStrategy::Random,
@@ -348,11 +347,10 @@ async fn test_read_write_split_exclude_primary() {
     assert_eq!(replica_ids.len(), 2);
 
     // Verify primary pool ID is not in the set of used pools
-    let primary_id = replicas.primary.as_ref().unwrap().pool.id();
+    let primary_id = replicas.primary().unwrap().id();
     assert!(!replica_ids.contains(&primary_id));
 
     // Shutdown both primary and replicas
-    replicas.primary.as_ref().unwrap().pool.shutdown();
     replicas.shutdown();
 }
 
@@ -364,7 +362,7 @@ async fn test_read_write_split_include_primary() {
 
     let replica_configs = [create_test_pool_config("localhost", 5432)];
 
-    let replicas = Replicas::new(
+    let replicas = LoadBalancer::new(
         &Some(primary_pool),
         &replica_configs,
         LoadBalancingStrategy::Random,
@@ -385,11 +383,10 @@ async fn test_read_write_split_include_primary() {
     assert_eq!(used_pool_ids.len(), 2);
 
     // Verify primary pool ID is in the set of used pools
-    let primary_id = replicas.primary.as_ref().unwrap().pool.id();
+    let primary_id = replicas.primary().unwrap().id();
     assert!(used_pool_ids.contains(&primary_id));
 
     // Shutdown both primary and replicas
-    replicas.primary.as_ref().unwrap().pool.shutdown();
     replicas.shutdown();
 }
 
@@ -401,7 +398,7 @@ async fn test_read_write_split_exclude_primary_no_primary() {
         create_test_pool_config("127.0.0.1", 5432),
     ];
 
-    let replicas = Replicas::new(
+    let replicas = LoadBalancer::new(
         &None,
         &replica_configs,
         LoadBalancingStrategy::Random,
@@ -431,7 +428,7 @@ async fn test_read_write_split_include_primary_no_primary() {
         create_test_pool_config("127.0.0.1", 5432),
     ];
 
-    let replicas = Replicas::new(
+    let replicas = LoadBalancer::new(
         &None,
         &replica_configs,
         LoadBalancingStrategy::Random,
@@ -462,7 +459,7 @@ async fn test_read_write_split_with_banned_primary() {
 
     let replica_configs = [create_test_pool_config("localhost", 5432)];
 
-    let replicas = Replicas::new(
+    let replicas = LoadBalancer::new(
         &Some(primary_pool),
         &replica_configs,
         LoadBalancingStrategy::Random,
@@ -471,7 +468,7 @@ async fn test_read_write_split_with_banned_primary() {
     replicas.launch();
 
     // Ban the primary
-    let primary_ban = &replicas.primary.as_ref().unwrap().ban;
+    let primary_ban = &replicas.targets.last().unwrap().ban;
     primary_ban.ban(Error::ServerError, Duration::from_millis(1000));
 
     let request = Request::default();
@@ -487,11 +484,10 @@ async fn test_read_write_split_with_banned_primary() {
     assert_eq!(used_pool_ids.len(), 1);
 
     // Verify primary pool ID is not in the set of used pools
-    let primary_id = replicas.primary.as_ref().unwrap().pool.id();
+    let primary_id = replicas.targets.last().unwrap().pool.id();
     assert!(!used_pool_ids.contains(&primary_id));
 
     // Shutdown both primary and replicas
-    replicas.primary.as_ref().unwrap().pool.shutdown();
     replicas.shutdown();
 }
 
@@ -503,7 +499,7 @@ async fn test_read_write_split_with_banned_replicas() {
 
     let replica_configs = [create_test_pool_config("localhost", 5432)];
 
-    let replicas = Replicas::new(
+    let replicas = LoadBalancer::new(
         &Some(primary_pool),
         &replica_configs,
         LoadBalancingStrategy::Random,
@@ -512,7 +508,7 @@ async fn test_read_write_split_with_banned_replicas() {
     replicas.launch();
 
     // Ban the replica
-    let replica_ban = &replicas.replicas[0].ban;
+    let replica_ban = &replicas.targets[0].ban;
     replica_ban.ban(Error::ServerError, Duration::from_millis(1000));
 
     let request = Request::default();
@@ -528,11 +524,10 @@ async fn test_read_write_split_with_banned_replicas() {
     assert_eq!(used_pool_ids.len(), 1);
 
     // Verify primary pool ID is in the set of used pools
-    let primary_id = replicas.primary.as_ref().unwrap().pool.id();
+    let primary_id = replicas.targets.last().unwrap().pool.id();
     assert!(used_pool_ids.contains(&primary_id));
 
     // Shutdown both primary and replicas
-    replicas.primary.as_ref().unwrap().pool.shutdown();
     replicas.shutdown();
 }
 
@@ -547,7 +542,7 @@ async fn test_read_write_split_exclude_primary_with_round_robin() {
         create_test_pool_config("127.0.0.1", 5432),
     ];
 
-    let replicas = Replicas::new(
+    let replicas = LoadBalancer::new(
         &Some(primary_pool),
         &replica_configs,
         LoadBalancingStrategy::RoundRobin,
@@ -569,7 +564,7 @@ async fn test_read_write_split_exclude_primary_with_round_robin() {
     assert_eq!(unique_ids.len(), 2);
 
     // Verify primary is never used
-    let primary_id = replicas.primary.as_ref().unwrap().pool.id();
+    let primary_id = replicas.targets.last().unwrap().pool.id();
     assert!(!pool_sequence.contains(&primary_id));
 
     // Verify round-robin pattern: each pool should be different from the previous one
@@ -584,7 +579,6 @@ async fn test_read_write_split_exclude_primary_with_round_robin() {
     }
 
     // Shutdown both primary and replicas
-    replicas.primary.as_ref().unwrap().pool.shutdown();
     replicas.shutdown();
 }
 
@@ -593,7 +587,7 @@ async fn test_monitor_shuts_down_on_notify() {
     let pool_config1 = create_test_pool_config("127.0.0.1", 5432);
     let pool_config2 = create_test_pool_config("localhost", 5432);
 
-    let replicas = Replicas::new(
+    let replicas = LoadBalancer::new(
         &None,
         &[pool_config1, pool_config2],
         LoadBalancingStrategy::Random,
@@ -601,7 +595,7 @@ async fn test_monitor_shuts_down_on_notify() {
     );
 
     replicas
-        .replicas
+        .targets
         .iter()
         .for_each(|target| target.pool.launch());
     let monitor_handle = Monitor::spawn(&replicas);
@@ -627,11 +621,11 @@ async fn test_monitor_shuts_down_on_notify() {
 async fn test_monitor_bans_unhealthy_target() {
     let replicas = setup_test_replicas();
 
-    replicas.replicas[0].health.toggle(false);
+    replicas.targets[0].health.toggle(false);
 
     sleep(Duration::from_millis(400)).await;
 
-    assert!(replicas.replicas[0].ban.banned());
+    assert!(replicas.targets[0].ban.banned());
 
     replicas.shutdown();
 }
@@ -640,13 +634,13 @@ async fn test_monitor_bans_unhealthy_target() {
 async fn test_monitor_clears_expired_bans() {
     let replicas = setup_test_replicas();
 
-    replicas.replicas[0]
+    replicas.targets[0]
         .ban
         .ban(Error::ServerError, Duration::from_millis(50));
 
     sleep(Duration::from_millis(400)).await;
 
-    assert!(!replicas.replicas[0].ban.banned());
+    assert!(!replicas.targets[0].ban.banned());
 
     replicas.shutdown();
 }
@@ -655,7 +649,7 @@ async fn test_monitor_clears_expired_bans() {
 async fn test_monitor_does_not_ban_single_target() {
     let pool_config = create_test_pool_config("127.0.0.1", 5432);
 
-    let replicas = Replicas::new(
+    let replicas = LoadBalancer::new(
         &None,
         &[pool_config],
         LoadBalancingStrategy::Random,
@@ -663,11 +657,11 @@ async fn test_monitor_does_not_ban_single_target() {
     );
     replicas.launch();
 
-    replicas.replicas[0].health.toggle(false);
+    replicas.targets[0].health.toggle(false);
 
     sleep(Duration::from_millis(400)).await;
 
-    assert!(!replicas.replicas[0].ban.banned());
+    assert!(!replicas.targets[0].ban.banned());
 
     replicas.shutdown();
 }
@@ -676,13 +670,13 @@ async fn test_monitor_does_not_ban_single_target() {
 async fn test_monitor_unbans_all_when_all_unhealthy() {
     let replicas = setup_test_replicas();
 
-    replicas.replicas[0].health.toggle(false);
-    replicas.replicas[1].health.toggle(false);
+    replicas.targets[0].health.toggle(false);
+    replicas.targets[1].health.toggle(false);
 
     sleep(Duration::from_millis(400)).await;
 
-    assert!(!replicas.replicas[0].ban.banned());
-    assert!(!replicas.replicas[1].ban.banned());
+    assert!(!replicas.targets[0].ban.banned());
+    assert!(!replicas.targets[1].ban.banned());
 
     replicas.shutdown();
 }
@@ -725,7 +719,7 @@ async fn test_monitor_does_not_ban_with_zero_ban_timeout() {
         ..Default::default()
     };
 
-    let replicas = Replicas::new(
+    let replicas = LoadBalancer::new(
         &None,
         &[pool_config1, pool_config2],
         LoadBalancingStrategy::Random,
@@ -733,11 +727,11 @@ async fn test_monitor_does_not_ban_with_zero_ban_timeout() {
     );
     replicas.launch();
 
-    replicas.replicas[0].health.toggle(false);
+    replicas.targets[0].health.toggle(false);
 
     sleep(Duration::from_millis(400)).await;
 
-    assert!(!replicas.replicas[0].ban.banned());
+    assert!(!replicas.targets[0].ban.banned());
 
     replicas.shutdown();
 }
@@ -747,7 +741,7 @@ async fn test_monitor_health_state_race() {
     use tokio::spawn;
 
     let replicas = setup_test_replicas();
-    let target = replicas.replicas[0].clone();
+    let target = replicas.targets[0].clone();
 
     let toggle_task = spawn(async move {
         for _ in 0..50 {
@@ -762,8 +756,8 @@ async fn test_monitor_health_state_race() {
 
     toggle_task.await.unwrap();
 
-    let banned = replicas.replicas[0].ban.banned();
-    let healthy = replicas.replicas[0].health.healthy();
+    let banned = replicas.targets[0].ban.banned();
+    let healthy = replicas.targets[0].health.healthy();
 
     assert!(
         !banned || !healthy,
@@ -781,7 +775,7 @@ async fn test_include_primary_if_replica_banned_no_bans() {
 
     let replica_configs = [create_test_pool_config("localhost", 5432)];
 
-    let replicas = Replicas::new(
+    let replicas = LoadBalancer::new(
         &Some(primary_pool),
         &replica_configs,
         LoadBalancingStrategy::Random,
@@ -802,11 +796,10 @@ async fn test_include_primary_if_replica_banned_no_bans() {
     assert_eq!(used_pool_ids.len(), 1);
 
     // Verify primary pool ID is not in the set of used pools
-    let primary_id = replicas.primary.as_ref().unwrap().pool.id();
+    let primary_id = replicas.primary().unwrap().id();
     assert!(!used_pool_ids.contains(&primary_id));
 
     // Shutdown both primary and replicas
-    replicas.primary.as_ref().unwrap().pool.shutdown();
     replicas.shutdown();
 }
 
@@ -818,7 +811,7 @@ async fn test_include_primary_if_replica_banned_with_ban() {
 
     let replica_configs = [create_test_pool_config("localhost", 5432)];
 
-    let replicas = Replicas::new(
+    let replicas = LoadBalancer::new(
         &Some(primary_pool),
         &replica_configs,
         LoadBalancingStrategy::Random,
@@ -827,7 +820,7 @@ async fn test_include_primary_if_replica_banned_with_ban() {
     replicas.launch();
 
     // Ban the replica
-    let replica_ban = &replicas.replicas[0].ban;
+    let replica_ban = &replicas.targets[0].ban;
     replica_ban.ban(Error::ServerError, Duration::from_millis(1000));
 
     let request = Request::default();
@@ -843,10 +836,9 @@ async fn test_include_primary_if_replica_banned_with_ban() {
     assert_eq!(used_pool_ids.len(), 1);
 
     // Verify primary pool ID is in the set of used pools
-    let primary_id = replicas.primary.as_ref().unwrap().pool.id();
+    let primary_id = replicas.primary().unwrap().id();
     assert!(used_pool_ids.contains(&primary_id));
 
     // Shutdown both primary and replicas
-    replicas.primary.as_ref().unwrap().pool.shutdown();
     replicas.shutdown();
 }

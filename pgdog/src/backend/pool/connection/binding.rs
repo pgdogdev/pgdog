@@ -2,7 +2,7 @@
 
 use crate::{
     frontend::{client::query_engine::TwoPcPhase, ClientRequest},
-    net::{parameter::Parameters, BackendKeyData, ProtocolMessage},
+    net::{parameter::Parameters, BackendKeyData, ProtocolMessage, Query},
     state::State,
 };
 
@@ -252,7 +252,10 @@ impl Binding {
     }
 
     /// Execute a query on all servers.
-    pub async fn execute(&mut self, query: &str) -> Result<Vec<Message>, Error> {
+    pub async fn execute(
+        &mut self,
+        query: impl Into<Query> + Clone,
+    ) -> Result<Vec<Message>, Error> {
         let mut result = vec![];
         match self {
             Binding::Direct(Some(ref mut server)) => {
@@ -260,7 +263,9 @@ impl Binding {
             }
 
             Binding::MultiShard(ref mut servers, _) => {
-                let futures = servers.iter_mut().map(|server| server.execute(query));
+                let futures = servers
+                    .iter_mut()
+                    .map(|server| server.execute(query.clone()));
                 let results = join_all(futures).await;
 
                 for server_result in results {

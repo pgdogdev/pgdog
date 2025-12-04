@@ -8,13 +8,13 @@ use tokio::{select, spawn, sync::Notify};
 use tracing::debug;
 
 use crate::backend::databases::User;
-use crate::backend::pool::replicas::ban::Ban;
+use crate::backend::pool::lb::ban::Ban;
 use crate::backend::PubSubListener;
 use crate::config::{config, LoadBalancingStrategy, ReadWriteSplit, Role};
 use crate::net::messages::BackendKeyData;
 use crate::net::NotificationResponse;
 
-use super::{Error, Guard, Pool, PoolConfig, Replicas, Request};
+use super::{Error, Guard, LoadBalancer, Pool, PoolConfig, Request};
 
 pub mod monitor;
 pub mod role_detector;
@@ -37,8 +37,6 @@ pub(super) struct ShardConfig<'a> {
     pub(super) identifier: Arc<User>,
     /// LSN check interval
     pub(super) lsn_check_interval: Duration,
-    /// Role detector is enabled.
-    pub(super) role_detector: bool,
 }
 
 /// Connection pools for a single database shard.
@@ -67,8 +65,8 @@ impl Shard {
 
     /// Get connection to the primary database.
     pub async fn primary(&self, request: &Request) -> Result<Guard, Error> {
-        self.primary
-            .as_ref()
+        self.replicas
+            .primary()
             .ok_or(Error::NoPrimary)?
             .get(request)
             .await
@@ -77,24 +75,12 @@ impl Shard {
     /// Get connection to one of the replica databases, using the configured
     /// load balancing algorithm.
     pub async fn replica(&self, request: &Request) -> Result<Guard, Error> {
-        if self.replicas.is_empty() {
-            self.primary
-                .as_ref()
-                .ok_or(Error::NoDatabases)?
-                .get(request)
-                .await
-        } else {
-            self.replicas.get(request).await
-        }
+        self.replicas.get(request).await
     }
 
     /// Get connection to primary if configured, otherwise replica.
     pub async fn primary_or_replica(&self, request: &Request) -> Result<Guard, Error> {
-        if self.primary.is_some() {
-            self.primary(request).await
-        } else {
-            self.replica(request).await
-        }
+        self.replica(request).await
     }
 
     /// Move connections from this shard to another shard, preserving them.
@@ -102,28 +88,12 @@ impl Shard {
     /// This is done during configuration reloading, if no significant changes are made to
     /// the configuration.
     pub fn move_conns_to(&self, destination: &Shard) {
-        if let Some(ref primary) = self.primary {
-            if let Some(ref other) = destination.primary {
-                primary.move_conns_to(other);
-            }
-        }
-
         self.replicas.move_conns_to(&destination.replicas);
     }
 
     /// Checks if the connection pools from this shard are compatible
     /// with the other shard. If yes, they can be moved without closing them.
     pub(crate) fn can_move_conns_to(&self, other: &Shard) -> bool {
-        if let Some(ref primary) = self.primary {
-            if let Some(ref other) = other.primary {
-                if !primary.can_move_conns_to(other) {
-                    return false;
-                }
-            } else {
-                return false;
-            }
-        }
-
         self.replicas.can_move_conns_to(&other.replicas)
     }
 
@@ -150,9 +120,6 @@ impl Shard {
 
     /// Bring every pool online.
     pub fn launch(&self) {
-        if let Some(ref primary) = self.primary {
-            primary.launch();
-        }
         self.replicas.launch();
         ShardMonitor::run(self);
         if let Some(ref listener) = self.pub_sub {
@@ -162,7 +129,7 @@ impl Shard {
 
     /// Returns true if the shard has a primary database.
     pub fn has_primary(&self) -> bool {
-        self.primary.is_some()
+        self.replicas.primary().is_some()
     }
 
     /// Returns true if the shard has any replica databases.
@@ -180,9 +147,6 @@ impl Shard {
     /// If these connection pools aren't running the query sent by this client, this is a no-op.
     ///
     pub async fn cancel(&self, id: &BackendKeyData) -> Result<(), super::super::Error> {
-        if let Some(ref primary) = self.primary {
-            primary.cancel(id).await?;
-        }
         self.replicas.cancel(id).await?;
 
         Ok(())
@@ -199,15 +163,12 @@ impl Shard {
     /// Get all connection pools along with their roles (i.e., primary or replica).
     pub fn pools_with_roles(&self) -> Vec<(Role, Pool)> {
         let mut pools = vec![];
-        if let Some(primary) = self.primary.clone() {
-            pools.push((Role::Primary, primary));
-        }
 
         pools.extend(
             self.replicas
-                .pools()
-                .into_iter()
-                .map(|p| (Role::Replica, p.clone())),
+                .targets
+                .iter()
+                .map(|target| (target.role(), target.pool.clone())),
         );
 
         pools
@@ -221,9 +182,6 @@ impl Shard {
     /// Shutdown every pool and maintenance task in this shard.
     pub fn shutdown(&self) {
         self.comms.shutdown.notify_waiters();
-        if let Some(pool) = self.primary.as_ref() {
-            pool.shutdown()
-        }
         if let Some(ref listener) = self.pub_sub {
             listener.shutdown();
         }
@@ -244,13 +202,8 @@ impl Shard {
 
     /// Re-detect primary/replica roles and re-build
     /// the shard routing logic.
-    pub fn redetect_roles(&self) -> Option<DetectedRoles> {
+    pub fn redetect_roles(&self) -> bool {
         self.replicas.redetect_roles()
-    }
-
-    /// Get current roles.
-    pub fn current_roles(&self) -> DetectedRoles {
-        self.replicas.current_roles()
     }
 }
 
@@ -267,8 +220,7 @@ impl Deref for Shard {
 #[derive(Default, Debug, Clone)]
 pub struct ShardInner {
     number: usize,
-    primary: Option<Pool>,
-    replicas: Replicas,
+    replicas: LoadBalancer,
     comms: Arc<ShardComms>,
     pub_sub: Option<PubSubListener>,
     identifier: Arc<User>,
@@ -284,14 +236,12 @@ impl ShardInner {
             rw_split,
             identifier,
             lsn_check_interval,
-            role_detector,
         } = shard;
         let primary = primary.as_ref().map(Pool::new);
-        let replicas = Replicas::new(&primary, replicas, lb_strategy, rw_split);
+        let replicas = LoadBalancer::new(&primary, replicas, lb_strategy, rw_split);
         let comms = Arc::new(ShardComms {
             shutdown: Notify::new(),
             lsn_check_interval,
-            role_detector,
         });
         let pub_sub = if config().pub_sub_enabled() {
             primary.as_ref().map(PubSubListener::new)
@@ -301,7 +251,6 @@ impl ShardInner {
 
         Self {
             number,
-            primary,
             replicas,
             comms,
             pub_sub,
@@ -343,12 +292,11 @@ mod test {
                 database: "pgdog".into(),
             }),
             lsn_check_interval: Duration::MAX,
-            role_detector: false,
         });
         shard.launch();
 
         for _ in 0..25 {
-            let replica_id = shard.replicas.replicas[0].pool.id();
+            let replica_id = shard.replicas.targets[0].pool.id();
 
             let conn = shard.replica(&Request::default()).await.unwrap();
             assert_eq!(conn.pool.id(), replica_id);
@@ -382,7 +330,6 @@ mod test {
                 database: "pgdog".into(),
             }),
             lsn_check_interval: Duration::MAX,
-            role_detector: false,
         });
         shard.launch();
         let mut ids = BTreeSet::new();

@@ -8,9 +8,14 @@ impl QueryEngine {
         context: &mut QueryEngineContext<'_>,
         name: String,
         value: ParameterValue,
+        in_transaction: bool,
     ) -> Result<(), Error> {
-        context.params.insert(name, value);
-        self.comms.update_params(context.params);
+        if in_transaction {
+            self.transaction_params.insert(name, value);
+        } else {
+            context.params.insert(name, value);
+            self.comms.update_params(context.params);
+        }
 
         let bytes_sent = context
             .stream

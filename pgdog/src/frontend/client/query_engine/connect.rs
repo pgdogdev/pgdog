@@ -46,12 +46,26 @@ impl QueryEngine {
                 }
 
                 let query_timeout = context.timeouts.query_timeout(&self.stats.state);
+
                 // We may need to sync params with the server and that reads from the socket.
                 timeout(
                     query_timeout,
                     self.backend.link_client(&self.client_id, context.params),
                 )
                 .await??;
+
+                // Sync transaction parameters. These will only
+                // be captured inside an explicit transaction
+                // so we don't have to track them.
+                let set_queries = self.transaction_params.set_queries(true);
+                for query in set_queries {
+                    timeout(query_timeout, self.backend.execute(query)).await??;
+                }
+                debug!(
+                    "synced {} in-transaction parameters",
+                    self.transaction_params.len()
+                );
+                self.transaction_params.clear();
 
                 true
             }
