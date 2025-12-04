@@ -56,7 +56,6 @@ impl ShardMonitor {
             select! {
                 _ = maintenance.tick() => {},
                 _ = self.shard.comms().shutdown.notified() => {
-                    println!("Shutting down");
                     break;
                 },
             }
