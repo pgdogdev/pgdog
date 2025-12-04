@@ -51,6 +51,7 @@ impl QueryEngine {
                 self.transaction_params.len()
             );
             self.transaction_params.clear();
+            self.backend.reset_changed_params();
         } else if !self.connect(context, route).await? {
             return Ok(());
         }

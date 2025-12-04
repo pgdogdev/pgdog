@@ -372,6 +372,18 @@ impl Binding {
         }
     }
 
+    /// Reset changed params on all servers, disabling parameter tracking
+    /// for this request.
+    pub fn reset_changed_params(&mut self) {
+        match self {
+            Binding::Direct(Some(ref mut server)) => server.reset_changed_params(),
+            Binding::MultiShard(ref mut servers, _) => servers
+                .iter_mut()
+                .for_each(|server| server.reset_changed_params()),
+            _ => (),
+        }
+    }
+
     pub(super) fn dirty(&mut self) {
         match self {
             Binding::Direct(Some(ref mut server)) => server.mark_dirty(true),
