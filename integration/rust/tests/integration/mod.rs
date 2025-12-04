@@ -12,6 +12,7 @@ pub mod prepared;
 pub mod reload;
 pub mod rewrite;
 pub mod savepoint;
+pub mod set_in_transaction;
 pub mod set_sharding_key;
 pub mod shard_consistency;
 pub mod stddev;
