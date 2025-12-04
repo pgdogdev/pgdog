@@ -1,6 +1,7 @@
 use super::Shard;
 
 pub(super) struct RoleDetector {
+    enabled: bool,
     shard: Shard,
 }
 
@@ -8,13 +9,26 @@ impl RoleDetector {
     /// Create new role change detector.
     pub(super) fn new(shard: &Shard) -> Self {
         Self {
+            enabled: shard
+                .pools()
+                .iter()
+                .all(|pool| pool.config().role_detection),
             shard: shard.clone(),
         }
     }
 
     /// Detect role change in the shard.
     pub(super) fn changed(&mut self) -> bool {
-        self.shard.redetect_roles()
+        if self.enabled() {
+            self.shard.redetect_roles()
+        } else {
+            false
+        }
+    }
+
+    /// Role detector is enabled.
+    pub(super) fn enabled(&self) -> bool {
+        self.enabled
     }
 }
 
@@ -27,14 +41,14 @@ mod test {
 
     use crate::backend::databases::User;
     use crate::backend::pool::lsn_monitor::LsnStats;
-    use crate::backend::pool::{Address, PoolConfig};
+    use crate::backend::pool::{Address, Config, PoolConfig};
     use crate::backend::replication::publisher::Lsn;
     use crate::config::{LoadBalancingStrategy, ReadWriteSplit};
 
     use super::super::ShardConfig;
     use super::*;
 
-    fn create_test_pool_config(host: &str, port: u16) -> PoolConfig {
+    fn create_test_pool_config(host: &str, port: u16, role_detection: bool) -> PoolConfig {
         PoolConfig {
             address: Address {
                 host: host.into(),
@@ -44,7 +58,10 @@ mod test {
                 database_name: "pgdog".into(),
                 ..Default::default()
             },
-            ..Default::default()
+            config: Config {
+                role_detection,
+                ..Default::default()
+            },
         }
     }
 
@@ -77,19 +94,20 @@ mod test {
 
     #[test]
     fn test_changed_returns_false_when_lsn_stats_invalid() {
-        let primary = Some(create_test_pool_config("127.0.0.1", 5432));
-        let replicas = [create_test_pool_config("localhost", 5432)];
+        let primary = Some(create_test_pool_config("127.0.0.1", 5432, true));
+        let replicas = [create_test_pool_config("localhost", 5432, true)];
         let shard = create_test_shard(&primary, &replicas);
 
         let mut detector = RoleDetector::new(&shard);
 
+        assert!(detector.enabled());
         assert!(!detector.changed());
     }
 
     #[test]
     fn test_changed_returns_false_when_roles_unchanged() {
-        let primary = Some(create_test_pool_config("127.0.0.1", 5432));
-        let replicas = [create_test_pool_config("localhost", 5432)];
+        let primary = Some(create_test_pool_config("127.0.0.1", 5432, true));
+        let replicas = [create_test_pool_config("localhost", 5432, true)];
         let shard = create_test_shard(&primary, &replicas);
 
         set_lsn_stats(&shard, 0, true, 100);
@@ -97,13 +115,14 @@ mod test {
 
         let mut detector = RoleDetector::new(&shard);
 
+        assert!(detector.enabled());
         assert!(!detector.changed());
     }
 
     #[test]
     fn test_changed_returns_true_on_failover() {
-        let primary = Some(create_test_pool_config("127.0.0.1", 5432));
-        let replicas = [create_test_pool_config("localhost", 5432)];
+        let primary = Some(create_test_pool_config("127.0.0.1", 5432, true));
+        let replicas = [create_test_pool_config("localhost", 5432, true)];
         let shard = create_test_shard(&primary, &replicas);
 
         set_lsn_stats(&shard, 0, true, 100);
@@ -111,6 +130,7 @@ mod test {
 
         let mut detector = RoleDetector::new(&shard);
 
+        assert!(detector.enabled());
         assert!(!detector.changed());
 
         set_lsn_stats(&shard, 0, false, 300);
@@ -121,20 +141,41 @@ mod test {
 
     #[test]
     fn test_changed_returns_false_after_roles_stabilize() {
-        let primary = Some(create_test_pool_config("127.0.0.1", 5432));
-        let replicas = [create_test_pool_config("localhost", 5432)];
+        let primary = Some(create_test_pool_config("127.0.0.1", 5432, true));
+        let replicas = [create_test_pool_config("localhost", 5432, true)];
         let shard = create_test_shard(&primary, &replicas);
 
         set_lsn_stats(&shard, 0, true, 100);
         set_lsn_stats(&shard, 1, false, 200);
 
         let mut detector = RoleDetector::new(&shard);
+        assert!(detector.enabled());
         assert!(!detector.changed());
 
         set_lsn_stats(&shard, 0, false, 300);
         set_lsn_stats(&shard, 1, true, 200);
 
         assert!(detector.changed());
+
+        assert!(!detector.changed());
+    }
+
+    #[test]
+    fn test_disabled_when_not_all_roles_auto() {
+        let primary = Some(create_test_pool_config("127.0.0.1", 5432, false));
+        let replicas = [create_test_pool_config("localhost", 5432, true)];
+        let shard = create_test_shard(&primary, &replicas);
+
+        set_lsn_stats(&shard, 0, true, 100);
+        set_lsn_stats(&shard, 1, false, 200);
+
+        let mut detector = RoleDetector::new(&shard);
+
+        assert!(!detector.enabled());
+        assert!(!detector.changed());
+
+        set_lsn_stats(&shard, 0, false, 300);
+        set_lsn_stats(&shard, 1, true, 200);
 
         assert!(!detector.changed());
     }

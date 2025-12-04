@@ -395,7 +395,7 @@ pub(crate) fn new_pool(
             });
         let replicas = user_databases
             .iter()
-            .filter(|d| matches!(d.role, Role::Replica | Role::Auto))
+            .filter(|d| matches!(d.role, Role::Replica | Role::Auto)) // Auto role is assumed read-only until proven otherwise.
             .map(|replica| PoolConfig {
                 address: Address::new(replica, user, replica.number),
                 config: Config::new(general, replica, user, has_single_replica),

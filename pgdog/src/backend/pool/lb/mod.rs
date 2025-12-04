@@ -33,14 +33,14 @@ mod test;
 
 /// Read query load balancer target.
 #[derive(Clone, Debug)]
-pub struct ReadTarget {
+pub struct Target {
     pub pool: Pool,
     pub ban: Ban,
     replica: Arc<AtomicBool>,
     pub health: TargetHealth,
 }
 
-impl ReadTarget {
+impl Target {
     pub(super) fn new(pool: Pool, role: Role) -> Self {
         let ban = Ban::new(&pool);
         Self {
@@ -72,7 +72,7 @@ impl ReadTarget {
 #[derive(Clone, Default, Debug)]
 pub struct LoadBalancer {
     /// Read/write targets.
-    pub(super) targets: Vec<ReadTarget>,
+    pub(super) targets: Vec<Target>,
     /// Checkout timeout.
     pub(super) checkout_timeout: Duration,
     /// Round robin atomic counter.
@@ -104,12 +104,12 @@ impl LoadBalancer {
 
         let mut targets: Vec<_> = addrs
             .iter()
-            .map(|config| ReadTarget::new(Pool::new(config), Role::Replica))
+            .map(|config| Target::new(Pool::new(config), Role::Replica))
             .collect();
 
         let primary_target = primary
             .as_ref()
-            .map(|pool| ReadTarget::new(pool.clone(), Role::Primary));
+            .map(|pool| Target::new(pool.clone(), Role::Primary));
 
         if let Some(primary) = primary_target {
             targets.push(primary);
@@ -134,7 +134,7 @@ impl LoadBalancer {
     ///
     /// Unlike [`primary()`], this returns the full target struct which allows
     /// access to ban and health state for monitoring and testing purposes.
-    pub fn primary_target(&self) -> Option<&ReadTarget> {
+    pub fn primary_target(&self) -> Option<&Target> {
         self.targets
             .iter()
             .rev() // If there is a primary, it's likely to be last.
@@ -257,7 +257,7 @@ impl LoadBalancer {
         use LoadBalancingStrategy::*;
         use ReadWriteSplit::*;
 
-        let mut candidates: Vec<&ReadTarget> = self.targets.iter().collect();
+        let mut candidates: Vec<&Target> = self.targets.iter().collect();
 
         let primary_reads = match self.rw_split {
             IncludePrimary => true,

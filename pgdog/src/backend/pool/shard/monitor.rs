@@ -1,7 +1,7 @@
 use super::*;
 
 use tokio::time::interval;
-use tracing::warn;
+use tracing::{info, warn};
 
 /// Shard communication primitives.
 #[derive(Debug)]
@@ -51,6 +51,14 @@ impl ShardMonitor {
         );
 
         let mut detector = RoleDetector::new(&self.shard);
+
+        if detector.enabled() {
+            info!(
+                "automatic database role detection is enabled for shard {} [{}]",
+                self.shard.number(),
+                self.shard.identifier()
+            );
+        }
 
         loop {
             select! {
