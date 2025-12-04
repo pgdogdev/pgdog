@@ -136,7 +136,7 @@ impl ConfigAndUsers {
 
         let mirroring = mirror_strs
             .iter()
-            .map(|s| Mirroring::from_str(s).map_err(|e| Error::ParseError(e)))
+            .map(|s| Mirroring::from_str(s).map_err(Error::ParseError))
             .collect::<Result<Vec<_>, _>>()?;
 
         self.config.mirroring = mirroring;

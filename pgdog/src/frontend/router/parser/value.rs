@@ -17,7 +17,7 @@ pub enum Value<'a> {
     Null,
     Placeholder(i32),
     Vector(Vector),
-    Function(&'a str),
+    Function(std::string::String),
 }
 
 impl Value<'_> {
@@ -76,13 +76,19 @@ impl<'a> TryFrom<&'a Option<NodeEnum>> for Value<'a> {
             Some(NodeEnum::AConst(a_const)) => Ok(a_const.into()),
             Some(NodeEnum::ParamRef(param_ref)) => Ok(Value::Placeholder(param_ref.number)),
             Some(NodeEnum::FuncCall(func)) => {
-                if let Some(Node {
-                    node: Some(NodeEnum::String(sval)),
-                }) = func.funcname.first()
-                {
-                    Ok(Value::Function(&sval.sval))
-                } else {
+                let mut name = Vec::new();
+                for comp in func.funcname.iter() {
+                    if let Node {
+                        node: Some(NodeEnum::String(sval)),
+                    } = comp
+                    {
+                        name.push(sval.sval.to_string());
+                    }
+                }
+                if name.is_empty() {
                     Ok(Value::Null)
+                } else {
+                    Ok(Value::Function(name.join(".")))
                 }
             }
             Some(NodeEnum::TypeCast(cast)) => {

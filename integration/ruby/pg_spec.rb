@@ -111,4 +111,13 @@ describe 'pg' do
       expect(res[0]['one']).to eq('2')
     end
   end
+
+  it 'unique_id' do
+    conn = connect "pgdog_sharded"
+    100.times do |i|
+      res = conn.exec "SELECT pgdog.unique_id() AS id, $1 AS counter", [i]
+      expect(res[0]["id"].to_i).to be > 0
+      expect(res[0]["counter"].to_i).to eq(i)
+    end
+  end
 end

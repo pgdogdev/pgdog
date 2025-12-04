@@ -7,7 +7,7 @@ use crate::{
     frontend::{
         router::{
             context::RouterContext,
-            parser::{rewrite::Rewrite, OrderBy, Shard},
+            parser::{OrderBy, Shard},
             round_robin,
             sharding::{Centroids, ContextBuilder, Value as ShardingValue},
         },
@@ -177,28 +177,32 @@ impl QueryParser {
         let cache = Cache::get();
 
         // Get the AST from cache or parse the statement live.
-        let statement = match context.query()? {
-            // Only prepared statements (or just extended) are cached.
-            BufferedQuery::Prepared(query) => {
-                cache.parse(query.query(), &context.sharding_schema)?
-            }
-            // Don't cache simple queries.
-            //
-            // They contain parameter values, which makes the cache
-            // too large to be practical.
-            //
-            // Make your clients use prepared statements
-            // or at least send statements with placeholders using the
-            // extended protocol.
-            BufferedQuery::Query(query) => {
-                cache.parse_uncached(query.query(), &context.sharding_schema)?
+        let statement = if let Some(ast) = context.router_context.ast.cloned() {
+            ast // The AST was already parsed by the rewriter module.
+        } else {
+            match context.query()? {
+                // Only prepared statements (or just extended) are cached.
+                BufferedQuery::Prepared(query) => {
+                    cache.parse(query.query(), &context.sharding_schema)?
+                }
+                // Don't cache simple queries.
+                //
+                // They contain parameter values, which makes the cache
+                // too large to be practical.
+                //
+                // Make your clients use prepared statements
+                // or at least send statements with placeholders using the
+                // extended protocol.
+                BufferedQuery::Query(query) => {
+                    cache.parse_uncached(query.query(), &context.sharding_schema)?
+                }
             }
         };
 
         self.ensure_explain_recorder(statement.ast(), context);
 
         // Parse hardcoded shard from a query comment.
-        if context.router_needed || context.dry_run {
+        if context.use_parser() {
             self.shard = statement.comment_shard.clone();
             let role_override = statement.comment_role;
             if let Some(role) = role_override {
@@ -217,12 +221,6 @@ impl QueryParser {
 
         debug!("{}", context.query()?.query());
         trace!("{:#?}", statement);
-
-        let rewrite = Rewrite::new(statement.ast());
-        if rewrite.needs_rewrite() {
-            debug!("rewrite needed");
-            return rewrite.rewrite(context.prepared_statements());
-        }
 
         if let Some(multi_tenant) = context.multi_tenant() {
             debug!("running multi-tenant check");

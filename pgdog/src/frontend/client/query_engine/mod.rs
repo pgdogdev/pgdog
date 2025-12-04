@@ -3,7 +3,7 @@ use crate::{
     config::config,
     frontend::{
         client::query_engine::hooks::QueryEngineHooks,
-        router::{parser::Shard, Route},
+        router::{parser::Shard, rewrite::RewriteRequest, Route},
         BufferedQuery, Client, Command, Comms, Error, Router, RouterContext, Stats,
     },
     net::{BackendKeyData, ErrorResponse, Message, Parameters},
@@ -22,6 +22,7 @@ pub mod incomplete_requests;
 pub mod insert_split;
 pub mod internal_values;
 pub mod notify_buffer;
+pub mod output;
 pub mod prepared_statements;
 pub mod pub_sub;
 pub mod query;
@@ -37,6 +38,7 @@ pub mod unknown_command;
 use self::query::ExplainResponseState;
 pub use context::QueryEngineContext;
 use notify_buffer::NotifyBuffer;
+pub use output::QueryEngineOutput;
 pub use two_pc::phase::TwoPcPhase;
 use two_pc::TwoPc;
 
@@ -108,25 +110,34 @@ impl QueryEngine {
     }
 
     /// Handle client request.
-    pub async fn handle(&mut self, context: &mut QueryEngineContext<'_>) -> Result<(), Error> {
+    pub async fn handle(
+        &mut self,
+        context: &mut QueryEngineContext<'_>,
+    ) -> Result<QueryEngineOutput, Error> {
+        // Check that we have the latest version of the config.
+        if let Some(error) = self.ensure_cluster(context.in_transaction()).await {
+            self.error_response(context, error).await?;
+            return Ok(QueryEngineOutput::Executed);
+        }
+
         self.stats
             .received(context.client_request.total_message_len());
         self.set_state(State::Active); // Client is active.
 
         // Rewrite prepared statements.
-        self.rewrite_extended(context)?;
+        self.rewrite_request(context)?;
 
         // Intercept commands we don't have to forward to a server.
         if self.intercept_incomplete(context).await? {
             self.update_stats(context);
-            return Ok(());
+            return Ok(QueryEngineOutput::Executed);
         }
 
         // Route transaction to the right servers.
         if !self.route_transaction(context).await? {
             self.update_stats(context);
             debug!("transaction has nowhere to go");
-            return Ok(());
+            return Ok(QueryEngineOutput::Executed);
         }
 
         self.hooks.before_execution(context)?;
@@ -221,8 +232,10 @@ impl QueryEngine {
                 self.set_route(context, route.clone()).await?;
             }
             Command::Copy(_) => self.execute(context, &route).await?,
-            Command::Rewrite(query) => {
-                context.client_request.rewrite(query)?;
+            Command::Rewrite(requests) => {
+                for request in requests {
+                    request.execute(context.client_request);
+                }
                 self.execute(context, &route).await?;
             }
             Command::InsertSplit(plan) => self.insert_split(context, *plan.clone()).await?,
@@ -246,7 +259,7 @@ impl QueryEngine {
 
         self.update_stats(context);
 
-        Ok(())
+        Ok(QueryEngineOutput::Executed)
     }
 
     fn update_stats(&mut self, context: &mut QueryEngineContext<'_>) {

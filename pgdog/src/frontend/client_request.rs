@@ -140,6 +140,17 @@ impl ClientRequest {
         Ok(None)
     }
 
+    /// Get mutable reference to parameters, if any.
+    pub fn parameters_mut(&mut self) -> Result<Option<&mut Bind>, Error> {
+        for message in self.messages.iter_mut() {
+            if let ProtocolMessage::Bind(bind) = message {
+                return Ok(Some(bind));
+            }
+        }
+
+        Ok(None)
+    }
+
     /// Get all CopyData messages.
     pub fn copy_data(&self) -> Result<Vec<CopyData>, Error> {
         let mut rows = vec![];
@@ -180,12 +191,28 @@ impl ClientRequest {
     }
 
     /// Rewrite query in buffer.
-    pub fn rewrite(&mut self, request: &[ProtocolMessage]) -> Result<(), Error> {
+    pub fn rewrite_simple(&mut self, request: &[ProtocolMessage]) -> Result<(), Error> {
         if self.messages.iter().any(|c| c.code() != 'Q') {
             return Err(Error::OnlySimpleForRewrites);
         }
         self.messages.clear();
         self.messages.extend(request.to_vec());
+        Ok(())
+    }
+
+    pub fn rewrite_extended(&mut self, request: &[ProtocolMessage]) -> Result<(), Error> {
+        for new_message in request {
+            if let Some(pos) = self
+                .messages
+                .iter()
+                .position(|p| p.code() == new_message.code())
+            {
+                self.messages[pos] = new_message.clone();
+            } else {
+                self.messages.insert(0, new_message.clone());
+            }
+        }
+
         Ok(())
     }
 

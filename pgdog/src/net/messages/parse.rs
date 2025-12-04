@@ -38,11 +38,10 @@ impl Parse {
     }
 
     /// New anonymous prepared statement.
-    #[cfg(test)]
-    pub fn new_anonymous(query: &str) -> Self {
+    pub fn new_anonymous(query: impl ToString) -> Self {
         Self {
             name: Bytes::from("\0"),
-            query: Bytes::from(query.to_owned() + "\0"),
+            query: Bytes::from(query.to_string() + "\0"),
             data_types: Bytes::copy_from_slice(&0i16.to_be_bytes()),
             original: None,
         }
@@ -66,6 +65,10 @@ impl Parse {
     pub fn query(&self) -> &str {
         // SAFETY: We check that this is valid UTF-8 in Self::from_bytes.
         unsafe { from_utf8_unchecked(&self.query[0..self.query.len() - 1]) }
+    }
+
+    pub fn name_ref(&self) -> Bytes {
+        self.name.clone()
     }
 
     /// Get query reference.

@@ -26,7 +26,7 @@ use crate::{
     net::{messages::BackendKeyData, Query},
 };
 
-use super::{Address, Config, Error, Guard, MirrorStats, Request, Shard, ShardConfig};
+use super::{Address, ClusterStats, Config, Error, Guard, Request, Shard, ShardConfig};
 use crate::config::LoadBalancingStrategy;
 
 #[derive(Clone, Debug, Default)]
@@ -53,7 +53,7 @@ pub struct Cluster {
     multi_tenant: Option<MultiTenant>,
     rw_strategy: ReadWriteStrategy,
     schema_admin: bool,
-    stats: Arc<Mutex<MirrorStats>>,
+    stats: Arc<Mutex<ClusterStats>>,
     cross_shard_disabled: bool,
     two_phase_commit: bool,
     two_phase_commit_auto: bool,
@@ -245,7 +245,7 @@ impl Cluster {
             multi_tenant: multi_tenant.clone(),
             rw_strategy,
             schema_admin,
-            stats: Arc::new(Mutex::new(MirrorStats::default())),
+            stats: Arc::new(Mutex::new(ClusterStats::default())),
             cross_shard_disabled,
             two_phase_commit: two_pc && shards.len() > 1,
             two_phase_commit_auto: two_pc_auto && shards.len() > 1,
@@ -409,14 +409,18 @@ impl Cluster {
         self.schema_admin = owner;
     }
 
-    pub fn stats(&self) -> Arc<Mutex<MirrorStats>> {
+    pub fn stats(&self) -> Arc<Mutex<ClusterStats>> {
         self.stats.clone()
     }
 
-    /// We'll need the query router to figure out
-    /// where a query should go.
-    pub fn router_needed(&self) -> bool {
+    /// We need to parse the query using pg_query.
+    pub fn use_parser(&self) -> bool {
         !(self.shards().len() == 1 && (self.read_only() || self.write_only()))
+            || self.query_parser_enabled
+            || self.multi_tenant.is_some()
+            || self.pub_sub_enabled()
+            || self.prepared_statements() == &PreparedStatements::Full
+            || self.dry_run
     }
 
     /// Multi-tenant config.

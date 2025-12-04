@@ -4,6 +4,7 @@ use crate::{
     backend::pool::{connection::mirror::Mirror, stats::MemoryStats},
     frontend::{
         client::{timeouts::Timeouts, TransactionType},
+        router::parser::cache::CachedAst,
         Client, ClientRequest, PreparedStatements,
     },
     net::{BackendKeyData, Parameters, Stream},
@@ -38,6 +39,8 @@ pub struct QueryEngineContext<'a> {
     pub(super) rollback: bool,
     /// Omnisharded modulo.
     pub(super) omni_sticky_index: usize,
+    /// Query AST.
+    pub(super) ast: Option<CachedAst>,
 }
 
 impl<'a> QueryEngineContext<'a> {
@@ -58,6 +61,7 @@ impl<'a> QueryEngineContext<'a> {
             requests_left: 0,
             rollback: false,
             omni_sticky_index: client.omni_sticky_index,
+            ast: None,
         }
     }
 
@@ -83,6 +87,7 @@ impl<'a> QueryEngineContext<'a> {
             requests_left: 0,
             rollback: false,
             omni_sticky_index: thread_rng().gen_range(1..usize::MAX),
+            ast: None,
         }
     }
 

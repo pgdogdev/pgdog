@@ -195,8 +195,7 @@ impl Config {
     /// Organize all databases by name for quicker retrieval.
     pub fn databases(&self) -> HashMap<String, Vec<Vec<EnumeratedDatabase>>> {
         let mut databases = HashMap::new();
-        let mut number = 0;
-        for database in &self.databases {
+        for (number, database) in self.databases.iter().enumerate() {
             let entry = databases
                 .entry(database.name.clone())
                 .or_insert_with(Vec::new);
@@ -210,7 +209,6 @@ impl Config {
                     number,
                     database: database.clone(),
                 });
-            number += 1;
         }
         databases
     }
@@ -323,7 +321,7 @@ impl Config {
                     );
                 }
             } else {
-                pooler_mode.insert(database.name.clone(), database.pooler_mode.clone());
+                pooler_mode.insert(database.name.clone(), database.pooler_mode);
             }
         }
 
@@ -352,17 +350,15 @@ impl Config {
             _ => (),
         }
 
-        if !self.general.two_phase_commit {
-            if self.rewrite.enabled {
-                if self.rewrite.shard_key == RewriteMode::Rewrite {
-                    warn!("rewrite.shard_key=rewrite will apply non-atomic shard-key rewrites; enabling two_phase_commit is strongly recommended"
+        if !self.general.two_phase_commit && self.rewrite.enabled {
+            if self.rewrite.shard_key == RewriteMode::Rewrite {
+                warn!("rewrite.shard_key=rewrite will apply non-atomic shard-key rewrites; enabling two_phase_commit is strongly recommended"
                     );
-                }
+            }
 
-                if self.rewrite.split_inserts == RewriteMode::Rewrite {
-                    warn!("rewrite.split_inserts=rewrite may commit partial multi-row INSERTs; enabling two_phase_commit is strongly recommended"
+            if self.rewrite.split_inserts == RewriteMode::Rewrite {
+                warn!("rewrite.split_inserts=rewrite may commit partial multi-row INSERTs; enabling two_phase_commit is strongly recommended"
                     );
-                }
             }
         }
     }

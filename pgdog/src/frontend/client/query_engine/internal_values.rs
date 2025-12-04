@@ -32,7 +32,7 @@ impl QueryEngine {
         &mut self,
         context: &mut QueryEngineContext<'_>,
     ) -> Result<(), Error> {
-        let id = unique_id::UniqueId::generator()?.next_id().await;
+        let id = unique_id::UniqueId::generator()?.next_id();
         let bytes_sent = context
             .stream
             .send_many(&[

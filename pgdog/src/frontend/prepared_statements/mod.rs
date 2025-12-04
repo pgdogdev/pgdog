@@ -123,8 +123,7 @@ impl PreparedStatements {
     pub fn parse(&self, name: &str) -> Option<Parse> {
         self.local
             .get(name)
-            .map(|name| self.global.read().parse(name))
-            .flatten()
+            .and_then(|name| self.global.read().parse(name))
     }
 
     /// Number of prepared statements in the local cache.

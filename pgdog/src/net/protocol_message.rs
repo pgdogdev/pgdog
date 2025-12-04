@@ -58,6 +58,14 @@ impl ProtocolMessage {
             Self::CopyFail(copy_fail) => copy_fail.len(),
         }
     }
+
+    pub fn query(&self) -> Option<&str> {
+        match self {
+            ProtocolMessage::Query(query) => Some(query.query()),
+            ProtocolMessage::Parse(parse) => Some(parse.query()),
+            _ => None,
+        }
+    }
 }
 
 impl Protocol for ProtocolMessage {

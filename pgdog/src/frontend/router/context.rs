@@ -1,7 +1,10 @@
 use super::Error;
 use crate::{
     backend::Cluster,
-    frontend::{client::TransactionType, BufferedQuery, ClientRequest, PreparedStatements},
+    frontend::{
+        client::TransactionType, router::parser::cache::CachedAst, BufferedQuery, ClientRequest,
+        PreparedStatements,
+    },
     net::{Bind, Parameters},
 };
 
@@ -27,6 +30,8 @@ pub struct RouterContext<'a> {
     pub two_pc: bool,
     /// Sticky omnisharded index.
     pub omni_sticky_index: usize,
+    /// Query ast.
+    pub ast: Option<&'a CachedAst>,
 }
 
 impl<'a> RouterContext<'a> {
@@ -37,6 +42,7 @@ impl<'a> RouterContext<'a> {
         params: &'a Parameters,
         transaction: Option<TransactionType>,
         omni_sticky_index: usize,
+        ast: Option<&'a CachedAst>,
     ) -> Result<Self, Error> {
         let query = buffer.query()?;
         let bind = buffer.parameters()?;
@@ -53,6 +59,7 @@ impl<'a> RouterContext<'a> {
             executable: buffer.executable(),
             two_pc: cluster.two_pc_enabled(),
             omni_sticky_index,
+            ast,
         })
     }
 

@@ -30,6 +30,7 @@ pub mod show_pools;
 pub mod show_prepared_statements;
 pub mod show_query_cache;
 pub mod show_replication;
+pub mod show_rewrite;
 pub mod show_server_memory;
 pub mod show_servers;
 pub mod show_stats;
