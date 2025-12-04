@@ -441,4 +441,151 @@ mod test {
             _ => panic!("not a select"),
         }
     }
+
+    #[test]
+    fn test_parse_group_by_column_name_single() {
+        let query = pg_query::parse("SELECT user_id, COUNT(1) FROM example GROUP BY user_id")
+            .unwrap()
+            .protobuf
+            .stmts
+            .first()
+            .cloned()
+            .unwrap();
+        match query.stmt.unwrap().node.unwrap() {
+            NodeEnum::SelectStmt(stmt) => {
+                let aggr = Aggregate::parse(&stmt).unwrap();
+                assert_eq!(aggr.group_by(), &[0]);
+                assert_eq!(aggr.targets().len(), 1);
+                let target = &aggr.targets()[0];
+                assert!(matches!(target.function(), AggregateFunction::Count));
+                assert_eq!(target.column(), 1);
+            }
+            _ => panic!("not a select"),
+        }
+    }
+
+    #[test]
+    fn test_parse_group_by_column_name_multiple() {
+        let query = pg_query::parse(
+            "SELECT COUNT(*), user_id, category_id FROM example GROUP BY user_id, category_id",
+        )
+        .unwrap()
+        .protobuf
+        .stmts
+        .first()
+        .cloned()
+        .unwrap();
+        match query.stmt.unwrap().node.unwrap() {
+            NodeEnum::SelectStmt(stmt) => {
+                let aggr = Aggregate::parse(&stmt).unwrap();
+                assert_eq!(aggr.group_by(), &[1, 2]);
+                assert_eq!(aggr.targets().len(), 1);
+                let target = &aggr.targets()[0];
+                assert!(matches!(target.function(), AggregateFunction::Count));
+                assert_eq!(target.column(), 0);
+            }
+            _ => panic!("not a select"),
+        }
+    }
+
+    #[test]
+    fn test_parse_group_by_qualified_column_name() {
+        let query = pg_query::parse(
+            "SELECT COUNT(1), example.user_id FROM example GROUP BY example.user_id",
+        )
+        .unwrap()
+        .protobuf
+        .stmts
+        .first()
+        .cloned()
+        .unwrap();
+        match query.stmt.unwrap().node.unwrap() {
+            NodeEnum::SelectStmt(stmt) => {
+                let aggr = Aggregate::parse(&stmt).unwrap();
+                assert_eq!(aggr.group_by(), &[1]);
+                assert_eq!(aggr.targets().len(), 1);
+                let target = &aggr.targets()[0];
+                assert!(matches!(target.function(), AggregateFunction::Count));
+                assert_eq!(target.column(), 0);
+            }
+            _ => panic!("not a select"),
+        }
+    }
+
+    #[test]
+    fn test_parse_group_by_mixed_ordinal_and_column_name() {
+        let query = pg_query::parse(
+            "SELECT user_id, category_id, SUM(quantity) FROM example GROUP BY user_id, 2",
+        )
+        .unwrap()
+        .protobuf
+        .stmts
+        .first()
+        .cloned()
+        .unwrap();
+        match query.stmt.unwrap().node.unwrap() {
+            NodeEnum::SelectStmt(stmt) => {
+                let aggr = Aggregate::parse(&stmt).unwrap();
+                assert_eq!(aggr.group_by(), &[0, 1]);
+                assert_eq!(aggr.targets().len(), 1);
+                let target = &aggr.targets()[0];
+                assert!(matches!(target.function(), AggregateFunction::Sum));
+                assert_eq!(target.column(), 2);
+            }
+            _ => panic!("not a select"),
+        }
+    }
+
+    #[test]
+    fn test_parse_group_by_column_not_in_select() {
+        let query = pg_query::parse("SELECT COUNT(*) FROM example GROUP BY user_id")
+            .unwrap()
+            .protobuf
+            .stmts
+            .first()
+            .cloned()
+            .unwrap();
+        match query.stmt.unwrap().node.unwrap() {
+            NodeEnum::SelectStmt(stmt) => {
+                let aggr = Aggregate::parse(&stmt).unwrap();
+                let empty: Vec<usize> = vec![];
+                assert_eq!(aggr.group_by(), empty.as_slice());
+                assert_eq!(aggr.targets().len(), 1);
+            }
+            _ => panic!("not a select"),
+        }
+    }
+
+    #[test]
+    fn test_parse_group_by_with_multiple_aggregates() {
+        let query = pg_query::parse(
+            "SELECT COUNT(*), SUM(price), user_id, AVG(price) FROM example GROUP BY user_id",
+        )
+        .unwrap()
+        .protobuf
+        .stmts
+        .first()
+        .cloned()
+        .unwrap();
+        match query.stmt.unwrap().node.unwrap() {
+            NodeEnum::SelectStmt(stmt) => {
+                let aggr = Aggregate::parse(&stmt).unwrap();
+                assert_eq!(aggr.group_by(), &[2]);
+                assert_eq!(aggr.targets().len(), 3);
+                assert!(matches!(
+                    aggr.targets()[0].function(),
+                    AggregateFunction::Count
+                ));
+                assert!(matches!(
+                    aggr.targets()[1].function(),
+                    AggregateFunction::Sum
+                ));
+                assert!(matches!(
+                    aggr.targets()[2].function(),
+                    AggregateFunction::Avg
+                ));
+            }
+            _ => panic!("not a select"),
+        }
+    }
 }
