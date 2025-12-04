@@ -46,6 +46,7 @@ impl QueryEngine {
                 }
 
                 let query_timeout = context.timeouts.query_timeout(&self.stats.state);
+
                 // We may need to sync params with the server and that reads from the socket.
                 timeout(
                     query_timeout,

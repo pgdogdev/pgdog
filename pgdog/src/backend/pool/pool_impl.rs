@@ -18,8 +18,8 @@ use crate::net::{Parameter, Parameters};
 
 use super::inner::CheckInResult;
 use super::{
-    lsn_monitor::LsnMonitor, replicas::TargetHealth, Address, Comms, Config, Error, Guard,
-    Healtcheck, Inner, Monitor, Oids, PoolConfig, Request, State, Waiting,
+    lb::TargetHealth, lsn_monitor::LsnMonitor, Address, Comms, Config, Error, Guard, Healtcheck,
+    Inner, Monitor, Oids, PoolConfig, Request, State, Waiting,
 };
 
 static ID_COUNTER: Lazy<Arc<AtomicU64>> = Lazy::new(|| Arc::new(AtomicU64::new(0)));
@@ -420,12 +420,6 @@ impl Pool {
     #[cfg(test)]
     pub(crate) fn update_config(&self, config: Config) {
         self.lock().config = config;
-    }
-
-    /// Set LSN stats for testing.
-    #[cfg(test)]
-    pub(crate) fn set_lsn_stats(&self, stats: LsnStats) {
-        *self.inner().lsn_stats.write() = stats;
     }
 
     /// Fetch OIDs for user-defined data types.

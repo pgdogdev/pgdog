@@ -15,7 +15,7 @@ pub mod server_options;
 pub mod stats;
 
 pub use error::Error;
-pub use pool::{Cluster, ClusterShardConfig, Pool, Replicas, Shard, ShardingSchema};
+pub use pool::{Cluster, ClusterShardConfig, LoadBalancer, Pool, Shard, ShardingSchema};
 pub use prepared_statements::PreparedStatements;
 pub use protocol::*;
 pub use pub_sub::{PubSubClient, PubSubListener};

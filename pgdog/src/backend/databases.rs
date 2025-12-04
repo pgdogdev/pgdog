@@ -374,11 +374,6 @@ pub(crate) fn new_pool(
     user: &crate::config::User,
     config: &crate::config::Config,
 ) -> Option<(User, Cluster)> {
-    let existing_roles = databases()
-        .cluster(user)
-        .ok()
-        .map(|cluster| cluster.redetect_roles());
-
     let sharded_tables = config.sharded_tables();
     let omnisharded_tables = config.omnisharded_tables();
     let sharded_mappings = config.sharded_mappings();
@@ -386,27 +381,10 @@ pub(crate) fn new_pool(
     let general = &config.general;
     let databases = config.databases();
 
-    let mut shards = databases.get(&user.database).cloned()?;
+    let shards = databases.get(&user.database).cloned()?;
 
     let mut shard_configs = vec![];
-    for (shard_number, user_databases) in shards.iter_mut().enumerate() {
-        let role_detector = user_databases.iter().any(|d| d.role == Role::Auto);
-
-        if let Some(ref shard_roles) = existing_roles
-            .as_ref()
-            .and_then(|existing_roles| existing_roles.get(shard_number).cloned())
-            .flatten()
-        {
-            for user_database in user_databases.iter_mut() {
-                // Override role with automatically detected one.
-                if let Some(role) = shard_roles.get(&user_database.number) {
-                    if user_database.role == Role::Auto {
-                        user_database.role = role.role;
-                    }
-                }
-            }
-        }
-
+    for user_databases in shards {
         let has_single_replica = user_databases.len() == 1;
         let primary = user_databases
             .iter()
@@ -417,18 +395,14 @@ pub(crate) fn new_pool(
             });
         let replicas = user_databases
             .iter()
-            .filter(|d| matches!(d.role, Role::Replica | Role::Auto))
+            .filter(|d| matches!(d.role, Role::Replica | Role::Auto)) // Auto role is assumed read-only until proven otherwise.
             .map(|replica| PoolConfig {
                 address: Address::new(replica, user, replica.number),
                 config: Config::new(general, replica, user, has_single_replica),
             })
             .collect::<Vec<_>>();
 
-        shard_configs.push(ClusterShardConfig {
-            primary,
-            replicas,
-            role_detector,
-        });
+        shard_configs.push(ClusterShardConfig { primary, replicas });
     }
 
     let mut sharded_tables = sharded_tables
@@ -1181,319 +1155,5 @@ mod tests {
             mirror_config_dest_only.is_none(),
             "Mirror config should not be precomputed when source has no users"
         );
-    }
-
-    #[test]
-    fn test_new_pool_fetches_existing_roles_on_reload() {
-        use crate::backend::pool::lsn_monitor::LsnStats;
-        use crate::backend::replication::publisher::Lsn;
-        use std::sync::Arc;
-        use tokio::time::Instant;
-
-        let _lock = lock();
-
-        let mut config = Config::default();
-        config.databases = vec![
-            Database {
-                name: "testdb".to_string(),
-                host: "127.0.0.1".to_string(),
-                port: 5432,
-                role: Role::Auto,
-                shard: 0,
-                ..Default::default()
-            },
-            Database {
-                name: "testdb".to_string(),
-                host: "127.0.0.1".to_string(),
-                port: 5433,
-                role: Role::Auto,
-                shard: 0,
-                ..Default::default()
-            },
-        ];
-
-        let users = crate::config::Users {
-            users: vec![crate::config::User {
-                name: "testuser".to_string(),
-                database: "testdb".to_string(),
-                password: Some("pass".to_string()),
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
-
-        let config_and_users = ConfigAndUsers {
-            config: config.clone(),
-            users: users.clone(),
-            config_path: std::path::PathBuf::new(),
-            users_path: std::path::PathBuf::new(),
-        };
-
-        let initial_databases = from_config(&config_and_users);
-        let cluster = initial_databases.cluster(("testuser", "testdb")).unwrap();
-
-        for pool in cluster.shards()[0].pools() {
-            let lsn_stats = LsnStats {
-                replica: pool.addr().database_number == 1,
-                lsn: Lsn::from_i64(1000),
-                offset_bytes: 1000,
-                timestamp: Default::default(),
-                fetched: Instant::now(),
-                aurora: false,
-            };
-            pool.set_lsn_stats(lsn_stats);
-        }
-
-        DATABASES.store(Arc::new(initial_databases));
-
-        let (_, new_cluster) = new_pool(&users.users[0], &config).unwrap();
-
-        let roles = new_cluster.shards()[0].current_roles();
-
-        assert_eq!(roles.len(), 2);
-
-        assert_eq!(
-            roles.get(&0).unwrap().role,
-            Role::Primary,
-            "database_number 0 should be assigned Primary (replica=false)"
-        );
-        assert_eq!(
-            roles.get(&1).unwrap().role,
-            Role::Replica,
-            "database_number 1 should be assigned Replica (replica=true)"
-        );
-
-        DATABASES.store(Arc::new(Databases::default()));
-    }
-
-    #[test]
-    fn test_new_pool_only_assigns_roles_to_auto() {
-        use crate::backend::pool::lsn_monitor::LsnStats;
-        use crate::backend::replication::publisher::Lsn;
-        use std::sync::Arc;
-        use tokio::time::Instant;
-
-        let _lock = lock();
-
-        let mut config = Config::default();
-        config.databases = vec![
-            Database {
-                name: "testdb".to_string(),
-                host: "127.0.0.1".to_string(),
-                port: 5432,
-                role: Role::Primary,
-                shard: 0,
-                ..Default::default()
-            },
-            Database {
-                name: "testdb".to_string(),
-                host: "127.0.0.1".to_string(),
-                port: 5433,
-                role: Role::Replica,
-                shard: 0,
-                ..Default::default()
-            },
-            Database {
-                name: "testdb".to_string(),
-                host: "127.0.0.1".to_string(),
-                port: 5434,
-                role: Role::Auto,
-                shard: 0,
-                ..Default::default()
-            },
-        ];
-
-        let users = crate::config::Users {
-            users: vec![crate::config::User {
-                name: "testuser".to_string(),
-                database: "testdb".to_string(),
-                password: Some("pass".to_string()),
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
-
-        let config_and_users = ConfigAndUsers {
-            config: config.clone(),
-            users: users.clone(),
-            config_path: std::path::PathBuf::new(),
-            users_path: std::path::PathBuf::new(),
-        };
-
-        let initial_databases = from_config(&config_and_users);
-        let cluster = initial_databases.cluster(("testuser", "testdb")).unwrap();
-
-        for pool in cluster.shards()[0].pools() {
-            let db_num = pool.addr().database_number;
-            let lsn_stats = LsnStats {
-                replica: db_num != 0,
-                lsn: Lsn::from_i64(1000),
-                offset_bytes: 1000,
-                timestamp: Default::default(),
-                fetched: Instant::now(),
-                aurora: false,
-            };
-            pool.set_lsn_stats(lsn_stats);
-        }
-
-        DATABASES.store(Arc::new(initial_databases));
-
-        let (_, new_cluster) = new_pool(&users.users[0], &config).unwrap();
-
-        let roles = new_cluster.shards()[0].current_roles();
-
-        assert_eq!(roles.len(), 3);
-
-        assert_eq!(
-            roles.get(&0).unwrap().role,
-            Role::Primary,
-            "Explicit Primary should remain Primary (LSN says replica=false)"
-        );
-        assert_eq!(
-            roles.get(&1).unwrap().role,
-            Role::Replica,
-            "Explicit Replica should remain Replica (even though LSN says replica=true which would suggest Replica, the explicit config is preserved)"
-        );
-        assert_eq!(
-            roles.get(&2).unwrap().role,
-            Role::Replica,
-            "Auto role should be assigned Replica based on LSN replica=true"
-        );
-
-        DATABASES.store(Arc::new(Databases::default()));
-    }
-
-    #[test]
-    fn test_new_pool_matches_roles_by_database_number() {
-        use crate::backend::pool::lsn_monitor::LsnStats;
-        use crate::backend::replication::publisher::Lsn;
-        use std::sync::Arc;
-        use tokio::time::Instant;
-
-        let _lock = lock();
-
-        let mut config = Config::default();
-        config.databases = vec![
-            Database {
-                name: "db1".to_string(),
-                host: "127.0.0.1".to_string(),
-                port: 5432,
-                role: Role::Auto,
-                shard: 0,
-                ..Default::default()
-            },
-            Database {
-                name: "db2".to_string(),
-                host: "127.0.0.1".to_string(),
-                port: 5433,
-                role: Role::Auto,
-                shard: 0,
-                ..Default::default()
-            },
-            Database {
-                name: "db1".to_string(),
-                host: "127.0.0.1".to_string(),
-                port: 5434,
-                role: Role::Auto,
-                shard: 0,
-                ..Default::default()
-            },
-        ];
-
-        let users = crate::config::Users {
-            users: vec![
-                crate::config::User {
-                    name: "user1".to_string(),
-                    database: "db1".to_string(),
-                    password: Some("pass".to_string()),
-                    ..Default::default()
-                },
-                crate::config::User {
-                    name: "user2".to_string(),
-                    database: "db2".to_string(),
-                    password: Some("pass".to_string()),
-                    ..Default::default()
-                },
-            ],
-            ..Default::default()
-        };
-
-        let config_and_users = ConfigAndUsers {
-            config: config.clone(),
-            users: users.clone(),
-            config_path: std::path::PathBuf::new(),
-            users_path: std::path::PathBuf::new(),
-        };
-
-        let initial_databases = from_config(&config_and_users);
-
-        let db1_cluster = initial_databases.cluster(("user1", "db1")).unwrap();
-        for pool in db1_cluster.shards()[0].pools() {
-            let db_num = pool.addr().database_number;
-            let lsn_stats = LsnStats {
-                replica: db_num == 2,
-                lsn: Lsn::from_i64(1000),
-                offset_bytes: 1000,
-                timestamp: Default::default(),
-                fetched: Instant::now(),
-                aurora: false,
-            };
-            pool.set_lsn_stats(lsn_stats);
-        }
-
-        let db2_cluster = initial_databases.cluster(("user2", "db2")).unwrap();
-        for pool in db2_cluster.shards()[0].pools() {
-            let lsn_stats = LsnStats {
-                replica: false,
-                lsn: Lsn::from_i64(1000),
-                offset_bytes: 1000,
-                timestamp: Default::default(),
-                fetched: Instant::now(),
-                aurora: false,
-            };
-            pool.set_lsn_stats(lsn_stats);
-        }
-
-        DATABASES.store(Arc::new(initial_databases));
-
-        let (_, new_db1_cluster) = new_pool(&users.users[0], &config).unwrap();
-        let db1_roles = new_db1_cluster.shards()[0].current_roles();
-
-        assert_eq!(db1_roles.len(), 2);
-        assert!(
-            db1_roles.get(&0).is_some(),
-            "db1 should have database_number 0"
-        );
-        assert!(
-            db1_roles.get(&2).is_some(),
-            "db1 should have database_number 2"
-        );
-
-        assert_eq!(
-            db1_roles.get(&0).unwrap().role,
-            Role::Primary,
-            "database_number 0 should be Primary (replica=false)"
-        );
-        assert_eq!(
-            db1_roles.get(&2).unwrap().role,
-            Role::Replica,
-            "database_number 2 should be Replica (replica=true)"
-        );
-
-        let (_, new_db2_cluster) = new_pool(&users.users[1], &config).unwrap();
-        let db2_roles = new_db2_cluster.shards()[0].current_roles();
-
-        assert_eq!(db2_roles.len(), 1);
-        assert!(
-            db2_roles.get(&1).is_some(),
-            "db2 should have database_number 1"
-        );
-        assert_eq!(
-            db2_roles.get(&1).unwrap().role,
-            Role::Primary,
-            "database_number 1 should be Primary (replica=false)"
-        );
-
-        DATABASES.store(Arc::new(Databases::default()));
     }
 }

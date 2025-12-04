@@ -7,6 +7,7 @@ use tracing::{info, warn};
 use crate::sharding::ShardedSchema;
 use crate::{
     EnumeratedDatabase, Memory, OmnishardedTable, PassthoughAuth, PreparedStatements, RewriteMode,
+    Role,
 };
 
 use super::database::Database;
@@ -312,18 +313,39 @@ impl Config {
             }
         }
 
-        // Check pooler mode.
-        let mut pooler_mode = HashMap::<String, Option<PoolerMode>>::new();
+        struct Check {
+            pooler_mode: Option<PoolerMode>,
+            role: Role,
+            role_warned: bool,
+        }
+
+        // Check identical configs.
+        let mut checks = HashMap::<String, Check>::new();
         for database in &self.databases {
-            if let Some(mode) = pooler_mode.get(&database.name) {
-                if mode != &database.pooler_mode {
+            if let Some(existing) = checks.get_mut(&database.name) {
+                if existing.pooler_mode != database.pooler_mode {
                     warn!(
                         "database \"{}\" (shard={}, role={}) has a different \"pooler_mode\" setting, ignoring",
                         database.name, database.shard, database.role,
                     );
                 }
+                let auto = existing.role == Role::Auto || database.role == Role::Auto;
+                if auto && existing.role != database.role && !existing.role_warned {
+                    warn!(
+                        r#"database "{}" has a mix of auto and specific roles, automatic role detection will be disabled"#,
+                        database.name
+                    );
+                    existing.role_warned = true;
+                }
             } else {
-                pooler_mode.insert(database.name.clone(), database.pooler_mode.clone());
+                checks.insert(
+                    database.name.clone(),
+                    Check {
+                        pooler_mode: database.pooler_mode.clone(),
+                        role: database.role,
+                        role_warned: false,
+                    },
+                );
             }
         }
 

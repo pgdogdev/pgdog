@@ -15,7 +15,6 @@ use tracing::{error, info};
 use crate::{
     backend::{
         databases::{databases, User as DatabaseUser},
-        pool::shard::role_detector::DetectedRoles,
         replication::{ReplicationConfig, ShardedColumn, ShardedSchemas},
         Schema, ShardedTables,
     },
@@ -88,7 +87,6 @@ impl ShardingSchema {
 pub struct ClusterShardConfig {
     pub primary: Option<PoolConfig>,
     pub replicas: Vec<PoolConfig>,
-    pub role_detector: bool,
 }
 
 impl ClusterShardConfig {
@@ -232,7 +230,6 @@ impl Cluster {
                         rw_split,
                         identifier: identifier.clone(),
                         lsn_check_interval,
-                        role_detector: config.role_detector,
                     })
                 })
                 .collect(),
@@ -526,14 +523,6 @@ impl Cluster {
 
         Ok(())
     }
-
-    /// Re-detect primary/replica roles, with shard numbers.
-    pub fn redetect_roles(&self) -> Vec<Option<DetectedRoles>> {
-        self.shards
-            .iter()
-            .map(|shard| shard.redetect_roles())
-            .collect()
-    }
 }
 
 #[cfg(test)]
@@ -582,7 +571,6 @@ mod test {
                         rw_split: ReadWriteSplit::IncludePrimary,
                         identifier: identifier.clone(),
                         lsn_check_interval: Duration::MAX,
-                        role_detector: false,
                     })
                 })
                 .collect::<Vec<_>>();
