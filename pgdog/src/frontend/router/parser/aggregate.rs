@@ -1,7 +1,6 @@
 use pg_query::protobuf::Integer;
 use pg_query::protobuf::{a_const::Val, Node, SelectStmt, String as PgQueryString};
 use pg_query::NodeEnum;
-use std::collections::HashSet;
 
 use crate::frontend::router::parser::{ExpressionRegistry, Function};
 
@@ -68,49 +67,58 @@ pub struct Aggregate {
     group_by: Vec<usize>,
 }
 
-// finds a column name in the target list and returns the index.
-fn target_list_to_index(stmt: &SelectStmt, column_names: HashSet<&String>) -> Option<usize> {
+fn target_list_to_index(stmt: &SelectStmt, column_names: Vec<&String>) -> Option<usize> {
     for (idx, node) in stmt.target_list.iter().enumerate() {
-        if let Some(node) = node.node.as_ref() {
-            match node {
-                NodeEnum::ResTarget(res_target_box) => {
-                    let res_target = res_target_box.as_ref();
-                    if let Some(node_box) = res_target.val.as_ref() {
-                        if let Some(inner_enum) = node_box.node.as_ref() {
-                            match inner_enum {
-                                NodeEnum::ColumnRef(column_ref) => {
-                                    if column_ref.fields.iter().all(|field_node| {
-                                        if let Some(node_box) = field_node.node.as_ref() {
-                                            match node_box {
-                                                // NOTE: if we have example.user_id, there are two things here, we expect them to match exactly
-                                                // this is more restrictive than actual postgres, where you can have
-                                                // the group by say user_id, and the select say table_name.user_id
-                                                // I don't know if we can do better than this without looking at the structure of the schema.
-                                                // I'm also technically not checking the order of these here, where I should be
-                                                // but this is quick n' dirty.
-                                                NodeEnum::String(PgQueryString {
-                                                    sval: found_column_name,
-                                                    ..
-                                                }) => column_names.contains(found_column_name),
-                                                _ => false,
-                                            }
-                                        } else {
-                                            false
-                                        }
-                                    }) {
-                                        return Some(idx);
-                                    }
+        if let Some(NodeEnum::ResTarget(res_target_box)) = node.node.as_ref() {
+            let res_target = res_target_box.as_ref();
+            if let Some(node_box) = res_target.val.as_ref() {
+                if let Some(NodeEnum::ColumnRef(column_ref)) = node_box.node.as_ref() {
+                    let select_names: Vec<&String> = column_ref
+                        .fields
+                        .iter()
+                        .filter_map(|field_node| {
+                            if let Some(node_box) = field_node.node.as_ref() {
+                                match node_box {
+                                    NodeEnum::String(PgQueryString {
+                                        sval: found_column_name,
+                                        ..
+                                    }) => Some(found_column_name),
+                                    _ => None,
                                 }
-                                _ => {}
+                            } else {
+                                None
                             }
-                        }
+                        })
+                        .collect();
+
+                    if select_names.is_empty() {
+                        continue;
+                    }
+
+                    if columns_match(&column_names, &select_names) {
+                        return Some(idx);
                     }
                 }
-                _ => {}
             }
         }
     }
-    return None;
+    None
+}
+
+fn columns_match(group_by_names: &[&String], select_names: &[&String]) -> bool {
+    if group_by_names == select_names {
+        return true;
+    }
+
+    if group_by_names.len() == 1 && select_names.len() == 2 {
+        return select_names[1] == group_by_names[0];
+    }
+
+    if group_by_names.len() == 2 && select_names.len() == 1 {
+        return group_by_names[1] == select_names[0];
+    }
+
+    false
 }
 
 impl Aggregate {
@@ -128,7 +136,7 @@ impl Aggregate {
                         _ => None,
                     }),
                     NodeEnum::ColumnRef(column_ref) => {
-                        let column_names = column_ref
+                        let column_names: Vec<&String> = column_ref
                             .fields
                             .iter()
                             .filter_map(|node| match node {
@@ -584,6 +592,67 @@ mod test {
                     aggr.targets()[2].function(),
                     AggregateFunction::Avg
                 ));
+            }
+            _ => panic!("not a select"),
+        }
+    }
+
+    #[test]
+    fn test_parse_group_by_qualified_matches_select_unqualified() {
+        let query =
+            pg_query::parse("SELECT user_id, COUNT(1) FROM example GROUP BY example.user_id")
+                .unwrap()
+                .protobuf
+                .stmts
+                .first()
+                .cloned()
+                .unwrap();
+        match query.stmt.unwrap().node.unwrap() {
+            NodeEnum::SelectStmt(stmt) => {
+                let aggr = Aggregate::parse(&stmt).unwrap();
+                assert_eq!(aggr.group_by(), &[0]);
+                assert_eq!(aggr.targets().len(), 1);
+            }
+            _ => panic!("not a select"),
+        }
+    }
+
+    #[test]
+    fn test_parse_group_by_unqualified_matches_select_qualified() {
+        let query =
+            pg_query::parse("SELECT example.user_id, COUNT(1) FROM example GROUP BY user_id")
+                .unwrap()
+                .protobuf
+                .stmts
+                .first()
+                .cloned()
+                .unwrap();
+        match query.stmt.unwrap().node.unwrap() {
+            NodeEnum::SelectStmt(stmt) => {
+                let aggr = Aggregate::parse(&stmt).unwrap();
+                assert_eq!(aggr.group_by(), &[0]);
+                assert_eq!(aggr.targets().len(), 1);
+            }
+            _ => panic!("not a select"),
+        }
+    }
+
+    #[test]
+    fn test_parse_group_by_both_qualified_order_matters() {
+        let query = pg_query::parse(
+            "SELECT example.user_id, COUNT(1) FROM example GROUP BY example.user_id",
+        )
+        .unwrap()
+        .protobuf
+        .stmts
+        .first()
+        .cloned()
+        .unwrap();
+        match query.stmt.unwrap().node.unwrap() {
+            NodeEnum::SelectStmt(stmt) => {
+                let aggr = Aggregate::parse(&stmt).unwrap();
+                assert_eq!(aggr.group_by(), &[0]);
+                assert_eq!(aggr.targets().len(), 1);
             }
             _ => panic!("not a select"),
         }
