@@ -56,6 +56,7 @@ impl ShardMonitor {
             select! {
                 _ = maintenance.tick() => {},
                 _ = self.shard.comms().shutdown.notified() => {
+                    println!("Shutting down");
                     break;
                 },
             }
@@ -66,7 +67,6 @@ impl ShardMonitor {
                     self.shard.number(),
                     self.shard.identifier()
                 );
-                break;
             }
 
             let pool_with_stats = self

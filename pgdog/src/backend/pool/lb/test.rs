@@ -842,3 +842,64 @@ async fn test_include_primary_if_replica_banned_with_ban() {
     // Shutdown both primary and replicas
     replicas.shutdown();
 }
+
+#[tokio::test]
+async fn test_has_replicas_with_replicas() {
+    let replicas = setup_test_replicas();
+
+    assert!(replicas.has_replicas());
+
+    replicas.shutdown();
+}
+
+#[tokio::test]
+async fn test_has_replicas_with_primary_and_replicas() {
+    let primary_config = create_test_pool_config("127.0.0.1", 5432);
+    let primary_pool = Pool::new(&primary_config);
+    primary_pool.launch();
+
+    let replica_configs = [create_test_pool_config("localhost", 5432)];
+
+    let lb = LoadBalancer::new(
+        &Some(primary_pool),
+        &replica_configs,
+        LoadBalancingStrategy::Random,
+        ReadWriteSplit::IncludePrimary,
+    );
+    lb.launch();
+
+    assert!(lb.has_replicas());
+
+    lb.shutdown();
+}
+
+#[tokio::test]
+async fn test_has_replicas_primary_only() {
+    let primary_config = create_test_pool_config("127.0.0.1", 5432);
+    let primary_pool = Pool::new(&primary_config);
+    primary_pool.launch();
+
+    let lb = LoadBalancer::new(
+        &Some(primary_pool),
+        &[],
+        LoadBalancingStrategy::Random,
+        ReadWriteSplit::IncludePrimary,
+    );
+    lb.launch();
+
+    assert!(!lb.has_replicas());
+
+    lb.shutdown();
+}
+
+#[tokio::test]
+async fn test_has_replicas_empty() {
+    let lb = LoadBalancer::new(
+        &None,
+        &[],
+        LoadBalancingStrategy::Random,
+        ReadWriteSplit::IncludePrimary,
+    );
+
+    assert!(!lb.has_replicas());
+}

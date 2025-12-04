@@ -138,7 +138,7 @@ impl Shard {
 
     /// Returns true if the shard has any replica databases.
     pub fn has_replicas(&self) -> bool {
-        !self.lb.is_empty()
+        self.lb.has_replicas()
     }
 
     /// Request a query to be cancelled on any of the servers in the connection pools

@@ -13,6 +13,7 @@ use tokio::{
     sync::Notify,
     time::{timeout, Instant},
 };
+use tracing::warn;
 
 use crate::config::{LoadBalancingStrategy, ReadWriteSplit, Role};
 use crate::net::messages::BackendKeyData;
@@ -57,6 +58,13 @@ impl ReadTarget {
         } else {
             Role::Primary
         }
+    }
+
+    /// Set role.
+    pub(super) fn set_role(&self, role: Role) -> bool {
+        let value = role == Role::Replica;
+        let old = self.replica.swap(value, Ordering::Relaxed);
+        value != old
     }
 }
 
@@ -133,16 +141,10 @@ impl LoadBalancer {
             .find(|target| target.role() == Role::Primary)
     }
 
-    pub fn write_only(&self) -> bool {
-        self.targets
-            .iter()
-            .all(|target| target.role() == Role::Primary)
-    }
-
     /// Detect database roles from pg_is_in_recovery() and
     /// return new primary (if any), and replicas.
     pub fn redetect_roles(&self) -> bool {
-        let mut changed = false;
+        let mut promoted = false;
 
         let mut targets = self
             .targets
@@ -150,11 +152,6 @@ impl LoadBalancer {
             .into_iter()
             .map(|target| (target.pool.lsn_stats(), target))
             .collect::<Vec<_>>();
-
-        // Only detect roles if the LSN detector is running.
-        if !targets.iter().all(|target| target.0.valid()) {
-            return false;
-        }
 
         // Pick primary by latest data. The one with the most
         // up-to-date lsn number and pg_is_in_recovery() = false
@@ -168,26 +165,26 @@ impl LoadBalancer {
 
         let primary = targets
             .iter()
-            .find(|target| target.0.valid() && !target.0.replica);
+            .position(|target| !target.0.replica && target.0.valid());
 
         if let Some(primary) = primary {
-            if primary.1.role() != Role::Primary {
-                changed = true;
-                primary.1.replica.store(false, Ordering::Relaxed);
+            promoted = targets[primary].1.set_role(Role::Primary);
+
+            if promoted {
+                warn!("new primary chosen: {}", targets[primary].1.pool.addr());
+
+                // Demote everyone else to replicas.
+                targets
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| *i != primary)
+                    .for_each(|(_, target)| {
+                        target.1.set_role(Role::Replica);
+                    });
             }
         }
-        let replicas = targets
-            .iter()
-            .filter(|target| target.0.replica)
-            .collect::<Vec<_>>();
 
-        for replica in replicas {
-            if replica.1.role() != Role::Replica {
-                replica.1.replica.store(true, Ordering::Relaxed);
-            }
-        }
-
-        changed
+        promoted
     }
 
     /// Launch replica pools and start the monitor.
@@ -224,14 +221,11 @@ impl LoadBalancer {
                 .all(|(a, b)| a.pool.can_move_conns_to(&b.pool))
     }
 
-    /// How many replicas we are connected to.
-    pub fn len(&self) -> usize {
-        self.targets.len()
-    }
-
     /// There are no replicas.
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
+    pub fn has_replicas(&self) -> bool {
+        self.targets
+            .iter()
+            .any(|target| target.role() == Role::Replica)
     }
 
     /// Cancel a query if one is running.
