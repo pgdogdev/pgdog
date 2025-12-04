@@ -43,7 +43,7 @@ impl QueryEngine {
             // be captured inside an explicit transaction
             // so we don't have to track them.
             let query_timeout = context.timeouts.query_timeout(&self.stats.state);
-            for query in self.transaction_params.set_queries() {
+            for query in self.transaction_params.set_queries(true) {
                 timeout(query_timeout, self.backend.execute(query)).await??;
             }
             debug!(

@@ -903,3 +903,101 @@ async fn test_has_replicas_empty() {
 
     assert!(!lb.has_replicas());
 }
+
+#[tokio::test]
+async fn test_set_role() {
+    let replicas = setup_test_replicas();
+
+    // Initially all targets are replicas
+    assert_eq!(replicas.targets[0].role(), Role::Replica);
+    assert_eq!(replicas.targets[1].role(), Role::Replica);
+
+    // Setting replica to replica returns false (no change)
+    let changed = replicas.targets[0].set_role(Role::Replica);
+    assert!(!changed);
+    assert_eq!(replicas.targets[0].role(), Role::Replica);
+
+    // Setting replica to primary returns true (changed)
+    let changed = replicas.targets[0].set_role(Role::Primary);
+    assert!(changed);
+    assert_eq!(replicas.targets[0].role(), Role::Primary);
+
+    // Setting primary to primary returns false (no change)
+    let changed = replicas.targets[0].set_role(Role::Primary);
+    assert!(!changed);
+    assert_eq!(replicas.targets[0].role(), Role::Primary);
+
+    // Setting primary to replica returns true (changed)
+    let changed = replicas.targets[0].set_role(Role::Replica);
+    assert!(changed);
+    assert_eq!(replicas.targets[0].role(), Role::Replica);
+
+    replicas.shutdown();
+}
+
+#[tokio::test]
+async fn test_can_move_conns_to_same_config() {
+    let pool_config1 = create_test_pool_config("127.0.0.1", 5432);
+    let pool_config2 = create_test_pool_config("localhost", 5432);
+
+    let lb1 = LoadBalancer::new(
+        &None,
+        &[pool_config1.clone(), pool_config2.clone()],
+        LoadBalancingStrategy::Random,
+        ReadWriteSplit::IncludePrimary,
+    );
+
+    let lb2 = LoadBalancer::new(
+        &None,
+        &[pool_config1, pool_config2],
+        LoadBalancingStrategy::Random,
+        ReadWriteSplit::IncludePrimary,
+    );
+
+    assert!(lb1.can_move_conns_to(&lb2));
+}
+
+#[tokio::test]
+async fn test_can_move_conns_to_different_count() {
+    let pool_config1 = create_test_pool_config("127.0.0.1", 5432);
+    let pool_config2 = create_test_pool_config("localhost", 5432);
+
+    let lb1 = LoadBalancer::new(
+        &None,
+        &[pool_config1.clone(), pool_config2],
+        LoadBalancingStrategy::Random,
+        ReadWriteSplit::IncludePrimary,
+    );
+
+    let lb2 = LoadBalancer::new(
+        &None,
+        &[pool_config1],
+        LoadBalancingStrategy::Random,
+        ReadWriteSplit::IncludePrimary,
+    );
+
+    assert!(!lb1.can_move_conns_to(&lb2));
+}
+
+#[tokio::test]
+async fn test_can_move_conns_to_different_addresses() {
+    let pool_config1 = create_test_pool_config("127.0.0.1", 5432);
+    let pool_config2 = create_test_pool_config("localhost", 5432);
+    let pool_config3 = create_test_pool_config("127.0.0.1", 5433);
+
+    let lb1 = LoadBalancer::new(
+        &None,
+        &[pool_config1, pool_config2],
+        LoadBalancingStrategy::Random,
+        ReadWriteSplit::IncludePrimary,
+    );
+
+    let lb2 = LoadBalancer::new(
+        &None,
+        &[pool_config3.clone(), pool_config3],
+        LoadBalancingStrategy::Random,
+        ReadWriteSplit::IncludePrimary,
+    );
+
+    assert!(!lb1.can_move_conns_to(&lb2));
+}

@@ -176,10 +176,18 @@ impl Parameters {
         self.hash == other.hash
     }
 
-    pub fn set_queries(&self) -> Vec<Query> {
+    /// Generate SET queries to change server state.
+    ///
+    /// # Arguments
+    ///
+    /// * `local`: Generate `SET LOCAL` which are automatically
+    ///            reset after the transaction is over.
+    ///
+    pub fn set_queries(&self, local: bool) -> Vec<Query> {
+        let set = if local { "SET LOCAL" } else { "SET" };
         self.params
             .iter()
-            .map(|(name, value)| Query::new(format!(r#"SET "{}" TO {}"#, name, value)))
+            .map(|(name, value)| Query::new(format!(r#"{} "{}" TO {}"#, set, name, value)))
             .collect()
     }
 
