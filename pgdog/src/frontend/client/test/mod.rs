@@ -2,7 +2,7 @@ use std::time::{Duration, Instant};
 
 use pgdog_config::PoolerMode;
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
+    io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
     time::timeout,
 };
@@ -21,8 +21,8 @@ use crate::{
     },
     net::{
         bind::Parameter, Bind, Close, CommandComplete, DataRow, Describe, ErrorResponse, Execute,
-        Field, Flush, Format, FromBytes, Parse, Protocol, Query, ReadyForQuery, RowDescription,
-        Sync, Terminate, ToBytes,
+        Field, Flush, Format, FromBytes, Message, Parse, Protocol, Query, ReadyForQuery,
+        RowDescription, Sync, Terminate, ToBytes,
     },
     state::State,
 };
@@ -72,6 +72,39 @@ macro_rules! new_client {
 
         (conn, client, engine)
     }};
+}
+
+pub fn buffer(messages: &[impl ToBytes]) -> BytesMut {
+    let mut buf = BytesMut::new();
+    for message in messages {
+        buf.put(message.to_bytes().unwrap());
+    }
+    buf
+}
+
+/// Read a series of messages from the stream and make sure
+/// they arrive in the right order.
+pub async fn read(stream: &mut (impl AsyncRead + Unpin), codes: &[char]) -> Vec<Message> {
+    let mut result = vec![];
+
+    for code in codes {
+        let c = stream.read_u8().await.unwrap();
+
+        assert_eq!(c as char, *code, "unexpected message received");
+
+        let len = stream.read_i32().await.unwrap();
+        let mut data = vec![0u8; len as usize - 4];
+        stream.read_exact(&mut data).await.unwrap();
+
+        let mut message = BytesMut::new();
+        message.put_u8(c);
+        message.put_i32(len);
+        message.put_slice(&data);
+
+        result.push(Message::new(message.freeze()))
+    }
+
+    result
 }
 
 macro_rules! buffer {

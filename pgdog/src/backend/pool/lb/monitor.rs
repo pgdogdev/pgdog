@@ -9,12 +9,12 @@ static MAINTENANCE: Duration = Duration::from_millis(333);
 
 #[derive(Clone, Debug)]
 pub(super) struct Monitor {
-    replicas: Replicas,
+    replicas: LoadBalancer,
 }
 
 impl Monitor {
     /// Create new replica targets monitor.
-    pub(super) fn spawn(replicas: &Replicas) -> JoinHandle<()> {
+    pub(super) fn spawn(replicas: &LoadBalancer) -> JoinHandle<()> {
         let monitor = Self {
             replicas: replicas.clone(),
         };
@@ -27,23 +27,9 @@ impl Monitor {
     async fn run(&self) {
         let mut interval = interval(MAINTENANCE);
 
-        let mut targets: Vec<_> = self.replicas.replicas.clone();
-        if let Some(primary) = self.replicas.primary.clone() {
-            targets.push(primary);
-        }
-
-        let mut bans: Vec<Ban> = self
-            .replicas
-            .replicas
-            .iter()
-            .map(|target| target.ban.clone())
-            .collect();
-
-        if let Some(ref primary) = self.replicas.primary {
-            bans.push(primary.ban.clone());
-        }
-
         debug!("replicas monitor running");
+
+        let targets = &self.replicas.targets;
 
         loop {
             let mut check_offline = false;
@@ -59,7 +45,7 @@ impl Monitor {
             if check_offline {
                 let offline = self
                     .replicas
-                    .replicas
+                    .targets
                     .iter()
                     .all(|target| !target.pool.lock().online);
 

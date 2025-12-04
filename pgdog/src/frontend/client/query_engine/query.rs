@@ -38,6 +38,20 @@ impl QueryEngine {
             }
 
             self.backend.execute(begin_stmt.query()).await?;
+
+            // Sync transaction parameters. These will only
+            // be captured inside an explicit transaction
+            // so we don't have to track them.
+            let query_timeout = context.timeouts.query_timeout(&self.stats.state);
+            for query in self.transaction_params.set_queries(true) {
+                timeout(query_timeout, self.backend.execute(query)).await??;
+            }
+            debug!(
+                "synced {} in-transaction parameters",
+                self.transaction_params.len()
+            );
+            self.transaction_params.clear();
+            self.backend.reset_changed_params();
         } else if !self.connect(context, route).await? {
             return Ok(());
         }

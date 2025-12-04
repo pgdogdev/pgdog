@@ -1,5 +1,3 @@
-use crate::backend::databases;
-
 use super::*;
 
 use tokio::time::interval;
@@ -10,7 +8,6 @@ use tracing::{info, warn};
 pub(super) struct ShardComms {
     pub(super) shutdown: Notify,
     pub(super) lsn_check_interval: Duration,
-    pub(super) role_detector: bool,
 }
 
 impl Default for ShardComms {
@@ -18,7 +15,6 @@ impl Default for ShardComms {
         Self {
             shutdown: Notify::new(),
             lsn_check_interval: Duration::MAX,
-            role_detector: false,
         }
     }
 }
@@ -55,11 +51,10 @@ impl ShardMonitor {
         );
 
         let mut detector = RoleDetector::new(&self.shard);
-        let detector_enabled = self.shard.comms().role_detector;
 
-        if detector_enabled {
+        if detector.enabled() {
             info!(
-                "failover enabled for shard {} [{}]",
+                "automatic database role detection is enabled for shard {} [{}]",
                 self.shard.number(),
                 self.shard.identifier()
             );
@@ -73,14 +68,12 @@ impl ShardMonitor {
                 },
             }
 
-            if detector_enabled && detector.changed() {
+            if detector.changed() {
                 warn!(
                     "database role changed in shard {} [{}]",
                     self.shard.number(),
                     self.shard.identifier()
                 );
-                databases::reload_from_existing();
-                break;
             }
 
             let pool_with_stats = self
