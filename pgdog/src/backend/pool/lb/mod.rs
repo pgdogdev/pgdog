@@ -1,4 +1,4 @@
-//! Replicas pool.
+//! Load balanced connection pool.
 
 use std::{
     sync::{
@@ -60,7 +60,7 @@ impl ReadTarget {
     }
 }
 
-/// Replicas pools.
+/// Load balancer.
 #[derive(Clone, Default, Debug)]
 pub struct LoadBalancer {
     /// Read/write targets.
@@ -85,10 +85,14 @@ impl LoadBalancer {
         lb_strategy: LoadBalancingStrategy,
         rw_split: ReadWriteSplit,
     ) -> LoadBalancer {
-        let mut checkout_timeout = addrs
-            .iter()
-            .map(|c| c.config.checkout_timeout)
-            .sum::<Duration>();
+        let checkout_timeout = primary
+            .as_ref()
+            .map(|primary| primary.config().checkout_timeout)
+            .unwrap_or(Duration::ZERO)
+            + addrs
+                .iter()
+                .map(|c| c.config.checkout_timeout)
+                .sum::<Duration>();
 
         let mut targets: Vec<_> = addrs
             .iter()
@@ -100,7 +104,6 @@ impl LoadBalancer {
             .map(|pool| ReadTarget::new(pool.clone(), Role::Primary));
 
         if let Some(primary) = primary_target {
-            checkout_timeout += primary.pool.config().checkout_timeout;
             targets.push(primary);
         }
 
