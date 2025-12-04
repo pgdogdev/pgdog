@@ -469,7 +469,7 @@ impl Server {
 
             // Combine both to create a new, fresh session state
             // on this connection.
-            queries.extend(tracked.set_queries(false));
+            queries.extend(tracked.set_queries());
 
             // Set state on the connection only if
             // there are any params to change.
