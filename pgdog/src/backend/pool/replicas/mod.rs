@@ -1,7 +1,7 @@
 //! Replicas pool.
 
 use std::{
-    collections::HashMap,
+    collections::BTreeMap,
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
@@ -118,7 +118,7 @@ impl Replicas {
                 let role = DetectedRole::from_read_target(replica);
                 (role.database_number, role)
             })
-            .collect::<HashMap<_, _>>();
+            .collect::<BTreeMap<_, _>>();
 
         if let Some(ref primary) = self.primary {
             let role = DetectedRole::from_read_target(primary);
@@ -165,7 +165,7 @@ impl Replicas {
             .filter(|target| target.0.replica)
             .collect::<Vec<_>>();
 
-        let mut numbers: HashMap<_, _> = replicas
+        let mut numbers: BTreeMap<_, _> = replicas
             .iter()
             .map(|target| {
                 let database_number = target.1.pool.addr().database_number;
