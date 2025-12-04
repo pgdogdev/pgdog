@@ -1,5 +1,5 @@
-use pg_query::protobuf::{Integer};
-use pg_query::protobuf::{a_const::Val, SelectStmt, String as PgQueryString, Node};
+use pg_query::protobuf::Integer;
+use pg_query::protobuf::{a_const::Val, Node, SelectStmt, String as PgQueryString};
 use pg_query::NodeEnum;
 use std::collections::HashSet;
 
@@ -79,8 +79,7 @@ fn target_list_to_index(stmt: &SelectStmt, column_names: HashSet<&String>) -> Op
                         if let Some(inner_enum) = node_box.node.as_ref() {
                             match inner_enum {
                                 NodeEnum::ColumnRef(column_ref) => {
-                                    if column_ref.fields.iter().all(
-                                        |field_node|
+                                    if column_ref.fields.iter().all(|field_node| {
                                         if let Some(node_box) = field_node.node.as_ref() {
                                             match node_box {
                                                 // NOTE: if we have example.user_id, there are two things here, we expect them to match exactly
@@ -89,12 +88,16 @@ fn target_list_to_index(stmt: &SelectStmt, column_names: HashSet<&String>) -> Op
                                                 // I don't know if we can do better than this without looking at the structure of the schema.
                                                 // I'm also technically not checking the order of these here, where I should be
                                                 // but this is quick n' dirty.
-                                                NodeEnum::String(PgQueryString{ sval: found_column_name, .. }) => { column_names.contains(found_column_name)},
-                                                _ => false
-
+                                                NodeEnum::String(PgQueryString {
+                                                    sval: found_column_name,
+                                                    ..
+                                                }) => column_names.contains(found_column_name),
+                                                _ => false,
                                             }
-                                        } else { false }
-                                    ) {
+                                        } else {
+                                            false
+                                        }
+                                    }) {
                                         return Some(idx);
                                     }
                                 }
@@ -102,12 +105,12 @@ fn target_list_to_index(stmt: &SelectStmt, column_names: HashSet<&String>) -> Op
                             }
                         }
                     }
-                },
+                }
                 _ => {}
             }
         }
     }
-    return None
+    return None;
 }
 
 impl Aggregate {
@@ -125,15 +128,20 @@ impl Aggregate {
                         _ => None,
                     }),
                     NodeEnum::ColumnRef(column_ref) => {
-                        let column_names = column_ref.fields.iter().filter_map(|node| match node {
-                            Node{node: Some(NodeEnum::String(PgQueryString{sval: column_name}))} => {
-                                Some(column_name)
-                            }
-                            _ => None
-                        }).collect();
+                        let column_names = column_ref
+                            .fields
+                            .iter()
+                            .filter_map(|node| match node {
+                                Node {
+                                    node:
+                                        Some(NodeEnum::String(PgQueryString { sval: column_name })),
+                                } => Some(column_name),
+                                _ => None,
+                            })
+                            .collect();
                         Some(target_list_to_index(stmt, column_names))
-                    },
-                    _ => None
+                    }
+                    _ => None,
                 })
             })
             .flatten()
