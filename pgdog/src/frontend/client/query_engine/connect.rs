@@ -108,6 +108,9 @@ impl QueryEngine {
 
         if cluster.shards().len() == 1 {
             Ok(Route::write(Shard::Direct(0)).set_read(route.is_read()))
+        } else if route.schema_path_driven() {
+            // Schema-based routing will only go to one shard.
+            Ok(route.clone())
         } else {
             Ok(Route::write(Shard::All).set_read(route.is_read()))
         }
