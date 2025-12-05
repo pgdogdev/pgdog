@@ -77,17 +77,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let runtime = match config.config.general.workers {
         0 => {
             let mut binding = Builder::new_current_thread();
-            binding.enable_all();
+            binding
+                .enable_all()
+                .thread_stack_size(config.config.memory.stack_size);
             binding
         }
         workers => {
-            info!("spawning {} workers", workers);
             let mut builder = Builder::new_multi_thread();
-            builder.worker_threads(workers).enable_all();
+            builder
+                .worker_threads(workers)
+                .enable_all()
+                .thread_stack_size(config.config.memory.stack_size);
             builder
         }
     }
     .build()?;
+
+    info!(
+        "spawning {} threads (stack size: {}MiB)",
+        config.config.general.workers,
+        config.config.memory.stack_size / 1024 / 1024
+    );
 
     runtime.block_on(async move { pgdog(args.command).await })?;
 
