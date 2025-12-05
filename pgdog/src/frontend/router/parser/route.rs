@@ -79,6 +79,7 @@ pub struct Route {
     rewritten_sql: Option<String>,
     explain: Option<ExplainTrace>,
     rollback_savepoint: bool,
+    schema_path_driven: bool,
 }
 
 impl Display for Route {
@@ -174,6 +175,14 @@ impl Route {
     pub fn set_shard(mut self, shard: impl Into<Shard>) -> Self {
         self.set_shard_mut(shard);
         self
+    }
+
+    pub fn set_schema_path_driven_mut(&mut self, schema_driven: bool) {
+        self.schema_path_driven = schema_driven;
+    }
+
+    pub fn schema_path_driven(&self) -> bool {
+        self.schema_path_driven
     }
 
     pub fn set_maintenace(mut self) -> Self {

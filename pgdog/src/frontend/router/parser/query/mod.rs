@@ -144,6 +144,7 @@ impl QueryParser {
             // Check search_path and override.
             if let Some(shard) = self.check_search_path_for_shard(&qp_context)? {
                 query.set_shard_mut(shard);
+                query.set_schema_path_driven_mut(true);
             }
         }
 
