@@ -33,10 +33,7 @@ impl QueryParser {
         };
 
         match result {
-            Ok(mut command) => {
-                self.attach_explain(&mut command);
-                Ok(command)
-            }
+            Ok(command) => Ok(command),
             Err(err) => {
                 self.explain_recorder = None;
                 Err(err)
