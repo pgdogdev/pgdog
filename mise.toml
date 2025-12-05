@@ -1,0 +1,3 @@
+[tools]
+"cargo:cargo-nextest" = "latest"
+"cargo:cargo-watch" = "latest"
