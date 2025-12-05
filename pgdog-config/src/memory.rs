@@ -7,6 +7,8 @@ pub struct Memory {
     pub net_buffer: usize,
     #[serde(default = "default_message_buffer")]
     pub message_buffer: usize,
+    #[serde(default = "default_stack_size")]
+    pub stack_size: usize,
 }
 
 impl Default for Memory {
@@ -14,6 +16,7 @@ impl Default for Memory {
         Self {
             net_buffer: default_net_buffer(),
             message_buffer: default_message_buffer(),
+            stack_size: default_stack_size(),
         }
     }
 }
@@ -24,4 +27,9 @@ fn default_net_buffer() -> usize {
 
 fn default_message_buffer() -> usize {
     default_net_buffer()
+}
+
+// Default: 2MiB.
+fn default_stack_size() -> usize {
+    2 * 1024 * 1024
 }
