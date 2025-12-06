@@ -182,6 +182,8 @@ impl QueryEngine {
 
                 TransactionState::Idle => {
                     context.transaction = None;
+                    // This is necessary because we set the route
+                    // explicitly with schema-based sharding.
                     self.set_route = None;
                 }
 
