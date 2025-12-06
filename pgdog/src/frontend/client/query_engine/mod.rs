@@ -144,6 +144,7 @@ impl QueryEngine {
         // Schema-sharding route persists until the end
         // of the transaction.
         if command.route().schema_path_driven() && self.set_route.is_none() {
+            debug!("search_path route is set for transaction");
             self.set_route = Some(command.route().clone());
         }
 
