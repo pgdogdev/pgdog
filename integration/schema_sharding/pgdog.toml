@@ -1,6 +1,5 @@
 [general]
 expanded_explain = true
-dry_run = true
 cross_shard_disabled = true
 
 [[databases]]
