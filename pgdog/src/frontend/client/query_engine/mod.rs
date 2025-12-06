@@ -140,6 +140,15 @@ impl QueryEngine {
         self.pending_explain = None;
 
         let command = self.router.command();
+
+        // Schema-sharding route persists until the end
+        // of the transaction.
+        if command.route().schema_path_driven() && self.set_route.is_none() {
+            self.set_route = Some(command.route().clone());
+        }
+
+        // If we have set a fixed route using the schema_path session variable,
+        // keep it for the rest of the transaaction.
         let mut route = if let Some(ref route) = self.set_route {
             route.clone()
         } else {

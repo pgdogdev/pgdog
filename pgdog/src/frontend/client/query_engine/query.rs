@@ -182,6 +182,7 @@ impl QueryEngine {
 
                 TransactionState::Idle => {
                     context.transaction = None;
+                    self.set_route = None;
                 }
 
                 TransactionState::InTrasaction => {
