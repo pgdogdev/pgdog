@@ -11,6 +11,7 @@ use std::{
     iter::Sum,
     ops::{Add, Div, Sub},
     time::Duration,
+    u32,
 };
 
 /// Pool statistics.
@@ -215,7 +216,23 @@ impl Stats {
     pub fn calc_averages(&mut self, time: Duration) {
         let secs = time.as_secs() as usize;
         if secs > 0 {
-            self.averages = (self.counts - self.last_counts) / secs;
+            let diff = self.counts - self.last_counts;
+            self.averages = diff / secs;
+            self.averages.query_time =
+                diff.query_time / diff.query_count.try_into().unwrap_or(u32::MAX);
+            self.averages.xact_time =
+                diff.xact_time / diff.xact_count.try_into().unwrap_or(u32::MAX);
+            self.averages.wait_time =
+                diff.wait_time / diff.server_assignment_count.try_into().unwrap_or(u32::MAX);
+            self.averages.connect_time =
+                diff.connect_time / diff.connect_count.try_into().unwrap_or(u32::MAX);
+            let queries_in_xact = diff
+                .query_count
+                .wrapping_sub(diff.xact_count)
+                .clamp(1, u32::MAX as usize);
+            self.averages.idle_xact_time =
+                diff.idle_xact_time / queries_in_xact.try_into().unwrap_or(u32::MAX);
+
             self.last_counts = self.counts;
         }
     }
@@ -550,5 +567,30 @@ mod tests {
         assert_eq!(result.prepared_sync, 12);
         assert_eq!(result.connect_count, 8);
         assert_eq!(result.connect_time, Duration::from_secs(1));
+    }
+
+    #[test]
+    fn test_calc_averages() {
+        let mut stats = Stats::default();
+
+        stats.counts.query_count = 10;
+        stats.counts.query_time = Duration::from_millis(500);
+        stats.counts.xact_count = 5;
+        stats.counts.xact_time = Duration::from_millis(1000);
+        stats.counts.server_assignment_count = 4;
+        stats.counts.wait_time = Duration::from_millis(200);
+        stats.counts.connect_count = 2;
+        stats.counts.connect_time = Duration::from_millis(100);
+
+        stats.counts.idle_xact_time = Duration::from_millis(250);
+
+        stats.calc_averages(Duration::from_secs(1));
+
+        assert_eq!(stats.averages.query_time, Duration::from_millis(50));
+        assert_eq!(stats.averages.xact_time, Duration::from_millis(200));
+        assert_eq!(stats.averages.wait_time, Duration::from_millis(50));
+        assert_eq!(stats.averages.connect_time, Duration::from_millis(50));
+        // idle_xact_time is divided by (query_count - xact_count) = 10 - 5 = 5
+        assert_eq!(stats.averages.idle_xact_time, Duration::from_millis(50));
     }
 }
