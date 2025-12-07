@@ -52,7 +52,7 @@ impl<'a> Insert<'a> {
             .cols
             .iter()
             .map(Column::try_from)
-            .collect::<Result<Vec<Column<'a>>, ()>>()
+            .collect::<Result<Vec<Column<'a>>, Error>>()
             .ok()
             .unwrap_or(vec![])
     }

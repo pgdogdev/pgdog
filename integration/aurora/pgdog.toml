@@ -1,0 +1,15 @@
+[general]
+lsn_check_delay = 1000
+
+[[databases]]
+host = "self-only-instance-1.c5icciqq4b0q.us-west-2.rds.amazonaws.com"
+role = "auto"
+name = "postgres"
+
+[[databases]]
+host = "self-only-instance-1-us-west-2a.c5icciqq4b0q.us-west-2.rds.amazonaws.com"
+role = "auto"
+name = "postgres"
+
+[admin]
+password = "pgdog"
