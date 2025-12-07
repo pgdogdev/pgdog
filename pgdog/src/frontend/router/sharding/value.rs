@@ -2,10 +2,10 @@ use std::str::{from_utf8, FromStr};
 
 use uuid::Uuid;
 
-use super::{Error, Hasher};
+use super::{super::parser::Value as ParserValue, Error, Hasher};
 use crate::{
     config::DataType,
-    net::{Format, FromDataType, ParameterWithFormat, Vector},
+    net::{Bind, Format, FromDataType, ParameterWithFormat, Vector},
 };
 use bytes::Bytes;
 
@@ -54,6 +54,8 @@ impl<'a> Value<'a> {
         }
     }
 
+    /// Convert parameter to value, given the data type
+    /// and known encoding.
     pub fn from_param(
         param: &'a ParameterWithFormat<'a>,
         data_type: DataType,

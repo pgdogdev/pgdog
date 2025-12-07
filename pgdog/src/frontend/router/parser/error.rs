@@ -99,4 +99,16 @@ pub enum Error {
 
     #[error("prepared statement \"{0}\" doesn't exist")]
     PreparedStatementDoesntExist(String),
+
+    #[error("column decode error")]
+    ColumnDecode,
+
+    #[error("table decode error")]
+    TableDecode,
+
+    #[error("parameter ${0} not in bind")]
+    BindParameterMissing(i32),
+
+    #[error("statement is not a SELECT")]
+    NotASelect,
 }

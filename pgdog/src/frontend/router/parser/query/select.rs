@@ -39,27 +39,27 @@ impl QueryParser {
             ));
         }
 
+        let mut shards = HashSet::new();
+
+        let shard = SelectParser::new(stmt, context.router_context.bind, &context.sharding_schema)
+            .shard()?;
+        if let Some(shard) = shard {
+            if let Some(recorder) = self.recorder_mut() {
+                recorder.record_entry(Some(shard.clone()), "SELECT matched sharding key");
+            }
+            shards.insert(shard);
+        }
+
         // `SELECT NOW()`, `SELECT 1`, etc.
-        if stmt.from_clause.is_empty() {
+        if shards.is_empty() && stmt.from_clause.is_empty() {
             return Ok(Command::Query(
                 Route::read(Some(round_robin::next() % context.shards)).set_write(writes),
             ));
         }
 
         let order_by = Self::select_sort(&stmt.sort_clause, context.router_context.bind);
-        let mut shards = HashSet::new();
 
         let from_clause = TablesSource::from(FromClause::new(&stmt.from_clause));
-        let where_clause = WhereClause::new(&from_clause, &stmt.where_clause);
-
-        if let Some(ref where_clause) = where_clause {
-            shards = Self::where_clause(
-                &context.sharding_schema,
-                where_clause,
-                context.router_context.bind,
-                &mut self.explain_recorder,
-            )?;
-        }
 
         // Schema-based sharding.
         let mut schema_sharder = SchemaSharder::default();
