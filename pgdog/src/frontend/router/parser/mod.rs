@@ -59,7 +59,7 @@ pub use rewrite_engine::RewriteEngine;
 pub use rewrite_plan::{HelperKind, HelperMapping, QueryRewriter, RewriteOutput, RewritePlan};
 pub use route::{Route, Shard};
 pub use schema::Schema;
-pub use select::SelectParser;
+pub use select::StatementParser;
 pub use sequence::{OwnedSequence, Sequence};
 pub use table::{OwnedTable, Table};
 pub use tuple::Tuple;

@@ -1,7 +1,9 @@
 use std::collections::{HashMap, HashSet};
 
 use pg_query::{
-    protobuf::{AExprKind, BoolExprType, RawStmt, SelectStmt},
+    protobuf::{
+        AExprKind, BoolExprType, DeleteStmt, InsertStmt, RangeVar, RawStmt, SelectStmt, UpdateStmt,
+    },
     Node, NodeEnum,
 };
 
@@ -153,16 +155,23 @@ impl<'a> SearchResult<'a> {
     }
 }
 
-pub struct SelectParser<'a, 'b, 'c> {
-    stmt: &'a SelectStmt,
+enum Statement<'a> {
+    Select(&'a SelectStmt),
+    Update(&'a UpdateStmt),
+    Delete(&'a DeleteStmt),
+    Insert(&'a InsertStmt),
+}
+
+pub struct StatementParser<'a, 'b, 'c> {
+    stmt: Statement<'a>,
     bind: Option<&'b Bind>,
     schema: &'b ShardingSchema,
     recorder: Option<&'c mut ExplainRecorder>,
 }
 
-impl<'a, 'b, 'c> SelectParser<'a, 'b, 'c> {
-    pub fn new(
-        stmt: &'a SelectStmt,
+impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
+    fn new(
+        stmt: Statement<'a>,
         bind: Option<&'b Bind>,
         schema: &'b ShardingSchema,
         recorder: Option<&'c mut ExplainRecorder>,
@@ -173,6 +182,42 @@ impl<'a, 'b, 'c> SelectParser<'a, 'b, 'c> {
             schema,
             recorder,
         }
+    }
+
+    pub fn from_select(
+        stmt: &'a SelectStmt,
+        bind: Option<&'b Bind>,
+        schema: &'b ShardingSchema,
+        recorder: Option<&'c mut ExplainRecorder>,
+    ) -> Self {
+        Self::new(Statement::Select(stmt), bind, schema, recorder)
+    }
+
+    pub fn from_update(
+        stmt: &'a UpdateStmt,
+        bind: Option<&'b Bind>,
+        schema: &'b ShardingSchema,
+        recorder: Option<&'c mut ExplainRecorder>,
+    ) -> Self {
+        Self::new(Statement::Update(stmt), bind, schema, recorder)
+    }
+
+    pub fn from_delete(
+        stmt: &'a DeleteStmt,
+        bind: Option<&'b Bind>,
+        schema: &'b ShardingSchema,
+        recorder: Option<&'c mut ExplainRecorder>,
+    ) -> Self {
+        Self::new(Statement::Delete(stmt), bind, schema, recorder)
+    }
+
+    pub fn from_insert(
+        stmt: &'a InsertStmt,
+        bind: Option<&'b Bind>,
+        schema: &'b ShardingSchema,
+        recorder: Option<&'c mut ExplainRecorder>,
+    ) -> Self {
+        Self::new(Statement::Insert(stmt), bind, schema, recorder)
     }
 
     /// Record a sharding key match.
@@ -200,20 +245,77 @@ impl<'a, 'b, 'c> SelectParser<'a, 'b, 'c> {
         recorder: Option<&'c mut ExplainRecorder>,
     ) -> Result<Self, Error> {
         match raw.stmt.as_ref().and_then(|n| n.node.as_ref()) {
-            Some(NodeEnum::SelectStmt(stmt)) => Ok(Self::new(stmt, bind, schema, recorder)),
+            Some(NodeEnum::SelectStmt(stmt)) => Ok(Self::from_select(stmt, bind, schema, recorder)),
+            Some(NodeEnum::UpdateStmt(stmt)) => Ok(Self::from_update(stmt, bind, schema, recorder)),
+            Some(NodeEnum::DeleteStmt(stmt)) => Ok(Self::from_delete(stmt, bind, schema, recorder)),
+            Some(NodeEnum::InsertStmt(stmt)) => Ok(Self::from_insert(stmt, bind, schema, recorder)),
             _ => Err(Error::NotASelect),
         }
     }
 
     pub fn shard(&mut self) -> Result<Option<Shard>, Error> {
-        let ctx = SearchContext::from_from_clause(&self.stmt.from_clause);
-        let result = self.search_select_stmt(self.stmt, &ctx)?;
+        match self.stmt {
+            Statement::Select(stmt) => self.shard_select(stmt),
+            Statement::Update(stmt) => self.shard_update(stmt),
+            Statement::Delete(stmt) => self.shard_delete(stmt),
+            Statement::Insert(stmt) => self.shard_insert(stmt),
+        }
+    }
+
+    fn shard_select(&mut self, stmt: &'a SelectStmt) -> Result<Option<Shard>, Error> {
+        let ctx = SearchContext::from_from_clause(&stmt.from_clause);
+        let result = self.search_select_stmt(stmt, &ctx)?;
 
         match result {
             SearchResult::Match(shard) => Ok(Some(shard)),
             SearchResult::Matches(shards) => Ok(Self::converge(&shards)),
             _ => Ok(None),
         }
+    }
+
+    fn shard_update(&mut self, stmt: &'a UpdateStmt) -> Result<Option<Shard>, Error> {
+        let ctx = self.context_from_relation(&stmt.relation);
+        let result = self.search_update_stmt(stmt, &ctx)?;
+
+        match result {
+            SearchResult::Match(shard) => Ok(Some(shard)),
+            SearchResult::Matches(shards) => Ok(Self::converge(&shards)),
+            _ => Ok(None),
+        }
+    }
+
+    fn shard_delete(&mut self, stmt: &'a DeleteStmt) -> Result<Option<Shard>, Error> {
+        let ctx = self.context_from_relation(&stmt.relation);
+        let result = self.search_delete_stmt(stmt, &ctx)?;
+
+        match result {
+            SearchResult::Match(shard) => Ok(Some(shard)),
+            SearchResult::Matches(shards) => Ok(Self::converge(&shards)),
+            _ => Ok(None),
+        }
+    }
+
+    fn shard_insert(&mut self, stmt: &'a InsertStmt) -> Result<Option<Shard>, Error> {
+        let ctx = self.context_from_relation(&stmt.relation);
+        let result = self.search_insert_stmt(stmt, &ctx)?;
+
+        match result {
+            SearchResult::Match(shard) => Ok(Some(shard)),
+            SearchResult::Matches(shards) => Ok(Self::converge(&shards)),
+            _ => Ok(None),
+        }
+    }
+
+    fn context_from_relation(&self, relation: &'a Option<RangeVar>) -> SearchContext<'a> {
+        let mut ctx = SearchContext::default();
+        if let Some(ref range_var) = relation {
+            let table = Table::from(range_var);
+            ctx.table = Some(table);
+            if let Some(ref alias) = range_var.alias {
+                ctx.aliases.insert(alias.aliasname.as_str(), table);
+            }
+        }
+        ctx
     }
 
     fn converge(shards: &[Shard]) -> Option<Shard> {
@@ -577,6 +679,152 @@ impl<'a, 'b, 'c> SelectParser<'a, 'b, 'c> {
         }
         Ok(shard)
     }
+
+    /// Search an UPDATE statement for sharding keys.
+    fn search_update_stmt(
+        &mut self,
+        stmt: &'a UpdateStmt,
+        ctx: &SearchContext<'a>,
+    ) -> Result<SearchResult<'a>, Error> {
+        // Handle CTEs (WITH clause)
+        if let Some(ref with_clause) = stmt.with_clause {
+            for cte in &with_clause.ctes {
+                let result = self.select_search(cte, ctx)?;
+                if !result.is_none() {
+                    return Ok(result);
+                }
+            }
+        }
+
+        // Search WHERE clause
+        if let Some(ref where_clause) = stmt.where_clause {
+            let result = self.select_search(where_clause, ctx)?;
+            if !result.is_none() {
+                return Ok(result);
+            }
+        }
+
+        // Search FROM clause (UPDATE ... FROM ...)
+        for from_ in &stmt.from_clause {
+            let result = self.select_search(from_, ctx)?;
+            if !result.is_none() {
+                return Ok(result);
+            }
+        }
+
+        Ok(SearchResult::None)
+    }
+
+    /// Search a DELETE statement for sharding keys.
+    fn search_delete_stmt(
+        &mut self,
+        stmt: &'a DeleteStmt,
+        ctx: &SearchContext<'a>,
+    ) -> Result<SearchResult<'a>, Error> {
+        // Handle CTEs (WITH clause)
+        if let Some(ref with_clause) = stmt.with_clause {
+            for cte in &with_clause.ctes {
+                let result = self.select_search(cte, ctx)?;
+                if !result.is_none() {
+                    return Ok(result);
+                }
+            }
+        }
+
+        // Search WHERE clause
+        if let Some(ref where_clause) = stmt.where_clause {
+            let result = self.select_search(where_clause, ctx)?;
+            if !result.is_none() {
+                return Ok(result);
+            }
+        }
+
+        // Search USING clause (DELETE ... USING ...)
+        for using_ in &stmt.using_clause {
+            let result = self.select_search(using_, ctx)?;
+            if !result.is_none() {
+                return Ok(result);
+            }
+        }
+
+        Ok(SearchResult::None)
+    }
+
+    /// Search an INSERT statement for sharding keys.
+    fn search_insert_stmt(
+        &mut self,
+        stmt: &'a InsertStmt,
+        ctx: &SearchContext<'a>,
+    ) -> Result<SearchResult<'a>, Error> {
+        // Handle CTEs (WITH clause)
+        if let Some(ref with_clause) = stmt.with_clause {
+            for cte in &with_clause.ctes {
+                let result = self.select_search(cte, ctx)?;
+                if !result.is_none() {
+                    return Ok(result);
+                }
+            }
+        }
+
+        // Get the column names from INSERT INTO table (col1, col2, ...)
+        let columns: Vec<&str> = stmt
+            .cols
+            .iter()
+            .filter_map(|node| match &node.node {
+                Some(NodeEnum::ResTarget(target)) => Some(target.name.as_str()),
+                _ => None,
+            })
+            .collect();
+
+        // The select_stmt field contains either VALUES or a SELECT subquery
+        if let Some(ref select_node) = stmt.select_stmt {
+            if let Some(NodeEnum::SelectStmt(ref select_stmt)) = select_node.node {
+                // Check if this is VALUES (has values_lists) - need special handling
+                // to match column positions with sharding keys
+                if !select_stmt.values_lists.is_empty() {
+                    for values_list in &select_stmt.values_lists {
+                        if let Some(NodeEnum::List(ref list)) = values_list.node {
+                            for (pos, value_node) in list.items.iter().enumerate() {
+                                // Check if this position corresponds to a sharding key column
+                                if let Some(column_name) = columns.get(pos) {
+                                    let column = Column {
+                                        name: column_name,
+                                        table: ctx.table.map(|t| t.name),
+                                        schema: ctx.table.and_then(|t| t.schema),
+                                    };
+
+                                    if self.schema.tables().get_table(column).is_some() {
+                                        // Try to extract the value directly
+                                        if let Ok(value) = Value::try_from(&value_node.node) {
+                                            if let Some(shard) =
+                                                self.compute_shard_with_ctx(column, value, ctx)?
+                                            {
+                                                return Ok(SearchResult::Match(shard));
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // Search subqueries in values recursively
+                                let result = self.select_search(value_node, ctx)?;
+                                if result.is_match() {
+                                    return Ok(result);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Handle INSERT ... SELECT by recursively searching the SelectStmt
+                let result = self.select_search(select_node, ctx)?;
+                if !result.is_none() {
+                    return Ok(result);
+                }
+            }
+        }
+
+        Ok(SearchResult::None)
+    }
 }
 
 #[cfg(test)]
@@ -588,7 +836,7 @@ mod test {
 
     use super::*;
 
-    fn run_select_test(stmt: &str, bind: Option<&Bind>) -> Result<Option<Shard>, Error> {
+    fn run_test(stmt: &str, bind: Option<&Bind>) -> Result<Option<Shard>, Error> {
         let schema = ShardingSchema {
             shards: 3,
             tables: ShardedTables::new(
@@ -632,33 +880,32 @@ mod test {
             .first()
             .cloned()
             .unwrap();
-        let mut parser = SelectParser::from_raw(&raw, bind, &schema, None)?;
+        let mut parser = StatementParser::from_raw(&raw, bind, &schema, None)?;
         parser.shard()
     }
 
     #[test]
     fn test_simple_select() {
-        let result = run_select_test("SELECT * FROM sharded WHERE id = 1", None);
+        let result = run_test("SELECT * FROM sharded WHERE id = 1", None);
         assert!(result.unwrap().is_some());
     }
 
     #[test]
     fn test_select_with_and() {
-        let result =
-            run_select_test("SELECT * FROM sharded WHERE id = 1 AND name = 'foo'", None).unwrap();
+        let result = run_test("SELECT * FROM sharded WHERE id = 1 AND name = 'foo'", None).unwrap();
         assert!(result.is_some());
     }
 
     #[test]
     fn test_select_with_or_returns_none() {
         // OR expressions can't determine a single shard
-        let result = run_select_test("SELECT * FROM sharded WHERE id = 1 OR id = 2", None).unwrap();
+        let result = run_test("SELECT * FROM sharded WHERE id = 1 OR id = 2", None).unwrap();
         assert!(result.is_none());
     }
 
     #[test]
     fn test_select_with_subquery() {
-        let result = run_select_test(
+        let result = run_test(
             "SELECT * FROM sharded WHERE id IN (SELECT sharded_id FROM other WHERE sharded_id = 1)",
             None,
         )
@@ -668,7 +915,7 @@ mod test {
 
     #[test]
     fn test_select_with_cte() {
-        let result = run_select_test(
+        let result = run_test(
             "WITH cte AS (SELECT * FROM sharded WHERE id = 1) SELECT * FROM cte",
             None,
         )
@@ -678,7 +925,7 @@ mod test {
 
     #[test]
     fn test_select_with_join() {
-        let result = run_select_test(
+        let result = run_test(
             "SELECT * FROM sharded s JOIN other o ON s.id = o.sharded_id WHERE s.id = 1",
             None,
         )
@@ -688,13 +935,13 @@ mod test {
 
     #[test]
     fn test_select_with_type_cast() {
-        let result = run_select_test("SELECT * FROM sharded WHERE id = '1'::int", None).unwrap();
+        let result = run_test("SELECT * FROM sharded WHERE id = '1'::int", None).unwrap();
         assert!(result.is_some());
     }
 
     #[test]
     fn test_select_from_subquery() {
-        let result = run_select_test(
+        let result = run_test(
             "SELECT * FROM (SELECT * FROM sharded WHERE id = 1) AS sub",
             None,
         )
@@ -704,7 +951,7 @@ mod test {
 
     #[test]
     fn test_select_with_nested_cte() {
-        let result = run_select_test(
+        let result = run_test(
             "WITH cte1 AS (SELECT * FROM sharded WHERE id = 1), \
              cte2 AS (SELECT * FROM cte1) \
              SELECT * FROM cte2",
@@ -716,13 +963,13 @@ mod test {
 
     #[test]
     fn test_select_no_where_returns_none() {
-        let result = run_select_test("SELECT * FROM sharded", None).unwrap();
+        let result = run_test("SELECT * FROM sharded", None).unwrap();
         assert!(result.is_none());
     }
 
     #[test]
     fn test_select_with_in_list() {
-        let result = run_select_test("SELECT * FROM sharded WHERE id IN (1, 2, 3)", None).unwrap();
+        let result = run_test("SELECT * FROM sharded WHERE id IN (1, 2, 3)", None).unwrap();
         // IN with multiple values should return a shard match
         assert!(result.is_some());
     }
@@ -730,20 +977,20 @@ mod test {
     #[test]
     fn test_select_with_not_equals_returns_none() {
         // != operator is not supported for sharding
-        let result = run_select_test("SELECT * FROM sharded WHERE id != 1", None).unwrap();
+        let result = run_test("SELECT * FROM sharded WHERE id != 1", None).unwrap();
         assert!(result.is_none());
     }
 
     #[test]
     fn test_select_with_greater_than_returns_none() {
         // > operator is not supported for sharding
-        let result = run_select_test("SELECT * FROM sharded WHERE id > 1", None).unwrap();
+        let result = run_test("SELECT * FROM sharded WHERE id > 1", None).unwrap();
         assert!(result.is_none());
     }
 
     #[test]
     fn test_select_with_complex_and() {
-        let result = run_select_test(
+        let result = run_test(
             "SELECT * FROM sharded WHERE id = 1 AND status = 'active' AND created_at > now()",
             None,
         )
@@ -753,7 +1000,7 @@ mod test {
 
     #[test]
     fn test_select_with_left_join() {
-        let result = run_select_test(
+        let result = run_test(
             "SELECT * FROM sharded s LEFT JOIN other o ON s.id = o.sharded_id WHERE s.id = 1",
             None,
         )
@@ -763,7 +1010,7 @@ mod test {
 
     #[test]
     fn test_select_with_multiple_joins() {
-        let result = run_select_test(
+        let result = run_test(
             "SELECT * FROM sharded s \
              JOIN other o ON s.id = o.sharded_id \
              JOIN third t ON o.id = t.other_id \
@@ -776,7 +1023,7 @@ mod test {
 
     #[test]
     fn test_select_with_exists_subquery() {
-        let result = run_select_test(
+        let result = run_test(
             "SELECT * FROM sharded WHERE EXISTS (SELECT 1 FROM other WHERE sharded_id = 1)",
             None,
         )
@@ -788,7 +1035,7 @@ mod test {
     #[test]
     fn test_select_with_scalar_subquery() {
         // Scalar subquery where shard is determined by the subquery's WHERE clause
-        let result = run_select_test(
+        let result = run_test(
             "SELECT * FROM sharded WHERE id = (SELECT sharded_id FROM other WHERE sharded_id = 1 LIMIT 1)",
             None,
         )
@@ -800,7 +1047,7 @@ mod test {
     #[test]
     fn test_select_with_recursive_cte() {
         // Recursive CTEs have UNION - we look at the base case
-        let result = run_select_test(
+        let result = run_test(
             "WITH RECURSIVE cte AS ( \
                 SELECT * FROM sharded WHERE id = 1 \
                 UNION ALL \
@@ -815,7 +1062,7 @@ mod test {
 
     #[test]
     fn test_select_with_union() {
-        let result = run_select_test(
+        let result = run_test(
             "SELECT * FROM sharded WHERE id = 1 UNION SELECT * FROM sharded WHERE id = 2",
             None,
         )
@@ -826,7 +1073,7 @@ mod test {
 
     #[test]
     fn test_select_with_nested_subselects() {
-        let result = run_select_test(
+        let result = run_test(
             "SELECT * FROM sharded WHERE id IN ( \
                 SELECT * FROM other WHERE x IN ( \
                     SELECT y FROM third WHERE sharded_id = 1 \
@@ -844,14 +1091,14 @@ mod test {
     #[test]
     fn test_bound_simple_select() {
         let bind = Bind::new_params("", &[Parameter::new(b"1")]);
-        let result = run_select_test("SELECT * FROM sharded WHERE id = $1", Some(&bind)).unwrap();
+        let result = run_test("SELECT * FROM sharded WHERE id = $1", Some(&bind)).unwrap();
         assert!(result.is_some());
     }
 
     #[test]
     fn test_bound_select_with_and() {
         let bind = Bind::new_params("", &[Parameter::new(b"1")]);
-        let result = run_select_test(
+        let result = run_test(
             "SELECT * FROM sharded WHERE id = $1 AND name = 'foo'",
             Some(&bind),
         )
@@ -862,7 +1109,7 @@ mod test {
     #[test]
     fn test_bound_select_with_or_returns_none() {
         let bind = Bind::new_params("", &[Parameter::new(b"1"), Parameter::new(b"2")]);
-        let result = run_select_test(
+        let result = run_test(
             "SELECT * FROM sharded WHERE id = $1 OR id = $2",
             Some(&bind),
         )
@@ -873,7 +1120,7 @@ mod test {
     #[test]
     fn test_bound_select_with_subquery() {
         let bind = Bind::new_params("", &[Parameter::new(b"1")]);
-        let result = run_select_test(
+        let result = run_test(
             "SELECT * FROM sharded WHERE id IN (SELECT sharded_id FROM other WHERE sharded_id = $1)",
             Some(&bind),
         )
@@ -884,7 +1131,7 @@ mod test {
     #[test]
     fn test_bound_select_with_cte() {
         let bind = Bind::new_params("", &[Parameter::new(b"1")]);
-        let result = run_select_test(
+        let result = run_test(
             "WITH cte AS (SELECT * FROM sharded WHERE id = $1) SELECT * FROM cte",
             Some(&bind),
         )
@@ -895,7 +1142,7 @@ mod test {
     #[test]
     fn test_bound_select_with_join() {
         let bind = Bind::new_params("", &[Parameter::new(b"1")]);
-        let result = run_select_test(
+        let result = run_test(
             "SELECT * FROM sharded s JOIN other o ON s.id = o.sharded_id WHERE s.id = $1",
             Some(&bind),
         )
@@ -906,15 +1153,14 @@ mod test {
     #[test]
     fn test_bound_select_with_type_cast() {
         let bind = Bind::new_params("", &[Parameter::new(b"1")]);
-        let result =
-            run_select_test("SELECT * FROM sharded WHERE id = $1::int", Some(&bind)).unwrap();
+        let result = run_test("SELECT * FROM sharded WHERE id = $1::int", Some(&bind)).unwrap();
         assert!(result.is_some());
     }
 
     #[test]
     fn test_bound_select_from_subquery() {
         let bind = Bind::new_params("", &[Parameter::new(b"1")]);
-        let result = run_select_test(
+        let result = run_test(
             "SELECT * FROM (SELECT * FROM sharded WHERE id = $1) AS sub",
             Some(&bind),
         )
@@ -925,7 +1171,7 @@ mod test {
     #[test]
     fn test_bound_select_with_nested_cte() {
         let bind = Bind::new_params("", &[Parameter::new(b"1")]);
-        let result = run_select_test(
+        let result = run_test(
             "WITH cte1 AS (SELECT * FROM sharded WHERE id = $1), \
              cte2 AS (SELECT * FROM cte1) \
              SELECT * FROM cte2",
@@ -945,7 +1191,7 @@ mod test {
                 Parameter::new(b"3"),
             ],
         );
-        let result = run_select_test(
+        let result = run_test(
             "SELECT * FROM sharded WHERE id IN ($1, $2, $3)",
             Some(&bind),
         )
@@ -958,29 +1204,28 @@ mod test {
         // ANY($1) with an array parameter - $1 is a single array value like '{1,2,3}'
         // Array parameters route to all shards since we can't reliably parse them
         let bind = Bind::new_params("", &[Parameter::new(b"{1,2,3}")]);
-        let result =
-            run_select_test("SELECT * FROM sharded WHERE id = ANY($1)", Some(&bind)).unwrap();
+        let result = run_test("SELECT * FROM sharded WHERE id = ANY($1)", Some(&bind)).unwrap();
         assert_eq!(result, Some(Shard::All));
     }
 
     #[test]
     fn test_bound_select_with_not_equals_returns_none() {
         let bind = Bind::new_params("", &[Parameter::new(b"1")]);
-        let result = run_select_test("SELECT * FROM sharded WHERE id != $1", Some(&bind)).unwrap();
+        let result = run_test("SELECT * FROM sharded WHERE id != $1", Some(&bind)).unwrap();
         assert!(result.is_none());
     }
 
     #[test]
     fn test_bound_select_with_greater_than_returns_none() {
         let bind = Bind::new_params("", &[Parameter::new(b"1")]);
-        let result = run_select_test("SELECT * FROM sharded WHERE id > $1", Some(&bind)).unwrap();
+        let result = run_test("SELECT * FROM sharded WHERE id > $1", Some(&bind)).unwrap();
         assert!(result.is_none());
     }
 
     #[test]
     fn test_bound_select_with_complex_and() {
         let bind = Bind::new_params("", &[Parameter::new(b"1")]);
-        let result = run_select_test(
+        let result = run_test(
             "SELECT * FROM sharded WHERE id = $1 AND status = 'active' AND created_at > now()",
             Some(&bind),
         )
@@ -991,7 +1236,7 @@ mod test {
     #[test]
     fn test_bound_select_with_left_join() {
         let bind = Bind::new_params("", &[Parameter::new(b"1")]);
-        let result = run_select_test(
+        let result = run_test(
             "SELECT * FROM sharded s LEFT JOIN other o ON s.id = o.sharded_id WHERE s.id = $1",
             Some(&bind),
         )
@@ -1002,7 +1247,7 @@ mod test {
     #[test]
     fn test_bound_select_with_multiple_joins() {
         let bind = Bind::new_params("", &[Parameter::new(b"1")]);
-        let result = run_select_test(
+        let result = run_test(
             "SELECT * FROM sharded s \
              JOIN other o ON s.id = o.sharded_id \
              JOIN third t ON o.id = t.other_id \
@@ -1016,7 +1261,7 @@ mod test {
     #[test]
     fn test_bound_select_with_exists_subquery() {
         let bind = Bind::new_params("", &[Parameter::new(b"1")]);
-        let result = run_select_test(
+        let result = run_test(
             "SELECT * FROM sharded WHERE EXISTS (SELECT 1 FROM other WHERE sharded_id = $1)",
             Some(&bind),
         )
@@ -1027,7 +1272,7 @@ mod test {
     #[test]
     fn test_bound_select_with_scalar_subquery() {
         let bind = Bind::new_params("", &[Parameter::new(b"1")]);
-        let result = run_select_test(
+        let result = run_test(
             "SELECT * FROM sharded WHERE id = (SELECT sharded_id FROM other WHERE sharded_id = $1 LIMIT 1)",
             Some(&bind),
         )
@@ -1038,7 +1283,7 @@ mod test {
     #[test]
     fn test_bound_select_with_recursive_cte() {
         let bind = Bind::new_params("", &[Parameter::new(b"1")]);
-        let result = run_select_test(
+        let result = run_test(
             "WITH RECURSIVE cte AS ( \
                 SELECT * FROM sharded WHERE id = $1 \
                 UNION ALL \
@@ -1053,7 +1298,7 @@ mod test {
     #[test]
     fn test_bound_select_with_union() {
         let bind = Bind::new_params("", &[Parameter::new(b"1"), Parameter::new(b"2")]);
-        let result = run_select_test(
+        let result = run_test(
             "SELECT * FROM sharded WHERE id = $1 UNION SELECT * FROM sharded WHERE id = $2",
             Some(&bind),
         )
@@ -1064,7 +1309,7 @@ mod test {
     #[test]
     fn test_bound_select_with_nested_subselects() {
         let bind = Bind::new_params("", &[Parameter::new(b"1")]);
-        let result = run_select_test(
+        let result = run_test(
             "SELECT * FROM sharded WHERE id IN ( \
                 SELECT * FROM other WHERE x IN ( \
                     SELECT y FROM third WHERE sharded_id = $1 \
@@ -1079,7 +1324,7 @@ mod test {
     #[test]
     fn test_bound_select_with_cte_and_subquery() {
         let bind = Bind::new_params("", &[Parameter::new(b"1")]);
-        let result = run_select_test(
+        let result = run_test(
             "WITH cte AS (SELECT * FROM sharded WHERE id = $1) \
              SELECT * FROM cte WHERE id IN (SELECT sharded_id FROM other)",
             Some(&bind),
@@ -1091,7 +1336,7 @@ mod test {
     #[test]
     fn test_bound_select_with_multiple_ctes_and_subquery() {
         let bind = Bind::new_params("", &[Parameter::new(b"1")]);
-        let result = run_select_test(
+        let result = run_test(
             "WITH cte1 AS (SELECT * FROM sharded WHERE id = $1), \
              cte2 AS (SELECT * FROM other WHERE sharded_id IN (SELECT id FROM cte1)) \
              SELECT * FROM cte2",
@@ -1104,7 +1349,7 @@ mod test {
     #[test]
     fn test_bound_select_with_cte_subquery_and_join() {
         let bind = Bind::new_params("", &[Parameter::new(b"1")]);
-        let result = run_select_test(
+        let result = run_test(
             "WITH cte AS (SELECT * FROM sharded WHERE id = $1) \
              SELECT c.*, o.* FROM cte c \
              JOIN other o ON c.id = o.sharded_id \
@@ -1119,7 +1364,7 @@ mod test {
 
     #[test]
     fn test_select_with_schema_qualified_table() {
-        let result = run_select_test(
+        let result = run_test(
             "SELECT * FROM myschema.schema_sharded WHERE tenant_id = 1",
             None,
         )
@@ -1129,7 +1374,7 @@ mod test {
 
     #[test]
     fn test_select_with_schema_qualified_alias() {
-        let result = run_select_test(
+        let result = run_test(
             "SELECT * FROM myschema.schema_sharded s WHERE s.tenant_id = 1",
             None,
         )
@@ -1140,7 +1385,7 @@ mod test {
     #[test]
     fn test_bound_select_with_schema_qualified_alias() {
         let bind = Bind::new_params("", &[Parameter::new(b"1")]);
-        let result = run_select_test(
+        let result = run_test(
             "SELECT * FROM myschema.schema_sharded s WHERE s.tenant_id = $1",
             Some(&bind),
         )
@@ -1150,7 +1395,7 @@ mod test {
 
     #[test]
     fn test_select_with_schema_qualified_join() {
-        let result = run_select_test(
+        let result = run_test(
             "SELECT * FROM myschema.schema_sharded s \
              JOIN other o ON s.id = o.sharded_id WHERE s.tenant_id = 1",
             None,
@@ -1161,7 +1406,7 @@ mod test {
 
     #[test]
     fn test_select_wrong_schema_returns_none() {
-        let result = run_select_test(
+        let result = run_test(
             "SELECT * FROM otherschema.schema_sharded WHERE tenant_id = 1",
             None,
         )
@@ -1171,7 +1416,7 @@ mod test {
 
     #[test]
     fn test_select_wrong_schema_alias_returns_none() {
-        let result = run_select_test(
+        let result = run_test(
             "SELECT * FROM otherschema.schema_sharded s WHERE s.tenant_id = 1",
             None,
         )
@@ -1181,9 +1426,166 @@ mod test {
 
     #[test]
     fn test_select_with_any_array_literal() {
-        let result =
-            run_select_test("SELECT * FROM sharded WHERE id = ANY('{1, 2, 3}')", None).unwrap();
+        let result = run_test("SELECT * FROM sharded WHERE id = ANY('{1, 2, 3}')", None).unwrap();
         // ANY with array literal routes to all shards
         assert_eq!(result, Some(Shard::All));
+    }
+
+    // UPDATE statement tests
+
+    #[test]
+    fn test_simple_update() {
+        let result = run_test("UPDATE sharded SET name = 'foo' WHERE id = 1", None);
+        assert!(result.unwrap().is_some());
+    }
+
+    #[test]
+    fn test_update_with_bound_param() {
+        let bind = Bind::new_params("", &[Parameter::new(b"1")]);
+        let result = run_test("UPDATE sharded SET name = 'foo' WHERE id = $1", Some(&bind));
+        assert!(result.unwrap().is_some());
+    }
+
+    #[test]
+    fn test_update_with_and() {
+        let result = run_test(
+            "UPDATE sharded SET name = 'foo' WHERE id = 1 AND status = 'active'",
+            None,
+        );
+        assert!(result.unwrap().is_some());
+    }
+
+    #[test]
+    fn test_update_no_where_returns_none() {
+        let result = run_test("UPDATE sharded SET name = 'foo'", None);
+        assert!(result.unwrap().is_none());
+    }
+
+    #[test]
+    fn test_update_with_subquery() {
+        let result = run_test(
+            "UPDATE sharded SET name = 'foo' WHERE id IN (SELECT sharded_id FROM other WHERE sharded_id = 1)",
+            None,
+        );
+        assert!(result.unwrap().is_some());
+    }
+
+    // DELETE statement tests
+
+    #[test]
+    fn test_simple_delete() {
+        let result = run_test("DELETE FROM sharded WHERE id = 1", None);
+        assert!(result.unwrap().is_some());
+    }
+
+    #[test]
+    fn test_delete_with_bound_param() {
+        let bind = Bind::new_params("", &[Parameter::new(b"1")]);
+        let result = run_test("DELETE FROM sharded WHERE id = $1", Some(&bind));
+        assert!(result.unwrap().is_some());
+    }
+
+    #[test]
+    fn test_delete_with_and() {
+        let result = run_test(
+            "DELETE FROM sharded WHERE id = 1 AND status = 'active'",
+            None,
+        );
+        assert!(result.unwrap().is_some());
+    }
+
+    #[test]
+    fn test_delete_no_where_returns_none() {
+        let result = run_test("DELETE FROM sharded", None);
+        assert!(result.unwrap().is_none());
+    }
+
+    #[test]
+    fn test_delete_with_subquery() {
+        let result = run_test(
+            "DELETE FROM sharded WHERE id IN (SELECT sharded_id FROM other WHERE sharded_id = 1)",
+            None,
+        );
+        assert!(result.unwrap().is_some());
+    }
+
+    #[test]
+    fn test_delete_with_cte() {
+        let result = run_test(
+            "WITH to_delete AS (SELECT id FROM sharded WHERE id = 1) DELETE FROM sharded WHERE id IN (SELECT id FROM to_delete)",
+            None,
+        );
+        assert!(result.unwrap().is_some());
+    }
+
+    // INSERT statement tests
+
+    #[test]
+    fn test_simple_insert_with_value() {
+        let result = run_test("INSERT INTO sharded (id, name) VALUES (1, 'foo')", None);
+        assert!(result.unwrap().is_some());
+    }
+
+    #[test]
+    fn test_insert_with_bound_param() {
+        let bind = Bind::new_params("", &[Parameter::new(b"1"), Parameter::new(b"foo")]);
+        let result = run_test(
+            "INSERT INTO sharded (id, name) VALUES ($1, $2)",
+            Some(&bind),
+        );
+        assert!(result.unwrap().is_some());
+    }
+
+    #[test]
+    fn test_insert_with_subquery_in_values() {
+        let result = run_test(
+            "INSERT INTO sharded (id, name) VALUES ((SELECT sharded_id FROM other WHERE sharded_id = 1), 'foo')",
+            None,
+        );
+        assert!(result.unwrap().is_some());
+    }
+
+    #[test]
+    fn test_insert_with_subquery_in_values_param() {
+        let bind = Bind::new_params("", &[Parameter::new(b"1")]);
+        let result = run_test(
+            "INSERT INTO sharded (id, name) VALUES ((SELECT sharded_id FROM other WHERE sharded_id = $1), 'foo')",
+            Some(&bind),
+        );
+        assert!(result.unwrap().is_some());
+    }
+
+    #[test]
+    fn test_insert_select() {
+        let result = run_test(
+            "INSERT INTO sharded (id, name) SELECT sharded_id, name FROM other WHERE sharded_id = 1",
+            None,
+        );
+        assert!(result.unwrap().is_some());
+    }
+
+    #[test]
+    fn test_insert_select_with_param() {
+        let bind = Bind::new_params("", &[Parameter::new(b"1")]);
+        let result = run_test(
+            "INSERT INTO sharded (id, name) SELECT sharded_id, name FROM other WHERE sharded_id = $1",
+            Some(&bind),
+        );
+        assert!(result.unwrap().is_some());
+    }
+
+    #[test]
+    fn test_insert_with_cte() {
+        let result = run_test(
+            "WITH src AS (SELECT id, name FROM sharded WHERE id = 1) INSERT INTO sharded (id, name) SELECT id, name FROM src",
+            None,
+        );
+        assert!(result.unwrap().is_some());
+    }
+
+    #[test]
+    fn test_insert_no_sharding_key_returns_none() {
+        let result = run_test("INSERT INTO sharded (name) VALUES ('foo')", None);
+        assert!(result.unwrap().is_none());
     }
 }

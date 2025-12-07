@@ -41,7 +41,7 @@ impl QueryParser {
 
         let mut shards = HashSet::new();
 
-        let shard = SelectParser::new(
+        let shard = StatementParser::from_select(
             stmt,
             context.router_context.bind,
             &context.sharding_schema,
