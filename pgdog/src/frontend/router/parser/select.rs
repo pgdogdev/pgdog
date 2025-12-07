@@ -153,24 +153,54 @@ impl<'a> SearchResult<'a> {
     }
 }
 
-pub struct SelectParser<'a, 'b> {
+pub struct SelectParser<'a, 'b, 'c> {
     stmt: &'a SelectStmt,
     bind: Option<&'b Bind>,
     schema: &'b ShardingSchema,
+    recorder: Option<&'c mut ExplainRecorder>,
 }
 
-impl<'a, 'b> SelectParser<'a, 'b> {
-    pub fn new(stmt: &'a SelectStmt, bind: Option<&'b Bind>, schema: &'b ShardingSchema) -> Self {
-        Self { stmt, bind, schema }
+impl<'a, 'b, 'c> SelectParser<'a, 'b, 'c> {
+    pub fn new(
+        stmt: &'a SelectStmt,
+        bind: Option<&'b Bind>,
+        schema: &'b ShardingSchema,
+        recorder: Option<&'c mut ExplainRecorder>,
+    ) -> Self {
+        Self {
+            stmt,
+            bind,
+            schema,
+            recorder,
+        }
+    }
+
+    /// Record a sharding key match.
+    fn record_sharding_key(&mut self, shard: &Shard, column: Column<'_>, value: &Value<'_>) {
+        if let Some(recorder) = self.recorder.as_mut() {
+            let col_str = if let Some(table) = column.table {
+                format!("{}.{}", table, column.name)
+            } else {
+                column.name.to_string()
+            };
+            let description = match value {
+                Value::Placeholder(pos) => {
+                    format!("matched sharding key {} using parameter ${}", col_str, pos)
+                }
+                _ => format!("matched sharding key {} using constant", col_str),
+            };
+            recorder.record_entry(Some(shard.clone()), description);
+        }
     }
 
     pub fn from_raw(
         raw: &'a RawStmt,
         bind: Option<&'b Bind>,
         schema: &'b ShardingSchema,
+        recorder: Option<&'c mut ExplainRecorder>,
     ) -> Result<Self, Error> {
         match raw.stmt.as_ref().and_then(|n| n.node.as_ref()) {
-            Some(NodeEnum::SelectStmt(stmt)) => Ok(Self::new(stmt, bind, schema)),
+            Some(NodeEnum::SelectStmt(stmt)) => Ok(Self::new(stmt, bind, schema, recorder)),
             _ => Err(Error::NotASelect),
         }
     }
@@ -206,7 +236,7 @@ impl<'a, 'b> SelectParser<'a, 'b> {
     }
 
     fn compute_shard(
-        &'a self,
+        &mut self,
         column: Column<'a>,
         value: Value<'a>,
     ) -> Result<Option<Shard>, Error> {
@@ -261,7 +291,7 @@ impl<'a, 'b> SelectParser<'a, 'b> {
     }
 
     fn select_search(
-        &'a self,
+        &mut self,
         node: &'a Node,
         ctx: &SearchContext<'a>,
     ) -> Result<SearchResult<'a>, Error> {
@@ -471,7 +501,7 @@ impl<'a, 'b> SelectParser<'a, 'b> {
 
     /// Search a SELECT statement with its own context.
     fn search_select_stmt(
-        &'a self,
+        &mut self,
         stmt: &'a SelectStmt,
         ctx: &SearchContext<'a>,
     ) -> Result<SearchResult<'a>, Error> {
@@ -521,13 +551,13 @@ impl<'a, 'b> SelectParser<'a, 'b> {
 
     /// Compute shard with alias resolution from context.
     fn compute_shard_with_ctx(
-        &'a self,
+        &mut self,
         column: Column<'a>,
         value: Value<'a>,
         ctx: &SearchContext<'a>,
     ) -> Result<Option<Shard>, Error> {
         // Resolve table alias if present
-        let column = if let Some(table_ref) = column.table() {
+        let resolved_column = if let Some(table_ref) = column.table() {
             if let Some(resolved) = ctx.resolve_table(table_ref.name) {
                 Column {
                     name: column.name,
@@ -541,7 +571,11 @@ impl<'a, 'b> SelectParser<'a, 'b> {
             column
         };
 
-        self.compute_shard(column, value)
+        let shard = self.compute_shard(resolved_column, value.clone())?;
+        if let Some(ref shard) = shard {
+            self.record_sharding_key(shard, resolved_column, &value);
+        }
+        Ok(shard)
     }
 }
 
@@ -598,7 +632,7 @@ mod test {
             .first()
             .cloned()
             .unwrap();
-        let mut parser = SelectParser::from_raw(&raw, bind, &schema)?;
+        let mut parser = SelectParser::from_raw(&raw, bind, &schema, None)?;
         parser.shard()
     }
 

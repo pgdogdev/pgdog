@@ -41,12 +41,14 @@ impl QueryParser {
 
         let mut shards = HashSet::new();
 
-        let shard = SelectParser::new(stmt, context.router_context.bind, &context.sharding_schema)
-            .shard()?;
+        let shard = SelectParser::new(
+            stmt,
+            context.router_context.bind,
+            &context.sharding_schema,
+            self.recorder_mut(),
+        )
+        .shard()?;
         if let Some(shard) = shard {
-            if let Some(recorder) = self.recorder_mut() {
-                recorder.record_entry(Some(shard.clone()), "SELECT matched sharding key");
-            }
             shards.insert(shard);
         }
 
