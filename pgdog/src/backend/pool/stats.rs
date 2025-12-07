@@ -218,14 +218,30 @@ impl Stats {
         if secs > 0 {
             let diff = self.counts - self.last_counts;
             self.averages = diff / secs;
-            self.averages.query_time =
-                diff.query_time / diff.query_count.try_into().unwrap_or(u32::MAX);
-            self.averages.xact_time =
-                diff.xact_time / diff.xact_count.try_into().unwrap_or(u32::MAX);
-            self.averages.wait_time =
-                diff.wait_time / diff.server_assignment_count.try_into().unwrap_or(u32::MAX);
-            self.averages.connect_time =
-                diff.connect_time / diff.connect_count.try_into().unwrap_or(u32::MAX);
+            self.averages.query_time = diff.query_time
+                / diff
+                    .query_count
+                    .try_into()
+                    .unwrap_or(u32::MAX)
+                    .clamp(1, u32::MAX);
+            self.averages.xact_time = diff.xact_time
+                / diff
+                    .xact_count
+                    .try_into()
+                    .unwrap_or(u32::MAX)
+                    .clamp(1, u32::MAX);
+            self.averages.wait_time = diff.wait_time
+                / diff
+                    .server_assignment_count
+                    .try_into()
+                    .unwrap_or(u32::MAX)
+                    .clamp(1, u32::MAX);
+            self.averages.connect_time = diff.connect_time
+                / diff
+                    .connect_count
+                    .try_into()
+                    .unwrap_or(u32::MAX)
+                    .clamp(1, u32::MAX);
             let queries_in_xact = diff
                 .query_count
                 .wrapping_sub(diff.xact_count)
@@ -592,5 +608,27 @@ mod tests {
         assert_eq!(stats.averages.connect_time, Duration::from_millis(50));
         // idle_xact_time is divided by (query_count - xact_count) = 10 - 5 = 5
         assert_eq!(stats.averages.idle_xact_time, Duration::from_millis(50));
+    }
+
+    #[test]
+    fn test_calc_averages_division_by_zero() {
+        let mut stats = Stats::default();
+
+        // Set some time values but leave counts at zero
+        stats.counts.query_time = Duration::from_millis(100);
+        stats.counts.xact_time = Duration::from_millis(200);
+        stats.counts.wait_time = Duration::from_millis(50);
+        stats.counts.connect_time = Duration::from_millis(25);
+        stats.counts.idle_xact_time = Duration::from_millis(75);
+
+        // Should not panic - clamp(1, u32::MAX) prevents division by zero
+        stats.calc_averages(Duration::from_secs(1));
+
+        // When counts are zero, times are divided by 1 (the clamped minimum)
+        assert_eq!(stats.averages.query_time, Duration::from_millis(100));
+        assert_eq!(stats.averages.xact_time, Duration::from_millis(200));
+        assert_eq!(stats.averages.wait_time, Duration::from_millis(50));
+        assert_eq!(stats.averages.connect_time, Duration::from_millis(25));
+        assert_eq!(stats.averages.idle_xact_time, Duration::from_millis(75));
     }
 }
