@@ -258,7 +258,6 @@ impl LoadBalancer {
         use ReadWriteSplit::*;
 
         let mut candidates: Vec<&Target> = self.targets.iter().collect();
-        let num_targets = candidates.len();
 
         let primary_reads = match self.rw_split {
             IncludePrimary => true,
@@ -270,10 +269,14 @@ impl LoadBalancer {
             candidates.retain(|target| target.role() == Role::Replica);
         }
 
+        if candidates.is_empty() {
+            return Err(Error::AllReplicasDown);
+        }
+
         match self.lb_strategy {
             Random => candidates.shuffle(&mut rand::thread_rng()),
             RoundRobin => {
-                let first = self.round_robin.fetch_add(1, Ordering::Relaxed) % num_targets;
+                let first = self.round_robin.fetch_add(1, Ordering::Relaxed) % candidates.len();
                 let mut reshuffled = vec![];
                 reshuffled.extend_from_slice(&candidates[first..]);
                 reshuffled.extend_from_slice(&candidates[..first]);
