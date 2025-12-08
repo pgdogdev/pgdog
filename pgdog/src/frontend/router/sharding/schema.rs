@@ -14,6 +14,10 @@ pub struct SchemaSharder {
 impl SchemaSharder {
     /// Resolve current schema.
     pub fn resolve(&mut self, schema: Option<Schema<'_>>, schemas: &ShardedSchemas) {
+        if schemas.is_empty() {
+            return;
+        }
+
         let check = schemas.get(schema);
         if let Some(schema) = check {
             let catch_all = schema.is_default();
@@ -29,6 +33,10 @@ impl SchemaSharder {
 
     /// Resolve current schema from connection parameter.
     pub fn resolve_parameter(&mut self, parameter: &ParameterValue, schemas: &ShardedSchemas) {
+        if schemas.is_empty() {
+            return;
+        }
+
         match parameter {
             ParameterValue::String(search_path) => {
                 let schema = Schema::from(search_path.as_str());
