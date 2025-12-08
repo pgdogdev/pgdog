@@ -1,6 +1,5 @@
-use crate::frontend::router::{
-    parser::{cache::CachedAst, from_clause::FromClause, where_clause::TablesSource},
-    sharding::SchemaSharder,
+use crate::frontend::router::parser::{
+    cache::CachedAst, from_clause::FromClause, where_clause::TablesSource,
 };
 
 use super::*;
@@ -62,22 +61,6 @@ impl QueryParser {
         let order_by = Self::select_sort(&stmt.sort_clause, context.router_context.bind);
 
         let from_clause = TablesSource::from(FromClause::new(&stmt.from_clause));
-
-        // Schema-based sharding.
-        let mut schema_sharder = SchemaSharder::default();
-        for table in cached_ast.tables() {
-            let schema = table.schema();
-            schema_sharder.resolve(schema, &context.sharding_schema.schemas);
-        }
-        if let Some((shard, schema)) = schema_sharder.get() {
-            if let Some(recorder) = self.recorder_mut() {
-                recorder.record_entry(
-                    Some(shard.clone()),
-                    format!("SELECT matched schema {}", schema),
-                );
-            }
-            shards.insert(shard);
-        }
 
         // Shard by vector in ORDER BY clause.
         for order in &order_by {
