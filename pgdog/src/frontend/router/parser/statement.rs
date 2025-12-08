@@ -13,7 +13,7 @@ use super::{
 };
 use crate::{
     backend::ShardingSchema,
-    frontend::router::{parser::Shard, sharding::ContextBuilder},
+    frontend::router::{parser::Shard, sharding::ContextBuilder, sharding::SchemaSharder},
     net::Bind,
 };
 
@@ -254,11 +254,216 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
     }
 
     pub fn shard(&mut self) -> Result<Option<Shard>, Error> {
-        match self.stmt {
+        let result = match self.stmt {
             Statement::Select(stmt) => self.shard_select(stmt),
             Statement::Update(stmt) => self.shard_update(stmt),
             Statement::Delete(stmt) => self.shard_delete(stmt),
             Statement::Insert(stmt) => self.shard_insert(stmt),
+        }?;
+
+        // Key-based sharding succeeded
+        if result.is_some() {
+            return Ok(result);
+        } else if self.schema.schemas.is_empty() {
+            return Ok(None);
+        }
+
+        // Fallback to schema-based sharding
+        let tables = self.extract_tables();
+        let mut schema_sharder = SchemaSharder::default();
+        for table in &tables {
+            schema_sharder.resolve(table.schema(), &self.schema.schemas);
+        }
+
+        if let Some((shard, schema_name)) = schema_sharder.get() {
+            if let Some(recorder) = self.recorder.as_mut() {
+                recorder.record_entry(
+                    Some(shard.clone()),
+                    format!("matched schema {}", schema_name),
+                );
+            }
+            return Ok(Some(shard));
+        }
+
+        Ok(None)
+    }
+
+    /// Extract all tables referenced in the statement.
+    fn extract_tables(&self) -> Vec<Table<'a>> {
+        let mut tables = Vec::new();
+        match self.stmt {
+            Statement::Select(stmt) => self.extract_tables_from_select(stmt, &mut tables),
+            Statement::Update(stmt) => self.extract_tables_from_update(stmt, &mut tables),
+            Statement::Delete(stmt) => self.extract_tables_from_delete(stmt, &mut tables),
+            Statement::Insert(stmt) => self.extract_tables_from_insert(stmt, &mut tables),
+        }
+        tables
+    }
+
+    fn extract_tables_from_select(&self, stmt: &'a SelectStmt, tables: &mut Vec<Table<'a>>) {
+        // Handle UNION/INTERSECT/EXCEPT
+        if let Some(ref larg) = stmt.larg {
+            self.extract_tables_from_select(larg, tables);
+        }
+        if let Some(ref rarg) = stmt.rarg {
+            self.extract_tables_from_select(rarg, tables);
+        }
+
+        // FROM clause
+        for node in &stmt.from_clause {
+            self.extract_tables_from_node(node, tables);
+        }
+
+        // WITH clause (CTEs)
+        if let Some(ref with_clause) = stmt.with_clause {
+            for cte in &with_clause.ctes {
+                if let Some(NodeEnum::CommonTableExpr(ref cte_expr)) = cte.node {
+                    if let Some(ref ctequery) = cte_expr.ctequery {
+                        if let Some(NodeEnum::SelectStmt(ref inner_select)) = ctequery.node {
+                            self.extract_tables_from_select(inner_select, tables);
+                        }
+                    }
+                }
+            }
+        }
+
+        // WHERE clause subqueries
+        if let Some(ref where_clause) = stmt.where_clause {
+            self.extract_tables_from_node(where_clause, tables);
+        }
+    }
+
+    fn extract_tables_from_update(&self, stmt: &'a UpdateStmt, tables: &mut Vec<Table<'a>>) {
+        // Main relation
+        if let Some(ref relation) = stmt.relation {
+            tables.push(Table::from(relation));
+        }
+
+        // FROM clause
+        for node in &stmt.from_clause {
+            self.extract_tables_from_node(node, tables);
+        }
+
+        // WITH clause (CTEs)
+        if let Some(ref with_clause) = stmt.with_clause {
+            for cte in &with_clause.ctes {
+                if let Some(NodeEnum::CommonTableExpr(ref cte_expr)) = cte.node {
+                    if let Some(ref ctequery) = cte_expr.ctequery {
+                        if let Some(NodeEnum::SelectStmt(ref inner_select)) = ctequery.node {
+                            self.extract_tables_from_select(inner_select, tables);
+                        }
+                    }
+                }
+            }
+        }
+
+        // WHERE clause subqueries
+        if let Some(ref where_clause) = stmt.where_clause {
+            self.extract_tables_from_node(where_clause, tables);
+        }
+    }
+
+    fn extract_tables_from_delete(&self, stmt: &'a DeleteStmt, tables: &mut Vec<Table<'a>>) {
+        // Main relation
+        if let Some(ref relation) = stmt.relation {
+            tables.push(Table::from(relation));
+        }
+
+        // USING clause
+        for node in &stmt.using_clause {
+            self.extract_tables_from_node(node, tables);
+        }
+
+        // WITH clause (CTEs)
+        if let Some(ref with_clause) = stmt.with_clause {
+            for cte in &with_clause.ctes {
+                if let Some(NodeEnum::CommonTableExpr(ref cte_expr)) = cte.node {
+                    if let Some(ref ctequery) = cte_expr.ctequery {
+                        if let Some(NodeEnum::SelectStmt(ref inner_select)) = ctequery.node {
+                            self.extract_tables_from_select(inner_select, tables);
+                        }
+                    }
+                }
+            }
+        }
+
+        // WHERE clause subqueries
+        if let Some(ref where_clause) = stmt.where_clause {
+            self.extract_tables_from_node(where_clause, tables);
+        }
+    }
+
+    fn extract_tables_from_insert(&self, stmt: &'a InsertStmt, tables: &mut Vec<Table<'a>>) {
+        // Main relation
+        if let Some(ref relation) = stmt.relation {
+            tables.push(Table::from(relation));
+        }
+
+        // WITH clause (CTEs)
+        if let Some(ref with_clause) = stmt.with_clause {
+            for cte in &with_clause.ctes {
+                if let Some(NodeEnum::CommonTableExpr(ref cte_expr)) = cte.node {
+                    if let Some(ref ctequery) = cte_expr.ctequery {
+                        if let Some(NodeEnum::SelectStmt(ref inner_select)) = ctequery.node {
+                            self.extract_tables_from_select(inner_select, tables);
+                        }
+                    }
+                }
+            }
+        }
+
+        // SELECT part of INSERT ... SELECT
+        if let Some(ref select_stmt) = stmt.select_stmt {
+            if let Some(NodeEnum::SelectStmt(ref inner_select)) = select_stmt.node {
+                self.extract_tables_from_select(inner_select, tables);
+            }
+        }
+    }
+
+    fn extract_tables_from_node(&self, node: &'a Node, tables: &mut Vec<Table<'a>>) {
+        match &node.node {
+            Some(NodeEnum::RangeVar(range_var)) => {
+                tables.push(Table::from(range_var));
+            }
+            Some(NodeEnum::JoinExpr(join)) => {
+                if let Some(ref larg) = join.larg {
+                    self.extract_tables_from_node(larg, tables);
+                }
+                if let Some(ref rarg) = join.rarg {
+                    self.extract_tables_from_node(rarg, tables);
+                }
+            }
+            Some(NodeEnum::RangeSubselect(subselect)) => {
+                if let Some(ref subquery) = subselect.subquery {
+                    if let Some(NodeEnum::SelectStmt(ref inner_select)) = subquery.node {
+                        self.extract_tables_from_select(inner_select, tables);
+                    }
+                }
+            }
+            Some(NodeEnum::SubLink(sublink)) => {
+                if let Some(ref subselect) = sublink.subselect {
+                    if let Some(NodeEnum::SelectStmt(ref inner_select)) = subselect.node {
+                        self.extract_tables_from_select(inner_select, tables);
+                    }
+                }
+            }
+            Some(NodeEnum::SelectStmt(inner_select)) => {
+                self.extract_tables_from_select(inner_select, tables);
+            }
+            Some(NodeEnum::BoolExpr(bool_expr)) => {
+                for arg in &bool_expr.args {
+                    self.extract_tables_from_node(arg, tables);
+                }
+            }
+            Some(NodeEnum::AExpr(a_expr)) => {
+                if let Some(ref lexpr) = a_expr.lexpr {
+                    self.extract_tables_from_node(lexpr, tables);
+                }
+                if let Some(ref rexpr) = a_expr.rexpr {
+                    self.extract_tables_from_node(rexpr, tables);
+                }
+            }
+            _ => {}
         }
     }
 
@@ -1587,5 +1792,134 @@ mod test {
     fn test_insert_no_sharding_key_returns_none() {
         let result = run_test("INSERT INTO sharded (name) VALUES ('foo')", None);
         assert!(result.unwrap().is_none());
+    }
+
+    // Schema-based sharding fallback tests
+    use crate::backend::replication::ShardedSchemas;
+    use pgdog_config::sharding::ShardedSchema;
+
+    fn run_test_with_schemas(stmt: &str, bind: Option<&Bind>) -> Result<Option<Shard>, Error> {
+        let schema = ShardingSchema {
+            shards: 3,
+            tables: ShardedTables::new(
+                vec![ShardedTable {
+                    column: "id".into(),
+                    name: Some("sharded".into()),
+                    ..Default::default()
+                }],
+                vec![],
+            ),
+            schemas: ShardedSchemas::new(vec![
+                ShardedSchema {
+                    database: "test".to_string(),
+                    name: Some("sales".to_string()),
+                    shard: 1,
+                    all: false,
+                },
+                ShardedSchema {
+                    database: "test".to_string(),
+                    name: Some("inventory".to_string()),
+                    shard: 2,
+                    all: false,
+                },
+            ]),
+        };
+        let raw = pg_query::parse(stmt)
+            .unwrap()
+            .protobuf
+            .stmts
+            .first()
+            .cloned()
+            .unwrap();
+        let mut parser = StatementParser::from_raw(&raw, bind, &schema, None)?;
+        parser.shard()
+    }
+
+    #[test]
+    fn test_schema_sharding_select_fallback() {
+        // No sharding key in WHERE clause, but table is in a sharded schema
+        let result = run_test_with_schemas("SELECT * FROM sales.products", None).unwrap();
+        assert_eq!(result, Some(Shard::Direct(1)));
+    }
+
+    #[test]
+    fn test_schema_sharding_select_with_join() {
+        // JOIN between tables in the same sharded schema
+        let result = run_test_with_schemas(
+            "SELECT * FROM sales.products p JOIN sales.orders o ON p.id = o.product_id",
+            None,
+        )
+        .unwrap();
+        assert_eq!(result, Some(Shard::Direct(1)));
+    }
+
+    #[test]
+    fn test_schema_sharding_update_fallback() {
+        // No sharding key in WHERE clause, but table is in a sharded schema
+        let result = run_test_with_schemas("UPDATE sales.products SET name = 'foo'", None).unwrap();
+        assert_eq!(result, Some(Shard::Direct(1)));
+    }
+
+    #[test]
+    fn test_schema_sharding_delete_fallback() {
+        // No sharding key in WHERE clause, but table is in a sharded schema
+        let result = run_test_with_schemas("DELETE FROM sales.products", None).unwrap();
+        assert_eq!(result, Some(Shard::Direct(1)));
+    }
+
+    #[test]
+    fn test_schema_sharding_insert_fallback() {
+        // No sharding key in values, but table is in a sharded schema
+        let result =
+            run_test_with_schemas("INSERT INTO sales.products (name) VALUES ('foo')", None)
+                .unwrap();
+        assert_eq!(result, Some(Shard::Direct(1)));
+    }
+
+    #[test]
+    fn test_schema_sharding_with_subquery() {
+        // Subquery references table in a sharded schema
+        let result = run_test_with_schemas(
+            "SELECT * FROM unsharded WHERE id IN (SELECT id FROM sales.products)",
+            None,
+        )
+        .unwrap();
+        assert_eq!(result, Some(Shard::Direct(1)));
+    }
+
+    #[test]
+    fn test_schema_sharding_with_cte() {
+        // CTE references table in a sharded schema
+        let result = run_test_with_schemas(
+            "WITH cte AS (SELECT * FROM sales.products) SELECT * FROM cte",
+            None,
+        )
+        .unwrap();
+        assert_eq!(result, Some(Shard::Direct(1)));
+    }
+
+    #[test]
+    fn test_key_sharding_takes_precedence() {
+        // Both key-based and schema-based sharding could match,
+        // but key-based should take precedence
+        let result = run_test_with_schemas("SELECT * FROM sharded WHERE id = 1", None).unwrap();
+        // Key-based sharding returns a shard (not necessarily shard 1)
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn test_no_schema_no_key_returns_none() {
+        // Table not in sharded schema and no sharding key
+        let result = run_test_with_schemas("SELECT * FROM public.unknown", None).unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_schema_sharding_different_schemas() {
+        // Different sharded schemas route to different shards
+        let result1 = run_test_with_schemas("SELECT * FROM sales.products", None).unwrap();
+        let result2 = run_test_with_schemas("SELECT * FROM inventory.items", None).unwrap();
+        assert_eq!(result1, Some(Shard::Direct(1)));
+        assert_eq!(result2, Some(Shard::Direct(2)));
     }
 }
