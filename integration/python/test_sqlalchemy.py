@@ -467,15 +467,30 @@ async def test_connection_pool_stress(engines):
 
 @pytest.mark.asyncio
 async def test_schema_sharding(schema_sharding_engine):
+    import asyncio
+
+    admin().cursor().execute("SET cross_shard_disabled TO true")
     # All queries should touch shard_0 only.
     # Set it up separately
     conn = await schema_sharded_async()
     await conn.execute("SET search_path TO shard_0, public")
     await conn.execute("CREATE SCHEMA IF NOT EXISTS shard_0")
+    await conn.execute("DROP TABLE IF EXISTS shard_0.test_schema_sharding")
+    await conn.execute("CREATE TABLE shard_0.test_schema_sharding(id BIGINT)")
     await conn.close()
 
-    (pool, session) = schema_sharding_engine
+    (pool, session_factory) = schema_sharding_engine
 
-    async with session() as session:
-        async with session.begin():
-            await session.execute(text("SET LOCAL work_mem TO '4MB'"))
+    async def run_schema_sharding_test(task_id):
+        for _ in range(10):
+            async with session_factory() as session:
+                async with session.begin():
+                    await session.execute(text("SET LOCAL work_mem TO '4MB'"))
+                    await session.execute(text("SELECT 1"))
+                    await session.execute(text("SELECT * FROM test_schema_sharding"))
+
+    # Run 10 concurrent executions in parallel
+    tasks = [asyncio.create_task(run_schema_sharding_test(i)) for i in range(10)]
+    await asyncio.gather(*tasks)
+
+    admin().cursor().execute("SET cross_shard_disabled TO false")

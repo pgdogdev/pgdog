@@ -67,4 +67,3 @@ min_pool_size = 0
 name = "pgdog"
 password = "pgdog"
 database = "pgdog_schema"
-cross_shard_disabled = true
