@@ -5,7 +5,7 @@ use pg_query::{
     Node, NodeEnum,
 };
 
-use super::Schema;
+use super::{Error, Schema};
 use crate::util::escape_identifier;
 
 /// Table name in a query.
@@ -100,7 +100,7 @@ impl<'a> TryFrom<&'a Node> for Table<'a> {
 }
 
 impl<'a> TryFrom<&'a Vec<Node>> for Table<'a> {
-    type Error = ();
+    type Error = Error;
 
     fn try_from(value: &'a Vec<Node>) -> Result<Self, Self::Error> {
         match value.len() {
@@ -116,7 +116,7 @@ impl<'a> TryFrom<&'a Vec<Node>> for Table<'a> {
                         })
                     })
                     .flatten()
-                    .ok_or(())?;
+                    .ok_or(Error::TableDecode)?;
                 return table;
             }
 
@@ -149,7 +149,7 @@ impl<'a> TryFrom<&'a Vec<Node>> for Table<'a> {
             _ => (),
         }
 
-        Err(())
+        Err(Error::TableDecode)
     }
 }
 
@@ -173,7 +173,8 @@ impl<'a> From<&'a RangeVar> for Table<'a> {
 }
 
 impl<'a> TryFrom<&'a List> for Table<'a> {
-    type Error = ();
+    type Error = Error;
+
     fn try_from(value: &'a List) -> Result<Self, Self::Error> {
         fn str_value(list: &List, pos: usize) -> Option<&str> {
             if let Some(NodeEnum::String(ref schema)) = list.items.get(pos).unwrap().node {
@@ -186,7 +187,7 @@ impl<'a> TryFrom<&'a List> for Table<'a> {
         match value.items.len() {
             2 => {
                 let schema = str_value(value, 0);
-                let name = str_value(value, 1).ok_or(())?;
+                let name = str_value(value, 1).ok_or(Error::TableDecode)?;
                 Ok(Table {
                     schema,
                     name,
@@ -195,7 +196,7 @@ impl<'a> TryFrom<&'a List> for Table<'a> {
             }
 
             1 => {
-                let name = str_value(value, 0).ok_or(())?;
+                let name = str_value(value, 0).ok_or(Error::TableDecode)?;
                 Ok(Table {
                     schema: None,
                     name,
@@ -203,7 +204,7 @@ impl<'a> TryFrom<&'a List> for Table<'a> {
                 })
             }
 
-            _ => Err(()),
+            _ => Err(Error::TableDecode),
         }
     }
 }

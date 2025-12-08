@@ -54,6 +54,8 @@ impl<'a> Value<'a> {
         }
     }
 
+    /// Convert parameter to value, given the data type
+    /// and known encoding.
     pub fn from_param(
         param: &'a ParameterWithFormat<'a>,
         data_type: DataType,
