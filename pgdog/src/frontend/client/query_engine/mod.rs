@@ -224,13 +224,24 @@ impl QueryEngine {
             Command::Set {
                 name,
                 value,
-                in_transaction,
+                route,
+                extended,
+                local,
             } => {
+                let route = route.clone();
                 if self.backend.connected() {
-                    self.execute(context, &route).await?
+                    self.execute(context, &route).await?;
                 } else {
-                    self.set(context, name.clone(), value.clone(), *in_transaction)
-                        .await?
+                    let extended = *extended;
+                    self.set(
+                        context,
+                        name.clone(),
+                        value.clone(),
+                        extended,
+                        route,
+                        *local,
+                    )
+                    .await?;
                 }
             }
             Command::SetRoute(route) => {

@@ -547,12 +547,14 @@ fn test_transaction() {
         Command::Set {
             name,
             value,
-            in_transaction,
+            extended,
+            route,
         } => {
-            assert!(in_transaction);
+            assert!(!extended);
             assert_eq!(name, "application_name");
             assert_eq!(value.as_str().unwrap(), "test");
             assert!(!cluster.read_only());
+            assert_eq!(route.shard(), &Shard::All)
         }
 
         _ => panic!("not a query"),

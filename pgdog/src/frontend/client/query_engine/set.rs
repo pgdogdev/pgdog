@@ -8,26 +8,30 @@ impl QueryEngine {
         context: &mut QueryEngineContext<'_>,
         name: String,
         value: ParameterValue,
-        in_transaction: bool,
+        extended: bool,
+        route: Route,
+        local: bool,
     ) -> Result<(), Error> {
-        if in_transaction {
-            self.transaction_params.insert(name, value);
-        } else {
-            context.params.insert(name, value);
+        if !local {
+            context.params.insert(name, value.clone());
             self.comms.update_params(context.params);
         }
 
-        let bytes_sent = context
-            .stream
-            .send_many(&[
-                CommandComplete::from_str("SET").message()?.backend(),
-                ReadyForQuery::in_transaction(context.in_transaction())
-                    .message()?
-                    .backend(),
-            ])
-            .await?;
+        if extended {
+            self.execute(context, &route).await?
+        } else {
+            let bytes_sent = context
+                .stream
+                .send_many(&[
+                    CommandComplete::from_str("SET").message()?.backend(),
+                    ReadyForQuery::in_transaction(context.in_transaction())
+                        .message()?
+                        .backend(),
+                ])
+                .await?;
 
-        self.stats.sent(bytes_sent);
+            self.stats.sent(bytes_sent);
+        }
 
         Ok(())
     }
