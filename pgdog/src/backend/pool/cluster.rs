@@ -15,7 +15,7 @@ use tracing::{error, info};
 use crate::{
     backend::{
         databases::{databases, User as DatabaseUser},
-        replication::{ReplicationConfig, ShardedColumn, ShardedSchemas},
+        replication::{ReplicationConfig, ShardedSchemas},
         Schema, ShardedTables,
     },
     config::{

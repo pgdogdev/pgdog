@@ -2,10 +2,10 @@ use std::str::{from_utf8, FromStr};
 
 use uuid::Uuid;
 
-use super::{super::parser::Value as ParserValue, Error, Hasher};
+use super::{Error, Hasher};
 use crate::{
     config::DataType,
-    net::{Bind, Format, FromDataType, ParameterWithFormat, Vector},
+    net::{Format, FromDataType, ParameterWithFormat, Vector},
 };
 use bytes::Bytes;
 
