@@ -28,6 +28,7 @@ pub mod rewrite_plan;
 pub mod route;
 pub mod schema;
 pub mod sequence;
+pub mod statement;
 pub mod table;
 pub mod tuple;
 pub mod value;
@@ -59,6 +60,7 @@ pub use rewrite_plan::{HelperKind, HelperMapping, QueryRewriter, RewriteOutput, 
 pub use route::{Route, Shard};
 pub use schema::Schema;
 pub use sequence::{OwnedSequence, Sequence};
+pub use statement::StatementParser;
 pub use table::{OwnedTable, Table};
 pub use tuple::Tuple;
 pub use value::Value;

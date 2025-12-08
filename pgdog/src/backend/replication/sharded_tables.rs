@@ -3,7 +3,7 @@ use pgdog_config::OmnishardedTable;
 
 use crate::{
     config::{DataType, ShardedTable},
-    frontend::router::sharding::Mapping,
+    frontend::router::{parser::Column, sharding::Mapping},
     net::messages::Vector,
 };
 use std::{
@@ -101,6 +101,39 @@ impl ShardedTables {
         self.tables()
             .iter()
             .find(|t| t.name.as_deref() == Some(name))
+    }
+
+    /// Determine if the column is sharded and return its data type,
+    /// as declared in the schema.
+    pub fn get_table(&self, column: Column<'_>) -> Option<&ShardedTable> {
+        // Only fully-qualified columns can be matched.
+        let table = if let Some(table) = column.table() {
+            table
+        } else {
+            return None;
+        };
+
+        for candidate in &self.inner.tables {
+            if let Some(table_name) = candidate.name.as_ref() {
+                if !table.name_match(table_name) {
+                    continue;
+                }
+            }
+
+            if let Some(schema_name) = candidate.schema.as_ref() {
+                if let Some(schema) = table.schema() {
+                    if schema.name != schema_name {
+                        continue;
+                    }
+                }
+            }
+
+            if column.name == candidate.column {
+                return Some(candidate);
+            }
+        }
+
+        None
     }
 
     /// Find out which column (if any) is sharded in the given table.

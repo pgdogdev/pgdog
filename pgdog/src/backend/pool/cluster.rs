@@ -15,7 +15,7 @@ use tracing::{error, info};
 use crate::{
     backend::{
         databases::{databases, User as DatabaseUser},
-        replication::{ReplicationConfig, ShardedColumn, ShardedSchemas},
+        replication::{ReplicationConfig, ShardedSchemas},
         Schema, ShardedTables,
     },
     config::{
@@ -367,11 +367,6 @@ impl Cluster {
 
     pub fn pub_sub_enabled(&self) -> bool {
         self.pub_sub_channel_size > 0
-    }
-
-    /// Find sharded column position, if the table and columns match the configuration.
-    pub fn sharded_column(&self, table: &str, columns: &[&str]) -> Option<ShardedColumn> {
-        self.sharded_tables.sharded_column(table, columns)
     }
 
     /// A cluster is read_only if zero shards have a primary.

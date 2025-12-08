@@ -1,3 +1,8 @@
+//! Context builder for sharding a value.
+//!
+//! Manages mapping a value (integer, string, etc.)
+//! to a shard number, given a sharded mapping in pgdog.toml.
+//!
 use crate::{
     backend::ShardingSchema,
     config::{DataType, Hasher as HasherConfig, ShardedTable},
@@ -6,6 +11,7 @@ use crate::{
 
 use super::{Centroids, Context, Data, Error, Hasher, Lists, Operator, Ranges, Value};
 
+/// Sharding context builder.
 #[derive(Debug)]
 pub struct ContextBuilder<'a> {
     data_type: DataType,
@@ -21,6 +27,8 @@ pub struct ContextBuilder<'a> {
 }
 
 impl<'a> ContextBuilder<'a> {
+    /// Create new context builder from a sharded table
+    /// in the config.
     pub fn new(table: &'a ShardedTable) -> Self {
         Self {
             data_type: table.data_type,
@@ -42,7 +50,8 @@ impl<'a> ContextBuilder<'a> {
         }
     }
 
-    /// Infer sharding function from config.
+    /// Infer sharding function from config, iff
+    /// only one sharding function is configured.
     pub fn infer_from_from_and_config(
         value: &'a str,
         sharding_schema: &'a ShardingSchema,
@@ -141,6 +150,7 @@ impl<'a> ContextBuilder<'a> {
         }
     }
 
+    /// Set the number of shards in the configuration.
     pub fn shards(mut self, shards: usize) -> Self {
         if let Some(centroids) = self.centroids.take() {
             self.operator = Some(Operator::Centroids {
