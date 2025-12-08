@@ -121,7 +121,15 @@ impl QueryParser {
                     let mut sharder = SchemaSharder::default();
                     sharder.resolve_parameter(&value, &context.sharding_schema.schemas);
 
-                    let shard = sharder.get().map(|(shard, _)| shard).unwrap_or_default();
+                    let shard =
+                        sharder
+                            .get()
+                            .map(|(shard, _)| shard)
+                            .unwrap_or(if context.shards == 1 {
+                                Shard::Direct(0)
+                            } else {
+                                Shard::All
+                            });
                     let route = Route::write(shard).set_read(context.read_only);
 
                     return Ok(Command::Set {

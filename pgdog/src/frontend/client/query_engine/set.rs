@@ -18,7 +18,9 @@ impl QueryEngine {
         }
 
         if extended {
-            self.execute(context, &route).await?
+            // Re-enable cross-shard queries for this request.
+            context.cross_shard_disabled = Some(false);
+            self.execute(context, &route).await?;
         } else {
             let bytes_sent = context
                 .stream
