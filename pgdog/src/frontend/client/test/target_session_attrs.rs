@@ -2,14 +2,14 @@ use super::*;
 
 async fn run_target_session_test(property: &str, query: &str) -> Message {
     let mut params = Parameters::default();
-    params.insert("target_session_attrs", property);
+    params.insert("pgdog.role", property);
 
     let (mut stream, mut client) = test_client_with_params(params, true).await;
     let mut engine = QueryEngine::from_client(&client).unwrap();
 
     let expected = if property == "primary" {
         Role::Primary
-    } else if property == "standby" {
+    } else if property == "replica" {
         Role::Replica
     } else {
         panic!("unexpected property: {}", property);
@@ -33,7 +33,7 @@ async fn run_target_session_test(property: &str, query: &str) -> Message {
 #[tokio::test]
 async fn test_target_session_attrs_standby() {
     let reply = run_target_session_test(
-        "standby",
+        "replica",
         "CREATE TABLE test_target_session_attrs_standby(id BIGINT)",
     )
     .await;
