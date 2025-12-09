@@ -63,7 +63,7 @@ mod test {
 
         for (attr, role) in [
             ("primary", Some(Role::Primary)),
-            ("replica", Some(Role::Primary)),
+            ("replica", Some(Role::Replica)),
             ("random", None),
         ] {
             let mut params = Parameters::default();
