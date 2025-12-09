@@ -4,6 +4,7 @@ use std::cmp::max;
 use std::collections::VecDeque;
 use std::time::Duration;
 
+use crate::backend::DisconnectReason;
 use crate::backend::{stats::Counts as BackendCounts, Server};
 use crate::net::messages::BackendKeyData;
 
@@ -155,11 +156,14 @@ impl Inner {
         let max_age = self.config.max_age;
         let mut removed = 0;
 
-        self.idle_connections.retain(|c| {
+        self.idle_connections.retain_mut(|c| {
             let age = c.age(now);
             let keep = age < max_age;
             if !keep {
                 removed += 1;
+            }
+            if !keep {
+                c.disconnect_reason(DisconnectReason::Old);
             }
             keep
         });
@@ -174,16 +178,22 @@ impl Inner {
         let (mut remove, mut removed) = (self.can_remove(), 0);
         let idle_timeout = self.config.idle_timeout;
 
-        self.idle_connections.retain(|c| {
+        self.idle_connections.retain_mut(|c| {
             let idle_for = c.idle_for(now);
 
-            if remove > 0 && idle_for >= idle_timeout {
+            let keep = if remove > 0 && idle_for >= idle_timeout {
                 remove -= 1;
                 removed += 1;
                 false
             } else {
                 true
+            };
+
+            if !keep {
+                c.disconnect_reason(DisconnectReason::Idle);
             }
+
+            keep
         });
 
         removed
@@ -242,6 +252,9 @@ impl Inner {
     /// Dump all idle connections.
     #[inline]
     pub(super) fn dump_idle(&mut self) {
+        for conn in &mut self.idle_connections {
+            conn.disconnect_reason(DisconnectReason::Offline);
+        }
         self.idle_connections.clear();
     }
 
@@ -297,6 +310,7 @@ impl Inner {
         if server.error() {
             self.errors += 1;
             result.server_error = true;
+            server.disconnect_reason(DisconnectReason::Error);
 
             return result;
         }
@@ -309,18 +323,21 @@ impl Inner {
 
         // Close connections exceeding max age.
         if server.age(now) >= self.config.max_age {
+            server.disconnect_reason(DisconnectReason::Old);
             return result;
         }
 
         // Force close the connection.
         if server.force_close() {
             self.force_close += 1;
+            server.disconnect_reason(DisconnectReason::ForceClose);
             return result;
         }
 
         // Close connections in replication mode,
         // they are generally not re-usable.
         if server.replication_mode() {
+            server.disconnect_reason(DisconnectReason::ReplicationMode);
             return result;
         }
 
@@ -335,6 +352,7 @@ impl Inner {
             self.put(server, now);
         } else {
             self.out_of_sync += 1;
+            server.disconnect_reason(DisconnectReason::OutOfSync);
         }
 
         result

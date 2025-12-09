@@ -1,6 +1,7 @@
 //! pgDog backend managers connections to PostgreSQL.
 
 pub mod databases;
+pub mod disconnect_reason;
 pub mod error;
 pub mod maintenance_mode;
 pub mod pool;
@@ -14,6 +15,7 @@ pub mod server;
 pub mod server_options;
 pub mod stats;
 
+pub use disconnect_reason::DisconnectReason;
 pub use error::Error;
 pub use pool::{Cluster, ClusterShardConfig, LoadBalancer, Pool, Shard, ShardingSchema};
 pub use prepared_statements::PreparedStatements;

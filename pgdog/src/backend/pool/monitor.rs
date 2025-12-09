@@ -35,7 +35,7 @@
 use std::time::Duration;
 
 use super::{Error, Guard, Healtcheck, Oids, Pool, Request};
-use crate::backend::Server;
+use crate::backend::{DisconnectReason, Server};
 
 use tokio::time::{interval, sleep, timeout, Instant};
 use tokio::{select, task::spawn};
@@ -286,6 +286,8 @@ impl Monitor {
             let mut server = Self::create_connection(pool)
                 .await
                 .map_err(|_| Error::HealthcheckError)?;
+
+            server.disconnect_reason(DisconnectReason::Healthcheck);
 
             Healtcheck::mandatory(&mut server, pool, healthcheck_timeout)
                 .healthcheck()

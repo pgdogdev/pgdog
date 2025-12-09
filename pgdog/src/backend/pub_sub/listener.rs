@@ -15,7 +15,7 @@ use tokio::{
 use tracing::{debug, error, info};
 
 use crate::{
-    backend::{self, pool::Error, Pool},
+    backend::{self, pool::Error, DisconnectReason, Pool},
     config::config,
     net::{
         BackendKeyData, FromBytes, NotificationResponse, Parameter, Parameters, Protocol,
@@ -161,6 +161,7 @@ impl PubSubListener {
         info!("pub/sub started [{}]", pool.addr());
 
         let mut server = pool.standalone().await?;
+
         server
             .link_client(
                 &BackendKeyData::new(),
@@ -179,7 +180,10 @@ impl PubSubListener {
             .keys()
             .map(|channel| Request::Subscribe(channel.to_string()).into())
             .collect::<Vec<ProtocolMessage>>();
-        server.send(&resub.into()).await?;
+
+        if !resub.is_empty() {
+            server.send(&resub.into()).await?;
+        }
 
         loop {
             select! {
@@ -214,6 +218,7 @@ impl PubSubListener {
                         debug!("pub/sub request {:?}", req);
                         server.send(&vec![req.into()].into()).await?;
                     } else {
+                        server.disconnect_reason(DisconnectReason::Offline);
                         break;
                     }
                 }
