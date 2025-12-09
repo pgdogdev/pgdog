@@ -66,6 +66,11 @@ impl Startup {
                                     let name = name.trim().to_string();
                                     let value = value.trim().to_string();
                                     if !name.is_empty() && !value.is_empty() {
+                                        let value = if name == "search_path" {
+                                            search_path(&value)
+                                        } else {
+                                            ParameterValue::from(value)
+                                        };
                                         params.insert(name, value);
                                     }
                                 }
@@ -231,6 +236,14 @@ impl FromBytes for SslReply {
             answer => Err(Error::UnexpectedSslReply(answer)),
         }
     }
+}
+
+fn search_path(value: &str) -> ParameterValue {
+    let value = value
+        .split(",")
+        .map(|value| value.to_string())
+        .collect::<Vec<_>>();
+    ParameterValue::Tuple(value)
 }
 
 #[cfg(test)]

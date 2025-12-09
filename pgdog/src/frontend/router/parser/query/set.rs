@@ -85,37 +85,7 @@ impl QueryParser {
                     ));
                 }
 
-                let mut value = vec![];
-
-                for node in &stmt.args {
-                    if let Some(NodeEnum::AConst(AConst { val: Some(val), .. })) = &node.node {
-                        match val {
-                            Val::Sval(String { sval }) => {
-                                value.push(sval.to_string());
-                            }
-
-                            Val::Ival(Integer { ival }) => {
-                                value.push(ival.to_string());
-                            }
-
-                            Val::Fval(Float { fval }) => {
-                                value.push(fval.to_string());
-                            }
-
-                            Val::Boolval(Boolean { boolval }) => {
-                                value.push(boolval.to_string());
-                            }
-
-                            _ => (),
-                        }
-                    }
-                }
-
-                let value = match value.len() {
-                    0 => None,
-                    1 => Some(ParameterValue::String(value.pop().unwrap())),
-                    _ => Some(ParameterValue::Tuple(value)),
-                };
+                let value = Self::parse_set_value(stmt)?;
 
                 if let Some(value) = value {
                     let route = if name == "search_path" {
@@ -150,5 +120,41 @@ impl QueryParser {
         Ok(Command::Query(
             Route::write(shard).set_read(context.read_only),
         ))
+    }
+
+    pub fn parse_set_value(stmt: &VariableSetStmt) -> Result<Option<ParameterValue>, Error> {
+        let mut value = vec![];
+
+        for node in &stmt.args {
+            if let Some(NodeEnum::AConst(AConst { val: Some(val), .. })) = &node.node {
+                match val {
+                    Val::Sval(String { sval }) => {
+                        value.push(sval.to_string());
+                    }
+
+                    Val::Ival(Integer { ival }) => {
+                        value.push(ival.to_string());
+                    }
+
+                    Val::Fval(Float { fval }) => {
+                        value.push(fval.to_string());
+                    }
+
+                    Val::Boolval(Boolean { boolval }) => {
+                        value.push(boolval.to_string());
+                    }
+
+                    _ => (),
+                }
+            }
+        }
+
+        let value = match value.len() {
+            0 => None,
+            1 => Some(ParameterValue::String(value.pop().unwrap())),
+            _ => Some(ParameterValue::Tuple(value)),
+        };
+
+        Ok(value)
     }
 }
