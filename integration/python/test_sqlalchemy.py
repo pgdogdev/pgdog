@@ -497,3 +497,23 @@ async def test_schema_sharding(schema_sharding_engine):
     await asyncio.gather(*tasks)
 
     admin().cursor().execute("SET cross_shard_disabled TO false")
+
+@pytest.mark.asyncio
+async def test_role_selection():
+    engine = create_async_engine(
+        "postgresql+asyncpg://pgdog:pgdog@127.0.0.1:6432/pgdog",
+        pool_size=20,
+        max_overflow=30,
+        pool_timeout=30,
+        pool_recycle=3600,
+        pool_pre_ping=True,
+        connect_args={"server_settings": {"pgdog.role": "primary"}},
+    )
+    session_factory = async_sessionmaker(engine, expire_on_commit=True)
+
+    for _ in range(1):
+        async with session_factory() as session:
+            async with session.begin():
+                await session.execute(text("CREATE TABLE IF NOT EXISTS test_role_selection(id BIGINT)"))
+                await session.execute(text("CREATE TABLE IF NOT EXISTS test_role_selection(id BIGINT)"))
+                await session.rollback()

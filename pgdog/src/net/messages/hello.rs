@@ -81,6 +81,8 @@ impl Startup {
                     }
                 }
 
+                println!("params: {:?}", params);
+
                 Ok(Startup::Startup { params })
             }
             // CancelRequest (F)
