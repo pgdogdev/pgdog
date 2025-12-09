@@ -703,9 +703,10 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
                             // parse array literals or parameters, so route to all shards.
                             if is_any
                                 && matches!(values, SearchResult::Value(_))
-                                    && self.schema.tables().get_table(column).is_some() {
-                                        return Ok(SearchResult::Match(Shard::All));
-                                    }
+                                && self.schema.tables().get_table(column).is_some()
+                            {
+                                return Ok(SearchResult::Match(Shard::All));
+                            }
 
                             let mut shards = HashSet::new();
                             for value in values.iter() {

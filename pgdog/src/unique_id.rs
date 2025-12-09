@@ -34,13 +34,11 @@ const MAX_OFFSET: u64 = i64::MAX as u64
 
 static UNIQUE_ID: OnceCell<UniqueId> = OnceCell::new();
 
-#[derive(Debug)]
-#[derive(Default)]
+#[derive(Debug, Default)]
 struct State {
     last_timestamp_ms: u64,
     sequence: u64,
 }
-
 
 impl State {
     // Generate next unique ID in a distributed sequence.

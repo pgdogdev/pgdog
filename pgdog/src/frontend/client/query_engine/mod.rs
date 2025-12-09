@@ -182,7 +182,6 @@ impl QueryEngine {
                 self.set_route = None;
 
                 if self.backend.connected() || *extended {
-                    self.backend.transaction_params_hook(false);
                     let extended = *extended;
                     let transaction_route = self.transaction_route(&route)?;
                     context.client_request.route = Some(transaction_route.clone());
@@ -199,7 +198,6 @@ impl QueryEngine {
                 self.set_route = None;
 
                 if self.backend.connected() || *extended {
-                    self.backend.transaction_params_hook(true);
                     let extended = *extended;
                     let transaction_route = self.transaction_route(&route)?;
                     context.client_request.route = Some(transaction_route.clone());

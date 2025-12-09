@@ -66,16 +66,14 @@ impl ErrorResponse {
             severity: "ERROR".into(),
             code: "58000".into(),
             message: "cross-shard queries are disabled".into(),
-            detail: Some(
-                format!(
-                    "query doesn't have a sharding key{}",
-                    if let Some(query) = query {
-                        format!(": {}", query)
-                    } else {
-                        "".into()
-                    }
-                ),
-            ),
+            detail: Some(format!(
+                "query doesn't have a sharding key{}",
+                if let Some(query) = query {
+                    format!(": {}", query)
+                } else {
+                    "".into()
+                }
+            )),
             context: None,
             file: None,
             routine: None,
