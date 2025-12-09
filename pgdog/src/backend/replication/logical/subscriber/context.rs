@@ -54,7 +54,7 @@ impl<'a> StreamContext<'a> {
             &self.request,
             self.cluster,
             &mut self.prepared_statements,
-            &self.params,
+            &mut self.params,
             None,
             1,
         )?)

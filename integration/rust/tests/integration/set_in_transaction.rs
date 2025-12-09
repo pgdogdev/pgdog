@@ -1,16 +1,7 @@
 use rust::setup::{admin_sqlx, connections_sqlx};
-use serial_test::serial;
 use sqlx::Executor;
 
-#[tokio::test]
-#[serial]
-async fn test_set_in_transaction_reset_after_commit() {
-    let admin = admin_sqlx().await;
-    admin
-        .execute("SET cross_shard_disabled TO true")
-        .await
-        .unwrap();
-
+async fn run_set_in_transaction_reset_after_commit() {
     let pools = connections_sqlx().await;
     let sharded = &pools[1];
 
@@ -48,15 +39,36 @@ async fn test_set_in_transaction_reset_after_commit() {
 
     conn.execute("COMMIT").await.unwrap();
 
-    // Verify lock_timeout is reset to original after commit
+    // Verify lock_timeout is preserved after commit
     let timeout_after_commit: String = sqlx::query_scalar("SHOW lock_timeout")
         .fetch_one(&mut *conn)
         .await
         .unwrap();
-    assert_eq!(
+    assert_ne!(
         timeout_after_commit, original_timeout,
-        "lock_timeout should be reset to original after commit"
+        "lock_timeout should be preserved after commit"
     );
+    assert_eq!(
+        timeout_after_commit, new_timeout,
+        "lock_timeout should be preserved after commit"
+    );
+}
+
+#[tokio::test]
+async fn test_set_in_transaction_reset_after_commit() {
+    let admin = admin_sqlx().await;
+    admin
+        .execute("SET cross_shard_disabled TO true")
+        .await
+        .unwrap();
+
+    let mut handles = Vec::new();
+    for _ in 0..10 {
+        handles.push(tokio::spawn(run_set_in_transaction_reset_after_commit()));
+    }
+    for handle in handles {
+        handle.await.unwrap();
+    }
 
     admin
         .execute("SET cross_shard_disabled TO false")
@@ -64,15 +76,7 @@ async fn test_set_in_transaction_reset_after_commit() {
         .unwrap();
 }
 
-#[tokio::test]
-#[serial]
-async fn test_set_in_transaction_reset_after_rollback() {
-    let admin = admin_sqlx().await;
-    admin
-        .execute("SET cross_shard_disabled TO true")
-        .await
-        .unwrap();
-
+async fn run_set_in_transaction_reset_after_rollback() {
     let pools = connections_sqlx().await;
     let sharded = &pools[1];
 
@@ -119,6 +123,23 @@ async fn test_set_in_transaction_reset_after_rollback() {
         timeout_after_rollback, original_timeout,
         "statement_timeout should be reset to original after rollback"
     );
+}
+
+#[tokio::test]
+async fn test_set_in_transaction_reset_after_rollback() {
+    let admin = admin_sqlx().await;
+    admin
+        .execute("SET cross_shard_disabled TO true")
+        .await
+        .unwrap();
+
+    let mut handles = Vec::new();
+    for _ in 0..10 {
+        handles.push(tokio::spawn(run_set_in_transaction_reset_after_rollback()));
+    }
+    for handle in handles {
+        handle.await.unwrap();
+    }
 
     admin
         .execute("SET cross_shard_disabled TO false")
@@ -126,15 +147,7 @@ async fn test_set_in_transaction_reset_after_rollback() {
         .unwrap();
 }
 
-#[tokio::test]
-#[serial]
-async fn test_set_local_in_transaction_reset_after_commit() {
-    let admin = admin_sqlx().await;
-    admin
-        .execute("SET cross_shard_disabled TO true")
-        .await
-        .unwrap();
-
+async fn run_set_local_in_transaction_reset_after_commit() {
     let pools = connections_sqlx().await;
     let sharded = &pools[1];
 
@@ -181,6 +194,25 @@ async fn test_set_local_in_transaction_reset_after_commit() {
         work_mem_after_commit, original_work_mem,
         "work_mem should be reset to original after commit (SET LOCAL is transaction-scoped)"
     );
+}
+
+#[tokio::test]
+async fn test_set_local_in_transaction_reset_after_commit() {
+    let admin = admin_sqlx().await;
+    admin
+        .execute("SET cross_shard_disabled TO true")
+        .await
+        .unwrap();
+
+    let mut handles = Vec::new();
+    for _ in 0..10 {
+        handles.push(tokio::spawn(
+            run_set_local_in_transaction_reset_after_commit(),
+        ));
+    }
+    for handle in handles {
+        handle.await.unwrap();
+    }
 
     admin
         .execute("SET cross_shard_disabled TO false")

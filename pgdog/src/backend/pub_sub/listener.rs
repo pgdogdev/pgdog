@@ -168,6 +168,7 @@ impl PubSubListener {
                     name: "application_name".into(),
                     value: "PgDog Pub/Sub Listener".into(),
                 }]),
+                None,
             )
             .await?;
 

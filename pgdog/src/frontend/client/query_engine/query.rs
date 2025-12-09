@@ -30,28 +30,12 @@ impl QueryEngine {
         self.two_pc_check(context, route);
 
         // We need to run a query now.
-        if let Some(begin_stmt) = self.begin_stmt.take() {
+        if context.in_transaction() {
             // Connect to one shard if not sharded or to all shards
             // for a cross-shard tranasction.
             if !self.connect_transaction(context, route).await? {
                 return Ok(());
             }
-
-            self.backend.execute(begin_stmt.query()).await?;
-
-            // Sync transaction parameters. These will only
-            // be captured inside an explicit transaction
-            // so we don't have to track them.
-            let query_timeout = context.timeouts.query_timeout(&self.stats.state);
-            for query in self.transaction_params.set_queries(true) {
-                timeout(query_timeout, self.backend.execute(query)).await??;
-            }
-            debug!(
-                "synced {} in-transaction parameters",
-                self.transaction_params.len()
-            );
-            self.transaction_params.clear();
-            self.backend.reset_changed_params();
         } else if !self.connect(context, route).await? {
             return Ok(());
         }
@@ -329,7 +313,8 @@ impl QueryEngine {
             && !context.admin
             && context.client_request.executable()
         {
-            let error = ErrorResponse::cross_shard_disabled();
+            let query = context.client_request.query()?;
+            let error = ErrorResponse::cross_shard_disabled(query.as_ref().map(|q| q.query()));
 
             self.error_response(context, error).await?;
 

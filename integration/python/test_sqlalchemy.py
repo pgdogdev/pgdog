@@ -80,6 +80,7 @@ async def schema_sharding_engine():
         cursor = dbapi_connection.cursor()
         cursor.execute("SET search_path TO shard_0, public")
         cursor.close()
+        dbapi_connection.commit()
 
     session = async_sessionmaker(pool, expire_on_commit=True)
     return pool, session
@@ -486,6 +487,8 @@ async def test_schema_sharding(schema_sharding_engine):
             async with session_factory() as session:
                 async with session.begin():
                     await session.execute(text("SET LOCAL work_mem TO '4MB'"))
+                    for row in await session.execute(text("SHOW search_path")):
+                        print(row)
                     await session.execute(text("SELECT 1"))
                     await session.execute(text("SELECT * FROM test_schema_sharding"))
 

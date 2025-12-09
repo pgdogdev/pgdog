@@ -13,11 +13,21 @@ impl QueryEngine {
         local: bool,
     ) -> Result<(), Error> {
         if !local {
-            context.params.insert(name, value.clone());
-            self.comms.update_params(context.params);
+            if context.in_transaction() {
+                context.params.insert_transaction(name, value.clone());
+            } else {
+                context.params.insert(name, value.clone());
+                self.comms.update_params(context.params);
+            }
         }
 
-        if extended {
+        // search_path-based schema sharding.
+        if route.is_schema_path_driven() {
+            self.set_route = Some(route.clone());
+        }
+
+        // TODO: Respond with fake messages.
+        if extended || local {
             // Re-enable cross-shard queries for this request.
             context.cross_shard_disabled = Some(false);
             self.execute(context, &route).await?;

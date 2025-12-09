@@ -448,6 +448,7 @@ impl Server {
         &mut self,
         id: &BackendKeyData,
         params: &Parameters,
+        start_transaction: Option<&str>,
     ) -> Result<usize, Error> {
         // Sync application_name parameter
         // and update it in the stats.
@@ -458,9 +459,10 @@ impl Server {
 
         // Clear any params previously tracked by SET.
         self.changed_params.clear();
+        let mut clear_params = false;
 
         // Compare client and server params.
-        if !params.identical(&self.client_params) {
+        let mut executed = if !params.identical(&self.client_params) {
             // Construct client parameter SET queries.
             let tracked = params.tracked();
             // Construct RESET queries to reset any current params
@@ -477,18 +479,52 @@ impl Server {
                 debug!("syncing {} params", queries.len());
 
                 self.execute_batch(&queries).await?;
-
-                // We can receive ParameterStatus messages here,
-                // but we should ignore them since we are managing the session state.
-                self.changed_params.clear();
+                clear_params = true;
             }
 
             // Update params on this connection.
             self.client_params = tracked;
 
-            Ok(queries.len())
+            queries.len()
         } else {
-            Ok(0)
+            0
+        };
+
+        // Sync any parameters set inside the transaction. These will
+        // need to be revered on rollback or commited on commit.
+        if let Some(start_transaction) = start_transaction {
+            self.execute(start_transaction).await?;
+            let transaction_sets = params.set_queries(true);
+
+            if !transaction_sets.is_empty() {
+                debug!("syncing {} in-transaction params", transaction_sets.len());
+
+                self.execute_batch(&transaction_sets).await?;
+                clear_params = true;
+
+                for (name, value) in params.in_transaction_iter() {
+                    self.client_params.insert_transaction(name, value.clone());
+                }
+            }
+
+            executed += transaction_sets.len();
+        }
+
+        if clear_params {
+            // We can receive ParameterStatus messages here,
+            // but we should ignore them since we are managing the session state.
+            self.changed_params.clear();
+        }
+
+        Ok(executed)
+    }
+
+    // Handle COMMIT/ROLLBACK for in-transaction params tracking.
+    pub fn transaction_params_hook(&mut self, rollback: bool) {
+        if rollback {
+            self.client_params.rollback();
+        } else {
+            self.client_params.commit();
         }
     }
 
@@ -680,6 +716,9 @@ impl Server {
             self.execute("ROLLBACK").await?;
             self.stats.rollback();
         }
+
+        // Reset any params left over.
+        self.transaction_params_hook(true);
 
         if !self.done() {
             Err(Error::RollbackFailed)
@@ -1691,7 +1730,7 @@ pub mod test {
         params.insert("application_name", "test_sync_params");
         println!("server state: {}", server.stats().state);
         let changed = server
-            .link_client(&BackendKeyData::new(), &params)
+            .link_client(&BackendKeyData::new(), &params, None)
             .await
             .unwrap();
         assert_eq!(changed, 1);
@@ -1703,7 +1742,7 @@ pub mod test {
         assert_eq!(app_name[0], "test_sync_params");
 
         let changed = server
-            .link_client(&BackendKeyData::new(), &params)
+            .link_client(&BackendKeyData::new(), &params, None)
             .await
             .unwrap();
         assert_eq!(changed, 0);
@@ -1792,20 +1831,28 @@ pub mod test {
 
         let mut server = test_server().await;
 
-        let changed = server.link_client(&BackendKeyData::new(), &params).await?;
+        let changed = server
+            .link_client(&BackendKeyData::new(), &params, None)
+            .await?;
         assert_eq!(changed, 1);
 
-        let changed = server.link_client(&BackendKeyData::new(), &params).await?;
+        let changed = server
+            .link_client(&BackendKeyData::new(), &params, None)
+            .await?;
         assert_eq!(changed, 0);
 
         for i in 0..25 {
             let value = format!("apples_{}", i);
             params.insert("application_name", value);
 
-            let changed = server.link_client(&BackendKeyData::new(), &params).await?;
+            let changed = server
+                .link_client(&BackendKeyData::new(), &params, None)
+                .await?;
             assert_eq!(changed, 2); // RESET, SET.
 
-            let changed = server.link_client(&BackendKeyData::new(), &params).await?;
+            let changed = server
+                .link_client(&BackendKeyData::new(), &params, None)
+                .await?;
             assert_eq!(changed, 0);
         }
 
