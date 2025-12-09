@@ -562,7 +562,7 @@ impl Server {
         )
     }
 
-    /// Server is done executing all queries and isz
+    /// Server is done executing all queries and is
     /// not inside a transaction.
     pub fn can_check_in(&self) -> bool {
         self.stats().state == State::Idle
@@ -602,7 +602,17 @@ impl Server {
 
     /// Connection was left with an unfinished query.
     pub fn needs_drain(&self) -> bool {
-        !self.in_sync()
+        // We need to drain whenever the protocol state indicates that there
+        // are still tracked messages expected from the server *or* the high‑
+        // level connection state is not one of the "in sync" states.
+        //
+        // This is intentionally more conservative than just checking
+        // `in_sync()`: if a client disappears after we've enqueued expected
+        // backend responses (via `PreparedStatements::handle`) but before we
+        // see a new ReadyForQuery, the stats state can still be Idle while the
+        // protocol queue has pending items. In that case we must treat the
+        // connection as needing a drain before it is safe to reuse.
+        self.has_more_messages() || !self.in_sync()
     }
 
     /// Close the connection, don't do any recovery.
@@ -1769,6 +1779,23 @@ pub mod test {
             }
             println!("{:?}", msg);
         }
+    }
+
+    #[test]
+    fn test_needs_drain_when_protocol_queue_not_empty_even_if_idle() {
+        use crate::state::State;
+
+        let mut server = Server::default();
+        assert_eq!(server.stats().state, State::Idle);
+        assert!(server.in_sync());
+        assert!(!server.has_more_messages());
+        assert!(!server.needs_drain());
+
+        server.prepared_statements_mut().state_mut().add('Z'); // expect a ReadyForQuery at some point
+
+        assert_eq!(server.stats().state, State::Idle);
+        assert!(server.prepared_statements().state().has_more_messages());
+        assert!(server.needs_drain());
     }
 
     #[tokio::test]

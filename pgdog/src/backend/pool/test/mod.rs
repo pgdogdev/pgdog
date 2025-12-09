@@ -653,3 +653,65 @@ async fn test_lsn_monitor() {
 
     pool.shutdown();
 }
+
+/// If a client disconnects while the backend still has protocol messages
+/// queued for it, but the high-level stats state is Idle, the connection must
+/// still be treated as needing a drain. Otherwise the connection is checked
+/// back into the pool with a non-empty protocol queue and will be "tainted"
+/// for the next client.
+#[tokio::test]
+async fn test_abrupt_disconnect_with_pending_protocol_state_requires_drain() {
+    crate::logger();
+
+    let pool = pool();
+    let mut guard = pool.get(&Request::default()).await.unwrap();
+
+    guard
+        .send(
+            &vec![
+                ProtocolMessage::from(Query::new("SELECT 1")),
+                ProtocolMessage::from(Query::new("SELECT 1")),
+            ]
+            .into(),
+        )
+        .await
+        .unwrap();
+
+    // Consume only the RowDescription ('T'), leaving the remainder of the
+    // response (D, C, Z) unread. At this point the protocol state still
+    // expects a ReadyForQuery, so has_more_messages() is true.
+    for c in ['T', 'D', 'C', 'Z'] {
+        let msg = guard.read().await.unwrap();
+        assert_eq!(msg.code(), c);
+    }
+    assert!(
+        guard.prepared_statements().state().has_more_messages(),
+        "protocol state should have pending messages after partial read"
+    );
+    assert_eq!(guard.stats().state, State::Idle);
+
+    // Client disconnects, guard is dropped, runs Guard::cleanup. needs_drain()
+    // must report that there are pending protocol messages it's expecting,
+    // otherwise the connection is checked back into the pool with a non-empty
+    // protocol queue.
+    drop(guard);
+
+    // Re-acquire the same connection from the pool. If this
+    // assertion ever fails, the connection has been returned to the pool
+    // in a tainted state.
+    let mut guard = pool.get(&Request::default()).await.unwrap();
+    assert!(
+        !guard.prepared_statements().state().has_more_messages(),
+        "connection should not have pending protocol messages after cleanup"
+    );
+
+    // Run a fresh query and assert we get a valid result back; if the
+    // connection had been returned to the pool without a drain, this is
+    // where stray CommandComplete/ReadyForQuery messages from the previous
+    // query would surface and break the protocol. Each query would receive the
+    // prior query's results (off by 1).
+    let rows: Vec<i32> = guard.fetch_all("SELECT 2").await.unwrap();
+    assert_eq!(rows, vec![2]);
+    let rows: Vec<i32> = guard.fetch_all("SELECT 3").await.unwrap();
+    assert_eq!(rows, vec![3]);
+}
