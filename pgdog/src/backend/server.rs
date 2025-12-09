@@ -843,7 +843,9 @@ impl Server {
 
     #[inline]
     pub fn disconnect_reason(&mut self, reason: DisconnectReason) {
-        self.disconnect_reason = Some(reason);
+        if self.disconnect_reason.is_none() {
+            self.disconnect_reason = Some(reason);
+        }
     }
 
     /// Server connection unique identifier.
@@ -964,10 +966,10 @@ impl Drop for Server {
         self.stats().disconnect();
         if let Some(mut stream) = self.stream.take() {
             info!(
-                "closing server connection: {} [{}, state: {}]",
-                self.disconnect_reason.take().unwrap_or_default(),
+                "closing server connection [{}, state: {}, reason: {}]",
                 self.addr,
                 self.stats.state,
+                self.disconnect_reason.take().unwrap_or_default(),
             );
 
             spawn(async move {

@@ -10,6 +10,9 @@ pub enum DisconnectReason {
     Paused,
     ReplicationMode,
     OutOfSync,
+    Unhealthy,
+    Healthcheck,
+    PubSub,
     #[default]
     Other,
 }
@@ -26,6 +29,9 @@ impl Display for DisconnectReason {
             Self::Offline => "pool offline",
             Self::OutOfSync => "out of sync",
             Self::ReplicationMode => "in replication mode",
+            Self::Unhealthy => "unhealthy",
+            Self::Healthcheck => "standalone healthcheck",
+            Self::PubSub => "pub/sub",
         };
 
         write!(f, "{}", reason)
