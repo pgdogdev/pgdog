@@ -21,11 +21,6 @@ impl QueryEngine {
             }
         }
 
-        // search_path-based schema sharding.
-        if route.is_schema_path_driven() {
-            self.set_route = Some(route.clone());
-        }
-
         // TODO: Respond with fake messages.
         if extended || local {
             // Re-enable cross-shard queries for this request.
