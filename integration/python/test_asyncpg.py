@@ -519,3 +519,28 @@ async def test_schema_sharding_search_path():
 
     await asyncio.gather(*[run_test() for _ in range(10)])
     admin().cursor().execute("SET cross_shard_disabled TO false")
+
+
+@pytest.mark.asyncio
+async def test_pgdog_role_selection():
+    conn = await asyncpg.connect(
+        user="pgdog",
+        password="pgdog",
+        database="pgdog",
+        host="127.0.0.1",
+        port=6432,
+        statement_cache_size=250,
+        server_settings={
+            "pgdog.role": "replica",
+        }
+    )
+
+    got_err = False
+    for _ in range(10):
+        try:
+            await conn.execute("CREATE TABLE IF NOT EXISTS test_pgdog_role_selection(id BIGINT)")
+        except asyncpg.exceptions.ReadOnlySQLTransactionError:
+            got_err = True
+            pass
+
+    assert got_err

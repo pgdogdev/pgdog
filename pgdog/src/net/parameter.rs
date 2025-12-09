@@ -20,6 +20,7 @@ static IMMUTABLE_PARAMS: Lazy<Vec<String>> = Lazy::new(|| {
         String::from("user"),
         String::from("client_encoding"),
         String::from("replication"),
+        String::from("pgdog.role"),
     ])
 });
 

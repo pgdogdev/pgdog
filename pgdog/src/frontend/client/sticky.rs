@@ -34,11 +34,11 @@ impl Sticky {
     /// Create Sticky from params.
     pub fn from_params(params: &Parameters) -> Self {
         let role = params
-            .get("target_session_attrs")
+            .get("pgdog.role")
             .map(|value| match value {
                 ParameterValue::String(value) => match value.as_str() {
-                    "primary" | "read-write" => Some(Role::Primary),
-                    "standby" | "read-only" => Some(Role::Replica),
+                    "primary" => Some(Role::Primary),
+                    "replica" => Some(Role::Replica),
                     _ => None,
                 },
                 _ => None,
@@ -63,13 +63,11 @@ mod test {
 
         for (attr, role) in [
             ("primary", Some(Role::Primary)),
-            ("read-write", Some(Role::Primary)),
-            ("standby", Some(Role::Replica)),
-            ("read-only", Some(Role::Replica)),
+            ("replica", Some(Role::Replica)),
             ("random", None),
         ] {
             let mut params = Parameters::default();
-            params.insert("target_session_attrs", attr);
+            params.insert("pgdog.role", attr);
             let sticky = Sticky::from_params(&params);
             assert_eq!(sticky.role, role);
         }
