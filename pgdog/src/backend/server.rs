@@ -13,8 +13,8 @@ use tokio::{
 use tracing::{debug, error, info, trace, warn};
 
 use super::{
-    pool::Address, prepared_statements::HandleResult, Error, PreparedStatements, ServerOptions,
-    Stats,
+    pool::Address, prepared_statements::HandleResult, DisconnectReason, Error, PreparedStatements,
+    ServerOptions, Stats,
 };
 use crate::{
     auth::{md5, scram::Client},
@@ -61,6 +61,7 @@ pub struct Server {
     replication_mode: bool,
     pooler_mode: PoolerMode,
     stream_buffer: MessageBuffer,
+    disconnect_reason: Option<DisconnectReason>,
 }
 
 impl MemoryUsage for Server {
@@ -265,6 +266,7 @@ impl Server {
             re_synced: false,
             pooler_mode: PoolerMode::Transaction,
             stream_buffer: MessageBuffer::new(cfg.config.memory.message_buffer),
+            disconnect_reason: None,
         };
 
         server.stats.memory_used(server.memory_stats()); // Stream capacity.
@@ -839,6 +841,11 @@ impl Server {
         self.re_synced
     }
 
+    #[inline]
+    pub fn disconnect_reason(&mut self, reason: DisconnectReason) {
+        self.disconnect_reason = Some(reason);
+    }
+
     /// Server connection unique identifier.
     #[inline]
     pub fn id(&self) -> &BackendKeyData {
@@ -956,15 +963,12 @@ impl Drop for Server {
     fn drop(&mut self) {
         self.stats().disconnect();
         if let Some(mut stream) = self.stream.take() {
-            // If you see a lot of these, tell your clients
-            // to not send queries unless they are willing to stick
-            // around for results.
-            let out_of_sync = if self.done() {
-                " ".into()
-            } else {
-                format!(" {} ", self.stats().state)
-            };
-            info!("closing{}server connection [{}]", out_of_sync, self.addr,);
+            info!(
+                "closing server connection: {} [{}, state: {}]",
+                self.disconnect_reason.take().unwrap_or_default(),
+                self.addr,
+                self.stats.state,
+            );
 
             spawn(async move {
                 stream.write_all(&Terminate.to_bytes()?).await?;
@@ -1010,6 +1014,7 @@ pub mod test {
                 replication_mode: false,
                 pooler_mode: PoolerMode::Transaction,
                 stream_buffer: MessageBuffer::new(4096),
+                disconnect_reason: None,
             }
         }
     }
