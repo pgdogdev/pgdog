@@ -622,7 +622,7 @@ mod tests {
     fn new_client() -> Client {
         let stream = Stream::dev_null();
         let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 5432);
-        let mut client = Client::new_test(stream, addr);
+        let mut client = Client::new_test(stream, addr, Parameters::default());
         client.params.insert("database", "pgdog_sharded");
         client.connect_params.insert("database", "pgdog_sharded");
         client

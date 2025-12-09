@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::{
+    fmt::Display,
     ops::{Deref, DerefMut},
     str::FromStr,
 };
@@ -67,6 +68,18 @@ impl FromStr for ReadWriteSplit {
             "includeprimaryifreplicabanned" => Ok(Self::IncludePrimaryIfReplicaBanned),
             _ => Err(format!("Invalid read-write split: {}", s)),
         }
+    }
+}
+
+impl Display for ReadWriteSplit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let display = match self {
+            Self::ExcludePrimary => "exclude_primary",
+            Self::IncludePrimary => "include_primary",
+            Self::IncludePrimaryIfReplicaBanned => "include_primary_if_replica_banned",
+        };
+
+        write!(f, "{}", display)
     }
 }
 

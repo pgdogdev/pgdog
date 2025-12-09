@@ -21,13 +21,15 @@ use crate::{
     },
     net::{
         bind::Parameter, Bind, Close, CommandComplete, DataRow, Describe, ErrorResponse, Execute,
-        Field, Flush, Format, FromBytes, Message, Parse, Protocol, Query, ReadyForQuery,
-        RowDescription, Sync, Terminate, ToBytes,
+        Field, Flush, Format, FromBytes, Message, Parameters, Parse, Protocol, Query,
+        ReadyForQuery, RowDescription, Sync, Terminate, ToBytes,
     },
     state::State,
 };
 
 use super::Stream;
+
+pub mod target_session_attrs;
 
 //
 // cargo nextest runs these in separate processes.
@@ -53,7 +55,7 @@ pub async fn parallel_test_client() -> (TcpStream, Client) {
         let (stream, addr) = stream.accept().await.unwrap();
         let stream = Stream::plain(stream, 4096);
 
-        Client::new_test(stream, addr)
+        Client::new_test(stream, addr, Parameters::default())
     });
 
     let conn = TcpStream::connect(&format!("127.0.0.1:{}", port))

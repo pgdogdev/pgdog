@@ -323,12 +323,13 @@ impl Client {
     }
 
     #[cfg(test)]
-    pub fn new_test(stream: Stream, addr: SocketAddr) -> Self {
+    pub fn new_test(stream: Stream, addr: SocketAddr, params: Parameters) -> Self {
         use crate::{config::config, frontend::comms::comms};
 
         let mut connect_params = Parameters::default();
         connect_params.insert("user", "pgdog");
         connect_params.insert("database", "pgdog");
+        connect_params.merge(params);
 
         Self {
             stream,
@@ -338,7 +339,6 @@ impl Client {
             streaming: false,
             prepared_statements: PreparedStatements::new(),
             connect_params: connect_params.clone(),
-            params: connect_params,
             admin: false,
             transaction: None,
             timeouts: Timeouts::from_config(&config().config.general),
@@ -346,7 +346,8 @@ impl Client {
             stream_buffer: MessageBuffer::new(4096),
             shutdown: false,
             passthrough_password: None,
-            sticky: Sticky::new(),
+            sticky: Sticky::from_params(&connect_params),
+            params: connect_params,
         }
     }
 
