@@ -46,7 +46,21 @@ pub async fn test_client(replicas: bool) -> (TcpStream, Client) {
     parallel_test_client().await
 }
 
+pub async fn test_client_with_params(params: Parameters, replicas: bool) -> (TcpStream, Client) {
+    if replicas {
+        load_test_replicas();
+    } else {
+        load_test();
+    }
+
+    parallel_test_client_with_params(params).await
+}
+
 pub async fn parallel_test_client() -> (TcpStream, Client) {
+    parallel_test_client_with_params(Parameters::default()).await
+}
+
+pub async fn parallel_test_client_with_params(params: Parameters) -> (TcpStream, Client) {
     let addr = "127.0.0.1:0".to_string();
     let conn_addr = addr.clone();
     let stream = TcpListener::bind(&conn_addr).await.unwrap();
@@ -55,7 +69,7 @@ pub async fn parallel_test_client() -> (TcpStream, Client) {
         let (stream, addr) = stream.accept().await.unwrap();
         let stream = Stream::plain(stream, 4096);
 
-        Client::new_test(stream, addr, Parameters::default())
+        Client::new_test(stream, addr, params)
     });
 
     let conn = TcpStream::connect(&format!("127.0.0.1:{}", port))

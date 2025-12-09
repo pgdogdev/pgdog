@@ -43,3 +43,27 @@ impl Sticky {
         }
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_sticky() {
+        let params = Parameters::default();
+        assert!(Sticky::from_params(&params).role.is_none());
+
+        for (attr, role) in [
+            ("primary", Some(Role::Primary)),
+            ("read-write", Some(Role::Primary)),
+            ("standby", Some(Role::Replica)),
+            ("read-only", Some(Role::Replica)),
+            ("random", None),
+        ] {
+            let mut params = Parameters::default();
+            params.insert("target_session_attrs", attr);
+            let sticky = Sticky::from_params(&params);
+            assert_eq!(sticky.role, role);
+        }
+    }
+}
