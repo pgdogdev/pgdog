@@ -341,7 +341,7 @@ impl Config {
                 checks.insert(
                     database.name.clone(),
                     Check {
-                        pooler_mode: database.pooler_mode.clone(),
+                        pooler_mode: database.pooler_mode,
                         role: database.role,
                         role_warned: false,
                     },
@@ -374,8 +374,8 @@ impl Config {
             _ => (),
         }
 
-        if !self.general.two_phase_commit {
-            if self.rewrite.enabled {
+        if !self.general.two_phase_commit
+            && self.rewrite.enabled {
                 if self.rewrite.shard_key == RewriteMode::Rewrite {
                     warn!("rewrite.shard_key=rewrite will apply non-atomic shard-key rewrites; enabling two_phase_commit is strongly recommended"
                     );
@@ -386,7 +386,6 @@ impl Config {
                     );
                 }
             }
-        }
     }
 
     /// Multi-tenancy is enabled.

@@ -74,8 +74,7 @@ impl ErrorResponse {
                     } else {
                         "".into()
                     }
-                )
-                .into(),
+                ),
             ),
             context: None,
             file: None,

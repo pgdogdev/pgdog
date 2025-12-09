@@ -43,7 +43,7 @@ impl RouterCli {
         let cluster = databases().cluster((self.user.as_str(), self.database.as_str()))?;
 
         let mut stmt = PreparedStatements::default();
-        let mut params = Parameters::default();
+        let params = Parameters::default();
 
         for query in &self.queries {
             let mut qp = QueryParser::default();
@@ -52,7 +52,7 @@ impl RouterCli {
                 &req.into(),
                 &cluster,
                 &mut stmt,
-                &mut params,
+                &params,
                 None,
                 1,
             )?)?;

@@ -11,7 +11,6 @@ use std::{
     iter::Sum,
     ops::{Add, Div, Sub},
     time::Duration,
-    u32,
 };
 
 /// Pool statistics.
