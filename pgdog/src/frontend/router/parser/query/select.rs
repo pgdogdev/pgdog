@@ -112,7 +112,7 @@ impl QueryParser {
 
             if omni {
                 let shard = if sticky {
-                    context.router_context.omni_sticky_index
+                    context.router_context.sticky.omni_index
                 } else {
                     round_robin::next()
                 } % context.shards;

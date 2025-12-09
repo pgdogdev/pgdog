@@ -298,7 +298,7 @@ mod tests {
 
     fn test_client() -> Client {
         let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
-        Client::new_test(Stream::dev_null(), addr)
+        Client::new_test(Stream::dev_null(), addr, Parameters::default())
     }
 
     #[tokio::test]

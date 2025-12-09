@@ -140,6 +140,7 @@ mod tests {
         let mut client = crate::frontend::Client::new_test(
             Stream::dev_null(),
             std::net::SocketAddr::from(([127, 0, 0, 1], 1234)),
+            Parameters::default(),
         );
         client.transaction = Some(TransactionType::ReadWrite);
 

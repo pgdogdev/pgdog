@@ -271,6 +271,13 @@ impl Parameters {
         self.get(name)
             .map_or(default_value, |p| p.as_str().unwrap_or(default_value))
     }
+
+    /// Merge other into self.
+    pub fn merge(&mut self, other: Self) {
+        self.params.extend(other.params);
+        self.transaction_params.extend(other.transaction_params);
+        Self::compute_hash(&self.params);
+    }
 }
 
 impl Deref for Parameters {
