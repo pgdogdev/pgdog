@@ -7,7 +7,7 @@ use tokio::fs::read_to_string;
 use super::Error;
 use crate::{
     backend::databases::databases,
-    frontend::{router::QueryParser, Command, PreparedStatements, RouterContext},
+    frontend::{client::Sticky, router::QueryParser, Command, PreparedStatements, RouterContext},
     net::{Parameters, ProtocolMessage, Query},
 };
 
@@ -54,7 +54,7 @@ impl RouterCli {
                 &mut stmt,
                 &params,
                 None,
-                1,
+                Sticky::new(),
             )?)?;
             result.push(cmd);
         }

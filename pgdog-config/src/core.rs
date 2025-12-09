@@ -6,8 +6,8 @@ use tracing::{info, warn};
 
 use crate::sharding::ShardedSchema;
 use crate::{
-    EnumeratedDatabase, Memory, OmnishardedTable, PassthoughAuth, PreparedStatements, RewriteMode,
-    Role,
+    EnumeratedDatabase, Memory, OmnishardedTable, PassthoughAuth, PreparedStatements,
+    ReadWriteSplit, RewriteMode, Role,
 };
 
 use super::database::Database;
@@ -317,6 +317,7 @@ impl Config {
             pooler_mode: Option<PoolerMode>,
             role: Role,
             role_warned: bool,
+            have_replicas: bool,
         }
 
         // Check identical configs.
@@ -337,6 +338,9 @@ impl Config {
                     );
                     existing.role_warned = true;
                 }
+                if !existing.have_replicas {
+                    existing.have_replicas = database.role == Role::Replica;
+                }
             } else {
                 checks.insert(
                     database.name.clone(),
@@ -344,6 +348,7 @@ impl Config {
                         pooler_mode: database.pooler_mode,
                         role: database.role,
                         role_warned: false,
+                        have_replicas: database.role == Role::Replica,
                     },
                 );
             }
@@ -383,6 +388,17 @@ impl Config {
             if self.rewrite.split_inserts == RewriteMode::Rewrite {
                 warn!("rewrite.split_inserts=rewrite may commit partial multi-row INSERTs; enabling two_phase_commit is strongly recommended"
                     );
+            }
+        }
+
+        for (database, check) in checks {
+            if !check.have_replicas
+                && self.general.read_write_split == ReadWriteSplit::ExcludePrimary
+            {
+                warn!(
+                    r#"database "{}" has no replicas and read_write_split is set to "{}", read queries will not be served"#,
+                    database, self.general.read_write_split
+                );
             }
         }
     }

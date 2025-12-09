@@ -2,7 +2,8 @@ use super::super::Error;
 use crate::{
     backend::Cluster,
     frontend::{
-        router::parser::Shard, ClientRequest, Command, PreparedStatements, Router, RouterContext,
+        client::Sticky, router::parser::Shard, ClientRequest, Command, PreparedStatements, Router,
+        RouterContext,
     },
     net::{replication::TupleData, Bind, Parameters, Parse},
 };
@@ -56,7 +57,7 @@ impl<'a> StreamContext<'a> {
             &mut self.prepared_statements,
             &self.params,
             None,
-            1,
+            Sticky::new(),
         )?)
     }
 }

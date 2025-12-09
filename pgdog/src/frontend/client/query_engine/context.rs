@@ -1,9 +1,7 @@
-use rand::{thread_rng, Rng};
-
 use crate::{
     backend::pool::{connection::mirror::Mirror, stats::MemoryStats},
     frontend::{
-        client::{timeouts::Timeouts, TransactionType},
+        client::{timeouts::Timeouts, Sticky, TransactionType},
         Client, ClientRequest, PreparedStatements,
     },
     net::{BackendKeyData, Parameters, Stream},
@@ -36,8 +34,8 @@ pub struct QueryEngineContext<'a> {
     pub(super) admin: bool,
     /// Executing rollback statement.
     pub(super) rollback: bool,
-    /// Omnisharded modulo.
-    pub(super) omni_sticky_index: usize,
+    /// Sticky config:
+    pub(super) sticky: Sticky,
 }
 
 impl<'a> QueryEngineContext<'a> {
@@ -57,7 +55,7 @@ impl<'a> QueryEngineContext<'a> {
             admin: client.admin,
             requests_left: 0,
             rollback: false,
-            omni_sticky_index: client.omni_sticky_index,
+            sticky: client.sticky,
         }
     }
 
@@ -82,7 +80,7 @@ impl<'a> QueryEngineContext<'a> {
             admin: false,
             requests_left: 0,
             rollback: false,
-            omni_sticky_index: thread_rng().gen_range(1..usize::MAX),
+            sticky: Sticky::new(),
         }
     }
 

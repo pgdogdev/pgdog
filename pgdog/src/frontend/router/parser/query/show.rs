@@ -26,6 +26,7 @@ impl QueryParser {
 #[cfg(test)]
 mod test_show {
     use crate::backend::Cluster;
+    use crate::frontend::client::Sticky;
     use crate::frontend::router::parser::Shard;
     use crate::frontend::router::QueryParser;
     use crate::frontend::{ClientRequest, PreparedStatements, RouterContext};
@@ -42,7 +43,7 @@ mod test_show {
         // First call
         let query = "SHOW TRANSACTION ISOLATION LEVEL";
         let buffer = ClientRequest::from(vec![Query::new(query).into()]);
-        let context = RouterContext::new(&buffer, &c, &mut ps, &p, None, 1).unwrap();
+        let context = RouterContext::new(&buffer, &c, &mut ps, &p, None, Sticky::new()).unwrap();
 
         let first = parser.parse(context).unwrap().clone();
         let first_shard = first.route().shard();
@@ -51,7 +52,7 @@ mod test_show {
         // Second call
         let query = "SHOW TRANSACTION ISOLATION LEVEL";
         let buffer = ClientRequest::from(vec![Query::new(query).into()]);
-        let context = RouterContext::new(&buffer, &c, &mut ps, &p, None, 1).unwrap();
+        let context = RouterContext::new(&buffer, &c, &mut ps, &p, None, Sticky::new()).unwrap();
 
         let second = parser.parse(context).unwrap().clone();
         let second_shard = second.route().shard();
