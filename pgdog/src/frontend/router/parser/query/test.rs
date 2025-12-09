@@ -85,7 +85,7 @@ fn parse_query(query: &str) -> Command {
         &mut stmt,
         &params,
         None,
-        Sticky::new(),
+        Sticky::new_test(),
     )
     .unwrap();
     let command = query_parser.parse(context).unwrap().clone();

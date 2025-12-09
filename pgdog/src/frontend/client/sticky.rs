@@ -23,6 +23,14 @@ impl Sticky {
         Self::from_params(&Parameters::default())
     }
 
+    #[cfg(test)]
+    pub fn new_test() -> Self {
+        Self {
+            omni_index: 1,
+            role: None,
+        }
+    }
+
     /// Create Sticky from params.
     pub fn from_params(params: &Parameters) -> Self {
         let role = params
