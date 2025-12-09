@@ -524,7 +524,7 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
     }
 
     fn converge(shards: &[Shard]) -> Option<Shard> {
-        let shards: HashSet<Shard> = shards.into_iter().cloned().collect();
+        let shards: HashSet<Shard> = shards.iter().cloned().collect();
         match shards.len() {
             0 => None,
             1 => shards.into_iter().next(),
@@ -628,7 +628,7 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
 
             Some(NodeEnum::RangeSubselect(ref subselect)) => {
                 if let Some(ref node) = subselect.subquery {
-                    return self.select_search(node, ctx);
+                    self.select_search(node, ctx)
                 } else {
                     Ok(SearchResult::None)
                 }
@@ -701,12 +701,11 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
                         | (values, SearchResult::Column(column)) => {
                             // For ANY expressions with sharding columns, we can't reliably
                             // parse array literals or parameters, so route to all shards.
-                            if is_any {
-                                if matches!(values, SearchResult::Value(_)) {
-                                    if self.schema.tables().get_table(column).is_some() {
-                                        return Ok(SearchResult::Match(Shard::All));
-                                    }
-                                }
+                            if is_any
+                                && matches!(values, SearchResult::Value(_))
+                                && self.schema.tables().get_table(column).is_some()
+                            {
+                                return Ok(SearchResult::Match(Shard::All));
                             }
 
                             let mut shards = HashSet::new();

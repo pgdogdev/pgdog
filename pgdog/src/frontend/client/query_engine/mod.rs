@@ -55,7 +55,6 @@ pub struct QueryEngine {
     notify_buffer: NotifyBuffer,
     pending_explain: Option<ExplainResponseState>,
     hooks: QueryEngineHooks,
-    transaction_params: Parameters,
 }
 
 impl QueryEngine {
@@ -143,7 +142,7 @@ impl QueryEngine {
 
         // Schema-sharding route persists until the end
         // of the transaction.
-        if command.route().schema_path_driven() && self.set_route.is_none() {
+        if command.route().is_schema_path_driven() && self.set_route.is_none() {
             debug!("search_path route is set for transaction");
             self.set_route = Some(command.route().clone());
         }
@@ -192,6 +191,8 @@ impl QueryEngine {
                 } else {
                     self.end_not_connected(context, false, *extended).await?
                 }
+
+                context.params.commit();
             }
             Command::RollbackTransaction { extended } => {
                 self.set_route = None;
@@ -206,6 +207,8 @@ impl QueryEngine {
                 } else {
                     self.end_not_connected(context, true, *extended).await?
                 }
+
+                context.params.rollback();
             }
             Command::Query(_) => self.execute(context, &route).await?,
             Command::Listen { channel, shard } => {
@@ -224,13 +227,24 @@ impl QueryEngine {
             Command::Set {
                 name,
                 value,
-                in_transaction,
+                route,
+                extended,
+                local,
             } => {
+                let route = route.clone();
                 if self.backend.connected() {
-                    self.execute(context, &route).await?
+                    self.execute(context, &route).await?;
                 } else {
-                    self.set(context, name.clone(), value.clone(), *in_transaction)
-                        .await?
+                    let extended = *extended;
+                    self.set(
+                        context,
+                        name.clone(),
+                        value.clone(),
+                        extended,
+                        route,
+                        *local,
+                    )
+                    .await?;
                 }
             }
             Command::SetRoute(route) => {

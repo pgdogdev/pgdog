@@ -1,3 +1,5 @@
+use crate::frontend::router::sharding::SchemaSharder;
+
 use super::*;
 
 impl QueryParser {
@@ -75,54 +77,36 @@ impl QueryParser {
             // TODO: Handle SET commands for updating client
             // params without touching the server.
             name => {
+                let extended = context.router_context.extended;
+
                 if let Shard::Direct(shard) = self.shard {
                     return Ok(Command::Query(
                         Route::write(shard).set_read(context.read_only),
                     ));
                 }
 
-                let mut value = vec![];
+                let value = Self::parse_set_value(stmt)?;
 
-                for node in &stmt.args {
-                    if let Some(NodeEnum::AConst(AConst { val: Some(val), .. })) = &node.node {
-                        match val {
-                            Val::Sval(String { sval }) => {
-                                value.push(sval.to_string());
-                            }
+                if let Some(value) = value {
+                    let route = if name == "search_path" {
+                        let mut sharder = SchemaSharder::default();
+                        sharder.resolve_parameter(&value, &context.sharding_schema.schemas);
 
-                            Val::Ival(Integer { ival }) => {
-                                value.push(ival.to_string());
-                            }
+                        let shard = sharder.get().map(|(shard, _)| shard).unwrap_or_default();
+                        let mut route = Route::write(shard).set_read(context.read_only);
+                        route.set_schema_path_driven_mut(true);
+                        route
+                    } else {
+                        Route::write(Shard::All).set_read(context.read_only)
+                    };
 
-                            Val::Fval(Float { fval }) => {
-                                value.push(fval.to_string());
-                            }
-
-                            Val::Boolval(Boolean { boolval }) => {
-                                value.push(boolval.to_string());
-                            }
-
-                            _ => (),
-                        }
-                    }
-                }
-
-                match value.len() {
-                    0 => (),
-                    1 => {
-                        return Ok(Command::Set {
-                            name: name.to_string(),
-                            value: ParameterValue::String(value.pop().unwrap()),
-                            in_transaction: self.in_transaction,
-                        })
-                    }
-                    _ => {
-                        return Ok(Command::Set {
-                            name: name.to_string(),
-                            value: ParameterValue::Tuple(value),
-                            in_transaction: self.in_transaction,
-                        })
-                    }
+                    return Ok(Command::Set {
+                        name: name.to_string(),
+                        value,
+                        extended,
+                        route,
+                        local: stmt.is_local,
+                    });
                 }
             }
         }
@@ -136,5 +120,41 @@ impl QueryParser {
         Ok(Command::Query(
             Route::write(shard).set_read(context.read_only),
         ))
+    }
+
+    pub fn parse_set_value(stmt: &VariableSetStmt) -> Result<Option<ParameterValue>, Error> {
+        let mut value = vec![];
+
+        for node in &stmt.args {
+            if let Some(NodeEnum::AConst(AConst { val: Some(val), .. })) = &node.node {
+                match val {
+                    Val::Sval(String { sval }) => {
+                        value.push(sval.to_string());
+                    }
+
+                    Val::Ival(Integer { ival }) => {
+                        value.push(ival.to_string());
+                    }
+
+                    Val::Fval(Float { fval }) => {
+                        value.push(fval.to_string());
+                    }
+
+                    Val::Boolval(Boolean { boolval }) => {
+                        value.push(boolval.to_string());
+                    }
+
+                    _ => (),
+                }
+            }
+        }
+
+        let value = match value.len() {
+            0 => None,
+            1 => Some(ParameterValue::String(value.pop().unwrap())),
+            _ => Some(ParameterValue::Tuple(value)),
+        };
+
+        Ok(value)
     }
 }

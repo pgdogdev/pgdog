@@ -1,6 +1,7 @@
 use crate::{
     backend::replication::ShardedSchemas,
     frontend::router::parser::{Schema, Shard},
+    net::parameter::ParameterValue,
 };
 
 #[derive(Debug, Default, Clone)]
@@ -13,6 +14,10 @@ pub struct SchemaSharder {
 impl SchemaSharder {
     /// Resolve current schema.
     pub fn resolve(&mut self, schema: Option<Schema<'_>>, schemas: &ShardedSchemas) {
+        if schemas.is_empty() {
+            return;
+        }
+
         let check = schemas.get(schema);
         if let Some(schema) = check {
             let catch_all = schema.is_default();
@@ -22,6 +27,27 @@ impl SchemaSharder {
                 self.current = Some(schema.shard().into());
                 self.catch_all = catch_all;
                 self.schema = Some(schema.name().to_owned());
+            }
+        }
+    }
+
+    /// Resolve current schema from connection parameter.
+    pub fn resolve_parameter(&mut self, parameter: &ParameterValue, schemas: &ShardedSchemas) {
+        if schemas.is_empty() {
+            return;
+        }
+
+        match parameter {
+            ParameterValue::String(search_path) => {
+                let schema = Schema::from(search_path.as_str());
+                self.resolve(Some(schema), schemas)
+            }
+
+            ParameterValue::Tuple(search_paths) => {
+                for schema in search_paths {
+                    let schema = Schema::from(schema.as_str());
+                    self.resolve(Some(schema), schemas);
+                }
             }
         }
     }

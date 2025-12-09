@@ -269,6 +269,10 @@ impl LoadBalancer {
             candidates.retain(|target| target.role() == Role::Replica);
         }
 
+        if candidates.is_empty() {
+            return Err(Error::AllReplicasDown);
+        }
+
         match self.lb_strategy {
             Random => candidates.shuffle(&mut rand::thread_rng()),
             RoundRobin => {

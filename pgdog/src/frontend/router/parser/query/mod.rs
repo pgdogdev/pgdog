@@ -135,17 +135,20 @@ impl QueryParser {
             Command::default()
         };
 
-        // If the cluster only has one shard, use direct-to-shard queries.
-        if let Command::Query(ref mut query) = command {
-            if !matches!(query.shard(), Shard::Direct(_)) && qp_context.shards == 1 {
-                query.set_shard_mut(0);
+        match &mut command {
+            Command::Query(route) | Command::Set { route, .. } => {
+                if !matches!(route.shard(), Shard::Direct(_)) && qp_context.shards == 1 {
+                    route.set_shard_mut(0);
+                }
+
+                // Check search_path and override.
+                if let Some(shard) = self.check_search_path_for_shard(&qp_context)? {
+                    route.set_shard_mut(shard);
+                    route.set_schema_path_driven_mut(true);
+                }
             }
 
-            // Check search_path and override.
-            if let Some(shard) = self.check_search_path_for_shard(&qp_context)? {
-                query.set_shard_mut(shard);
-                query.set_schema_path_driven_mut(true);
-            }
+            _ => (),
         }
 
         debug!("query router decision: {:#?}", command);

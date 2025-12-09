@@ -415,6 +415,7 @@ async def test_copy_jsonb():
 
 @pytest.mark.asyncio
 async def test_schema_sharding():
+    admin().cursor().execute("SET cross_shard_disabled TO true")
     conn = await schema_sharded_async()
 
     for _ in range(25):
@@ -439,9 +440,11 @@ async def test_schema_sharding():
             assert delete == "DELETE 1"
 
             await conn.execute(f"TRUNCATE {schema}.test")
+    admin().cursor().execute("SET cross_shard_disabled TO false")
 
 @pytest.mark.asyncio
 async def test_schema_sharding_transactions():
+    admin().cursor().execute("SET cross_shard_disabled TO true")
     conn = await schema_sharded_async()
 
     for _ in range(25):
@@ -467,9 +470,11 @@ async def test_schema_sharding_transactions():
 
                 delete = await conn.execute(f"DELETE FROM {schema}.test WHERE id = $1", 3)
                 assert delete == "DELETE 1"
+    admin().cursor().execute("SET cross_shard_disabled TO false")
 
 @pytest.mark.asyncio
 async def test_schema_sharding_default():
+    admin().cursor().execute("SET cross_shard_disabled TO true")
     conn = await schema_sharded_async()
 
     for _ in range(25):
@@ -483,10 +488,20 @@ async def test_schema_sharding_default():
             raise Exception("table shouldn't exist on shard 1")
         except Exception as e:
             assert "relation \"test_schema_sharding_default\" does not exist" == str(e)
+    admin().cursor().execute("SET cross_shard_disabled TO false")
 
 
 @pytest.mark.asyncio
 async def test_schema_sharding_search_path():
+    admin().cursor().execute("SET cross_shard_disabled TO true")
+
+    conn = await schema_sharded_async()
+
+    for schema in ["shard_0", "shard_1"]:
+        await conn.execute(f"CREATE SCHEMA IF NOT EXISTS {schema}")
+        await conn.execute(f"CREATE TABLE IF NOT EXISTS {schema}.test(id BIGINT, created_at TIMESTAMPTZ DEFAULT NOW())")
+
+
     import asyncio
 
     async def run_test():
@@ -497,12 +512,10 @@ async def test_schema_sharding_search_path():
                 await conn.execute(f"SET search_path TO {schema}")
 
                 async with conn.transaction():
-                    await conn.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
-                    await conn.execute(f"CREATE SCHEMA IF NOT EXISTS {schema}")
                     await conn.execute("SET LOCAL statement_timeout TO '10s'")
-                    await conn.execute(f"CREATE TABLE {schema}.test(id BIGINT, created_at TIMESTAMPTZ DEFAULT NOW())")
                     await conn.fetch(f"SELECT * FROM {schema}.test WHERE id = $1", 1)
 
         await conn.close()
 
     await asyncio.gather(*[run_test() for _ in range(10)])
+    admin().cursor().execute("SET cross_shard_disabled TO false")

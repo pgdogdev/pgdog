@@ -47,12 +47,23 @@ impl QueryEngine {
 
                 let query_timeout = context.timeouts.query_timeout(&self.stats.state);
 
+                let begin_stmt = self.begin_stmt.take();
+
                 // We may need to sync params with the server and that reads from the socket.
                 timeout(
                     query_timeout,
-                    self.backend.link_client(&self.client_id, context.params),
+                    self.backend.link_client(
+                        &self.client_id,
+                        context.params,
+                        begin_stmt.as_ref().map(|stmt| stmt.query()),
+                    ),
                 )
                 .await??;
+
+                // Start transaction on the server(s).
+                if let Some(begin_stmt) = self.begin_stmt.take() {
+                    timeout(query_timeout, self.backend.execute(begin_stmt.query())).await??;
+                }
 
                 true
             }
@@ -108,7 +119,7 @@ impl QueryEngine {
 
         if cluster.shards().len() == 1 {
             Ok(Route::write(Shard::Direct(0)).set_read(route.is_read()))
-        } else if route.schema_path_driven() {
+        } else if route.is_schema_path_driven() {
             // Schema-based routing will only go to one shard.
             Ok(route.clone())
         } else {

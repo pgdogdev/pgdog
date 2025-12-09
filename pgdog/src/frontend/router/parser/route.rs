@@ -181,7 +181,7 @@ impl Route {
         self.schema_path_driven = schema_driven;
     }
 
-    pub fn schema_path_driven(&self) -> bool {
+    pub fn is_schema_path_driven(&self) -> bool {
         self.schema_path_driven
     }
 

@@ -10,7 +10,7 @@ from sqlalchemy.orm import mapped_column
 import pytest_asyncio
 import pytest
 from sqlalchemy.sql.expression import delete
-from globals import admin
+from globals import admin, schema_sharded_async
 
 
 class Base(AsyncAttrs, DeclarativeBase):
@@ -29,6 +29,12 @@ class User(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     email: Mapped[str]
+
+# class Products(Base):
+#     __tablename__ == "products"
+
+#     id: Mapped[int] = mapped_column(primary_key=True)
+#     name: Mapped[str]
 
 
 @pytest_asyncio.fixture
@@ -56,6 +62,28 @@ async def engines():
 
     return [(normal, normal_sessions), (sharded, sharded_sessions)]
 
+@pytest_asyncio.fixture
+async def schema_sharding_engine():
+    from sqlalchemy import event
+
+    pool = create_async_engine(
+        "postgresql+asyncpg://pgdog:pgdog@127.0.0.1:6432/pgdog_schema",
+        pool_size=20,          # Number of connections to maintain in pool
+        max_overflow=30,       # Additional connections beyond pool_size
+        pool_timeout=30,       # Timeout when getting connection from pool
+        pool_recycle=3600,     # Recycle connections after 1 hour
+        pool_pre_ping=True,    # Verify connections before use
+    )
+
+    @event.listens_for(pool.sync_engine, "connect")
+    def set_search_path(dbapi_connection, connection_record):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("SET search_path TO shard_0, public")
+        cursor.close()
+        dbapi_connection.commit()
+
+    session = async_sessionmaker(pool, expire_on_commit=True)
+    return pool, session
 
 @pytest.mark.asyncio
 async def test_session_manager(engines):
@@ -436,3 +464,36 @@ async def test_connection_pool_stress(engines):
         result = await session.execute(text("SELECT COUNT(*) FROM stress_test"))
         count = result.scalar()
         assert count > 0  # Should have some data left
+
+
+@pytest.mark.asyncio
+async def test_schema_sharding(schema_sharding_engine):
+    import asyncio
+
+    admin().cursor().execute("SET cross_shard_disabled TO true")
+    # All queries should touch shard_0 only.
+    # Set it up separately
+    conn = await schema_sharded_async()
+    await conn.execute("SET search_path TO shard_0, public")
+    await conn.execute("CREATE SCHEMA IF NOT EXISTS shard_0")
+    await conn.execute("DROP TABLE IF EXISTS shard_0.test_schema_sharding")
+    await conn.execute("CREATE TABLE shard_0.test_schema_sharding(id BIGINT)")
+    await conn.close()
+
+    (pool, session_factory) = schema_sharding_engine
+
+    async def run_schema_sharding_test(task_id):
+        for _ in range(10):
+            async with session_factory() as session:
+                async with session.begin():
+                    await session.execute(text("SET LOCAL work_mem TO '4MB'"))
+                    for row in await session.execute(text("SHOW search_path")):
+                        print(row)
+                    await session.execute(text("SELECT 1"))
+                    await session.execute(text("SELECT * FROM test_schema_sharding"))
+
+    # Run 10 concurrent executions in parallel
+    tasks = [asyncio.create_task(run_schema_sharding_test(i)) for i in range(10)]
+    await asyncio.gather(*tasks)
+
+    admin().cursor().execute("SET cross_shard_disabled TO false")

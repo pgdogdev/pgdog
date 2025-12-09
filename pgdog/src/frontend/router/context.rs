@@ -27,6 +27,8 @@ pub struct RouterContext<'a> {
     pub two_pc: bool,
     /// Sticky omnisharded index.
     pub omni_sticky_index: usize,
+    /// Extended protocol.
+    pub extended: bool,
 }
 
 impl<'a> RouterContext<'a> {
@@ -43,7 +45,6 @@ impl<'a> RouterContext<'a> {
         let copy_mode = buffer.copy();
 
         Ok(Self {
-            query,
             bind,
             params,
             prepared_statements: stmt,
@@ -53,6 +54,8 @@ impl<'a> RouterContext<'a> {
             executable: buffer.executable(),
             two_pc: cluster.two_pc_enabled(),
             omni_sticky_index,
+            extended: matches!(query, Some(BufferedQuery::Prepared(_))) || bind.is_some(),
+            query,
         })
     }
 
