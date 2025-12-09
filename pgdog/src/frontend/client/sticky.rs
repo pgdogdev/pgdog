@@ -1,0 +1,45 @@
+//! Sticky settings for clients that override
+//! default routing behavior determined by the query parser.
+
+use pgdog_config::Role;
+use rand::{thread_rng, Rng};
+
+use crate::net::{parameter::ParameterValue, Parameters};
+
+#[derive(Debug, Clone, Copy)]
+pub struct Sticky {
+    /// Which shard to use for omnisharded queries, making them
+    /// stick to only one database.
+    pub omni_index: usize,
+
+    /// Desired database role. This comes from `target_session_attrs`
+    /// provided by the client.
+    pub role: Option<Role>,
+}
+
+impl Sticky {
+    /// Create new sticky config.
+    pub fn new() -> Self {
+        Self::from_params(&Parameters::default())
+    }
+
+    /// Create Sticky from params.
+    pub fn from_params(params: &Parameters) -> Self {
+        let role = params
+            .get("target_session_attrs")
+            .map(|value| match value {
+                ParameterValue::String(value) => match value.as_str() {
+                    "primary" | "read-write" => Some(Role::Primary),
+                    "standby" | "read-only" => Some(Role::Replica),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .flatten();
+
+        Self {
+            omni_index: thread_rng().gen_range(1..usize::MAX),
+            role,
+        }
+    }
+}

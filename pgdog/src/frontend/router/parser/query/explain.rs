@@ -48,6 +48,7 @@ mod tests {
 
     use crate::backend::Cluster;
     use crate::config::{self, config};
+    use crate::frontend::client::Sticky;
     use crate::frontend::{ClientRequest, PreparedStatements, RouterContext};
     use crate::net::messages::{Bind, Parameter, Parse, Query};
     use crate::net::Parameters;
@@ -72,7 +73,8 @@ mod tests {
         let mut stmts = PreparedStatements::default();
         let params = Parameters::default();
 
-        let ctx = RouterContext::new(&buffer, &cluster, &mut stmts, &params, None, 1).unwrap();
+        let ctx = RouterContext::new(&buffer, &cluster, &mut stmts, &params, None, Sticky::new())
+            .unwrap();
 
         match QueryParser::default().parse(ctx).unwrap().clone() {
             Command::Query(route) => route,
@@ -99,7 +101,8 @@ mod tests {
         let mut stmts = PreparedStatements::default();
         let params = Parameters::default();
 
-        let ctx = RouterContext::new(&buffer, &cluster, &mut stmts, &params, None, 1).unwrap();
+        let ctx = RouterContext::new(&buffer, &cluster, &mut stmts, &params, None, Sticky::new())
+            .unwrap();
 
         match QueryParser::default().parse(ctx).unwrap().clone() {
             Command::Query(route) => route,

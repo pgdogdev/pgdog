@@ -4,7 +4,6 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use rand::{thread_rng, Rng};
 use timeouts::Timeouts;
 use tokio::{select, spawn, time::timeout};
 use tracing::{debug, enabled, error, info, trace, Level as LogLevel};
@@ -30,7 +29,10 @@ use crate::stats::memory::MemoryUsage;
 use crate::util::user_database_from_params;
 
 pub mod query_engine;
+pub mod sticky;
 pub mod timeouts;
+
+pub(crate) use sticky::Sticky;
 
 /// Frontend client.
 pub struct Client {
@@ -50,7 +52,7 @@ pub struct Client {
     client_request: ClientRequest,
     stream_buffer: MessageBuffer,
     passthrough_password: Option<String>,
-    omni_sticky_index: usize,
+    sticky: Sticky,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -308,7 +310,6 @@ impl Client {
             admin,
             streaming: false,
             params: params.clone(),
-            connect_params: params,
             prepared_statements: PreparedStatements::new(),
             transaction: None,
             timeouts: Timeouts::from_config(&config.config.general),
@@ -316,7 +317,8 @@ impl Client {
             stream_buffer: MessageBuffer::new(config.config.memory.message_buffer),
             shutdown: false,
             passthrough_password,
-            omni_sticky_index: thread_rng().gen_range(1..usize::MAX),
+            sticky: Sticky::from_params(&params),
+            connect_params: params,
         }))
     }
 
@@ -344,7 +346,7 @@ impl Client {
             stream_buffer: MessageBuffer::new(4096),
             shutdown: false,
             passthrough_password: None,
-            omni_sticky_index: 1,
+            sticky: Sticky::new(),
         }
     }
 

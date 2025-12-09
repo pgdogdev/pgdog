@@ -10,6 +10,7 @@ use crate::{
     state::State,
 };
 
+use pgdog_config::Role;
 use tracing::debug;
 
 pub mod connect;
@@ -154,6 +155,13 @@ impl QueryEngine {
         } else {
             command.route().clone()
         };
+
+        // Override read/write property based on target_session_attrs.
+        match context.sticky.role {
+            Some(Role::Replica) => route.set_read_mut(true),
+            Some(Role::Primary) => route.set_read_mut(false),
+            _ => (),
+        }
 
         if let Some(trace) = route.take_explain() {
             if config().config.general.expanded_explain {
