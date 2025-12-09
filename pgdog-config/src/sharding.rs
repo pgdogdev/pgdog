@@ -213,7 +213,7 @@ impl ShardedSchema {
     }
 
     pub fn name(&self) -> &str {
-        self.name.as_ref().map(|name| name.as_str()).unwrap_or("*")
+        self.name.as_deref().unwrap_or("*")
     }
 
     pub fn shard(&self) -> Option<usize> {

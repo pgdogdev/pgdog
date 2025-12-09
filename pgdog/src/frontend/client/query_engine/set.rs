@@ -8,26 +8,37 @@ impl QueryEngine {
         context: &mut QueryEngineContext<'_>,
         name: String,
         value: ParameterValue,
-        in_transaction: bool,
+        extended: bool,
+        route: Route,
+        local: bool,
     ) -> Result<(), Error> {
-        if in_transaction {
-            self.transaction_params.insert(name, value);
-        } else {
-            context.params.insert(name, value);
-            self.comms.update_params(context.params);
+        if !local {
+            if context.in_transaction() {
+                context.params.insert_transaction(name, value.clone());
+            } else {
+                context.params.insert(name, value.clone());
+                self.comms.update_params(context.params);
+            }
         }
 
-        let bytes_sent = context
-            .stream
-            .send_many(&[
-                CommandComplete::from_str("SET").message()?.backend(),
-                ReadyForQuery::in_transaction(context.in_transaction())
-                    .message()?
-                    .backend(),
-            ])
-            .await?;
+        // TODO: Respond with fake messages.
+        if extended || local {
+            // Re-enable cross-shard queries for this request.
+            context.cross_shard_disabled = Some(false);
+            self.execute(context, &route).await?;
+        } else {
+            let bytes_sent = context
+                .stream
+                .send_many(&[
+                    CommandComplete::from_str("SET").message()?.backend(),
+                    ReadyForQuery::in_transaction(context.in_transaction())
+                        .message()?
+                        .backend(),
+                ])
+                .await?;
 
-        self.stats.sent(bytes_sent);
+            self.stats.sent(bytes_sent);
+        }
 
         Ok(())
     }

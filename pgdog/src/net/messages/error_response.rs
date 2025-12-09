@@ -61,12 +61,19 @@ impl ErrorResponse {
         error
     }
 
-    pub fn cross_shard_disabled() -> ErrorResponse {
+    pub fn cross_shard_disabled(query: Option<&str>) -> ErrorResponse {
         ErrorResponse {
             severity: "ERROR".into(),
             code: "58000".into(),
             message: "cross-shard queries are disabled".into(),
-            detail: Some("query doesn't have a sharding key".into()),
+            detail: Some(format!(
+                "query doesn't have a sharding key{}",
+                if let Some(query) = query {
+                    format!(": {}", query)
+                } else {
+                    "".into()
+                }
+            )),
             context: None,
             file: None,
             routine: None,

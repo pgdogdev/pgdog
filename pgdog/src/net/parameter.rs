@@ -1,7 +1,8 @@
 //! Startup parameter.
+use tracing::debug;
 
 use std::{
-    collections::BTreeMap,
+    collections::{btree_map, BTreeMap},
     fmt::Display,
     hash::{DefaultHasher, Hash, Hasher},
     ops::{Deref, DerefMut},
@@ -105,6 +106,7 @@ impl ParameterValue {
 #[derive(Default, Debug, Clone, PartialEq)]
 pub struct Parameters {
     params: BTreeMap<String, ParameterValue>,
+    transaction_params: BTreeMap<String, ParameterValue>,
     hash: u64,
 }
 
@@ -121,6 +123,7 @@ impl From<BTreeMap<String, ParameterValue>> for Parameters {
         Self {
             params: value,
             hash,
+            transaction_params: BTreeMap::new(),
         }
     }
 }
@@ -138,6 +141,46 @@ impl Parameters {
         self.hash = Self::compute_hash(&self.params);
 
         result
+    }
+
+    /// Get parameter.
+    pub fn get(&self, name: &str) -> Option<&ParameterValue> {
+        if let Some(param) = self.params.get(name) {
+            Some(param)
+        } else {
+            self.transaction_params.get(name)
+        }
+    }
+
+    /// Get an iterator over in-transaction params.
+    pub fn in_transaction_iter(&self) -> btree_map::Iter<'_, String, ParameterValue> {
+        self.transaction_params.iter()
+    }
+
+    /// Insert a parameter, but only for the duration of the transaction.
+    pub fn insert_transaction(
+        &mut self,
+        name: impl ToString,
+        value: impl Into<ParameterValue>,
+    ) -> Option<ParameterValue> {
+        let name = name.to_string().to_lowercase();
+        self.transaction_params.insert(name, value.into())
+    }
+
+    /// Commit params we saved during the transaction.
+    pub fn commit(&mut self) {
+        debug!(
+            "saved {} in-transaction params",
+            self.transaction_params.len()
+        );
+        self.params
+            .extend(std::mem::take(&mut self.transaction_params));
+        self.hash = Self::compute_hash(&self.params);
+    }
+
+    /// Remove any params we saved during the transaction.
+    pub fn rollback(&mut self) {
+        self.transaction_params.clear();
     }
 
     fn compute_hash(params: &BTreeMap<String, ParameterValue>) -> u64 {
@@ -180,15 +223,17 @@ impl Parameters {
     ///
     /// # Arguments
     ///
-    /// * `local`: Generate `SET LOCAL` which are automatically
-    ///            reset after the transaction is over.
+    /// * `transaction`: Generate `SET` statements from in-transaction params only.
     ///
-    pub fn set_queries(&self, local: bool) -> Vec<Query> {
-        let set = if local { "SET LOCAL" } else { "SET" };
-        self.params
-            .iter()
-            .map(|(name, value)| Query::new(format!(r#"{} "{}" TO {}"#, set, name, value)))
-            .collect()
+    pub fn set_queries(&self, transaction_only: bool) -> Vec<Query> {
+        if transaction_only {
+            &self.transaction_params
+        } else {
+            &self.params
+        }
+        .iter()
+        .map(|(name, value)| Query::new(format!(r#"SET "{}" TO {}"#, name, value)))
+        .collect()
     }
 
     pub fn reset_queries(&self) -> Vec<Query> {
@@ -249,7 +294,11 @@ impl From<Vec<Parameter>> for Parameters {
             .map(|p| (p.name, ParameterValue::String(p.value)))
             .collect::<BTreeMap<_, _>>();
         let hash = Self::compute_hash(&params);
-        Self { params, hash }
+        Self {
+            params,
+            hash,
+            transaction_params: BTreeMap::new(),
+        }
     }
 }
 

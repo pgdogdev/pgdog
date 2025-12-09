@@ -107,11 +107,7 @@ impl ShardedTables {
     /// as declared in the schema.
     pub fn get_table(&self, column: Column<'_>) -> Option<&ShardedTable> {
         // Only fully-qualified columns can be matched.
-        let table = if let Some(table) = column.table() {
-            table
-        } else {
-            return None;
-        };
+        let table = column.table()?;
 
         for candidate in &self.inner.tables {
             if let Some(table_name) = candidate.name.as_ref() {

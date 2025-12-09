@@ -506,6 +506,12 @@ fn test_set() {
             _ => panic!("set must be intercepted"),
         }
     }
+
+    let command = command!("SET LOCAL work_mem TO 1");
+    match command.0 {
+        Command::Set { local, .. } => assert!(local),
+        _ => panic!("not a set"),
+    }
 }
 
 #[test]
@@ -547,12 +553,16 @@ fn test_transaction() {
         Command::Set {
             name,
             value,
-            in_transaction,
+            extended,
+            route,
+            local,
         } => {
-            assert!(in_transaction);
+            assert!(!extended);
             assert_eq!(name, "application_name");
             assert_eq!(value.as_str().unwrap(), "test");
             assert!(!cluster.read_only());
+            assert_eq!(route.shard(), &Shard::All);
+            assert!(!local);
         }
 
         _ => panic!("not a query"),

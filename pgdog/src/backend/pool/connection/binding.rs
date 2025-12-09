@@ -331,17 +331,21 @@ impl Binding {
         }
     }
 
+    /// Link client to server.
     pub async fn link_client(
         &mut self,
         id: &BackendKeyData,
         params: &Parameters,
+        transaction_start_stmt: Option<&str>,
     ) -> Result<usize, Error> {
         match self {
-            Binding::Direct(Some(ref mut server)) => server.link_client(id, params).await,
+            Binding::Direct(Some(ref mut server)) => {
+                server.link_client(id, params, transaction_start_stmt).await
+            }
             Binding::MultiShard(ref mut servers, _) => {
                 let futures = servers
                     .iter_mut()
-                    .map(|server| server.link_client(id, params));
+                    .map(|server| server.link_client(id, params, transaction_start_stmt));
                 let results = join_all(futures).await;
 
                 let mut max = 0;
@@ -355,6 +359,17 @@ impl Binding {
             }
 
             _ => Ok(0),
+        }
+    }
+
+    /// Handle transaction end.
+    pub fn transaction_params_hook(&mut self, rollback: bool) {
+        match self {
+            Binding::Direct(Some(ref mut server)) => server.transaction_params_hook(rollback),
+            Binding::MultiShard(ref mut servers, _) => servers
+                .iter_mut()
+                .for_each(|server| server.transaction_params_hook(rollback)),
+            _ => (),
         }
     }
 
