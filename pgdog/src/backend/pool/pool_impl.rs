@@ -11,7 +11,7 @@ use tokio::time::{timeout, Instant};
 use tracing::error;
 
 use crate::backend::pool::LsnStats;
-use crate::backend::{Server, ServerOptions};
+use crate::backend::{DisconnectReason, Server, ServerOptions};
 use crate::config::PoolerMode;
 use crate::net::messages::BackendKeyData;
 use crate::net::{Parameter, Parameters};
@@ -202,6 +202,7 @@ impl Pool {
         );
 
         if let Err(err) = healthcheck.healthcheck().await {
+            conn.disconnect_reason(DisconnectReason::Unhealthy);
             drop(conn);
             self.inner.health.toggle(false);
             return Err(err);
