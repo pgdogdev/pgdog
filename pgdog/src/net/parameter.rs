@@ -63,9 +63,12 @@ impl ToBytes for ParameterValue {
         match self {
             Self::String(string) => bytes.put_slice(string.as_bytes()),
             Self::Tuple(ref values) => {
-                for value in values {
-                    bytes.put_slice(value.as_bytes());
-                }
+                let values = values
+                    .iter()
+                    .map(|value| value.as_bytes().to_vec())
+                    .collect::<Vec<_>>()
+                    .join(", ".as_bytes());
+                bytes.put(Bytes::from(values));
             }
         }
         bytes.put_u8(0);
@@ -414,6 +417,7 @@ impl From<&Parameters> for Vec<Parameter> {
 #[cfg(test)]
 mod test {
     use crate::net::parameter::ParameterValue;
+    use crate::net::ToBytes;
 
     use super::Parameters;
 
@@ -434,5 +438,201 @@ mod test {
         assert!(!same);
 
         assert!(Parameters::default().identical(&Parameters::default()));
+    }
+
+    #[test]
+    fn test_insert_transaction_non_local() {
+        let mut params = Parameters::default();
+        params.insert("application_name", "test");
+        params.insert_transaction("search_path", "public", false);
+
+        // Transaction param should be accessible via get
+        assert_eq!(
+            params.get("search_path"),
+            Some(&ParameterValue::String("public".into()))
+        );
+
+        // Regular param should still be accessible
+        assert_eq!(
+            params.get("application_name"),
+            Some(&ParameterValue::String("test".into()))
+        );
+    }
+
+    #[test]
+    fn test_insert_transaction_local() {
+        let mut params = Parameters::default();
+        params.insert_transaction("search_path", "public", true);
+
+        // Local param should be accessible via get
+        assert_eq!(
+            params.get("search_path"),
+            Some(&ParameterValue::String("public".into()))
+        );
+    }
+
+    #[test]
+    fn test_get_priority_local_over_transaction() {
+        let mut params = Parameters::default();
+        params.insert("search_path", "base");
+        params.insert_transaction("search_path", "transaction", false);
+        params.insert_transaction("search_path", "local", true);
+
+        // Local should take priority
+        assert_eq!(
+            params.get("search_path"),
+            Some(&ParameterValue::String("local".into()))
+        );
+    }
+
+    #[test]
+    fn test_get_priority_transaction_over_regular() {
+        let mut params = Parameters::default();
+        params.insert("search_path", "base");
+        params.insert_transaction("search_path", "transaction", false);
+
+        // Transaction should take priority over regular
+        assert_eq!(
+            params.get("search_path"),
+            Some(&ParameterValue::String("transaction".into()))
+        );
+    }
+
+    #[test]
+    fn test_commit_clears_local_params() {
+        let mut params = Parameters::default();
+        params.insert_transaction("search_path", "transaction", false);
+        params.insert_transaction("timezone", "local_tz", true);
+
+        params.commit();
+
+        // Transaction param should be committed to regular params
+        assert_eq!(
+            params.get("search_path"),
+            Some(&ParameterValue::String("transaction".into()))
+        );
+
+        // Local param should be cleared (not committed)
+        assert_eq!(params.get("timezone"), None);
+    }
+
+    #[test]
+    fn test_rollback_clears_both_transaction_and_local() {
+        let mut params = Parameters::default();
+        params.insert("base", "value");
+        params.insert_transaction("search_path", "transaction", false);
+        params.insert_transaction("timezone", "local_tz", true);
+
+        params.rollback();
+
+        // Both transaction and local params should be cleared
+        assert_eq!(params.get("search_path"), None);
+        assert_eq!(params.get("timezone"), None);
+
+        // Base param should remain
+        assert_eq!(
+            params.get("base"),
+            Some(&ParameterValue::String("value".into()))
+        );
+    }
+
+    #[test]
+    fn test_set_queries_transaction_only_includes_set_local() {
+        let mut params = Parameters::default();
+        params.insert_transaction("search_path", "public", false);
+        params.insert_transaction("timezone", "UTC", true);
+
+        let queries = params.set_queries(true);
+
+        assert_eq!(queries.len(), 2);
+
+        // Check that we have both SET and SET LOCAL queries
+        let query_strings: Vec<String> = queries.iter().map(|q| q.query().to_string()).collect();
+
+        assert!(query_strings
+            .iter()
+            .any(|q| q.contains("SET \"search_path\"") && !q.contains("SET LOCAL")));
+        assert!(query_strings.iter().any(|q| q.contains("SET LOCAL")));
+    }
+
+    #[test]
+    fn test_copy_in_transaction() {
+        let mut source = Parameters::default();
+        source.insert_transaction("search_path", "public", false);
+        source.insert_transaction("timezone", "UTC", true);
+
+        let mut dest = Parameters::default();
+        dest.copy_in_transaction(&source);
+
+        // Both transaction and local params should be copied
+        assert_eq!(
+            dest.get("search_path"),
+            Some(&ParameterValue::String("public".into()))
+        );
+        assert_eq!(
+            dest.get("timezone"),
+            Some(&ParameterValue::String("UTC".into()))
+        );
+    }
+
+    #[test]
+    fn test_parameter_value_to_bytes_string() {
+        let value = ParameterValue::String("test".into());
+        let bytes = value.to_bytes().unwrap();
+
+        assert_eq!(&bytes[..], b"test\0");
+    }
+
+    #[test]
+    fn test_parameter_value_to_bytes_tuple() {
+        let value = ParameterValue::Tuple(vec!["a".into(), "b".into()]);
+        let bytes = value.to_bytes().unwrap();
+
+        assert_eq!(&bytes[..], b"a, b\0");
+    }
+
+    #[test]
+    fn test_parameter_value_display_string() {
+        let value = ParameterValue::String("test".into());
+        assert_eq!(format!("{}", value), r#""test""#);
+    }
+
+    #[test]
+    fn test_parameter_value_display_tuple() {
+        let value = ParameterValue::Tuple(vec!["$user".into(), "public".into()]);
+        assert_eq!(format!("{}", value), r#""$user", "public""#);
+    }
+
+    #[test]
+    fn test_parameter_value_display_already_quoted() {
+        // If value is already quoted, it should strip quotes and re-quote
+        let value = ParameterValue::String(r#""already quoted""#.into());
+        assert_eq!(format!("{}", value), r#""already quoted""#);
+    }
+
+    #[test]
+    fn test_merge_includes_local_params() {
+        let mut params1 = Parameters::default();
+        params1.insert("base", "value");
+
+        let mut params2 = Parameters::default();
+        params2.insert_transaction("search_path", "public", false);
+        params2.insert_transaction("timezone", "UTC", true);
+
+        params1.merge(params2);
+
+        // All params should be merged
+        assert_eq!(
+            params1.get("base"),
+            Some(&ParameterValue::String("value".into()))
+        );
+        assert_eq!(
+            params1.get("search_path"),
+            Some(&ParameterValue::String("public".into()))
+        );
+        assert_eq!(
+            params1.get("timezone"),
+            Some(&ParameterValue::String("UTC".into()))
+        );
     }
 }
