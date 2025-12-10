@@ -15,7 +15,7 @@ use tokio::{
 use tracing::{debug, error, info};
 
 use crate::{
-    backend::{self, pool::Error, DisconnectReason, Pool},
+    backend::{self, pool::Error, ConnectReason, DisconnectReason, Pool},
     config::config,
     net::{
         BackendKeyData, FromBytes, NotificationResponse, Parameter, Parameters, Protocol,
@@ -160,7 +160,7 @@ impl PubSubListener {
     ) -> Result<(), backend::Error> {
         info!("pub/sub started [{}]", pool.addr());
 
-        let mut server = pool.standalone().await?;
+        let mut server = pool.standalone(ConnectReason::PubSub).await?;
 
         server
             .link_client(

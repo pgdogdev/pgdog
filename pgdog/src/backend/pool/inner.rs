@@ -4,8 +4,8 @@ use std::cmp::max;
 use std::collections::VecDeque;
 use std::time::Duration;
 
-use crate::backend::DisconnectReason;
 use crate::backend::{stats::Counts as BackendCounts, Server};
+use crate::backend::{ConnectReason, DisconnectReason};
 use crate::net::messages::BackendKeyData;
 
 use tokio::time::Instant;
@@ -137,7 +137,7 @@ impl Inner {
 
     /// The pool should create more connections now.
     #[inline]
-    pub(super) fn should_create(&self) -> bool {
+    pub(super) fn should_create(&self) -> (bool, Option<ConnectReason>) {
         let below_min = self.total() < self.min();
         let below_max = self.total() < self.max();
         let maintain_min = below_min && below_max;
@@ -147,7 +147,13 @@ impl Inner {
 
         // Clients from banned pools won't be able to request connections
         // unless it's a primary.
-        client_needs || maintenance_on && maintain_min
+        if client_needs {
+            (true, Some(ConnectReason::ClientWaiting))
+        } else if maintenance_on && maintain_min {
+            (true, Some(ConnectReason::BelowMin))
+        } else {
+            (false, None)
+        }
     }
 
     /// Close connections that have exceeded the max age.
@@ -499,7 +505,10 @@ mod test {
         });
 
         assert_eq!(inner.idle(), 0);
-        assert!(inner.should_create()); // Should create due to waiting client
+        assert_eq!(
+            inner.should_create(),
+            (true, Some(ConnectReason::ClientWaiting))
+        );
     }
 
     #[test]
@@ -511,7 +520,7 @@ mod test {
 
         assert!(inner.total() < inner.min());
         assert!(inner.total() < inner.max());
-        assert!(inner.should_create());
+        assert_eq!(inner.should_create(), (true, Some(ConnectReason::BelowMin)));
     }
 
     #[test]
@@ -531,7 +540,7 @@ mod test {
         assert_eq!(inner.idle(), 2);
         assert_eq!(inner.checked_out(), 1);
         assert_eq!(inner.total(), inner.config.max);
-        assert!(!inner.should_create());
+        assert_eq!(inner.should_create(), (false, None));
     }
 
     #[test]
@@ -793,7 +802,10 @@ mod test {
         assert!(inner.total() < inner.max()); // Below maximum
         assert_eq!(inner.idle(), 0); // No idle connections
         assert!(!inner.waiting.is_empty()); // Has waiting clients
-        assert!(inner.should_create()); // Should create for waiting client needs
+        assert_eq!(
+            inner.should_create(),
+            (true, Some(ConnectReason::ClientWaiting))
+        );
     }
 
     #[test]
@@ -803,7 +815,7 @@ mod test {
         inner.config.min = 2;
 
         assert!(inner.total() < inner.min());
-        assert!(!inner.should_create()); // Offline prevents creation
+        assert_eq!(inner.should_create(), (false, None));
     }
 
     #[test]

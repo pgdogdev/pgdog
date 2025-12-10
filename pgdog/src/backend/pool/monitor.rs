@@ -35,7 +35,7 @@
 use std::time::Duration;
 
 use super::{Error, Guard, Healtcheck, Oids, Pool, Request};
-use crate::backend::{DisconnectReason, Server};
+use crate::backend::{ConnectReason, DisconnectReason, Server};
 
 use tokio::time::{interval, sleep, timeout, Instant};
 use tokio::{select, task::spawn};
@@ -99,7 +99,7 @@ impl Monitor {
                 // connections are available.
                 _ = comms.request.notified() => {
                     let (
-                        should_create,
+                        (should_create, reason),
                         online,
                     ) = {
                         let mut guard = self.pool.lock();
@@ -120,7 +120,7 @@ impl Monitor {
                     }
 
                     if should_create {
-                        let ok = self.replenish().await;
+                        let ok = self.replenish(reason.unwrap()).await;
                         if !ok {
                             self.pool.inner().health.toggle(false);
                         }
@@ -195,7 +195,7 @@ impl Monitor {
 
                     // If a client is waiting already,
                     // create it a connection.
-                    if guard.should_create() {
+                    if guard.should_create().0 {
                         comms.request.notify_one();
                     }
 
@@ -216,8 +216,8 @@ impl Monitor {
     }
 
     /// Replenish pool with one new connection.
-    async fn replenish(&self) -> bool {
-        if let Ok(conn) = Self::create_connection(&self.pool).await {
+    async fn replenish(&self, reason: ConnectReason) -> bool {
+        if let Ok(conn) = Self::create_connection(&self.pool, reason).await {
             let now = Instant::now();
             let server = Box::new(conn);
             let mut guard = self.pool.lock();
@@ -283,7 +283,7 @@ impl Monitor {
             // Create a new one and close it.
             info!("creating new healthcheck connection [{}]", pool.addr());
 
-            let mut server = Self::create_connection(pool)
+            let mut server = Self::create_connection(pool, ConnectReason::Healthcheck)
                 .await
                 .map_err(|_| Error::HealthcheckError)?;
 
@@ -317,7 +317,10 @@ impl Monitor {
         }
     }
 
-    pub(super) async fn create_connection(pool: &Pool) -> Result<Server, Error> {
+    pub(super) async fn create_connection(
+        pool: &Pool,
+        reason: ConnectReason,
+    ) -> Result<Server, Error> {
         let connect_timeout = pool.config().connect_timeout;
         let connect_attempts = pool.config().connect_attempts;
         let connect_attempt_delay = pool.config().connect_attempt_delay;
@@ -329,7 +332,7 @@ impl Monitor {
         for attempt in 0..connect_attempts {
             match timeout(
                 connect_timeout,
-                Server::connect(pool.addr(), options.clone()),
+                Server::connect(pool.addr(), options.clone(), reason),
             )
             .await
             {
@@ -485,7 +488,7 @@ mod test {
         assert!(!pool.lock().online);
 
         let monitor = Monitor { pool: pool.clone() };
-        let ok = monitor.replenish().await;
+        let ok = monitor.replenish(ConnectReason::Other).await;
 
         assert!(ok);
         assert_eq!(pool.lock().total(), initial_total);
