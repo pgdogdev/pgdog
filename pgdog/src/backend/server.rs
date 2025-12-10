@@ -504,9 +504,7 @@ impl Server {
                 self.execute_batch(&transaction_sets).await?;
                 clear_params = true;
 
-                for (name, value) in params.in_transaction_iter() {
-                    self.client_params.insert_transaction(name, value.clone());
-                }
+                self.client_params.copy_in_transaction(&params);
             }
 
             executed += transaction_sets.len();
