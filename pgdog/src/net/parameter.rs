@@ -106,8 +106,19 @@ impl ParameterValue {
 /// List of parameters.
 #[derive(Default, Debug, Clone, PartialEq)]
 pub struct Parameters {
+    /// Save parameters set at connection startup & set with `SET` command
+    /// outside a transaction.
     params: BTreeMap<String, ParameterValue>,
+    /// Save parameters set with `SET` inside a transaction. These will
+    /// need to be rolled back or saved depending on if the transaction is
+    /// rolled back or not.
     transaction_params: BTreeMap<String, ParameterValue>,
+    /// Parameters set with `SET LOCAL`. These need to be thrown away no matter
+    /// what but we need to intercept them for databases that have cross shard
+    /// queries disabled.
+    transaction_local_params: BTreeMap<String, ParameterValue>,
+    /// Hash of `params` to avoid syncing params between clients and servers
+    /// when they are the same.
     hash: u64,
 }
 
@@ -125,6 +136,7 @@ impl From<BTreeMap<String, ParameterValue>> for Parameters {
             params: value,
             hash,
             transaction_params: BTreeMap::new(),
+            transaction_local_params: BTreeMap::new(),
         }
     }
 }
@@ -146,10 +158,12 @@ impl Parameters {
 
     /// Get parameter.
     pub fn get(&self, name: &str) -> Option<&ParameterValue> {
-        if let Some(param) = self.params.get(name) {
+        if let Some(param) = self.transaction_local_params.get(name) {
+            Some(param)
+        } else if let Some(param) = self.transaction_params.get(name) {
             Some(param)
         } else {
-            self.transaction_params.get(name)
+            self.params.get(name)
         }
     }
 
@@ -163,9 +177,14 @@ impl Parameters {
         &mut self,
         name: impl ToString,
         value: impl Into<ParameterValue>,
+        local: bool,
     ) -> Option<ParameterValue> {
         let name = name.to_string().to_lowercase();
-        self.transaction_params.insert(name, value.into())
+        if local {
+            self.transaction_local_params.insert(name, value.into())
+        } else {
+            self.transaction_params.insert(name, value.into())
+        }
     }
 
     /// Commit params we saved during the transaction.
@@ -176,12 +195,14 @@ impl Parameters {
         );
         self.params
             .extend(std::mem::take(&mut self.transaction_params));
+        self.transaction_local_params.clear();
         self.hash = Self::compute_hash(&self.params);
     }
 
     /// Remove any params we saved during the transaction.
     pub fn rollback(&mut self) {
         self.transaction_params.clear();
+        self.transaction_local_params.clear();
     }
 
     fn compute_hash(params: &BTreeMap<String, ParameterValue>) -> u64 {
@@ -227,14 +248,31 @@ impl Parameters {
     /// * `transaction`: Generate `SET` statements from in-transaction params only.
     ///
     pub fn set_queries(&self, transaction_only: bool) -> Vec<Query> {
-        if transaction_only {
-            &self.transaction_params
-        } else {
-            &self.params
+        fn query(name: &str, value: &ParameterValue, local: bool) -> Query {
+            let set = if local { "SET LOCAL" } else { "SET" };
+            Query::new(format!(r#"{} "{}" TO {}"#, set, name, value))
         }
-        .iter()
-        .map(|(name, value)| Query::new(format!(r#"SET "{}" TO {}"#, name, value)))
-        .collect()
+
+        if transaction_only {
+            let mut sets = self
+                .transaction_params
+                .iter()
+                .map(|(key, value)| query(key, value, false))
+                .collect::<Vec<_>>();
+
+            sets.extend(
+                self.transaction_local_params
+                    .iter()
+                    .map(|(key, value)| query(key, value, true)),
+            );
+
+            sets
+        } else {
+            self.params
+                .iter()
+                .map(|(key, value)| query(key, value, false))
+                .collect()
+        }
     }
 
     pub fn reset_queries(&self) -> Vec<Query> {
@@ -277,7 +315,25 @@ impl Parameters {
     pub fn merge(&mut self, other: Self) {
         self.params.extend(other.params);
         self.transaction_params.extend(other.transaction_params);
+        self.transaction_local_params
+            .extend(other.transaction_local_params);
         Self::compute_hash(&self.params);
+    }
+
+    /// Copy params set inside the transaction.
+    pub fn copy_in_transaction(&mut self, other: &Self) {
+        self.transaction_params.extend(
+            other
+                .transaction_params
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone())),
+        );
+        self.transaction_local_params.extend(
+            other
+                .transaction_local_params
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone())),
+        );
     }
 }
 
@@ -306,6 +362,7 @@ impl From<Vec<Parameter>> for Parameters {
             params,
             hash,
             transaction_params: BTreeMap::new(),
+            transaction_local_params: BTreeMap::new(),
         }
     }
 }
