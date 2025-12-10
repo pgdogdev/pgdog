@@ -383,7 +383,7 @@ impl Pool {
         if let Some(statement_timeout) = config.statement_timeout {
             params.push(Parameter {
                 name: "statement_timeout".into(),
-                value: statement_timeout.as_millis().to_string(),
+                value: statement_timeout.as_millis().to_string().into(),
             });
         }
 

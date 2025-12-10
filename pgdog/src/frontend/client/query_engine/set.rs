@@ -12,17 +12,17 @@ impl QueryEngine {
         route: Route,
         local: bool,
     ) -> Result<(), Error> {
-        if !local {
-            if context.in_transaction() {
-                context.params.insert_transaction(name, value.clone());
-            } else {
-                context.params.insert(name, value.clone());
-                self.comms.update_params(context.params);
-            }
+        if context.in_transaction() {
+            context
+                .params
+                .insert_transaction(name, value.clone(), local);
+        } else {
+            context.params.insert(name, value.clone());
+            self.comms.update_params(context.params);
         }
 
         // TODO: Respond with fake messages.
-        if extended || local {
+        if extended {
             // Re-enable cross-shard queries for this request.
             context.cross_shard_disabled = Some(false);
             self.execute(context, &route).await?;

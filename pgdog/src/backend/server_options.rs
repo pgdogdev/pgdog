@@ -1,4 +1,4 @@
-use crate::net::Parameter;
+use crate::net::{parameter::ParameterValue, Parameter};
 
 #[derive(Debug, Clone, Default)]
 pub struct ServerOptions {
@@ -8,9 +8,13 @@ pub struct ServerOptions {
 
 impl ServerOptions {
     pub fn replication_mode(&self) -> bool {
-        self.params
-            .iter()
-            .any(|p| p.name == "replication" && p.value == "database")
+        self.params.iter().any(|p| {
+            p.name == "replication"
+                && match p.value {
+                    ParameterValue::String(ref value) => value == "database",
+                    _ => false,
+                }
+        })
     }
 
     pub fn new_replication() -> Self {
