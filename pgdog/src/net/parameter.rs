@@ -1,4 +1,5 @@
 //! Startup parameter.
+use bytes::{BufMut, Bytes, BytesMut};
 use tracing::debug;
 
 use std::{
@@ -10,7 +11,7 @@ use std::{
 
 use once_cell::sync::Lazy;
 
-use crate::stats::memory::MemoryUsage;
+use crate::{net::ToBytes, stats::memory::MemoryUsage};
 
 use super::{messages::Query, Error};
 
@@ -32,14 +33,14 @@ pub struct Parameter {
     /// Parameter name.
     pub name: String,
     /// Parameter value.
-    pub value: String,
+    pub value: ParameterValue,
 }
 
 impl<T: ToString> From<(T, T)> for Parameter {
     fn from(value: (T, T)) -> Self {
         Self {
             name: value.0.to_string(),
-            value: value.1.to_string(),
+            value: ParameterValue::String(value.1.to_string()),
         }
     }
 }
@@ -56,6 +57,23 @@ pub enum ParameterValue {
     Tuple(Vec<String>),
 }
 
+impl ToBytes for ParameterValue {
+    fn to_bytes(&self) -> Result<Bytes, Error> {
+        let mut bytes = BytesMut::new();
+        match self {
+            Self::String(string) => bytes.put_slice(string.as_bytes()),
+            Self::Tuple(ref values) => {
+                for value in values {
+                    bytes.put_slice(value.as_bytes());
+                }
+            }
+        }
+        bytes.put_u8(0);
+
+        Ok(bytes.freeze())
+    }
+}
+
 impl MemoryUsage for ParameterValue {
     #[inline]
     fn memory_usage(&self) -> usize {
@@ -68,13 +86,25 @@ impl MemoryUsage for ParameterValue {
 
 impl Display for ParameterValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        fn quote(value: &str) -> String {
+            let value = if value.starts_with("\"") && value.ends_with("\"") {
+                let mut value = value.to_string();
+                value.remove(0);
+                value.pop();
+                value.replace("\"", "\"\"") // Escape any double quotes.
+            } else {
+                value.to_string()
+            };
+
+            format!(r#""{}""#, value)
+        }
         match self {
-            Self::String(s) => write!(f, "'{}'", s),
+            Self::String(s) => write!(f, "{}", quote(s)),
             Self::Tuple(t) => write!(
                 f,
                 "{}",
                 t.iter()
-                    .map(|s| format!("'{}'", s))
+                    .map(|s| format!("{}", quote(s)))
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
@@ -355,7 +385,7 @@ impl From<Vec<Parameter>> for Parameters {
     fn from(value: Vec<Parameter>) -> Self {
         let params = value
             .into_iter()
-            .map(|p| (p.name, ParameterValue::String(p.value)))
+            .map(|p| (p.name, p.value))
             .collect::<BTreeMap<_, _>>();
         let hash = Self::compute_hash(&params);
         Self {
@@ -373,7 +403,7 @@ impl From<&Parameters> for Vec<Parameter> {
         for (key, value) in &val.params {
             result.push(Parameter {
                 name: key.to_string(),
-                value: value.to_string(),
+                value: value.clone(),
             });
         }
 

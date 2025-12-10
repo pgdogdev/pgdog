@@ -3,6 +3,7 @@
 use crate::net::{
     c_string_buf,
     messages::{code, prelude::*},
+    parameter::ParameterValue,
     Parameter,
 };
 
@@ -12,7 +13,7 @@ pub struct ParameterStatus {
     /// Parameter name, e.g. `client_encoding`.
     pub name: String,
     /// Parameter value, e.g. `UTF8`.
-    pub value: String,
+    pub value: ParameterValue,
 }
 
 impl From<Parameter> for ParameterStatus {
@@ -28,7 +29,7 @@ impl<T: ToString> From<(T, T)> for ParameterStatus {
     fn from(value: (T, T)) -> Self {
         Self {
             name: value.0.to_string(),
-            value: value.1.to_string(),
+            value: ParameterValue::String(value.1.to_string()),
         }
     }
 }
@@ -61,7 +62,7 @@ impl ParameterStatus {
             },
             ParameterStatus {
                 name: "server_version".into(),
-                value: env!("CARGO_PKG_VERSION").to_string() + " (PgDog)",
+                value: (env!("CARGO_PKG_VERSION").to_string() + " (PgDog)").into(),
             },
             ParameterStatus {
                 name: "standard_conforming_strings".into(),
@@ -76,7 +77,7 @@ impl ToBytes for ParameterStatus {
         let mut payload = Payload::named(self.code());
 
         payload.put_string(&self.name);
-        payload.put_string(&self.value);
+        payload.put(self.value.to_bytes()?);
 
         Ok(payload.freeze())
     }
@@ -89,7 +90,15 @@ impl FromBytes for ParameterStatus {
         let _len = bytes.get_i32();
 
         let name = c_string_buf(&mut bytes);
-        let value = c_string_buf(&mut bytes);
+        let mut value = c_string_buf(&mut bytes)
+            .split(",")
+            .map(|s| s.trim().to_string())
+            .collect::<Vec<_>>();
+        let value = if value.len() == 1 {
+            ParameterValue::String(value.pop().unwrap())
+        } else {
+            ParameterValue::Tuple(value)
+        };
 
         Ok(Self { name, value })
     }
