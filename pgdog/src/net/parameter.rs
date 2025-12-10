@@ -155,6 +155,18 @@ pub struct Parameters {
     hash: u64,
 }
 
+impl Display for Parameters {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let output = self
+            .params
+            .iter()
+            .map(|(k, v)| format!("{}={}", k, v))
+            .collect::<Vec<_>>()
+            .join(", ");
+        write!(f, "{}", output)
+    }
+}
+
 impl MemoryUsage for Parameters {
     #[inline]
     fn memory_usage(&self) -> usize {
