@@ -302,6 +302,11 @@ impl Client {
             );
         }
 
+        debug!(
+            "client \"{}\" startup parameters: {} [{}]",
+            user, params, addr
+        );
+
         Ok(Some(Self {
             addr,
             stream,
