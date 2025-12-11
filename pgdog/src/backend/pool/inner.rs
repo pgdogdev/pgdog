@@ -572,6 +572,7 @@ mod test {
                 max: 5,
                 idle: 0,
                 taken: 0,
+                waiting: 1,
             }
         ));
     }
@@ -593,6 +594,7 @@ mod test {
                 max: 5,
                 idle: 0,
                 taken: 0,
+                waiting: 0,
             }
         ));
     }
@@ -887,6 +889,7 @@ mod test {
                 max: 5,
                 idle: 0,
                 taken: 2,
+                waiting: 1,
             }
         ));
     }
