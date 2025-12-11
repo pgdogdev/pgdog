@@ -76,4 +76,7 @@ pub enum Error {
 
     #[error("checked in untracked connection: {0}")]
     UntrackedConnCheckin(BackendKeyData),
+
+    #[error("mapping missing: {0}")]
+    MappingMissing(usize),
 }
