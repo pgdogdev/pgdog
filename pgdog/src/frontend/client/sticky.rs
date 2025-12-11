@@ -17,6 +17,12 @@ pub struct Sticky {
     pub role: Option<Role>,
 }
 
+impl Default for Sticky {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Sticky {
     /// Create new sticky config.
     pub fn new() -> Self {
@@ -33,17 +39,14 @@ impl Sticky {
 
     /// Create Sticky from params.
     pub fn from_params(params: &Parameters) -> Self {
-        let role = params
-            .get("pgdog.role")
-            .map(|value| match value {
-                ParameterValue::String(value) => match value.as_str() {
-                    "primary" => Some(Role::Primary),
-                    "replica" => Some(Role::Replica),
-                    _ => None,
-                },
+        let role = params.get("pgdog.role").and_then(|value| match value {
+            ParameterValue::String(value) => match value.as_str() {
+                "primary" => Some(Role::Primary),
+                "replica" => Some(Role::Replica),
                 _ => None,
-            })
-            .flatten();
+            },
+            _ => None,
+        });
 
         Self {
             omni_index: thread_rng().gen_range(1..usize::MAX),

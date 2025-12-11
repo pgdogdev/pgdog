@@ -509,7 +509,7 @@ impl Server {
                 self.execute_batch(&transaction_sets).await?;
                 clear_params = true;
 
-                self.client_params.copy_in_transaction(&params);
+                self.client_params.copy_in_transaction(params);
             }
 
             executed += transaction_sets.len();
