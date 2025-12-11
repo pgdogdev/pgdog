@@ -588,7 +588,7 @@ async fn test_move_conns_to() {
     assert_eq!(destination.lock().total(), 0);
     assert!(!destination.lock().online);
 
-    source.move_conns_to(&destination);
+    source.move_conns_to(&destination).unwrap();
 
     assert!(!source.lock().online);
     assert!(destination.lock().online);

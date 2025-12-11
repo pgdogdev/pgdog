@@ -1,8 +1,20 @@
 //! BackendKeyData (B) message.
 
+use std::fmt::Display;
+use std::sync::atomic::AtomicI32;
+use std::sync::atomic::Ordering;
+
 use crate::net::messages::code;
 use crate::net::messages::prelude::*;
+use once_cell::sync::Lazy;
 use rand::Rng;
+
+static COUNTER: Lazy<AtomicI32> = Lazy::new(|| AtomicI32::new(0));
+
+// This wraps around.
+fn next_counter() -> i32 {
+    COUNTER.fetch_add(1, Ordering::SeqCst)
+}
 
 /// BackendKeyData (B)
 #[derive(Copy, Clone, Debug, Hash, PartialEq, Eq)]
@@ -11,6 +23,12 @@ pub struct BackendKeyData {
     pub pid: i32,
     /// Process secret.
     pub secret: i32,
+}
+
+impl Display for BackendKeyData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "pid={}, secret={}", self.pid, self.secret)
+    }
 }
 
 impl Default for BackendKeyData {
@@ -24,6 +42,16 @@ impl BackendKeyData {
     pub fn new() -> Self {
         Self {
             pid: rand::thread_rng().gen(),
+            secret: rand::thread_rng().gen(),
+        }
+    }
+
+    /// Create new BackendKeyData for a connected client.
+    ///
+    /// This counts client IDs incrementally.
+    pub fn new_client() -> Self {
+        Self {
+            pid: next_counter(),
             secret: rand::thread_rng().gen(),
         }
     }

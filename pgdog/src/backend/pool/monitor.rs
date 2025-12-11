@@ -122,7 +122,13 @@ impl Monitor {
 
                     if let ShouldCreate::Yes { reason, .. } = should_create {
                         info!("new connection requested: {} [{}]", should_create, self.pool.addr());
-                        let ok = self.replenish(reason).await;
+                        let ok = match self.replenish(reason).await {
+                            Ok(ok) => ok,
+                            Err(err) => {
+                                error!("monitor error: {}", err);
+                                false
+                            }
+                        };
                         if !ok {
                             self.pool.inner().health.toggle(false);
                         }
@@ -218,17 +224,17 @@ impl Monitor {
     }
 
     /// Replenish pool with one new connection.
-    async fn replenish(&self, reason: ConnectReason) -> bool {
+    async fn replenish(&self, reason: ConnectReason) -> Result<bool, Error> {
         if let Ok(conn) = Self::create_connection(&self.pool, reason).await {
             let now = Instant::now();
             let server = Box::new(conn);
             let mut guard = self.pool.lock();
             if guard.online {
-                guard.put(server, now);
+                guard.put(server, now)?;
             }
-            true
+            Ok(true)
         } else {
-            false
+            Ok(false)
         }
     }
 
@@ -267,7 +273,7 @@ impl Monitor {
             if !guard.online {
                 return Ok(false);
             }
-            guard.take(&Request::default())
+            guard.take(&Request::default())?
         };
 
         let healthcheck_timeout = pool.config().healthcheck_timeout;
@@ -490,7 +496,7 @@ mod test {
         assert!(!pool.lock().online);
 
         let monitor = Monitor { pool: pool.clone() };
-        let ok = monitor.replenish(ConnectReason::Other).await;
+        let ok = monitor.replenish(ConnectReason::Other).await.unwrap();
 
         assert!(ok);
         assert_eq!(pool.lock().total(), initial_total);

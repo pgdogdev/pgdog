@@ -8,7 +8,7 @@ use timeouts::Timeouts;
 use tokio::{select, spawn, time::timeout};
 use tracing::{debug, enabled, error, info, trace, Level as LogLevel};
 
-use super::{ClientRequest, Comms, Error, PreparedStatements};
+use super::{ClientRequest, Error, PreparedStatements};
 use crate::auth::{md5, scram::Server};
 use crate::backend::maintenance_mode;
 use crate::backend::pool::stats::MemoryStats;
@@ -19,6 +19,7 @@ use crate::backend::{
 use crate::config::convert::user_from_params;
 use crate::config::{self, config, AuthType, ConfigAndUsers};
 use crate::frontend::client::query_engine::{QueryEngine, QueryEngineContext};
+use crate::frontend::ClientComms;
 use crate::net::messages::{
     Authentication, BackendKeyData, ErrorResponse, FromBytes, Message, Password, Protocol,
     ReadyForQuery, ToBytes,
@@ -42,7 +43,7 @@ pub struct Client {
     #[allow(dead_code)]
     connect_params: Parameters,
     params: Parameters,
-    comms: Comms,
+    comms: ClientComms,
     admin: bool,
     streaming: bool,
     shutdown: bool,
@@ -86,7 +87,7 @@ impl MemoryUsage for Client {
             + std::mem::size_of::<BackendKeyData>()
             + self.connect_params.memory_usage()
             + self.params.memory_usage()
-            + std::mem::size_of::<Comms>()
+            + std::mem::size_of::<ClientComms>()
             + std::mem::size_of::<bool>() * 5
             + self.prepared_statements.memory_used()
             + std::mem::size_of::<Timeouts>()
@@ -106,17 +107,11 @@ impl Client {
         stream: Stream,
         params: Parameters,
         addr: SocketAddr,
-        comms: Comms,
         config: Arc<ConfigAndUsers>,
     ) -> Result<(), Error> {
         let login_timeout = Duration::from_millis(config.config.general.client_login_timeout);
 
-        match timeout(
-            login_timeout,
-            Self::login(stream, params, addr, comms, config),
-        )
-        .await
-        {
+        match timeout(login_timeout, Self::login(stream, params, addr, config)).await {
             Ok(Ok(Some(mut client))) => {
                 if client.admin {
                     // Admin clients are not waited on during shutdown.
@@ -143,7 +138,6 @@ impl Client {
         mut stream: Stream,
         params: Parameters,
         addr: SocketAddr,
-        mut comms: Comms,
         config: Arc<ConfigAndUsers>,
     ) -> Result<Option<Client>, Error> {
         // Bail immediately if TLS is required but the connection isn't using it.
@@ -157,7 +151,8 @@ impl Client {
         let admin_password = &config.config.admin.password;
         let auth_type = &config.config.general.auth_type;
 
-        let id = BackendKeyData::new();
+        let id = BackendKeyData::new_client();
+        let comms = ClientComms::new(&id);
 
         // Auto database.
         let exists = databases::databases().exists((user, database));
@@ -285,7 +280,7 @@ impl Client {
 
         stream.send(&id).await?;
         stream.send_flush(&ReadyForQuery::idle()).await?;
-        comms.connect(&id, addr, &params);
+        comms.connect(addr, &params);
 
         if config.config.general.log_connections {
             info!(
@@ -329,18 +324,20 @@ impl Client {
 
     #[cfg(test)]
     pub fn new_test(stream: Stream, addr: SocketAddr, params: Parameters) -> Self {
-        use crate::{config::config, frontend::comms::comms};
+        use crate::config::config;
 
         let mut connect_params = Parameters::default();
         connect_params.insert("user", "pgdog");
         connect_params.insert("database", "pgdog");
         connect_params.merge(params);
 
+        let id = BackendKeyData::new();
+
         Self {
             stream,
             addr,
-            id: BackendKeyData::new(),
-            comms: comms(),
+            id,
+            comms: ClientComms::new(&id),
             streaming: false,
             prepared_statements: PreparedStatements::new(),
             connect_params: connect_params.clone(),

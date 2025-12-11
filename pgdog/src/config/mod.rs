@@ -168,7 +168,7 @@ pub fn load_test_with_pooler_mode(pooler_mode: PoolerMode) {
     }];
 
     set(config).unwrap();
-    init();
+    init().unwrap();
 }
 
 #[cfg(test)]
@@ -202,5 +202,5 @@ pub fn load_test_replicas() {
     }];
 
     set(config).unwrap();
-    init();
+    init().unwrap();
 }

@@ -1001,3 +1001,41 @@ async fn test_can_move_conns_to_different_addresses() {
 
     assert!(!lb1.can_move_conns_to(&lb2));
 }
+
+#[tokio::test]
+async fn test_monitor_unbans_all_when_second_target_becomes_unhealthy_after_first_banned() {
+    let replicas = setup_test_replicas();
+
+    // First target becomes unhealthy
+    replicas.targets[0].health.toggle(false);
+
+    // Wait for monitor to ban the first target
+    sleep(Duration::from_millis(400)).await;
+
+    assert!(
+        replicas.targets[0].ban.banned(),
+        "First target should be banned"
+    );
+    assert!(
+        !replicas.targets[1].ban.banned(),
+        "Second target should not be banned yet"
+    );
+
+    // Now second target becomes unhealthy (first is already banned)
+    replicas.targets[1].health.toggle(false);
+
+    // Wait for monitor to process - should unban all since all are unhealthy
+    sleep(Duration::from_millis(400)).await;
+
+    // Both should be unbanned because all targets are unhealthy
+    assert!(
+        !replicas.targets[0].ban.banned(),
+        "First target should be unbanned when all targets are unhealthy"
+    );
+    assert!(
+        !replicas.targets[1].ban.banned(),
+        "Second target should be unbanned when all targets are unhealthy"
+    );
+
+    replicas.shutdown();
+}
