@@ -90,6 +90,13 @@ impl Inner {
         self.idle() + self.checked_out()
     }
 
+    /// The pool is full and will not
+    /// create any more connections.
+    #[inline]
+    pub(super) fn full(&self) -> bool {
+        self.total() == self.max()
+    }
+
     /// Number of idle connections in the pool.
     #[inline]
     pub(super) fn idle(&self) -> usize {
@@ -365,6 +372,7 @@ impl Inner {
         // place the connection back into the idle list.
         if server.can_check_in() {
             self.put(server, now);
+            result.replenish = false;
         } else {
             self.out_of_sync += 1;
             server.disconnect_reason(DisconnectReason::OutOfSync);
@@ -411,7 +419,7 @@ pub(super) struct CheckInResult {
     pub(super) replenish: bool,
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub(super) enum ShouldCreate {
     No,
     Yes {
@@ -553,10 +561,16 @@ mod test {
         });
 
         assert_eq!(inner.idle(), 0);
-        assert_eq!(
+        assert!(matches!(
             inner.should_create(),
-            (true, Some(ConnectReason::ClientWaiting))
-        );
+            ShouldCreate::Yes {
+                reason: ConnectReason::ClientWaiting,
+                min: 1,
+                max: 5,
+                idle: 0,
+                taken: 0,
+            }
+        ));
     }
 
     #[test]
@@ -568,7 +582,16 @@ mod test {
 
         assert!(inner.total() < inner.min());
         assert!(inner.total() < inner.max());
-        assert_eq!(inner.should_create(), (true, Some(ConnectReason::BelowMin)));
+        assert!(matches!(
+            inner.should_create(),
+            ShouldCreate::Yes {
+                reason: ConnectReason::BelowMin,
+                min: 2,
+                max: 5,
+                idle: 0,
+                taken: 0,
+            }
+        ));
     }
 
     #[test]
@@ -576,6 +599,8 @@ mod test {
         let mut inner = Inner::default();
         inner.online = true;
         inner.config.max = 3;
+
+        assert!(!inner.full());
 
         // Add 2 idle connections and 1 checked out connection to reach max
         inner.idle_connections.push(Box::new(Server::default()));
@@ -588,7 +613,8 @@ mod test {
         assert_eq!(inner.idle(), 2);
         assert_eq!(inner.checked_out(), 1);
         assert_eq!(inner.total(), inner.config.max);
-        assert_eq!(inner.should_create(), (false, None));
+        assert!(inner.full());
+        assert_eq!(inner.should_create(), ShouldCreate::No);
     }
 
     #[test]
@@ -850,10 +876,16 @@ mod test {
         assert!(inner.total() < inner.max()); // Below maximum
         assert_eq!(inner.idle(), 0); // No idle connections
         assert!(!inner.waiting.is_empty()); // Has waiting clients
-        assert_eq!(
+        assert!(matches!(
             inner.should_create(),
-            (true, Some(ConnectReason::ClientWaiting))
-        );
+            ShouldCreate::Yes {
+                reason: ConnectReason::ClientWaiting,
+                min: 1,
+                max: 5,
+                idle: 0,
+                taken: 2,
+            }
+        ));
     }
 
     #[test]
@@ -863,7 +895,7 @@ mod test {
         inner.config.min = 2;
 
         assert!(inner.total() < inner.min());
-        assert_eq!(inner.should_create(), (false, None));
+        assert_eq!(inner.should_create(), ShouldCreate::No);
     }
 
     #[test]
