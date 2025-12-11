@@ -1060,4 +1060,70 @@ mod test {
         assert_eq!(inner.idle(), 1);
         assert_eq!(inner.checked_out(), 0);
     }
+
+    #[test]
+    fn test_same_client_checks_out_two_connections() {
+        let mut inner = Inner::default();
+        inner.online = true;
+        inner.config.max = 2;
+        inner.config.min = 0;
+
+        // Add two idle connections to the pool
+        let server1 = Box::new(Server::default());
+        let server1_id = *server1.id();
+        let server2 = Box::new(Server::default());
+        let server2_id = *server2.id();
+        inner.idle_connections.push(server1);
+        inner.idle_connections.push(server2);
+
+        assert_eq!(inner.idle(), 2);
+        assert_eq!(inner.checked_out(), 0);
+        assert_eq!(inner.total(), 2);
+
+        // Same client ID for both requests
+        let client_id = BackendKeyData::new();
+        let request = Request::new(client_id);
+
+        // Check out first connection
+        let conn1 = inner
+            .take(&request)
+            .unwrap()
+            .expect("should get connection");
+        assert_eq!(inner.idle(), 1);
+        assert_eq!(inner.checked_out(), 1);
+        assert_eq!(inner.total(), 2);
+
+        // Check out second connection with the same client ID
+        let conn2 = inner
+            .take(&request)
+            .unwrap()
+            .expect("should get connection");
+        assert_eq!(inner.idle(), 0);
+        assert_eq!(inner.checked_out(), 2);
+        assert_eq!(inner.total(), 2);
+
+        // Verify the connections are different
+        assert_ne!(conn1.id(), conn2.id());
+
+        // Check in both connections
+        let now = Instant::now();
+        inner
+            .maybe_check_in(conn1, now, BackendCounts::default())
+            .unwrap();
+        assert_eq!(inner.idle(), 1);
+        assert_eq!(inner.checked_out(), 1);
+        assert_eq!(inner.total(), 2);
+
+        inner
+            .maybe_check_in(conn2, now, BackendCounts::default())
+            .unwrap();
+        assert_eq!(inner.idle(), 2);
+        assert_eq!(inner.checked_out(), 0);
+        assert_eq!(inner.total(), 2);
+
+        // Verify the specific servers are back in the idle pool
+        let idle_ids: Vec<_> = inner.idle_conns().iter().map(|s| *s.id()).collect();
+        assert!(idle_ids.contains(&server1_id));
+        assert!(idle_ids.contains(&server2_id));
+    }
 }

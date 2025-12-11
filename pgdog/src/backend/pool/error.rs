@@ -68,12 +68,6 @@ pub enum Error {
     #[error("pool is not healthy")]
     PoolUnhealthy,
 
-    #[error("duplicate client identifier: {0}")]
-    DuplicateClientId(BackendKeyData),
-
-    #[error("duplicate server identifer: {0}")]
-    DuplicateServerId(BackendKeyData),
-
     #[error("checked in untracked connection: {0}")]
     UntrackedConnCheckin(BackendKeyData),
 

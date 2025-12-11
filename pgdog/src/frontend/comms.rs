@@ -97,7 +97,7 @@ impl Comms {
     /// Update client parameters.
     pub fn update_params(&self, id: &BackendKeyData, params: Parameters) {
         let mut guard = self.global.clients.lock();
-        if let Some(entry) = guard.get_mut(&id) {
+        if let Some(entry) = guard.get_mut(id) {
             entry.paramters = params;
         }
     }
@@ -158,7 +158,7 @@ impl ClientComms {
 
     pub fn new(id: &BackendKeyData) -> Self {
         Self {
-            id: id.clone(),
+            id: *id,
             comms: comms(),
         }
     }

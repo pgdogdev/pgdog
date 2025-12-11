@@ -53,7 +53,7 @@ impl QueryEngine {
                 timeout(
                     query_timeout,
                     self.backend.link_client(
-                        &context.id,
+                        context.id,
                         context.params,
                         begin_stmt.as_ref().map(|stmt| stmt.query()),
                     ),
