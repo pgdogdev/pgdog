@@ -2,6 +2,7 @@
 
 use std::cmp::max;
 use std::collections::VecDeque;
+use std::fmt::Display;
 use std::time::Duration;
 
 use crate::backend::{stats::Counts as BackendCounts, Server};
@@ -89,6 +90,13 @@ impl Inner {
         self.idle() + self.checked_out()
     }
 
+    /// The pool is full and will not
+    /// create any more connections.
+    #[inline]
+    pub(super) fn full(&self) -> bool {
+        self.total() == self.max()
+    }
+
     /// Number of idle connections in the pool.
     #[inline]
     pub(super) fn idle(&self) -> usize {
@@ -137,7 +145,7 @@ impl Inner {
 
     /// The pool should create more connections now.
     #[inline]
-    pub(super) fn should_create(&self) -> (bool, Option<ConnectReason>) {
+    pub(super) fn should_create(&self) -> ShouldCreate {
         let below_min = self.total() < self.min();
         let below_max = self.total() < self.max();
         let maintain_min = below_min && below_max;
@@ -147,12 +155,21 @@ impl Inner {
 
         // Clients from banned pools won't be able to request connections
         // unless it's a primary.
-        if client_needs {
-            (true, Some(ConnectReason::ClientWaiting))
+        let reason = if client_needs {
+            ConnectReason::ClientWaiting
         } else if maintenance_on && maintain_min {
-            (true, Some(ConnectReason::BelowMin))
+            ConnectReason::BelowMin
         } else {
-            (false, None)
+            return ShouldCreate::No;
+        };
+
+        ShouldCreate::Yes {
+            reason,
+            min: self.min(),
+            max: self.max(),
+            idle: self.idle(),
+            taken: self.checked_out(),
+            waiting: self.waiting.len(),
         }
     }
 
@@ -356,6 +373,7 @@ impl Inner {
         // place the connection back into the idle list.
         if server.can_check_in() {
             self.put(server, now);
+            result.replenish = false;
         } else {
             self.out_of_sync += 1;
             server.disconnect_reason(DisconnectReason::OutOfSync);
@@ -400,6 +418,47 @@ impl Inner {
 pub(super) struct CheckInResult {
     pub(super) server_error: bool,
     pub(super) replenish: bool,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub(super) enum ShouldCreate {
+    No,
+    Yes {
+        reason: ConnectReason,
+        min: usize,
+        max: usize,
+        idle: usize,
+        taken: usize,
+        waiting: usize,
+    },
+}
+
+impl ShouldCreate {
+    pub(super) fn yes(&self) -> bool {
+        matches!(self, Self::Yes { .. })
+    }
+}
+
+impl Display for ShouldCreate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::No => write!(f, "no"),
+            Self::Yes {
+                reason,
+                min,
+                max,
+                idle,
+                taken,
+                waiting,
+            } => {
+                write!(
+                    f,
+                    "reason={}, min={}, max={}, idle={}, taken={}, waiting={}",
+                    reason, min, max, idle, taken, waiting
+                )
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -505,10 +564,17 @@ mod test {
         });
 
         assert_eq!(inner.idle(), 0);
-        assert_eq!(
+        assert!(matches!(
             inner.should_create(),
-            (true, Some(ConnectReason::ClientWaiting))
-        );
+            ShouldCreate::Yes {
+                reason: ConnectReason::ClientWaiting,
+                min: 1,
+                max: 5,
+                idle: 0,
+                taken: 0,
+                waiting: 1,
+            }
+        ));
     }
 
     #[test]
@@ -520,7 +586,17 @@ mod test {
 
         assert!(inner.total() < inner.min());
         assert!(inner.total() < inner.max());
-        assert_eq!(inner.should_create(), (true, Some(ConnectReason::BelowMin)));
+        assert!(matches!(
+            inner.should_create(),
+            ShouldCreate::Yes {
+                reason: ConnectReason::BelowMin,
+                min: 2,
+                max: 5,
+                idle: 0,
+                taken: 0,
+                waiting: 0,
+            }
+        ));
     }
 
     #[test]
@@ -528,6 +604,8 @@ mod test {
         let mut inner = Inner::default();
         inner.online = true;
         inner.config.max = 3;
+
+        assert!(!inner.full());
 
         // Add 2 idle connections and 1 checked out connection to reach max
         inner.idle_connections.push(Box::new(Server::default()));
@@ -540,7 +618,8 @@ mod test {
         assert_eq!(inner.idle(), 2);
         assert_eq!(inner.checked_out(), 1);
         assert_eq!(inner.total(), inner.config.max);
-        assert_eq!(inner.should_create(), (false, None));
+        assert!(inner.full());
+        assert_eq!(inner.should_create(), ShouldCreate::No);
     }
 
     #[test]
@@ -802,10 +881,17 @@ mod test {
         assert!(inner.total() < inner.max()); // Below maximum
         assert_eq!(inner.idle(), 0); // No idle connections
         assert!(!inner.waiting.is_empty()); // Has waiting clients
-        assert_eq!(
+        assert!(matches!(
             inner.should_create(),
-            (true, Some(ConnectReason::ClientWaiting))
-        );
+            ShouldCreate::Yes {
+                reason: ConnectReason::ClientWaiting,
+                min: 1,
+                max: 5,
+                idle: 0,
+                taken: 2,
+                waiting: 1,
+            }
+        ));
     }
 
     #[test]
@@ -815,7 +901,7 @@ mod test {
         inner.config.min = 2;
 
         assert!(inner.total() < inner.min());
-        assert_eq!(inner.should_create(), (false, None));
+        assert_eq!(inner.should_create(), ShouldCreate::No);
     }
 
     #[test]

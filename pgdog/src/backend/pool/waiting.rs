@@ -27,16 +27,19 @@ impl Waiting {
         let request = *request;
         let (tx, rx) = channel();
 
-        {
+        let full = {
             let mut guard = pool.lock();
             if !guard.online {
                 return Err(Error::Offline);
             }
-            guard.waiting.push_back(Waiter { request, tx })
-        }
+            guard.waiting.push_back(Waiter { request, tx });
+            guard.full()
+        };
 
         // Tell maintenance we are in line waiting for a connection.
-        pool.comms().request.notify_one();
+        if !full {
+            pool.comms().request.notify_one();
+        }
 
         Ok(Self {
             pool,

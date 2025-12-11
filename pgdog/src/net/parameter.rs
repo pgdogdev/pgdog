@@ -107,7 +107,7 @@ impl Display for ParameterValue {
                 f,
                 "{}",
                 t.iter()
-                    .map(|s| format!("{}", quote(s)))
+                    .map(|s| quote(s).to_string())
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
