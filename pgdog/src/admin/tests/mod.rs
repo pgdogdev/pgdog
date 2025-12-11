@@ -37,7 +37,7 @@ impl TestAdminContext {
         config::set(config.clone()).expect("failed to install test config");
 
         // Rebuild the in-process database registry from the supplied config.
-        replace_databases(from_config(&config), false);
+        replace_databases(from_config(&config), false).unwrap();
     }
 }
 
@@ -51,7 +51,7 @@ impl Drop for TestAdminContext {
     fn drop(&mut self) {
         // Restore the original configuration and database registry so other tests remain isolated.
         let _ = config::set(self.original.config.clone());
-        replace_databases(self.original.databases.clone(), false);
+        replace_databases(self.original.databases.clone(), false).unwrap();
     }
 }
 

@@ -2,7 +2,7 @@ use fnv::FnvHashMap as HashMap;
 
 use crate::net::BackendKeyData;
 
-use super::Mapping;
+use super::{Error, Mapping};
 
 #[derive(Default, Clone, Debug)]
 pub(super) struct Taken {
@@ -12,16 +12,33 @@ pub(super) struct Taken {
 
 impl Taken {
     #[inline]
-    pub(super) fn take(&mut self, mapping: &Mapping) {
-        self.client_server.insert(mapping.client, mapping.server);
-        self.server_client.insert(mapping.server, mapping.client);
+    pub(super) fn take(&mut self, mapping: &Mapping) -> Result<(), Error> {
+        if self
+            .client_server
+            .insert(mapping.client, mapping.server)
+            .is_some()
+        {
+            return Err(Error::DuplicateClientId(mapping.client));
+        }
+        if self
+            .server_client
+            .insert(mapping.server, mapping.client)
+            .is_some()
+        {
+            return Err(Error::DuplicateServerId(mapping.server));
+        }
+
+        Ok(())
     }
 
     #[inline]
-    pub(super) fn check_in(&mut self, server: &BackendKeyData) {
+    pub(super) fn check_in(&mut self, server: &BackendKeyData) -> Result<(), Error> {
         let client = self.server_client.remove(server);
         if let Some(client) = client {
             self.client_server.remove(&client);
+            Ok(())
+        } else {
+            Err(Error::UntrackedConnCheckin(*server))
         }
     }
 

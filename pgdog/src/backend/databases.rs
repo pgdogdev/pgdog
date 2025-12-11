@@ -46,7 +46,7 @@ pub fn databases() -> Arc<Databases> {
 }
 
 /// Replace databases pooler-wide.
-pub fn replace_databases(new_databases: Databases, reload: bool) {
+pub fn replace_databases(new_databases: Databases, reload: bool) -> Result<(), Error> {
     // Order of operations is important
     // to ensure zero downtime for clients.
     let old_databases = databases();
@@ -54,12 +54,14 @@ pub fn replace_databases(new_databases: Databases, reload: bool) {
     reload_notify::started();
     if reload {
         // Move whatever connections we can over to new pools.
-        old_databases.move_conns_to(&new_databases);
+        old_databases.move_conns_to(&new_databases)?;
     }
     new_databases.launch();
     DATABASES.store(new_databases);
     old_databases.shutdown();
     reload_notify::done();
+
+    Ok(())
 }
 
 /// Re-create all connections.
@@ -67,31 +69,34 @@ pub fn reconnect() -> Result<(), Error> {
     let config = config();
     let databases = from_config(&config);
 
-    replace_databases(databases, false);
+    replace_databases(databases, false)?;
     Ok(())
 }
 
 /// Re-create databases from existing config,
 /// preserving connections.
-pub fn reload_from_existing() {
+pub fn reload_from_existing() -> Result<(), Error> {
     let _lock = lock();
 
     let config = config();
     let databases = from_config(&config);
 
-    replace_databases(databases, true);
+    replace_databases(databases, true)?;
+    Ok(())
 }
 
 /// Initialize the databases for the first time.
-pub fn init() {
+pub fn init() -> Result<(), Error> {
     let config = config();
-    replace_databases(from_config(&config), false);
+    replace_databases(from_config(&config), false)?;
 
     // Resize query cache
     Cache::resize(config.config.general.query_cache_limit);
 
     // Start two-pc manager.
     let _monitor = Manager::get();
+
+    Ok(())
 }
 
 /// Shutdown all databases.
@@ -105,7 +110,7 @@ pub fn reload() -> Result<(), Error> {
     let new_config = load(&old_config.config_path, &old_config.users_path)?;
     let databases = from_config(&new_config);
 
-    replace_databases(databases, true);
+    replace_databases(databases, true)?;
 
     tls::reload()?;
 
@@ -317,20 +322,20 @@ impl Databases {
 
     /// Move all connections we can from old databases config to new
     /// databases config.
-    pub(crate) fn move_conns_to(&self, destination: &Databases) -> usize {
+    pub(crate) fn move_conns_to(&self, destination: &Databases) -> Result<usize, Error> {
         let mut moved = 0;
         for (user, cluster) in &self.databases {
             let dest = destination.databases.get(user);
 
             if let Some(dest) = dest {
                 if cluster.can_move_conns_to(dest) {
-                    cluster.move_conns_to(dest);
+                    cluster.move_conns_to(dest)?;
                     moved += 1;
                 }
             }
         }
 
-        moved
+        Ok(moved)
     }
 
     /// Shutdown all pools.
