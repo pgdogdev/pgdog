@@ -91,8 +91,10 @@ impl Shard {
     ///
     /// This is done during configuration reloading, if no significant changes are made to
     /// the configuration.
-    pub fn move_conns_to(&self, destination: &Shard) {
-        self.lb.move_conns_to(&destination.lb);
+    pub fn move_conns_to(&self, destination: &Shard) -> Result<(), Error> {
+        self.lb.move_conns_to(&destination.lb)?;
+
+        Ok(())
     }
 
     /// Checks if the connection pools from this shard are compatible

@@ -230,23 +230,23 @@ impl Inner {
 
     /// Take connection from the idle pool.
     #[inline(always)]
-    pub(super) fn take(&mut self, request: &Request) -> Option<Box<Server>> {
+    pub(super) fn take(&mut self, request: &Request) -> Result<Option<Box<Server>>, Error> {
         if let Some(conn) = self.idle_connections.pop() {
             self.taken.take(&Mapping {
                 client: request.id,
                 server: *(conn.id()),
-            });
+            })?;
 
-            Some(conn)
+            Ok(Some(conn))
         } else {
-            None
+            Ok(None)
         }
     }
 
     /// Place connection back into the pool
     /// or give it to a waiting client.
     #[inline]
-    pub(super) fn put(&mut self, mut conn: Box<Server>, now: Instant) {
+    pub(super) fn put(&mut self, mut conn: Box<Server>, now: Instant) -> Result<(), Error> {
         // Try to give it to a client that's been waiting, if any.
         let id = *conn.id();
         while let Some(waiter) = self.waiting.pop_front() {
@@ -256,15 +256,17 @@ impl Inner {
                 self.taken.take(&Mapping {
                     server: id,
                     client: waiter.request.id,
-                });
+                })?;
                 self.stats.counts.server_assignment_count += 1;
                 self.stats.counts.wait_time += now.duration_since(waiter.request.created_at);
-                return;
+                return Ok(());
             }
         }
 
         // No waiters, put connection in idle list.
         self.idle_connections.push(conn);
+
+        Ok(())
     }
 
     #[inline]
@@ -307,7 +309,7 @@ impl Inner {
         mut server: Box<Server>,
         now: Instant,
         stats: BackendCounts,
-    ) -> CheckInResult {
+    ) -> Result<CheckInResult, Error> {
         let mut result = CheckInResult {
             server_error: false,
             replenish: true,
@@ -319,12 +321,12 @@ impl Inner {
             if moved.id() != self.id {
                 server.stats_mut().pool_id = moved.id();
                 server.stats_mut().update();
-                moved.lock().maybe_check_in(server, now, stats);
-                return result;
+                moved.lock().maybe_check_in(server, now, stats)?;
+                return Ok(result);
             }
         }
 
-        self.taken.check_in(server.id());
+        self.taken.check_in(server.id())?;
 
         // Update stats
         self.stats.counts = self.stats.counts + stats;
@@ -335,33 +337,33 @@ impl Inner {
             result.server_error = true;
             server.disconnect_reason(DisconnectReason::Error);
 
-            return result;
+            return Ok(result);
         }
 
         // Pool is offline or paused, connection should be closed.
         if !self.online || self.paused {
             result.replenish = false;
-            return result;
+            return Ok(result);
         }
 
         // Close connections exceeding max age.
         if server.age(now) >= self.config.max_age {
             server.disconnect_reason(DisconnectReason::Old);
-            return result;
+            return Ok(result);
         }
 
         // Force close the connection.
         if server.force_close() {
             self.force_close += 1;
             server.disconnect_reason(DisconnectReason::ForceClose);
-            return result;
+            return Ok(result);
         }
 
         // Close connections in replication mode,
         // they are generally not re-usable.
         if server.replication_mode() {
             server.disconnect_reason(DisconnectReason::ReplicationMode);
-            return result;
+            return Ok(result);
         }
 
         if server.re_synced() {
@@ -372,14 +374,14 @@ impl Inner {
         // Finally, if the server is ok,
         // place the connection back into the idle list.
         if server.can_check_in() {
-            self.put(server, now);
+            self.put(server, now)?;
             result.replenish = false;
         } else {
             self.out_of_sync += 1;
             server.disconnect_reason(DisconnectReason::OutOfSync);
         }
 
-        result
+        Ok(result)
     }
 
     /// Remove waiter from the queue.
@@ -486,11 +488,19 @@ mod test {
     fn test_offline_pool_behavior() {
         let mut inner = Inner::default();
 
-        let result = inner.maybe_check_in(
-            Box::new(Server::default()),
-            Instant::now(),
-            BackendCounts::default(),
-        );
+        let server = Box::new(Server::default());
+        let server_id = *server.id();
+        inner
+            .taken
+            .take(&Mapping {
+                client: BackendKeyData::new(),
+                server: server_id,
+            })
+            .unwrap();
+
+        let result = inner
+            .maybe_check_in(server, Instant::now(), BackendCounts::default())
+            .unwrap();
 
         assert!(!result.server_error);
         assert_eq!(inner.idle(), 0); // pool offline, connection not added
@@ -503,11 +513,19 @@ mod test {
         inner.online = true;
         inner.paused = true;
 
-        inner.maybe_check_in(
-            Box::new(Server::default()),
-            Instant::now(),
-            BackendCounts::default(),
-        );
+        let server = Box::new(Server::default());
+        let server_id = *server.id();
+        inner
+            .taken
+            .take(&Mapping {
+                client: BackendKeyData::new(),
+                server: server_id,
+            })
+            .unwrap();
+
+        inner
+            .maybe_check_in(server, Instant::now(), BackendCounts::default())
+            .unwrap();
 
         assert_eq!(inner.total(), 0); // pool paused, connection not added
     }
@@ -518,11 +536,19 @@ mod test {
         inner.online = true;
         inner.paused = false;
 
-        let result = inner.maybe_check_in(
-            Box::new(Server::default()),
-            Instant::now(),
-            BackendCounts::default(),
-        );
+        let server = Box::new(Server::default());
+        let server_id = *server.id();
+        inner
+            .taken
+            .take(&Mapping {
+                client: BackendKeyData::new(),
+                server: server_id,
+            })
+            .unwrap();
+
+        let result = inner
+            .maybe_check_in(server, Instant::now(), BackendCounts::default())
+            .unwrap();
 
         assert!(!result.server_error);
         assert_eq!(inner.idle(), 1);
@@ -538,13 +564,18 @@ mod test {
         let server_id = *server.id();
 
         // Simulate server being checked out
-        inner.taken.take(&Mapping {
-            client: BackendKeyData::new(),
-            server: server_id,
-        });
+        inner
+            .taken
+            .take(&Mapping {
+                client: BackendKeyData::new(),
+                server: server_id,
+            })
+            .unwrap();
         assert_eq!(inner.checked_out(), 1);
 
-        let result = inner.maybe_check_in(server, Instant::now(), BackendCounts::default());
+        let result = inner
+            .maybe_check_in(server, Instant::now(), BackendCounts::default())
+            .unwrap();
         assert!(result.server_error);
 
         assert!(inner.taken.is_empty()); // Error server removed from taken
@@ -610,10 +641,13 @@ mod test {
         // Add 2 idle connections and 1 checked out connection to reach max
         inner.idle_connections.push(Box::new(Server::default()));
         inner.idle_connections.push(Box::new(Server::default()));
-        inner.taken.take(&Mapping {
-            client: BackendKeyData::new(),
-            server: BackendKeyData::new(),
-        });
+        inner
+            .taken
+            .take(&Mapping {
+                client: BackendKeyData::new(),
+                server: BackendKeyData::new(),
+            })
+            .unwrap();
 
         assert_eq!(inner.idle(), 2);
         assert_eq!(inner.checked_out(), 1);
@@ -658,11 +692,19 @@ mod test {
         inner.config.max_age = Duration::from_millis(60_000);
 
         // Add a connection
-        inner.maybe_check_in(
-            Box::new(Server::default()),
-            Instant::now(),
-            BackendCounts::default(),
-        );
+        let server = Box::new(Server::default());
+        let server_id = *server.id();
+        inner
+            .taken
+            .take(&Mapping {
+                client: BackendKeyData::new(),
+                server: server_id,
+            })
+            .unwrap();
+
+        inner
+            .maybe_check_in(server, Instant::now(), BackendCounts::default())
+            .unwrap();
         assert_eq!(inner.idle(), 1);
 
         // Close old connections before max age - should keep connection
@@ -681,7 +723,7 @@ mod test {
         assert_eq!(inner.total(), 0);
 
         // Simulate taking a connection
-        inner.taken.take(&Mapping::default());
+        inner.taken.take(&Mapping::default()).unwrap();
         assert_eq!(inner.total(), 1);
         assert_eq!(inner.checked_out(), 1);
 
@@ -698,11 +740,22 @@ mod test {
         inner.config.max_age = Duration::from_millis(60_000);
 
         let server = Box::new(Server::default());
-        let _result = inner.maybe_check_in(
-            server,
-            Instant::now() + Duration::from_secs(61), // Exceeds max age
-            BackendCounts::default(),
-        );
+        let server_id = *server.id();
+        inner
+            .taken
+            .take(&Mapping {
+                client: BackendKeyData::new(),
+                server: server_id,
+            })
+            .unwrap();
+
+        inner
+            .maybe_check_in(
+                server,
+                Instant::now() + Duration::from_secs(61), // Exceeds max age
+                BackendCounts::default(),
+            )
+            .unwrap();
 
         assert_eq!(inner.total(), 0); // Connection not added due to max age
     }
@@ -715,12 +768,40 @@ mod test {
 
         assert_eq!(inner.peer(&client_id), None);
 
-        inner.taken.take(&Mapping {
-            client: client_id,
-            server: server_id,
-        });
+        inner
+            .taken
+            .take(&Mapping {
+                client: client_id,
+                server: server_id,
+            })
+            .unwrap();
 
         assert_eq!(inner.peer(&client_id), Some(server_id));
+    }
+
+    #[test]
+    fn test_taken_server_returns_server_when_mapped() {
+        let mut taken = Taken::default();
+        let client_id = BackendKeyData::new();
+        let server_id = BackendKeyData::new();
+
+        // No mapping yet
+        assert_eq!(taken.server(&client_id), None);
+
+        // Add mapping
+        taken
+            .take(&Mapping {
+                client: client_id,
+                server: server_id,
+            })
+            .unwrap();
+
+        // Server should be returned for mapped client
+        assert_eq!(taken.server(&client_id), Some(server_id));
+
+        // Different client should return None
+        let other_client = BackendKeyData::new();
+        assert_eq!(taken.server(&other_client), None);
     }
 
     #[test]
@@ -746,11 +827,11 @@ mod test {
         let mut inner = Inner::default();
         let request = Request::default();
 
-        assert!(inner.take(&request).is_none());
+        assert!(inner.take(&request).unwrap().is_none());
 
         inner.idle_connections.push(Box::new(Server::default()));
         let server = inner.take(&request);
-        assert!(server.is_some());
+        assert!(server.unwrap().is_some());
         assert_eq!(inner.idle(), 0);
         assert_eq!(inner.checked_out(), 1);
     }
@@ -767,7 +848,7 @@ mod test {
         });
 
         let server = Box::new(Server::default());
-        inner.put(server, Instant::now());
+        inner.put(server, Instant::now()).unwrap();
 
         assert_eq!(inner.idle(), 0); // Connection given to waiter, not idle
         assert_eq!(inner.checked_out(), 1); // Connection now checked out to waiter
@@ -782,7 +863,7 @@ mod test {
         let mut inner = Inner::default();
         let server = Box::new(Server::default());
 
-        inner.put(server, Instant::now());
+        inner.put(server, Instant::now()).unwrap();
 
         assert_eq!(inner.idle(), 1); // Connection added to idle pool
         assert_eq!(inner.checked_out(), 0);
@@ -862,14 +943,20 @@ mod test {
         inner.config.max = 5;
 
         // Add connections above minimum but all are checked out (no idle)
-        inner.taken.take(&Mapping {
-            client: BackendKeyData::new(),
-            server: BackendKeyData::new(),
-        });
-        inner.taken.take(&Mapping {
-            client: BackendKeyData::new(),
-            server: BackendKeyData::new(),
-        });
+        inner
+            .taken
+            .take(&Mapping {
+                client: BackendKeyData::new(),
+                server: BackendKeyData::new(),
+            })
+            .unwrap();
+        inner
+            .taken
+            .take(&Mapping {
+                client: BackendKeyData::new(),
+                server: BackendKeyData::new(),
+            })
+            .unwrap();
 
         // Add a waiting client
         inner.waiting.push_back(Waiter {
@@ -915,7 +1002,7 @@ mod test {
         assert_eq!(inner.checked_out(), 0);
 
         let mut taken = Taken::default();
-        taken.take(&mapping);
+        taken.take(&mapping).unwrap();
 
         inner.set_taken(taken);
         assert_eq!(inner.checked_out(), 1);
@@ -953,7 +1040,7 @@ mod test {
         assert_eq!(inner.waiting.len(), 3);
 
         let server = Box::new(Server::default());
-        inner.put(server, Instant::now());
+        inner.put(server, Instant::now()).unwrap();
 
         // All waiters should be removed from queue since we tried each one
         assert_eq!(inner.waiting.len(), 0);
@@ -990,12 +1077,78 @@ mod test {
         assert_eq!(inner.waiting.len(), 2);
 
         let server = Box::new(Server::default());
-        inner.put(server, Instant::now());
+        inner.put(server, Instant::now()).unwrap();
 
         // All waiters should be removed since they were all dropped
         assert_eq!(inner.waiting.len(), 0);
         // Connection should go to idle pool since no waiters could receive it
         assert_eq!(inner.idle(), 1);
         assert_eq!(inner.checked_out(), 0);
+    }
+
+    #[test]
+    fn test_same_client_checks_out_two_connections() {
+        let mut inner = Inner::default();
+        inner.online = true;
+        inner.config.max = 2;
+        inner.config.min = 0;
+
+        // Add two idle connections to the pool
+        let server1 = Box::new(Server::default());
+        let server1_id = *server1.id();
+        let server2 = Box::new(Server::default());
+        let server2_id = *server2.id();
+        inner.idle_connections.push(server1);
+        inner.idle_connections.push(server2);
+
+        assert_eq!(inner.idle(), 2);
+        assert_eq!(inner.checked_out(), 0);
+        assert_eq!(inner.total(), 2);
+
+        // Same client ID for both requests
+        let client_id = BackendKeyData::new();
+        let request = Request::new(client_id);
+
+        // Check out first connection
+        let conn1 = inner
+            .take(&request)
+            .unwrap()
+            .expect("should get connection");
+        assert_eq!(inner.idle(), 1);
+        assert_eq!(inner.checked_out(), 1);
+        assert_eq!(inner.total(), 2);
+
+        // Check out second connection with the same client ID
+        let conn2 = inner
+            .take(&request)
+            .unwrap()
+            .expect("should get connection");
+        assert_eq!(inner.idle(), 0);
+        assert_eq!(inner.checked_out(), 2);
+        assert_eq!(inner.total(), 2);
+
+        // Verify the connections are different
+        assert_ne!(conn1.id(), conn2.id());
+
+        // Check in both connections
+        let now = Instant::now();
+        inner
+            .maybe_check_in(conn1, now, BackendCounts::default())
+            .unwrap();
+        assert_eq!(inner.idle(), 1);
+        assert_eq!(inner.checked_out(), 1);
+        assert_eq!(inner.total(), 2);
+
+        inner
+            .maybe_check_in(conn2, now, BackendCounts::default())
+            .unwrap();
+        assert_eq!(inner.idle(), 2);
+        assert_eq!(inner.checked_out(), 0);
+        assert_eq!(inner.total(), 2);
+
+        // Verify the specific servers are back in the idle pool
+        let idle_ids: Vec<_> = inner.idle_conns().iter().map(|s| *s.id()).collect();
+        assert!(idle_ids.contains(&server1_id));
+        assert!(idle_ids.contains(&server2_id));
     }
 }

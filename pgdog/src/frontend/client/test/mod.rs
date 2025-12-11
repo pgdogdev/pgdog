@@ -757,7 +757,7 @@ async fn test_parse_describe_flush_bind_execute_close_sync() {
 
 #[tokio::test]
 async fn test_client_login_timeout() {
-    use crate::{config::config, frontend::comms::comms};
+    use crate::config::config;
     use tokio::time::sleep;
 
     crate::logger();
@@ -779,7 +779,7 @@ async fn test_client_login_timeout() {
         params.insert("user", "pgdog");
         params.insert("database", "pgdog");
 
-        Client::spawn(stream, params, addr, comms(), crate::config::config()).await
+        Client::spawn(stream, params, addr, crate::config::config()).await
     });
 
     let conn = TcpStream::connect(&format!("127.0.0.1:{}", port))

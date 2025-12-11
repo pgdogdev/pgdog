@@ -110,7 +110,7 @@ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Erro
     net::tls::load()?;
 
     // Load databases and connect if needed.
-    databases::init();
+    databases::init()?;
 
     let general = &config::config().config.general;
 

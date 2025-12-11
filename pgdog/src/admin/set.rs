@@ -149,7 +149,7 @@ impl Command for Set {
         }
 
         config::set(config)?;
-        databases::init();
+        databases::init()?;
 
         Ok(vec![])
     }

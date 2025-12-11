@@ -130,7 +130,7 @@ impl Pool {
                     return Err(Error::Offline);
                 }
 
-                let conn = guard.take(request);
+                let conn = guard.take(request)?;
 
                 if conn.is_some() {
                     guard.stats.counts.wait_time += elapsed;
@@ -214,7 +214,7 @@ impl Pool {
     }
 
     /// Check the connection back into the pool.
-    pub(super) fn checkin(&self, mut server: Box<Server>) {
+    pub(super) fn checkin(&self, mut server: Box<Server>) -> Result<(), Error> {
         // Server is checked in right after transaction finished
         // in transaction mode but can be checked in anytime in session mode.
         let now = if server.pooler_mode() == &PoolerMode::Session {
@@ -234,7 +234,7 @@ impl Pool {
         let CheckInResult {
             server_error,
             replenish,
-        } = { self.lock().maybe_check_in(server, now, counts) };
+        } = { self.lock().maybe_check_in(server, now, counts)? };
 
         if server_error {
             error!(
@@ -249,6 +249,8 @@ impl Pool {
         if replenish {
             self.comms().request.notify_one();
         }
+
+        Ok(())
     }
 
     /// Server connection used by the client.
@@ -281,7 +283,7 @@ impl Pool {
     /// to a new instance of the pool.
     ///
     /// This shuts down the pool.
-    pub(crate) fn move_conns_to(&self, destination: &Pool) {
+    pub(crate) fn move_conns_to(&self, destination: &Pool) -> Result<(), Error> {
         // Ensure no deadlock.
         assert!(self.inner.id != destination.id());
         let now = Instant::now();
@@ -293,13 +295,15 @@ impl Pool {
             from_guard.online = false;
             let (idle, taken) = from_guard.move_conns_to(destination);
             for server in idle {
-                to_guard.put(server, now);
+                to_guard.put(server, now)?;
             }
             to_guard.set_taken(taken);
         }
 
         destination.launch();
         self.shutdown();
+
+        Ok(())
     }
 
     /// The two pools refer to the same database.

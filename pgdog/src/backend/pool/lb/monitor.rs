@@ -68,9 +68,14 @@ impl Monitor {
                     targets.len() > 1 && target.pool.config().ban_timeout > Duration::ZERO;
 
                 // Check health and ban if unhealthy.
-                if !healthy && bannable && !target.ban.banned() {
-                    ban_targets.push(i);
-                    banned += 1;
+                if !healthy && bannable {
+                    let already_banned = target.ban.banned();
+                    if already_banned || !healthy {
+                        banned += 1;
+                    }
+                    if !healthy {
+                        ban_targets.push(i);
+                    }
                 }
             }
 

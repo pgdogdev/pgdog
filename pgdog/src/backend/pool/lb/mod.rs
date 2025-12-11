@@ -203,12 +203,14 @@ impl LoadBalancer {
     }
 
     /// Move connections from this replica set to another.
-    pub fn move_conns_to(&self, destination: &LoadBalancer) {
+    pub fn move_conns_to(&self, destination: &LoadBalancer) -> Result<(), Error> {
         assert_eq!(self.targets.len(), destination.targets.len());
 
         for (from, to) in self.targets.iter().zip(destination.targets.iter()) {
-            from.pool.move_conns_to(&to.pool);
+            from.pool.move_conns_to(&to.pool)?;
         }
+
+        Ok(())
     }
 
     /// The two replica sets are referring to the same databases.

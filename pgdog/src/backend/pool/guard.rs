@@ -67,6 +67,7 @@ impl Guard {
             if needs_cleanup && !force_close {
                 let rollback_timeout = pool.inner().config.rollback_timeout;
                 let conn_recovery = pool.inner().config.connection_recovery;
+                let addr = self.pool.addr().clone();
 
                 spawn(async move {
                     match timeout(
@@ -88,7 +89,9 @@ impl Guard {
                         }
                     }
 
-                    pool.checkin(server);
+                    if let Err(err) = pool.checkin(server) {
+                        error!("pool checkin error: {} [{}]", err, addr);
+                    }
                 });
             } else {
                 debug!(
@@ -96,7 +99,9 @@ impl Guard {
                     server.stats().state,
                     server.addr(),
                 );
-                pool.checkin(server);
+                if let Err(err) = pool.checkin(server) {
+                    error!("pool checkin error: {} [{}]", err, self.pool.addr());
+                }
             }
         }
     }

@@ -290,10 +290,12 @@ impl Cluster {
     }
 
     /// Move connections from cluster to another, saving them.
-    pub(crate) fn move_conns_to(&self, other: &Cluster) {
+    pub(crate) fn move_conns_to(&self, other: &Cluster) -> Result<(), Error> {
         for (from, to) in self.shards.iter().zip(other.shards.iter()) {
-            from.move_conns_to(to);
+            from.move_conns_to(to)?;
         }
+
+        Ok(())
     }
 
     /// Cancel a query executed by one of the shards.

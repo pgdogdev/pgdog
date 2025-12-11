@@ -577,7 +577,7 @@ mod tests {
         }];
 
         config::set(cfg).unwrap();
-        databases::init();
+        databases::init().unwrap();
 
         let user = DbUser {
             user: "pgdog".into(),
