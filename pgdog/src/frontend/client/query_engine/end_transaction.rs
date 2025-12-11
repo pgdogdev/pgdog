@@ -131,11 +131,14 @@ impl QueryEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::load_test;
     use crate::frontend::client::TransactionType;
     use crate::net::Stream;
 
     #[tokio::test]
     async fn test_transaction_state_not_cleared() {
+        load_test();
+
         // Create a test client with DevNull stream (doesn't require real I/O)
         let mut client = crate::frontend::Client::new_test(
             Stream::dev_null(),
