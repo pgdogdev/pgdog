@@ -81,6 +81,23 @@ async fn test_client_ids_unique() {
         let _ = handle.await;
     }
 
+    // Verify disconnected clients no longer appear in SHOW CLIENTS.
+    let rows = admin.fetch_all("SHOW CLIENTS").await.unwrap();
+    let remaining_test_clients: Vec<i64> = rows
+        .iter()
+        .filter(|row| {
+            let app_name: String = row.get("application_name");
+            app_name == "test_client_ids"
+        })
+        .map(|row| row.get("id"))
+        .collect();
+
+    assert!(
+        remaining_test_clients.is_empty(),
+        "expected 0 test clients after disconnect, found {}",
+        remaining_test_clients.len()
+    );
+
     // Restore auth type to scram.
     admin.execute("SET auth_type TO 'scram'").await.unwrap();
     admin.close().await;
