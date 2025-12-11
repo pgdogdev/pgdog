@@ -1,6 +1,6 @@
 use super::super::Error;
 use crate::{
-    backend::{self, pool::Address, Server, ServerOptions},
+    backend::{self, pool::Address, ConnectReason, Server, ServerOptions},
     net::{
         replication::StatusUpdate, CopyData, CopyDone, DataRow, ErrorResponse, Format, FromBytes,
         FromDataType, Protocol, Query, ToBytes,
@@ -139,7 +139,14 @@ impl ReplicationSlot {
 
     /// Connect to database using replication mode.
     pub async fn connect(&mut self) -> Result<(), Error> {
-        self.server = Some(Server::connect(&self.address, ServerOptions::new_replication()).await?);
+        self.server = Some(
+            Server::connect(
+                &self.address,
+                ServerOptions::new_replication(),
+                ConnectReason::Replication,
+            )
+            .await?,
+        );
 
         Ok(())
     }

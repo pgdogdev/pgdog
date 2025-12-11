@@ -13,8 +13,8 @@ use tokio::{
 use tracing::{debug, error, info, trace, warn};
 
 use super::{
-    pool::Address, prepared_statements::HandleResult, DisconnectReason, Error, PreparedStatements,
-    ServerOptions, Stats,
+    pool::Address, prepared_statements::HandleResult, ConnectReason, DisconnectReason, Error,
+    PreparedStatements, ServerOptions, Stats,
 };
 use crate::{
     auth::{md5, scram::Client},
@@ -81,7 +81,11 @@ impl MemoryUsage for Server {
 
 impl Server {
     /// Create new PostgreSQL server connection.
-    pub async fn connect(addr: &Address, options: ServerOptions) -> Result<Self, Error> {
+    pub async fn connect(
+        addr: &Address,
+        options: ServerOptions,
+        connect_reason: ConnectReason,
+    ) -> Result<Self, Error> {
         debug!("=> {}", addr);
         let stream = TcpStream::connect(addr.addr().await?).await?;
         tweak(&stream)?;
@@ -242,9 +246,10 @@ impl Server {
         let params: Parameters = params.into();
 
         info!(
-            "new server connection [{}, auth: {}] {}",
+            "new server connection [{}, auth: {}, reason: {}] {}",
             addr,
             auth_type,
+            connect_reason,
             if stream.is_tls() { "🔓" } else { "" },
         );
 
@@ -1029,15 +1034,23 @@ pub mod test {
     }
 
     pub async fn test_server() -> Server {
-        Server::connect(&Address::new_test(), ServerOptions::default())
-            .await
-            .unwrap()
+        Server::connect(
+            &Address::new_test(),
+            ServerOptions::default(),
+            ConnectReason::Other,
+        )
+        .await
+        .unwrap()
     }
 
     pub async fn test_replication_server() -> Server {
-        Server::connect(&Address::new_test(), ServerOptions::new_replication())
-            .await
-            .unwrap()
+        Server::connect(
+            &Address::new_test(),
+            ServerOptions::new_replication(),
+            ConnectReason::Replication,
+        )
+        .await
+        .unwrap()
     }
 
     #[tokio::test]

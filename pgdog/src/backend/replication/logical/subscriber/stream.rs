@@ -19,7 +19,7 @@ use tracing::{debug, trace};
 use super::super::{publisher::Table, Error};
 use super::StreamContext;
 use crate::{
-    backend::{Cluster, Server},
+    backend::{Cluster, ConnectReason, Server},
     config::Role,
     frontend::router::parser::Shard,
     net::{
@@ -179,7 +179,7 @@ impl StreamSubscriber {
                 .find(|(r, _)| r == &Role::Primary)
                 .ok_or(Error::NoPrimary)?
                 .1
-                .standalone()
+                .standalone(ConnectReason::Replication)
                 .await?;
             conns.push(primary);
         }
