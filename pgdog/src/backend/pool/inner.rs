@@ -169,6 +169,7 @@ impl Inner {
             max: self.max(),
             idle: self.idle(),
             taken: self.checked_out(),
+            waiting: self.waiting.len(),
         }
     }
 
@@ -428,6 +429,7 @@ pub(super) enum ShouldCreate {
         max: usize,
         idle: usize,
         taken: usize,
+        waiting: usize,
     },
 }
 
@@ -447,11 +449,12 @@ impl Display for ShouldCreate {
                 max,
                 idle,
                 taken,
+                waiting,
             } => {
                 write!(
                     f,
-                    "reason={}, min={}, max={}, idle={}, taken={}",
-                    reason, min, max, idle, taken
+                    "reason={}, min={}, max={}, idle={}, taken={}, waiting={}",
+                    reason, min, max, idle, taken, waiting
                 )
             }
         }
