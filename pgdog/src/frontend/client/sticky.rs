@@ -39,16 +39,14 @@ impl Sticky {
 
     /// Create Sticky from params.
     pub fn from_params(params: &Parameters) -> Self {
-        let role = params
-            .get("pgdog.role")
-            .and_then(|value| match value {
-                ParameterValue::String(value) => match value.as_str() {
-                    "primary" => Some(Role::Primary),
-                    "replica" => Some(Role::Replica),
-                    _ => None,
-                },
+        let role = params.get("pgdog.role").and_then(|value| match value {
+            ParameterValue::String(value) => match value.as_str() {
+                "primary" => Some(Role::Primary),
+                "replica" => Some(Role::Replica),
                 _ => None,
-            });
+            },
+            _ => None,
+        });
 
         Self {
             omni_index: thread_rng().gen_range(1..usize::MAX),
