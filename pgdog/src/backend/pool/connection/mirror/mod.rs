@@ -13,8 +13,7 @@ use crate::config::{config, ConfigAndUsers};
 use crate::frontend::client::query_engine::{QueryEngine, QueryEngineContext};
 use crate::frontend::client::timeouts::Timeouts;
 use crate::frontend::client::TransactionType;
-use crate::frontend::comms::comms;
-use crate::frontend::PreparedStatements;
+use crate::frontend::{ClientComms, PreparedStatements};
 use crate::net::{BackendKeyData, Parameter, Parameters, Stream};
 
 use crate::frontend::ClientRequest;
@@ -93,7 +92,12 @@ impl Mirror {
         ]);
 
         // Same query engine as the client, except with a potentially different database config.
-        let mut query_engine = QueryEngine::new(&params, &comms(), false, &None)?;
+        let mut query_engine = QueryEngine::new(
+            &params,
+            &ClientComms::new(&BackendKeyData::new()),
+            false,
+            &None,
+        )?;
 
         // Mirror must read server responses to keep the connection synchronized,
         // so disable test_mode which skips reading responses.

@@ -358,7 +358,7 @@ mod tests {
             .messages
             .push(Query::new("INSERT INTO sharded (id) VALUES (1)").into());
 
-        let mut engine = QueryEngine::default();
+        let mut engine = QueryEngine::from_client(&client).unwrap();
         let mut context = QueryEngineContext::new(&mut client);
 
         engine
@@ -385,7 +385,7 @@ mod tests {
             Sync::new().into(),
         ]);
 
-        let mut engine = QueryEngine::default();
+        let mut engine = QueryEngine::from_client(&client).unwrap();
         let mut context = QueryEngineContext::new(&mut client);
 
         engine

@@ -4,9 +4,9 @@ use crate::{
     frontend::{
         client::query_engine::hooks::QueryEngineHooks,
         router::{parser::Shard, Route},
-        BufferedQuery, Client, Command, Comms, Error, Router, RouterContext, Stats,
+        BufferedQuery, Client, ClientComms, Command, Error, Router, RouterContext, Stats,
     },
-    net::{BackendKeyData, ErrorResponse, Message, Parameters},
+    net::{ErrorResponse, Message, Parameters},
     state::State,
 };
 
@@ -41,15 +41,14 @@ use notify_buffer::NotifyBuffer;
 pub use two_pc::phase::TwoPcPhase;
 use two_pc::TwoPc;
 
-#[derive(Default, Debug)]
+#[derive(Debug)]
 pub struct QueryEngine {
     begin_stmt: Option<BufferedQuery>,
     router: Router,
-    comms: Comms,
+    comms: ClientComms,
     stats: Stats,
     backend: Connection,
     streaming: bool,
-    client_id: BackendKeyData,
     test_mode: bool,
     set_route: Option<Route>,
     two_pc: TwoPc,
@@ -62,7 +61,7 @@ impl QueryEngine {
     /// Create new query engine.
     pub fn new(
         params: &Parameters,
-        comms: &Comms,
+        comms: &ClientComms,
         admin: bool,
         passthrough_password: &Option<String>,
     ) -> Result<Self, Error> {
@@ -73,14 +72,20 @@ impl QueryEngine {
 
         Ok(Self {
             backend,
-            client_id: comms.client_id(),
             comms: comms.clone(),
             hooks: QueryEngineHooks::new(),
             #[cfg(test)]
             test_mode: true,
             #[cfg(not(test))]
             test_mode: false,
-            ..Default::default()
+            stats: Stats::default(),
+            streaming: bool::default(),
+            two_pc: TwoPc::default(),
+            notify_buffer: NotifyBuffer::default(),
+            pending_explain: None,
+            begin_stmt: None,
+            router: Router::default(),
+            set_route: None,
         })
     }
 
@@ -303,12 +308,12 @@ impl QueryEngine {
             .prepared_statements(context.prepared_statements.len_local());
         self.stats.memory_used(context.memory_stats);
 
-        self.comms.stats(self.stats);
+        self.comms.update_stats(self.stats);
     }
 
     pub fn set_state(&mut self, state: State) {
         self.stats.state = state;
-        self.comms.stats(self.stats);
+        self.comms.update_stats(self.stats);
     }
 
     pub fn get_state(&self) -> State {

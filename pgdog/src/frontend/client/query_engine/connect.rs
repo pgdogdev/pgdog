@@ -17,10 +17,10 @@ impl QueryEngine {
             return Ok(true);
         }
 
-        let request = Request::new(self.client_id);
+        let request = Request::new(*context.id);
 
         self.stats.waiting(request.created_at);
-        self.comms.stats(self.stats);
+        self.comms.update_stats(self.stats);
 
         let connected = match self.backend.connect(&request, route).await {
             Ok(_) => {
@@ -53,7 +53,7 @@ impl QueryEngine {
                 timeout(
                     query_timeout,
                     self.backend.link_client(
-                        &self.client_id,
+                        &context.id,
                         context.params,
                         begin_stmt.as_ref().map(|stmt| stmt.query()),
                     ),
@@ -94,7 +94,7 @@ impl QueryEngine {
             }
         };
 
-        self.comms.stats(self.stats);
+        self.comms.update_stats(self.stats);
 
         Ok(connected)
     }

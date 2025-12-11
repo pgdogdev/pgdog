@@ -145,7 +145,7 @@ mod tests {
         client.transaction = Some(TransactionType::ReadWrite);
 
         // Create a default query engine (avoids backend connection)
-        let mut engine = QueryEngine::default();
+        let mut engine = QueryEngine::from_client(&client).unwrap();
         // state copied from client
         let mut context = QueryEngineContext::new(&mut client);
         let result = engine.end_not_connected(&mut context, false, false).await;

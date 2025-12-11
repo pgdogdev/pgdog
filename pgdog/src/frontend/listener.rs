@@ -20,10 +20,7 @@ use tokio::{select, spawn};
 
 use tracing::{error, info, warn};
 
-use super::{
-    comms::{comms, Comms},
-    Client, Error,
-};
+use super::{comms::comms, Client, Error};
 
 /// Client connections listener and handler.
 #[derive(Debug, Clone)]
@@ -45,21 +42,18 @@ impl Listener {
     pub async fn listen(&mut self) -> Result<(), Error> {
         info!("🐕 PgDog listening on {}", self.addr);
         let listener = TcpListener::bind(&self.addr).await?;
-        let comms = comms();
-        let shutdown_signal = comms.shutting_down();
+        let shutdown_signal = comms().shutting_down();
         let mut sighup = Sighup::new()?;
 
         loop {
-            let comms = comms.clone();
-
             select! {
                 connection = listener.accept() => {
+                   let comms = comms();
                    let (stream, addr) = connection?;
                    let offline = comms.offline();
 
-                   let client_comms = comms.clone();
                    let future = async move {
-                       match Self::handle_client(stream, addr, client_comms).await {
+                       match Self::handle_client(stream, addr).await {
                            Ok(_) => (),
                            Err(err) => if !err.disconnect() {
                                error!("client crashed: {:?}", err);
@@ -159,7 +153,7 @@ impl Listener {
         self.shutdown.notify_waiters();
     }
 
-    async fn handle_client(stream: TcpStream, addr: SocketAddr, comms: Comms) -> Result<(), Error> {
+    async fn handle_client(stream: TcpStream, addr: SocketAddr) -> Result<(), Error> {
         tweak(&stream)?;
         let config = config();
 
@@ -203,7 +197,7 @@ impl Listener {
                 }
 
                 Startup::Startup { params } => {
-                    Client::spawn(stream, params, addr, comms, config).await?;
+                    Client::spawn(stream, params, addr, config).await?;
                     break;
                 }
 
