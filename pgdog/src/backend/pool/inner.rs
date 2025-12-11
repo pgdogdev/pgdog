@@ -780,6 +780,31 @@ mod test {
     }
 
     #[test]
+    fn test_taken_server_returns_server_when_mapped() {
+        let mut taken = Taken::default();
+        let client_id = BackendKeyData::new();
+        let server_id = BackendKeyData::new();
+
+        // No mapping yet
+        assert_eq!(taken.server(&client_id), None);
+
+        // Add mapping
+        taken
+            .take(&Mapping {
+                client: client_id,
+                server: server_id,
+            })
+            .unwrap();
+
+        // Server should be returned for mapped client
+        assert_eq!(taken.server(&client_id), Some(server_id));
+
+        // Different client should return None
+        let other_client = BackendKeyData::new();
+        assert_eq!(taken.server(&other_client), None);
+    }
+
+    #[test]
     fn test_can_remove() {
         let mut inner = Inner::default();
         inner.config.min = 2;
