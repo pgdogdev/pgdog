@@ -35,6 +35,7 @@
 use std::time::Duration;
 
 use super::{Error, Guard, Healtcheck, Oids, Pool, Request};
+use crate::backend::pool::inner::ShouldCreate;
 use crate::backend::{ConnectReason, DisconnectReason, Server};
 
 use tokio::time::{interval, sleep, timeout, Instant};
@@ -99,7 +100,7 @@ impl Monitor {
                 // connections are available.
                 _ = comms.request.notified() => {
                     let (
-                        (should_create, reason),
+                        should_create,
                         online,
                     ) = {
                         let mut guard = self.pool.lock();
@@ -119,8 +120,9 @@ impl Monitor {
                         break;
                     }
 
-                    if should_create {
-                        let ok = self.replenish(reason.unwrap()).await;
+                    if let ShouldCreate::Yes { reason, .. } = should_create {
+                        info!("new connection requested: {} [{}]", should_create, self.pool.addr());
+                        let ok = self.replenish(reason).await;
                         if !ok {
                             self.pool.inner().health.toggle(false);
                         }
@@ -195,7 +197,7 @@ impl Monitor {
 
                     // If a client is waiting already,
                     // create it a connection.
-                    if guard.should_create().0 {
+                    if guard.should_create().yes() {
                         comms.request.notify_one();
                     }
 

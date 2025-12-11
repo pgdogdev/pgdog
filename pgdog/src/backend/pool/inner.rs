@@ -2,6 +2,7 @@
 
 use std::cmp::max;
 use std::collections::VecDeque;
+use std::fmt::Display;
 use std::time::Duration;
 
 use crate::backend::{stats::Counts as BackendCounts, Server};
@@ -137,7 +138,7 @@ impl Inner {
 
     /// The pool should create more connections now.
     #[inline]
-    pub(super) fn should_create(&self) -> (bool, Option<ConnectReason>) {
+    pub(super) fn should_create(&self) -> ShouldCreate {
         let below_min = self.total() < self.min();
         let below_max = self.total() < self.max();
         let maintain_min = below_min && below_max;
@@ -147,12 +148,20 @@ impl Inner {
 
         // Clients from banned pools won't be able to request connections
         // unless it's a primary.
-        if client_needs {
-            (true, Some(ConnectReason::ClientWaiting))
+        let reason = if client_needs {
+            ConnectReason::ClientWaiting
         } else if maintenance_on && maintain_min {
-            (true, Some(ConnectReason::BelowMin))
+            ConnectReason::BelowMin
         } else {
-            (false, None)
+            return ShouldCreate::No;
+        };
+
+        ShouldCreate::Yes {
+            reason,
+            min: self.min(),
+            max: self.max(),
+            idle: self.idle(),
+            taken: self.checked_out(),
         }
     }
 
@@ -400,6 +409,45 @@ impl Inner {
 pub(super) struct CheckInResult {
     pub(super) server_error: bool,
     pub(super) replenish: bool,
+}
+
+#[derive(Debug, Copy, Clone)]
+pub(super) enum ShouldCreate {
+    No,
+    Yes {
+        reason: ConnectReason,
+        min: usize,
+        max: usize,
+        idle: usize,
+        taken: usize,
+    },
+}
+
+impl ShouldCreate {
+    pub(super) fn yes(&self) -> bool {
+        matches!(self, Self::Yes { .. })
+    }
+}
+
+impl Display for ShouldCreate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::No => write!(f, "no"),
+            Self::Yes {
+                reason,
+                min,
+                max,
+                idle,
+                taken,
+            } => {
+                write!(
+                    f,
+                    "reason={}, min={}, max={}, idle={}, taken={}",
+                    reason, min, max, idle, taken
+                )
+            }
+        }
+    }
 }
 
 #[cfg(test)]
