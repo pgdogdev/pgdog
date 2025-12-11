@@ -5,7 +5,7 @@ use pg_query::NodeEnum;
 use tracing::debug;
 
 use crate::{
-    backend::{replication::subscriber::ParallelConnection, Cluster},
+    backend::{replication::subscriber::ParallelConnection, Cluster, ConnectReason},
     config::Role,
     frontend::router::parser::{CopyParser, Shard},
     net::{CopyData, CopyDone, ErrorResponse, FromBytes, Protocol, Query, ToBytes},
@@ -73,7 +73,7 @@ impl CopySubscriber {
                 .find(|(role, _)| role == &Role::Primary)
                 .ok_or(Error::NoPrimary)?
                 .1
-                .standalone()
+                .standalone(ConnectReason::Replication)
                 .await?;
             servers.push(ParallelConnection::new(primary)?);
         }

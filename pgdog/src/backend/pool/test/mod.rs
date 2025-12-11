@@ -76,7 +76,7 @@ async fn test_pool_checkout() {
 
     assert_eq!(pool.lock().idle(), 0);
     assert_eq!(pool.lock().total(), 1);
-    assert!(!pool.lock().should_create());
+    assert_eq!(pool.lock().should_create(), (false, None));
 
     let err = timeout(Duration::from_millis(100), pool.get(&Request::default())).await;
 

@@ -11,7 +11,7 @@ use tokio::time::{timeout, Instant};
 use tracing::error;
 
 use crate::backend::pool::LsnStats;
-use crate::backend::{DisconnectReason, Server, ServerOptions};
+use crate::backend::{ConnectReason, DisconnectReason, Server, ServerOptions};
 use crate::config::PoolerMode;
 use crate::net::messages::BackendKeyData;
 use crate::net::{Parameter, Parameters};
@@ -326,8 +326,8 @@ impl Pool {
     }
 
     /// Create a connection to the pool, untracked by the logic here.
-    pub async fn standalone(&self) -> Result<Server, Error> {
-        Monitor::create_connection(self).await
+    pub async fn standalone(&self, reason: ConnectReason) -> Result<Server, Error> {
+        Monitor::create_connection(self, reason).await
     }
 
     /// Shutdown the pool.
