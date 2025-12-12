@@ -208,7 +208,7 @@ impl QueryParser {
             }
         };
 
-        self.ensure_explain_recorder(statement.ast(), context);
+        self.ensure_explain_recorder(statement.parse_result(), context);
 
         // Parse hardcoded shard from a query comment.
         if context.router_needed || context.dry_run {
@@ -231,7 +231,7 @@ impl QueryParser {
         debug!("{}", context.query()?.query());
         trace!("{:#?}", statement);
 
-        let rewrite = Rewrite::new(statement.ast());
+        let rewrite = Rewrite::new(statement.parse_result());
         if rewrite.needs_rewrite() {
             debug!("rewrite needed");
             return rewrite.rewrite(context.prepared_statements());
@@ -244,7 +244,7 @@ impl QueryParser {
                 context.router_context.cluster.user(),
                 multi_tenant,
                 context.router_context.cluster.schema(),
-                statement.ast(),
+                statement.parse_result(),
                 context.router_context.params,
             )
             .run()?;
@@ -256,7 +256,7 @@ impl QueryParser {
         // We don't expect clients to send multiple queries. If they do
         // only the first one is used for routing.
         //
-        let root = statement.ast().protobuf.stmts.first();
+        let root = statement.parse_result().protobuf.stmts.first();
 
         let root = if let Some(root) = root {
             root.stmt.as_ref().ok_or(Error::EmptyQuery)?

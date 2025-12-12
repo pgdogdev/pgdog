@@ -59,7 +59,7 @@ impl Ast {
     }
 
     /// Get the reference to the AST.
-    pub fn ast(&self) -> &ParseResult {
+    pub fn parse_result(&self) -> &ParseResult {
         &self.ast
     }
 
