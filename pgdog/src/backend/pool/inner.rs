@@ -94,7 +94,7 @@ impl Inner {
     /// create any more connections.
     #[inline]
     pub(super) fn full(&self) -> bool {
-        self.total() == self.max()
+        self.total() >= self.max()
     }
 
     /// Number of idle connections in the pool.
