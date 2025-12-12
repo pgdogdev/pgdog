@@ -2,7 +2,7 @@ use crate::{
     backend::pool::{Connection, Request},
     config::config,
     frontend::{
-        client::query_engine::hooks::QueryEngineHooks,
+        client::query_engine::{hooks::QueryEngineHooks, route_query::ClusterCheck},
         router::{parser::Shard, Route},
         BufferedQuery, Client, ClientComms, Command, Error, Router, RouterContext, Stats,
     },
@@ -121,6 +121,13 @@ impl QueryEngine {
 
         // Rewrite prepared statements.
         self.rewrite_extended(context)?;
+
+        if let ClusterCheck::Offline = self.cluster_check(context).await? {
+            return Ok(());
+        }
+
+        // Rewrite statement if necessary.
+        self.parse_and_rewrite(context).await?;
 
         // Intercept commands we don't have to forward to a server.
         if self.intercept_incomplete(context).await? {

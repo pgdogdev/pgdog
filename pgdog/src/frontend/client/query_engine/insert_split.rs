@@ -15,7 +15,7 @@ impl QueryEngine {
         context: &mut QueryEngineContext<'_>,
         plan: InsertSplitPlan,
     ) -> Result<(), Error> {
-        if !context.client_request.executable() {
+        if !context.client_request.is_executable() {
             return self.send_split_parse_ack(context).await;
         }
 
@@ -316,7 +316,7 @@ mod tests {
         let mut context = QueryEngineContext::new(&mut client);
         let plan = sample_plan();
 
-        assert!(!context.client_request.executable());
+        assert!(!context.client_request.is_executable());
 
         engine.insert_split(&mut context, plan).await.unwrap();
 
@@ -339,7 +339,7 @@ mod tests {
         let mut context = QueryEngineContext::new(&mut client);
         let plan = sample_plan();
 
-        assert!(context.client_request.executable());
+        assert!(context.client_request.is_executable());
         assert!(context.in_transaction());
 
         engine.insert_split(&mut context, plan).await.unwrap();

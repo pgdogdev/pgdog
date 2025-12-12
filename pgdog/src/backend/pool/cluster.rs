@@ -413,6 +413,16 @@ impl Cluster {
         !(self.shards().len() == 1 && (self.read_only() || self.write_only()))
     }
 
+    /// Use the query parser.
+    pub fn use_query_parser(&self) -> bool {
+        self.multi_tenant().is_some()
+            || self.query_parser_enabled()
+            || self.router_needed()
+            || self.dry_run()
+            || self.prepared_statements() == &PreparedStatements::Full
+            || self.pub_sub_enabled()
+    }
+
     /// Multi-tenant config.
     pub fn multi_tenant(&self) -> &Option<MultiTenant> {
         &self.multi_tenant

@@ -10,6 +10,7 @@ use tracing::debug;
 use super::super::{Error, Route};
 use super::Ast;
 use crate::backend::ShardingSchema;
+use crate::frontend::BufferedQuery;
 
 static CACHE: Lazy<Cache> = Lazy::new(Cache::new);
 
@@ -67,13 +68,21 @@ impl Cache {
         debug!("ast cache size set to {}", capacity);
     }
 
+    /// Handle parsing a query.
+    pub fn query(&self, query: &BufferedQuery, schema: &ShardingSchema) -> Result<Ast, Error> {
+        match query {
+            BufferedQuery::Prepared(parse) => self.parse(parse.query(), schema),
+            BufferedQuery::Query(query) => self.simple(query.query(), schema),
+        }
+    }
+
     /// Parse a statement by either getting it from cache
     /// or using pg_query parser.
     ///
     /// N.B. There is a race here that allows multiple threads to
     /// parse the same query. That's better imo than locking the data structure
     /// while we parse the query.
-    pub fn parse(&self, query: &str, schema: &ShardingSchema) -> Result<Ast, Error> {
+    fn parse(&self, query: &str, schema: &ShardingSchema) -> Result<Ast, Error> {
         {
             let mut guard = self.inner.lock();
             let ast = guard.queries.get_mut(query).map(|entry| {
@@ -87,7 +96,7 @@ impl Cache {
         }
 
         // Parse query without holding lock.
-        let entry = Ast::new(query, schema)?;
+        let entry = Ast::new(query, schema, true)?;
 
         let mut guard = self.inner.lock();
         guard.queries.put(query.to_owned(), entry.clone());
@@ -97,8 +106,8 @@ impl Cache {
     }
 
     /// Parse a statement but do not store it in the cache.
-    pub fn parse_uncached(&self, query: &str, schema: &ShardingSchema) -> Result<Ast, Error> {
-        let mut entry = Ast::new(query, schema)?;
+    fn simple(&self, query: &str, schema: &ShardingSchema) -> Result<Ast, Error> {
+        let mut entry = Ast::new(query, schema, false)?;
         entry.cached = false;
         Ok(entry)
     }
@@ -121,7 +130,7 @@ impl Cache {
             }
         }
 
-        let entry = Ast::new(query, schema)?;
+        let entry = Ast::new(query, schema, true)?;
         entry.update_stats(route);
 
         let mut guard = self.inner.lock();

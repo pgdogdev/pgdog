@@ -4,7 +4,8 @@ use super::{Error, RewritePlan, StatementRewrite};
 
 impl StatementRewrite<'_> {
     /// Entrypoint for rewriting SELECT queries.
-    pub(super) fn rewrite_select(node: &mut Node, plan: &mut RewritePlan) -> Result<(), Error> {
+    #[allow(dead_code)]
+    pub(super) fn rewrite_select(_node: &mut Node, _plan: &mut RewritePlan) -> Result<(), Error> {
         todo!()
     }
 }
