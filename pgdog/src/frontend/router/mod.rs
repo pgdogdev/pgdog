@@ -13,7 +13,7 @@ pub use copy::CopyRow;
 pub use error::Error;
 use lazy_static::lazy_static;
 use parser::Shard;
-pub use parser::{Command, QueryParser, Route};
+pub use parser::{Ast, Command, QueryParser, Route};
 
 use super::ClientRequest;
 pub use context::RouterContext;

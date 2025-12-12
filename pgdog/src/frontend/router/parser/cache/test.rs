@@ -1,7 +1,7 @@
 use pg_query::{normalize, parse};
 use tokio::spawn;
 
-use crate::backend::ShardingSchema;
+use crate::{backend::ShardingSchema, frontend::BufferedQuery, net::Parse};
 
 use super::*;
 use std::time::{Duration, Instant};
@@ -63,7 +63,10 @@ async fn bench_ast_cache() {
             for _ in 0..(times / threads) {
                 let start = Instant::now();
                 Cache::get()
-                    .parse(query, &ShardingSchema::default())
+                    .query(
+                        &BufferedQuery::Prepared(Parse::new_anonymous(query)),
+                        &ShardingSchema::default(),
+                    )
                     .unwrap();
                 cached_time += start.elapsed();
             }
@@ -105,7 +108,7 @@ fn test_tables_list() {
         "DELETE FROM private_schema.test",
         "DROP TABLE private_schema.test",
     ] {
-        let ast = Ast::new(q, &ShardingSchema::default()).unwrap();
+        let ast = Ast::new(q, &ShardingSchema::default(), true).unwrap();
         let tables = ast.tables();
         println!("{:?}", tables);
     }

@@ -2,11 +2,13 @@
 //!
 
 use pg_query::protobuf::ParseResult;
+use pg_query::Node;
 
 pub mod error;
 pub mod plan;
 pub mod select;
 pub mod unique_id;
+pub mod visitor;
 
 pub use error::Error;
 pub use plan::RewritePlan;
@@ -38,10 +40,31 @@ impl<'a> StatementRewrite<'a> {
 
     /// Maybe rewrite the statement and produce a rewrite plan
     /// we can apply to Bind messages.
-    pub fn maybe_rewrite(&'a mut self) -> Result<RewritePlan, Error> {
-        let mut plan = RewritePlan::default();
+    pub fn maybe_rewrite(&mut self) -> Result<RewritePlan, Error> {
+        let params = visitor::count_params(self.stmt);
+        let mut plan = RewritePlan {
+            params,
+            ..Default::default()
+        };
 
-        // TODO: implement rewrite engine.
+        // Track the next parameter number to use
+        let mut next_param = plan.params as i32 + 1;
+
+        let extended = self.extended;
+        visitor::visit_and_mutate_nodes(self.stmt, |node| -> Result<Option<Node>, Error> {
+            match Self::rewrite_unique_id(node, extended, &mut next_param)? {
+                Some(replacement) => {
+                    plan.unique_ids += 1;
+                    self.rewritten = true;
+                    Ok(Some(replacement))
+                }
+                None => Ok(None),
+            }
+        })?;
+
+        if self.rewritten {
+            plan.stmt = Some(self.stmt.deparse()?);
+        }
 
         Ok(plan)
     }

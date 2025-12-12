@@ -577,7 +577,7 @@ impl Server {
     }
 
     pub fn copy_mode(&self) -> bool {
-        self.prepared_statements.copy_mode()
+        self.prepared_statements.is_copy_mode()
     }
 
     /// Server is still inside a transaction.

@@ -15,9 +15,10 @@ fn global_name(counter: usize) -> String {
     format!("__pgdog_{}", counter)
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Statement {
     parse: Parse,
+    rewrite: Option<Parse>,
     row_description: Option<RowDescription>,
     #[allow(dead_code)]
     version: usize,
@@ -57,7 +58,7 @@ impl Statement {
 /// with different data types, we can't re-use it and
 /// need to plan a new one.
 ///
-#[derive(Debug, Clone, PartialEq, Hash, Eq)]
+#[derive(Debug, Clone, PartialEq, Hash, Eq, Default)]
 pub struct CacheKey {
     pub query: Bytes,
     pub data_types: Bytes,
@@ -171,11 +172,8 @@ impl GlobalCache {
                 name.clone(),
                 Statement {
                     parse,
-                    row_description: None,
-                    version: 0,
-                    rewrite_plan: None,
                     cache_key,
-                    evict_on_close: false,
+                    ..Default::default()
                 },
             );
 
@@ -210,15 +208,20 @@ impl GlobalCache {
             name.clone(),
             Statement {
                 parse,
-                row_description: None,
                 version: self.versions,
-                rewrite_plan: None,
                 cache_key: key,
-                evict_on_close: false,
+                ..Default::default()
             },
         );
 
         name
+    }
+
+    /// Rewrite prepared statement in the global cache.
+    pub fn rewrite(&mut self, parse: &Parse) {
+        if let Some(stmt) = self.names.get_mut(parse.name()) {
+            stmt.rewrite = Some(parse.clone());
+        }
     }
 
     /// Client sent a Describe for a prepared statement and received a RowDescription.
@@ -256,6 +259,7 @@ impl GlobalCache {
         self.names.get(name).and_then(|s| s.rewrite_plan.clone())
     }
 
+    /// Clear the global cache.
     pub fn reset(&mut self) {
         self.statements.clear();
         self.names.clear();
@@ -278,6 +282,16 @@ impl GlobalCache {
     /// or to inspect the original query.
     pub fn parse(&self, name: &str) -> Option<Parse> {
         self.names.get(name).map(|p| p.parse.clone())
+    }
+
+    /// Get the rewritten Parse statement.
+    ///
+    /// Used for preparing this statement on a server connection.
+    ///
+    pub fn rewritten(&self, name: &str) -> Option<Parse> {
+        self.names
+            .get(name)
+            .map(|p| p.rewrite.clone().unwrap_or(p.parse.clone()))
     }
 
     /// Get the RowDescription message for the prepared statement.

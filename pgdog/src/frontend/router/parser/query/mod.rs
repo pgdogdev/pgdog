@@ -187,26 +187,12 @@ impl QueryParser {
             }
         }
 
-        let cache = Cache::get();
-
-        // Get the AST from cache or parse the statement live.
-        let statement = match context.query()? {
-            // Only prepared statements (or just extended) are cached.
-            BufferedQuery::Prepared(query) => {
-                cache.parse(query.query(), &context.sharding_schema)?
-            }
-            // Don't cache simple queries.
-            //
-            // They contain parameter values, which makes the cache
-            // too large to be practical.
-            //
-            // Make your clients use prepared statements
-            // or at least send statements with placeholders using the
-            // extended protocol.
-            BufferedQuery::Query(query) => {
-                cache.parse_uncached(query.query(), &context.sharding_schema)?
-            }
-        };
+        let statement = context
+            .router_context
+            .ast
+            .as_ref()
+            .ok_or(Error::EmptyQuery)?
+            .clone();
 
         self.ensure_explain_recorder(statement.parse_result(), context);
 
@@ -418,7 +404,7 @@ impl QueryParser {
         if context.dry_run {
             // Record statement in cache with normalized parameters.
             if !statement.cached {
-                cache.record_normalized(
+                Cache::get().record_normalized(
                     context.query()?.query(),
                     command.route(),
                     &context.sharding_schema,

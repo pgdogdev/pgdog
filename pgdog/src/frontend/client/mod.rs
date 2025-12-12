@@ -507,7 +507,7 @@ impl Client {
         self.prepared_statements.level = config.prepared_statements();
         self.timeouts = Timeouts::from_config(&config.config.general);
 
-        while !self.client_request.full() {
+        while !self.client_request.is_complete() {
             let idle_timeout = self
                 .timeouts
                 .client_idle_timeout(&state, &self.client_request);
