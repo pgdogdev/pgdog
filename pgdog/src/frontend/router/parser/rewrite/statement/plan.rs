@@ -27,10 +27,10 @@ pub struct RewritePlan {
 impl RewritePlan {
     /// Apply the rewrite plan to a Bind message by appending generated unique IDs.
     pub fn apply_bind(&self, bind: &mut Bind) -> Result<(), Error> {
-        let generator = UniqueId::generator()?;
         let format = bind.default_param_format();
 
         for _ in 0..self.unique_ids {
+            let generator = UniqueId::generator()?;
             let id = generator.next_id();
             let param = match format {
                 Format::Binary => Parameter::new(&id.to_be_bytes()),
