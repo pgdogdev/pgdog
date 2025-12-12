@@ -1,4 +1,4 @@
-use crate::frontend::router::parser::cache::CachedAst;
+use crate::frontend::router::parser::cache::Ast;
 use pgdog_plugin::{ReadWrite, Shard as PdShard};
 use std::string::String as StdString;
 
@@ -23,7 +23,7 @@ impl QueryParser {
     pub(super) fn plugins(
         &mut self,
         context: &QueryParserContext,
-        statement: &CachedAst,
+        statement: &Ast,
         read: bool,
     ) -> Result<(), Error> {
         // Don't run plugins on Parse only.
