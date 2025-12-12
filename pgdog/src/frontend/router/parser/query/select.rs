@@ -19,7 +19,7 @@ impl QueryParser {
         stmt: &SelectStmt,
         context: &mut QueryParserContext,
     ) -> Result<Command, Error> {
-        let ast = cached_ast.ast();
+        let ast = cached_ast.parse_result();
         let cte_writes = Self::cte_writes(stmt);
         let mut writes = Self::functions(stmt)?;
 
