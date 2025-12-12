@@ -191,8 +191,8 @@ impl QueryParser {
             .router_context
             .ast
             .as_ref()
-            .ok_or(Error::EmptyQuery)?
-            .clone();
+            .cloned()
+            .unwrap_or(Cache::get().query(context.query()?, &context.sharding_schema)?);
 
         self.ensure_explain_recorder(statement.parse_result(), context);
 
