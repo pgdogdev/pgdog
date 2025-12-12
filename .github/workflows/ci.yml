@@ -96,6 +96,7 @@ jobs:
     timeout-minutes: 30
     env:
       LLVM_PROFILE_FILE: ${{ github.workspace }}/target/llvm-cov-target/profiles/pgdog-%p-%m.profraw
+      NODE_ID: pgdog-dev-1
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rs/toolchain@v1
