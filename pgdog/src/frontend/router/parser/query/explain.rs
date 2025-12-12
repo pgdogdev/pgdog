@@ -1,11 +1,11 @@
-use crate::frontend::router::parser::cache::CachedAst;
+use crate::frontend::router::parser::cache::Ast;
 
 use super::*;
 
 impl QueryParser {
     pub(super) fn explain(
         &mut self,
-        cached_ast: &CachedAst,
+        cached_ast: &Ast,
         stmt: &ExplainStmt,
         context: &mut QueryParserContext,
     ) -> Result<Command, Error> {
