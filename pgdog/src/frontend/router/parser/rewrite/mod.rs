@@ -4,6 +4,7 @@ use super::{Command, Error};
 
 mod insert_split;
 mod shard_key;
+pub mod statement;
 
 use crate::net::{Parse, ProtocolMessage};
 use crate::{frontend::PreparedStatements, net::Query};
