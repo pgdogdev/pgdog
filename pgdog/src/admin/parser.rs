@@ -5,12 +5,12 @@ use super::{
     prelude::Message, probe::Probe, reconnect::Reconnect, reload::Reload,
     reset_query_cache::ResetQueryCache, set::Set, setup_schema::SetupSchema,
     show_client_memory::ShowClientMemory, show_clients::ShowClients, show_config::ShowConfig,
-    show_instance_id::ShowInstanceId, show_lists::ShowLists, show_mirrors::ShowMirrors,
-    show_peers::ShowPeers, show_pools::ShowPools, show_prepared_statements::ShowPreparedStatements,
-    show_query_cache::ShowQueryCache, show_replication::ShowReplication,
-    show_server_memory::ShowServerMemory, show_servers::ShowServers, show_stats::ShowStats,
-    show_transactions::ShowTransactions, show_version::ShowVersion, shutdown::Shutdown, Command,
-    Error,
+    show_config_file::ShowConfigFile, show_instance_id::ShowInstanceId, show_lists::ShowLists,
+    show_mirrors::ShowMirrors, show_peers::ShowPeers, show_pools::ShowPools,
+    show_prepared_statements::ShowPreparedStatements, show_query_cache::ShowQueryCache,
+    show_replication::ShowReplication, show_server_memory::ShowServerMemory,
+    show_servers::ShowServers, show_stats::ShowStats, show_transactions::ShowTransactions,
+    show_version::ShowVersion, shutdown::Shutdown, Command, Error,
 };
 
 use tracing::debug;
@@ -23,6 +23,7 @@ pub enum ParseResult {
     Reload(Reload),
     ShowPools(ShowPools),
     ShowConfig(ShowConfig),
+    ShowConfigFile(ShowConfigFile),
     ShowServers(ShowServers),
     ShowPeers(ShowPeers),
     ShowQueryCache(ShowQueryCache),
@@ -58,6 +59,7 @@ impl ParseResult {
             Reload(reload) => reload.execute().await,
             ShowPools(show_pools) => show_pools.execute().await,
             ShowConfig(show_config) => show_config.execute().await,
+            ShowConfigFile(show_config_file) => show_config_file.execute().await,
             ShowServers(show_servers) => show_servers.execute().await,
             ShowPeers(show_peers) => show_peers.execute().await,
             ShowQueryCache(show_query_cache) => show_query_cache.execute().await,
@@ -93,6 +95,7 @@ impl ParseResult {
             Reload(reload) => reload.name(),
             ShowPools(show_pools) => show_pools.name(),
             ShowConfig(show_config) => show_config.name(),
+            ShowConfigFile(show_config_file) => show_config_file.name(),
             ShowServers(show_servers) => show_servers.name(),
             ShowPeers(show_peers) => show_peers.name(),
             ShowQueryCache(show_query_cache) => show_query_cache.name(),
@@ -137,7 +140,22 @@ impl Parser {
             "show" => match iter.next().ok_or(Error::Syntax)?.trim() {
                 "clients" => ParseResult::ShowClients(ShowClients::parse(&sql)?),
                 "pools" => ParseResult::ShowPools(ShowPools::parse(&sql)?),
-                "config" => ParseResult::ShowConfig(ShowConfig::parse(&sql)?),
+                "config" => {
+                    let next_keyword = iter.clone().find_map(|token| {
+                        let trimmed = token.trim();
+                        if trimmed.is_empty() {
+                            None
+                        } else {
+                            Some(trimmed)
+                        }
+                    });
+
+                    if next_keyword == Some("file") {
+                        ParseResult::ShowConfigFile(ShowConfigFile::parse(&sql)?)
+                    } else {
+                        ParseResult::ShowConfig(ShowConfig::parse(&sql)?)
+                    }
+                }
                 "servers" => ParseResult::ShowServers(ShowServers::parse(&sql)?),
                 "server" => match iter.next().ok_or(Error::Syntax)?.trim() {
                     "memory" => ParseResult::ShowServerMemory(ShowServerMemory::parse(&sql)?),
@@ -228,5 +246,11 @@ mod tests {
     fn parses_show_client_memory_command() {
         let result = Parser::parse("SHOW CLIENT MEMORY;");
         assert!(matches!(result, Ok(ParseResult::ShowClientMemory(_))));
+    }
+
+    #[test]
+    fn parses_show_config_file_command() {
+        let result = Parser::parse("SHOW CONFIG FILE;");
+        assert!(matches!(result, Ok(ParseResult::ShowConfigFile(_))));
     }
 }
