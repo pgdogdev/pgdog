@@ -14,7 +14,7 @@ pub mod visitor;
 
 pub use error::Error;
 pub use plan::RewritePlan;
-pub use simple_prepared::{rewrite_simple_prepared, SimplePreparedRewrite};
+pub use simple_prepared::SimplePreparedResult;
 
 #[derive(Debug)]
 pub struct StatementRewrite<'a> {
@@ -58,20 +58,11 @@ impl<'a> StatementRewrite<'a> {
         };
 
         // Handle top-level PREPARE/EXECUTE statements.
-        for stmt in &mut self.stmt.stmts {
-            if let Some(ref mut node) = stmt.stmt {
-                if let Some(ref mut inner) = node.node {
-                    match rewrite_simple_prepared(inner, self.prepared_statements)? {
-                        SimplePreparedRewrite::Prepared => {
-                            self.rewritten = true;
-                        }
-                        SimplePreparedRewrite::Executed { name, statement } => {
-                            plan.prepares.push((name, statement));
-                            self.rewritten = true;
-                        }
-                        SimplePreparedRewrite::None => {}
-                    }
-                }
+        if self.prepared_statements.level.full() {
+            let prepared_result = self.rewrite_simple_prepared()?;
+            if prepared_result.rewritten {
+                self.rewritten = true;
+                plan.prepares = prepared_result.prepares;
             }
         }
 

@@ -3,11 +3,20 @@ use pg_query::{Error as PgQueryError, NodeEnum};
 use crate::frontend::PreparedStatements;
 use crate::net::Parse;
 
-use super::Error;
+use super::{Error, StatementRewrite};
 
-/// Result of rewriting a PREPARE or EXECUTE SQL command.
+/// Result of rewriting all PREPARE/EXECUTE statements in a query.
+#[derive(Debug, Clone, Default)]
+pub struct SimplePreparedResult {
+    /// Whether any statement was rewritten.
+    pub rewritten: bool,
+    /// Prepared statements to prepend (name, statement) for EXECUTE rewrites.
+    pub prepares: Vec<(String, String)>,
+}
+
+/// Result of rewriting a single PREPARE or EXECUTE SQL command.
 #[derive(Debug, Clone)]
-pub enum SimplePreparedRewrite {
+enum SimplePreparedRewrite {
     /// Node was not a PREPARE or EXECUTE statement.
     None,
     /// PREPARE statement was rewritten.
@@ -17,19 +26,44 @@ pub enum SimplePreparedRewrite {
     Executed { name: String, statement: String },
 }
 
-/// Rewrites `PREPARE` and `EXECUTE` SQL commands to use
-/// globally cached prepared statement names.
-///
-/// # More details
-///
-/// `PREPARE __stmt_1 AS SELECT $1` is rewritten as `PREPARE __pgdog_1 AS SELECT $1` and
-/// `SELECT $1` is stored in the global cache using `insert_anyway`.
-///
-/// `EXECUTE __stmt_1(1)` is rewritten to `EXECUTE __pgdog_1(1)`. Additionally, the caller
-/// should prepend `ProtocolMessage::Prepare` to the client request using the returned
-/// name and statement.
-///
-pub fn rewrite_simple_prepared(
+impl StatementRewrite<'_> {
+    /// Rewrites all top-level `PREPARE` and `EXECUTE` SQL commands.
+    ///
+    /// # More details
+    ///
+    /// `PREPARE __stmt_1 AS SELECT $1` is rewritten as `PREPARE __pgdog_1 AS SELECT $1` and
+    /// `SELECT $1` is stored in the global cache using `insert_anyway`.
+    ///
+    /// `EXECUTE __stmt_1(1)` is rewritten to `EXECUTE __pgdog_1(1)`. Additionally, the caller
+    /// should prepend `ProtocolMessage::Prepare` to the client request using the returned
+    /// name and statement.
+    ///
+    pub(super) fn rewrite_simple_prepared(&mut self) -> Result<SimplePreparedResult, Error> {
+        let mut result = SimplePreparedResult::default();
+
+        for stmt in &mut self.stmt.stmts {
+            if let Some(ref mut node) = stmt.stmt {
+                if let Some(ref mut inner) = node.node {
+                    match rewrite_single_prepared(inner, self.prepared_statements)? {
+                        SimplePreparedRewrite::Prepared => {
+                            result.rewritten = true;
+                        }
+                        SimplePreparedRewrite::Executed { name, statement } => {
+                            result.prepares.push((name, statement));
+                            result.rewritten = true;
+                        }
+                        SimplePreparedRewrite::None => {}
+                    }
+                }
+            }
+        }
+
+        Ok(result)
+    }
+}
+
+/// Rewrites a single `PREPARE` or `EXECUTE` node.
+fn rewrite_single_prepared(
     node: &mut NodeEnum,
     prepared_statements: &mut PreparedStatements,
 ) -> Result<SimplePreparedRewrite, Error> {
@@ -78,14 +112,21 @@ pub fn rewrite_simple_prepared(
 mod tests {
     use super::super::StatementRewrite;
     use super::*;
+    use crate::config::PreparedStatements as PreparedStatementsLevel;
     use pg_query::parse;
+
+    fn prepared_statements_full() -> PreparedStatements {
+        let mut ps = PreparedStatements::default();
+        ps.set_level(PreparedStatementsLevel::Full);
+        ps
+    }
 
     #[test]
     fn test_rewrite_prepare() {
         let mut ast = parse("PREPARE test_stmt AS SELECT $1, $2")
             .unwrap()
             .protobuf;
-        let mut ps = PreparedStatements::default();
+        let mut ps = prepared_statements_full();
         let mut rewrite = StatementRewrite::new(&mut ast, false, &mut ps);
         let plan = rewrite.maybe_rewrite().unwrap();
 
@@ -104,7 +145,7 @@ mod tests {
 
     #[test]
     fn test_rewrite_execute() {
-        let mut ps = PreparedStatements::default();
+        let mut ps = prepared_statements_full();
 
         // First, prepare a statement
         let mut ast = parse("PREPARE test_stmt AS SELECT 1").unwrap().protobuf;
@@ -129,7 +170,7 @@ mod tests {
 
     #[test]
     fn test_rewrite_execute_with_params() {
-        let mut ps = PreparedStatements::default();
+        let mut ps = prepared_statements_full();
 
         // First, prepare a statement with parameters
         let mut ast = parse("PREPARE test_stmt AS SELECT $1, $2")
@@ -157,7 +198,7 @@ mod tests {
 
     #[test]
     fn test_execute_nonexistent_fails() {
-        let mut ps = PreparedStatements::default();
+        let mut ps = prepared_statements_full();
 
         let mut ast = parse("EXECUTE nonexistent_stmt").unwrap().protobuf;
         let mut rewrite = StatementRewrite::new(&mut ast, false, &mut ps);
@@ -169,7 +210,7 @@ mod tests {
     #[test]
     fn test_no_rewrite_for_regular_select() {
         let mut ast = parse("SELECT 1, 2, 3").unwrap().protobuf;
-        let mut ps = PreparedStatements::default();
+        let mut ps = prepared_statements_full();
         let mut rewrite = StatementRewrite::new(&mut ast, false, &mut ps);
         let plan = rewrite.maybe_rewrite().unwrap();
 

@@ -17,7 +17,8 @@ use crate::backend::Cluster;
 use crate::config::ReadWriteStrategy;
 use crate::frontend::{
     client::{Sticky, TransactionType},
-    ClientRequest, PreparedStatements, RouterContext,
+    router::Ast,
+    BufferedQuery, ClientRequest, PreparedStatements, RouterContext,
 };
 use crate::net::messages::Query;
 use crate::net::Parameters;
@@ -74,10 +75,13 @@ fn lock_config_mode() -> MutexGuard<'static, ()> {
 
 fn parse_query(query: &str) -> Command {
     let mut query_parser = QueryParser::default();
-    let client_request = ClientRequest::from(vec![Query::new(query).into()]);
     let cluster = Cluster::new_test();
     let mut stmt = PreparedStatements::default();
     let params = Parameters::default();
+    let mut ast = Ast::new(query, &cluster.sharding_schema(), false, &mut stmt).unwrap();
+    ast.cached = false; // Simple protocol queries are not cached
+    let mut client_request = ClientRequest::from(vec![Query::new(query).into()]);
+    client_request.ast = Some(ast);
 
     let context = RouterContext::new(
         &client_request,
@@ -100,10 +104,13 @@ macro_rules! command {
     ($query:expr, $in_transaction:expr) => {{
         let query = $query;
         let mut query_parser = QueryParser::default();
-        let client_request = ClientRequest::from(vec![Query::new(query).into()]);
         let cluster = Cluster::new_test();
         let mut stmt = PreparedStatements::default();
         let params = Parameters::default();
+        let mut ast = Ast::new(query, &cluster.sharding_schema(), false, &mut stmt).unwrap();
+        ast.cached = false; // Simple protocol queries are not cached
+        let mut client_request = ClientRequest::from(vec![Query::new(query).into()]);
+        client_request.ast = Some(ast);
         let transaction = if $in_transaction {
             Some(TransactionType::ReadWrite)
         } else {
@@ -146,7 +153,27 @@ macro_rules! query_parser {
         let cluster = $cluster;
         let mut prep_stmts = PreparedStatements::default();
         let params = Parameters::default();
-        let client_request: ClientRequest = vec![$query.into()].into();
+        let mut client_request: ClientRequest = vec![$query.into()].into();
+
+        let buffered_query = client_request.query().unwrap();
+        let (query_str, extended) = match buffered_query {
+            Some(BufferedQuery::Query(q)) => (q.query().to_owned(), false),
+            Some(BufferedQuery::Prepared(p)) => (p.query().to_owned(), true),
+            None => panic!("no query in client request"),
+        };
+
+        let mut ast = Ast::new(
+            &query_str,
+            &cluster.sharding_schema(),
+            extended,
+            &mut prep_stmts,
+        )
+        .unwrap();
+        // Simple protocol queries should not be marked as cached
+        if !extended {
+            ast.cached = false;
+        }
+        client_request.ast = Some(ast);
 
         let maybe_transaction = if $in_transaction {
             Some(TransactionType::ReadWrite)
@@ -187,12 +214,17 @@ macro_rules! parse {
             })
             .collect::<Vec<_>>();
         let bind = Bind::new_params_codes($name, &params, $codes);
+        let cluster = Cluster::new_test();
+        let mut prep_stmts = PreparedStatements::default();
+        let ast = Ast::new($query, &cluster.sharding_schema(), true, &mut prep_stmts).unwrap();
+        let mut client_request = ClientRequest::from(vec![parse.into(), bind.into()]);
+        client_request.ast = Some(ast);
         let route = QueryParser::default()
             .parse(
                 RouterContext::new(
-                    &ClientRequest::from(vec![parse.into(), bind.into()]),
-                    &Cluster::new_test(),
-                    &mut PreparedStatements::default(),
+                    &client_request,
+                    &cluster,
+                    &mut prep_stmts,
                     &Parameters::default(),
                     None,
                     Sticky::new(),
@@ -216,8 +248,11 @@ macro_rules! parse {
 
 fn parse_with_parameters(query: &str, params: Parameters) -> Result<Command, Error> {
     let mut prep_stmts = PreparedStatements::default();
-    let client_request: ClientRequest = vec![Query::new(query).into()].into();
     let cluster = Cluster::new_test();
+    let mut ast = Ast::new(query, &cluster.sharding_schema(), false, &mut prep_stmts).unwrap();
+    ast.cached = false; // Simple protocol queries are not cached
+    let mut client_request: ClientRequest = vec![Query::new(query).into()].into();
+    client_request.ast = Some(ast);
     let router_context = RouterContext::new(
         &client_request,
         &cluster,
@@ -240,7 +275,9 @@ fn parse_with_bind(query: &str, params: &[&[u8]]) -> Result<Command, Error> {
         .map(|value| Parameter::new(value))
         .collect::<Vec<_>>();
     let bind = crate::net::messages::Bind::new_params("", &params);
-    let client_request: ClientRequest = vec![parse.into(), bind.into()].into();
+    let ast = Ast::new(query, &cluster.sharding_schema(), true, &mut prep_stmts).unwrap();
+    let mut client_request: ClientRequest = vec![parse.into(), bind.into()].into();
+    client_request.ast = Some(ast);
     let router_context = RouterContext::new(
         &client_request,
         &cluster,
@@ -501,10 +538,20 @@ fn test_set() {
         _ => panic!("search path"),
     }
 
-    let buffer: ClientRequest = vec![Query::new(r#"SET statement_timeout TO 1"#).into()].into();
+    let query_str = r#"SET statement_timeout TO 1"#;
     let cluster = Cluster::new_test();
     let mut prep_stmts = PreparedStatements::default();
     let params = Parameters::default();
+    let mut ast = Ast::new(
+        query_str,
+        &cluster.sharding_schema(),
+        false,
+        &mut prep_stmts,
+    )
+    .unwrap();
+    ast.cached = false;
+    let mut buffer: ClientRequest = vec![Query::new(query_str).into()].into();
+    buffer.ast = Some(ast);
     let transaction = Some(TransactionType::ReadWrite);
     let router_context = RouterContext::new(
         &buffer,
@@ -604,10 +651,13 @@ fn update_sharding_key_errors_by_default() {
     let _guard = ConfigModeGuard::set(RewriteMode::Error);
 
     let query = "UPDATE sharded SET id = id + 1 WHERE id = 1";
+    let cluster = Cluster::new_test();
     let mut prep_stmts = PreparedStatements::default();
     let params = Parameters::default();
-    let client_request: ClientRequest = vec![Query::new(query).into()].into();
-    let cluster = Cluster::new_test();
+    let mut ast = Ast::new(query, &cluster.sharding_schema(), false, &mut prep_stmts).unwrap();
+    ast.cached = false;
+    let mut client_request: ClientRequest = vec![Query::new(query).into()].into();
+    client_request.ast = Some(ast);
     let router_context = RouterContext::new(
         &client_request,
         &cluster,
@@ -631,10 +681,13 @@ fn update_sharding_key_ignore_mode_allows() {
     let _guard = ConfigModeGuard::set(RewriteMode::Ignore);
 
     let query = "UPDATE sharded SET id = id + 1 WHERE id = 1";
+    let cluster = Cluster::new_test();
     let mut prep_stmts = PreparedStatements::default();
     let params = Parameters::default();
-    let client_request: ClientRequest = vec![Query::new(query).into()].into();
-    let cluster = Cluster::new_test();
+    let mut ast = Ast::new(query, &cluster.sharding_schema(), false, &mut prep_stmts).unwrap();
+    ast.cached = false;
+    let mut client_request: ClientRequest = vec![Query::new(query).into()].into();
+    client_request.ast = Some(ast);
     let router_context = RouterContext::new(
         &client_request,
         &cluster,
@@ -655,10 +708,13 @@ fn update_sharding_key_rewrite_mode_not_supported() {
     let _guard = ConfigModeGuard::set(RewriteMode::Rewrite);
 
     let query = "UPDATE sharded SET id = id + 1 WHERE id = 1";
+    let cluster = Cluster::new_test();
     let mut prep_stmts = PreparedStatements::default();
     let params = Parameters::default();
-    let client_request: ClientRequest = vec![Query::new(query).into()].into();
-    let cluster = Cluster::new_test();
+    let mut ast = Ast::new(query, &cluster.sharding_schema(), false, &mut prep_stmts).unwrap();
+    ast.cached = false;
+    let mut client_request: ClientRequest = vec![Query::new(query).into()].into();
+    client_request.ast = Some(ast);
     let router_context = RouterContext::new(
         &client_request,
         &cluster,
@@ -682,10 +738,13 @@ fn update_sharding_key_rewrite_plan_detected() {
     let _guard = ConfigModeGuard::set(RewriteMode::Rewrite);
 
     let query = "UPDATE sharded SET id = 11 WHERE id = 1";
+    let cluster = Cluster::new_test();
     let mut prep_stmts = PreparedStatements::default();
     let params = Parameters::default();
-    let client_request: ClientRequest = vec![Query::new(query).into()].into();
-    let cluster = Cluster::new_test();
+    let mut ast = Ast::new(query, &cluster.sharding_schema(), false, &mut prep_stmts).unwrap();
+    ast.cached = false;
+    let mut client_request: ClientRequest = vec![Query::new(query).into()].into();
+    client_request.ast = Some(ast);
     let router_context = RouterContext::new(
         &client_request,
         &cluster,
@@ -850,8 +909,7 @@ fn test_function_begin() {
     let cluster = Cluster::new_test();
     let mut prep_stmts = PreparedStatements::default();
     let params = Parameters::default();
-    let buffer: ClientRequest = vec![Query::new(
-        "SELECT
+    let query_str = "SELECT
 	ROW(t1.*) AS tt1,
 	ROW(t2.*) AS tt2
 FROM t1
@@ -864,10 +922,17 @@ WHERE t2.account = (
 	WHERE
 		t2.id = $1
 	)
-	",
+	";
+    let mut ast = Ast::new(
+        query_str,
+        &cluster.sharding_schema(),
+        false,
+        &mut prep_stmts,
     )
-    .into()]
-    .into();
+    .unwrap();
+    ast.cached = false;
+    let mut buffer: ClientRequest = vec![Query::new(query_str).into()].into();
+    buffer.ast = Some(ast);
     let transaction = Some(TransactionType::ReadWrite);
     let router_context = RouterContext::new(
         &buffer,
