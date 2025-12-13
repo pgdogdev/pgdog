@@ -187,12 +187,13 @@ impl QueryParser {
             }
         }
 
-        let statement = context
-            .router_context
-            .ast
-            .as_ref()
-            .cloned()
-            .unwrap_or(Cache::get().query(context.query()?, &context.sharding_schema)?);
+        let statement = if let Some(ast) = context.router_context.ast.as_ref().cloned() {
+            ast
+        } else {
+            let query = context.query()?.clone();
+            let sharding_schema = context.sharding_schema.clone();
+            Cache::get().query(&query, &sharding_schema, context.prepared_statements())?
+        };
 
         self.ensure_explain_recorder(statement.parse_result(), context);
 
@@ -404,10 +405,13 @@ impl QueryParser {
         if context.dry_run {
             // Record statement in cache with normalized parameters.
             if !statement.cached {
+                let query_str = context.query()?.query().to_owned();
+                let sharding_schema = context.sharding_schema.clone();
                 Cache::get().record_normalized(
-                    context.query()?.query(),
+                    &query_str,
                     command.route(),
-                    &context.sharding_schema,
+                    &sharding_schema,
+                    context.prepared_statements(),
                 )?;
             }
             Ok(command.dry_run())

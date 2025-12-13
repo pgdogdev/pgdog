@@ -7,6 +7,7 @@ use std::sync::Arc;
 use super::super::{comment::comment, Error, Route, Shard, StatementRewrite, Table};
 use super::Stats;
 use crate::frontend::router::parser::rewrite::statement::RewritePlan;
+use crate::frontend::PreparedStatements;
 use crate::{backend::ShardingSchema, config::Role};
 
 /// Abstract syntax tree (query) cache entry,
@@ -43,9 +44,15 @@ impl Deref for Ast {
 
 impl Ast {
     /// Create new cache entry from pg_query's AST.
-    pub fn new(query: &str, schema: &ShardingSchema, extended: bool) -> Result<Self, Error> {
+    pub fn new(
+        query: &str,
+        schema: &ShardingSchema,
+        extended: bool,
+        prepared_statements: &mut PreparedStatements,
+    ) -> Result<Self, Error> {
         let mut ast = parse(query).map_err(Error::PgQuery)?;
-        let rewrite_plan = StatementRewrite::new(&mut ast.protobuf, extended).maybe_rewrite()?;
+        let rewrite_plan = StatementRewrite::new(&mut ast.protobuf, extended, prepared_statements)
+            .maybe_rewrite()?;
         let (comment_shard, comment_role) = comment(query, schema)?;
 
         Ok(Self {

@@ -10,7 +10,7 @@ use tracing::debug;
 use super::super::{Error, Route};
 use super::Ast;
 use crate::backend::ShardingSchema;
-use crate::frontend::BufferedQuery;
+use crate::frontend::{BufferedQuery, PreparedStatements};
 
 static CACHE: Lazy<Cache> = Lazy::new(Cache::new);
 
@@ -69,10 +69,17 @@ impl Cache {
     }
 
     /// Handle parsing a query.
-    pub fn query(&self, query: &BufferedQuery, schema: &ShardingSchema) -> Result<Ast, Error> {
+    pub fn query(
+        &self,
+        query: &BufferedQuery,
+        schema: &ShardingSchema,
+        prepared_statements: &mut PreparedStatements,
+    ) -> Result<Ast, Error> {
         match query {
-            BufferedQuery::Prepared(parse) => self.parse(parse.query(), schema),
-            BufferedQuery::Query(query) => self.simple(query.query(), schema),
+            BufferedQuery::Prepared(parse) => {
+                self.parse(parse.query(), schema, prepared_statements)
+            }
+            BufferedQuery::Query(query) => self.simple(query.query(), schema, prepared_statements),
         }
     }
 
@@ -82,7 +89,12 @@ impl Cache {
     /// N.B. There is a race here that allows multiple threads to
     /// parse the same query. That's better imo than locking the data structure
     /// while we parse the query.
-    fn parse(&self, query: &str, schema: &ShardingSchema) -> Result<Ast, Error> {
+    fn parse(
+        &self,
+        query: &str,
+        schema: &ShardingSchema,
+        prepared_statements: &mut PreparedStatements,
+    ) -> Result<Ast, Error> {
         {
             let mut guard = self.inner.lock();
             let ast = guard.queries.get_mut(query).map(|entry| {
@@ -96,7 +108,7 @@ impl Cache {
         }
 
         // Parse query without holding lock.
-        let entry = Ast::new(query, schema, true)?;
+        let entry = Ast::new(query, schema, true, prepared_statements)?;
 
         let mut guard = self.inner.lock();
         guard.queries.put(query.to_owned(), entry.clone());
@@ -106,8 +118,13 @@ impl Cache {
     }
 
     /// Parse a statement but do not store it in the cache.
-    fn simple(&self, query: &str, schema: &ShardingSchema) -> Result<Ast, Error> {
-        let mut entry = Ast::new(query, schema, false)?;
+    fn simple(
+        &self,
+        query: &str,
+        schema: &ShardingSchema,
+        prepared_statements: &mut PreparedStatements,
+    ) -> Result<Ast, Error> {
+        let mut entry = Ast::new(query, schema, false, prepared_statements)?;
         entry.cached = false;
         Ok(entry)
     }
@@ -118,6 +135,7 @@ impl Cache {
         query: &str,
         route: &Route,
         schema: &ShardingSchema,
+        prepared_statements: &mut PreparedStatements,
     ) -> Result<(), Error> {
         let normalized = normalize(query).map_err(Error::PgQuery)?;
 
@@ -130,7 +148,7 @@ impl Cache {
             }
         }
 
-        let entry = Ast::new(query, schema, true)?;
+        let entry = Ast::new(query, schema, true, prepared_statements)?;
         entry.update_stats(route);
 
         let mut guard = self.inner.lock();

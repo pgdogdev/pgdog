@@ -127,7 +127,9 @@ impl QueryEngine {
         }
 
         // Rewrite statement if necessary.
-        self.parse_and_rewrite(context).await?;
+        if !self.parse_and_rewrite(context).await? {
+            return Ok(());
+        }
 
         // Intercept commands we don't have to forward to a server.
         if self.intercept_incomplete(context).await? {
