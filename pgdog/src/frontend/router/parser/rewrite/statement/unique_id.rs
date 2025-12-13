@@ -114,6 +114,7 @@ impl StatementRewrite<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::frontend::PreparedStatements;
 
     fn parse_first_target(sql: &str) -> Node {
         let ast = pg_query::parse(sql).unwrap();
@@ -165,7 +166,8 @@ mod tests {
         let mut ast = pg_query::parse("SELECT pgdog.unique_id()")
             .unwrap()
             .protobuf;
-        let mut rewrite = StatementRewrite::new(&mut ast, true);
+        let mut ps = PreparedStatements::default();
+        let mut rewrite = StatementRewrite::new(&mut ast, true, &mut ps);
         let plan = rewrite.maybe_rewrite().unwrap();
 
         let sql = ast.deparse().unwrap();
@@ -179,7 +181,8 @@ mod tests {
         let mut ast = pg_query::parse("SELECT pgdog.unique_id(), $1, $2")
             .unwrap()
             .protobuf;
-        let mut rewrite = StatementRewrite::new(&mut ast, true);
+        let mut ps = PreparedStatements::default();
+        let mut rewrite = StatementRewrite::new(&mut ast, true, &mut ps);
         let plan = rewrite.maybe_rewrite().unwrap();
 
         let sql = ast.deparse().unwrap();
@@ -193,7 +196,8 @@ mod tests {
         let mut ast = pg_query::parse("SELECT pgdog.unique_id(), pgdog.unique_id()")
             .unwrap()
             .protobuf;
-        let mut rewrite = StatementRewrite::new(&mut ast, true);
+        let mut ps = PreparedStatements::default();
+        let mut rewrite = StatementRewrite::new(&mut ast, true, &mut ps);
         let plan = rewrite.maybe_rewrite().unwrap();
 
         let sql = ast.deparse().unwrap();
@@ -210,7 +214,8 @@ mod tests {
         let mut ast = pg_query::parse("SELECT pgdog.unique_id()")
             .unwrap()
             .protobuf;
-        let mut rewrite = StatementRewrite::new(&mut ast, false);
+        let mut ps = PreparedStatements::default();
+        let mut rewrite = StatementRewrite::new(&mut ast, false, &mut ps);
         let plan = rewrite.maybe_rewrite().unwrap();
 
         let sql = ast.deparse().unwrap();
@@ -235,7 +240,8 @@ mod tests {
         let mut ast = pg_query::parse("SELECT pgdog.unique_id(), pgdog.unique_id()")
             .unwrap()
             .protobuf;
-        let mut rewrite = StatementRewrite::new(&mut ast, false);
+        let mut ps = PreparedStatements::default();
+        let mut rewrite = StatementRewrite::new(&mut ast, false, &mut ps);
         let plan = rewrite.maybe_rewrite().unwrap();
 
         let sql = ast.deparse().unwrap();
@@ -250,7 +256,8 @@ mod tests {
     #[test]
     fn test_rewrite_no_unique_id() {
         let mut ast = pg_query::parse("SELECT 1, 2, 3").unwrap().protobuf;
-        let mut rewrite = StatementRewrite::new(&mut ast, true);
+        let mut ps = PreparedStatements::default();
+        let mut rewrite = StatementRewrite::new(&mut ast, true, &mut ps);
         let plan = rewrite.maybe_rewrite().unwrap();
 
         let sql = ast.deparse().unwrap();
@@ -264,7 +271,8 @@ mod tests {
             pg_query::parse("INSERT INTO t (id, name) VALUES (pgdog.unique_id(), 'test')")
                 .unwrap()
                 .protobuf;
-        let mut rewrite = StatementRewrite::new(&mut ast, true);
+        let mut ps = PreparedStatements::default();
+        let mut rewrite = StatementRewrite::new(&mut ast, true, &mut ps);
         let plan = rewrite.maybe_rewrite().unwrap();
 
         let sql = ast.deparse().unwrap();
@@ -278,7 +286,8 @@ mod tests {
             pg_query::parse("INSERT INTO t (id) VALUES (pgdog.unique_id()), (pgdog.unique_id())")
                 .unwrap()
                 .protobuf;
-        let mut rewrite = StatementRewrite::new(&mut ast, true);
+        let mut ps = PreparedStatements::default();
+        let mut rewrite = StatementRewrite::new(&mut ast, true, &mut ps);
         let plan = rewrite.maybe_rewrite().unwrap();
 
         let sql = ast.deparse().unwrap();
@@ -291,7 +300,8 @@ mod tests {
         let mut ast = pg_query::parse("INSERT INTO t (id) SELECT pgdog.unique_id() FROM s")
             .unwrap()
             .protobuf;
-        let mut rewrite = StatementRewrite::new(&mut ast, true);
+        let mut ps = PreparedStatements::default();
+        let mut rewrite = StatementRewrite::new(&mut ast, true, &mut ps);
         let plan = rewrite.maybe_rewrite().unwrap();
 
         let sql = ast.deparse().unwrap();
@@ -304,7 +314,8 @@ mod tests {
         let mut ast = pg_query::parse("UPDATE t SET id = pgdog.unique_id() WHERE name = 'test'")
             .unwrap()
             .protobuf;
-        let mut rewrite = StatementRewrite::new(&mut ast, true);
+        let mut ps = PreparedStatements::default();
+        let mut rewrite = StatementRewrite::new(&mut ast, true, &mut ps);
         let plan = rewrite.maybe_rewrite().unwrap();
 
         let sql = ast.deparse().unwrap();
@@ -317,7 +328,8 @@ mod tests {
         let mut ast = pg_query::parse("UPDATE t SET name = 'new' WHERE id = pgdog.unique_id()")
             .unwrap()
             .protobuf;
-        let mut rewrite = StatementRewrite::new(&mut ast, true);
+        let mut ps = PreparedStatements::default();
+        let mut rewrite = StatementRewrite::new(&mut ast, true, &mut ps);
         let plan = rewrite.maybe_rewrite().unwrap();
 
         let sql = ast.deparse().unwrap();
@@ -330,7 +342,8 @@ mod tests {
         let mut ast = pg_query::parse("DELETE FROM t WHERE id = pgdog.unique_id()")
             .unwrap()
             .protobuf;
-        let mut rewrite = StatementRewrite::new(&mut ast, true);
+        let mut ps = PreparedStatements::default();
+        let mut rewrite = StatementRewrite::new(&mut ast, true, &mut ps);
         let plan = rewrite.maybe_rewrite().unwrap();
 
         let sql = ast.deparse().unwrap();
@@ -345,7 +358,8 @@ mod tests {
         )
         .unwrap()
         .protobuf;
-        let mut rewrite = StatementRewrite::new(&mut ast, true);
+        let mut ps = PreparedStatements::default();
+        let mut rewrite = StatementRewrite::new(&mut ast, true, &mut ps);
         let plan = rewrite.maybe_rewrite().unwrap();
 
         let sql = ast.deparse().unwrap();

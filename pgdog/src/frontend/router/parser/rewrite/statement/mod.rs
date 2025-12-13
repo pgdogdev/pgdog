@@ -4,14 +4,17 @@
 use pg_query::protobuf::ParseResult;
 use pg_query::Node;
 
+use crate::frontend::PreparedStatements;
+
 pub mod error;
 pub mod plan;
-pub mod select;
+pub mod simple_prepared;
 pub mod unique_id;
 pub mod visitor;
 
 pub use error::Error;
 pub use plan::RewritePlan;
+pub use simple_prepared::{rewrite_simple_prepared, SimplePreparedRewrite};
 
 #[derive(Debug)]
 pub struct StatementRewrite<'a> {
@@ -23,6 +26,8 @@ pub struct StatementRewrite<'a> {
     /// we need to rewrite function calls with parameters
     /// and not actual values.
     extended: bool,
+    /// Prepared statements cache for name mapping.
+    prepared_statements: &'a mut PreparedStatements,
 }
 
 impl<'a> StatementRewrite<'a> {
@@ -30,11 +35,16 @@ impl<'a> StatementRewrite<'a> {
     ///
     /// More often than not, it won't do anything.
     ///
-    pub fn new(stmt: &'a mut ParseResult, extended: bool) -> Self {
+    pub fn new(
+        stmt: &'a mut ParseResult,
+        extended: bool,
+        prepared_statements: &'a mut PreparedStatements,
+    ) -> Self {
         Self {
             stmt,
             rewritten: false,
             extended,
+            prepared_statements,
         }
     }
 
@@ -46,6 +56,24 @@ impl<'a> StatementRewrite<'a> {
             params,
             ..Default::default()
         };
+
+        // Handle top-level PREPARE/EXECUTE statements.
+        for stmt in &mut self.stmt.stmts {
+            if let Some(ref mut node) = stmt.stmt {
+                if let Some(ref mut inner) = node.node {
+                    match rewrite_simple_prepared(inner, self.prepared_statements)? {
+                        SimplePreparedRewrite::Prepared => {
+                            self.rewritten = true;
+                        }
+                        SimplePreparedRewrite::Executed { name, statement } => {
+                            plan.prepares.push((name, statement));
+                            self.rewritten = true;
+                        }
+                        SimplePreparedRewrite::None => {}
+                    }
+                }
+            }
+        }
 
         // Track the next parameter number to use
         let mut next_param = plan.params as i32 + 1;

@@ -1,6 +1,6 @@
 use crate::frontend::{ClientRequest, PreparedStatements};
 use crate::net::messages::bind::{Format, Parameter};
-use crate::net::{Bind, Parse, Query};
+use crate::net::{Bind, Parse, ProtocolMessage, Query};
 use crate::unique_id::UniqueId;
 
 use super::Error;
@@ -22,6 +22,10 @@ pub struct RewritePlan {
 
     /// Rewritten SQL statement.
     pub(super) stmt: Option<String>,
+
+    /// Prepared statements to prepend to the client request.
+    /// Each tuple contains (name, statement) for ProtocolMessage::Prepare.
+    pub(super) prepares: Vec<(String, String)>,
 }
 
 impl RewritePlan {
@@ -60,7 +64,18 @@ impl RewritePlan {
 
     /// Apply the rewrite plan to a ClientRequest.
     pub fn apply(&self, request: &mut ClientRequest) -> Result<(), Error> {
-        use crate::net::ProtocolMessage;
+        // Prepend any required Prepare messages for EXECUTE statements.
+        if !self.prepares.is_empty() {
+            let prepends: Vec<ProtocolMessage> = self
+                .prepares
+                .iter()
+                .map(|(name, statement)| ProtocolMessage::Prepare {
+                    name: name.clone(),
+                    statement: statement.clone(),
+                })
+                .collect();
+            request.messages.splice(0..0, prepends);
+        }
 
         for message in request.messages.iter_mut() {
             match message {
@@ -75,7 +90,7 @@ impl RewritePlan {
 
     /// Rewrite plan doesn't do anything.
     pub fn no_op(&self) -> bool {
-        self.stmt.is_none()
+        self.stmt.is_none() && self.prepares.is_empty()
     }
 }
 
