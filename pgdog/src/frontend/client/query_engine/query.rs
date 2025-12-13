@@ -311,7 +311,7 @@ impl QueryEngine {
         if cross_shard_disabled
             && route.is_cross_shard()
             && !context.admin
-            && context.client_request.executable()
+            && context.client_request.is_executable()
         {
             let query = context.client_request.query()?;
             let error = ErrorResponse::cross_shard_disabled(query.as_ref().map(|q| q.query()));
@@ -338,7 +338,7 @@ impl QueryEngine {
         if enabled
             && route.should_2pc()
             && self.begin_stmt.is_none()
-            && context.client_request.executable()
+            && context.client_request.is_executable()
             && !context.in_transaction()
         {
             debug!("[2pc] enabling automatic transaction");
@@ -360,7 +360,7 @@ impl QueryEngine {
         if shards > 1 // This check only matters for cross-shard queries
             && context.in_error()
             && !context.rollback
-            && context.client_request.executable()
+            && context.client_request.is_executable()
             && !route.rollback_savepoint()
         {
             let error = ErrorResponse::in_failed_transaction();

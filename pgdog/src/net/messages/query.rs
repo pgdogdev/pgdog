@@ -39,6 +39,13 @@ impl Query {
         //          Don't read the trailing null byte.
         unsafe { from_utf8_unchecked(&self.payload[5..self.payload.len() - 1]) }
     }
+
+    /// Update the SQL query.
+    pub fn set_query(&mut self, query: &str) {
+        let mut payload = Payload::named('Q');
+        payload.put_string(query);
+        self.payload = payload.freeze();
+    }
 }
 
 impl FromBytes for Query {

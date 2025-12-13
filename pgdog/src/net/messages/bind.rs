@@ -258,6 +258,47 @@ impl Bind {
     pub fn format_codes_raw(&self) -> &Vec<Format> {
         &self.codes
     }
+
+    /// Push a parameter to the end of the parameter list with the given format.
+    ///
+    /// Handles format codes correctly per PostgreSQL semantics:
+    /// - If codes.len() == 0: all parameters use Text
+    /// - If codes.len() == 1: all parameters use that one format (uniform)
+    /// - If codes.len() == params.len() (and > 1): one-to-one mapping
+    pub fn push_param(&mut self, param: Parameter, format: Format) {
+        if self.codes.len() == 1 {
+            // Uniform format: if new format differs, expand to one-to-one
+            if self.codes[0] != format {
+                let existing_format = self.codes[0];
+                self.codes = vec![existing_format; self.params.len()];
+                self.codes.push(format);
+            }
+            // If format matches, keep uniform (no change to codes)
+        } else if self.codes.len() > 1 && self.codes.len() == self.params.len() {
+            // One-to-one mapping: add the new format
+            self.codes.push(format);
+        } else if self.codes.is_empty() && format == Format::Binary {
+            // No codes (all text): if adding binary, need to expand
+            self.codes = vec![Format::Text; self.params.len()];
+            self.codes.push(Format::Binary);
+        }
+        // If codes.len() == 0 and format is Text, no codes needed
+
+        self.params.push(param);
+        self.original = None;
+    }
+
+    /// Get the effective format for new parameters.
+    pub fn default_param_format(&self) -> Format {
+        if self.codes.len() == 1 {
+            self.codes[0]
+        } else if self.codes.is_empty() {
+            Format::Text
+        } else {
+            // One-to-one mapping: default to Text for new params
+            Format::Text
+        }
+    }
 }
 
 impl FromBytes for Bind {

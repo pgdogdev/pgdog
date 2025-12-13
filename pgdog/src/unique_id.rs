@@ -7,14 +7,13 @@
 //! 2. Each instance of PgDog has reasonably accurate and synchronized
 //!    clock, so `std::time::SystemTime` returns a good value.
 //!
-use std::sync::Arc;
+use std::thread;
 use std::time::UNIX_EPOCH;
 use std::time::{Duration, SystemTime};
 
 use once_cell::sync::OnceCell;
+use parking_lot::Mutex;
 use thiserror::Error;
-use tokio::sync::Mutex;
-use tokio::time::sleep;
 
 use crate::config::config;
 use crate::util::{instance_id, node_id};
@@ -43,14 +42,14 @@ struct State {
 impl State {
     // Generate next unique ID in a distributed sequence.
     // The `node_id` argument must be globally unique.
-    async fn next_id(&mut self, node_id: u64, id_offset: u64) -> u64 {
-        let mut now = wait_until(self.last_timestamp_ms).await;
+    fn next_id(&mut self, node_id: u64, id_offset: u64) -> u64 {
+        let mut now = wait_until(self.last_timestamp_ms);
 
         if now == self.last_timestamp_ms {
             self.sequence = (self.sequence + 1) & MAX_SEQUENCE;
             // Wraparound.
             if self.sequence == 0 {
-                now = wait_until(now + 1).await;
+                now = wait_until(now + 1);
             }
         } else {
             // Reset sequence to zero once we reach next ms.
@@ -83,13 +82,13 @@ fn now_ms() -> u64 {
 
 // Get a monotonically increasing timestamp in ms.
 // Protects against clock drift.
-async fn wait_until(target_ms: u64) -> u64 {
+fn wait_until(target_ms: u64) -> u64 {
     loop {
         let now = now_ms();
         if now >= target_ms {
             return now;
         }
-        sleep(Duration::from_millis(1)).await;
+        thread::sleep(Duration::from_millis(1));
     }
 }
 
@@ -105,11 +104,11 @@ pub enum Error {
     OffsetTooLarge(u64),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct UniqueId {
     node_id: u64,
     id_offset: u64,
-    inner: Arc<Mutex<State>>,
+    inner: Mutex<State>,
 }
 
 impl UniqueId {
@@ -130,7 +129,7 @@ impl UniqueId {
         Ok(Self {
             node_id,
             id_offset: min_id,
-            inner: Arc::new(Mutex::new(State::default())),
+            inner: Mutex::new(State::default()),
         })
     }
 
@@ -140,12 +139,8 @@ impl UniqueId {
     }
 
     /// Generate a globally unique, monotonically increasing identifier.
-    pub async fn next_id(&self) -> i64 {
-        self.inner
-            .lock()
-            .await
-            .next_id(self.node_id, self.id_offset)
-            .await as i64
+    pub fn next_id(&self) -> i64 {
+        self.inner.lock().next_id(self.node_id, self.id_offset) as i64
     }
 }
 
@@ -155,8 +150,8 @@ mod test {
 
     use super::*;
 
-    #[tokio::test]
-    async fn test_unique_ids() {
+    #[test]
+    fn test_unique_ids() {
         unsafe {
             set_var("NODE_ID", "pgdog-1");
         }
@@ -165,32 +160,32 @@ mod test {
         let mut ids = HashSet::new();
 
         for _ in 0..num_ids {
-            ids.insert(UniqueId::generator().unwrap().next_id().await);
+            ids.insert(UniqueId::generator().unwrap().next_id());
         }
 
         assert_eq!(ids.len(), num_ids);
     }
 
-    #[tokio::test]
-    async fn test_ids_monotonically_increasing() {
+    #[test]
+    fn test_ids_monotonically_increasing() {
         let mut state = State::default();
         let node_id = 1u64;
 
         let mut prev_id = 0u64;
         for _ in 0..10_000 {
-            let id = state.next_id(node_id, 0).await;
+            let id = state.next_id(node_id, 0);
             assert!(id > prev_id, "ID {id} not greater than previous {prev_id}");
             prev_id = id;
         }
     }
 
-    #[tokio::test]
-    async fn test_ids_always_positive() {
+    #[test]
+    fn test_ids_always_positive() {
         let mut state = State::default();
         let node_id = MAX_NODE_ID; // Use max node to maximize bits used
 
         for _ in 0..10_000 {
-            let id = state.next_id(node_id, 0).await;
+            let id = state.next_id(node_id, 0);
             let signed = id as i64;
             assert!(signed > 0, "ID should be positive, got {signed}");
         }
@@ -218,12 +213,12 @@ mod test {
         assert_eq!(id >> 63, 0, "Bit 63 should be clear");
     }
 
-    #[tokio::test]
-    async fn test_extract_components() {
+    #[test]
+    fn test_extract_components() {
         let node: u64 = 42;
         let mut state = State::default();
 
-        let id = state.next_id(node, 0).await;
+        let id = state.next_id(node, 0);
 
         // Extract components back
         let extracted_seq = id & MAX_SEQUENCE;
@@ -235,7 +230,7 @@ mod test {
         assert!(extracted_elapsed > 0); // Elapsed time since epoch
 
         // Generate another ID and verify sequence increments
-        let id2 = state.next_id(node, 0).await;
+        let id2 = state.next_id(node, 0);
         let extracted_seq2 = id2 & MAX_SEQUENCE;
         let extracted_node2 = (id2 >> NODE_SHIFT) & MAX_NODE_ID;
 
@@ -243,14 +238,14 @@ mod test {
         assert!(matches!(extracted_seq2, 1 | 0)); // Sequence incremented (or time advanced and reset to 0)
     }
 
-    #[tokio::test]
-    async fn test_id_offset() {
+    #[test]
+    fn test_id_offset() {
         let offset: u64 = 1_000_000_000;
         let node: u64 = 5;
         let mut state = State::default();
 
         for _ in 0..1000 {
-            let id = state.next_id(node, offset).await;
+            let id = state.next_id(node, offset);
             assert!(
                 id > offset,
                 "ID {id} should be greater than offset {offset}"
@@ -258,15 +253,15 @@ mod test {
         }
     }
 
-    #[tokio::test]
-    async fn test_id_offset_monotonic() {
+    #[test]
+    fn test_id_offset_monotonic() {
         let offset: u64 = 1_000_000_000;
         let node: u64 = 5;
         let mut state = State::default();
 
         let mut prev_id = 0u64;
         for _ in 0..1000 {
-            let id = state.next_id(node, offset).await;
+            let id = state.next_id(node, offset);
             assert!(id > prev_id, "ID {id} not greater than previous {prev_id}");
             prev_id = id;
         }

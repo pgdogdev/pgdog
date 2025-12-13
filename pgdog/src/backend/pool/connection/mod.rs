@@ -293,7 +293,7 @@ impl Connection {
         router: &mut Router,
         streaming: bool,
     ) -> Result<(), Error> {
-        if client_request.copy() && !streaming {
+        if client_request.is_copy() && !streaming {
             let rows = router
                 .copy_data(client_request)
                 .map_err(|e| Error::Router(e.to_string()))?;

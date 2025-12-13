@@ -2,6 +2,7 @@
 
 use thiserror::Error;
 
+use super::rewrite::statement::Error as RewriteError;
 use crate::{config::RewriteMode, frontend::router::sharding};
 
 #[derive(Debug, Error)]
@@ -111,4 +112,7 @@ pub enum Error {
 
     #[error("statement is not a SELECT")]
     NotASelect,
+
+    #[error("rewrite: {0}")]
+    Rewrite(#[from] RewriteError),
 }

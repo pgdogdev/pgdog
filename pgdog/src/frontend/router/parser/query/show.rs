@@ -28,21 +28,24 @@ mod test_show {
     use crate::backend::Cluster;
     use crate::frontend::client::Sticky;
     use crate::frontend::router::parser::Shard;
-    use crate::frontend::router::QueryParser;
+    use crate::frontend::router::{Ast, QueryParser};
     use crate::frontend::{ClientRequest, PreparedStatements, RouterContext};
     use crate::net::messages::Query;
     use crate::net::Parameters;
 
     #[test]
     fn show_runs_on_a_direct_shard_round_robin() {
-        let mut ps = PreparedStatements::default();
         let c = Cluster::new_test();
         let p = Parameters::default();
         let mut parser = QueryParser::default();
 
         // First call
         let query = "SHOW TRANSACTION ISOLATION LEVEL";
-        let buffer = ClientRequest::from(vec![Query::new(query).into()]);
+        let mut ps = PreparedStatements::default();
+        let mut ast = Ast::new(query, &c.sharding_schema(), false, &mut ps).unwrap();
+        ast.cached = false;
+        let mut buffer = ClientRequest::from(vec![Query::new(query).into()]);
+        buffer.ast = Some(ast);
         let context = RouterContext::new(&buffer, &c, &mut ps, &p, None, Sticky::new()).unwrap();
 
         let first = parser.parse(context).unwrap().clone();
@@ -51,7 +54,11 @@ mod test_show {
 
         // Second call
         let query = "SHOW TRANSACTION ISOLATION LEVEL";
-        let buffer = ClientRequest::from(vec![Query::new(query).into()]);
+        let mut ps = PreparedStatements::default();
+        let mut ast = Ast::new(query, &c.sharding_schema(), false, &mut ps).unwrap();
+        ast.cached = false;
+        let mut buffer = ClientRequest::from(vec![Query::new(query).into()]);
+        buffer.ast = Some(ast);
         let context = RouterContext::new(&buffer, &c, &mut ps, &p, None, Sticky::new()).unwrap();
 
         let second = parser.parse(context).unwrap().clone();

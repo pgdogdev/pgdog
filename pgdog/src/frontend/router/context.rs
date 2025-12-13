@@ -3,6 +3,7 @@ use crate::{
     backend::Cluster,
     frontend::{
         client::{Sticky, TransactionType},
+        router::Ast,
         BufferedQuery, ClientRequest, PreparedStatements,
     },
     net::{Bind, Parameters},
@@ -32,6 +33,8 @@ pub struct RouterContext<'a> {
     pub sticky: Sticky,
     /// Extended protocol.
     pub extended: bool,
+    /// AST.
+    pub ast: Option<Ast>,
 }
 
 impl<'a> RouterContext<'a> {
@@ -45,7 +48,7 @@ impl<'a> RouterContext<'a> {
     ) -> Result<Self, Error> {
         let query = buffer.query()?;
         let bind = buffer.parameters()?;
-        let copy_mode = buffer.copy();
+        let copy_mode = buffer.is_copy();
 
         Ok(Self {
             bind,
@@ -54,11 +57,12 @@ impl<'a> RouterContext<'a> {
             cluster,
             transaction,
             copy_mode,
-            executable: buffer.executable(),
+            executable: buffer.is_executable(),
             two_pc: cluster.two_pc_enabled(),
             sticky,
             extended: matches!(query, Some(BufferedQuery::Prepared(_))) || bind.is_some(),
             query,
+            ast: buffer.ast.clone(),
         })
     }
 

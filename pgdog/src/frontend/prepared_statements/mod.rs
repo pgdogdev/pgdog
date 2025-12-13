@@ -20,7 +20,6 @@ pub mod rewrite;
 
 pub use error::Error;
 pub use global_cache::GlobalCache;
-
 pub use rewrite::Rewrite;
 
 static CACHE: Lazy<PreparedStatements> = Lazy::new(PreparedStatements::default);
@@ -163,6 +162,12 @@ impl PreparedStatements {
     /// How much memory is used, approx.
     pub fn memory_used(&self) -> usize {
         self.memory_used
+    }
+
+    /// Set the prepared statements level.
+    #[cfg(test)]
+    pub fn set_level(&mut self, level: PreparedStatementsLevel) {
+        self.level = level;
     }
 }
 

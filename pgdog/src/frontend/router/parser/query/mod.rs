@@ -7,7 +7,7 @@ use crate::{
     frontend::{
         router::{
             context::RouterContext,
-            parser::{rewrite::Rewrite, OrderBy, Shard},
+            parser::{OrderBy, Shard},
             round_robin,
             sharding::{Centroids, ContextBuilder, Value as ShardingValue},
         },
@@ -187,28 +187,13 @@ impl QueryParser {
             }
         }
 
-        let cache = Cache::get();
+        let statement = context
+            .router_context
+            .ast
+            .clone()
+            .ok_or(Error::EmptyQuery)?;
 
-        // Get the AST from cache or parse the statement live.
-        let statement = match context.query()? {
-            // Only prepared statements (or just extended) are cached.
-            BufferedQuery::Prepared(query) => {
-                cache.parse(query.query(), &context.sharding_schema)?
-            }
-            // Don't cache simple queries.
-            //
-            // They contain parameter values, which makes the cache
-            // too large to be practical.
-            //
-            // Make your clients use prepared statements
-            // or at least send statements with placeholders using the
-            // extended protocol.
-            BufferedQuery::Query(query) => {
-                cache.parse_uncached(query.query(), &context.sharding_schema)?
-            }
-        };
-
-        self.ensure_explain_recorder(statement.ast(), context);
+        self.ensure_explain_recorder(statement.parse_result(), context);
 
         // Parse hardcoded shard from a query comment.
         if context.router_needed || context.dry_run {
@@ -231,12 +216,6 @@ impl QueryParser {
         debug!("{}", context.query()?.query());
         trace!("{:#?}", statement);
 
-        let rewrite = Rewrite::new(statement.ast());
-        if rewrite.needs_rewrite() {
-            debug!("rewrite needed");
-            return rewrite.rewrite(context.prepared_statements());
-        }
-
         if let Some(multi_tenant) = context.multi_tenant() {
             debug!("running multi-tenant check");
 
@@ -244,7 +223,7 @@ impl QueryParser {
                 context.router_context.cluster.user(),
                 multi_tenant,
                 context.router_context.cluster.schema(),
-                statement.ast(),
+                statement.parse_result(),
                 context.router_context.params,
             )
             .run()?;
@@ -256,7 +235,7 @@ impl QueryParser {
         // We don't expect clients to send multiple queries. If they do
         // only the first one is used for routing.
         //
-        let root = statement.ast().protobuf.stmts.first();
+        let root = statement.parse_result().protobuf.stmts.first();
 
         let root = if let Some(root) = root {
             root.stmt.as_ref().ok_or(Error::EmptyQuery)?
@@ -418,10 +397,13 @@ impl QueryParser {
         if context.dry_run {
             // Record statement in cache with normalized parameters.
             if !statement.cached {
-                cache.record_normalized(
-                    context.query()?.query(),
+                let query_str = context.query()?.query().to_owned();
+                let sharding_schema = context.sharding_schema.clone();
+                Cache::get().record_normalized(
+                    &query_str,
                     command.route(),
-                    &context.sharding_schema,
+                    &sharding_schema,
+                    context.prepared_statements(),
                 )?;
             }
             Ok(command.dry_run())

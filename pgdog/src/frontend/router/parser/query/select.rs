@@ -1,5 +1,5 @@
 use crate::frontend::router::parser::{
-    cache::CachedAst, from_clause::FromClause, where_clause::TablesSource,
+    cache::Ast, from_clause::FromClause, where_clause::TablesSource,
 };
 
 use super::*;
@@ -15,11 +15,11 @@ impl QueryParser {
     ///
     pub(super) fn select(
         &mut self,
-        cached_ast: &CachedAst,
+        cached_ast: &Ast,
         stmt: &SelectStmt,
         context: &mut QueryParserContext,
     ) -> Result<Command, Error> {
-        let ast = cached_ast.ast();
+        let ast = cached_ast.parse_result();
         let cte_writes = Self::cte_writes(stmt);
         let mut writes = Self::functions(stmt)?;
 

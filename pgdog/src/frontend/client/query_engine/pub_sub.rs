@@ -61,7 +61,7 @@ impl QueryEngine {
         let bytes_sent = context
             .stream
             .send_many(&[
-                CommandComplete::new(command).message()?,
+                CommandComplete::new(command).message()?.backend(),
                 ReadyForQuery::in_transaction(context.in_transaction()).message()?,
             ])
             .await?;
