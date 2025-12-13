@@ -368,6 +368,13 @@ impl Server {
                             }
                         }
                         Err(err) => {
+                            match err {
+                                Error::ProtocolOutOfSync => {
+                                    // conservatively, we do not know for sure if this is recoverable
+                                    self.stats.state(State::Error);
+                                }
+                                _ => {}
+                            }
                             error!(
                                 "{:?} got: {}, extended buffer: {:?}, state: {}",
                                 err,
@@ -989,7 +996,7 @@ impl Drop for Server {
 pub mod test {
     use crate::{config::Memory, frontend::PreparedStatements, net::*};
 
-    use super::*;
+    use super::{Error, *};
 
     impl Default for Server {
         fn default() -> Self {
@@ -2405,5 +2412,37 @@ pub mod test {
             !server.sync_prepared(),
             "sync_prepared flag should remain false after regular queries"
         );
+    }
+
+    #[tokio::test]
+    async fn test_protocol_out_of_sync_sets_error_state() {
+        let mut server = test_server().await;
+
+        server
+            .send(&vec![Query::new("SELECT 1").into()].into())
+            .await
+            .unwrap();
+
+        for c in ['T', 'D'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), c);
+        }
+
+        // simulate an unlikely, but existent out-of-sync state
+        server
+            .prepared_statements_mut()
+            .state_mut()
+            .queue_mut()
+            .clear();
+
+        let res = server.read().await;
+        assert!(
+            matches!(res, Err(Error::ProtocolOutOfSync)),
+            "protocol should be out of sync"
+        );
+        assert!(
+            server.stats().state == State::Error,
+            "state should be Error after detecting desync"
+        )
     }
 }

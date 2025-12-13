@@ -208,6 +208,11 @@ impl ProtocolState {
         &self.queue
     }
 
+    #[cfg(test)]
+    pub(crate) fn queue_mut(&mut self) -> &mut VecDeque<ExecutionItem> {
+        &mut self.queue
+    }
+
     pub(crate) fn done(&self) -> bool {
         self.is_empty() && !self.out_of_sync
     }
