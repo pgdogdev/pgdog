@@ -7,7 +7,7 @@ use crate::{
     frontend::{
         router::{
             context::RouterContext,
-            parser::{rewrite::Rewrite, OrderBy, Shard},
+            parser::{OrderBy, Shard},
             round_robin,
             sharding::{Centroids, ContextBuilder, Value as ShardingValue},
         },
@@ -187,13 +187,11 @@ impl QueryParser {
             }
         }
 
-        let statement = if let Some(ast) = context.router_context.ast.as_ref().cloned() {
-            ast
-        } else {
-            let query = context.query()?.clone();
-            let sharding_schema = context.sharding_schema.clone();
-            Cache::get().query(&query, &sharding_schema, context.prepared_statements())?
-        };
+        let statement = context
+            .router_context
+            .ast
+            .clone()
+            .ok_or(Error::EmptyQuery)?;
 
         self.ensure_explain_recorder(statement.parse_result(), context);
 
@@ -217,12 +215,6 @@ impl QueryParser {
 
         debug!("{}", context.query()?.query());
         trace!("{:#?}", statement);
-
-        let rewrite = Rewrite::new(statement.parse_result());
-        if rewrite.needs_rewrite() {
-            debug!("rewrite needed");
-            return rewrite.rewrite(context.prepared_statements());
-        }
 
         if let Some(multi_tenant) = context.multi_tenant() {
             debug!("running multi-tenant check");

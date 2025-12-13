@@ -43,7 +43,7 @@ impl Deref for Ast {
 }
 
 impl Ast {
-    /// Create new cache entry from pg_query's AST.
+    /// Parse statement and run the rewrite engine, if necessary.
     pub fn new(
         query: &str,
         schema: &ShardingSchema,

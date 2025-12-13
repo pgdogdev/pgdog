@@ -164,6 +164,12 @@ impl PreparedStatements {
     pub fn memory_used(&self) -> usize {
         self.memory_used
     }
+
+    /// Set the prepared statements level.
+    #[cfg(test)]
+    pub fn set_level(&mut self, level: PreparedStatementsLevel) {
+        self.level = level;
+    }
 }
 
 /// Run prepared statements maintenance task
