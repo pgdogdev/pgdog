@@ -9,4 +9,7 @@ pub enum Error {
 
     #[error("pg_query: {0}")]
     PgQuery(#[from] pg_query::Error),
+
+    #[error("cache: {0}")]
+    Cache(String),
 }

@@ -51,8 +51,9 @@ impl Ast {
         prepared_statements: &mut PreparedStatements,
     ) -> Result<Self, Error> {
         let mut ast = parse(query).map_err(Error::PgQuery)?;
-        let rewrite_plan = StatementRewrite::new(&mut ast.protobuf, extended, prepared_statements)
-            .maybe_rewrite()?;
+        let rewrite_plan =
+            StatementRewrite::new(&mut ast.protobuf, extended, prepared_statements, schema)
+                .maybe_rewrite()?;
         let (comment_shard, comment_role) = comment(query, schema)?;
 
         Ok(Self {

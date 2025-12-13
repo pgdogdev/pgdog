@@ -3,7 +3,8 @@ use crate::net::messages::bind::{Format, Parameter};
 use crate::net::{Bind, Parse, ProtocolMessage, Query};
 use crate::unique_id::UniqueId;
 
-use super::Error;
+use super::insert::build_split_requests;
+use super::{Error, InsertSplit};
 
 /// Statement rewrite plan.
 ///
@@ -26,6 +27,15 @@ pub struct RewritePlan {
     /// Prepared statements to prepend to the client request.
     /// Each tuple contains (name, statement) for ProtocolMessage::Prepare.
     pub(super) prepares: Vec<(String, String)>,
+
+    /// Insert split.
+    pub(super) insert_split: Vec<InsertSplit>,
+}
+
+#[derive(Debug, Clone)]
+pub enum RewriteResult {
+    InPlace,
+    InsertSplit(Vec<ClientRequest>),
 }
 
 impl RewritePlan {
@@ -63,7 +73,7 @@ impl RewritePlan {
     }
 
     /// Apply the rewrite plan to a ClientRequest.
-    pub fn apply(&self, request: &mut ClientRequest) -> Result<(), Error> {
+    pub fn apply(&self, request: &mut ClientRequest) -> Result<RewriteResult, Error> {
         // Prepend any required Prepare messages for EXECUTE statements.
         if !self.prepares.is_empty() {
             let prepends: Vec<ProtocolMessage> = self
@@ -85,7 +95,13 @@ impl RewritePlan {
                 _ => {}
             }
         }
-        Ok(())
+
+        if !self.insert_split.is_empty() {
+            let requests = build_split_requests(&self.insert_split, request);
+            return Ok(RewriteResult::InsertSplit(requests));
+        }
+
+        Ok(RewriteResult::InPlace)
     }
 
     /// Rewrite plan doesn't do anything.

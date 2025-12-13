@@ -4,15 +4,18 @@
 use pg_query::protobuf::ParseResult;
 use pg_query::Node;
 
+use crate::backend::ShardingSchema;
 use crate::frontend::PreparedStatements;
 
 pub mod error;
+pub mod insert;
 pub mod plan;
 pub mod simple_prepared;
 pub mod unique_id;
 pub mod visitor;
 
 pub use error::Error;
+pub use insert::InsertSplit;
 pub use plan::RewritePlan;
 pub use simple_prepared::SimplePreparedResult;
 
@@ -28,6 +31,8 @@ pub struct StatementRewrite<'a> {
     extended: bool,
     /// Prepared statements cache for name mapping.
     prepared_statements: &'a mut PreparedStatements,
+    /// Sharding schema for cache lookups.
+    schema: &'a ShardingSchema,
 }
 
 impl<'a> StatementRewrite<'a> {
@@ -39,12 +44,14 @@ impl<'a> StatementRewrite<'a> {
         stmt: &'a mut ParseResult,
         extended: bool,
         prepared_statements: &'a mut PreparedStatements,
+        schema: &'a ShardingSchema,
     ) -> Self {
         Self {
             stmt,
             rewritten: false,
             extended,
             prepared_statements,
+            schema,
         }
     }
 
@@ -84,6 +91,8 @@ impl<'a> StatementRewrite<'a> {
         if self.rewritten {
             plan.stmt = Some(self.stmt.deparse()?);
         }
+
+        self.split_insert(&mut plan)?;
 
         Ok(plan)
     }
