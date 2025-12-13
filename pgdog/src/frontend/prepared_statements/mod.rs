@@ -20,7 +20,6 @@ pub mod rewrite;
 
 pub use error::Error;
 pub use global_cache::GlobalCache;
-
 pub use rewrite::Rewrite;
 
 static CACHE: Lazy<PreparedStatements> = Lazy::new(PreparedStatements::default);
