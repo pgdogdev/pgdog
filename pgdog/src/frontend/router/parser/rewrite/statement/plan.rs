@@ -45,10 +45,9 @@ impl RewritePlan {
     pub fn apply_parse(&self, parse: &mut Parse) {
         if let Some(ref stmt) = self.stmt {
             parse.set_query(stmt);
-        }
-
-        if !parse.anonymous() {
-            PreparedStatements::global().write().rewrite(&parse);
+            if !parse.anonymous() {
+                PreparedStatements::global().write().rewrite(&parse);
+            }
         }
     }
 
