@@ -232,7 +232,7 @@ impl QueryParser {
         trace!("{:#?}", statement);
 
         let rewrite = Rewrite::new(statement.ast());
-        if rewrite.needs_rewrite() {
+        if context.full_prepared_statements && rewrite.needs_rewrite() {
             debug!("rewrite needed");
             return rewrite.rewrite(context.prepared_statements());
         }
