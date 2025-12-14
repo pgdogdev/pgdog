@@ -22,6 +22,7 @@ pub mod hooks;
 pub mod incomplete_requests;
 pub mod insert_split;
 pub mod internal_values;
+pub mod multi_step;
 pub mod notify_buffer;
 pub mod prepared_statements;
 pub mod pub_sub;

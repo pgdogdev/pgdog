@@ -27,13 +27,13 @@ pub struct HelperMapping {
 
 /// Plan describing how the proxy rewrites a query and its results.
 #[derive(Debug, Clone, Default, PartialEq)]
-pub struct RewritePlan {
+pub struct AggregateRewritePlan {
     /// Column indexes (0-based) to drop from the row description/results after execution.
     drop_columns: Vec<usize>,
     helpers: Vec<HelperMapping>,
 }
 
-impl RewritePlan {
+impl AggregateRewritePlan {
     pub fn new() -> Self {
         Self {
             drop_columns: Vec::new(),
@@ -67,11 +67,11 @@ impl RewritePlan {
 #[derive(Debug, Default, Clone)]
 pub struct RewriteOutput {
     pub sql: String,
-    pub plan: RewritePlan,
+    pub plan: AggregateRewritePlan,
 }
 
 impl RewriteOutput {
-    pub fn new(sql: String, plan: RewritePlan) -> Self {
+    pub fn new(sql: String, plan: AggregateRewritePlan) -> Self {
         Self { sql, plan }
     }
 }
@@ -82,7 +82,7 @@ mod tests {
 
     #[test]
     fn rewrite_plan_noop() {
-        let plan = RewritePlan::new();
+        let plan = AggregateRewritePlan::new();
         assert!(plan.is_noop());
         assert!(plan.drop_columns().is_empty());
         assert!(plan.helpers().is_empty());
@@ -90,7 +90,7 @@ mod tests {
 
     #[test]
     fn rewrite_plan_drop_columns() {
-        let mut plan = RewritePlan::new();
+        let mut plan = AggregateRewritePlan::new();
         plan.add_drop_column(1);
         plan.add_drop_column(4);
         assert_eq!(plan.drop_columns(), &[1, 4]);
@@ -98,7 +98,7 @@ mod tests {
 
     #[test]
     fn rewrite_plan_helpers() {
-        let mut plan = RewritePlan::new();
+        let mut plan = AggregateRewritePlan::new();
         plan.add_helper(HelperMapping {
             target_column: 0,
             helper_column: 1,

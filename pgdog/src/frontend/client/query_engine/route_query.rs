@@ -68,7 +68,7 @@ impl QueryEngine {
             context.client_request,
             cluster,
             context.prepared_statements,
-            context.params,
+            context.params.search_path(),
             context.transaction,
             context.sticky,
         )?;

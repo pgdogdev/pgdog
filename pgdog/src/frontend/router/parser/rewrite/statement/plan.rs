@@ -3,6 +3,7 @@ use crate::net::messages::bind::{Format, Parameter};
 use crate::net::{Bind, Parse, ProtocolMessage, Query};
 use crate::unique_id::UniqueId;
 
+use super::aggregate::RewriteOutput;
 use super::insert::build_split_requests;
 use super::{Error, InsertSplit};
 
@@ -30,6 +31,10 @@ pub struct RewritePlan {
 
     /// Insert split.
     pub(super) insert_split: Vec<InsertSplit>,
+
+    /// Position in the result where the count(*) or count(name)
+    /// functions are added.
+    pub(super) aggregates: RewriteOutput,
 }
 
 #[derive(Debug, Clone)]

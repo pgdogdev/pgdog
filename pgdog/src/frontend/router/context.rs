@@ -6,7 +6,7 @@ use crate::{
         router::Ast,
         BufferedQuery, ClientRequest, PreparedStatements,
     },
-    net::{Bind, Parameters},
+    net::{parameter::ParameterValue, Bind, Parameters},
 };
 
 #[derive(Debug)]
@@ -20,7 +20,7 @@ pub struct RouterContext<'a> {
     /// Cluster configuration.
     pub cluster: &'a Cluster,
     /// Client parameters, e.g. search_path.
-    pub params: &'a Parameters,
+    pub search_path: Option<&'a ParameterValue>,
     /// Client inside transaction,
     pub transaction: Option<TransactionType>,
     /// Currently executing COPY statement.
@@ -42,7 +42,7 @@ impl<'a> RouterContext<'a> {
         buffer: &'a ClientRequest,
         cluster: &'a Cluster,
         stmt: &'a mut PreparedStatements,
-        params: &'a Parameters,
+        search_path: Option<&'a ParameterValue>,
         transaction: Option<TransactionType>,
         sticky: Sticky,
     ) -> Result<Self, Error> {
@@ -52,7 +52,7 @@ impl<'a> RouterContext<'a> {
 
         Ok(Self {
             bind,
-            params,
+            search_path,
             prepared_statements: stmt,
             cluster,
             transaction,

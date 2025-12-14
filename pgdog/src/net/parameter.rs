@@ -382,6 +382,11 @@ impl Parameters {
                 .map(|(key, value)| (key.clone(), value.clone())),
         );
     }
+
+    /// Get search_path, if set.
+    pub fn search_path(&self) -> Option<&ParameterValue> {
+        self.get("search_path")
+    }
 }
 
 impl Deref for Parameters {

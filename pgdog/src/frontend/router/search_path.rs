@@ -1,7 +1,4 @@
-use crate::{
-    backend::Schema,
-    net::{parameter::ParameterValue, Parameters},
-};
+use crate::{backend::Schema, net::parameter::ParameterValue};
 
 #[derive(Debug)]
 pub struct SearchPath<'a> {
@@ -24,9 +21,13 @@ impl<'a> SearchPath<'a> {
         schemas
     }
 
-    pub(crate) fn new(user: &'a str, params: &'a Parameters, schema: &'a Schema) -> Self {
+    pub(crate) fn new(
+        user: &'a str,
+        search_path: Option<&'a ParameterValue>,
+        schema: &'a Schema,
+    ) -> Self {
         let default_path = schema.search_path();
-        let search_path = match params.get("search_path") {
+        let search_path = match search_path {
             Some(ParameterValue::Tuple(overriden)) => overriden.as_slice(),
             _ => default_path,
         };
