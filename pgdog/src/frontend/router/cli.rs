@@ -8,7 +8,7 @@ use super::Error;
 use crate::{
     backend::databases::databases,
     frontend::{client::Sticky, router::QueryParser, Command, PreparedStatements, RouterContext},
-    net::{Parameters, ProtocolMessage, Query},
+    net::{ProtocolMessage, Query},
 };
 
 #[derive(Debug, Clone)]

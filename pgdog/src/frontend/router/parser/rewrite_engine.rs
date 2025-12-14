@@ -339,7 +339,7 @@ mod tests {
             },
             None => panic!("empty"),
         };
-        let aggregate = Aggregate::parse(stmt).unwrap();
+        let aggregate = Aggregate::parse(stmt);
         RewriteEngine::new().rewrite_select(&ast, sql, &aggregate)
     }
 
@@ -375,7 +375,7 @@ mod tests {
             },
             None => panic!("empty"),
         };
-        let aggregate = Aggregate::parse(stmt).unwrap();
+        let aggregate = Aggregate::parse(stmt);
         assert_eq!(aggregate.targets().len(), 2);
         assert!(aggregate
             .targets()
@@ -416,7 +416,7 @@ mod tests {
             },
             None => panic!("empty"),
         };
-        let aggregate = Aggregate::parse(stmt).unwrap();
+        let aggregate = Aggregate::parse(stmt);
         assert_eq!(aggregate.targets().len(), 3);
         assert!(
             aggregate
@@ -457,7 +457,7 @@ mod tests {
             },
             None => panic!("empty"),
         };
-        let aggregate = Aggregate::parse(stmt).unwrap();
+        let aggregate = Aggregate::parse(stmt);
         assert_eq!(aggregate.targets().len(), 4);
         assert_eq!(
             aggregate

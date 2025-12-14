@@ -756,7 +756,7 @@ mod test {
             .cloned()
             .unwrap();
         let aggregate = match stmt.stmt.unwrap().node.unwrap() {
-            pg_query::NodeEnum::SelectStmt(stmt) => Aggregate::parse(&stmt).unwrap(),
+            pg_query::NodeEnum::SelectStmt(stmt) => Aggregate::parse(&stmt),
             _ => panic!("expected select stmt"),
         };
 
@@ -796,7 +796,7 @@ mod test {
             .cloned()
             .unwrap();
         let aggregate = match stmt.stmt.unwrap().node.unwrap() {
-            pg_query::NodeEnum::SelectStmt(stmt) => Aggregate::parse(&stmt).unwrap(),
+            pg_query::NodeEnum::SelectStmt(stmt) => Aggregate::parse(&stmt),
             _ => panic!("expected select stmt"),
         };
 
@@ -833,7 +833,7 @@ mod test {
             .cloned()
             .unwrap();
         let aggregate = match stmt.stmt.unwrap().node.unwrap() {
-            pg_query::NodeEnum::SelectStmt(stmt) => Aggregate::parse(&stmt).unwrap(),
+            pg_query::NodeEnum::SelectStmt(stmt) => Aggregate::parse(&stmt),
             _ => panic!("expected select stmt"),
         };
 
@@ -882,7 +882,7 @@ mod test {
             .cloned()
             .unwrap();
         let aggregate = match stmt.stmt.unwrap().node.unwrap() {
-            pg_query::NodeEnum::SelectStmt(stmt) => Aggregate::parse(&stmt).unwrap(),
+            pg_query::NodeEnum::SelectStmt(stmt) => Aggregate::parse(&stmt),
             _ => panic!("expected select stmt"),
         };
 
@@ -945,7 +945,7 @@ mod test {
             .cloned()
             .unwrap();
         let aggregate = match stmt.stmt.unwrap().node.unwrap() {
-            pg_query::NodeEnum::SelectStmt(stmt) => Aggregate::parse(&stmt).unwrap(),
+            pg_query::NodeEnum::SelectStmt(stmt) => Aggregate::parse(&stmt),
             _ => panic!("expected select stmt"),
         };
 
@@ -1022,7 +1022,7 @@ mod test {
             .cloned()
             .unwrap();
         let aggregate = match stmt.stmt.unwrap().node.unwrap() {
-            pg_query::NodeEnum::SelectStmt(stmt) => Aggregate::parse(&stmt).unwrap(),
+            pg_query::NodeEnum::SelectStmt(stmt) => Aggregate::parse(&stmt),
             _ => panic!("expected select stmt"),
         };
 
@@ -1091,7 +1091,7 @@ mod test {
             .cloned()
             .unwrap();
         let aggregate = match stmt.stmt.unwrap().node.unwrap() {
-            pg_query::NodeEnum::SelectStmt(stmt) => Aggregate::parse(&stmt).unwrap(),
+            pg_query::NodeEnum::SelectStmt(stmt) => Aggregate::parse(&stmt),
             _ => panic!("expected select stmt"),
         };
 
@@ -1129,7 +1129,7 @@ mod test {
             .cloned()
             .unwrap();
         let aggregate = match stmt.stmt.unwrap().node.unwrap() {
-            pg_query::NodeEnum::SelectStmt(stmt) => Aggregate::parse(&stmt).unwrap(),
+            pg_query::NodeEnum::SelectStmt(stmt) => Aggregate::parse(&stmt),
             _ => panic!("expected select stmt"),
         };
 
@@ -1172,7 +1172,7 @@ mod test {
             .cloned()
             .unwrap();
         let aggregate = match stmt.stmt.unwrap().node.unwrap() {
-            pg_query::NodeEnum::SelectStmt(stmt) => Aggregate::parse(&stmt).unwrap(),
+            pg_query::NodeEnum::SelectStmt(stmt) => Aggregate::parse(&stmt),
             _ => panic!("expected select stmt"),
         };
 

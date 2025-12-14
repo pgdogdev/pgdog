@@ -3,9 +3,8 @@ use crate::net::messages::bind::{Format, Parameter};
 use crate::net::{Bind, Parse, ProtocolMessage, Query};
 use crate::unique_id::UniqueId;
 
-use super::aggregate::RewriteOutput;
 use super::insert::build_split_requests;
-use super::{Error, InsertSplit};
+use super::{aggregate::AggregateRewritePlan, Error, InsertSplit};
 
 /// Statement rewrite plan.
 ///
@@ -34,7 +33,7 @@ pub struct RewritePlan {
 
     /// Position in the result where the count(*) or count(name)
     /// functions are added.
-    pub(super) aggregates: RewriteOutput,
+    pub(super) aggregates: AggregateRewritePlan,
 }
 
 #[derive(Debug, Clone)]

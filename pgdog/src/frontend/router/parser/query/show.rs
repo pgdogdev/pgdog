@@ -31,12 +31,10 @@ mod test_show {
     use crate::frontend::router::{Ast, QueryParser};
     use crate::frontend::{ClientRequest, PreparedStatements, RouterContext};
     use crate::net::messages::Query;
-    use crate::net::Parameters;
 
     #[test]
     fn show_runs_on_a_direct_shard_round_robin() {
         let c = Cluster::new_test();
-        let p = Parameters::default();
         let mut parser = QueryParser::default();
 
         // First call

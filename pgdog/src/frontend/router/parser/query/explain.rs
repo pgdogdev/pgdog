@@ -50,7 +50,6 @@ mod tests {
     use crate::frontend::router::Ast;
     use crate::frontend::{ClientRequest, PreparedStatements, RouterContext};
     use crate::net::messages::{Bind, Parameter, Parse, Query};
-    use crate::net::Parameters;
     use bytes::Bytes;
     use std::sync::Once;
 
@@ -68,7 +67,6 @@ mod tests {
         enable_expanded_explain();
         let cluster = Cluster::new_test();
         let mut stmts = PreparedStatements::default();
-        let params = Parameters::default();
 
         let mut ast = Ast::new(sql, &cluster.sharding_schema(), false, &mut stmts).unwrap();
         ast.cached = false;
