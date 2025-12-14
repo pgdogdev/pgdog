@@ -6,7 +6,7 @@ use crate::{
         router::Ast,
         BufferedQuery, ClientRequest, PreparedStatements,
     },
-    net::{parameter::ParameterValue, Bind, Parameters},
+    net::{parameter::ParameterValue, Bind},
 };
 
 #[derive(Debug)]

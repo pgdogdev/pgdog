@@ -5,7 +5,7 @@ use crate::{
         client::Sticky, router::parser::Shard, ClientRequest, Command, PreparedStatements, Router,
         RouterContext,
     },
-    net::{replication::TupleData, Bind, Parameters, Parse},
+    net::{replication::TupleData, Bind, Parse},
 };
 
 #[derive(Debug)]

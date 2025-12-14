@@ -1,51 +1,41 @@
-use crate::frontend::router::parser::{
-    Aggregate, AggregateFunction, HelperKind, HelperMapping, RewriteOutput, RewritePlan,
-};
+use crate::frontend::router::parser::aggregate::{Aggregate, AggregateFunction};
 use pg_query::protobuf::{
-    a_const::Val, AConst, FuncCall, Integer, Node, ResTarget, String as PgString,
+    a_const::Val, AConst, FuncCall, Integer, Node, ParseResult, ResTarget, String as PgString,
 };
-use pg_query::{NodeEnum, ParseResult};
+use pg_query::NodeEnum;
+
+use super::{AggregateRewritePlan, HelperKind, HelperMapping, RewriteOutput};
 
 /// Query rewrite engine. Currently supports injecting helper aggregates for AVG and
 /// variance-related functions that require additional helper aggregates when run
 /// across shards.
 #[derive(Default)]
-pub struct RewriteEngine;
+pub struct AggregatesRewrite;
 
-impl RewriteEngine {
+impl AggregatesRewrite {
     pub fn new() -> Self {
         Self
     }
 
-    /// Rewrite a SELECT query, adding helper aggregates when necessary.
-    pub fn rewrite_select(
-        &self,
-        ast: &ParseResult,
-        sql: &str,
-        aggregate: &Aggregate,
-    ) -> RewriteOutput {
-        self.rewrite_parsed(ast, aggregate, sql)
+    /// Rewrite a SELECT query in-place, adding helper aggregates when necessary.
+    pub fn rewrite_select(&self, ast: &mut ParseResult, aggregate: &Aggregate) -> RewriteOutput {
+        self.rewrite_parsed(ast, aggregate)
     }
 
-    fn rewrite_parsed(
-        &self,
-        parsed: &ParseResult,
-        aggregate: &Aggregate,
-        original_sql: &str,
-    ) -> RewriteOutput {
-        let Some(raw_stmt) = parsed.protobuf.stmts.first() else {
-            return RewriteOutput::new(original_sql.to_string(), RewritePlan::new());
+    fn rewrite_parsed(&self, parsed: &mut ParseResult, aggregate: &Aggregate) -> RewriteOutput {
+        let Some(raw_stmt) = parsed.stmts.first() else {
+            return RewriteOutput::default();
         };
 
         let Some(stmt) = raw_stmt.stmt.as_ref() else {
-            return RewriteOutput::new(original_sql.to_string(), RewritePlan::new());
+            return RewriteOutput::default();
         };
 
         let Some(NodeEnum::SelectStmt(select)) = stmt.node.as_ref() else {
-            return RewriteOutput::new(original_sql.to_string(), RewritePlan::new());
+            return RewriteOutput::default();
         };
 
-        let mut plan = RewritePlan::new();
+        let mut plan = AggregateRewritePlan::new();
         let mut helper_nodes: Vec<Node> = Vec::new();
         let mut planned_aliases: Vec<String> = Vec::new();
         let base_len = select.target_list.len();
@@ -144,26 +134,24 @@ impl RewriteEngine {
         }
 
         if helper_nodes.is_empty() {
-            return RewriteOutput::new(original_sql.to_string(), RewritePlan::new());
+            return RewriteOutput::default();
         }
 
-        let mut ast = parsed.protobuf.clone();
-        let Some(raw_stmt) = ast.stmts.first_mut() else {
-            return RewriteOutput::new(original_sql.to_string(), RewritePlan::new());
+        let Some(raw_stmt) = parsed.stmts.first_mut() else {
+            return RewriteOutput::default();
         };
 
         let Some(stmt) = raw_stmt.stmt.as_mut() else {
-            return RewriteOutput::new(original_sql.to_string(), RewritePlan::new());
+            return RewriteOutput::default();
         };
 
         let Some(NodeEnum::SelectStmt(select)) = stmt.node.as_mut() else {
-            return RewriteOutput::new(original_sql.to_string(), RewritePlan::new());
+            return RewriteOutput::default();
         };
 
         select.target_list.extend(helper_nodes);
 
-        let rewritten_sql = ast.deparse().unwrap_or_else(|_| original_sql.to_string());
-        RewriteOutput::new(rewritten_sql, plan)
+        RewriteOutput::new(plan)
     }
 
     fn extract_func_call(node: &Node) -> Option<&FuncCall> {
@@ -325,33 +313,38 @@ mod tests {
     use super::*;
     use crate::frontend::router::parser::aggregate::Aggregate;
 
-    fn rewrite(sql: &str) -> RewriteOutput {
-        let ast = pg_query::parse(sql).unwrap();
-        let stmt = match ast
-            .protobuf
+    fn select(ast: &ParseResult) -> &pg_query::protobuf::SelectStmt {
+        match ast
             .stmts
             .first()
             .and_then(|stmt| stmt.stmt.as_ref())
+            .and_then(|stmt| stmt.node.as_ref())
         {
-            Some(raw) => match raw.node.as_ref().unwrap() {
-                NodeEnum::SelectStmt(select) => select,
-                _ => panic!("not a select"),
-            },
-            None => panic!("empty"),
+            Some(NodeEnum::SelectStmt(select)) => select,
+            _ => panic!("not a select"),
+        }
+    }
+
+    fn rewrite(sql: &str) -> (ParseResult, RewriteOutput) {
+        let mut parsed = pg_query::parse(sql).unwrap().protobuf;
+        let aggregate = {
+            let stmt = select(&parsed);
+            Aggregate::parse(stmt)
         };
-        let aggregate = Aggregate::parse(stmt).unwrap();
-        RewriteEngine::new().rewrite_select(&ast, sql, &aggregate)
+        let output = AggregatesRewrite::new().rewrite_select(&mut parsed, &aggregate);
+        (parsed, output)
     }
 
     #[test]
     fn rewrite_engine_noop() {
-        let output = rewrite("SELECT COUNT(price) FROM menu");
+        let (ast, output) = rewrite("SELECT COUNT(price) FROM menu");
         assert!(output.plan.is_noop());
+        assert_eq!(select(&ast).target_list.len(), 1);
     }
 
     #[test]
     fn rewrite_engine_adds_helper() {
-        let output = rewrite("SELECT AVG(price) FROM menu");
+        let (ast, output) = rewrite("SELECT AVG(price) FROM menu");
         assert!(!output.plan.is_noop());
         assert_eq!(output.plan.drop_columns(), &[1]);
         assert_eq!(output.plan.helpers().len(), 1);
@@ -362,20 +355,7 @@ mod tests {
         assert!(!helper.distinct);
         assert!(matches!(helper.kind, HelperKind::Count));
 
-        let parsed = pg_query::parse(&output.sql).unwrap();
-        let stmt = match parsed
-            .protobuf
-            .stmts
-            .first()
-            .and_then(|stmt| stmt.stmt.as_ref())
-        {
-            Some(raw) => match raw.node.as_ref().unwrap() {
-                NodeEnum::SelectStmt(select) => select,
-                _ => panic!("not select"),
-            },
-            None => panic!("empty"),
-        };
-        let aggregate = Aggregate::parse(stmt).unwrap();
+        let aggregate = Aggregate::parse(select(&ast));
         assert_eq!(aggregate.targets().len(), 2);
         assert!(aggregate
             .targets()
@@ -386,14 +366,14 @@ mod tests {
     #[test]
     fn rewrite_engine_skips_when_count_exists() {
         let sql = "SELECT COUNT(price), AVG(price) FROM menu";
-        let output = rewrite(sql);
+        let (ast, output) = rewrite(sql);
         assert!(output.plan.is_noop());
-        assert_eq!(output.sql, sql);
+        assert_eq!(select(&ast).target_list.len(), 2);
     }
 
     #[test]
     fn rewrite_engine_handles_mismatched_pair() {
-        let output = rewrite("SELECT COUNT(price::numeric), AVG(price) FROM menu");
+        let (ast, output) = rewrite("SELECT COUNT(price::numeric), AVG(price) FROM menu");
         assert_eq!(output.plan.drop_columns(), &[2]);
         assert_eq!(output.plan.helpers().len(), 1);
         let helper = &output.plan.helpers()[0];
@@ -402,21 +382,7 @@ mod tests {
         assert!(!helper.distinct);
         assert!(matches!(helper.kind, HelperKind::Count));
 
-        // Ensure the rewritten SQL now contains both AVG and helper COUNT for the AVG target.
-        let parsed = pg_query::parse(&output.sql).unwrap();
-        let stmt = match parsed
-            .protobuf
-            .stmts
-            .first()
-            .and_then(|stmt| stmt.stmt.as_ref())
-        {
-            Some(raw) => match raw.node.as_ref().unwrap() {
-                NodeEnum::SelectStmt(select) => select,
-                _ => panic!("not select"),
-            },
-            None => panic!("empty"),
-        };
-        let aggregate = Aggregate::parse(stmt).unwrap();
+        let aggregate = Aggregate::parse(select(&ast));
         assert_eq!(aggregate.targets().len(), 3);
         assert!(
             aggregate
@@ -430,7 +396,7 @@ mod tests {
 
     #[test]
     fn rewrite_engine_multiple_avg_helpers() {
-        let output = rewrite("SELECT AVG(price), AVG(discount) FROM menu");
+        let (ast, output) = rewrite("SELECT AVG(price), AVG(discount) FROM menu");
         assert_eq!(output.plan.drop_columns(), &[2, 3]);
         assert_eq!(output.plan.helpers().len(), 2);
 
@@ -444,20 +410,7 @@ mod tests {
         assert_eq!(helper_discount.helper_column, 3);
         assert!(matches!(helper_discount.kind, HelperKind::Count));
 
-        let parsed = pg_query::parse(&output.sql).unwrap();
-        let stmt = match parsed
-            .protobuf
-            .stmts
-            .first()
-            .and_then(|stmt| stmt.stmt.as_ref())
-        {
-            Some(raw) => match raw.node.as_ref().unwrap() {
-                NodeEnum::SelectStmt(select) => select,
-                _ => panic!("not select"),
-            },
-            None => panic!("empty"),
-        };
-        let aggregate = Aggregate::parse(stmt).unwrap();
+        let aggregate = Aggregate::parse(select(&ast));
         assert_eq!(aggregate.targets().len(), 4);
         assert_eq!(
             aggregate
@@ -471,7 +424,7 @@ mod tests {
 
     #[test]
     fn rewrite_engine_stddev_helpers() {
-        let output = rewrite("SELECT STDDEV(price) FROM menu");
+        let (ast, output) = rewrite("SELECT STDDEV(price) FROM menu");
         assert!(!output.plan.is_noop());
         assert_eq!(output.plan.drop_columns(), &[1, 2, 3]);
         assert_eq!(output.plan.helpers().len(), 3);
@@ -490,20 +443,7 @@ mod tests {
         assert!(kinds.contains(&HelperKind::Sum));
         assert!(kinds.contains(&HelperKind::SumSquares));
 
-        let parsed = pg_query::parse(&output.sql).unwrap();
-        let stmt = match parsed
-            .protobuf
-            .stmts
-            .first()
-            .and_then(|stmt| stmt.stmt.as_ref())
-        {
-            Some(raw) => match raw.node.as_ref().unwrap() {
-                NodeEnum::SelectStmt(select) => select,
-                _ => panic!("not select"),
-            },
-            None => panic!("empty"),
-        };
         // Expect original STDDEV plus three helpers.
-        assert_eq!(stmt.target_list.len(), 4);
+        assert_eq!(select(&ast).target_list.len(), 4);
     }
 }

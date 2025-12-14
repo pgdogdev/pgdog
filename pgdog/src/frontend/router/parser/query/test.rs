@@ -21,7 +21,6 @@ use crate::frontend::{
     BufferedQuery, ClientRequest, PreparedStatements, RouterContext,
 };
 use crate::net::messages::Query;
-use crate::net::Parameters;
 
 struct ConfigModeGuard {
     original: ConfigAndUsers,
@@ -105,7 +104,6 @@ macro_rules! command {
         let mut query_parser = QueryParser::default();
         let cluster = Cluster::new_test();
         let mut stmt = PreparedStatements::default();
-        let params = Parameters::default();
         let mut ast = Ast::new(query, &cluster.sharding_schema(), false, &mut stmt).unwrap();
         ast.cached = false; // Simple protocol queries are not cached
         let mut client_request = ClientRequest::from(vec![Query::new(query).into()]);
@@ -889,7 +887,6 @@ fn test_function_begin() {
     assert!(qp.in_transaction);
     let cluster = Cluster::new_test();
     let mut prep_stmts = PreparedStatements::default();
-    let params = Parameters::default();
     let query_str = "SELECT
 	ROW(t1.*) AS tt1,
 	ROW(t2.*) AS tt2

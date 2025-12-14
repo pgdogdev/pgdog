@@ -1,4 +1,4 @@
-use pg_query::{protobuf::Param, NodeEnum, ParseResult};
+use pg_query::{NodeEnum, ParseResult};
 
 use super::Error;
 use crate::{
@@ -8,7 +8,7 @@ use crate::{
         router::parser::{where_clause::TablesSource, Table, WhereClause},
         SearchPath,
     },
-    net::{parameter::ParameterValue, Parameters},
+    net::parameter::ParameterValue,
 };
 
 pub struct MultiTenantCheck<'a> {

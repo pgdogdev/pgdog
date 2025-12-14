@@ -1,11 +1,16 @@
+/// Type of aggregate function added to the result set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HelperKind {
+    /// COUNT(*) or COUNT(name)
     Count,
+    /// SUM(column)
     Sum,
+    /// SUM(POWER(column, 2))
     SumSquares,
 }
 
 impl HelperKind {
+    /// Suffix for the aggregate function.
     pub fn alias_suffix(&self) -> &'static str {
         match self {
             HelperKind::Count => "count",
@@ -15,6 +20,7 @@ impl HelperKind {
     }
 }
 
+/// Context on the aggregate function column added to the result set.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HelperMapping {
     pub target_column: usize,
@@ -66,13 +72,12 @@ impl AggregateRewritePlan {
 
 #[derive(Debug, Default, Clone)]
 pub struct RewriteOutput {
-    pub sql: String,
     pub plan: AggregateRewritePlan,
 }
 
 impl RewriteOutput {
-    pub fn new(sql: String, plan: AggregateRewritePlan) -> Self {
-        Self { sql, plan }
+    pub fn new(plan: AggregateRewritePlan) -> Self {
+        Self { plan }
     }
 }
 
@@ -121,6 +126,5 @@ mod tests {
     fn rewrite_output_defaults() {
         let output = RewriteOutput::default();
         assert!(output.plan.is_noop());
-        assert!(output.sql.is_empty());
     }
 }

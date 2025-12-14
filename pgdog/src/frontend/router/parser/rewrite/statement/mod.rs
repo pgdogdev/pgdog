@@ -89,6 +89,9 @@ impl<'a> StatementRewrite<'a> {
             }
         })?;
 
+        // Add helper aggregates when needed.
+        self.rewrite_aggregates(&mut plan)?;
+
         if self.rewritten {
             plan.stmt = Some(self.stmt.deparse()?);
         }
