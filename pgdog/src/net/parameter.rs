@@ -99,7 +99,11 @@ impl Display for ParameterValue {
                 value.to_string()
             };
 
-            format!(r#""{}""#, value)
+            if value.is_empty() {
+                format!("''")
+            } else {
+                format!(r#""{}""#, value)
+            }
         }
         match self {
             Self::String(s) => write!(f, "{}", quote(s)),
