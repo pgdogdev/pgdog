@@ -651,4 +651,9 @@ mod test {
             Some(&ParameterValue::String("UTC".into()))
         );
     }
+
+    #[test]
+    fn test_empty_parameter_value() {
+        assert_eq!(ParameterValue::String("".into()).to_string(), "''");
+    }
 }
