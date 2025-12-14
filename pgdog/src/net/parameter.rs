@@ -99,7 +99,11 @@ impl Display for ParameterValue {
                 value.to_string()
             };
 
-            format!(r#""{}""#, value)
+            if value.is_empty() {
+                format!("''")
+            } else {
+                format!(r#""{}""#, value)
+            }
         }
         match self {
             Self::String(s) => write!(f, "{}", quote(s)),
@@ -646,5 +650,10 @@ mod test {
             params1.get("timezone"),
             Some(&ParameterValue::String("UTC".into()))
         );
+    }
+
+    #[test]
+    fn test_empty_parameter_value() {
+        assert_eq!(ParameterValue::String("".into()).to_string(), "''");
     }
 }
