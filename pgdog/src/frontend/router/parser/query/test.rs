@@ -77,7 +77,6 @@ fn parse_query(query: &str) -> Command {
     let mut query_parser = QueryParser::default();
     let cluster = Cluster::new_test();
     let mut stmt = PreparedStatements::default();
-    let params = Parameters::default();
     let mut ast = Ast::new(query, &cluster.sharding_schema(), false, &mut stmt).unwrap();
     ast.cached = false; // Simple protocol queries are not cached
     let mut client_request = ClientRequest::from(vec![Query::new(query).into()]);
@@ -87,7 +86,7 @@ fn parse_query(query: &str) -> Command {
         &client_request,
         &cluster,
         &mut stmt,
-        &params,
+        None,
         None,
         Sticky::new_test(),
     )
@@ -120,7 +119,7 @@ macro_rules! command {
             &client_request,
             &cluster,
             &mut stmt,
-            &params,
+            None,
             transaction,
             Sticky::new(),
         )
@@ -152,7 +151,7 @@ macro_rules! query_parser {
     ($qp:expr, $query:expr, $in_transaction:expr, $cluster:expr) => {{
         let cluster = $cluster;
         let mut prep_stmts = PreparedStatements::default();
-        let params = Parameters::default();
+
         let mut client_request: ClientRequest = vec![$query.into()].into();
 
         let buffered_query = client_request.query().unwrap();
@@ -185,7 +184,7 @@ macro_rules! query_parser {
             &client_request,
             &cluster,
             &mut prep_stmts,
-            &params,
+            None,
             maybe_transaction,
             Sticky::new(),
         )
@@ -225,7 +224,7 @@ macro_rules! parse {
                     &client_request,
                     &cluster,
                     &mut prep_stmts,
-                    &Parameters::default(),
+                    None,
                     None,
                     Sticky::new(),
                 )
@@ -246,7 +245,7 @@ macro_rules! parse {
     };
 }
 
-fn parse_with_parameters(query: &str, params: Parameters) -> Result<Command, Error> {
+fn parse_with_parameters(query: &str) -> Result<Command, Error> {
     let mut prep_stmts = PreparedStatements::default();
     let cluster = Cluster::new_test();
     let mut ast = Ast::new(query, &cluster.sharding_schema(), false, &mut prep_stmts).unwrap();
@@ -257,7 +256,7 @@ fn parse_with_parameters(query: &str, params: Parameters) -> Result<Command, Err
         &client_request,
         &cluster,
         &mut prep_stmts,
-        &params,
+        None,
         None,
         Sticky::new(),
     )
@@ -268,7 +267,6 @@ fn parse_with_parameters(query: &str, params: Parameters) -> Result<Command, Err
 fn parse_with_bind(query: &str, params: &[&[u8]]) -> Result<Command, Error> {
     let mut prep_stmts = PreparedStatements::default();
     let cluster = Cluster::new_test();
-    let parameters = Parameters::default();
     let parse = Parse::new_anonymous(query);
     let params = params
         .iter()
@@ -282,7 +280,7 @@ fn parse_with_bind(query: &str, params: &[&[u8]]) -> Result<Command, Error> {
         &client_request,
         &cluster,
         &mut prep_stmts,
-        &parameters,
+        None,
         None,
         Sticky::new(),
     )
@@ -541,7 +539,6 @@ fn test_set() {
     let query_str = r#"SET statement_timeout TO 1"#;
     let cluster = Cluster::new_test();
     let mut prep_stmts = PreparedStatements::default();
-    let params = Parameters::default();
     let mut ast = Ast::new(
         query_str,
         &cluster.sharding_schema(),
@@ -557,7 +554,7 @@ fn test_set() {
         &buffer,
         &cluster,
         &mut prep_stmts,
-        &params,
+        None,
         transaction,
         Sticky::new(),
     )
@@ -653,7 +650,6 @@ fn update_sharding_key_errors_by_default() {
     let query = "UPDATE sharded SET id = id + 1 WHERE id = 1";
     let cluster = Cluster::new_test();
     let mut prep_stmts = PreparedStatements::default();
-    let params = Parameters::default();
     let mut ast = Ast::new(query, &cluster.sharding_schema(), false, &mut prep_stmts).unwrap();
     ast.cached = false;
     let mut client_request: ClientRequest = vec![Query::new(query).into()].into();
@@ -662,7 +658,7 @@ fn update_sharding_key_errors_by_default() {
         &client_request,
         &cluster,
         &mut prep_stmts,
-        &params,
+        None,
         None,
         Sticky::new(),
     )
@@ -683,7 +679,6 @@ fn update_sharding_key_ignore_mode_allows() {
     let query = "UPDATE sharded SET id = id + 1 WHERE id = 1";
     let cluster = Cluster::new_test();
     let mut prep_stmts = PreparedStatements::default();
-    let params = Parameters::default();
     let mut ast = Ast::new(query, &cluster.sharding_schema(), false, &mut prep_stmts).unwrap();
     ast.cached = false;
     let mut client_request: ClientRequest = vec![Query::new(query).into()].into();
@@ -692,7 +687,7 @@ fn update_sharding_key_ignore_mode_allows() {
         &client_request,
         &cluster,
         &mut prep_stmts,
-        &params,
+        None,
         None,
         Sticky::new(),
     )
@@ -710,7 +705,6 @@ fn update_sharding_key_rewrite_mode_not_supported() {
     let query = "UPDATE sharded SET id = id + 1 WHERE id = 1";
     let cluster = Cluster::new_test();
     let mut prep_stmts = PreparedStatements::default();
-    let params = Parameters::default();
     let mut ast = Ast::new(query, &cluster.sharding_schema(), false, &mut prep_stmts).unwrap();
     ast.cached = false;
     let mut client_request: ClientRequest = vec![Query::new(query).into()].into();
@@ -719,7 +713,7 @@ fn update_sharding_key_rewrite_mode_not_supported() {
         &client_request,
         &cluster,
         &mut prep_stmts,
-        &params,
+        None,
         None,
         Sticky::new(),
     )
@@ -740,7 +734,6 @@ fn update_sharding_key_rewrite_plan_detected() {
     let query = "UPDATE sharded SET id = 11 WHERE id = 1";
     let cluster = Cluster::new_test();
     let mut prep_stmts = PreparedStatements::default();
-    let params = Parameters::default();
     let mut ast = Ast::new(query, &cluster.sharding_schema(), false, &mut prep_stmts).unwrap();
     ast.cached = false;
     let mut client_request: ClientRequest = vec![Query::new(query).into()].into();
@@ -749,7 +742,7 @@ fn update_sharding_key_rewrite_plan_detected() {
         &client_request,
         &cluster,
         &mut prep_stmts,
-        &params,
+        None,
         None,
         Sticky::new(),
     )
@@ -773,11 +766,8 @@ fn update_sharding_key_rewrite_computes_new_shard() {
     let _lock = lock_config_mode();
     let _guard = ConfigModeGuard::set(RewriteMode::Rewrite);
 
-    let command = parse_with_parameters(
-        "UPDATE sharded SET id = 11 WHERE id = 1",
-        Parameters::default(),
-    )
-    .expect("expected command");
+    let command =
+        parse_with_parameters("UPDATE sharded SET id = 11 WHERE id = 1").expect("expected command");
 
     let plan = match command {
         Command::ShardKeyRewrite(plan) => plan,
@@ -792,10 +782,7 @@ fn update_sharding_key_rewrite_requires_parameter_values() {
     let _lock = lock_config_mode();
     let _guard = ConfigModeGuard::set(RewriteMode::Rewrite);
 
-    let result = parse_with_parameters(
-        "UPDATE sharded SET id = $1 WHERE id = 1",
-        Parameters::default(),
-    );
+    let result = parse_with_parameters("UPDATE sharded SET id = $1 WHERE id = 1");
 
     assert!(
         matches!(result, Err(Error::MissingParameter(1))),
@@ -832,11 +819,8 @@ fn update_sharding_key_rewrite_self_assignment_falls_back() {
     let _lock = lock_config_mode();
     let _guard = ConfigModeGuard::set(RewriteMode::Rewrite);
 
-    let command = parse_with_parameters(
-        "UPDATE sharded SET id = id WHERE id = 1",
-        Parameters::default(),
-    )
-    .expect("expected command");
+    let command =
+        parse_with_parameters("UPDATE sharded SET id = id WHERE id = 1").expect("expected command");
 
     match command {
         Command::Query(route) => {
@@ -851,10 +835,7 @@ fn update_sharding_key_rewrite_null_assignment_not_supported() {
     let _lock = lock_config_mode();
     let _guard = ConfigModeGuard::set(RewriteMode::Rewrite);
 
-    let result = parse_with_parameters(
-        "UPDATE sharded SET id = NULL WHERE id = 1",
-        Parameters::default(),
-    );
+    let result = parse_with_parameters("UPDATE sharded SET id = NULL WHERE id = 1");
 
     assert!(
         matches!(result, Err(Error::ShardKeyRewriteNotSupported { .. })),
@@ -938,7 +919,7 @@ WHERE t2.account = (
         &buffer,
         &cluster,
         &mut prep_stmts,
-        &params,
+        None,
         transaction,
         Sticky::new(),
     )
@@ -1000,11 +981,10 @@ fn test_close_direct_one_shard() {
 
     let buf: ClientRequest = vec![Close::named("test").into(), Sync.into()].into();
     let mut pp = PreparedStatements::default();
-    let params = Parameters::default();
     let transaction = None;
 
     let context =
-        RouterContext::new(&buf, &cluster, &mut pp, &params, transaction, Sticky::new()).unwrap();
+        RouterContext::new(&buf, &cluster, &mut pp, None, transaction, Sticky::new()).unwrap();
 
     let cmd = qp.parse(context).unwrap();
 

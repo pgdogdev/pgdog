@@ -1,4 +1,6 @@
-use super::{Aggregate, AggregateFunction, HelperKind, HelperMapping, RewriteOutput, RewritePlan};
+use crate::frontend::router::parser::{
+    Aggregate, AggregateFunction, HelperKind, HelperMapping, RewriteOutput, RewritePlan,
+};
 use pg_query::protobuf::{
     a_const::Val, AConst, FuncCall, Integer, Node, ResTarget, String as PgString,
 };
@@ -317,8 +319,6 @@ struct HelperSpec {
     func: FuncCall,
     kind: HelperKind,
 }
-
-impl HelperKind {}
 
 #[cfg(test)]
 mod tests {

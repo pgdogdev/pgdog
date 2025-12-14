@@ -7,6 +7,7 @@ use pg_query::Node;
 use crate::backend::ShardingSchema;
 use crate::frontend::PreparedStatements;
 
+pub mod aggregate;
 pub mod error;
 pub mod insert;
 pub mod plan;

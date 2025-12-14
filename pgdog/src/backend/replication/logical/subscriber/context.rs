@@ -12,7 +12,6 @@ use crate::{
 pub struct StreamContext<'a> {
     request: ClientRequest,
     cluster: &'a Cluster,
-    params: Parameters,
     prepared_statements: PreparedStatements,
     bind: Bind,
 }
@@ -27,7 +26,6 @@ impl<'a> StreamContext<'a> {
             request,
             cluster,
             prepared_statements: PreparedStatements::new(),
-            params: Parameters::default(),
             bind,
         }
     }
@@ -55,7 +53,7 @@ impl<'a> StreamContext<'a> {
             &self.request,
             self.cluster,
             &mut self.prepared_statements,
-            &self.params,
+            None,
             None,
             Sticky::new(),
         )?)

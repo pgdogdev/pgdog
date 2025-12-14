@@ -13,7 +13,7 @@ impl QueryParser {
         }
 
         // Check search_path for schema.
-        let search_path = context.router_context.params.get("search_path");
+        let search_path = context.router_context.search_path;
         let mut schema_sharder = SchemaSharder::default();
 
         match search_path {

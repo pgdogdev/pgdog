@@ -56,7 +56,7 @@ pub use prepare::Prepare;
 pub use query::QueryParser;
 pub use rewrite::{Assignment, AssignmentValue, ShardKeyRewritePlan, StatementRewrite};
 pub use rewrite_engine::RewriteEngine;
-pub use rewrite_plan::{HelperKind, HelperMapping, QueryRewriter, RewriteOutput, RewritePlan};
+pub use rewrite_plan::{HelperKind, HelperMapping, RewriteOutput, RewritePlan};
 pub use route::{Route, Shard};
 pub use schema::Schema;
 pub use sequence::{OwnedSequence, Sequence};

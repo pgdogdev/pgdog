@@ -224,7 +224,7 @@ impl QueryParser {
                 multi_tenant,
                 context.router_context.cluster.schema(),
                 statement.parse_result(),
-                context.router_context.params,
+                context.router_context.search_path,
             )
             .run()?;
         }
