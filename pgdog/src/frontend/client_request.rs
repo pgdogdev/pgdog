@@ -58,6 +58,13 @@ impl ClientRequest {
         }
     }
 
+    /// Remove any saved state from the request.
+    pub fn clear(&mut self) {
+        self.messages.clear();
+        self.route = None;
+        self.ast = None;
+    }
+
     /// We received a complete request and we are ready to
     /// send it to the query engine.
     pub fn is_complete(&self) -> bool {

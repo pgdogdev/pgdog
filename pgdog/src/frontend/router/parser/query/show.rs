@@ -43,6 +43,7 @@ mod test_show {
             query,
             &c.sharding_schema(),
             false,
+            false,
             &mut PreparedStatements::default(),
         )
         .unwrap();
@@ -60,6 +61,7 @@ mod test_show {
         let mut ast = Ast::new(
             query,
             &c.sharding_schema(),
+            false,
             false,
             &mut PreparedStatements::default(),
         )

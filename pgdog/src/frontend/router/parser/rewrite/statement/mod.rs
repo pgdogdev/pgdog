@@ -5,7 +5,7 @@ use pg_query::protobuf::ParseResult;
 use pg_query::Node;
 
 use crate::backend::ShardingSchema;
-use crate::frontend::{BufferedQuery, PreparedStatements};
+use crate::frontend::PreparedStatements;
 
 pub mod aggregate;
 pub mod error;
@@ -22,18 +22,18 @@ pub use simple_prepared::SimplePreparedResult;
 
 /// Statement rewrite engine context.
 #[derive(Debug)]
-pub(crate) struct StatementRewriteContext<'a> {
+pub struct StatementRewriteContext<'a> {
     /// The AST of the statement we are rewriting.
-    pub(crate) stmt: &'a mut ParseResult,
+    pub stmt: &'a mut ParseResult,
     /// The statement is using the extended protocol with placeholders.
-    pub(crate) extended: bool,
+    pub extended: bool,
     /// The statement is named, so we need to save any derivatives into the global
     /// statement cache.
-    pub(crate) prepared: bool,
+    pub prepared: bool,
     /// Reference to global prepared stmt cache.
-    pub(crate) prepared_statements: &'a mut PreparedStatements,
+    pub prepared_statements: &'a mut PreparedStatements,
     /// Sharding schema.
-    pub(crate) schema: &'a ShardingSchema,
+    pub schema: &'a ShardingSchema,
 }
 
 #[derive(Debug)]
@@ -46,6 +46,9 @@ pub struct StatementRewrite<'a> {
     /// we need to rewrite function calls with parameters
     /// and not actual values.
     extended: bool,
+    /// The statement is named (prepared), so we need to save
+    /// any derivatives into the global statement cache.
+    prepared: bool,
     /// Prepared statements cache for name mapping.
     prepared_statements: &'a mut PreparedStatements,
     /// Sharding schema for cache lookups.
@@ -57,18 +60,14 @@ impl<'a> StatementRewrite<'a> {
     ///
     /// More often than not, it won't do anything.
     ///
-    pub fn new(
-        stmt: &'a mut ParseResult,
-        extended: bool,
-        prepared_statements: &'a mut PreparedStatements,
-        schema: &'a ShardingSchema,
-    ) -> Self {
+    pub fn new(ctx: StatementRewriteContext<'a>) -> Self {
         Self {
-            stmt,
+            stmt: ctx.stmt,
             rewritten: false,
-            extended,
-            prepared_statements,
-            schema,
+            extended: ctx.extended,
+            prepared: ctx.prepared,
+            prepared_statements: ctx.prepared_statements,
+            schema: ctx.schema,
         }
     }
 

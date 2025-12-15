@@ -20,7 +20,6 @@ pub mod discard;
 pub mod end_transaction;
 pub mod hooks;
 pub mod incomplete_requests;
-pub mod insert_split;
 pub mod internal_values;
 pub mod multi_step;
 pub mod notify_buffer;
@@ -274,7 +273,6 @@ impl QueryEngine {
                 self.set_route(context, route.clone()).await?;
             }
             Command::Copy(_) => self.execute(context, &route).await?,
-            Command::InsertSplit(plan) => self.insert_split(context, *plan.clone()).await?,
             Command::ShardKeyRewrite(plan) => {
                 self.shard_key_rewrite(context, *plan.clone()).await?
             }

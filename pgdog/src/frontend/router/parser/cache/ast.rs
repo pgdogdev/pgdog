@@ -5,7 +5,9 @@ use std::{collections::HashSet, ops::Deref};
 use parking_lot::Mutex;
 use std::sync::Arc;
 
-use super::super::{comment::comment, Error, Route, Shard, StatementRewrite, Table};
+use super::super::{
+    comment::comment, Error, Route, Shard, StatementRewrite, StatementRewriteContext, Table,
+};
 use super::{Fingerprint, Stats};
 use crate::frontend::router::parser::rewrite::statement::RewritePlan;
 use crate::frontend::PreparedStatements;
@@ -65,12 +67,18 @@ impl Ast {
         query: &str,
         schema: &ShardingSchema,
         extended: bool,
+        prepared: bool,
         prepared_statements: &mut PreparedStatements,
     ) -> Result<Self, Error> {
         let mut ast = parse(query).map_err(Error::PgQuery)?;
-        let rewrite_plan =
-            StatementRewrite::new(&mut ast.protobuf, extended, prepared_statements, schema)
-                .maybe_rewrite()?;
+        let rewrite_plan = StatementRewrite::new(StatementRewriteContext {
+            stmt: &mut ast.protobuf,
+            extended,
+            prepared,
+            prepared_statements,
+            schema,
+        })
+        .maybe_rewrite()?;
         let (comment_shard, comment_role) = comment(query, schema)?;
         let fingerprint = Fingerprint::new(query).map_err(Error::PgQuery)?;
 

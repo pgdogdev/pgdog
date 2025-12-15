@@ -20,6 +20,10 @@ pub struct InsertSplit {
 
     /// The statement AST.
     ast: Ast,
+
+    /// The global prepared statement name for this split.
+    /// Only set when the original statement was a named prepared statement.
+    statement_name: Option<String>,
 }
 
 impl InsertSplit {
@@ -36,6 +40,11 @@ impl InsertSplit {
     /// Get the AST.
     pub fn ast(&self) -> &Ast {
         &self.ast
+    }
+
+    /// Get the global prepared statement name, if this split was registered.
+    pub fn statement_name(&self) -> Option<&str> {
+        self.statement_name.as_deref()
     }
 
     /// Build a ClientRequest from this split and the original request.
@@ -89,7 +98,14 @@ impl InsertSplit {
             Vec::new()
         };
 
-        Bind::new_params_codes(bind.statement(), &params, &codes)
+        // Use the split's registered statement name if available,
+        // otherwise fall back to the original bind's statement name.
+        let statement_name = self
+            .statement_name
+            .as_deref()
+            .unwrap_or_else(|| bind.statement());
+
+        Bind::new_params_codes(statement_name, &params, &codes)
     }
 }
 
@@ -143,7 +159,23 @@ impl StatementRewrite<'_> {
             let ast = cache
                 .query(&query, self.schema, self.prepared_statements)
                 .map_err(|e| Error::Cache(e.to_string()))?;
-            plan.insert_split.push(InsertSplit { params, stmt, ast });
+
+            // If this is a named prepared statement, register the split in the global cache
+            // and store the assigned name for use in Bind messages.
+            let statement_name = if self.prepared {
+                let mut parse = Parse::named("", &stmt);
+                self.prepared_statements.insert(&mut parse);
+                Some(parse.name().to_owned())
+            } else {
+                None
+            };
+
+            plan.insert_split.push(InsertSplit {
+                params,
+                stmt,
+                ast,
+                statement_name,
+            });
         }
 
         Ok(())
@@ -252,6 +284,7 @@ mod tests {
     use super::*;
     use crate::backend::replication::{ShardedSchemas, ShardedTables};
     use crate::backend::ShardingSchema;
+    use crate::frontend::router::parser::StatementRewriteContext;
     use crate::frontend::PreparedStatements;
 
     fn default_schema() -> ShardingSchema {
@@ -266,7 +299,13 @@ mod tests {
         let mut ast = pg_query::parse(sql).unwrap().protobuf;
         let mut prepared = PreparedStatements::default();
         let schema = default_schema();
-        let mut rewriter = StatementRewrite::new(&mut ast, false, &mut prepared, &schema);
+        let mut rewriter = StatementRewrite::new(StatementRewriteContext {
+            stmt: &mut ast,
+            extended: false,
+            prepared: false,
+            prepared_statements: &mut prepared,
+            schema: &schema,
+        });
         let mut plan = RewritePlan::default();
         rewriter.split_insert(&mut plan).unwrap();
         plan.insert_split

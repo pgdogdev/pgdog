@@ -68,7 +68,7 @@ mod tests {
         let cluster = Cluster::new_test();
         let mut stmts = PreparedStatements::default();
 
-        let mut ast = Ast::new(sql, &cluster.sharding_schema(), false, &mut stmts).unwrap();
+        let mut ast = Ast::new(sql, &cluster.sharding_schema(), false, false, &mut stmts).unwrap();
         ast.cached = false;
         let mut buffer = ClientRequest::from(vec![Query::new(sql).into()]);
         buffer.ast = Some(ast);
@@ -98,7 +98,7 @@ mod tests {
         let cluster = Cluster::new_test();
         let mut stmts = PreparedStatements::default();
 
-        let ast = Ast::new(sql, &cluster.sharding_schema(), true, &mut stmts).unwrap();
+        let ast = Ast::new(sql, &cluster.sharding_schema(), true, false, &mut stmts).unwrap();
         let mut buffer: ClientRequest = vec![parse_msg.into(), bind.into()].into();
         buffer.ast = Some(ast);
 

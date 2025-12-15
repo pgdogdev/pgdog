@@ -116,6 +116,7 @@ mod tests {
     use super::*;
     use crate::backend::replication::{ShardedSchemas, ShardedTables};
     use crate::backend::ShardingSchema;
+    use crate::frontend::router::parser::StatementRewriteContext;
     use crate::frontend::PreparedStatements;
 
     fn default_schema() -> ShardingSchema {
@@ -178,7 +179,13 @@ mod tests {
             .protobuf;
         let mut ps = PreparedStatements::default();
         let schema = default_schema();
-        let mut rewrite = StatementRewrite::new(&mut ast, true, &mut ps, &schema);
+        let mut rewrite = StatementRewrite::new(StatementRewriteContext {
+            stmt: &mut ast,
+            extended: true,
+            prepared: false,
+            prepared_statements: &mut ps,
+            schema: &schema,
+        });
         let plan = rewrite.maybe_rewrite().unwrap();
 
         let sql = ast.deparse().unwrap();
@@ -194,7 +201,13 @@ mod tests {
             .protobuf;
         let mut ps = PreparedStatements::default();
         let schema = default_schema();
-        let mut rewrite = StatementRewrite::new(&mut ast, true, &mut ps, &schema);
+        let mut rewrite = StatementRewrite::new(StatementRewriteContext {
+            stmt: &mut ast,
+            extended: true,
+            prepared: false,
+            prepared_statements: &mut ps,
+            schema: &schema,
+        });
         let plan = rewrite.maybe_rewrite().unwrap();
 
         let sql = ast.deparse().unwrap();
@@ -210,7 +223,13 @@ mod tests {
             .protobuf;
         let mut ps = PreparedStatements::default();
         let schema = default_schema();
-        let mut rewrite = StatementRewrite::new(&mut ast, true, &mut ps, &schema);
+        let mut rewrite = StatementRewrite::new(StatementRewriteContext {
+            stmt: &mut ast,
+            extended: true,
+            prepared: false,
+            prepared_statements: &mut ps,
+            schema: &schema,
+        });
         let plan = rewrite.maybe_rewrite().unwrap();
 
         let sql = ast.deparse().unwrap();
@@ -229,7 +248,13 @@ mod tests {
             .protobuf;
         let mut ps = PreparedStatements::default();
         let schema = default_schema();
-        let mut rewrite = StatementRewrite::new(&mut ast, false, &mut ps, &schema);
+        let mut rewrite = StatementRewrite::new(StatementRewriteContext {
+            stmt: &mut ast,
+            extended: false,
+            prepared: false,
+            prepared_statements: &mut ps,
+            schema: &schema,
+        });
         let plan = rewrite.maybe_rewrite().unwrap();
 
         let sql = ast.deparse().unwrap();
@@ -256,7 +281,13 @@ mod tests {
             .protobuf;
         let mut ps = PreparedStatements::default();
         let schema = default_schema();
-        let mut rewrite = StatementRewrite::new(&mut ast, false, &mut ps, &schema);
+        let mut rewrite = StatementRewrite::new(StatementRewriteContext {
+            stmt: &mut ast,
+            extended: false,
+            prepared: false,
+            prepared_statements: &mut ps,
+            schema: &schema,
+        });
         let plan = rewrite.maybe_rewrite().unwrap();
 
         let sql = ast.deparse().unwrap();
@@ -273,7 +304,13 @@ mod tests {
         let mut ast = pg_query::parse("SELECT 1, 2, 3").unwrap().protobuf;
         let mut ps = PreparedStatements::default();
         let schema = default_schema();
-        let mut rewrite = StatementRewrite::new(&mut ast, true, &mut ps, &schema);
+        let mut rewrite = StatementRewrite::new(StatementRewriteContext {
+            stmt: &mut ast,
+            extended: true,
+            prepared: false,
+            prepared_statements: &mut ps,
+            schema: &schema,
+        });
         let plan = rewrite.maybe_rewrite().unwrap();
 
         let sql = ast.deparse().unwrap();
@@ -289,7 +326,13 @@ mod tests {
                 .protobuf;
         let mut ps = PreparedStatements::default();
         let schema = default_schema();
-        let mut rewrite = StatementRewrite::new(&mut ast, true, &mut ps, &schema);
+        let mut rewrite = StatementRewrite::new(StatementRewriteContext {
+            stmt: &mut ast,
+            extended: true,
+            prepared: false,
+            prepared_statements: &mut ps,
+            schema: &schema,
+        });
         let plan = rewrite.maybe_rewrite().unwrap();
 
         let sql = ast.deparse().unwrap();
@@ -305,7 +348,13 @@ mod tests {
                 .protobuf;
         let mut ps = PreparedStatements::default();
         let schema = default_schema();
-        let mut rewrite = StatementRewrite::new(&mut ast, true, &mut ps, &schema);
+        let mut rewrite = StatementRewrite::new(StatementRewriteContext {
+            stmt: &mut ast,
+            extended: true,
+            prepared: false,
+            prepared_statements: &mut ps,
+            schema: &schema,
+        });
         let plan = rewrite.maybe_rewrite().unwrap();
 
         let sql = ast.deparse().unwrap();
@@ -320,7 +369,13 @@ mod tests {
             .protobuf;
         let mut ps = PreparedStatements::default();
         let schema = default_schema();
-        let mut rewrite = StatementRewrite::new(&mut ast, true, &mut ps, &schema);
+        let mut rewrite = StatementRewrite::new(StatementRewriteContext {
+            stmt: &mut ast,
+            extended: true,
+            prepared: false,
+            prepared_statements: &mut ps,
+            schema: &schema,
+        });
         let plan = rewrite.maybe_rewrite().unwrap();
 
         let sql = ast.deparse().unwrap();
@@ -335,7 +390,13 @@ mod tests {
             .protobuf;
         let mut ps = PreparedStatements::default();
         let schema = default_schema();
-        let mut rewrite = StatementRewrite::new(&mut ast, true, &mut ps, &schema);
+        let mut rewrite = StatementRewrite::new(StatementRewriteContext {
+            stmt: &mut ast,
+            extended: true,
+            prepared: false,
+            prepared_statements: &mut ps,
+            schema: &schema,
+        });
         let plan = rewrite.maybe_rewrite().unwrap();
 
         let sql = ast.deparse().unwrap();
@@ -350,7 +411,13 @@ mod tests {
             .protobuf;
         let mut ps = PreparedStatements::default();
         let schema = default_schema();
-        let mut rewrite = StatementRewrite::new(&mut ast, true, &mut ps, &schema);
+        let mut rewrite = StatementRewrite::new(StatementRewriteContext {
+            stmt: &mut ast,
+            extended: true,
+            prepared: false,
+            prepared_statements: &mut ps,
+            schema: &schema,
+        });
         let plan = rewrite.maybe_rewrite().unwrap();
 
         let sql = ast.deparse().unwrap();
@@ -365,7 +432,13 @@ mod tests {
             .protobuf;
         let mut ps = PreparedStatements::default();
         let schema = default_schema();
-        let mut rewrite = StatementRewrite::new(&mut ast, true, &mut ps, &schema);
+        let mut rewrite = StatementRewrite::new(StatementRewriteContext {
+            stmt: &mut ast,
+            extended: true,
+            prepared: false,
+            prepared_statements: &mut ps,
+            schema: &schema,
+        });
         let plan = rewrite.maybe_rewrite().unwrap();
 
         let sql = ast.deparse().unwrap();
@@ -382,7 +455,13 @@ mod tests {
         .protobuf;
         let mut ps = PreparedStatements::default();
         let schema = default_schema();
-        let mut rewrite = StatementRewrite::new(&mut ast, true, &mut ps, &schema);
+        let mut rewrite = StatementRewrite::new(StatementRewriteContext {
+            stmt: &mut ast,
+            extended: true,
+            prepared: false,
+            prepared_statements: &mut ps,
+            schema: &schema,
+        });
         let plan = rewrite.maybe_rewrite().unwrap();
 
         let sql = ast.deparse().unwrap();

@@ -87,7 +87,10 @@ impl Cache {
     ) -> Result<Ast, Error> {
         match query {
             BufferedQuery::Prepared(parse) => {
-                self.parse(parse.query(), schema, prepared_statements)
+                // A statement is "prepared" (named) if it has a non-empty name.
+                // This affects how the rewrite engine handles split INSERTs.
+                let prepared = !parse.anonymous();
+                self.parse(parse.query(), schema, prepared, prepared_statements)
             }
             BufferedQuery::Query(query) => self.simple(query.query(), schema, prepared_statements),
         }
@@ -103,6 +106,7 @@ impl Cache {
         &self,
         query: &str,
         schema: &ShardingSchema,
+        prepared: bool,
         prepared_statements: &mut PreparedStatements,
     ) -> Result<Ast, Error> {
         {
@@ -118,7 +122,7 @@ impl Cache {
         }
 
         // Parse query without holding lock.
-        let entry = Ast::new(query, schema, true, prepared_statements)?;
+        let entry = Ast::new(query, schema, true, prepared, prepared_statements)?;
 
         let mut guard = self.inner.lock();
         guard.queries.put(query.to_owned(), entry.clone());
@@ -135,7 +139,7 @@ impl Cache {
         schema: &ShardingSchema,
         prepared_statements: &mut PreparedStatements,
     ) -> Result<Ast, Error> {
-        let mut entry = Ast::new(query, schema, false, prepared_statements)?;
+        let mut entry = Ast::new(query, schema, false, false, prepared_statements)?;
         entry.cached = false;
         Ok(entry)
     }

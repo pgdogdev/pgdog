@@ -54,7 +54,9 @@ pub use limit::{Limit, LimitClause};
 pub use order_by::OrderBy;
 pub use prepare::Prepare;
 pub use query::QueryParser;
-pub use rewrite::{Assignment, AssignmentValue, ShardKeyRewritePlan, StatementRewrite};
+pub use rewrite::{
+    Assignment, AssignmentValue, ShardKeyRewritePlan, StatementRewrite, StatementRewriteContext,
+};
 pub use rewrite_engine::RewriteEngine;
 pub use rewrite_plan::{HelperKind, HelperMapping, RewriteOutput, RewritePlan};
 pub use route::{Route, Shard};

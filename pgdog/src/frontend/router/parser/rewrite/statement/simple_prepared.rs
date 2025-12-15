@@ -110,7 +110,7 @@ fn rewrite_single_prepared(
 
 #[cfg(test)]
 mod tests {
-    use super::super::StatementRewrite;
+    use super::super::{StatementRewrite, StatementRewriteContext};
     use super::*;
     use crate::backend::replication::{ShardedSchemas, ShardedTables};
     use crate::backend::ShardingSchema;
@@ -138,7 +138,13 @@ mod tests {
             .protobuf;
         let mut ps = prepared_statements_full();
         let schema = default_schema();
-        let mut rewrite = StatementRewrite::new(&mut ast, false, &mut ps, &schema);
+        let mut rewrite = StatementRewrite::new(StatementRewriteContext {
+            stmt: &mut ast,
+            extended: false,
+            prepared: false,
+            prepared_statements: &mut ps,
+            schema: &schema,
+        });
         let plan = rewrite.maybe_rewrite().unwrap();
 
         let sql = ast.deparse().unwrap();
@@ -161,13 +167,25 @@ mod tests {
         // First, prepare a statement
         let mut ast = parse("PREPARE test_stmt AS SELECT 1").unwrap().protobuf;
         let schema = default_schema();
-        let mut rewrite = StatementRewrite::new(&mut ast, false, &mut ps, &schema);
+        let mut rewrite = StatementRewrite::new(StatementRewriteContext {
+            stmt: &mut ast,
+            extended: false,
+            prepared: false,
+            prepared_statements: &mut ps,
+            schema: &schema,
+        });
         rewrite.maybe_rewrite().unwrap();
 
         // Now execute it
         let mut ast = parse("EXECUTE test_stmt").unwrap().protobuf;
         let schema = default_schema();
-        let mut rewrite = StatementRewrite::new(&mut ast, false, &mut ps, &schema);
+        let mut rewrite = StatementRewrite::new(StatementRewriteContext {
+            stmt: &mut ast,
+            extended: false,
+            prepared: false,
+            prepared_statements: &mut ps,
+            schema: &schema,
+        });
         let plan = rewrite.maybe_rewrite().unwrap();
 
         let sql = ast.deparse().unwrap();
@@ -190,13 +208,25 @@ mod tests {
             .unwrap()
             .protobuf;
         let schema = default_schema();
-        let mut rewrite = StatementRewrite::new(&mut ast, false, &mut ps, &schema);
+        let mut rewrite = StatementRewrite::new(StatementRewriteContext {
+            stmt: &mut ast,
+            extended: false,
+            prepared: false,
+            prepared_statements: &mut ps,
+            schema: &schema,
+        });
         rewrite.maybe_rewrite().unwrap();
 
         // Now execute it with arguments
         let mut ast = parse("EXECUTE test_stmt(1, 'hello')").unwrap().protobuf;
         let schema = default_schema();
-        let mut rewrite = StatementRewrite::new(&mut ast, false, &mut ps, &schema);
+        let mut rewrite = StatementRewrite::new(StatementRewriteContext {
+            stmt: &mut ast,
+            extended: false,
+            prepared: false,
+            prepared_statements: &mut ps,
+            schema: &schema,
+        });
         let plan = rewrite.maybe_rewrite().unwrap();
 
         let sql = ast.deparse().unwrap();
@@ -217,7 +247,13 @@ mod tests {
 
         let mut ast = parse("EXECUTE nonexistent_stmt").unwrap().protobuf;
         let schema = default_schema();
-        let mut rewrite = StatementRewrite::new(&mut ast, false, &mut ps, &schema);
+        let mut rewrite = StatementRewrite::new(StatementRewriteContext {
+            stmt: &mut ast,
+            extended: false,
+            prepared: false,
+            prepared_statements: &mut ps,
+            schema: &schema,
+        });
         let result = rewrite.maybe_rewrite();
 
         assert!(result.is_err());
@@ -228,7 +264,13 @@ mod tests {
         let mut ast = parse("SELECT 1, 2, 3").unwrap().protobuf;
         let mut ps = prepared_statements_full();
         let schema = default_schema();
-        let mut rewrite = StatementRewrite::new(&mut ast, false, &mut ps, &schema);
+        let mut rewrite = StatementRewrite::new(StatementRewriteContext {
+            stmt: &mut ast,
+            extended: false,
+            prepared: false,
+            prepared_statements: &mut ps,
+            schema: &schema,
+        });
         let plan = rewrite.maybe_rewrite().unwrap();
 
         let sql = ast.deparse().unwrap();

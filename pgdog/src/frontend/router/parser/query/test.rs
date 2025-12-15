@@ -43,27 +43,6 @@ impl Drop for ConfigModeGuard {
     }
 }
 
-struct SplitConfigGuard {
-    original: ConfigAndUsers,
-}
-
-impl SplitConfigGuard {
-    fn set(mode: RewriteMode) -> Self {
-        let original = config().deref().clone();
-        let mut updated = original.clone();
-        updated.config.rewrite.split_inserts = mode;
-        updated.config.rewrite.enabled = true;
-        config::set(updated).unwrap();
-        Self { original }
-    }
-}
-
-impl Drop for SplitConfigGuard {
-    fn drop(&mut self) {
-        config::set(self.original.clone()).unwrap();
-    }
-}
-
 static CONFIG_MODE_LOCK: Mutex<()> = Mutex::new(());
 
 fn lock_config_mode() -> MutexGuard<'static, ()> {
@@ -78,6 +57,7 @@ fn parse_query(query: &str) -> Command {
     let mut ast = Ast::new(
         query,
         &cluster.sharding_schema(),
+        false,
         false,
         &mut PreparedStatements::default(),
     )
@@ -104,6 +84,7 @@ macro_rules! command {
         let mut ast = Ast::new(
             query,
             &cluster.sharding_schema(),
+            false,
             false,
             &mut PreparedStatements::default(),
         )
@@ -160,6 +141,7 @@ macro_rules! query_parser {
             &query_str,
             &cluster.sharding_schema(),
             extended,
+            false,
             &mut prep_stmts,
         )
         .unwrap();
@@ -212,6 +194,7 @@ macro_rules! parse {
             $query,
             &cluster.sharding_schema(),
             true,
+            false,
             &mut PreparedStatements::default(),
         )
         .unwrap();
@@ -242,6 +225,7 @@ fn parse_with_parameters(query: &str) -> Result<Command, Error> {
         query,
         &cluster.sharding_schema(),
         false,
+        false,
         &mut PreparedStatements::default(),
     )
     .unwrap();
@@ -265,6 +249,7 @@ fn parse_with_bind(query: &str, params: &[&[u8]]) -> Result<Command, Error> {
         query,
         &cluster.sharding_schema(),
         true,
+        false,
         &mut PreparedStatements::default(),
     )
     .unwrap();
@@ -530,6 +515,7 @@ fn test_set() {
         query_str,
         &cluster.sharding_schema(),
         false,
+        false,
         &mut prep_stmts,
     )
     .unwrap();
@@ -630,7 +616,14 @@ fn update_sharding_key_errors_by_default() {
     let query = "UPDATE sharded SET id = id + 1 WHERE id = 1";
     let cluster = Cluster::new_test();
     let mut prep_stmts = PreparedStatements::default();
-    let mut ast = Ast::new(query, &cluster.sharding_schema(), false, &mut prep_stmts).unwrap();
+    let mut ast = Ast::new(
+        query,
+        &cluster.sharding_schema(),
+        false,
+        false,
+        &mut prep_stmts,
+    )
+    .unwrap();
     ast.cached = false;
     let mut client_request: ClientRequest = vec![Query::new(query).into()].into();
     client_request.ast = Some(ast);
@@ -652,7 +645,14 @@ fn update_sharding_key_ignore_mode_allows() {
     let query = "UPDATE sharded SET id = id + 1 WHERE id = 1";
     let cluster = Cluster::new_test();
     let mut prep_stmts = PreparedStatements::default();
-    let mut ast = Ast::new(query, &cluster.sharding_schema(), false, &mut prep_stmts).unwrap();
+    let mut ast = Ast::new(
+        query,
+        &cluster.sharding_schema(),
+        false,
+        false,
+        &mut prep_stmts,
+    )
+    .unwrap();
     ast.cached = false;
     let mut client_request: ClientRequest = vec![Query::new(query).into()].into();
     client_request.ast = Some(ast);
@@ -671,7 +671,14 @@ fn update_sharding_key_rewrite_mode_not_supported() {
     let query = "UPDATE sharded SET id = id + 1 WHERE id = 1";
     let cluster = Cluster::new_test();
     let mut prep_stmts = PreparedStatements::default();
-    let mut ast = Ast::new(query, &cluster.sharding_schema(), false, &mut prep_stmts).unwrap();
+    let mut ast = Ast::new(
+        query,
+        &cluster.sharding_schema(),
+        false,
+        false,
+        &mut prep_stmts,
+    )
+    .unwrap();
     ast.cached = false;
     let mut client_request: ClientRequest = vec![Query::new(query).into()].into();
     client_request.ast = Some(ast);
@@ -693,7 +700,14 @@ fn update_sharding_key_rewrite_plan_detected() {
     let query = "UPDATE sharded SET id = 11 WHERE id = 1";
     let cluster = Cluster::new_test();
     let mut prep_stmts = PreparedStatements::default();
-    let mut ast = Ast::new(query, &cluster.sharding_schema(), false, &mut prep_stmts).unwrap();
+    let mut ast = Ast::new(
+        query,
+        &cluster.sharding_schema(),
+        false,
+        false,
+        &mut prep_stmts,
+    )
+    .unwrap();
     ast.cached = false;
     let mut client_request: ClientRequest = vec![Query::new(query).into()].into();
     client_request.ast = Some(ast);
@@ -859,6 +873,7 @@ WHERE t2.account = (
         query_str,
         &cluster.sharding_schema(),
         false,
+        false,
         &mut prep_stmts,
     )
     .unwrap();
@@ -964,22 +979,6 @@ fn test_any() {
     );
 
     assert_eq!(route.shard(), &Shard::All);
-}
-
-#[test]
-fn split_insert_rewrite_emits_command() {
-    let _lock = lock_config_mode();
-    let _guard = SplitConfigGuard::set(RewriteMode::Rewrite);
-
-    let (command, _) = command!("INSERT INTO sharded (id, value) VALUES (1, 'a'), (11, 'b')");
-
-    match command {
-        Command::InsertSplit(plan) => {
-            assert_eq!(plan.total_rows(), 2);
-            assert!(plan.shard_list().len() > 1, "expected multiple shards");
-        }
-        other => panic!("expected insert split command, got {other:?}"),
-    }
 }
 
 #[test]

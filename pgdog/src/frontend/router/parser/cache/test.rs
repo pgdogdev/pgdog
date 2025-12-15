@@ -113,7 +113,7 @@ fn test_tables_list() {
         "DELETE FROM private_schema.test",
         "DROP TABLE private_schema.test",
     ] {
-        let ast = Ast::new(q, &ShardingSchema::default(), true, &mut prepared_statements).unwrap();
+        let ast = Ast::new(q, &ShardingSchema::default(), true, false, &mut prepared_statements).unwrap();
         let tables = ast.tables();
         println!("{:?}", tables);
     }

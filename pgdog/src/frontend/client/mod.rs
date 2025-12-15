@@ -496,7 +496,7 @@ impl Client {
     /// This ensures we don't check out a connection from the pool until the client
     /// sent a complete request.
     async fn buffer(&mut self, state: State) -> Result<BufferEvent, Error> {
-        self.client_request.messages.clear();
+        self.client_request.clear();
 
         // Only start timer once we receive the first message.
         let mut timer = None;
