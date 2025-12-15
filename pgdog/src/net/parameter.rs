@@ -25,8 +25,6 @@ static IMMUTABLE_PARAMS: Lazy<Vec<String>> = Lazy::new(|| {
     ])
 });
 
-// static IMMUTABLE_PARAMS: &[&str] = &["database", "user", "client_encoding"];
-
 /// Startup parameter.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Parameter {
@@ -94,13 +92,13 @@ impl Display for ParameterValue {
                 let mut value = value.to_string();
                 value.remove(0);
                 value.pop();
-                value.replace("\"", "\"\"") // Escape any double quotes.
+                value
             } else {
                 value.to_string()
             };
 
-            if value.is_empty() {
-                format!("''")
+            if value.is_empty() || value.contains("\"") {
+                format!("'{}'", value)
             } else {
                 format!(r#""{}""#, value)
             }
@@ -649,6 +647,14 @@ mod test {
         assert_eq!(
             params1.get("timezone"),
             Some(&ParameterValue::String("UTC".into()))
+        );
+    }
+
+    #[test]
+    fn test_json_parameter_value() {
+        assert_eq!(
+            ParameterValue::String(r#"{"sampling_state":"1","span_id":"2a9abb846bb02bfe","trace_id":"6b9e798174650d2f6e8262ec175f241f"}"#.into()).to_string(),
+            r#"'{"sampling_state":"1","span_id":"2a9abb846bb02bfe","trace_id":"6b9e798174650d2f6e8262ec175f241f"}'"#
         );
     }
 
