@@ -39,12 +39,17 @@ mod test_show {
 
         // First call
         let query = "SHOW TRANSACTION ISOLATION LEVEL";
-        let mut ps = PreparedStatements::default();
-        let mut ast = Ast::new(query, &c.sharding_schema(), false, &mut ps).unwrap();
+        let mut ast = Ast::new(
+            query,
+            &c.sharding_schema(),
+            false,
+            &mut PreparedStatements::default(),
+        )
+        .unwrap();
         ast.cached = false;
         let mut buffer = ClientRequest::from(vec![Query::new(query).into()]);
         buffer.ast = Some(ast);
-        let context = RouterContext::new(&buffer, &c, &mut ps, None, None, Sticky::new()).unwrap();
+        let context = RouterContext::new(&buffer, &c, None, None, Sticky::new()).unwrap();
 
         let first = parser.parse(context).unwrap().clone();
         let first_shard = first.route().shard();
@@ -52,12 +57,17 @@ mod test_show {
 
         // Second call
         let query = "SHOW TRANSACTION ISOLATION LEVEL";
-        let mut ps = PreparedStatements::default();
-        let mut ast = Ast::new(query, &c.sharding_schema(), false, &mut ps).unwrap();
+        let mut ast = Ast::new(
+            query,
+            &c.sharding_schema(),
+            false,
+            &mut PreparedStatements::default(),
+        )
+        .unwrap();
         ast.cached = false;
         let mut buffer = ClientRequest::from(vec![Query::new(query).into()]);
         buffer.ast = Some(ast);
-        let context = RouterContext::new(&buffer, &c, &mut ps, None, None, Sticky::new()).unwrap();
+        let context = RouterContext::new(&buffer, &c, None, None, Sticky::new()).unwrap();
 
         let second = parser.parse(context).unwrap().clone();
         let second_shard = second.route().shard();

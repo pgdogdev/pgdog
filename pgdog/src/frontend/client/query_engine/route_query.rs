@@ -67,7 +67,6 @@ impl QueryEngine {
         let router_context = RouterContext::new(
             context.client_request,
             cluster,
-            context.prepared_statements,
             context.params.search_path(),
             context.transaction,
             context.sticky,

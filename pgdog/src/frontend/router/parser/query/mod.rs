@@ -395,13 +395,7 @@ impl QueryParser {
             // Record statement in cache with normalized parameters.
             if !statement.cached {
                 let query_str = context.query()?.query().to_owned();
-                let sharding_schema = context.sharding_schema.clone();
-                Cache::get().record_normalized(
-                    &query_str,
-                    command.route(),
-                    &sharding_schema,
-                    context.prepared_statements(),
-                )?;
+                Cache::get().record_normalized(&query_str, command.route())?;
             }
             Ok(command.dry_run())
         } else {
