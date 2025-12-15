@@ -99,21 +99,21 @@ impl<'a> Insert<'a> {
                 return Ok(InsertRouting::Routed(schema.shard().into()));
             }
 
-            if key.is_some() && tuples.len() > 1 {
-                if rewrite_enabled && split_mode == RewriteMode::Rewrite {
-                    let plan =
-                        self.build_split_plan(&tables, schema, bind, table, &columns, &tuples);
-                    trace!("rewrite plan: {:#?}", plan);
-                    return plan;
-                }
+            // if key.is_some() && tuples.len() > 1 {
+            //     if rewrite_enabled && split_mode == RewriteMode::Rewrite {
+            //         let plan =
+            //             self.build_split_plan(&tables, schema, bind, table, &columns, &tuples);
+            //         trace!("rewrite plan: {:#?}", plan);
+            //         return plan;
+            //     }
 
-                if split_mode == RewriteMode::Error {
-                    return Err(Error::ShardedMultiRowInsert {
-                        table: table.name.to_owned(),
-                        mode: split_mode,
-                    });
-                }
-            }
+            //     if split_mode == RewriteMode::Error {
+            //         return Err(Error::ShardedMultiRowInsert {
+            //             table: table.name.to_owned(),
+            //             mode: split_mode,
+            //         });
+            //     }
+            // }
         }
 
         if let Some(key) = key {

@@ -1,7 +1,10 @@
 use tokio::time::timeout;
 
 use crate::{
-    frontend::{client::TransactionType, router::parser::explain_trace::ExplainTrace},
+    frontend::{
+        client::TransactionType,
+        router::parser::{explain_trace::ExplainTrace, rewrite::statement::plan::RewriteResult},
+    },
     net::{
         DataRow, FromBytes, Message, Protocol, ProtocolMessage, Query, ReadyForQuery,
         RowDescription, ToBytes, TransactionState,
@@ -45,19 +48,7 @@ impl QueryEngine {
             return Ok(());
         }
 
-        // if let Some(sql) = route.rewritten_sql() {
-        //     match context.client_request.rewrite(&[Query::new(sql).into()]) {
-        //         Ok(()) => (),
-        //         Err(crate::net::Error::OnlySimpleForRewrites) => {
-        //             context.client_request.rewrite_prepared(
-        //                 sql,
-        //                 context.prepared_statements,
-        //                 route.rewrite_plan(),
-        //             );
-        //         }
-        //         Err(err) => return Err(err.into()),
-        //     }
-        // }
+        self.hooks.after_connected(context, &self.backend)?;
 
         // Set response format.
         for msg in context.client_request.messages.iter() {
@@ -66,32 +57,40 @@ impl QueryEngine {
             }
         }
 
-        self.hooks.after_connected(context, &self.backend)?;
+        match context.rewrite_result.take() {
+            Some(RewriteResult::InsertSplit(requests)) => {
+                multi_step::InsertMulti::from_engine(self, context, requests)
+                    .execute()
+                    .await?;
+            }
 
-        self.backend
-            .handle_client_request(context.client_request, &mut self.router, self.streaming)
-            .await?;
+            Some(RewriteResult::InPlace) | None => {
+                self.backend
+                    .handle_client_request(context.client_request, &mut self.router, self.streaming)
+                    .await?;
 
-        while self.backend.has_more_messages()
-            && !self.backend.copy_mode()
-            && !self.streaming
-            && !self.test_mode
-        {
-            let message = match timeout(
-                context.timeouts.query_timeout(&State::Active),
-                self.backend.read(),
-            )
-            .await
-            {
-                Ok(response) => response?,
-                Err(err) => {
-                    // Close the conn, it could be stuck executing a query
-                    // or dead.
-                    self.backend.force_close();
-                    return Err(err.into());
+                while self.backend.has_more_messages()
+                    && !self.backend.copy_mode()
+                    && !self.streaming
+                    && !self.test_mode
+                {
+                    let message = match timeout(
+                        context.timeouts.query_timeout(&State::Active),
+                        self.backend.read(),
+                    )
+                    .await
+                    {
+                        Ok(response) => response?,
+                        Err(err) => {
+                            // Close the conn, it could be stuck executing a query
+                            // or dead.
+                            self.backend.force_close();
+                            return Err(err.into());
+                        }
+                    };
+                    self.server_message(context, message).await?;
                 }
-            };
-            self.server_message(context, message).await?;
+            }
         }
 
         Ok(())

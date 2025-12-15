@@ -60,11 +60,6 @@ impl QueryEngine {
                 )
                 .await??;
 
-                // Start transaction on the server(s).
-                if let Some(begin_stmt) = self.begin_stmt.take() {
-                    timeout(query_timeout, self.backend.execute(begin_stmt.query())).await??;
-                }
-
                 true
             }
 

@@ -43,9 +43,14 @@ impl MultiServerState {
         self.counters.get(&'D').copied().unwrap_or_default()
     }
 
+    /// Error happened.
+    pub fn error(&self) -> bool {
+        self.counters.contains_key(&'E')
+    }
+
     /// Create CommandComplete (C) message.
     pub fn command_complete(&self, command_type: CommandType) -> Option<CommandComplete> {
-        if !self.counters.contains_key(&'C') {
+        if !self.counters.contains_key(&'C') || self.error() {
             return None;
         }
 
@@ -55,7 +60,7 @@ impl MultiServerState {
             CommandType::Insert => "INSERT",
         };
 
-        Some(CommandComplete::new(format!("{} {}", self.rows(), name)))
+        Some(CommandComplete::new(format!("{} {}", name, self.rows())))
     }
 
     /// Create ReadyForQuery (C) message.
@@ -64,6 +69,10 @@ impl MultiServerState {
             return None;
         }
 
-        Some(ReadyForQuery::in_transaction(in_transaction))
+        if self.error() {
+            Some(ReadyForQuery::error())
+        } else {
+            Some(ReadyForQuery::in_transaction(in_transaction))
+        }
     }
 }

@@ -56,6 +56,9 @@ pub enum Error {
 
     #[error("rewrite: {0}")]
     Rewrite(#[from] crate::frontend::router::parser::rewrite::statement::Error),
+
+    #[error("multi-step: {0}")]
+    MultiStep(#[from] crate::frontend::client::query_engine::multi_step::Error),
 }
 
 impl Error {

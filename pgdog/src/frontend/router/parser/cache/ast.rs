@@ -1,11 +1,12 @@
 use pg_query::{parse, protobuf::ObjectType, NodeEnum, NodeRef, ParseResult};
+use std::fmt::Debug;
 use std::{collections::HashSet, ops::Deref};
 
 use parking_lot::Mutex;
 use std::sync::Arc;
 
 use super::super::{comment::comment, Error, Route, Shard, StatementRewrite, Table};
-use super::Stats;
+use super::{Fingerprint, Stats};
 use crate::frontend::router::parser::rewrite::statement::RewritePlan;
 use crate::frontend::PreparedStatements;
 use crate::{backend::ShardingSchema, config::Role};
@@ -32,6 +33,8 @@ pub struct AstInner {
     pub comment_role: Option<Role>,
     /// Rewrite plan.
     pub rewrite_plan: RewritePlan,
+    /// Fingerprint.
+    pub fingerprint: Fingerprint,
 }
 
 impl AstInner {
@@ -43,6 +46,7 @@ impl AstInner {
             comment_role: None,
             comment_shard: Shard::All,
             rewrite_plan: RewritePlan::default(),
+            fingerprint: Fingerprint::default(),
         }
     }
 }
@@ -68,6 +72,7 @@ impl Ast {
             StatementRewrite::new(&mut ast.protobuf, extended, prepared_statements, schema)
                 .maybe_rewrite()?;
         let (comment_shard, comment_role) = comment(query, schema)?;
+        let fingerprint = Fingerprint::new(query).map_err(Error::PgQuery)?;
 
         Ok(Self {
             cached: true,
@@ -77,6 +82,7 @@ impl Ast {
                 comment_role,
                 ast,
                 rewrite_plan,
+                fingerprint,
             }),
         })
     }

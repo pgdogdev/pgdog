@@ -35,7 +35,6 @@ mod update;
 
 use multi_tenant::MultiTenantCheck;
 use pgdog_plugin::pg_query::{
-    fingerprint,
     protobuf::{a_const::Val, *},
     NodeEnum,
 };
@@ -376,10 +375,9 @@ impl QueryParser {
                 // Only fingerprint the query if some manual queries are configured.
                 // Otherwise, we're wasting time parsing SQL.
                 if !databases.manual_queries().is_empty() {
-                    let fingerprint =
-                        fingerprint(context.query()?.query()).map_err(Error::PgQuery)?;
-                    debug!("fingerprint: {}", fingerprint.hex);
-                    let manual_route = databases.manual_query(&fingerprint.hex).cloned();
+                    let fingerprint = &statement.fingerprint.hex;
+                    debug!("fingerprint: {}", fingerprint);
+                    let manual_route = databases.manual_query(fingerprint).cloned();
 
                     // TODO: check routing logic required by config.
                     if manual_route.is_some() {
@@ -394,8 +392,8 @@ impl QueryParser {
         if context.dry_run {
             // Record statement in cache with normalized parameters.
             if !statement.cached {
-                let query_str = context.query()?.query().to_owned();
-                Cache::get().record_normalized(&query_str, command.route())?;
+                let query = context.query()?.query();
+                Cache::get().record_normalized(query, command.route())?;
             }
             Ok(command.dry_run())
         } else {

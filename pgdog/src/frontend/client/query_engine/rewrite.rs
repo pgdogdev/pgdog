@@ -62,7 +62,7 @@ impl QueryEngine {
             .map(|ast| ast.rewrite_plan.clone());
 
         if let Some(plan) = plan {
-            plan.apply(context.client_request)?;
+            context.rewrite_result = Some(plan.apply(context.client_request)?);
         }
 
         Ok(true)
