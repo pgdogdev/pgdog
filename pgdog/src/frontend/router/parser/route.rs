@@ -1,8 +1,8 @@
 use std::fmt::Display;
 
 use super::{
-    explain_trace::ExplainTrace, Aggregate, DistinctBy, FunctionBehavior, Limit, LockingBehavior,
-    OrderBy, RewritePlan,
+    explain_trace::ExplainTrace, rewrite::statement::aggregate::AggregateRewritePlan, Aggregate,
+    DistinctBy, FunctionBehavior, Limit, LockingBehavior, OrderBy,
 };
 
 #[derive(Debug, Clone, PartialEq, PartialOrd, Ord, Eq, Hash, Default)]
@@ -75,7 +75,7 @@ pub struct Route {
     lock_session: bool,
     distinct: Option<DistinctBy>,
     maintenance: bool,
-    rewrite_plan: RewritePlan,
+    rewrite_plan: AggregateRewritePlan,
     rewritten_sql: Option<String>,
     explain: Option<ExplainTrace>,
     rollback_savepoint: bool,
@@ -267,29 +267,11 @@ impl Route {
         self.is_cross_shard() && self.is_write() && !self.is_maintenance()
     }
 
-    pub fn rewrite_plan(&self) -> &RewritePlan {
+    pub fn rewrite_plan(&self) -> &AggregateRewritePlan {
         &self.rewrite_plan
     }
 
-    pub fn rewrite_plan_mut(&mut self) -> &mut RewritePlan {
-        &mut self.rewrite_plan
-    }
-
-    pub fn set_rewrite(&mut self, plan: RewritePlan, sql: String) {
+    pub fn set_rewrite_plan_mut(&mut self, plan: AggregateRewritePlan) {
         self.rewrite_plan = plan;
-        self.rewritten_sql = Some(sql);
-    }
-
-    pub fn clear_rewrite(&mut self) {
-        self.rewrite_plan = RewritePlan::new();
-        self.rewritten_sql = None;
-    }
-
-    pub fn rewritten_sql(&self) -> Option<&str> {
-        self.rewritten_sql.as_deref()
-    }
-
-    pub fn take_rewritten_sql(&mut self) -> Option<String> {
-        self.rewritten_sql.take()
     }
 }

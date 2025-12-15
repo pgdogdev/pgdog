@@ -40,6 +40,7 @@ pub struct AggregateRewritePlan {
 }
 
 impl AggregateRewritePlan {
+    /// Create new no-op aggregate rewrite plan.
     pub fn new() -> Self {
         Self {
             drop_columns: Vec::new(),
@@ -47,6 +48,7 @@ impl AggregateRewritePlan {
         }
     }
 
+    /// Is this plan a no-op? Doesn't do anything.
     pub fn is_noop(&self) -> bool {
         self.drop_columns.is_empty() && self.helpers.is_empty()
     }

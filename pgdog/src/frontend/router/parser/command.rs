@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
     frontend::{client::TransactionType, BufferedQuery},
-    net::{parameter::ParameterValue, ProtocolMessage},
+    net::parameter::ParameterValue,
 };
 use lazy_static::lazy_static;
 
@@ -31,7 +31,6 @@ pub enum Command {
         local: bool,
     },
     PreparedStatement(Prepare),
-    Rewrite(Vec<ProtocolMessage>),
     InternalField {
         name: String,
         value: String,
