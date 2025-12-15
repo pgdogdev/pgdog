@@ -5,7 +5,7 @@ use pg_query::protobuf::ParseResult;
 use pg_query::Node;
 
 use crate::backend::ShardingSchema;
-use crate::frontend::PreparedStatements;
+use crate::frontend::{BufferedQuery, PreparedStatements};
 
 pub mod aggregate;
 pub mod error;
@@ -19,6 +19,22 @@ pub use error::Error;
 pub use insert::InsertSplit;
 pub use plan::RewritePlan;
 pub use simple_prepared::SimplePreparedResult;
+
+/// Statement rewrite engine context.
+#[derive(Debug)]
+pub(crate) struct StatementRewriteContext<'a> {
+    /// The AST of the statement we are rewriting.
+    pub(crate) stmt: &'a mut ParseResult,
+    /// The statement is using the extended protocol with placeholders.
+    pub(crate) extended: bool,
+    /// The statement is named, so we need to save any derivatives into the global
+    /// statement cache.
+    pub(crate) prepared: bool,
+    /// Reference to global prepared stmt cache.
+    pub(crate) prepared_statements: &'a mut PreparedStatements,
+    /// Sharding schema.
+    pub(crate) schema: &'a ShardingSchema,
+}
 
 #[derive(Debug)]
 pub struct StatementRewrite<'a> {

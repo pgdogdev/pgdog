@@ -1,6 +1,7 @@
 use fnv::FnvHashMap as HashMap;
 
-use crate::net::{CommandComplete, ReadyForQuery};
+use super::Error;
+use crate::net::{CommandComplete, FromBytes, Message, Protocol, ReadyForQuery, ToBytes};
 
 #[derive(Debug, Clone)]
 pub enum CommandType {
@@ -12,6 +13,7 @@ pub enum CommandType {
 #[derive(Debug, Clone)]
 pub struct MultiServerState {
     servers: usize,
+    rows: usize,
     counters: HashMap<char, usize>,
 }
 
@@ -20,27 +22,34 @@ impl MultiServerState {
     pub fn new(servers: usize) -> Self {
         Self {
             servers,
+            rows: 0,
             counters: HashMap::default(),
         }
     }
 
     /// Should the message be forwarded to the client.
-    pub fn forward(&mut self, code: char) -> bool {
+    pub fn forward(&mut self, message: &Message) -> Result<bool, Error> {
+        let code = message.code();
         let count = self.counters.entry(code).or_default();
         *count += 1;
 
-        match code {
+        Ok(match code {
             'T' | '1' | '2' | '3' | 't' => *count == 1,
-            'C' | 'Z' => false,
+            'C' => {
+                let command_complete = CommandComplete::from_bytes(message.to_bytes()?)?;
+                self.rows += command_complete.rows()?.unwrap_or(0);
+                false
+            }
+            'Z' => false,
             'n' => *count == self.servers && !self.counters.contains_key(&'D'),
             'I' => *count == self.servers && !self.counters.contains_key(&'C'),
             _ => true,
-        }
+        })
     }
 
     /// Number of rows returned.
     pub fn rows(&self) -> usize {
-        self.counters.get(&'D').copied().unwrap_or_default()
+        self.rows
     }
 
     /// Error happened.
@@ -57,7 +66,7 @@ impl MultiServerState {
         let name = match command_type {
             CommandType::Delete => "DELETE",
             CommandType::Update => "UPDATE",
-            CommandType::Insert => "INSERT",
+            CommandType::Insert => "INSERT 0",
         };
 
         Some(CommandComplete::new(format!("{} {}", name, self.rows())))

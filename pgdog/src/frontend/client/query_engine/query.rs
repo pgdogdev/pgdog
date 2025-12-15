@@ -59,9 +59,14 @@ impl QueryEngine {
 
         match context.rewrite_result.take() {
             Some(RewriteResult::InsertSplit(requests)) => {
-                multi_step::InsertMulti::from_engine(self, context, requests)
+                let ok = multi_step::InsertMulti::from_engine(self, context, requests)
                     .execute()
                     .await?;
+                // Set transaction in error state, requiring client to
+                // send ROLLBACK before going further.
+                if context.in_transaction() && !ok {
+                    context.transaction = Some(TransactionType::ErrorReadWrite);
+                }
             }
 
             Some(RewriteResult::InPlace) | None => {

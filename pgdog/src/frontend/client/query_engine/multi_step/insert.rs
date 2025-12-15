@@ -1,3 +1,5 @@
+use tokio::io::AsyncWriteExt;
+
 use super::{CommandType, Error, MultiServerState};
 use crate::{
     backend::pool::Connection,
@@ -8,7 +10,7 @@ use crate::{
         },
         ClientRequest, Command, Router, RouterContext,
     },
-    net::{parameter::ParameterValue, Protocol, Stream},
+    net::{parameter::ParameterValue, Stream},
 };
 
 #[derive(Debug)]
@@ -25,6 +27,8 @@ pub(crate) struct InsertMulti<'a> {
     transaction: Option<TransactionType>,
     /// Sticky.
     sticky: Sticky,
+    /// Execution state.
+    state: MultiServerState,
 }
 
 impl<'a> InsertMulti<'a> {
@@ -34,6 +38,7 @@ impl<'a> InsertMulti<'a> {
         requests: Vec<ClientRequest>,
     ) -> Self {
         Self {
+            state: MultiServerState::new(requests.len()),
             connection: &mut engine.backend,
             stream: context.stream,
             requests,
@@ -43,7 +48,7 @@ impl<'a> InsertMulti<'a> {
         }
     }
 
-    pub(crate) async fn execute(&'a mut self) -> Result<(), Error> {
+    pub(crate) async fn execute(&'a mut self) -> Result<bool, Error> {
         let cluster = self.connection.cluster()?;
         for request in self.requests.iter_mut() {
             let context = RouterContext::new(
@@ -62,27 +67,27 @@ impl<'a> InsertMulti<'a> {
             }
         }
 
-        let mut state = MultiServerState::new(self.requests.len());
-
         for request in self.requests.iter() {
             self.connection.send(request).await?;
 
             while self.connection.has_more_messages() {
                 let reply = self.connection.read().await?;
-                if state.forward(reply.code()) {
+                if self.state.forward(&reply)? {
                     self.stream.send(&reply).await?;
                 }
             }
         }
 
-        if let Some(cc) = state.command_complete(CommandType::Insert) {
+        if let Some(cc) = self.state.command_complete(CommandType::Insert) {
             self.stream.send(&cc).await?;
         }
 
-        if let Some(rfq) = state.ready_for_query(self.transaction.is_some()) {
-            self.stream.send(&rfq).await?;
+        if let Some(rfq) = self.state.ready_for_query(self.transaction.is_some()) {
+            self.stream.send_flush(&rfq).await?;
+        } else {
+            self.stream.flush().await?;
         }
 
-        Ok(())
+        Ok(self.state.error())
     }
 }

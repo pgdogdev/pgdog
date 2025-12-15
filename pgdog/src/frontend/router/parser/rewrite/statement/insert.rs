@@ -14,8 +14,10 @@ pub struct InsertSplit {
     /// that should be used to build the Bind message specific to this
     /// insert statement.
     params: Vec<u16>,
+
     /// The split up INSERT statement with parameters and/or values.
     stmt: String,
+
     /// The statement AST.
     ast: Ast,
 }
@@ -402,5 +404,65 @@ mod tests {
         assert_eq!(extracted.params_raw().len(), 1);
         assert_eq!(extracted.format_codes_raw().len(), 1);
         assert_eq!(extracted.format_codes_raw()[0], Format::Binary);
+    }
+
+    #[test]
+    fn test_extract_bind_params_mixed_params_and_literals() {
+        let splits = parse_and_split("INSERT INTO t (a, b) VALUES ($1, 'lit1'), ($2, 'lit2')");
+        let bind = Bind::new_params(
+            "test",
+            &[
+                Parameter::new(b"value_for_param1"),
+                Parameter::new(b"value_for_param2"),
+            ],
+        );
+
+        assert_eq!(splits.len(), 2);
+
+        // First split: statement uses $1 with literal, bind extracts param 0
+        assert_eq!(splits[0].stmt(), "INSERT INTO t (a, b) VALUES ($1, 'lit1')");
+        let extracted = splits[0].extract_bind_params(&bind);
+        assert_eq!(extracted.params_raw().len(), 1);
+        assert_eq!(extracted.params_raw()[0].data.as_ref(), b"value_for_param1");
+
+        // Second split: statement uses $1 (renumbered from $2) with literal, bind extracts param 1
+        assert_eq!(splits[1].stmt(), "INSERT INTO t (a, b) VALUES ($1, 'lit2')");
+        let extracted = splits[1].extract_bind_params(&bind);
+        assert_eq!(extracted.params_raw().len(), 1);
+        assert_eq!(extracted.params_raw()[0].data.as_ref(), b"value_for_param2");
+    }
+
+    #[test]
+    fn test_extract_bind_params_varying_param_counts() {
+        // First tuple has 2 params, second tuple has 1 param and 1 literal
+        let splits = parse_and_split("INSERT INTO t (a, b) VALUES ($1, $2), ($3, 'literal')");
+        let bind = Bind::new_params(
+            "test",
+            &[
+                Parameter::new(b"p1"),
+                Parameter::new(b"p2"),
+                Parameter::new(b"p3"),
+            ],
+        );
+
+        assert_eq!(splits.len(), 2);
+
+        // First split: uses params 0 and 1 (original $1, $2)
+        assert_eq!(splits[0].stmt(), "INSERT INTO t (a, b) VALUES ($1, $2)");
+        assert_eq!(splits[0].params(), &[0, 1]);
+        let extracted = splits[0].extract_bind_params(&bind);
+        assert_eq!(extracted.params_raw().len(), 2);
+        assert_eq!(extracted.params_raw()[0].data.as_ref(), b"p1");
+        assert_eq!(extracted.params_raw()[1].data.as_ref(), b"p2");
+
+        // Second split: uses param 2 (original $3), renumbered to $1
+        assert_eq!(
+            splits[1].stmt(),
+            "INSERT INTO t (a, b) VALUES ($1, 'literal')"
+        );
+        assert_eq!(splits[1].params(), &[2]);
+        let extracted = splits[1].extract_bind_params(&bind);
+        assert_eq!(extracted.params_raw().len(), 1);
+        assert_eq!(extracted.params_raw()[0].data.as_ref(), b"p3");
     }
 }

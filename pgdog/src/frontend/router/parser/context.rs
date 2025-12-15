@@ -42,12 +42,8 @@ pub struct QueryParserContext<'a> {
     pub(super) dry_run: bool,
     /// Expanded EXPLAIN annotations enabled?
     pub(super) expanded_explain: bool,
-    /// Rewrite features toggled on/off globally.
-    pub(super) rewrite_enabled: bool,
     /// How to handle sharding-key updates.
     pub(super) shard_key_update_mode: RewriteMode,
-    /// How to handle multi-row INSERTs into sharded tables.
-    pub(super) split_insert_mode: RewriteMode,
 }
 
 impl<'a> QueryParserContext<'a> {
@@ -63,9 +59,7 @@ impl<'a> QueryParserContext<'a> {
             multi_tenant: router_context.cluster.multi_tenant(),
             dry_run: router_context.cluster.dry_run(),
             expanded_explain: router_context.cluster.expanded_explain(),
-            rewrite_enabled: router_context.cluster.rewrite().enabled,
             shard_key_update_mode: router_context.cluster.rewrite().shard_key,
-            split_insert_mode: router_context.cluster.rewrite().split_inserts,
             router_context,
         }
     }
@@ -139,13 +133,5 @@ impl<'a> QueryParserContext<'a> {
 
     pub(super) fn shard_key_update_mode(&self) -> RewriteMode {
         self.shard_key_update_mode
-    }
-
-    pub(super) fn rewrite_enabled(&self) -> bool {
-        self.rewrite_enabled
-    }
-
-    pub(super) fn split_insert_mode(&self) -> RewriteMode {
-        self.split_insert_mode
     }
 }

@@ -12,8 +12,8 @@ use bytes::{Buf, BufMut, BytesMut};
 use crate::{
     backend::databases::databases,
     config::{
-        config, load_test, load_test_replicas, load_test_with_pooler_mode, set, PreparedStatements,
-        Role,
+        config, load_test, load_test_replicas, load_test_sharded, load_test_with_pooler_mode, set,
+        PreparedStatements, Role,
     },
     frontend::{
         client::{BufferEvent, QueryEngine},
@@ -42,6 +42,13 @@ pub async fn test_client(replicas: bool) -> (TcpStream, Client) {
     } else {
         load_test();
     }
+
+    parallel_test_client().await
+}
+
+/// Load test client with 4 databases (2 shards, 1 replica each).
+pub async fn test_client_sharded() -> (TcpStream, Client) {
+    load_test_sharded();
 
     parallel_test_client().await
 }
@@ -100,13 +107,20 @@ pub fn buffer(messages: &[impl ToBytes]) -> BytesMut {
 
 /// Read a series of messages from the stream and make sure
 /// they arrive in the right order.
-pub async fn read(stream: &mut (impl AsyncRead + Unpin), codes: &[char]) -> Vec<Message> {
+pub async fn read_messages(stream: &mut (impl AsyncRead + Unpin), codes: &[char]) -> Vec<Message> {
     let mut result = vec![];
+    let mut error = false;
 
     for code in codes {
         let c = stream.read_u8().await.unwrap();
 
-        assert_eq!(c as char, *code, "unexpected message received");
+        if c as char != *code {
+            if c as char == 'E' {
+                error = true;
+            } else {
+                panic!("got message code {}, expected {}", c as char, *code);
+            }
+        }
 
         let len = stream.read_i32().await.unwrap();
         let mut data = vec![0u8; len as usize - 4];
@@ -117,7 +131,16 @@ pub async fn read(stream: &mut (impl AsyncRead + Unpin), codes: &[char]) -> Vec<
         message.put_i32(len);
         message.put_slice(&data);
 
-        result.push(Message::new(message.freeze()))
+        let message = Message::new(message.freeze());
+
+        if error {
+            panic!(
+                "{:#}",
+                ErrorResponse::from_bytes(message.to_bytes().unwrap()).unwrap()
+            );
+        } else {
+            result.push(message);
+        }
     }
 
     result
