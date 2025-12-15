@@ -7,7 +7,7 @@ use tokio::fs::read_to_string;
 use super::Error;
 use crate::{
     backend::databases::databases,
-    frontend::{client::Sticky, router::QueryParser, Command, PreparedStatements, RouterContext},
+    frontend::{client::Sticky, router::QueryParser, Command, RouterContext},
     net::{ProtocolMessage, Query},
 };
 
@@ -42,15 +42,12 @@ impl RouterCli {
         let mut result = vec![];
         let cluster = databases().cluster((self.user.as_str(), self.database.as_str()))?;
 
-        let mut stmt = PreparedStatements::default();
-
         for query in &self.queries {
             let mut qp = QueryParser::default();
             let req = vec![ProtocolMessage::from(Query::new(query))];
             let cmd = qp.parse(RouterContext::new(
                 &req.into(),
                 &cluster,
-                &mut stmt,
                 None,
                 None,
                 Sticky::new(),

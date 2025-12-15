@@ -4,15 +4,13 @@ use crate::{
     frontend::{
         client::{Sticky, TransactionType},
         router::Ast,
-        BufferedQuery, ClientRequest, PreparedStatements,
+        BufferedQuery, ClientRequest,
     },
     net::{parameter::ParameterValue, Bind},
 };
 
 #[derive(Debug)]
 pub struct RouterContext<'a> {
-    /// Prepared statements.
-    pub prepared_statements: &'a mut PreparedStatements,
     /// Bound parameters to the query.
     pub bind: Option<&'a Bind>,
     /// Query we're looking it.
@@ -41,7 +39,6 @@ impl<'a> RouterContext<'a> {
     pub fn new(
         buffer: &'a ClientRequest,
         cluster: &'a Cluster,
-        stmt: &'a mut PreparedStatements,
         search_path: Option<&'a ParameterValue>,
         transaction: Option<TransactionType>,
         sticky: Sticky,
@@ -53,7 +50,6 @@ impl<'a> RouterContext<'a> {
         Ok(Self {
             bind,
             search_path,
-            prepared_statements: stmt,
             cluster,
             transaction,
             copy_mode,

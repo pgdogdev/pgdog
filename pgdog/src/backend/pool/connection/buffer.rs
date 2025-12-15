@@ -8,7 +8,7 @@ use std::{
 use crate::{
     frontend::router::parser::{
         rewrite::statement::aggregate::AggregateRewritePlan, Aggregate, DistinctBy, DistinctColumn,
-        OrderBy, RewritePlan,
+        OrderBy,
     },
     net::{
         messages::{DataRow, FromBytes, Message, Protocol, ToBytes, Vector},

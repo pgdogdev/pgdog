@@ -10,7 +10,7 @@ use crate::net::Bind;
 use crate::{
     backend::ShardingSchema,
     config::{MultiTenant, ReadWriteStrategy, RewriteMode},
-    frontend::{BufferedQuery, PreparedStatements, RouterContext},
+    frontend::{BufferedQuery, RouterContext},
 };
 
 use super::Error;
@@ -93,11 +93,6 @@ impl<'a> QueryParserContext<'a> {
     /// Get the query we're parsing, if any.
     pub(super) fn query(&self) -> Result<&BufferedQuery, Error> {
         self.router_context.query.as_ref().ok_or(Error::EmptyQuery)
-    }
-
-    /// Mutable reference to client's prepared statements cache.
-    pub(super) fn prepared_statements(&mut self) -> &mut PreparedStatements {
-        self.router_context.prepared_statements
     }
 
     /// Multi-tenant checks.

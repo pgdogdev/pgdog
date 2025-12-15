@@ -27,6 +27,16 @@ pub struct Stats {
     pub multi: usize,
 }
 
+impl Stats {
+    /// Create new statistics record for an AST entry.
+    pub fn new() -> Self {
+        Self {
+            hits: 1,
+            ..Default::default()
+        }
+    }
+}
+
 /// Mutex-protected query cache.
 #[derive(Debug)]
 struct Inner {
@@ -117,7 +127,8 @@ impl Cache {
         Ok(entry)
     }
 
-    /// Parse a statement but do not store it in the cache.
+    /// Parse and rewrite a statement but do not store it in the cache,
+    /// because it may contain parameter values.
     fn simple(
         &self,
         query: &str,
@@ -130,13 +141,11 @@ impl Cache {
     }
 
     /// Record a query sent over the simple protocol, while removing parameters.
-    pub fn record_normalized(
-        &self,
-        query: &str,
-        route: &Route,
-        schema: &ShardingSchema,
-        prepared_statements: &mut PreparedStatements,
-    ) -> Result<(), Error> {
+    ///
+    /// Used by dry run mode to keep stats on what queries are routed correctly,
+    /// and which are not.
+    ///
+    pub fn record_normalized(&self, query: &str, route: &Route) -> Result<(), Error> {
         let normalized = normalize(query).map_err(Error::PgQuery)?;
 
         {
@@ -148,7 +157,7 @@ impl Cache {
             }
         }
 
-        let entry = Ast::new(query, schema, true, prepared_statements)?;
+        let entry = Ast::new_record(&normalized)?;
         entry.update_stats(route);
 
         let mut guard = self.inner.lock();

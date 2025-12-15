@@ -136,7 +136,7 @@ impl QueryParser {
 
         // Only rewrite if query is cross-shard.
         if query.is_cross_shard() && context.shards > 1 {
-            query.set_rewrite_plan_mut(cached_ast.rewrite_plan.aggregates.clone());
+            query.set_aggregate_rewrite_plan_mut(cached_ast.rewrite_plan.aggregates.clone());
         }
 
         Ok(Command::Query(query.set_write(writes)))

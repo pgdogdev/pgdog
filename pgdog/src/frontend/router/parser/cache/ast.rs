@@ -34,6 +34,19 @@ pub struct AstInner {
     pub rewrite_plan: RewritePlan,
 }
 
+impl AstInner {
+    /// Create new AST record, with no rewrite or comment routing.
+    pub fn new(ast: ParseResult) -> Self {
+        Self {
+            ast,
+            stats: Mutex::new(Stats::new()),
+            comment_role: None,
+            comment_shard: Shard::All,
+            rewrite_plan: RewritePlan::default(),
+        }
+    }
+}
+
 impl Deref for Ast {
     type Target = AstInner;
 
@@ -59,15 +72,22 @@ impl Ast {
         Ok(Self {
             cached: true,
             inner: Arc::new(AstInner {
-                stats: Mutex::new(Stats {
-                    hits: 1,
-                    ..Default::default()
-                }),
+                stats: Mutex::new(Stats::new()),
                 comment_shard,
                 comment_role,
                 ast,
                 rewrite_plan,
             }),
+        })
+    }
+
+    /// Record new AST entry, without rewriting or comment-routing.
+    pub fn new_record(query: &str) -> Result<Self, Error> {
+        let ast = parse(query).map_err(Error::PgQuery)?;
+
+        Ok(Self {
+            cached: true,
+            inner: Arc::new(AstInner::new(ast)),
         })
     }
 

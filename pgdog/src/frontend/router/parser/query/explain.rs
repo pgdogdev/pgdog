@@ -73,8 +73,7 @@ mod tests {
         let mut buffer = ClientRequest::from(vec![Query::new(sql).into()]);
         buffer.ast = Some(ast);
 
-        let ctx =
-            RouterContext::new(&buffer, &cluster, &mut stmts, None, None, Sticky::new()).unwrap();
+        let ctx = RouterContext::new(&buffer, &cluster, None, None, Sticky::new()).unwrap();
 
         match QueryParser::default().parse(ctx).unwrap().clone() {
             Command::Query(route) => route,
@@ -103,8 +102,7 @@ mod tests {
         let mut buffer: ClientRequest = vec![parse_msg.into(), bind.into()].into();
         buffer.ast = Some(ast);
 
-        let ctx =
-            RouterContext::new(&buffer, &cluster, &mut stmts, None, None, Sticky::new()).unwrap();
+        let ctx = RouterContext::new(&buffer, &cluster, None, None, Sticky::new()).unwrap();
 
         match QueryParser::default().parse(ctx).unwrap().clone() {
             Command::Query(route) => route,

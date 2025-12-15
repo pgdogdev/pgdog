@@ -16,24 +16,25 @@ pub struct RewritePlan {
     /// the original statement. This is calculated first,
     /// and $params+n parameters are added to the statement to
     /// substitute values we are rewriting.
-    pub params: u16,
+    pub(crate) params: u16,
 
     /// Number of unique IDs to append to the Bind message.
-    pub unique_ids: u16,
+    pub(crate) unique_ids: u16,
 
     /// Rewritten SQL statement.
-    pub stmt: Option<String>,
+    pub(crate) stmt: Option<String>,
 
     /// Prepared statements to prepend to the client request.
     /// Each tuple contains (name, statement) for ProtocolMessage::Prepare.
-    pub prepares: Vec<(String, String)>,
+    pub(crate) prepares: Vec<(String, String)>,
 
-    /// Insert split.
-    pub insert_split: Vec<InsertSplit>,
+    /// Splitting of multi-tuple INSERT statements into
+    /// multiple queries.
+    pub(crate) insert_split: Vec<InsertSplit>,
 
     /// Position in the result where the count(*) or count(name)
     /// functions are added.
-    pub aggregates: AggregateRewritePlan,
+    pub(crate) aggregates: AggregateRewritePlan,
 }
 
 #[derive(Debug, Clone)]
@@ -44,7 +45,7 @@ pub enum RewriteResult {
 
 impl RewritePlan {
     /// Apply the rewrite plan to a Bind message by appending generated unique IDs.
-    pub fn apply_bind(&self, bind: &mut Bind) -> Result<(), Error> {
+    pub(crate) fn apply_bind(&self, bind: &mut Bind) -> Result<(), Error> {
         let format = bind.default_param_format();
 
         for _ in 0..self.unique_ids {
@@ -60,7 +61,7 @@ impl RewritePlan {
     }
 
     /// Apply the rewrite plan to a Parse message by updating the SQL.
-    pub fn apply_parse(&self, parse: &mut Parse) {
+    pub(crate) fn apply_parse(&self, parse: &mut Parse) {
         if let Some(ref stmt) = self.stmt {
             parse.set_query(stmt);
             if !parse.anonymous() {
@@ -70,14 +71,14 @@ impl RewritePlan {
     }
 
     /// Apply the rewrite plan to a Query message by updating the SQL.
-    pub fn apply_query(&self, query: &mut Query) {
+    pub(crate) fn apply_query(&self, query: &mut Query) {
         if let Some(ref stmt) = self.stmt {
             query.set_query(stmt);
         }
     }
 
     /// Apply the rewrite plan to a ClientRequest.
-    pub fn apply(&self, request: &mut ClientRequest) -> Result<RewriteResult, Error> {
+    pub(crate) fn apply(&self, request: &mut ClientRequest) -> Result<RewriteResult, Error> {
         // Prepend any required Prepare messages for EXECUTE statements.
         if !self.prepares.is_empty() {
             let prepends: Vec<ProtocolMessage> = self
@@ -109,8 +110,12 @@ impl RewritePlan {
     }
 
     /// Rewrite plan doesn't do anything.
-    pub fn no_op(&self) -> bool {
-        self.stmt.is_none() && self.prepares.is_empty()
+    #[allow(dead_code)]
+    pub(crate) fn no_op(&self) -> bool {
+        self.stmt.is_none()
+            && self.prepares.is_empty()
+            && self.aggregates.is_noop()
+            && self.insert_split.is_empty()
     }
 }
 

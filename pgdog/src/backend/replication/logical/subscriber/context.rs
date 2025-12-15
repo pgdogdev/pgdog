@@ -2,8 +2,7 @@ use super::super::Error;
 use crate::{
     backend::Cluster,
     frontend::{
-        client::Sticky, router::parser::Shard, ClientRequest, Command, PreparedStatements, Router,
-        RouterContext,
+        client::Sticky, router::parser::Shard, ClientRequest, Command, Router, RouterContext,
     },
     net::{replication::TupleData, Bind, Parse},
 };
@@ -12,7 +11,6 @@ use crate::{
 pub struct StreamContext<'a> {
     request: ClientRequest,
     cluster: &'a Cluster,
-    prepared_statements: PreparedStatements,
     bind: Bind,
 }
 
@@ -25,7 +23,6 @@ impl<'a> StreamContext<'a> {
         Self {
             request,
             cluster,
-            prepared_statements: PreparedStatements::new(),
             bind,
         }
     }
@@ -52,7 +49,6 @@ impl<'a> StreamContext<'a> {
         Ok(RouterContext::new(
             &self.request,
             self.cluster,
-            &mut self.prepared_statements,
             None,
             None,
             Sticky::new(),
