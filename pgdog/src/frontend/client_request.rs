@@ -8,7 +8,7 @@ use lazy_static::lazy_static;
 use regex::Regex;
 
 use crate::{
-    frontend::router::{parser::RewritePlan, Ast},
+    frontend::router::Ast,
     net::{
         messages::{Bind, CopyData, Protocol},
         Error, Flush, ProtocolMessage,
@@ -201,26 +201,6 @@ impl ClientRequest {
         self.messages.clear();
         self.messages.extend(request.to_vec());
         Ok(())
-    }
-
-    /// Rewrite prepared statement SQL before sending it to the backend.
-    pub fn rewrite_prepared(
-        &mut self,
-        query: &str,
-        prepared: &mut PreparedStatements,
-        plan: &RewritePlan,
-    ) -> bool {
-        let mut updated = false;
-
-        for message in self.messages.iter_mut() {
-            if let ProtocolMessage::Parse(parse) = message {
-                parse.set_query(query);
-                prepared.update_and_set_rewrite_plan(parse.name(), query, plan.clone());
-                updated = true;
-            }
-        }
-
-        updated
     }
 
     /// Get the route for this client request.

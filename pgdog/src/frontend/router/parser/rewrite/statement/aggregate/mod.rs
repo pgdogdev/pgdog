@@ -28,7 +28,7 @@ impl StatementRewrite<'_> {
             return Ok(());
         }
 
-        let output = AggregatesRewrite::new().rewrite_select(self.stmt, &aggregate);
+        let output = AggregatesRewrite::default().rewrite_select(self.stmt, &aggregate);
         if output.plan.is_noop() {
             return Ok(());
         }

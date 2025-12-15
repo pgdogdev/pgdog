@@ -45,19 +45,19 @@ impl QueryEngine {
             return Ok(());
         }
 
-        if let Some(sql) = route.rewritten_sql() {
-            match context.client_request.rewrite(&[Query::new(sql).into()]) {
-                Ok(()) => (),
-                Err(crate::net::Error::OnlySimpleForRewrites) => {
-                    context.client_request.rewrite_prepared(
-                        sql,
-                        context.prepared_statements,
-                        route.rewrite_plan(),
-                    );
-                }
-                Err(err) => return Err(err.into()),
-            }
-        }
+        // if let Some(sql) = route.rewritten_sql() {
+        //     match context.client_request.rewrite(&[Query::new(sql).into()]) {
+        //         Ok(()) => (),
+        //         Err(crate::net::Error::OnlySimpleForRewrites) => {
+        //             context.client_request.rewrite_prepared(
+        //                 sql,
+        //                 context.prepared_statements,
+        //                 route.rewrite_plan(),
+        //             );
+        //         }
+        //         Err(err) => return Err(err.into()),
+        //     }
+        // }
 
         // Set response format.
         for msg in context.client_request.messages.iter() {

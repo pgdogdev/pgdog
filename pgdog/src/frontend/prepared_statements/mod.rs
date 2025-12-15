@@ -9,7 +9,6 @@ use tracing::debug;
 
 use crate::{
     config::{config, PreparedStatements as PreparedStatementsLevel},
-    frontend::router::parser::RewritePlan,
     net::{Parse, ProtocolMessage},
     stats::memory::MemoryUsage,
 };
@@ -96,23 +95,6 @@ impl PreparedStatements {
         parse.rename_fast(&name)
     }
 
-    /// Retrieve stored rewrite plan for a prepared statement, if any.
-    pub fn rewrite_plan(&self, name: &str) -> Option<RewritePlan> {
-        self.global.read().rewrite_plan(name)
-    }
-
-    /// Set rewrite plan for UPDATE / INSERT statement
-    /// rewrites used in rewritten cross-shard queries.
-    pub fn update_and_set_rewrite_plan(
-        &mut self,
-        name: &str,
-        sql: &str,
-        plan: RewritePlan,
-    ) -> bool {
-        self.global
-            .write()
-            .update_and_set_rewrite_plan(name, sql, plan)
-    }
     /// Get global statement counter.
     pub fn name(&self, name: &str) -> Option<&String> {
         self.local.get(name)

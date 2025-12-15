@@ -1,7 +1,6 @@
 use bytes::Bytes;
 
 use crate::{
-    frontend::router::parser::RewritePlan,
     net::messages::{Parse, RowDescription},
     stats::memory::MemoryUsage,
 };
@@ -22,7 +21,6 @@ pub struct Statement {
     row_description: Option<RowDescription>,
     #[allow(dead_code)]
     version: usize,
-    rewrite_plan: Option<RewritePlan>,
     cache_key: CacheKey,
     evict_on_close: bool,
 }
@@ -234,31 +232,6 @@ impl GlobalCache {
         }
     }
 
-    pub fn update_and_set_rewrite_plan(
-        &mut self,
-        name: &str,
-        sql: &str,
-        plan: RewritePlan,
-    ) -> bool {
-        if let Some(statement) = self.names.get_mut(name) {
-            statement.parse.set_query(sql);
-            if !plan.is_noop() {
-                statement.evict_on_close = !plan.helpers().is_empty();
-                statement.rewrite_plan = Some(plan);
-            } else {
-                statement.evict_on_close = false;
-                statement.rewrite_plan = None;
-            }
-            true
-        } else {
-            false
-        }
-    }
-
-    pub fn rewrite_plan(&self, name: &str) -> Option<RewritePlan> {
-        self.names.get(name).and_then(|s| s.rewrite_plan.clone())
-    }
-
     /// Clear the global cache.
     pub fn reset(&mut self) {
         self.statements.clear();
@@ -437,34 +410,6 @@ mod test {
         assert_eq!(cache.close_unused(20), 1);
         assert_eq!(cache.close_unused(19), 0);
         assert_eq!(cache.len(), 20);
-    }
-
-    #[test]
-    fn test_update_query_reuses_cache_key() {
-        let mut cache = GlobalCache::default();
-        let parse = Parse::named("__sqlx_1", "SELECT 1");
-        let (is_new, name) = cache.insert(&parse);
-        assert!(is_new);
-
-        assert!(cache.update_and_set_rewrite_plan(
-            &name,
-            "SELECT 1 ORDER BY 1",
-            RewritePlan::default()
-        ));
-
-        let key = cache
-            .statements()
-            .keys()
-            .next()
-            .expect("statement key missing");
-        assert_eq!(key.query().unwrap(), "SELECT 1");
-        assert_eq!(cache.query(&name).unwrap(), "SELECT 1 ORDER BY 1");
-
-        let parse_again = Parse::named("__sqlx_2", "SELECT 1");
-        let (is_new_again, reused_name) = cache.insert(&parse_again);
-        assert!(!is_new_again);
-        assert_eq!(reused_name, name);
-        assert_eq!(cache.len(), 1);
     }
 
     #[test]

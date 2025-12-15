@@ -16,24 +16,24 @@ pub struct RewritePlan {
     /// the original statement. This is calculated first,
     /// and $params+n parameters are added to the statement to
     /// substitute values we are rewriting.
-    pub(super) params: u16,
+    pub params: u16,
 
     /// Number of unique IDs to append to the Bind message.
-    pub(super) unique_ids: u16,
+    pub unique_ids: u16,
 
     /// Rewritten SQL statement.
-    pub(super) stmt: Option<String>,
+    pub stmt: Option<String>,
 
     /// Prepared statements to prepend to the client request.
     /// Each tuple contains (name, statement) for ProtocolMessage::Prepare.
-    pub(super) prepares: Vec<(String, String)>,
+    pub prepares: Vec<(String, String)>,
 
     /// Insert split.
-    pub(super) insert_split: Vec<InsertSplit>,
+    pub insert_split: Vec<InsertSplit>,
 
     /// Position in the result where the count(*) or count(name)
     /// functions are added.
-    pub(super) aggregates: AggregateRewritePlan,
+    pub aggregates: AggregateRewritePlan,
 }
 
 #[derive(Debug, Clone)]

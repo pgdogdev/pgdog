@@ -13,10 +13,6 @@ use super::{AggregateRewritePlan, HelperKind, HelperMapping, RewriteOutput};
 pub struct AggregatesRewrite;
 
 impl AggregatesRewrite {
-    pub fn new() -> Self {
-        Self
-    }
-
     /// Rewrite a SELECT query in-place, adding helper aggregates when necessary.
     pub fn rewrite_select(&self, ast: &mut ParseResult, aggregate: &Aggregate) -> RewriteOutput {
         self.rewrite_parsed(ast, aggregate)
@@ -331,7 +327,7 @@ mod tests {
             let stmt = select(&parsed);
             Aggregate::parse(stmt)
         };
-        let output = AggregatesRewrite::new().rewrite_select(&mut parsed, &aggregate);
+        let output = AggregatesRewrite::default().rewrite_select(&mut parsed, &aggregate);
         (parsed, output)
     }
 
