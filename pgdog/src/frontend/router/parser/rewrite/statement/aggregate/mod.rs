@@ -27,12 +27,12 @@ impl StatementRewrite<'_> {
             return Ok(());
         };
 
-        let aggregate = Aggregate::parse(&select);
+        let aggregate = Aggregate::parse(select);
         if aggregate.is_empty() {
             return Ok(());
         }
 
-        let output = AggregatesRewrite::default().rewrite_select(self.stmt, &aggregate);
+        let output = AggregatesRewrite.rewrite_select(self.stmt, &aggregate);
         if output.plan.is_noop() {
             return Ok(());
         }

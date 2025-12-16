@@ -39,7 +39,7 @@ impl<'a> InsertMulti<'a> {
         for request in self.requests.iter_mut() {
             let context = RouterContext::new(
                 request,
-                &cluster,
+                cluster,
                 context.params.search_path(),
                 context.transaction(),
                 context.sticky,

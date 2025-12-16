@@ -65,7 +65,7 @@ impl RewritePlan {
         if let Some(ref stmt) = self.stmt {
             parse.set_query(stmt);
             if !parse.anonymous() {
-                PreparedStatements::global().write().rewrite(&parse);
+                PreparedStatements::global().write().rewrite(parse);
             }
         }
     }

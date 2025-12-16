@@ -48,6 +48,12 @@ pub struct TestMode {
     pub enabled: bool,
 }
 
+impl Default for TestMode {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TestMode {
     pub fn new() -> Self {
         Self {

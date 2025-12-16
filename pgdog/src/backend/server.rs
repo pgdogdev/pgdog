@@ -323,10 +323,8 @@ impl Server {
             HandleResult::Forward => [Some(message), None],
         };
 
-        for message in &queue {
-            if let Some(message) = message {
-                trace!("{:#?} >>> [{}]", message, self.addr());
-            }
+        for message in queue.iter().flatten() {
+            trace!("{:#?} >>> [{}]", message, self.addr());
         }
 
         for message in queue.into_iter().flatten() {
