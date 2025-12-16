@@ -203,6 +203,12 @@ impl Parameters {
         result
     }
 
+    /// Recompute hash when params are cleared.
+    pub fn clear(&mut self) {
+        self.params.clear();
+        self.hash = Self::compute_hash(&self.params);
+    }
+
     /// Get parameter.
     pub fn get(&self, name: &str) -> Option<&ParameterValue> {
         if let Some(param) = self.transaction_local_params.get(name) {
