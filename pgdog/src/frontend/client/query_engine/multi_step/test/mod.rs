@@ -5,7 +5,7 @@ use crate::{
     net::{Query, ToBytes},
 };
 
-pub mod extended;
+pub mod prepared;
 pub mod simple;
 
 async fn truncate_table(table: &str, stream: &mut TcpStream) {

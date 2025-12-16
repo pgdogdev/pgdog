@@ -48,7 +48,7 @@ mod tests {
     use crate::config::{self, config};
     use crate::frontend::client::Sticky;
     use crate::frontend::router::Ast;
-    use crate::frontend::{ClientRequest, PreparedStatements, RouterContext};
+    use crate::frontend::{BufferedQuery, ClientRequest, PreparedStatements, RouterContext};
     use crate::net::messages::{Bind, Parameter, Parse, Query};
     use bytes::Bytes;
     use std::sync::Once;
@@ -68,8 +68,12 @@ mod tests {
         let cluster = Cluster::new_test();
         let mut stmts = PreparedStatements::default();
 
-        let mut ast = Ast::new(sql, &cluster.sharding_schema(), false, false, &mut stmts).unwrap();
-        ast.cached = false;
+        let ast = Ast::new(
+            &BufferedQuery::Query(Query::new(sql)),
+            &cluster.sharding_schema(),
+            &mut stmts,
+        )
+        .unwrap();
         let mut buffer = ClientRequest::from(vec![Query::new(sql).into()]);
         buffer.ast = Some(ast);
 
@@ -98,7 +102,12 @@ mod tests {
         let cluster = Cluster::new_test();
         let mut stmts = PreparedStatements::default();
 
-        let ast = Ast::new(sql, &cluster.sharding_schema(), true, false, &mut stmts).unwrap();
+        let ast = Ast::new(
+            &BufferedQuery::Prepared(Parse::new_anonymous(sql)),
+            &cluster.sharding_schema(),
+            &mut stmts,
+        )
+        .unwrap();
         let mut buffer: ClientRequest = vec![parse_msg.into(), bind.into()].into();
         buffer.ast = Some(ast);
 

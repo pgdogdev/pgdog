@@ -16,7 +16,4 @@ pub enum Error {
 
     #[error("multi-step insert has no route")]
     NoRoute,
-
-    #[error("backends not connected for multi-shard insert")]
-    NotConnected,
 }

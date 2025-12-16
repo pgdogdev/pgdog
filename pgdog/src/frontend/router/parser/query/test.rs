@@ -54,15 +54,12 @@ fn lock_config_mode() -> MutexGuard<'static, ()> {
 fn parse_query(query: &str) -> Command {
     let mut query_parser = QueryParser::default();
     let cluster = Cluster::new_test();
-    let mut ast = Ast::new(
-        query,
+    let ast = Ast::new(
+        &BufferedQuery::Query(Query::new(query)),
         &cluster.sharding_schema(),
-        false,
-        false,
         &mut PreparedStatements::default(),
     )
     .unwrap();
-    ast.cached = false; // Simple protocol queries are not cached
     let mut client_request = ClientRequest::from(vec![Query::new(query).into()]);
     client_request.ast = Some(ast);
 
@@ -82,10 +79,8 @@ macro_rules! command {
         let mut query_parser = QueryParser::default();
         let cluster = Cluster::new_test();
         let mut ast = Ast::new(
-            query,
+            &BufferedQuery::Query(Query::new($query)),
             &cluster.sharding_schema(),
-            false,
-            false,
             &mut PreparedStatements::default(),
         )
         .unwrap();
@@ -128,27 +123,16 @@ macro_rules! query_parser {
         let cluster = $cluster;
         let mut client_request: ClientRequest = vec![$query.into()].into();
 
-        let buffered_query = client_request.query().unwrap();
-        let (query_str, extended) = match buffered_query {
-            Some(BufferedQuery::Query(q)) => (q.query().to_owned(), false),
-            Some(BufferedQuery::Prepared(p)) => (p.query().to_owned(), true),
-            None => panic!("no query in client request"),
-        };
+        let buffered_query = client_request
+            .query()
+            .expect("parsing query")
+            .expect("no query in client request");
 
         let mut prep_stmts = PreparedStatements::default();
 
-        let mut ast = Ast::new(
-            &query_str,
-            &cluster.sharding_schema(),
-            extended,
-            false,
-            &mut prep_stmts,
-        )
-        .unwrap();
-        // Simple protocol queries should not be marked as cached
-        if !extended {
-            ast.cached = false;
-        }
+        let mut ast =
+            Ast::new(&buffered_query, &cluster.sharding_schema(), &mut prep_stmts).unwrap();
+        ast.cached = false; // Dry run test needs this.
         client_request.ast = Some(ast);
 
         let maybe_transaction = if $in_transaction {
@@ -191,10 +175,8 @@ macro_rules! parse {
         let bind = Bind::new_params_codes($name, &params, $codes);
         let cluster = Cluster::new_test();
         let ast = Ast::new(
-            $query,
+            &BufferedQuery::Prepared(Parse::new_anonymous($query)),
             &cluster.sharding_schema(),
-            true,
-            false,
             &mut PreparedStatements::default(),
         )
         .unwrap();
@@ -222,10 +204,8 @@ macro_rules! parse {
 fn parse_with_parameters(query: &str) -> Result<Command, Error> {
     let cluster = Cluster::new_test();
     let mut ast = Ast::new(
-        query,
+        &BufferedQuery::Query(Query::new(query)),
         &cluster.sharding_schema(),
-        false,
-        false,
         &mut PreparedStatements::default(),
     )
     .unwrap();
@@ -246,10 +226,8 @@ fn parse_with_bind(query: &str, params: &[&[u8]]) -> Result<Command, Error> {
         .collect::<Vec<_>>();
     let bind = crate::net::messages::Bind::new_params("", &params);
     let ast = Ast::new(
-        query,
+        &BufferedQuery::Prepared(Parse::new_anonymous(query)),
         &cluster.sharding_schema(),
-        true,
-        false,
         &mut PreparedStatements::default(),
     )
     .unwrap();
@@ -511,14 +489,8 @@ fn test_set() {
     let query_str = r#"SET statement_timeout TO 1"#;
     let cluster = Cluster::new_test();
     let mut prep_stmts = PreparedStatements::default();
-    let mut ast = Ast::new(
-        query_str,
-        &cluster.sharding_schema(),
-        false,
-        false,
-        &mut prep_stmts,
-    )
-    .unwrap();
+    let buffered_query = BufferedQuery::Query(Query::new(query_str));
+    let mut ast = Ast::new(&buffered_query, &cluster.sharding_schema(), &mut prep_stmts).unwrap();
     ast.cached = false;
     let mut buffer: ClientRequest = vec![Query::new(query_str).into()].into();
     buffer.ast = Some(ast);
@@ -616,14 +588,8 @@ fn update_sharding_key_errors_by_default() {
     let query = "UPDATE sharded SET id = id + 1 WHERE id = 1";
     let cluster = Cluster::new_test();
     let mut prep_stmts = PreparedStatements::default();
-    let mut ast = Ast::new(
-        query,
-        &cluster.sharding_schema(),
-        false,
-        false,
-        &mut prep_stmts,
-    )
-    .unwrap();
+    let buffered_query = BufferedQuery::Query(Query::new(query));
+    let mut ast = Ast::new(&buffered_query, &cluster.sharding_schema(), &mut prep_stmts).unwrap();
     ast.cached = false;
     let mut client_request: ClientRequest = vec![Query::new(query).into()].into();
     client_request.ast = Some(ast);
@@ -645,14 +611,8 @@ fn update_sharding_key_ignore_mode_allows() {
     let query = "UPDATE sharded SET id = id + 1 WHERE id = 1";
     let cluster = Cluster::new_test();
     let mut prep_stmts = PreparedStatements::default();
-    let mut ast = Ast::new(
-        query,
-        &cluster.sharding_schema(),
-        false,
-        false,
-        &mut prep_stmts,
-    )
-    .unwrap();
+    let buffered_query = BufferedQuery::Query(Query::new(query));
+    let mut ast = Ast::new(&buffered_query, &cluster.sharding_schema(), &mut prep_stmts).unwrap();
     ast.cached = false;
     let mut client_request: ClientRequest = vec![Query::new(query).into()].into();
     client_request.ast = Some(ast);
@@ -671,14 +631,8 @@ fn update_sharding_key_rewrite_mode_not_supported() {
     let query = "UPDATE sharded SET id = id + 1 WHERE id = 1";
     let cluster = Cluster::new_test();
     let mut prep_stmts = PreparedStatements::default();
-    let mut ast = Ast::new(
-        query,
-        &cluster.sharding_schema(),
-        false,
-        false,
-        &mut prep_stmts,
-    )
-    .unwrap();
+    let buffered_query = BufferedQuery::Query(Query::new(query));
+    let mut ast = Ast::new(&buffered_query, &cluster.sharding_schema(), &mut prep_stmts).unwrap();
     ast.cached = false;
     let mut client_request: ClientRequest = vec![Query::new(query).into()].into();
     client_request.ast = Some(ast);
@@ -700,14 +654,8 @@ fn update_sharding_key_rewrite_plan_detected() {
     let query = "UPDATE sharded SET id = 11 WHERE id = 1";
     let cluster = Cluster::new_test();
     let mut prep_stmts = PreparedStatements::default();
-    let mut ast = Ast::new(
-        query,
-        &cluster.sharding_schema(),
-        false,
-        false,
-        &mut prep_stmts,
-    )
-    .unwrap();
+    let buffered_query = BufferedQuery::Query(Query::new(query));
+    let mut ast = Ast::new(&buffered_query, &cluster.sharding_schema(), &mut prep_stmts).unwrap();
     ast.cached = false;
     let mut client_request: ClientRequest = vec![Query::new(query).into()].into();
     client_request.ast = Some(ast);
@@ -869,14 +817,8 @@ WHERE t2.account = (
 		t2.id = $1
 	)
 	";
-    let mut ast = Ast::new(
-        query_str,
-        &cluster.sharding_schema(),
-        false,
-        false,
-        &mut prep_stmts,
-    )
-    .unwrap();
+    let buffered_query = BufferedQuery::Query(Query::new(query_str));
+    let mut ast = Ast::new(&buffered_query, &cluster.sharding_schema(), &mut prep_stmts).unwrap();
     ast.cached = false;
     let mut buffer: ClientRequest = vec![Query::new(query_str).into()].into();
     buffer.ast = Some(ast);

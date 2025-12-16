@@ -2,7 +2,9 @@ use pg_query::{normalize, parse};
 use tokio::spawn;
 
 use crate::{
-    backend::ShardingSchema, frontend::BufferedQuery, frontend::PreparedStatements, net::Parse,
+    backend::ShardingSchema,
+    frontend::{BufferedQuery, PreparedStatements},
+    net::{Parse, Query},
 };
 
 use super::*;
@@ -113,7 +115,7 @@ fn test_tables_list() {
         "DELETE FROM private_schema.test",
         "DROP TABLE private_schema.test",
     ] {
-        let ast = Ast::new(q, &ShardingSchema::default(), true, false, &mut prepared_statements).unwrap();
+        let ast = Ast::new(&BufferedQuery::Query(Query::new(q)), &ShardingSchema::default(), &mut prepared_statements).unwrap();
         let tables = ast.tables();
         println!("{:?}", tables);
     }

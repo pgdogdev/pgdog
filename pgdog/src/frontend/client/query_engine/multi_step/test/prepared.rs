@@ -13,7 +13,7 @@ mod insert {
     };
 
     #[tokio::test]
-    async fn test_extended() {
+    async fn test_prepared() {
         crate::logger();
 
         let (mut stream, mut client) = test_client_sharded().await;

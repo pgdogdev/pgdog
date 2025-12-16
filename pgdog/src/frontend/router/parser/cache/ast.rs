@@ -10,7 +10,7 @@ use super::super::{
 };
 use super::{Fingerprint, Stats};
 use crate::frontend::router::parser::rewrite::statement::RewritePlan;
-use crate::frontend::PreparedStatements;
+use crate::frontend::{BufferedQuery, PreparedStatements};
 use crate::{backend::ShardingSchema, config::Role};
 
 /// Abstract syntax tree (query) cache entry,
@@ -64,17 +64,15 @@ impl Deref for Ast {
 impl Ast {
     /// Parse statement and run the rewrite engine, if necessary.
     pub fn new(
-        query: &str,
+        query: &BufferedQuery,
         schema: &ShardingSchema,
-        extended: bool,
-        prepared: bool,
         prepared_statements: &mut PreparedStatements,
     ) -> Result<Self, Error> {
         let mut ast = parse(query).map_err(Error::PgQuery)?;
         let rewrite_plan = StatementRewrite::new(StatementRewriteContext {
             stmt: &mut ast.protobuf,
-            extended,
-            prepared,
+            extended: query.extended(),
+            prepared: query.prepared(),
             prepared_statements,
             schema,
         })

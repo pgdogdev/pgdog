@@ -29,7 +29,7 @@ mod test_show {
     use crate::frontend::client::Sticky;
     use crate::frontend::router::parser::Shard;
     use crate::frontend::router::{Ast, QueryParser};
-    use crate::frontend::{ClientRequest, PreparedStatements, RouterContext};
+    use crate::frontend::{BufferedQuery, ClientRequest, PreparedStatements, RouterContext};
     use crate::net::messages::Query;
 
     #[test]
@@ -40,10 +40,8 @@ mod test_show {
         // First call
         let query = "SHOW TRANSACTION ISOLATION LEVEL";
         let mut ast = Ast::new(
-            query,
+            &BufferedQuery::Query(Query::new(query)),
             &c.sharding_schema(),
-            false,
-            false,
             &mut PreparedStatements::default(),
         )
         .unwrap();
@@ -59,10 +57,8 @@ mod test_show {
         // Second call
         let query = "SHOW TRANSACTION ISOLATION LEVEL";
         let mut ast = Ast::new(
-            query,
+            &BufferedQuery::Query(Query::new(query)),
             &c.sharding_schema(),
-            false,
-            false,
             &mut PreparedStatements::default(),
         )
         .unwrap();

@@ -86,13 +86,8 @@ impl Cache {
         prepared_statements: &mut PreparedStatements,
     ) -> Result<Ast, Error> {
         match query {
-            BufferedQuery::Prepared(parse) => {
-                // A statement is "prepared" (named) if it has a non-empty name.
-                // This affects how the rewrite engine handles split INSERTs.
-                let prepared = !parse.anonymous();
-                self.parse(parse.query(), schema, prepared, prepared_statements)
-            }
-            BufferedQuery::Query(query) => self.simple(query.query(), schema, prepared_statements),
+            BufferedQuery::Prepared(_) => self.parse(query, schema, prepared_statements),
+            BufferedQuery::Query(_) => self.simple(query, schema, prepared_statements),
         }
     }
 
@@ -104,14 +99,13 @@ impl Cache {
     /// while we parse the query.
     fn parse(
         &self,
-        query: &str,
+        query: &BufferedQuery,
         schema: &ShardingSchema,
-        prepared: bool,
         prepared_statements: &mut PreparedStatements,
     ) -> Result<Ast, Error> {
         {
             let mut guard = self.inner.lock();
-            let ast = guard.queries.get_mut(query).map(|entry| {
+            let ast = guard.queries.get_mut(query.query()).map(|entry| {
                 entry.stats.lock().hits += 1; // No contention on this.
                 entry.clone()
             });
@@ -122,10 +116,10 @@ impl Cache {
         }
 
         // Parse query without holding lock.
-        let entry = Ast::new(query, schema, true, prepared, prepared_statements)?;
+        let entry = Ast::new(query, schema, prepared_statements)?;
 
         let mut guard = self.inner.lock();
-        guard.queries.put(query.to_owned(), entry.clone());
+        guard.queries.put(query.query().to_string(), entry.clone());
         guard.stats.misses += 1;
 
         Ok(entry)
@@ -135,11 +129,11 @@ impl Cache {
     /// because it may contain parameter values.
     fn simple(
         &self,
-        query: &str,
+        query: &BufferedQuery,
         schema: &ShardingSchema,
         prepared_statements: &mut PreparedStatements,
     ) -> Result<Ast, Error> {
-        let mut entry = Ast::new(query, schema, false, false, prepared_statements)?;
+        let mut entry = Ast::new(query, schema, prepared_statements)?;
         entry.cached = false;
         Ok(entry)
     }

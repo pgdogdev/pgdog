@@ -20,6 +20,14 @@ impl BufferedQuery {
         matches!(self, Self::Prepared(_))
     }
 
+    pub fn prepared(&self) -> bool {
+        if let Self::Prepared(ref parse) = self {
+            !parse.anonymous()
+        } else {
+            false
+        }
+    }
+
     pub fn simple(&self) -> bool {
         matches!(self, Self::Query(_))
     }
