@@ -128,14 +128,13 @@ impl Binding {
                 if let Some(server) = server {
                     server.send(client_request).await
                 } else {
-                    Err(Error::NotConnected)
+                    Err(Error::DirectToShardNotConnected)
                 }
             }
 
             Binding::MultiShard(servers, state) => {
                 let mut shards_sent = servers.len();
                 let mut futures = Vec::new();
-                println!("multi binding: {:?}", client_request.route());
 
                 for (shard, server) in servers.iter_mut().enumerate() {
                     let send = match client_request.route().shard() {
@@ -419,6 +418,17 @@ impl Binding {
         }
     }
 
+    pub fn is_multishard(&self) -> bool {
+        match self {
+            Binding::MultiShard(ref servers, _) => !servers.is_empty(),
+            _ => false,
+        }
+    }
+
+    pub fn is_direct(&self) -> bool {
+        matches!(self, Binding::Direct(Some(_)))
+    }
+
     pub fn copy_mode(&self) -> bool {
         match self {
             Binding::Admin(_) => false,
@@ -435,12 +445,14 @@ impl Binding {
             Binding::Direct(Some(_)) => 1,
             Binding::MultiShard(ref servers, _) => {
                 if servers.is_empty() {
-                    return Err(Error::NotConnected);
+                    return Err(Error::MultiShardNotConnected);
                 } else {
                     servers.len()
                 }
             }
-            _ => return Err(Error::NotConnected),
+            _ => {
+                return Err(Error::NotConnected);
+            }
         })
     }
 }

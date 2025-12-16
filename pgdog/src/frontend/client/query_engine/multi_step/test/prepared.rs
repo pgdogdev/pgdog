@@ -47,7 +47,6 @@ mod insert {
         stream.write_all(&desc.to_bytes().unwrap()).await.unwrap();
         stream.write_all(&flush.to_bytes().unwrap()).await.unwrap();
         stream.flush().await.unwrap();
-        println!("here");
 
         let _ = read_messages(&mut stream, &['1', 't', 'T']).await;
 

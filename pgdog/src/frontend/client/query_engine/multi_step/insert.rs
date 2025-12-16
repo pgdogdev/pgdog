@@ -53,6 +53,10 @@ impl<'a> InsertMulti<'a> {
             }
         }
 
+        if !self.engine.backend.is_multishard() {
+            return Err(Error::MultiShardRequired);
+        }
+
         for request in self.requests.iter() {
             self.engine.backend.send(request).await?;
 

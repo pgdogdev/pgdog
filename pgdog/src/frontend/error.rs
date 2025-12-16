@@ -59,6 +59,9 @@ pub enum Error {
 
     #[error("couldn't determine route for statement")]
     NoRoute,
+
+    #[error("multi-tuple insert requires multi-shard binding")]
+    MultiShardRequired,
 }
 
 impl Error {

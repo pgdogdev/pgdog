@@ -1754,7 +1754,6 @@ pub mod test {
         let mut server = test_server().await;
         let mut params = Parameters::default();
         params.insert("application_name", "test_sync_params");
-        println!("server state: {}", server.stats().state);
         let changed = server
             .link_client(&BackendKeyData::new(), &params, None)
             .await

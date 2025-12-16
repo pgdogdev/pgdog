@@ -33,8 +33,17 @@ pub enum Error {
     #[error("server not connected")]
     NotConnected,
 
+    #[error("direct-to-shard not connected")]
+    DirectToShardNotConnected,
+
+    #[error("multi-shard not connected")]
+    MultiShardNotConnected,
+
     #[error("multi shard copy not connected")]
     CopyNotConnected,
+
+    #[error("cluster not connected")]
+    ClusterNotConnected,
 
     #[error("{0}")]
     Pool(#[from] crate::backend::pool::Error),

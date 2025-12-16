@@ -142,6 +142,13 @@ impl QueryParser {
                     route.set_shard_mut(shard);
                     route.set_schema_path_driven_mut(true);
                 }
+
+                if let Some(role) = qp_context.router_context.sticky.role {
+                    match role {
+                        Role::Primary => route.set_read_mut(false),
+                        _ => route.set_read_mut(true),
+                    }
+                }
             }
 
             _ => (),
@@ -312,7 +319,7 @@ impl QueryParser {
         // e.g. Parse, Describe, Flush-style flow.
         if !context.router_context.executable {
             if let Command::Query(ref query) = command {
-                if query.is_cross_shard() {
+                if query.is_cross_shard() && statement.rewrite_plan.insert_split.is_empty() {
                     let shard = if self.shard == Shard::All {
                         Shard::Direct(round_robin::next() % context.shards)
                     } else {
