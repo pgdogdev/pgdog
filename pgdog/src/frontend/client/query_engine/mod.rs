@@ -44,6 +44,22 @@ pub use two_pc::phase::TwoPcPhase;
 use two_pc::TwoPc;
 
 #[derive(Debug)]
+pub struct TestMode {
+    pub enabled: bool,
+}
+
+impl TestMode {
+    pub fn new() -> Self {
+        Self {
+            #[cfg(test)]
+            enabled: true,
+            #[cfg(not(test))]
+            enabled: false,
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct QueryEngine {
     begin_stmt: Option<BufferedQuery>,
     router: Router,
@@ -51,7 +67,7 @@ pub struct QueryEngine {
     stats: Stats,
     backend: Connection,
     streaming: bool,
-    test_mode: bool,
+    test_mode: TestMode,
     set_route: Option<Route>,
     two_pc: TwoPc,
     notify_buffer: NotifyBuffer,
@@ -76,10 +92,7 @@ impl QueryEngine {
             backend,
             comms: comms.clone(),
             hooks: QueryEngineHooks::new(),
-            #[cfg(test)]
-            test_mode: true,
-            #[cfg(not(test))]
-            test_mode: false,
+            test_mode: TestMode::new(),
             stats: Stats::default(),
             streaming: bool::default(),
             two_pc: TwoPc::default(),

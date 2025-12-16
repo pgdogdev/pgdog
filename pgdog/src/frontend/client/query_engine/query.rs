@@ -72,7 +72,7 @@ impl QueryEngine {
                 while self.backend.has_more_messages()
                     && !self.backend.copy_mode()
                     && !self.streaming
-                    && !self.test_mode
+                    && !self.test_mode.enabled
                 {
                     let message = self.read_server_message(context).await?;
                     self.process_server_message(context, message).await?;

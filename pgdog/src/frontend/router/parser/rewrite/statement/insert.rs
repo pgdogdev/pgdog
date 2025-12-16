@@ -298,7 +298,7 @@ mod tests {
 
     fn default_schema() -> ShardingSchema {
         ShardingSchema {
-            shards: 1,
+            shards: 2,
             tables: ShardedTables::default(),
             schemas: ShardedSchemas::default(),
         }

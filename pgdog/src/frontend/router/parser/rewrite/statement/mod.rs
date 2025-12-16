@@ -81,12 +81,11 @@ impl<'a> StatementRewrite<'a> {
         };
 
         // Handle top-level PREPARE/EXECUTE statements.
-        if self.prepared_statements.level.full() {
-            let prepared_result = self.rewrite_simple_prepared()?;
-            if prepared_result.rewritten {
-                self.rewritten = true;
-                plan.prepares = prepared_result.prepares;
-            }
+
+        let prepared_result = self.rewrite_simple_prepared()?;
+        if prepared_result.rewritten {
+            self.rewritten = true;
+            plan.prepares = prepared_result.prepares;
         }
 
         // Track the next parameter number to use

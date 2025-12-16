@@ -1,5 +1,8 @@
+use pgdog_config::General;
+
 use crate::{
-    config::{load_test, load_test_sharded},
+    backend::databases::reload_from_existing,
+    config::{config, load_test, load_test_sharded, set},
     frontend::Client,
     net::{Parameters, Stream},
 };
@@ -7,6 +10,8 @@ use crate::{
 pub mod prelude;
 mod rewrite_extended;
 mod rewrite_insert_split;
+mod rewrite_simple_prepared;
+mod set;
 
 pub(super) fn test_client() -> Client {
     load_test();
@@ -16,4 +21,11 @@ pub(super) fn test_client() -> Client {
 pub(super) fn test_sharded_client() -> Client {
     load_test_sharded();
     Client::new_test(Stream::dev_null(), Parameters::default())
+}
+
+pub(super) fn change_config(f: impl FnOnce(&mut General)) {
+    let mut config = (*config()).clone();
+    f(&mut config.config.general);
+    set(config).unwrap();
+    reload_from_existing().unwrap();
 }

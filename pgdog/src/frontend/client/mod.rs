@@ -36,6 +36,7 @@ pub mod timeouts;
 pub(crate) use sticky::Sticky;
 
 /// Frontend client.
+#[derive(Debug)]
 pub struct Client {
     addr: SocketAddr,
     stream: Stream,
@@ -332,6 +333,8 @@ impl Client {
         connect_params.merge(params);
 
         let id = BackendKeyData::new();
+        let mut prepared_statements = PreparedStatements::new();
+        prepared_statements.level = config().config.general.prepared_statements;
 
         Self {
             stream,
@@ -339,7 +342,7 @@ impl Client {
             id,
             comms: ClientComms::new(&id),
             streaming: false,
-            prepared_statements: PreparedStatements::new(),
+            prepared_statements,
             connect_params: connect_params.clone(),
             admin: false,
             transaction: None,

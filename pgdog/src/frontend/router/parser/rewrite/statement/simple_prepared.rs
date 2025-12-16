@@ -41,6 +41,10 @@ impl StatementRewrite<'_> {
     pub(super) fn rewrite_simple_prepared(&mut self) -> Result<SimplePreparedResult, Error> {
         let mut result = SimplePreparedResult::default();
 
+        if !self.prepared_statements.level.full() {
+            return Ok(result);
+        }
+
         for stmt in &mut self.stmt.stmts {
             if let Some(ref mut node) = stmt.stmt {
                 if let Some(ref mut inner) = node.node {
@@ -110,42 +114,51 @@ fn rewrite_single_prepared(
 
 #[cfg(test)]
 mod tests {
-    use super::super::{StatementRewrite, StatementRewriteContext};
+    use super::super::{RewritePlan, StatementRewrite, StatementRewriteContext};
     use super::*;
     use crate::backend::replication::{ShardedSchemas, ShardedTables};
     use crate::backend::ShardingSchema;
     use crate::config::PreparedStatements as PreparedStatementsLevel;
     use pg_query::parse;
+    use pg_query::protobuf::ParseResult;
 
-    fn default_schema() -> ShardingSchema {
-        ShardingSchema {
-            shards: 1,
-            tables: ShardedTables::default(),
-            schemas: ShardedSchemas::default(),
-        }
+    struct TestContext {
+        ps: PreparedStatements,
+        schema: ShardingSchema,
     }
 
-    fn prepared_statements_full() -> PreparedStatements {
-        let mut ps = PreparedStatements::default();
-        ps.set_level(PreparedStatementsLevel::Full);
-        ps
+    impl TestContext {
+        fn new() -> Self {
+            let mut ps = PreparedStatements::default();
+            ps.set_level(PreparedStatementsLevel::Full);
+            Self {
+                ps,
+                schema: ShardingSchema {
+                    shards: 1,
+                    tables: ShardedTables::default(),
+                    schemas: ShardedSchemas::default(),
+                },
+            }
+        }
+
+        fn rewrite(&mut self, sql: &str) -> Result<(ParseResult, RewritePlan), Error> {
+            let mut ast = parse(sql).unwrap().protobuf;
+            let mut rewrite = StatementRewrite::new(StatementRewriteContext {
+                stmt: &mut ast,
+                extended: false,
+                prepared: false,
+                prepared_statements: &mut self.ps,
+                schema: &self.schema,
+            });
+            let plan = rewrite.maybe_rewrite()?;
+            Ok((ast, plan))
+        }
     }
 
     #[test]
     fn test_rewrite_prepare() {
-        let mut ast = parse("PREPARE test_stmt AS SELECT $1, $2")
-            .unwrap()
-            .protobuf;
-        let mut ps = prepared_statements_full();
-        let schema = default_schema();
-        let mut rewrite = StatementRewrite::new(StatementRewriteContext {
-            stmt: &mut ast,
-            extended: false,
-            prepared: false,
-            prepared_statements: &mut ps,
-            schema: &schema,
-        });
-        let plan = rewrite.maybe_rewrite().unwrap();
+        let mut ctx = TestContext::new();
+        let (ast, plan) = ctx.rewrite("PREPARE test_stmt AS SELECT $1, $2").unwrap();
 
         let sql = ast.deparse().unwrap();
         assert!(
@@ -154,7 +167,7 @@ mod tests {
         );
         assert!(
             !sql.contains("test_stmt"),
-            "Original name should be replaced: {sql}"
+            "original name should be replaced: {sql}"
         );
         assert!(plan.prepares.is_empty());
         assert!(plan.stmt.is_some());
@@ -162,31 +175,9 @@ mod tests {
 
     #[test]
     fn test_rewrite_execute() {
-        let mut ps = prepared_statements_full();
-
-        // First, prepare a statement
-        let mut ast = parse("PREPARE test_stmt AS SELECT 1").unwrap().protobuf;
-        let schema = default_schema();
-        let mut rewrite = StatementRewrite::new(StatementRewriteContext {
-            stmt: &mut ast,
-            extended: false,
-            prepared: false,
-            prepared_statements: &mut ps,
-            schema: &schema,
-        });
-        rewrite.maybe_rewrite().unwrap();
-
-        // Now execute it
-        let mut ast = parse("EXECUTE test_stmt").unwrap().protobuf;
-        let schema = default_schema();
-        let mut rewrite = StatementRewrite::new(StatementRewriteContext {
-            stmt: &mut ast,
-            extended: false,
-            prepared: false,
-            prepared_statements: &mut ps,
-            schema: &schema,
-        });
-        let plan = rewrite.maybe_rewrite().unwrap();
+        let mut ctx = TestContext::new();
+        ctx.rewrite("PREPARE test_stmt AS SELECT 1").unwrap();
+        let (ast, plan) = ctx.rewrite("EXECUTE test_stmt").unwrap();
 
         let sql = ast.deparse().unwrap();
         assert!(
@@ -194,6 +185,7 @@ mod tests {
             "EXECUTE should use global name, got: {sql}"
         );
         assert_eq!(plan.prepares.len(), 1);
+
         let (name, statement) = &plan.prepares[0];
         assert!(name.starts_with("__pgdog_"));
         assert_eq!(statement, "SELECT 1");
@@ -201,33 +193,9 @@ mod tests {
 
     #[test]
     fn test_rewrite_execute_with_params() {
-        let mut ps = prepared_statements_full();
-
-        // First, prepare a statement with parameters
-        let mut ast = parse("PREPARE test_stmt AS SELECT $1, $2")
-            .unwrap()
-            .protobuf;
-        let schema = default_schema();
-        let mut rewrite = StatementRewrite::new(StatementRewriteContext {
-            stmt: &mut ast,
-            extended: false,
-            prepared: false,
-            prepared_statements: &mut ps,
-            schema: &schema,
-        });
-        rewrite.maybe_rewrite().unwrap();
-
-        // Now execute it with arguments
-        let mut ast = parse("EXECUTE test_stmt(1, 'hello')").unwrap().protobuf;
-        let schema = default_schema();
-        let mut rewrite = StatementRewrite::new(StatementRewriteContext {
-            stmt: &mut ast,
-            extended: false,
-            prepared: false,
-            prepared_statements: &mut ps,
-            schema: &schema,
-        });
-        let plan = rewrite.maybe_rewrite().unwrap();
+        let mut ctx = TestContext::new();
+        ctx.rewrite("PREPARE test_stmt AS SELECT $1, $2").unwrap();
+        let (ast, plan) = ctx.rewrite("EXECUTE test_stmt(1, 'hello')").unwrap();
 
         let sql = ast.deparse().unwrap();
         assert!(
@@ -243,35 +211,15 @@ mod tests {
 
     #[test]
     fn test_execute_nonexistent_fails() {
-        let mut ps = prepared_statements_full();
-
-        let mut ast = parse("EXECUTE nonexistent_stmt").unwrap().protobuf;
-        let schema = default_schema();
-        let mut rewrite = StatementRewrite::new(StatementRewriteContext {
-            stmt: &mut ast,
-            extended: false,
-            prepared: false,
-            prepared_statements: &mut ps,
-            schema: &schema,
-        });
-        let result = rewrite.maybe_rewrite();
-
+        let mut ctx = TestContext::new();
+        let result = ctx.rewrite("EXECUTE nonexistent_stmt");
         assert!(result.is_err());
     }
 
     #[test]
     fn test_no_rewrite_for_regular_select() {
-        let mut ast = parse("SELECT 1, 2, 3").unwrap().protobuf;
-        let mut ps = prepared_statements_full();
-        let schema = default_schema();
-        let mut rewrite = StatementRewrite::new(StatementRewriteContext {
-            stmt: &mut ast,
-            extended: false,
-            prepared: false,
-            prepared_statements: &mut ps,
-            schema: &schema,
-        });
-        let plan = rewrite.maybe_rewrite().unwrap();
+        let mut ctx = TestContext::new();
+        let (ast, plan) = ctx.rewrite("SELECT 1, 2, 3").unwrap();
 
         let sql = ast.deparse().unwrap();
         assert_eq!(sql, "SELECT 1, 2, 3");

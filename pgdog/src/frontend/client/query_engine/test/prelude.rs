@@ -1,10 +1,14 @@
 pub use crate::{
     frontend::{
-        client::query_engine::{QueryEngine, QueryEngineContext},
+        client::{
+            query_engine::{QueryEngine, QueryEngineContext},
+            test::TestClient,
+            Client,
+        },
         ClientRequest,
     },
     net::{
-        Protocol,
-        {bind::Parameter, Bind, Execute, Flush, Parse, ProtocolMessage, Query, Sync},
+        bind::Parameter, Bind, Execute, Flush, Parameters, Parse, Protocol, ProtocolMessage, Query,
+        Stream, Sync,
     },
 };

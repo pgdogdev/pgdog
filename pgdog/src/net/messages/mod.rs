@@ -261,3 +261,46 @@ macro_rules! code {
 }
 
 pub(crate) use code;
+
+macro_rules! from_message {
+    ($ty:tt) => {
+        impl TryFrom<Message> for $ty {
+            type Error = crate::net::Error;
+
+            fn try_from(message: Message) -> Result<$ty, Self::Error> {
+                <$ty as FromBytes>::from_bytes(message.to_bytes()?)
+            }
+        }
+    };
+}
+
+from_message!(Authentication);
+from_message!(BackendKeyData);
+from_message!(Bind);
+from_message!(BindComplete);
+from_message!(Close);
+from_message!(CloseComplete);
+from_message!(CommandComplete);
+from_message!(CopyData);
+from_message!(CopyDone);
+from_message!(CopyFail);
+from_message!(DataRow);
+from_message!(Describe);
+from_message!(EmptyQueryResponse);
+from_message!(ErrorResponse);
+from_message!(Execute);
+from_message!(Flush);
+from_message!(NoData);
+from_message!(NoticeResponse);
+from_message!(NotificationResponse);
+from_message!(ParameterDescription);
+from_message!(ParameterStatus);
+from_message!(Parse);
+from_message!(ParseComplete);
+from_message!(Query);
+from_message!(ReadyForQuery);
+from_message!(RowDescription);
+from_message!(Sync);
+from_message!(Terminate);
+
+pub(crate) use from_message;
