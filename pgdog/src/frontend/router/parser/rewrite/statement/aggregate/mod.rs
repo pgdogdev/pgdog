@@ -11,6 +11,10 @@ pub use plan::{AggregateRewritePlan, HelperKind, HelperMapping, RewriteOutput};
 impl StatementRewrite<'_> {
     /// Add missing COUNT(*) and other helps when using aggregates.
     pub(super) fn rewrite_aggregates(&mut self, plan: &mut RewritePlan) -> Result<(), Error> {
+        if self.schema.shards == 1 {
+            return Ok(());
+        }
+
         let Some(raw_stmt) = self.stmt.stmts.first() else {
             return Ok(());
         };

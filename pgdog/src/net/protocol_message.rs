@@ -6,7 +6,7 @@ use super::{
     Protocol, Query, Sync, ToBytes,
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ProtocolMessage {
     Bind(Bind),
     Parse(Parse),

@@ -56,6 +56,11 @@ impl InsertSplit {
                 ProtocolMessage::Parse(parse) => {
                     let mut new_parse = parse.clone();
                     new_parse.set_query(&self.stmt);
+
+                    if let Some(name) = self.statement_name() {
+                        new_parse.rename_fast(name);
+                    }
+
                     ProtocolMessage::Parse(new_parse)
                 }
                 ProtocolMessage::Query(query) => {
@@ -135,7 +140,11 @@ impl StatementRewrite<'_> {
     /// ```
     ///
     pub(super) fn split_insert(&mut self, plan: &mut RewritePlan) -> Result<(), Error> {
-        // First, build all split SQL strings and params (only needs immutable borrow)
+        // Don't rewrite INSERTs in unsharded databases.
+        if self.schema.shards == 1 {
+            return Ok(());
+        }
+
         let splits: Vec<(Vec<u16>, String)> = {
             let values_lists = match self.get_insert_values_lists() {
                 Some(lists) if lists.len() > 1 => lists,

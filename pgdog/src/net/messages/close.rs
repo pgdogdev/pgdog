@@ -6,7 +6,7 @@ use std::str::from_utf8_unchecked;
 use super::code;
 use super::prelude::*;
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct Close {
     payload: Bytes,
 }

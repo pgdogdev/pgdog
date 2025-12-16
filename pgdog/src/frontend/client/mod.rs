@@ -323,7 +323,7 @@ impl Client {
     }
 
     #[cfg(test)]
-    pub fn new_test(stream: Stream, addr: SocketAddr, params: Parameters) -> Self {
+    pub fn new_test(stream: Stream, params: Parameters) -> Self {
         use crate::config::config;
 
         let mut connect_params = Parameters::default();
@@ -335,7 +335,7 @@ impl Client {
 
         Self {
             stream,
-            addr,
+            addr: SocketAddr::from(([127, 0, 0, 1], 1234)),
             id,
             comms: ClientComms::new(&id),
             streaming: false,

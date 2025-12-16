@@ -6,7 +6,7 @@ use crate::net::c_string_buf_len;
 use super::code;
 use super::prelude::*;
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct Execute {
     payload: Bytes,
     portal_len: usize,

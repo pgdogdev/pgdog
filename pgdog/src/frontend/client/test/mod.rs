@@ -73,10 +73,10 @@ pub async fn parallel_test_client_with_params(params: Parameters) -> (TcpStream,
     let stream = TcpListener::bind(&conn_addr).await.unwrap();
     let port = stream.local_addr().unwrap().port();
     let connect_handle = tokio::spawn(async move {
-        let (stream, addr) = stream.accept().await.unwrap();
+        let (stream, _) = stream.accept().await.unwrap();
         let stream = Stream::plain(stream, 4096);
 
-        Client::new_test(stream, addr, params)
+        Client::new_test(stream, params)
     });
 
     let conn = TcpStream::connect(&format!("127.0.0.1:{}", port))

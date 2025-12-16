@@ -1,7 +1,7 @@
 use super::code;
 use super::prelude::*;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Sync;
 
 impl Default for Sync {

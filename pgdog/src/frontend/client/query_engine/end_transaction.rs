@@ -140,11 +140,8 @@ mod tests {
         load_test();
 
         // Create a test client with DevNull stream (doesn't require real I/O)
-        let mut client = crate::frontend::Client::new_test(
-            Stream::dev_null(),
-            std::net::SocketAddr::from(([127, 0, 0, 1], 1234)),
-            Parameters::default(),
-        );
+        let mut client =
+            crate::frontend::Client::new_test(Stream::dev_null(), Parameters::default());
         client.transaction = Some(TransactionType::ReadWrite);
 
         // Create a default query engine (avoids backend connection)
