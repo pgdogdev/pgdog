@@ -135,6 +135,7 @@ impl Binding {
             Binding::MultiShard(servers, state) => {
                 let mut shards_sent = servers.len();
                 let mut futures = Vec::new();
+                println!("multi binding: {:?}", client_request.route());
 
                 for (shard, server) in servers.iter_mut().enumerate() {
                     let send = match client_request.route().shard() {

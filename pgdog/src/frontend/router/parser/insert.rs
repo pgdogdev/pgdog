@@ -77,6 +77,11 @@ impl<'a> Insert<'a> {
             }
         }
 
+        if tuples.len() != 1 {
+            debug!("multiple tuples in an INSERT statement");
+            return Ok(Shard::All);
+        }
+
         if let Some(key) = key {
             if let Some(bind) = bind {
                 if let Ok(Some(param)) = bind.parameter(key.position) {
@@ -92,12 +97,6 @@ impl<'a> Insert<'a> {
                         return Ok(ctx.apply()?);
                     }
                 }
-            }
-
-            // TODO: support rewriting INSERTs to run against multiple shards.
-            if tuples.len() != 1 {
-                debug!("multiple tuples in an INSERT statement");
-                return Ok(Shard::All);
             }
 
             if let Some(value) = tuples.first().and_then(|tuple| tuple.get(key.position)) {

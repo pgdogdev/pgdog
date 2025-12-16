@@ -450,7 +450,9 @@ impl Client {
         message: Message,
     ) -> Result<(), Error> {
         let mut context = QueryEngineContext::new(self);
-        query_engine.server_message(&mut context, message).await?;
+        query_engine
+            .process_server_message(&mut context, message)
+            .await?;
         self.transaction = context.transaction();
 
         Ok(())

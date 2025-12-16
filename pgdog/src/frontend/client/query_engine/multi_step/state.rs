@@ -1,6 +1,6 @@
 use fnv::FnvHashMap as HashMap;
 
-use super::Error;
+use super::super::Error;
 use crate::net::{CommandComplete, FromBytes, Message, Protocol, ReadyForQuery, ToBytes};
 
 #[derive(Debug, Clone)]

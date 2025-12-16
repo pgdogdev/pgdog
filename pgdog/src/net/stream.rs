@@ -170,8 +170,6 @@ impl Stream {
                 StreamInner::DevNull => (),
             }
 
-            trace!("{:?} <-- {:#?}", self.peer_addr(), message);
-
             #[cfg(debug_assertions)]
             {
                 use crate::net::messages::FromBytes;

@@ -59,14 +59,9 @@ impl QueryEngine {
 
         match context.rewrite_result.take() {
             Some(RewriteResult::InsertSplit(requests)) => {
-                let ok = multi_step::InsertMulti::from_engine(self, context, requests)
-                    .execute()
+                multi_step::InsertMulti::from_engine(self, requests)
+                    .execute(context)
                     .await?;
-                // Set transaction in error state, requiring client to
-                // send ROLLBACK before going further.
-                if context.in_transaction() && !ok {
-                    context.transaction = Some(TransactionType::ErrorReadWrite);
-                }
             }
 
             Some(RewriteResult::InPlace) | None => {
@@ -79,21 +74,8 @@ impl QueryEngine {
                     && !self.streaming
                     && !self.test_mode
                 {
-                    let message = match timeout(
-                        context.timeouts.query_timeout(&State::Active),
-                        self.backend.read(),
-                    )
-                    .await
-                    {
-                        Ok(response) => response?,
-                        Err(err) => {
-                            // Close the conn, it could be stuck executing a query
-                            // or dead.
-                            self.backend.force_close();
-                            return Err(err.into());
-                        }
-                    };
-                    self.server_message(context, message).await?;
+                    let message = self.read_server_message(context).await?;
+                    self.process_server_message(context, message).await?;
                 }
             }
         }
@@ -101,7 +83,29 @@ impl QueryEngine {
         Ok(())
     }
 
-    pub async fn server_message(
+    pub async fn read_server_message(
+        &mut self,
+        context: &mut QueryEngineContext<'_>,
+    ) -> Result<Message, Error> {
+        let message = match timeout(
+            context.timeouts.query_timeout(&State::Active),
+            self.backend.read(),
+        )
+        .await
+        {
+            Ok(response) => response?,
+            Err(err) => {
+                // Close the conn, it could be stuck executing a query
+                // or dead.
+                self.backend.force_close();
+                return Err(err.into());
+            }
+        };
+
+        Ok(message)
+    }
+
+    pub async fn process_server_message(
         &mut self,
         context: &mut QueryEngineContext<'_>,
         message: Message,
