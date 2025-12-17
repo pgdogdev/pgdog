@@ -8,10 +8,18 @@ impl QueryEngine {
     /// Connect to backend, if necessary.
     ///
     /// Return true if connected, false otherwise.
+    ///
+    /// # Arguments
+    ///
+    /// - context: Query engine context.
+    /// - connect_route: Override which route to use for connecting to backend(s).
+    ///                  Used to connect to all shards for an explicit cross-shard transaction
+    ///                  started with `BEGIN`.
+    ///
     pub(super) async fn connect(
         &mut self,
         context: &mut QueryEngineContext<'_>,
-        route: &Route,
+        connect_route: Option<&Route>,
     ) -> Result<bool, Error> {
         if self.backend.connected() {
             return Ok(true);
@@ -22,16 +30,20 @@ impl QueryEngine {
         self.stats.waiting(request.created_at);
         self.comms.update_stats(self.stats);
 
-        let connected = match self.backend.connect(&request, route).await {
+        let connect_route = connect_route.unwrap_or(context.client_request.route());
+
+        let connected = match self.backend.connect(&request, connect_route).await {
             Ok(_) => {
                 self.stats.connected();
-                self.stats.locked(route.is_lock_session());
+                self.stats
+                    .locked(context.client_request.route().is_lock_session());
                 // This connection will be locked to this client
                 // until they disconnect.
                 //
                 // Used in case the client runs an advisory lock
                 // or another leaky transaction mode abstraction.
-                self.backend.lock(route.is_lock_session());
+                self.backend
+                    .lock(context.client_request.route().is_lock_session());
 
                 if let Ok(addr) = self.backend.addr() {
                     debug!(
@@ -40,7 +52,7 @@ impl QueryEngine {
                             .map(|a| a.to_string())
                             .collect::<Vec<_>>()
                             .join(","),
-                        route,
+                        context.client_request.route(),
                         self.stats.wait_time.as_secs_f64() * 1000.0
                     );
                 }
@@ -98,15 +110,14 @@ impl QueryEngine {
     pub(super) async fn connect_transaction(
         &mut self,
         context: &mut QueryEngineContext<'_>,
-        route: &Route,
     ) -> Result<bool, Error> {
         debug!("connecting to backend(s) to serve transaction");
 
-        let route = self.transaction_route(route)?;
+        let route = self.transaction_route(context.client_request.route())?;
 
         trace!("transaction routing to {:#?}", route);
 
-        self.connect(context, &route).await
+        self.connect(context, Some(&route)).await
     }
 
     pub(super) fn transaction_route(&mut self, route: &Route) -> Result<Route, Error> {

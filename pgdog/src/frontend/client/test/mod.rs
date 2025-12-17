@@ -524,7 +524,6 @@ async fn test_transaction_state() {
 
     assert!(client.transaction.is_some());
     assert!(engine.router().route().is_write());
-    assert!(engine.router().in_transaction());
 
     conn.write_all(&buffer!(
         { Parse::named("test", "SELECT $1") },
@@ -539,7 +538,6 @@ async fn test_transaction_state() {
 
     assert!(client.transaction.is_some());
     assert!(engine.router().route().is_write());
-    assert!(engine.router().in_transaction());
 
     for c in ['1', 't', 'T', 'Z'] {
         let msg = engine.backend().read().await.unwrap();
@@ -580,7 +578,6 @@ async fn test_transaction_state() {
 
     assert!(client.transaction.is_some());
     assert!(engine.router().route().is_write());
-    assert!(engine.router().in_transaction());
 
     conn.write_all(&buffer!({ Query::new("COMMIT") }))
         .await

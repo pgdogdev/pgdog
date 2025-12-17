@@ -91,11 +91,6 @@ impl Router {
         self.latest_command = Command::default();
     }
 
-    /// Query parser is inside a transaction.
-    pub fn in_transaction(&self) -> bool {
-        self.query_parser.in_transaction()
-    }
-
     /// Get last commmand computed by the query parser.
     pub fn command(&self) -> &Command {
         &self.latest_command

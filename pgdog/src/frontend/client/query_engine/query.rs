@@ -21,30 +21,29 @@ impl QueryEngine {
     pub(super) async fn execute(
         &mut self,
         context: &mut QueryEngineContext<'_>,
-        route: &Route,
     ) -> Result<(), Error> {
         // Check that we're not in a transaction error state.
-        if !self.transaction_error_check(context, route).await? {
+        if !self.transaction_error_check(context).await? {
             return Ok(());
         }
 
         // Check if we need to do 2pc automatically
         // for single-statement writes.
-        self.two_pc_check(context, route);
+        self.two_pc_check(context);
 
         // We need to run a query now.
         if context.in_transaction() {
             // Connect to one shard if not sharded or to all shards
             // for a cross-shard tranasction.
-            if !self.connect_transaction(context, route).await? {
+            if !self.connect_transaction(context).await? {
                 return Ok(());
             }
-        } else if !self.connect(context, route).await? {
+        } else if !self.connect(context, None).await? {
             return Ok(());
         }
 
         // Check we can run this query.
-        if !self.cross_shard_check(context, route).await? {
+        if !self.cross_shard_check(context).await? {
             return Ok(());
         }
 
@@ -174,9 +173,6 @@ impl QueryEngine {
 
                 TransactionState::Idle => {
                     context.transaction = None;
-                    // This is necessary because we set the route
-                    // explicitly with schema-based sharding.
-                    self.set_route = None;
                 }
 
                 TransactionState::InTrasaction => {
@@ -300,7 +296,6 @@ impl QueryEngine {
     async fn cross_shard_check(
         &mut self,
         context: &mut QueryEngineContext<'_>,
-        route: &Route,
     ) -> Result<bool, Error> {
         // Check for cross-shard queries.
         if context.cross_shard_disabled.is_none() {
@@ -317,7 +312,7 @@ impl QueryEngine {
         debug!("cross-shard queries disabled: {}", cross_shard_disabled,);
 
         if cross_shard_disabled
-            && route.is_cross_shard()
+            && context.client_request.route().is_cross_shard()
             && !context.admin
             && context.client_request.is_executable()
         {
@@ -336,7 +331,7 @@ impl QueryEngine {
         }
     }
 
-    fn two_pc_check(&mut self, context: &mut QueryEngineContext<'_>, route: &Route) {
+    fn two_pc_check(&mut self, context: &mut QueryEngineContext<'_>) {
         let enabled = self
             .backend
             .cluster()
@@ -344,7 +339,7 @@ impl QueryEngine {
             .unwrap_or_default();
 
         if enabled
-            && route.should_2pc()
+            && context.client_request.route().should_2pc()
             && self.begin_stmt.is_none()
             && context.client_request.is_executable()
             && !context.in_transaction()
@@ -358,7 +353,6 @@ impl QueryEngine {
     async fn transaction_error_check(
         &mut self,
         context: &mut QueryEngineContext<'_>,
-        route: &Route,
     ) -> Result<bool, Error> {
         let shards = if let Ok(shards) = self.backend.shards() {
             shards
@@ -369,7 +363,7 @@ impl QueryEngine {
             && context.in_error()
             && !context.rollback
             && context.client_request.is_executable()
-            && !route.rollback_savepoint()
+            && !context.client_request.route().rollback_savepoint()
         {
             let error = ErrorResponse::in_failed_transaction();
 

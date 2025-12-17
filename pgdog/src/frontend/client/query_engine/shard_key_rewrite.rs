@@ -48,12 +48,14 @@ impl QueryEngine {
             }
         };
 
+        context.client_request.route = Some(plan.route().clone());
+
         let Some(target_shard) = plan.new_shard() else {
-            return self.execute(context, plan.route()).await;
+            return self.execute(context).await;
         };
 
         if source_shard == target_shard {
-            return self.execute(context, plan.route()).await;
+            return self.execute(context).await;
         }
 
         if context.in_transaction() {

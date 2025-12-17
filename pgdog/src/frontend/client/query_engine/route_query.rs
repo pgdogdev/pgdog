@@ -46,7 +46,7 @@ impl QueryEngine {
         }
     }
 
-    pub(super) async fn route_transaction(
+    pub(super) async fn route_query(
         &mut self,
         context: &mut QueryEngineContext<'_>,
     ) -> Result<bool, Error> {

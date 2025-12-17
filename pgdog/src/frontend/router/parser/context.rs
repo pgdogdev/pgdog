@@ -2,6 +2,7 @@
 
 use std::os::raw::c_void;
 
+use pgdog_config::Role;
 use pgdog_plugin::pg_query::protobuf::ParseResult;
 use pgdog_plugin::{PdParameters, PdRouterContext, PdStatement};
 
@@ -70,6 +71,7 @@ impl<'a> QueryParserContext<'a> {
             self.router_context.transaction(),
             Some(TransactionType::ReadWrite)
         ) && self.rw_conservative()
+            || self.router_context.parameter_hints.compute_role() == Some(Role::Primary)
     }
 
     /// Are we using the conservative read/write separation strategy?

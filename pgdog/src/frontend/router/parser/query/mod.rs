@@ -55,8 +55,6 @@ use tracing::{debug, trace};
 ///
 #[derive(Debug)]
 pub struct QueryParser {
-    // The statement is executed inside a transaction.
-    in_transaction: bool,
     // No matter what query is executed, we'll send it to the primary.
     write_override: bool,
     // Currently calculated shard.
@@ -70,7 +68,6 @@ pub struct QueryParser {
 impl Default for QueryParser {
     fn default() -> Self {
         Self {
-            in_transaction: false,
             write_override: false,
             shard: ShardsWithPriority::default(),
             plugin_output: PluginOutput::default(),
@@ -112,11 +109,6 @@ impl QueryParser {
         }
     }
 
-    /// Indicates we are in a transaction.
-    pub fn in_transaction(&self) -> bool {
-        self.in_transaction
-    }
-
     /// Parse a query and return a command.
     pub fn parse(&mut self, context: RouterContext) -> Result<Command, Error> {
         let mut qp_context = QueryParserContext::new(context);
@@ -128,7 +120,6 @@ impl QueryParser {
             .compute_shard(&mut self.shard, &qp_context.sharding_schema)?;
 
         let mut command = if qp_context.query().is_ok() {
-            self.in_transaction = qp_context.router_context.in_transaction();
             self.write_override = qp_context.write_override();
 
             self.query(&mut qp_context)?
@@ -157,7 +148,11 @@ impl QueryParser {
             _ => (),
         }
 
-        debug!("query router decision: {:#?}", command);
+        debug!(
+            "query router decision: {:#?} (shard: {:#?})",
+            command,
+            self.shard.peek(),
+        );
 
         self.attach_explain(&mut command);
 

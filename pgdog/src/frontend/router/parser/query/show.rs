@@ -49,8 +49,8 @@ mod test_show {
         ast.cached = false;
         let mut buffer = ClientRequest::from(vec![Query::new(query).into()]);
         buffer.ast = Some(ast);
-        let context =
-            RouterContext::new(&buffer, &c, &Parameters::default(), None, Sticky::new()).unwrap();
+        let params = Parameters::default();
+        let context = RouterContext::new(&buffer, &c, &params, None, Sticky::new()).unwrap();
 
         let first = parser.parse(context).unwrap().clone();
         let first_shard = first.route().shard();
@@ -67,8 +67,8 @@ mod test_show {
         ast.cached = false;
         let mut buffer = ClientRequest::from(vec![Query::new(query).into()]);
         buffer.ast = Some(ast);
-        let context =
-            RouterContext::new(&buffer, &c, &Parameters::default(), None, Sticky::new()).unwrap();
+        let params = Parameters::default();
+        let context = RouterContext::new(&buffer, &c, &params, None, Sticky::new()).unwrap();
 
         let second = parser.parse(context).unwrap().clone();
         let second_shard = second.route().shard();

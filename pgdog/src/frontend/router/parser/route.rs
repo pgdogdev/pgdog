@@ -287,21 +287,27 @@ impl Route {
     }
 }
 
+/// Shard source.
+///
+/// N.B. Ordering here matters. Don't move these around,
+/// unless you're changing the algorithm.
+///
+/// These are ranked from least priority to highest
+/// priority.
 #[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd)]
 pub enum ShardSource {
-    SearchPath(String),
+    RoundRobin,
     Table,
+    SearchPath(String),
     Set,
     Comment,
     Override,
-    RoundRobin,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd)]
 pub struct ShardWithPriority {
-    priority: u8,
-    shard: Shard,
     source: ShardSource,
+    shard: Shard,
 }
 
 impl ShardWithPriority {
@@ -309,7 +315,6 @@ impl ShardWithPriority {
     pub fn new_comment(shard: Shard) -> Self {
         Self {
             shard,
-            priority: 0,
             source: ShardSource::Comment,
         }
     }
@@ -318,7 +323,6 @@ impl ShardWithPriority {
     pub fn new_table(shard: Shard) -> Self {
         Self {
             shard,
-            priority: 5,
             source: ShardSource::Table,
         }
     }
@@ -327,7 +331,6 @@ impl ShardWithPriority {
     pub fn new_override(shard: Shard) -> Self {
         Self {
             shard,
-            priority: 0,
             source: ShardSource::Override,
         }
     }
@@ -336,7 +339,6 @@ impl ShardWithPriority {
     pub fn new_rr(shard: Shard) -> Self {
         Self {
             shard,
-            priority: 6,
             source: ShardSource::RoundRobin,
         }
     }
@@ -350,7 +352,6 @@ impl ShardWithPriority {
     pub fn new_set(shard: Shard) -> Self {
         Self {
             shard,
-            priority: 1,
             source: ShardSource::Set,
         }
     }
@@ -359,7 +360,6 @@ impl ShardWithPriority {
     pub fn new_search_path(shard: Shard, schema: &str) -> Self {
         Self {
             shard,
-            priority: 4,
             source: ShardSource::SearchPath(schema.to_string()),
         }
     }
@@ -370,17 +370,6 @@ impl Deref for ShardWithPriority {
 
     fn deref(&self) -> &Self::Target {
         &self.shard
-    }
-}
-
-impl PartialOrd for ShardWithPriority {
-    /// Order by priority in ascending order.
-    ///
-    /// 0 = highest priority (first)
-    /// 9 = lowest priority (last)
-    ///
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        other.priority.partial_cmp(&self.priority)
     }
 }
 
@@ -410,7 +399,6 @@ impl ShardsWithPriority {
         lazy_static! {
             static ref DEFAULT_SHARD: ShardWithPriority = ShardWithPriority {
                 shard: Shard::All,
-                priority: 0,
                 source: ShardSource::Override,
             };
         }
@@ -424,5 +412,69 @@ impl ShardsWithPriority {
             .peek()
             .map(|shard| matches!(shard.source, ShardSource::SearchPath(_)))
             .unwrap_or_default()
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_shard_ord() {
+        assert!(Shard::Direct(0) < Shard::All);
+        assert!(Shard::Multi(vec![]) < Shard::All);
+    }
+
+    #[test]
+    fn test_source_ord() {
+        assert!(ShardSource::RoundRobin < ShardSource::Table);
+        assert!(ShardSource::Table < ShardSource::SearchPath(String::new()));
+        assert!(ShardSource::SearchPath(String::new()) < ShardSource::Set);
+        assert!(ShardSource::Set < ShardSource::Comment);
+        assert!(ShardSource::Comment < ShardSource::Override);
+    }
+
+    #[test]
+    fn test_shard_with_priority_ord() {
+        let shard = Shard::Direct(0);
+
+        assert!(
+            ShardWithPriority::new_rr(shard.clone()) < ShardWithPriority::new_table(shard.clone())
+        );
+        assert!(
+            ShardWithPriority::new_table(shard.clone())
+                < ShardWithPriority::new_search_path(shard.clone(), "schema")
+        );
+        assert!(
+            ShardWithPriority::new_search_path(shard.clone(), "schema")
+                < ShardWithPriority::new_set(shard.clone())
+        );
+        assert!(
+            ShardWithPriority::new_set(shard.clone())
+                < ShardWithPriority::new_comment(shard.clone())
+        );
+        assert!(
+            ShardWithPriority::new_comment(shard.clone())
+                < ShardWithPriority::new_override(shard.clone())
+        );
+    }
+
+    #[test]
+    fn test_comment_override_set() {
+        let mut shards = ShardsWithPriority::default();
+
+        shards.push(ShardWithPriority::new_set(Shard::Direct(1)));
+        assert_eq!(shards.shard(), &Shard::Direct(1));
+
+        shards.push(ShardWithPriority::new_comment(Shard::Direct(2)));
+        assert_eq!(shards.shard(), &Shard::Direct(2));
+
+        let mut shards = ShardsWithPriority::default();
+
+        shards.push(ShardWithPriority::new_comment(Shard::Direct(3)));
+        assert_eq!(shards.shard(), &Shard::Direct(3));
+
+        shards.push(ShardWithPriority::new_set(Shard::Direct(4)));
+        assert_eq!(shards.shard(), &Shard::Direct(3));
     }
 }

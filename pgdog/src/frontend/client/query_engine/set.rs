@@ -1,4 +1,4 @@
-use crate::net::{parameter::ParameterValue, CommandComplete, Protocol, ReadyForQuery};
+use crate::net::parameter::ParameterValue;
 
 use super::*;
 
@@ -20,28 +20,6 @@ impl QueryEngine {
         }
 
         self.fake_command_response(context, "SET").await?;
-
-        Ok(())
-    }
-
-    pub(crate) async fn set_route(
-        &mut self,
-        context: &mut QueryEngineContext<'_>,
-        route: Route,
-    ) -> Result<(), Error> {
-        self.set_route = Some(route);
-
-        let bytes_sent = context
-            .stream
-            .send_many(&[
-                CommandComplete::from_str("SET").message()?.backend(),
-                ReadyForQuery::in_transaction(context.in_transaction())
-                    .message()?
-                    .backend(),
-            ])
-            .await?;
-
-        self.stats.sent(bytes_sent);
 
         Ok(())
     }

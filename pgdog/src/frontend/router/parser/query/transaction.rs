@@ -30,7 +30,6 @@ impl QueryParser {
                 return Ok(Command::RollbackTransaction { extended })
             }
             TransactionStmtKind::TransStmtBegin | TransactionStmtKind::TransStmtStart => {
-                self.in_transaction = true;
                 let transaction_type = Self::transaction_type(&stmt.options).unwrap_or_default();
                 return Ok(Command::StartTransaction {
                     query: context.query()?.clone(),

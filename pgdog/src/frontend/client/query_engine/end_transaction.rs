@@ -43,7 +43,6 @@ impl QueryEngine {
     pub(super) async fn end_connected(
         &mut self,
         context: &mut QueryEngineContext<'_>,
-        route: &Route,
         rollback: bool,
         extended: bool,
     ) -> Result<(), Error> {
@@ -71,7 +70,7 @@ impl QueryEngine {
 
         // 2pc is used only for writes and is not needed for rollbacks.
         let two_pc = cluster.two_pc_enabled()
-            && route.is_write()
+            && context.client_request.route().is_write()
             && !rollback
             && context.transaction().map(|t| t.write()).unwrap_or(false);
 
@@ -92,7 +91,7 @@ impl QueryEngine {
                 self.notify_buffer.clear();
             }
             context.rollback = rollback;
-            self.execute(context, route).await?;
+            self.execute(context).await?;
         }
 
         Ok(())

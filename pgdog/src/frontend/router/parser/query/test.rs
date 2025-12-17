@@ -7,7 +7,7 @@ use crate::{
     config::{self, config, ConfigAndUsers, RewriteMode},
     net::{
         messages::{parse::Parse, Parameter},
-        Close, Format, Sync,
+        Close, Format, Parameters, Sync,
     },
 };
 use bytes::Bytes;
@@ -63,8 +63,9 @@ fn parse_query(query: &str) -> Command {
     let mut client_request = ClientRequest::from(vec![Query::new(query).into()]);
     client_request.ast = Some(ast);
 
+    let params = Parameters::default();
     let context =
-        RouterContext::new(&client_request, &cluster, None, None, Sticky::new_test()).unwrap();
+        RouterContext::new(&client_request, &cluster, &params, None, Sticky::new_test()).unwrap();
     let command = query_parser.parse(context).unwrap().clone();
     command
 }
@@ -92,9 +93,15 @@ macro_rules! command {
         } else {
             None
         };
-        let context =
-            RouterContext::new(&client_request, &cluster, None, transaction, Sticky::new())
-                .unwrap();
+        let params = Parameters::default();
+        let context = RouterContext::new(
+            &client_request,
+            &cluster,
+            &params,
+            transaction,
+            Sticky::new(),
+        )
+        .unwrap();
         let command = query_parser.parse(context).unwrap().clone();
 
         (command, query_parser)
@@ -141,10 +148,11 @@ macro_rules! query_parser {
             None
         };
 
+        let params = Parameters::default();
         let router_context = RouterContext::new(
             &client_request,
             &cluster,
-            None,
+            &params,
             maybe_transaction,
             Sticky::new(),
         )
@@ -182,9 +190,17 @@ macro_rules! parse {
         .unwrap();
         let mut client_request = ClientRequest::from(vec![parse.into(), bind.into()]);
         client_request.ast = Some(ast);
+        let client_params = Parameters::default();
         let route = QueryParser::default()
             .parse(
-                RouterContext::new(&client_request, &cluster, None, None, Sticky::new()).unwrap(),
+                RouterContext::new(
+                    &client_request,
+                    &cluster,
+                    &client_params,
+                    None,
+                    Sticky::new(),
+                )
+                .unwrap(),
             )
             .unwrap()
             .clone();
@@ -212,8 +228,15 @@ fn parse_with_parameters(query: &str) -> Result<Command, Error> {
     ast.cached = false; // Simple protocol queries are not cached
     let mut client_request: ClientRequest = vec![Query::new(query).into()].into();
     client_request.ast = Some(ast);
-    let router_context =
-        RouterContext::new(&client_request, &cluster, None, None, Sticky::new()).unwrap();
+    let client_params = Parameters::default();
+    let router_context = RouterContext::new(
+        &client_request,
+        &cluster,
+        &client_params,
+        None,
+        Sticky::new(),
+    )
+    .unwrap();
     QueryParser::default().parse(router_context)
 }
 
@@ -233,8 +256,15 @@ fn parse_with_bind(query: &str, params: &[&[u8]]) -> Result<Command, Error> {
     .unwrap();
     let mut client_request: ClientRequest = vec![parse.into(), bind.into()].into();
     client_request.ast = Some(ast);
-    let router_context =
-        RouterContext::new(&client_request, &cluster, None, None, Sticky::new()).unwrap();
+    let client_params = Parameters::default();
+    let router_context = RouterContext::new(
+        &client_request,
+        &cluster,
+        &client_params,
+        None,
+        Sticky::new(),
+    )
+    .unwrap();
 
     QueryParser::default().parse(router_context)
 }
@@ -419,18 +449,16 @@ fn test_set() {
         Command::SetRoute(route) => assert_eq!(route.shard(), &Shard::Direct(1)),
         _ => panic!("not a set route"),
     }
-    let (_, qp) = command!(r#"SET "pgdog.shard" TO 1"#, true);
-    assert!(qp.in_transaction);
+    let (_, _) = command!(r#"SET "pgdog.shard" TO 1"#, true);
 
     let (command, _) = command!(r#"SET "pgdog.sharding_key" TO '11'"#, true);
     match command {
         Command::SetRoute(route) => assert_eq!(route.shard(), &Shard::Direct(1)),
         _ => panic!("not a set route"),
     }
-    let (_, qp) = command!(r#"SET "pgdog.sharding_key" TO '11'"#, true);
-    assert!(qp.in_transaction);
+    let (_, _) = command!(r#"SET "pgdog.sharding_key" TO '11'"#, true);
 
-    for (command, qp) in [
+    for (command, _) in [
         command!("SET TimeZone TO 'UTC'"),
         command!("SET TIME ZONE 'UTC'"),
     ] {
@@ -441,10 +469,9 @@ fn test_set() {
             }
             _ => panic!("not a set"),
         };
-        assert!(!qp.in_transaction);
     }
 
-    let (command, qp) = command!("SET statement_timeout TO 3000");
+    let (command, _) = command!("SET statement_timeout TO 3000");
     match command {
         Command::Set { name, value, .. } => {
             assert_eq!(name, "statement_timeout");
@@ -452,11 +479,10 @@ fn test_set() {
         }
         _ => panic!("not a set"),
     };
-    assert!(!qp.in_transaction);
 
     // TODO: user shouldn't be able to set these.
     // The server will report an error on synchronization.
-    let (command, qp) = command!("SET is_superuser TO true");
+    let (command, _) = command!("SET is_superuser TO true");
     match command {
         Command::Set { name, value, .. } => {
             assert_eq!(name, "is_superuser");
@@ -464,7 +490,6 @@ fn test_set() {
         }
         _ => panic!("not a set"),
     };
-    assert!(!qp.in_transaction);
 
     let (_, mut qp) = command!("BEGIN");
     assert!(qp.write_override);
@@ -495,15 +520,15 @@ fn test_set() {
     let mut buffer: ClientRequest = vec![Query::new(query_str).into()].into();
     buffer.ast = Some(ast);
     let transaction = Some(TransactionType::ReadWrite);
+    let params = Parameters::default();
     let router_context =
-        RouterContext::new(&buffer, &cluster, None, transaction, Sticky::new()).unwrap();
+        RouterContext::new(&buffer, &cluster, &params, transaction, Sticky::new()).unwrap();
     let mut context = QueryParserContext::new(router_context);
 
     for read_only in [true, false] {
         context.read_only = read_only;
         // Overriding context above.
         let mut qp = QueryParser::default();
-        qp.in_transaction = true;
         let route = qp.query(&mut context).unwrap();
 
         match route {
@@ -527,7 +552,6 @@ fn test_transaction() {
         _ => panic!("not a query"),
     };
 
-    assert!(qp.in_transaction);
     assert!(qp.write_override);
 
     let route = query_parser!(qp, Parse::named("test", "SELECT $1"), true);
@@ -545,9 +569,7 @@ fn test_transaction() {
         cluster.clone()
     );
     assert!(matches!(command, Command::StartTransaction { .. }));
-    assert!(qp.in_transaction);
 
-    qp.in_transaction = true;
     let route = query_parser!(
         qp,
         Query::new("SET application_name TO 'test'"),
@@ -585,8 +607,9 @@ fn update_sharding_key_errors_by_default() {
     ast.cached = false;
     let mut client_request: ClientRequest = vec![Query::new(query).into()].into();
     client_request.ast = Some(ast);
+    let params = Parameters::default();
     let router_context =
-        RouterContext::new(&client_request, &cluster, None, None, Sticky::new()).unwrap();
+        RouterContext::new(&client_request, &cluster, &params, None, Sticky::new()).unwrap();
 
     let result = QueryParser::default().parse(router_context);
     assert!(
@@ -608,8 +631,9 @@ fn update_sharding_key_ignore_mode_allows() {
     ast.cached = false;
     let mut client_request: ClientRequest = vec![Query::new(query).into()].into();
     client_request.ast = Some(ast);
+    let params = Parameters::default();
     let router_context =
-        RouterContext::new(&client_request, &cluster, None, None, Sticky::new()).unwrap();
+        RouterContext::new(&client_request, &cluster, &params, None, Sticky::new()).unwrap();
 
     let command = QueryParser::default().parse(router_context).unwrap();
     assert!(matches!(command, Command::Query(_)));
@@ -628,8 +652,9 @@ fn update_sharding_key_rewrite_mode_not_supported() {
     ast.cached = false;
     let mut client_request: ClientRequest = vec![Query::new(query).into()].into();
     client_request.ast = Some(ast);
+    let params = Parameters::default();
     let router_context =
-        RouterContext::new(&client_request, &cluster, None, None, Sticky::new()).unwrap();
+        RouterContext::new(&client_request, &cluster, &params, None, Sticky::new()).unwrap();
 
     let result = QueryParser::default().parse(router_context);
     assert!(
@@ -651,8 +676,9 @@ fn update_sharding_key_rewrite_plan_detected() {
     ast.cached = false;
     let mut client_request: ClientRequest = vec![Query::new(query).into()].into();
     client_request.ast = Some(ast);
+    let params = Parameters::default();
     let router_context =
-        RouterContext::new(&client_request, &cluster, None, None, Sticky::new()).unwrap();
+        RouterContext::new(&client_request, &cluster, &params, None, Sticky::new()).unwrap();
 
     let command = QueryParser::default().parse(router_context).unwrap();
     match command {
@@ -760,9 +786,8 @@ fn test_begin_extended() {
 
 #[test]
 fn test_show_shards() {
-    let (cmd, qp) = command!("SHOW pgdog.shards");
+    let (cmd, _) = command!("SHOW pgdog.shards");
     assert!(matches!(cmd, Command::InternalField { .. }));
-    assert!(!qp.in_transaction);
 }
 
 #[test]
@@ -792,7 +817,6 @@ fn test_cte() {
 fn test_function_begin() {
     let (cmd, mut qp) = command!("BEGIN");
     assert!(matches!(cmd, Command::StartTransaction { .. }));
-    assert!(qp.in_transaction);
     let cluster = Cluster::new_test();
     let mut prep_stmts = PreparedStatements::default();
     let query_str = "SELECT
@@ -815,15 +839,15 @@ WHERE t2.account = (
     let mut buffer: ClientRequest = vec![Query::new(query_str).into()].into();
     buffer.ast = Some(ast);
     let transaction = Some(TransactionType::ReadWrite);
+    let params = Parameters::default();
     let router_context =
-        RouterContext::new(&buffer, &cluster, None, transaction, Sticky::new()).unwrap();
+        RouterContext::new(&buffer, &cluster, &params, transaction, Sticky::new()).unwrap();
     let mut context = QueryParserContext::new(router_context);
     let route = qp.query(&mut context).unwrap();
     match route {
         Command::Query(query) => assert!(query.is_write()),
         _ => panic!("not a select"),
     }
-    assert!(qp.in_transaction);
 }
 
 #[test]
@@ -874,8 +898,9 @@ fn test_close_direct_one_shard() {
 
     let buf: ClientRequest = vec![Close::named("test").into(), Sync.into()].into();
     let transaction = None;
+    let params = Parameters::default();
 
-    let context = RouterContext::new(&buf, &cluster, None, transaction, Sticky::new()).unwrap();
+    let context = RouterContext::new(&buf, &cluster, &params, transaction, Sticky::new()).unwrap();
 
     let cmd = qp.parse(context).unwrap();
 
