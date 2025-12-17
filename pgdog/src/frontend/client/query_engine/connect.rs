@@ -13,8 +13,8 @@ impl QueryEngine {
     ///
     /// - context: Query engine context.
     /// - connect_route: Override which route to use for connecting to backend(s).
-    ///                  Used to connect to all shards for an explicit cross-shard transaction
-    ///                  started with `BEGIN`.
+    ///   Used to connect to all shards for an explicit cross-shard transaction
+    ///   started with `BEGIN`.
     ///
     pub(super) async fn connect(
         &mut self,

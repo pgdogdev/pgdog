@@ -53,7 +53,7 @@ use tracing::{debug, trace};
 /// to store intermediate state or to store external context for the duration
 /// of the parsing.
 ///
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct QueryParser {
     // No matter what query is executed, we'll send it to the primary.
     write_override: bool,
@@ -63,17 +63,6 @@ pub struct QueryParser {
     plugin_output: PluginOutput,
     // Record explain output.
     explain_recorder: Option<ExplainRecorder>,
-}
-
-impl Default for QueryParser {
-    fn default() -> Self {
-        Self {
-            write_override: false,
-            shard: ShardsWithPriority::default(),
-            plugin_output: PluginOutput::default(),
-            explain_recorder: None,
-        }
-    }
 }
 
 impl QueryParser {
@@ -127,25 +116,21 @@ impl QueryParser {
             Command::default()
         };
 
-        match &mut command {
-            Command::Query(route) => {
-                if !matches!(route.shard(), Shard::Direct(_)) && qp_context.shards == 1 {
-                    self.shard
-                        .push(ShardWithPriority::new_override(route.shard().clone()));
-                    route.set_shard_mut(0);
-                }
-
-                route.set_search_path_driven_mut(self.shard.is_search_path());
-
-                if let Some(role) = qp_context.router_context.sticky.role {
-                    match role {
-                        Role::Primary => route.set_read(false),
-                        _ => route.set_read(true),
-                    }
-                }
+        if let Command::Query(route) = &mut command {
+            if !matches!(route.shard(), Shard::Direct(_)) && qp_context.shards == 1 {
+                self.shard
+                    .push(ShardWithPriority::new_override(route.shard().clone()));
+                route.set_shard_mut(0);
             }
 
-            _ => (),
+            route.set_search_path_driven_mut(self.shard.is_search_path());
+
+            if let Some(role) = qp_context.router_context.sticky.role {
+                match role {
+                    Role::Primary => route.set_read(false),
+                    _ => route.set_read(true),
+                }
+            }
         }
 
         debug!(

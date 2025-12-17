@@ -45,7 +45,7 @@ impl ParameterHints<'_> {
             }
         }
         if let Some(ParameterValue::String(val)) = self.pgdog_sharding_key {
-            let ctx = ContextBuilder::infer_from_from_and_config(val.as_str(), &sharding_schema)?
+            let ctx = ContextBuilder::infer_from_from_and_config(val.as_str(), sharding_schema)?
                 .shards(sharding_schema.shards)
                 .build()?;
             let shard = ctx.apply()?;
