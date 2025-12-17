@@ -1,10 +1,12 @@
+use lazy_static::lazy_static;
+
 use super::super::Error;
 use crate::{
     backend::Cluster,
     frontend::{
         client::Sticky, router::parser::Shard, ClientRequest, Command, Router, RouterContext,
     },
-    net::{replication::TupleData, Bind, Parse},
+    net::{replication::TupleData, Bind, Parameters, Parse},
 };
 
 #[derive(Debug)]
@@ -46,10 +48,13 @@ impl<'a> StreamContext<'a> {
 
     /// Construct router context.
     pub fn router_context(&'a mut self) -> Result<RouterContext<'a>, Error> {
+        lazy_static! {
+            static ref PARAMS: Parameters = Parameters::default();
+        }
         Ok(RouterContext::new(
             &self.request,
             self.cluster,
-            None,
+            &PARAMS,
             None,
             Sticky::new(),
         )?)

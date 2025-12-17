@@ -50,7 +50,7 @@ impl QueryParser {
         }
 
         Ok(Command::Query(
-            Route::write(None).set_rollback_savepoint(rollback_savepoint),
+            Route::write(None).with_rollback_savepoint(rollback_savepoint),
         ))
     }
 

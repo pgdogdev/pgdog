@@ -18,6 +18,7 @@ pub mod context;
 pub mod deallocate;
 pub mod discard;
 pub mod end_transaction;
+pub mod fake;
 pub mod hooks;
 pub mod incomplete_requests;
 pub mod internal_values;
@@ -178,7 +179,7 @@ impl QueryEngine {
 
         // Schema-sharding route persists until the end
         // of the transaction.
-        if command.route().is_schema_path_driven() && self.set_route.is_none() {
+        if command.route().is_search_path_driven() && self.set_route.is_none() {
             debug!("search_path route is set for transaction");
             self.set_route = Some(command.route().clone());
         }
@@ -193,8 +194,8 @@ impl QueryEngine {
 
         // Override read/write property based on target_session_attrs.
         match context.sticky.role {
-            Some(Role::Replica) => route.set_read_mut(true),
-            Some(Role::Primary) => route.set_read_mut(false),
+            Some(Role::Replica) => route.set_read(true),
+            Some(Role::Primary) => route.set_read(false),
             _ => (),
         }
 
@@ -267,27 +268,15 @@ impl QueryEngine {
                     .await?
             }
             Command::Unlisten(channel) => self.unlisten(context, &channel.clone()).await?,
-            Command::Set {
-                name,
-                value,
-                route,
-                extended,
-                local,
-            } => {
+            Command::Set { name, value, local } => {
                 let route = route.clone();
+                // FIXME: parameters set in between statements inside a transaction won't
+                // be recorded in the client parameters.
                 if self.backend.connected() {
                     self.execute(context, &route).await?;
                 } else {
-                    let extended = *extended;
-                    self.set(
-                        context,
-                        name.clone(),
-                        value.clone(),
-                        extended,
-                        route,
-                        *local,
-                    )
-                    .await?;
+                    self.set(context, name.clone(), value.clone(), *local)
+                        .await?;
                 }
             }
             Command::SetRoute(route) => {

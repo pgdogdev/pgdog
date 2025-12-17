@@ -8,8 +8,6 @@ impl QueryEngine {
         context: &mut QueryEngineContext<'_>,
         name: String,
         value: ParameterValue,
-        extended: bool,
-        route: Route,
         local: bool,
     ) -> Result<(), Error> {
         if context.in_transaction() {
@@ -21,24 +19,7 @@ impl QueryEngine {
             self.comms.update_params(context.params);
         }
 
-        // TODO: Respond with fake messages.
-        if extended {
-            // Re-enable cross-shard queries for this request.
-            context.cross_shard_disabled = Some(false);
-            self.execute(context, &route).await?;
-        } else {
-            let bytes_sent = context
-                .stream
-                .send_many(&[
-                    CommandComplete::from_str("SET").message()?.backend(),
-                    ReadyForQuery::in_transaction(context.in_transaction())
-                        .message()?
-                        .backend(),
-                ])
-                .await?;
-
-            self.stats.sent(bytes_sent);
-        }
+        self.fake_command_response(context, "SET").await?;
 
         Ok(())
     }

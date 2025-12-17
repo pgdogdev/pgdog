@@ -25,13 +25,13 @@ impl QueryEngine {
         let connected = match self.backend.connect(&request, route).await {
             Ok(_) => {
                 self.stats.connected();
-                self.stats.locked(route.lock_session());
+                self.stats.locked(route.is_lock_session());
                 // This connection will be locked to this client
                 // until they disconnect.
                 //
                 // Used in case the client runs an advisory lock
                 // or another leaky transaction mode abstraction.
-                self.backend.lock(route.lock_session());
+                self.backend.lock(route.is_lock_session());
 
                 if let Ok(addr) = self.backend.addr() {
                     debug!(
@@ -113,12 +113,12 @@ impl QueryEngine {
         let cluster = self.backend.cluster()?;
 
         if cluster.shards().len() == 1 {
-            Ok(Route::write(Shard::Direct(0)).set_read(route.is_read()))
-        } else if route.is_schema_path_driven() {
+            Ok(Route::write(Shard::Direct(0)).with_read(route.is_read()))
+        } else if route.is_search_path_driven() {
             // Schema-based routing will only go to one shard.
             Ok(route.clone())
         } else {
-            Ok(Route::write(Shard::All).set_read(route.is_read()))
+            Ok(Route::write(Shard::All).with_read(route.is_read()))
         }
     }
 }

@@ -48,7 +48,6 @@ use tracing::{debug, trace};
 ///
 /// 1. Which shard it should go to
 /// 2. Is it a read or a write
-/// 3. Does it need to be re-rewritten to something else, e.g. prepared statement.
 ///
 /// It's re-created for each query we process. Struct variables are used
 /// to store intermediate state or to store external context for the duration
@@ -61,7 +60,7 @@ pub struct QueryParser {
     // No matter what query is executed, we'll send it to the primary.
     write_override: bool,
     // Currently calculated shard.
-    shard: Shard,
+    shard: ShardsWithPriority,
     // Plugin read override.
     plugin_output: PluginOutput,
     // Record explain output.
@@ -73,7 +72,7 @@ impl Default for QueryParser {
         Self {
             in_transaction: false,
             write_override: false,
-            shard: Shard::All,
+            shard: ShardsWithPriority::default(),
             plugin_output: PluginOutput::default(),
             explain_recorder: None,
         }
@@ -122,6 +121,12 @@ impl QueryParser {
     pub fn parse(&mut self, context: RouterContext) -> Result<Command, Error> {
         let mut qp_context = QueryParserContext::new(context);
 
+        // Compute shard from any parameters.
+        qp_context
+            .router_context
+            .parameter_hints
+            .compute_shard(&mut self.shard, &qp_context.sharding_schema)?;
+
         let mut command = if qp_context.query().is_ok() {
             self.in_transaction = qp_context.router_context.in_transaction();
             self.write_override = qp_context.write_override();
@@ -132,21 +137,19 @@ impl QueryParser {
         };
 
         match &mut command {
-            Command::Query(route) | Command::Set { route, .. } => {
+            Command::Query(route) => {
                 if !matches!(route.shard(), Shard::Direct(_)) && qp_context.shards == 1 {
+                    self.shard
+                        .push(ShardWithPriority::new_override(route.shard().clone()));
                     route.set_shard_mut(0);
                 }
 
-                // Check search_path and override.
-                if let Some(shard) = self.check_search_path_for_shard(&qp_context)? {
-                    route.set_shard_mut(shard);
-                    route.set_schema_path_driven_mut(true);
-                }
+                route.set_search_path_driven_mut(self.shard.is_search_path());
 
                 if let Some(role) = qp_context.router_context.sticky.role {
                     match role {
-                        Role::Primary => route.set_read_mut(false),
-                        _ => route.set_read_mut(true),
+                        Role::Primary => route.set_read(false),
+                        _ => route.set_read(true),
                     }
                 }
             }
@@ -200,18 +203,21 @@ impl QueryParser {
 
         // Parse hardcoded shard from a query comment.
         if context.router_needed || context.dry_run {
-            self.shard = statement.comment_shard.clone();
+            if let Some(comment_shard) = statement.comment_shard.clone() {
+                self.shard
+                    .push(ShardWithPriority::new_comment(comment_shard));
+            }
+
             let role_override = statement.comment_role;
             if let Some(role) = role_override {
                 self.write_override = role == Role::Primary;
             }
-            if let Some(recorder) = self.recorder_mut() {
-                if !matches!(statement.comment_shard, Shard::All) || role_override.is_some() {
-                    let role_str = role_override.map(|role| match role {
-                        Role::Primary | Role::Auto => "primary",
-                        Role::Replica => "replica",
-                    });
-                    recorder.record_comment_override(statement.comment_shard.clone(), role_str);
+
+            if statement.comment_shard.is_some() || role_override.is_some() {
+                let shard = self.shard.shard().clone();
+
+                if let Some(recorder) = self.recorder_mut() {
+                    recorder.record_comment_override(shard, role_override);
                 }
             }
         }
@@ -227,7 +233,7 @@ impl QueryParser {
                 multi_tenant,
                 context.router_context.cluster.schema(),
                 statement.parse_result(),
-                context.router_context.search_path,
+                context.router_context.parameter_hints.search_path,
             )
             .run()?;
         }
@@ -320,12 +326,15 @@ impl QueryParser {
         if !context.router_context.executable {
             if let Command::Query(ref query) = command {
                 if query.is_cross_shard() && statement.rewrite_plan.insert_split.is_empty() {
-                    let shard = if self.shard == Shard::All {
-                        Shard::Direct(round_robin::next() % context.shards)
-                    } else {
-                        self.shard.clone()
-                    };
-                    return Ok(Command::Query(query.clone().set_shard(shard)));
+                    self.shard.push(ShardWithPriority::new_rr(Shard::Direct(
+                        round_robin::next() % context.shards,
+                    )));
+
+                    // Since this query isn't executable and we decided
+                    // to route it to any shard, we can early return here.
+                    return Ok(Command::Query(
+                        query.clone().with_shard(self.shard.shard().clone()),
+                    ));
                 }
             }
         }
@@ -341,7 +350,7 @@ impl QueryParser {
         )?;
 
         // Overwrite shard using shard we got from a comment, if any.
-        if let Shard::Direct(shard) = self.shard {
+        if let &Shard::Direct(shard) = self.shard.shard() {
             if let Command::Query(ref mut route) = command {
                 route.set_shard_mut(shard);
             }
@@ -351,7 +360,7 @@ impl QueryParser {
         // Plugins override what we calculated above.
         if let Command::Query(ref mut route) = command {
             if let Some(read) = self.plugin_output.read {
-                route.set_read_mut(read);
+                route.set_read(read);
             }
 
             if let Some(ref shard) = self.plugin_output.shard {
@@ -377,7 +386,7 @@ impl QueryParser {
             // Looking through manual queries to see if we have any
             // with the fingerprint.
             //
-            if route.shard().all() {
+            if route.shard().is_all() {
                 let databases = databases();
                 // Only fingerprint the query if some manual queries are configured.
                 // Otherwise, we're wasting time parsing SQL.

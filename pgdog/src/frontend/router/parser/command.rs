@@ -26,8 +26,6 @@ pub enum Command {
     Set {
         name: String,
         value: ParameterValue,
-        extended: bool,
-        route: Route,
         local: bool,
     },
     PreparedStatement(Prepare),

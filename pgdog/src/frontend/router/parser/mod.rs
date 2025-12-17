@@ -59,7 +59,7 @@ pub use rewrite::{
 };
 pub use rewrite_engine::RewriteEngine;
 pub use rewrite_plan::{HelperKind, HelperMapping, RewriteOutput, RewritePlan};
-pub use route::{Route, Shard};
+pub use route::{Route, Shard, ShardWithPriority, ShardsWithPriority};
 pub use schema::Schema;
 pub use sequence::{OwnedSequence, Sequence};
 pub use statement::StatementParser;

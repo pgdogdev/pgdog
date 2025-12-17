@@ -31,9 +31,10 @@ impl QueryParser {
             writes.writes = true;
         }
 
-        if matches!(self.shard, Shard::Direct(_)) {
+        // Early return for any direct-to-shard queries.
+        if self.shard.shard().is_direct() {
             return Ok(Command::Query(
-                Route::read(self.shard.clone()).set_write(writes),
+                Route::read(self.shard.shard().clone()).with_write(writes),
             ));
         }
 
@@ -46,19 +47,23 @@ impl QueryParser {
             self.recorder_mut(),
         )
         .shard()?;
+
         if let Some(shard) = shard {
             shards.insert(shard);
         }
 
         // `SELECT NOW()`, `SELECT 1`, etc.
         if shards.is_empty() && stmt.from_clause.is_empty() {
+            self.shard.push(ShardWithPriority::new_rr(Shard::Direct(
+                round_robin::next() % context.shards,
+            )));
+
             return Ok(Command::Query(
-                Route::read(Some(round_robin::next() % context.shards)).set_write(writes),
+                Route::read(self.shard.shard().clone()).with_write(writes),
             ));
         }
 
         let order_by = Self::select_sort(&stmt.sort_clause, context.router_context.bind);
-
         let from_clause = TablesSource::from(FromClause::new(&stmt.from_clause));
 
         // Shard by vector in ORDER BY clause.
@@ -90,7 +95,15 @@ impl QueryParser {
         let limit = LimitClause::new(stmt, context.router_context.bind).limit_offset()?;
         let distinct = Distinct::new(stmt).distinct()?;
 
-        let mut query = Route::select(shard, order_by, aggregates, limit, distinct);
+        self.shard.push(ShardWithPriority::new_table(shard));
+
+        let mut query = Route::select(
+            self.shard.shard().clone(),
+            order_by,
+            aggregates,
+            limit,
+            distinct,
+        );
 
         // Omnisharded tables check.
         if query.is_all_shards() {
@@ -116,7 +129,10 @@ impl QueryParser {
                     round_robin::next()
                 } % context.shards;
 
-                query.set_shard_mut(shard);
+                self.shard
+                    .push(ShardWithPriority::new_omni(Shard::Direct(shard)));
+
+                query.set_shard_mut(self.shard.shard().clone());
 
                 if let Some(recorder) = self.recorder_mut() {
                     recorder.record_entry(
@@ -136,10 +152,10 @@ impl QueryParser {
 
         // Only rewrite if query is cross-shard.
         if query.is_cross_shard() && context.shards > 1 {
-            query.set_aggregate_rewrite_plan_mut(cached_ast.rewrite_plan.aggregates.clone());
+            query.with_aggregate_rewrite_plan_mut(cached_ast.rewrite_plan.aggregates.clone());
         }
 
-        Ok(Command::Query(query.set_write(writes)))
+        Ok(Command::Query(query.with_write(writes)))
     }
 
     /// Handle the `ORDER BY` clause of a `SELECT` statement.

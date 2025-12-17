@@ -1,4 +1,4 @@
-use super::Error;
+use super::{Error, ParameterHints};
 use crate::{
     backend::Cluster,
     frontend::{
@@ -6,7 +6,7 @@ use crate::{
         router::Ast,
         BufferedQuery, ClientRequest,
     },
-    net::{parameter::ParameterValue, Bind},
+    net::{Bind, Parameters},
 };
 
 #[derive(Debug)]
@@ -18,7 +18,7 @@ pub struct RouterContext<'a> {
     /// Cluster configuration.
     pub cluster: &'a Cluster,
     /// Client parameters, e.g. search_path.
-    pub search_path: Option<&'a ParameterValue>,
+    pub parameter_hints: ParameterHints<'a>,
     /// Client inside transaction,
     pub transaction: Option<TransactionType>,
     /// Currently executing COPY statement.
@@ -39,7 +39,7 @@ impl<'a> RouterContext<'a> {
     pub fn new(
         buffer: &'a ClientRequest,
         cluster: &'a Cluster,
-        search_path: Option<&'a ParameterValue>,
+        params: &'a Parameters,
         transaction: Option<TransactionType>,
         sticky: Sticky,
     ) -> Result<Self, Error> {
@@ -49,7 +49,7 @@ impl<'a> RouterContext<'a> {
 
         Ok(Self {
             bind,
-            search_path,
+            parameter_hints: ParameterHints::from(params),
             cluster,
             transaction,
             copy_mode,

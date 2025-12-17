@@ -22,6 +22,8 @@ static IMMUTABLE_PARAMS: Lazy<Vec<String>> = Lazy::new(|| {
         String::from("client_encoding"),
         String::from("replication"),
         String::from("pgdog.role"),
+        String::from("pgdog.shard"),
+        String::from("pgdog.sharding_key"),
     ])
 });
 
@@ -53,6 +55,7 @@ pub struct MergeResult {
 pub enum ParameterValue {
     String(String),
     Tuple(Vec<String>),
+    Integer(i32),
 }
 
 impl ToBytes for ParameterValue {
@@ -68,6 +71,7 @@ impl ToBytes for ParameterValue {
                     .join(", ".as_bytes());
                 bytes.put(Bytes::from(values));
             }
+            Self::Integer(integer) => bytes.put_slice(integer.to_string().as_bytes()),
         }
         bytes.put_u8(0);
 
@@ -81,6 +85,7 @@ impl MemoryUsage for ParameterValue {
         match self {
             Self::String(v) => v.memory_usage(),
             Self::Tuple(vals) => vals.memory_usage(),
+            Self::Integer(int) => int.memory_usage(),
         }
     }
 }
@@ -113,6 +118,7 @@ impl Display for ParameterValue {
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
+            Self::Integer(int) => write!(f, "{}", int),
         }
     }
 }

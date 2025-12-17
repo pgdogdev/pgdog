@@ -40,7 +40,7 @@ impl<'a> InsertMulti<'a> {
             let context = RouterContext::new(
                 request,
                 cluster,
-                context.params.search_path(),
+                context.params,
                 context.transaction(),
                 context.sticky,
             )?;

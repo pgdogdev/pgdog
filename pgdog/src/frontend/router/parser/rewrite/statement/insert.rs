@@ -173,6 +173,7 @@ impl StatementRewrite<'_> {
             // If this is a named prepared statement, register the split in the global cache
             // and store the assigned name for use in Bind messages.
             let statement_name = if self.prepared {
+                // Name will be assigned by `insert`.
                 let mut parse = Parse::named("", &stmt);
                 self.prepared_statements.insert(&mut parse);
                 Some(parse.name().to_owned())

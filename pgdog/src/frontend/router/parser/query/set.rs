@@ -1,5 +1,3 @@
-use crate::frontend::router::sharding::SchemaSharder;
-
 use super::*;
 
 impl QueryParser {
@@ -15,110 +13,95 @@ impl QueryParser {
         stmt: &VariableSetStmt,
         context: &QueryParserContext,
     ) -> Result<Command, Error> {
-        match stmt.name.as_str() {
-            "pgdog.shard" => {
-                if self.in_transaction {
-                    let node = stmt
-                        .args
-                        .first()
-                        .ok_or(Error::SetShard)?
-                        .node
-                        .as_ref()
-                        .ok_or(Error::SetShard)?;
-                    if let NodeEnum::AConst(AConst {
-                        val: Some(a_const::Val::Ival(Integer { ival })),
-                        ..
-                    }) = node
-                    {
-                        return Ok(Command::SetRoute(
-                            Route::write(Some(*ival as usize)).set_read(context.read_only),
-                        ));
-                    }
-                } else {
-                    return Err(Error::RequiresTransaction);
-                }
-            }
+        let value = Self::parse_set_value(stmt)?;
 
-            "pgdog.sharding_key" => {
-                if self.in_transaction {
-                    let node = stmt
-                        .args
-                        .first()
-                        .ok_or(Error::SetShard)?
-                        .node
-                        .as_ref()
-                        .ok_or(Error::SetShard)?;
-
-                    if let NodeEnum::AConst(AConst {
-                        val: Some(Val::Sval(String { sval })),
-                        ..
-                    }) = node
-                    {
-                        let shard = if context.sharding_schema.shards > 1 {
-                            let ctx = ContextBuilder::infer_from_from_and_config(
-                                sval.as_str(),
-                                &context.sharding_schema,
-                            )?
-                            .shards(context.shards)
-                            .build()?;
-                            ctx.apply()?
-                        } else {
-                            Shard::Direct(0)
-                        };
-                        return Ok(Command::SetRoute(
-                            Route::write(shard).set_read(context.read_only),
-                        ));
-                    }
-                } else {
-                    return Err(Error::RequiresTransaction);
-                }
-            }
-
-            // TODO: Handle SET commands for updating client
-            // params without touching the server.
-            name => {
-                let extended = context.router_context.extended;
-
-                if let Shard::Direct(shard) = self.shard {
-                    return Ok(Command::Query(
-                        Route::write(shard).set_read(context.read_only),
-                    ));
-                }
-
-                let value = Self::parse_set_value(stmt)?;
-
-                if let Some(value) = value {
-                    let route = if name == "search_path" {
-                        let mut sharder = SchemaSharder::default();
-                        sharder.resolve_parameter(&value, &context.sharding_schema.schemas);
-
-                        let shard = sharder.get().map(|(shard, _)| shard).unwrap_or_default();
-                        let mut route = Route::write(shard).set_read(context.read_only);
-                        route.set_schema_path_driven_mut(true);
-                        route
-                    } else {
-                        Route::write(Shard::All).set_read(context.read_only)
-                    };
-
-                    return Ok(Command::Set {
-                        name: name.to_string(),
-                        value,
-                        extended,
-                        route,
-                        local: stmt.is_local,
-                    });
-                }
-            }
+        if let Some(value) = value {
+            return Ok(Command::Set {
+                name: stmt.name.to_string(),
+                value,
+                local: stmt.is_local,
+            });
         }
 
-        let shard = if let Shard::Direct(_) = self.shard {
-            self.shard.clone()
-        } else {
-            Shard::All
-        };
+        // match stmt.name.as_str() {
+        //     "pgdog.shard" => {
+        //         if self.in_transaction {
+        //             let node = stmt
+        //                 .args
+        //                 .first()
+        //                 .ok_or(Error::SetShard)?
+        //                 .node
+        //                 .as_ref()
+        //                 .ok_or(Error::SetShard)?;
+        //             if let NodeEnum::AConst(AConst {
+        //                 val: Some(a_const::Val::Ival(Integer { ival })),
+        //                 ..
+        //             }) = node
+        //             {
+        //                 self.shard
+        //                     .push(ShardWithPriority::new_set(Shard::Direct(*ival as usize)));
+
+        //                 return Ok(Command::SetRoute(
+        //                     Route::write(self.shard.shard().clone()).with_read(context.read_only),
+        //                 ));
+        //             }
+        //         } else {
+        //             return Err(Error::RequiresTransaction);
+        //         }
+        //     }
+
+        //     "pgdog.sharding_key" => {
+        //         if self.in_transaction {
+        //             let node = stmt
+        //                 .args
+        //                 .first()
+        //                 .ok_or(Error::SetShard)?
+        //                 .node
+        //                 .as_ref()
+        //                 .ok_or(Error::SetShard)?;
+
+        //             if let NodeEnum::AConst(AConst {
+        //                 val: Some(Val::Sval(String { sval })),
+        //                 ..
+        //             }) = node
+        //             {
+        //                 let shard = if context.sharding_schema.shards > 1 {
+        //                     let ctx = ContextBuilder::infer_from_from_and_config(
+        //                         sval.as_str(),
+        //                         &context.sharding_schema,
+        //                     )?
+        //                     .shards(context.shards)
+        //                     .build()?;
+        //                     ctx.apply()?
+        //                 } else {
+        //                     Shard::Direct(0)
+        //                 };
+        //                 return Ok(Command::SetRoute(
+        //                     Route::write(shard).with_read(context.read_only),
+        //                 ));
+        //             }
+        //         } else {
+        //             return Err(Error::RequiresTransaction);
+        //         }
+        //     }
+
+        // TODO: Handle SET commands for updating client
+        // params without touching the server.
+        // name => {
+        //     let value = Self::parse_set_value(stmt)?;
+
+        //     if let Some(value) = value {
+        //         return Ok(Command::Set {
+        //             name: name.to_string(),
+        //             value,
+        //             local: stmt.is_local,
+        //         });
+        //     }
+        // }
+        // }
 
         Ok(Command::Query(
-            Route::write(shard).set_read(context.read_only),
+            Route::write(self.shard.shard().clone()).with_read(context.read_only),
         ))
     }
 

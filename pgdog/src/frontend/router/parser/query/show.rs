@@ -16,7 +16,7 @@ impl QueryParser {
             "pgdog.unique_id" => Ok(Command::UniqueId),
             _ => {
                 let shard = Shard::Direct(round_robin::next() % context.shards);
-                let route = Route::write(shard).set_read(context.read_only);
+                let route = Route::write(shard).with_read(context.read_only);
                 Ok(Command::Query(route))
             }
         }
@@ -31,6 +31,7 @@ mod test_show {
     use crate::frontend::router::{Ast, QueryParser};
     use crate::frontend::{BufferedQuery, ClientRequest, PreparedStatements, RouterContext};
     use crate::net::messages::Query;
+    use crate::net::Parameters;
 
     #[test]
     fn show_runs_on_a_direct_shard_round_robin() {
@@ -48,7 +49,8 @@ mod test_show {
         ast.cached = false;
         let mut buffer = ClientRequest::from(vec![Query::new(query).into()]);
         buffer.ast = Some(ast);
-        let context = RouterContext::new(&buffer, &c, None, None, Sticky::new()).unwrap();
+        let context =
+            RouterContext::new(&buffer, &c, &Parameters::default(), None, Sticky::new()).unwrap();
 
         let first = parser.parse(context).unwrap().clone();
         let first_shard = first.route().shard();
@@ -65,7 +67,8 @@ mod test_show {
         ast.cached = false;
         let mut buffer = ClientRequest::from(vec![Query::new(query).into()]);
         buffer.ast = Some(ast);
-        let context = RouterContext::new(&buffer, &c, None, None, Sticky::new()).unwrap();
+        let context =
+            RouterContext::new(&buffer, &c, &Parameters::default(), None, Sticky::new()).unwrap();
 
         let second = parser.parse(context).unwrap().clone();
         let second_shard = second.route().shard();

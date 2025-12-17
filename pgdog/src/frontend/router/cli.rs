@@ -8,7 +8,7 @@ use super::Error;
 use crate::{
     backend::databases::databases,
     frontend::{client::Sticky, router::QueryParser, Command, RouterContext},
-    net::{ProtocolMessage, Query},
+    net::{Parameters, ProtocolMessage, Query},
 };
 
 #[derive(Debug, Clone)]
@@ -48,7 +48,7 @@ impl RouterCli {
             let cmd = qp.parse(RouterContext::new(
                 &req.into(),
                 &cluster,
-                None,
+                &Parameters::default(),
                 None,
                 Sticky::new(),
             )?)?;

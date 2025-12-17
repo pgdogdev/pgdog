@@ -1,5 +1,4 @@
 //! Statement rewriter.
-//!
 
 use pg_query::protobuf::ParseResult;
 use pg_query::Node;
@@ -81,7 +80,6 @@ impl<'a> StatementRewrite<'a> {
         };
 
         // Handle top-level PREPARE/EXECUTE statements.
-
         let prepared_result = self.rewrite_simple_prepared()?;
         if prepared_result.rewritten {
             self.rewritten = true;

@@ -49,6 +49,8 @@ impl SchemaSharder {
                     self.resolve(Some(schema), schemas);
                 }
             }
+
+            _ => (),
         }
     }
 

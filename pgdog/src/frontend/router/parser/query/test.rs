@@ -245,7 +245,7 @@ fn test_insert() {
         "INSERT INTO sharded (id, email) VALUES ($1, $2)",
         ["11".as_bytes(), "test@test.com".as_bytes()]
     );
-    assert_eq!(route.shard(), &Shard::direct(1));
+    assert_eq!(route.shard(), &Shard::new_direct(1));
 }
 
 #[test]
@@ -555,18 +555,10 @@ fn test_transaction() {
         cluster.clone()
     );
     match route {
-        Command::Set {
-            name,
-            value,
-            extended,
-            route,
-            local,
-        } => {
-            assert!(!extended);
+        Command::Set { name, value, local } => {
             assert_eq!(name, "application_name");
             assert_eq!(value.as_str().unwrap(), "test");
             assert!(!cluster.read_only());
-            assert_eq!(route.shard(), &Shard::All);
             assert!(!local);
         }
 
@@ -777,14 +769,14 @@ fn test_show_shards() {
 fn test_write_functions() {
     let route = query!("SELECT pg_advisory_lock($1)");
     assert!(route.is_write());
-    assert!(route.lock_session());
+    assert!(route.is_lock_session());
 }
 
 #[test]
 fn test_write_nolock() {
     let route = query!("SELECT nextval('234')");
     assert!(route.is_write());
-    assert!(!route.lock_session());
+    assert!(!route.is_lock_session());
 }
 
 #[test]

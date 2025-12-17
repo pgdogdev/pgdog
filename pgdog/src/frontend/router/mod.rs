@@ -4,6 +4,7 @@ pub mod cli;
 pub mod context;
 pub mod copy;
 pub mod error;
+pub mod parameter_hints;
 pub mod parser;
 pub mod round_robin;
 pub mod search_path;
@@ -17,6 +18,7 @@ pub use parser::{Ast, Command, QueryParser, Route};
 
 use super::ClientRequest;
 pub use context::RouterContext;
+pub use parameter_hints::ParameterHints;
 pub use search_path::SearchPath;
 pub use sharding::{Lists, Ranges};
 

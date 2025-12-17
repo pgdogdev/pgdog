@@ -30,7 +30,7 @@ pub struct AstInner {
     /// AST stats.
     pub stats: Mutex<Stats>,
     /// Shard.
-    pub comment_shard: Shard,
+    pub comment_shard: Option<Shard>,
     /// Role.
     pub comment_role: Option<Role>,
     /// Rewrite plan.
@@ -46,7 +46,7 @@ impl AstInner {
             ast,
             stats: Mutex::new(Stats::new()),
             comment_role: None,
-            comment_shard: Shard::All,
+            comment_shard: None,
             rewrite_plan: RewritePlan::default(),
             fingerprint: Fingerprint::default(),
         }
@@ -74,7 +74,7 @@ impl Ast {
 
         // Don't rewrite statements that will be
         // sent to a direct shard.
-        let rewrite_plan = if !comment_shard.is_direct() {
+        let rewrite_plan = if comment_shard.is_none() {
             StatementRewrite::new(StatementRewriteContext {
                 stmt: &mut ast.protobuf,
                 extended: query.extended(),
