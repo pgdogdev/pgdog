@@ -15,8 +15,11 @@ impl QueryParser {
             }),
             "pgdog.unique_id" => Ok(Command::UniqueId),
             _ => {
-                let shard = Shard::Direct(round_robin::next() % context.shards);
-                let route = Route::write(shard).with_read(context.read_only);
+                self.shard
+                    .push(ShardWithPriority::new_rr_no_table(Shard::Direct(
+                        round_robin::next() % context.shards,
+                    )));
+                let route = Route::write(self.shard.shard().clone()).with_read(context.read_only);
                 Ok(Command::Query(route))
             }
         }

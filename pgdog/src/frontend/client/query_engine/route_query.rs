@@ -72,11 +72,11 @@ impl QueryEngine {
             context.sticky,
         )?;
         match self.router.query(router_context) {
-            Ok(cmd) => {
+            Ok(command) => {
                 trace!(
                     "routing {:#?} to {:#?}",
                     context.client_request.messages,
-                    cmd
+                    command,
                 );
             }
             Err(err) => {

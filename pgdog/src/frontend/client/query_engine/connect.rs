@@ -22,6 +22,7 @@ impl QueryEngine {
         connect_route: Option<&Route>,
     ) -> Result<bool, Error> {
         if self.backend.connected() {
+            self.debug_connected(context, true);
             return Ok(true);
         }
 
@@ -45,17 +46,7 @@ impl QueryEngine {
                 self.backend
                     .lock(context.client_request.route().is_lock_session());
 
-                if let Ok(addr) = self.backend.addr() {
-                    debug!(
-                        "client paired with [{}] using route [{}] [{:.4}ms]",
-                        addr.into_iter()
-                            .map(|a| a.to_string())
-                            .collect::<Vec<_>>()
-                            .join(","),
-                        context.client_request.route(),
-                        self.stats.wait_time.as_secs_f64() * 1000.0
-                    );
-                }
+                self.debug_connected(context, false);
 
                 let query_timeout = context.timeouts.query_timeout(&self.stats.state);
 
@@ -130,6 +121,25 @@ impl QueryEngine {
             Ok(route.clone())
         } else {
             Ok(Route::write(Shard::All).with_read(route.is_read()))
+        }
+    }
+
+    fn debug_connected(&self, context: &QueryEngineContext<'_>, connected: bool) {
+        if let Ok(addr) = self.backend.addr() {
+            debug!(
+                "{} [{}] using route [{}] [{:.4}ms]",
+                if connected {
+                    "already connected to"
+                } else {
+                    "client paired with"
+                },
+                addr.into_iter()
+                    .map(|a| a.to_string())
+                    .collect::<Vec<_>>()
+                    .join(","),
+                context.client_request.route(),
+                self.stats.wait_time.as_secs_f64() * 1000.0
+            );
         }
     }
 }

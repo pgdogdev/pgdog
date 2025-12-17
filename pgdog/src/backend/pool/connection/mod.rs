@@ -386,7 +386,7 @@ impl Connection {
     }
 
     /// Get connected servers addresses.
-    pub(crate) fn addr(&mut self) -> Result<Vec<&Address>, Error> {
+    pub(crate) fn addr(&self) -> Result<Vec<&Address>, Error> {
         Ok(match self.binding {
             Binding::Direct(Some(ref server)) => vec![server.addr()],
             Binding::MultiShard(ref servers, _) => servers.iter().map(|s| s.addr()).collect(),

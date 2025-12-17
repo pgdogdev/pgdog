@@ -22,6 +22,9 @@ use crate::frontend::{
 };
 use crate::net::messages::Query;
 
+pub mod setup;
+pub mod test_rr;
+
 struct ConfigModeGuard {
     original: ConfigAndUsers,
 }

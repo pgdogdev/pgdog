@@ -54,9 +54,10 @@ impl QueryParser {
 
         // `SELECT NOW()`, `SELECT 1`, etc.
         if shards.is_empty() && stmt.from_clause.is_empty() {
-            self.shard.push(ShardWithPriority::new_rr(Shard::Direct(
-                round_robin::next() % context.shards,
-            )));
+            self.shard
+                .push(ShardWithPriority::new_rr_no_table(Shard::Direct(
+                    round_robin::next() % context.shards,
+                )));
 
             return Ok(Command::Query(
                 Route::read(self.shard.shard().clone()).with_write(writes),
@@ -130,7 +131,7 @@ impl QueryParser {
                 } % context.shards;
 
                 self.shard
-                    .push(ShardWithPriority::new_omni(Shard::Direct(shard)));
+                    .push(ShardWithPriority::new_rr_omni(Shard::Direct(shard)));
 
                 query.set_shard_mut(self.shard.shard().clone());
 

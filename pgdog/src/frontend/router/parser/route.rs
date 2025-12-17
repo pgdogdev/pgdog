@@ -296,12 +296,21 @@ impl Route {
 /// priority.
 #[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd)]
 pub enum ShardSource {
-    RoundRobin,
     Table,
+    RoundRobin(RoundRobinReason),
     SearchPath(String),
     Set,
     Comment,
+    Plugin,
     Override,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd)]
+pub enum RoundRobinReason {
+    PrimaryShardedTableInsert,
+    Omni,
+    NotExecutable,
+    NoTable,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd)]
@@ -316,6 +325,13 @@ impl ShardWithPriority {
         Self {
             shard,
             source: ShardSource::Comment,
+        }
+    }
+
+    pub fn new_plugin(shard: Shard) -> Self {
+        Self {
+            shard,
+            source: ShardSource::Plugin,
         }
     }
 
@@ -335,17 +351,32 @@ impl ShardWithPriority {
         }
     }
 
-    /// New round-robin shard path.
-    pub fn new_rr(shard: Shard) -> Self {
+    pub fn new_rr_omni(shard: Shard) -> Self {
         Self {
             shard,
-            source: ShardSource::RoundRobin,
+            source: ShardSource::RoundRobin(RoundRobinReason::Omni),
         }
     }
 
-    /// New omni/sticky routing.
-    pub fn new_omni(shard: Shard) -> Self {
-        Self::new_rr(shard)
+    pub fn new_rr_not_executable(shard: Shard) -> Self {
+        Self {
+            shard,
+            source: ShardSource::RoundRobin(RoundRobinReason::NotExecutable),
+        }
+    }
+
+    pub fn new_rr_primary_insert(shard: Shard) -> Self {
+        Self {
+            shard,
+            source: ShardSource::RoundRobin(RoundRobinReason::PrimaryShardedTableInsert),
+        }
+    }
+
+    pub fn new_rr_no_table(shard: Shard) -> Self {
+        Self {
+            shard,
+            source: ShardSource::RoundRobin(RoundRobinReason::NoTable),
+        }
     }
 
     /// New SET-based routing.
@@ -362,6 +393,11 @@ impl ShardWithPriority {
             shard,
             source: ShardSource::SearchPath(schema.to_string()),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn source(&self) -> &ShardSource {
+        &self.source
     }
 }
 
@@ -427,7 +463,7 @@ mod test {
 
     #[test]
     fn test_source_ord() {
-        assert!(ShardSource::RoundRobin < ShardSource::Table);
+        assert!(ShardSource::Table < ShardSource::RoundRobin(RoundRobinReason::NotExecutable));
         assert!(ShardSource::Table < ShardSource::SearchPath(String::new()));
         assert!(ShardSource::SearchPath(String::new()) < ShardSource::Set);
         assert!(ShardSource::Set < ShardSource::Comment);
@@ -439,7 +475,8 @@ mod test {
         let shard = Shard::Direct(0);
 
         assert!(
-            ShardWithPriority::new_rr(shard.clone()) < ShardWithPriority::new_table(shard.clone())
+            ShardWithPriority::new_table(shard.clone())
+                < ShardWithPriority::new_rr_omni(shard.clone())
         );
         assert!(
             ShardWithPriority::new_table(shard.clone())
