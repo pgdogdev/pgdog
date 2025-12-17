@@ -1033,7 +1033,9 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
 
 #[cfg(test)]
 mod test {
-    use pgdog_config::{FlexibleType, Mapping, ShardedMapping, ShardedMappingKind, ShardedTable};
+    use pgdog_config::{
+        FlexibleType, Mapping, Rewrite, ShardedMapping, ShardedMappingKind, ShardedTable,
+    };
 
     use crate::backend::ShardedTables;
     use crate::net::messages::{Bind, Parameter};
@@ -1822,6 +1824,7 @@ mod test {
                     all: false,
                 },
             ]),
+            rewrite: Rewrite::default(),
         };
         let raw = pg_query::parse(stmt)
             .unwrap()

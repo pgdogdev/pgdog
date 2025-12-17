@@ -113,6 +113,8 @@ impl StatementRewrite<'_> {
 
 #[cfg(test)]
 mod tests {
+    use pgdog_config::Rewrite;
+
     use super::*;
     use crate::backend::replication::{ShardedSchemas, ShardedTables};
     use crate::backend::ShardingSchema;
@@ -124,6 +126,10 @@ mod tests {
             shards: 1,
             tables: ShardedTables::default(),
             schemas: ShardedSchemas::default(),
+            rewrite: Rewrite {
+                enabled: true,
+                ..Default::default()
+            },
         }
     }
 

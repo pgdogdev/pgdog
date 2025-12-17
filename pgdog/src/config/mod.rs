@@ -295,6 +295,9 @@ pub fn load_test_sharded() {
             ..Default::default()
         },
     ];
+    config.config.rewrite.enabled = true;
+    config.config.rewrite.split_inserts = RewriteMode::Rewrite;
+    config.config.rewrite.shard_key = RewriteMode::Rewrite;
     config.config.general.load_balancing_strategy = LoadBalancingStrategy::RoundRobin;
     config.users.users = vec![User {
         name: "pgdog".into(),

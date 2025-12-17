@@ -1,4 +1,5 @@
 use pg_query::{Node, NodeEnum};
+use pgdog_config::RewriteMode;
 
 use crate::frontend::router::parser::Cache;
 use crate::frontend::router::Ast;
@@ -141,7 +142,7 @@ impl StatementRewrite<'_> {
     ///
     pub(super) fn split_insert(&mut self, plan: &mut RewritePlan) -> Result<(), Error> {
         // Don't rewrite INSERTs in unsharded databases.
-        if self.schema.shards == 1 {
+        if self.schema.shards == 1 || self.schema.rewrite.split_inserts != RewriteMode::Rewrite {
             return Ok(());
         }
 
@@ -290,6 +291,8 @@ impl StatementRewrite<'_> {
 
 #[cfg(test)]
 mod tests {
+    use pgdog_config::Rewrite;
+
     use super::*;
     use crate::backend::replication::{ShardedSchemas, ShardedTables};
     use crate::backend::ShardingSchema;
@@ -301,6 +304,11 @@ mod tests {
             shards: 2,
             tables: ShardedTables::default(),
             schemas: ShardedSchemas::default(),
+            rewrite: Rewrite {
+                enabled: true,
+                split_inserts: RewriteMode::Rewrite,
+                ..Default::default()
+            },
         }
     }
 

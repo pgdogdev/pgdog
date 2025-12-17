@@ -75,6 +75,8 @@ pub struct ShardingSchema {
     pub tables: ShardedTables,
     /// Scemas.
     pub schemas: ShardedSchemas,
+    /// Rewrite config.
+    pub rewrite: Rewrite,
 }
 
 impl ShardingSchema {
@@ -441,6 +443,7 @@ impl Cluster {
             shards: self.shards.len(),
             tables: self.sharded_tables.clone(),
             schemas: self.sharded_schemas.clone(),
+            rewrite: self.rewrite.clone(),
         }
     }
 

@@ -121,6 +121,7 @@ mod tests {
     use crate::config::PreparedStatements as PreparedStatementsLevel;
     use pg_query::parse;
     use pg_query::protobuf::ParseResult;
+    use pgdog_config::Rewrite;
 
     struct TestContext {
         ps: PreparedStatements,
@@ -137,6 +138,10 @@ mod tests {
                     shards: 1,
                     tables: ShardedTables::default(),
                     schemas: ShardedSchemas::default(),
+                    rewrite: Rewrite {
+                        enabled: true,
+                        ..Default::default()
+                    },
                 },
             }
         }
