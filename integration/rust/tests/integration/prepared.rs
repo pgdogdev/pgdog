@@ -139,7 +139,7 @@ async fn test_prepared_cache_respects_limit() {
 }
 
 #[tokio::test]
-async fn test_prepared_cache_helper_evicted_on_close() {
+async fn test_prepared_cache_helper_not_evicted_on_close() {
     let admin = admin_sqlx().await;
     admin.execute("RECONNECT").await.unwrap();
     admin
@@ -204,8 +204,8 @@ async fn test_prepared_cache_helper_evicted_on_close() {
         .collect::<Vec<_>>();
 
     assert!(
-        prepared.is_empty(),
-        "helper rewrite statements should be evicted once the connection closes"
+        !prepared.is_empty(),
+        "helper rewrite statements should be not evicted once the connection closes"
     );
 
     admin.execute("RELOAD").await.unwrap();

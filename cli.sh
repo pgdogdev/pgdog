@@ -23,7 +23,7 @@ function bench_init() {
 }
 
 function psql_cmd() {
-    PGPASSWORD=pgdog psql -h 127.0.0.1 -p 6432 -U pgdog $2
+    PGPASSWORD=pgdog psql -h 127.0.0.1 -p 6432 -U pgdog $1
 }
 
 # Parse command
@@ -32,7 +32,7 @@ case "$1" in
         admin
         ;;
     psql)
-        psql_cmd
+        psql_cmd $2
         ;;
     binit)
         bench_init

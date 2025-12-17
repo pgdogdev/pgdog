@@ -261,10 +261,19 @@ impl GlobalCache {
     ///
     /// Used for preparing this statement on a server connection.
     ///
-    pub fn rewritten(&self, name: &str) -> Option<Parse> {
+    pub fn rewritten_parse(&self, name: &str) -> Option<Parse> {
         self.names
             .get(name)
             .map(|p| p.rewrite.clone().unwrap_or(p.parse.clone()))
+    }
+
+    /// Returns true if this prepared statement has been
+    /// rewritten by the rewrite engine.
+    pub fn is_rewritten(&self, name: &str) -> bool {
+        self.names
+            .get(name)
+            .map(|p| p.rewrite.is_some())
+            .unwrap_or_default()
     }
 
     /// Get the RowDescription message for the prepared statement.

@@ -69,16 +69,23 @@ impl Ast {
         prepared_statements: &mut PreparedStatements,
     ) -> Result<Self, Error> {
         let mut ast = parse(query).map_err(Error::PgQuery)?;
-        let rewrite_plan = StatementRewrite::new(StatementRewriteContext {
-            stmt: &mut ast.protobuf,
-            extended: query.extended(),
-            prepared: query.prepared(),
-            prepared_statements,
-            schema,
-        })
-        .maybe_rewrite()?;
         let (comment_shard, comment_role) = comment(query, schema)?;
         let fingerprint = Fingerprint::new(query).map_err(Error::PgQuery)?;
+
+        // Don't rewrite statements that will be
+        // sent to a direct shard.
+        let rewrite_plan = if !comment_shard.is_direct() {
+            StatementRewrite::new(StatementRewriteContext {
+                stmt: &mut ast.protobuf,
+                extended: query.extended(),
+                prepared: query.prepared(),
+                prepared_statements,
+                schema,
+            })
+            .maybe_rewrite()?
+        } else {
+            RewritePlan::default()
+        };
 
         Ok(Self {
             cached: true,

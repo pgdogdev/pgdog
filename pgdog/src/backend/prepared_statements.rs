@@ -299,7 +299,7 @@ impl PreparedStatements {
     /// Get the Parse message stored in the global prepared statements
     /// cache for this statement.
     pub(crate) fn parse(&self, name: &str) -> Option<Parse> {
-        self.global_cache.read().rewritten(name)
+        self.global_cache.read().rewritten_parse(name)
     }
 
     /// Get the globally stored RowDescription for this prepared statement,
