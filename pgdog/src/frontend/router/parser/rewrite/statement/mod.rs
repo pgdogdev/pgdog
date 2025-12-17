@@ -91,19 +91,17 @@ impl<'a> StatementRewrite<'a> {
         // Track the next parameter number to use
         let mut next_param = plan.params as i32 + 1;
 
-        if self.schema.rewrite.enabled {
-            let extended = self.extended;
-            visitor::visit_and_mutate_nodes(self.stmt, |node| -> Result<Option<Node>, Error> {
-                match Self::rewrite_unique_id(node, extended, &mut next_param)? {
-                    Some(replacement) => {
-                        plan.unique_ids += 1;
-                        self.rewritten = true;
-                        Ok(Some(replacement))
-                    }
-                    None => Ok(None),
+        let extended = self.extended;
+        visitor::visit_and_mutate_nodes(self.stmt, |node| -> Result<Option<Node>, Error> {
+            match Self::rewrite_unique_id(node, extended, &mut next_param)? {
+                Some(replacement) => {
+                    plan.unique_ids += 1;
+                    self.rewritten = true;
+                    Ok(Some(replacement))
                 }
-            })?;
-        }
+                None => Ok(None),
+            }
+        })?;
 
         if self.schema.rewrite.enabled {
             self.rewrite_aggregates(&mut plan)?;
