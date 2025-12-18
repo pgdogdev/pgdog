@@ -4,6 +4,7 @@ use crate::net::{Bind, Parse, ProtocolMessage, Query};
 use crate::unique_id::UniqueId;
 
 use super::insert::build_split_requests;
+use super::update::ShardingKeyUpdate;
 use super::{aggregate::AggregateRewritePlan, Error, InsertSplit};
 
 /// Statement rewrite plan.
@@ -35,6 +36,9 @@ pub struct RewritePlan {
     /// Position in the result where the count(*) or count(name)
     /// functions are added.
     pub(crate) aggregates: AggregateRewritePlan,
+
+    /// Sharding key update plan.
+    pub(crate) sharding_key_update: Option<ShardingKeyUpdate>,
 }
 
 #[derive(Debug, Clone)]

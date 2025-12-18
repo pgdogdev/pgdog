@@ -12,6 +12,7 @@ pub mod insert;
 pub mod plan;
 pub mod simple_prepared;
 pub mod unique_id;
+pub mod update;
 pub mod visitor;
 
 pub use error::Error;
@@ -112,6 +113,8 @@ impl<'a> StatementRewrite<'a> {
         }
 
         self.split_insert(&mut plan)?;
+
+        self.sharding_key_update(&mut plan)?;
 
         Ok(plan)
     }

@@ -91,6 +91,17 @@ impl Cache {
         }
     }
 
+    /// Save a pre-computed AST in the cache.
+    pub(crate) fn save(&self, query: &str, ast: Ast) {
+        let mut guard = self.inner.lock();
+        if guard.queries.contains(query) {
+            return;
+        }
+
+        guard.queries.put(query.to_string(), ast);
+        guard.stats.misses += 1;
+    }
+
     /// Parse a statement by either getting it from cache
     /// or using pg_query parser.
     ///
@@ -118,9 +129,7 @@ impl Cache {
         // Parse query without holding lock.
         let entry = Ast::new(query, schema, prepared_statements)?;
 
-        let mut guard = self.inner.lock();
-        guard.queries.put(query.query().to_string(), entry.clone());
-        guard.stats.misses += 1;
+        self.save(query.query(), entry.clone());
 
         Ok(entry)
     }

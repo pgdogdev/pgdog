@@ -47,7 +47,7 @@ where
     visit_and_mutate_children(inner, callback)
 }
 
-fn visit_and_mutate_children<F, E>(node: &mut NodeEnum, callback: &mut F) -> Result<(), E>
+pub fn visit_and_mutate_children<F, E>(node: &mut NodeEnum, callback: &mut F) -> Result<(), E>
 where
     F: FnMut(&mut Node) -> Result<Option<Node>, E>,
 {
