@@ -103,6 +103,9 @@ impl QueryParser {
         let mut qp_context = QueryParserContext::new(context);
 
         // Clear any previously saved state.
+        // Do this here first (and not at the end)
+        // because we can early return due to syntax error
+        // and that'll keep the state of the parser dirty.
         self.shard.clear();
 
         // Compute shard from any parameters.

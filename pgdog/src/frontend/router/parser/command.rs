@@ -47,7 +47,6 @@ pub enum Command {
         shard: Shard,
     },
     Unlisten(String),
-    SetRoute(Route),
     ShardKeyRewrite(Box<ShardKeyRewritePlan>),
     UniqueId,
 }

@@ -1,8 +1,8 @@
 use tokio::io::AsyncWriteExt;
 
 use crate::net::{
-    BindComplete, CommandComplete, ParameterDescription, ParseComplete, Protocol, ReadyForQuery,
-    RowDescription,
+    BindComplete, CommandComplete, NoData, ParameterDescription, ParseComplete, Protocol,
+    ProtocolMessage, ReadyForQuery, RowDescription,
 };
 
 use super::*;
@@ -17,32 +17,39 @@ impl QueryEngine {
     ) -> Result<(), Error> {
         let mut sent = 0;
         for message in context.client_request.iter() {
-            sent += match message.code() {
-                'P' => context.stream.send(&ParseComplete).await?,
-                'B' => context.stream.send(&BindComplete).await?,
-                'D' => {
-                    context
-                        .stream
-                        .send(&ParameterDescription::default())
-                        .await?
-                        + context.stream.send(&RowDescription::default()).await?
+            sent += match message {
+                ProtocolMessage::Parse(_) => context.stream.send(&ParseComplete).await?,
+                ProtocolMessage::Bind(_) => context.stream.send(&BindComplete).await?,
+                ProtocolMessage::Describe(describe) => {
+                    if describe.is_statement() {
+                        context
+                            .stream
+                            .send(&ParameterDescription::default())
+                            .await?
+                            + context.stream.send(&RowDescription::default()).await?
+                    } else {
+                        context.stream.send(&NoData).await?
+                    }
                 }
-                'E' => context.stream.send(&CommandComplete::new(command)).await?,
-                'S' => {
+                ProtocolMessage::Execute(_) => {
+                    context.stream.send(&CommandComplete::new(command)).await?
+                }
+                ProtocolMessage::Sync(_) => {
                     context
                         .stream
                         .send(&ReadyForQuery::in_transaction(context.in_transaction()))
                         .await?
                 }
-                'Q' => {
+                ProtocolMessage::Query(_) => {
                     context.stream.send(&CommandComplete::new(command)).await?
                         + context
                             .stream
                             .send(&ReadyForQuery::in_transaction(context.in_transaction()))
                             .await?
                 }
+
                 _ => 0,
-            };
+            }
         }
         context.stream.flush().await?;
         self.stats.sent(sent);

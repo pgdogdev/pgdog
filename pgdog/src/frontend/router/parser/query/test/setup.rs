@@ -8,6 +8,8 @@ use crate::{
     net::{Parameters, ProtocolMessage},
 };
 
+pub(super) use crate::net::*;
+
 pub(crate) struct QueryParserTest {
     cluster: Cluster,
     params: Parameters,

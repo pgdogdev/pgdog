@@ -1,9 +1,6 @@
-use crate::{
-    frontend::router::parser::{
-        route::{RoundRobinReason, ShardSource},
-        Shard,
-    },
-    net::{Bind, Describe, Execute, Flush, Parse, Sync},
+use crate::frontend::router::parser::{
+    route::{RoundRobinReason, ShardSource},
+    Shard,
 };
 
 use super::setup::*;
