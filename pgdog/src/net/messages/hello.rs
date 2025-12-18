@@ -54,7 +54,10 @@ impl Startup {
 
                     let value = c_string(stream).await?;
 
-                    if name == "options" {
+                    if name == "search_path" {
+                        let value = search_path(&value);
+                        params.insert(name, value);
+                    } else if name == "options" {
                         let kvs = value.split("-c");
                         for kv in kvs {
                             let mut nvs = kv.split("=");

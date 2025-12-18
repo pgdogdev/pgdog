@@ -1,4 +1,5 @@
-use crate::frontend::router::parser::Shard;
+use crate::frontend::router::parser::{route::ShardSource, Shard};
+use crate::net::parameter::ParameterValue;
 
 use super::setup::{QueryParserTest, *};
 
@@ -272,4 +273,20 @@ fn test_schema_sharding_priority_on_delete() {
     .into()]);
 
     assert_eq!(command.route().shard(), &Shard::Direct(0));
+}
+
+// --- SET commands with schema sharding via search_path ---
+
+#[test]
+fn test_set_routes_to_shard_from_search_path() {
+    let mut test =
+        QueryParserTest::new().with_param("search_path", ParameterValue::String("shard_0".into()));
+
+    let command = test.execute(vec![Query::new("SET statement_timeout TO 1000").into()]);
+
+    assert_eq!(command.route().shard(), &Shard::Direct(0));
+    assert_eq!(
+        command.route().shard_with_priority().source(),
+        &ShardSource::SearchPath("shard_0".into())
+    );
 }
