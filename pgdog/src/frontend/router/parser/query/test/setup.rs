@@ -11,7 +11,7 @@ use crate::{
         },
         ClientRequest, Command, PreparedStatements, RouterContext,
     },
-    net::{Parameters, ProtocolMessage},
+    net::{parameter::ParameterValue, Parameters, ProtocolMessage},
 };
 
 pub(super) use crate::net::*;
@@ -93,6 +93,16 @@ impl QueryParserTest {
         config::set(updated).unwrap();
         // Recreate cluster with the new config
         self.cluster = Cluster::new_test();
+        self
+    }
+
+    /// Set a parameter value.
+    pub(crate) fn with_param(
+        mut self,
+        name: impl ToString,
+        value: impl Into<ParameterValue>,
+    ) -> Self {
+        self.params.insert(name, value);
         self
     }
 

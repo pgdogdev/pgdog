@@ -34,6 +34,7 @@ pub mod test_functions;
 pub mod test_rewrite;
 pub mod test_rr;
 pub mod test_schema_sharding;
+pub mod test_search_path;
 pub mod test_select;
 pub mod test_set;
 pub mod test_sharding;
