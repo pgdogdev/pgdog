@@ -679,4 +679,19 @@ mod test {
     fn test_empty_parameter_value() {
         assert_eq!(ParameterValue::String("".into()).to_string(), "''");
     }
+
+    #[test]
+    fn test_clear_resets_hash() {
+        let mut params = Parameters::default();
+        params.insert("application_name", "test_app");
+        params.insert("TimeZone", "UTC");
+
+        // Verify params are not identical to empty (hash differs)
+        assert!(!params.identical(&Parameters::default()));
+
+        params.clear();
+
+        // After clear, hash should be reset to match empty Parameters
+        assert!(params.identical(&Parameters::default()));
+    }
 }
