@@ -477,7 +477,7 @@ fn format_literal(value: &str) -> String {
 mod tests {
     use super::*;
     use crate::frontend::router::{
-        parser::{rewrite::Assignment, route::Shard, table::OwnedTable},
+        parser::{rewrite::Assignment, route::Shard, table::OwnedTable, ShardWithPriority},
         Route,
     };
     use crate::{
@@ -681,7 +681,7 @@ mod tests {
                 schema: None,
                 alias: None,
             },
-            Route::write(Shard::Direct(0)),
+            Route::write(ShardWithPriority::new_default_unset(Shard::Direct(0))),
             Some(1),
             update_stmt,
             vec![Assignment::new("id".into(), AssignmentValue::Integer(5))],

@@ -9,7 +9,11 @@ impl QueryParser {
         node: &Option<NodeEnum>,
         context: &mut QueryParserContext<'_>,
     ) -> Result<Command, Error> {
-        let command = Self::shard_ddl(node, &context.sharding_schema)?;
+        let command = Self::shard_ddl(
+            node,
+            &context.sharding_schema,
+            &mut context.shards_calculator,
+        )?;
 
         Ok(command)
     }
@@ -17,6 +21,7 @@ impl QueryParser {
     pub(super) fn shard_ddl(
         node: &Option<NodeEnum>,
         schema: &ShardingSchema,
+        calculator: &mut ShardsWithPriority,
     ) -> Result<Command, Error> {
         let mut shard = Shard::All;
 
@@ -161,7 +166,16 @@ impl QueryParser {
                                             .cloned()
                                             .flatten()
                                         {
-                                            let command = Self::shard_ddl(&node.node, schema)?;
+                                            // Use a fresh calculator for each inner statement
+                                            // to avoid pollution from statements that don't match
+                                            // any DDL pattern (like BEGIN, END, etc.)
+                                            let mut inner_calculator =
+                                                ShardsWithPriority::default();
+                                            let command = Self::shard_ddl(
+                                                &node.node,
+                                                schema,
+                                                &mut inner_calculator,
+                                            )?;
                                             if let Command::Query(query) = command {
                                                 if !query.is_cross_shard() {
                                                     shard = query.shard().clone();
@@ -202,7 +216,9 @@ impl QueryParser {
             _ => (),
         };
 
-        Ok(Command::Query(Route::write(shard)))
+        calculator.push(ShardWithPriority::new_table(shard));
+
+        Ok(Command::Query(Route::write(calculator.shard())))
     }
 
     pub(super) fn shard_ddl_table(
@@ -227,7 +243,10 @@ mod test {
 
     use crate::{
         backend::{replication::ShardedSchemas, ShardingSchema},
-        frontend::router::{parser::Shard, QueryParser},
+        frontend::router::{
+            parser::{Shard, ShardsWithPriority},
+            QueryParser,
+        },
     };
 
     fn test_schema() -> ShardingSchema {
@@ -266,109 +285,125 @@ mod test {
     #[test]
     fn test_create_table_sharded_schema() {
         let root = parse_stmt("CREATE TABLE shard_0.test (id BIGINT)");
-        let command = QueryParser::shard_ddl(&root, &test_schema()).unwrap();
+        let mut calculator = ShardsWithPriority::default();
+        let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::Direct(0));
     }
 
     #[test]
     fn test_create_table_unsharded_schema() {
         let root = parse_stmt("CREATE TABLE unsharded.test (id BIGINT)");
-        let command = QueryParser::shard_ddl(&root, &test_schema()).unwrap();
+        let mut calculator = ShardsWithPriority::default();
+        let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::All);
     }
 
     #[test]
     fn test_create_table_no_schema() {
         let root = parse_stmt("CREATE TABLE test (id BIGINT)");
-        let command = QueryParser::shard_ddl(&root, &test_schema()).unwrap();
+        let mut calculator = ShardsWithPriority::default();
+        let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::All);
     }
 
     #[test]
     fn test_create_sequence_sharded() {
         let root = parse_stmt("CREATE SEQUENCE shard_1.test_seq");
-        let command = QueryParser::shard_ddl(&root, &test_schema()).unwrap();
+        let mut calculator = ShardsWithPriority::default();
+        let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::Direct(1));
     }
 
     #[test]
     fn test_create_sequence_unsharded() {
         let root = parse_stmt("CREATE SEQUENCE public.test_seq");
-        let command = QueryParser::shard_ddl(&root, &test_schema()).unwrap();
+        let mut calculator = ShardsWithPriority::default();
+        let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::All);
     }
 
     #[test]
     fn test_drop_table_sharded() {
         let root = parse_stmt("DROP TABLE shard_0.test");
-        let command = QueryParser::shard_ddl(&root, &test_schema()).unwrap();
+        let mut calculator = ShardsWithPriority::default();
+        let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::Direct(0));
     }
 
     #[test]
     fn test_drop_table_unsharded() {
         let root = parse_stmt("DROP TABLE public.test");
-        let command = QueryParser::shard_ddl(&root, &test_schema()).unwrap();
+        let mut calculator = ShardsWithPriority::default();
+        let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::All);
     }
 
     #[test]
     fn test_drop_index_sharded() {
         let root = parse_stmt("DROP INDEX shard_1.test_idx");
-        let command = QueryParser::shard_ddl(&root, &test_schema()).unwrap();
+        let mut calculator = ShardsWithPriority::default();
+        let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::Direct(1));
     }
 
     #[test]
     fn test_drop_view_sharded() {
         let root = parse_stmt("DROP VIEW shard_0.test_view");
-        let command = QueryParser::shard_ddl(&root, &test_schema()).unwrap();
+        let mut calculator = ShardsWithPriority::default();
+        let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::Direct(0));
     }
 
     #[test]
     fn test_drop_sequence_sharded() {
         let root = parse_stmt("DROP SEQUENCE shard_1.test_seq");
-        let command = QueryParser::shard_ddl(&root, &test_schema()).unwrap();
+        let mut calculator = ShardsWithPriority::default();
+        let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::Direct(1));
     }
 
     #[test]
     fn test_drop_schema_sharded() {
         let root = parse_stmt("DROP SCHEMA shard_0");
-        let command = QueryParser::shard_ddl(&root, &test_schema()).unwrap();
+        let mut calculator = ShardsWithPriority::default();
+        let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::Direct(0));
     }
 
     #[test]
     fn test_drop_schema_unsharded() {
         let root = parse_stmt("DROP SCHEMA public");
-        let command = QueryParser::shard_ddl(&root, &test_schema()).unwrap();
+        let mut calculator = ShardsWithPriority::default();
+        let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::All);
     }
 
     #[test]
     fn test_create_schema_sharded() {
         let root = parse_stmt("CREATE SCHEMA shard_0");
-        let command = QueryParser::shard_ddl(&root, &test_schema()).unwrap();
+        let mut calculator = ShardsWithPriority::default();
+        let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::Direct(0));
     }
 
     #[test]
     fn test_create_schema_unsharded() {
         let root = parse_stmt("CREATE SCHEMA new_schema");
-        let command = QueryParser::shard_ddl(&root, &test_schema()).unwrap();
+        let mut calculator = ShardsWithPriority::default();
+        let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::All);
     }
 
     #[test]
     fn test_create_index_sharded() {
         let root = parse_stmt("CREATE INDEX test_idx ON shard_1.test (id)");
-        let command = QueryParser::shard_ddl(&root, &test_schema()).unwrap();
+        let mut calculator = ShardsWithPriority::default();
+        let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::Direct(1));
 
         let root = parse_stmt("CREATE UNIQUE INDEX test_idx ON shard_1.test (id)");
-        let command = QueryParser::shard_ddl(&root, &test_schema()).unwrap();
+        let mut calculator = ShardsWithPriority::default();
+        let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::Direct(1));
     }
 
@@ -381,49 +416,56 @@ mod test {
          WHEN duplicate_object THEN null;
         END $$;"#,
         );
-        let command = QueryParser::shard_ddl(&root, &test_schema()).unwrap();
+        let mut calculator = ShardsWithPriority::default();
+        let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::Direct(1));
     }
 
     #[test]
     fn test_create_index_unsharded() {
         let root = parse_stmt("CREATE INDEX test_idx ON public.test (id)");
-        let command = QueryParser::shard_ddl(&root, &test_schema()).unwrap();
+        let mut calculator = ShardsWithPriority::default();
+        let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::All);
     }
 
     #[test]
     fn test_create_view_sharded() {
         let root = parse_stmt("CREATE VIEW shard_0.test_view AS SELECT 1");
-        let command = QueryParser::shard_ddl(&root, &test_schema()).unwrap();
+        let mut calculator = ShardsWithPriority::default();
+        let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::Direct(0));
     }
 
     #[test]
     fn test_create_view_unsharded() {
         let root = parse_stmt("CREATE VIEW public.test_view AS SELECT 1");
-        let command = QueryParser::shard_ddl(&root, &test_schema()).unwrap();
+        let mut calculator = ShardsWithPriority::default();
+        let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::All);
     }
 
     #[test]
     fn test_create_table_as_sharded() {
         let root = parse_stmt("CREATE TABLE shard_1.new_table AS SELECT * FROM other");
-        let command = QueryParser::shard_ddl(&root, &test_schema()).unwrap();
+        let mut calculator = ShardsWithPriority::default();
+        let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::Direct(1));
     }
 
     #[test]
     fn test_create_table_as_unsharded() {
         let root = parse_stmt("CREATE TABLE public.new_table AS SELECT * FROM other");
-        let command = QueryParser::shard_ddl(&root, &test_schema()).unwrap();
+        let mut calculator = ShardsWithPriority::default();
+        let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::All);
     }
 
     #[test]
     fn test_lock_table() {
         let root = parse_stmt(r#"LOCK TABLE "shard_1"."__migrations_table""#);
-        let command = QueryParser::shard_ddl(&root, &test_schema()).unwrap();
+        let mut calculator = ShardsWithPriority::default();
+        let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::Direct(1));
     }
 
@@ -432,7 +474,8 @@ mod test {
         let root = parse_stmt(
             "CREATE FUNCTION shard_0.test_func() RETURNS void AS $$ BEGIN END; $$ LANGUAGE plpgsql",
         );
-        let command = QueryParser::shard_ddl(&root, &test_schema()).unwrap();
+        let mut calculator = ShardsWithPriority::default();
+        let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::Direct(0));
     }
 
@@ -441,133 +484,152 @@ mod test {
         let root = parse_stmt(
             "CREATE FUNCTION public.test_func() RETURNS void AS $$ BEGIN END; $$ LANGUAGE plpgsql",
         );
-        let command = QueryParser::shard_ddl(&root, &test_schema()).unwrap();
+        let mut calculator = ShardsWithPriority::default();
+        let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::All);
     }
 
     #[test]
     fn test_create_enum_sharded() {
         let root = parse_stmt("CREATE TYPE shard_1.mood AS ENUM ('sad', 'ok', 'happy')");
-        let command = QueryParser::shard_ddl(&root, &test_schema()).unwrap();
+        let mut calculator = ShardsWithPriority::default();
+        let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::Direct(1));
     }
 
     #[test]
     fn test_create_enum_unsharded() {
         let root = parse_stmt("CREATE TYPE public.mood AS ENUM ('sad', 'ok', 'happy')");
-        let command = QueryParser::shard_ddl(&root, &test_schema()).unwrap();
+        let mut calculator = ShardsWithPriority::default();
+        let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::All);
     }
 
     #[test]
     fn test_alter_owner_sharded() {
         let root = parse_stmt("ALTER TABLE shard_0.test OWNER TO new_owner");
-        let command = QueryParser::shard_ddl(&root, &test_schema()).unwrap();
+        let mut calculator = ShardsWithPriority::default();
+        let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::Direct(0));
     }
 
     #[test]
     fn test_alter_owner_unsharded() {
         let root = parse_stmt("ALTER TABLE public.test OWNER TO new_owner");
-        let command = QueryParser::shard_ddl(&root, &test_schema()).unwrap();
+        let mut calculator = ShardsWithPriority::default();
+        let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::All);
     }
 
     #[test]
     fn test_rename_table_sharded() {
         let root = parse_stmt("ALTER TABLE shard_1.test RENAME TO new_test");
-        let command = QueryParser::shard_ddl(&root, &test_schema()).unwrap();
+        let mut calculator = ShardsWithPriority::default();
+        let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::Direct(1));
     }
 
     #[test]
     fn test_rename_table_unsharded() {
         let root = parse_stmt("ALTER TABLE public.test RENAME TO new_test");
-        let command = QueryParser::shard_ddl(&root, &test_schema()).unwrap();
+        let mut calculator = ShardsWithPriority::default();
+        let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::All);
     }
 
     #[test]
     fn test_alter_table_sharded() {
         let root = parse_stmt("ALTER TABLE shard_0.test ADD COLUMN new_col INT");
-        let command = QueryParser::shard_ddl(&root, &test_schema()).unwrap();
+        let mut calculator = ShardsWithPriority::default();
+        let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::Direct(0));
     }
 
     #[test]
     fn test_alter_table_unsharded() {
         let root = parse_stmt("ALTER TABLE public.test ADD COLUMN new_col INT");
-        let command = QueryParser::shard_ddl(&root, &test_schema()).unwrap();
+        let mut calculator = ShardsWithPriority::default();
+        let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::All);
     }
 
     #[test]
     fn test_alter_sequence_sharded() {
         let root = parse_stmt("ALTER SEQUENCE shard_1.test_seq RESTART WITH 100");
-        let command = QueryParser::shard_ddl(&root, &test_schema()).unwrap();
+        let mut calculator = ShardsWithPriority::default();
+        let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::Direct(1));
     }
 
     #[test]
     fn test_alter_sequence_unsharded() {
         let root = parse_stmt("ALTER SEQUENCE public.test_seq RESTART WITH 100");
-        let command = QueryParser::shard_ddl(&root, &test_schema()).unwrap();
+        let mut calculator = ShardsWithPriority::default();
+        let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::All);
     }
 
     #[test]
     fn test_vacuum_sharded() {
         let root = parse_stmt("VACUUM shard_0.test");
-        let command = QueryParser::shard_ddl(&root, &test_schema()).unwrap();
+        let mut calculator = ShardsWithPriority::default();
+        let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::Direct(0));
     }
 
     #[test]
     fn test_vacuum_unsharded() {
         let root = parse_stmt("VACUUM public.test");
-        let command = QueryParser::shard_ddl(&root, &test_schema()).unwrap();
+        let mut calculator = ShardsWithPriority::default();
+        let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::All);
     }
 
     #[test]
     fn test_vacuum_no_table() {
         let root = parse_stmt("VACUUM");
-        let command = QueryParser::shard_ddl(&root, &test_schema()).unwrap();
+        let mut calculator = ShardsWithPriority::default();
+        let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::All);
     }
 
     #[test]
     fn test_truncate_single_table_sharded() {
         let root = parse_stmt("TRUNCATE shard_0.test");
-        let command = QueryParser::shard_ddl(&root, &test_schema()).unwrap();
+        let mut calculator = ShardsWithPriority::default();
+        let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::Direct(0));
     }
 
     #[test]
     fn test_truncate_single_table_unsharded() {
         let root = parse_stmt("TRUNCATE public.test");
-        let command = QueryParser::shard_ddl(&root, &test_schema()).unwrap();
+        let mut calculator = ShardsWithPriority::default();
+        let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::All);
     }
 
     #[test]
     fn test_truncate_multiple_tables_same_shard() {
         let root = parse_stmt("TRUNCATE shard_0.test1, shard_0.test2");
-        let command = QueryParser::shard_ddl(&root, &test_schema()).unwrap();
+        let mut calculator = ShardsWithPriority::default();
+        let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::Direct(0));
     }
 
     #[test]
     fn test_truncate_cross_shard_error() {
         let root = parse_stmt("TRUNCATE shard_0.test1, shard_1.test2");
-        let result = QueryParser::shard_ddl(&root, &test_schema());
+        let mut calculator = ShardsWithPriority::default();
+        let result = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_unhandled_ddl_defaults_to_all() {
         let root = parse_stmt("COMMENT ON TABLE public.test IS 'test comment'");
-        let command = QueryParser::shard_ddl(&root, &test_schema()).unwrap();
+        let mut calculator = ShardsWithPriority::default();
+        let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::All);
     }
 }

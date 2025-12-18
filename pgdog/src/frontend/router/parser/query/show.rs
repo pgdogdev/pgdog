@@ -6,7 +6,7 @@ impl QueryParser {
     pub(super) fn show(
         &mut self,
         stmt: &VariableShowStmt,
-        context: &QueryParserContext,
+        context: &mut QueryParserContext,
     ) -> Result<Command, Error> {
         match stmt.name.as_str() {
             "pgdog.shards" => Ok(Command::InternalField {
@@ -15,11 +15,13 @@ impl QueryParser {
             }),
             "pgdog.unique_id" => Ok(Command::UniqueId),
             _ => {
-                self.shard
+                context
+                    .shards_calculator
                     .push(ShardWithPriority::new_rr_no_table(Shard::Direct(
                         round_robin::next() % context.shards,
                     )));
-                let route = Route::write(self.shard.shard().clone()).with_read(context.read_only);
+                let route = Route::write(context.shards_calculator.shard().clone())
+                    .with_read(context.read_only);
                 Ok(Command::Query(route))
             }
         }

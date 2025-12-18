@@ -21,7 +21,7 @@ fn test_close_direct_single_shard() {
     let command = test.execute(vec![Close::named("test").into(), Sync.into()]);
 
     match command {
-        Command::Query(route) => assert_eq!(route.shard(), &Shard::Direct(0)),
+        Command::Query(route) => assert_eq!(route.shard(), &Shard::Direct(0), "{:?}", route),
         _ => panic!("expected Query, got {command:?}"),
     }
 }

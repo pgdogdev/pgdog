@@ -1,5 +1,5 @@
 //! Route queries to correct shards.
-use std::collections::HashSet;
+use std::{collections::HashSet, ops::Deref};
 
 use crate::{
     backend::{databases::databases, ShardingSchema},
@@ -57,8 +57,6 @@ use tracing::{debug, trace};
 pub struct QueryParser {
     // No matter what query is executed, we'll send it to the primary.
     write_override: bool,
-    // Currently calculated shard.
-    shard: ShardsWithPriority,
     // Plugin read override.
     plugin_output: PluginOutput,
     // Record explain output.
@@ -100,38 +98,29 @@ impl QueryParser {
 
     /// Parse a query and return a command.
     pub fn parse(&mut self, context: RouterContext) -> Result<Command, Error> {
-        let mut qp_context = QueryParserContext::new(context);
+        let mut context = QueryParserContext::new(context)?;
 
-        // Clear any previously saved state.
-        // Do this here first (and not at the end)
-        // because we can early return due to syntax error
-        // and that'll keep the state of the parser dirty.
-        self.shard.clear();
+        let mut command = if context.query().is_ok() {
+            self.write_override = context.write_override();
 
-        // Compute shard from any parameters.
-        qp_context
-            .router_context
-            .parameter_hints
-            .compute_shard(&mut self.shard, &qp_context.sharding_schema)?;
-
-        let mut command = if qp_context.query().is_ok() {
-            self.write_override = qp_context.write_override();
-
-            self.query(&mut qp_context)?
+            self.query(&mut context)?
         } else {
             Command::default()
         };
 
         if let Command::Query(route) = &mut command {
-            if !matches!(route.shard(), Shard::Direct(_)) && qp_context.shards == 1 {
-                self.shard
-                    .push(ShardWithPriority::new_override(route.shard().clone()));
-                route.set_shard_mut(0);
+            if route.is_cross_shard() && context.shards == 1 {
+                context
+                    .shards_calculator
+                    .push(ShardWithPriority::new_override_only_one_shard(
+                        Shard::Direct(0),
+                    ));
+                route.set_shard_mut(context.shards_calculator.shard());
             }
 
-            route.set_search_path_driven_mut(self.shard.is_search_path());
+            route.set_search_path_driven_mut(context.shards_calculator.is_search_path());
 
-            if let Some(role) = qp_context.router_context.sticky.role {
+            if let Some(role) = context.router_context.sticky.role {
                 match role {
                     Role::Primary => route.set_read(false),
                     _ => route.set_read(true),
@@ -142,7 +131,7 @@ impl QueryParser {
         debug!(
             "query router decision: {:#?} (shard: {:#?})",
             command,
-            self.shard.peek(),
+            context.shards_calculator.peek(),
         );
 
         self.attach_explain(&mut command);
@@ -171,11 +160,15 @@ impl QueryParser {
         if !use_parser {
             // Cluster is read-only and only has one shard.
             if context.read_only {
-                return Ok(Command::Query(Route::read(Shard::Direct(0))));
+                return Ok(Command::Query(Route::read(
+                    ShardWithPriority::new_override_parser_disabled(Shard::Direct(0)),
+                )));
             }
             // Cluster doesn't have replicas and has only one shard.
             if context.write_only {
-                return Ok(Command::Query(Route::write(Shard::Direct(0))));
+                return Ok(Command::Query(Route::write(
+                    ShardWithPriority::new_override_parser_disabled(Shard::Direct(0)),
+                )));
             }
         }
 
@@ -190,7 +183,8 @@ impl QueryParser {
         // Parse hardcoded shard from a query comment.
         if context.router_needed || context.dry_run {
             if let Some(comment_shard) = statement.comment_shard.clone() {
-                self.shard
+                context
+                    .shards_calculator
                     .push(ShardWithPriority::new_comment(comment_shard));
             }
 
@@ -200,10 +194,10 @@ impl QueryParser {
             }
 
             if statement.comment_shard.is_some() || role_override.is_some() {
-                let shard = self.shard.shard().clone();
+                let shard = context.shards_calculator.shard();
 
                 if let Some(recorder) = self.recorder_mut() {
-                    recorder.record_comment_override(shard, role_override);
+                    recorder.record_comment_override(shard.deref().clone(), role_override);
                 }
             }
         }
@@ -235,10 +229,15 @@ impl QueryParser {
         let root = if let Some(root) = root {
             root.stmt.as_ref().ok_or(Error::EmptyQuery)?
         } else {
+            context
+                .shards_calculator
+                .push(ShardWithPriority::new_rr_empty_query(Shard::Direct(
+                    round_robin::next() % context.shards,
+                )));
             // Send empty query to any shard.
-            return Ok(Command::Query(Route::read(Shard::Direct(
-                round_robin::next() % context.shards,
-            ))));
+            return Ok(Command::Query(Route::read(
+                context.shards_calculator.shard(),
+            )));
         };
 
         let mut command = match root.node {
@@ -312,7 +311,8 @@ impl QueryParser {
         if !context.router_context.executable {
             if let Command::Query(ref query) = command {
                 if query.is_cross_shard() && statement.rewrite_plan.insert_split.is_empty() {
-                    self.shard
+                    context
+                        .shards_calculator
                         .push(ShardWithPriority::new_rr_not_executable(Shard::Direct(
                             round_robin::next() % context.shards,
                         )));
@@ -320,7 +320,9 @@ impl QueryParser {
                     // Since this query isn't executable and we decided
                     // to route it to any shard, we can early return here.
                     return Ok(Command::Query(
-                        query.clone().with_shard(self.shard.shard().clone()),
+                        query
+                            .clone()
+                            .with_shard(context.shards_calculator.shard().clone()),
                     ));
                 }
             }
@@ -337,8 +339,9 @@ impl QueryParser {
         )?;
 
         // Set shard on route, if we're ready.
-        if let &Shard::Direct(shard) = self.shard.shard() {
-            if let Command::Query(ref mut route) = command {
+        if let Command::Query(ref mut route) = command {
+            let shard = context.shards_calculator.shard();
+            if shard.is_direct() {
                 route.set_shard_mut(shard);
             }
         }
@@ -351,9 +354,10 @@ impl QueryParser {
             }
 
             if let Some(ref shard) = self.plugin_output.shard {
-                self.shard
+                context
+                    .shards_calculator
                     .push(ShardWithPriority::new_plugin(shard.clone()));
-                route.set_shard_raw_mut(self.shard.shard());
+                route.set_shard_raw_mut(context.shards_calculator.shard());
             }
         }
 
@@ -365,7 +369,12 @@ impl QueryParser {
         //
         if context.shards == 1 && !context.dry_run {
             if let Command::Query(ref mut route) = command {
-                route.set_shard_mut(0);
+                context
+                    .shards_calculator
+                    .push(ShardWithPriority::new_override_only_one_shard(
+                        Shard::Direct(0),
+                    ));
+                route.set_shard_mut(context.shards_calculator.shard());
             }
         }
 
@@ -386,10 +395,10 @@ impl QueryParser {
 
                     // TODO: check routing logic required by config.
                     if manual_route.is_some() {
-                        self.shard.push(ShardWithPriority::new_table(Shard::Direct(
-                            round_robin::next() % context.shards,
-                        )));
-                        route.set_shard_mut(self.shard.shard().clone());
+                        context.shards_calculator.push(ShardWithPriority::new_table(
+                            Shard::Direct(round_robin::next() % context.shards),
+                        ));
+                        route.set_shard_mut(context.shards_calculator.shard().clone());
                     }
                 }
             }
@@ -410,7 +419,7 @@ impl QueryParser {
     }
 
     /// Handle COPY command.
-    fn copy(stmt: &CopyStmt, context: &QueryParserContext) -> Result<Command, Error> {
+    fn copy(stmt: &CopyStmt, context: &mut QueryParserContext) -> Result<Command, Error> {
         // Schema-based routing.
         //
         // We do this here as well because COPY <table> TO STDOUT
@@ -424,17 +433,30 @@ impl QueryParser {
         let table = stmt.relation.as_ref().map(Table::from);
         if let Some(table) = table {
             if let Some(schema) = context.sharding_schema.schemas.get(table.schema()) {
+                let shard: Shard = schema.shard().into();
+                context
+                    .shards_calculator
+                    .push(ShardWithPriority::new_table(shard));
                 if !stmt.is_from {
-                    return Ok(Command::Query(Route::read(schema.shard())));
+                    return Ok(Command::Query(Route::read(
+                        context.shards_calculator.shard(),
+                    )));
                 } else {
-                    return Ok(Command::Query(Route::write(schema.shard())));
+                    return Ok(Command::Query(Route::write(
+                        context.shards_calculator.shard(),
+                    )));
                 }
             }
         }
 
         let parser = CopyParser::new(stmt, context.router_context.cluster)?;
         if !stmt.is_from {
-            Ok(Command::Query(Route::read(Shard::All)))
+            context
+                .shards_calculator
+                .push(ShardWithPriority::new_table(Shard::All));
+            Ok(Command::Query(Route::read(
+                context.shards_calculator.shard(),
+            )))
         } else {
             Ok(Command::Copy(Box::new(parser)))
         }
@@ -450,22 +472,22 @@ impl QueryParser {
     fn insert(
         &mut self,
         stmt: &InsertStmt,
-        context: &QueryParserContext,
+        context: &mut QueryParserContext,
     ) -> Result<Command, Error> {
         let insert = Insert::new(stmt);
-        self.shard.push(ShardWithPriority::new_table(
+        context.shards_calculator.push(ShardWithPriority::new_table(
             insert.shard(&context.sharding_schema, context.router_context.bind)?,
         ));
-        let shard = self.shard.shard().clone();
+        let shard = context.shards_calculator.shard();
 
         if let Some(recorder) = self.recorder_mut() {
-            match &shard {
-                Shard::Direct(_) => {
-                    recorder.record_entry(Some(shard.clone()), "INSERT matched sharding key")
-                }
-                Shard::Multi(_) => {
-                    recorder.record_entry(Some(shard.clone()), "INSERT targeted multiple shards")
-                }
+            match shard.deref() {
+                Shard::Direct(_) => recorder
+                    .record_entry(Some(shard.deref().clone()), "INSERT matched sharding key"),
+                Shard::Multi(_) => recorder.record_entry(
+                    Some(shard.deref().clone()),
+                    "INSERT targeted multiple shards",
+                ),
                 Shard::All => recorder.record_entry(None, "INSERT broadcasted"),
             };
         }

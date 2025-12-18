@@ -540,7 +540,7 @@ fn test_set() {
     let params = Parameters::default();
     let router_context =
         RouterContext::new(&buffer, &cluster, &params, transaction, Sticky::new()).unwrap();
-    let mut context = QueryParserContext::new(router_context);
+    let mut context = QueryParserContext::new(router_context).unwrap();
 
     for read_only in [true, false] {
         context.read_only = read_only;
@@ -859,7 +859,7 @@ WHERE t2.account = (
     let params = Parameters::default();
     let router_context =
         RouterContext::new(&buffer, &cluster, &params, transaction, Sticky::new()).unwrap();
-    let mut context = QueryParserContext::new(router_context);
+    let mut context = QueryParserContext::new(router_context).unwrap();
     let route = qp.query(&mut context).unwrap();
     match route {
         Command::Query(query) => assert!(query.is_write()),

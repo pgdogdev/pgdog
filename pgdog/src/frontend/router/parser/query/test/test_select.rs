@@ -96,7 +96,7 @@ fn test_distinct_on_columns() {
         distinct,
         &DistinctBy::Columns(vec![
             DistinctColumn::Index(0),
-            DistinctColumn::Name(std::string::String::from("email"))
+            DistinctColumn::Name(String::from("email"))
         ])
     );
 }

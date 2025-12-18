@@ -32,9 +32,9 @@ impl QueryParser {
         }
 
         // Early return for any direct-to-shard queries.
-        if self.shard.shard().is_direct() {
+        if context.shards_calculator.shard().is_direct() {
             return Ok(Command::Query(
-                Route::read(self.shard.shard().clone()).with_write(writes),
+                Route::read(context.shards_calculator.shard().clone()).with_write(writes),
             ));
         }
 
@@ -54,13 +54,14 @@ impl QueryParser {
 
         // `SELECT NOW()`, `SELECT 1`, etc.
         if shards.is_empty() && stmt.from_clause.is_empty() {
-            self.shard
+            context
+                .shards_calculator
                 .push(ShardWithPriority::new_rr_no_table(Shard::Direct(
                     round_robin::next() % context.shards,
                 )));
 
             return Ok(Command::Query(
-                Route::read(self.shard.shard().clone()).with_write(writes),
+                Route::read(context.shards_calculator.shard().clone()).with_write(writes),
             ));
         }
 
@@ -96,10 +97,12 @@ impl QueryParser {
         let limit = LimitClause::new(stmt, context.router_context.bind).limit_offset()?;
         let distinct = Distinct::new(stmt).distinct()?;
 
-        self.shard.push(ShardWithPriority::new_table(shard));
+        context
+            .shards_calculator
+            .push(ShardWithPriority::new_table(shard));
 
         let mut query = Route::select(
-            self.shard.shard().clone(),
+            context.shards_calculator.shard().clone(),
             order_by,
             aggregates,
             limit,
@@ -130,10 +133,11 @@ impl QueryParser {
                     round_robin::next()
                 } % context.shards;
 
-                self.shard
+                context
+                    .shards_calculator
                     .push(ShardWithPriority::new_rr_omni(Shard::Direct(shard)));
 
-                query.set_shard_mut(self.shard.shard().clone());
+                query.set_shard_mut(context.shards_calculator.shard().clone());
 
                 if let Some(recorder) = self.recorder_mut() {
                     recorder.record_entry(

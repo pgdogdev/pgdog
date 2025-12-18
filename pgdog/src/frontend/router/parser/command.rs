@@ -54,7 +54,8 @@ pub enum Command {
 impl Command {
     pub fn route(&self) -> &Route {
         lazy_static! {
-            static ref DEFAULT_ROUTE: Route = Route::write(Shard::All);
+            static ref DEFAULT_ROUTE: Route =
+                Route::write(ShardWithPriority::new_default_unset(Shard::All));
         }
 
         match self {
@@ -67,7 +68,9 @@ impl Command {
 
 impl Default for Command {
     fn default() -> Self {
-        Command::Query(Route::write(Shard::All))
+        Command::Query(Route::write(ShardWithPriority::new_default_unset(
+            Shard::All,
+        )))
     }
 }
 
@@ -110,17 +113,19 @@ impl Command {
     pub(crate) fn dry_run(self) -> Self {
         match self {
             Command::Query(mut query) => {
-                query.set_shard_mut(0);
+                query.set_shard_mut(ShardWithPriority::new_override_dry_run(Shard::Direct(0)));
                 Command::Query(query)
             }
 
             Command::ShardKeyRewrite(plan) => {
                 let mut route = plan.route().clone();
-                route.set_shard_mut(0);
+                route.set_shard_mut(ShardWithPriority::new_override_dry_run(Shard::Direct(0)));
                 Command::Query(route)
             }
 
-            Command::Copy(_) => Command::Query(Route::write(Some(0))),
+            Command::Copy(_) => Command::Query(Route::write(
+                ShardWithPriority::new_override_dry_run(Shard::Direct(0)),
+            )),
             _ => self,
         }
     }

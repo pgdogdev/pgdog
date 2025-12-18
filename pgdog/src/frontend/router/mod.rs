@@ -16,6 +16,8 @@ use lazy_static::lazy_static;
 use parser::Shard;
 pub use parser::{Ast, Command, QueryParser, Route};
 
+use crate::frontend::router::parser::ShardWithPriority;
+
 use super::ClientRequest;
 pub use context::RouterContext;
 pub use parameter_hints::ParameterHints;
@@ -76,7 +78,8 @@ impl Router {
     /// Get current route.
     pub fn route(&self) -> &Route {
         lazy_static! {
-            static ref DEFAULT_ROUTE: Route = Route::write(Shard::All);
+            static ref DEFAULT_ROUTE: Route =
+                Route::write(ShardWithPriority::new_default_unset(Shard::All));
         }
 
         match self.command() {

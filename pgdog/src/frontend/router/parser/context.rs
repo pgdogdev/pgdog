@@ -7,6 +7,7 @@ use pgdog_plugin::pg_query::protobuf::ParseResult;
 use pgdog_plugin::{PdParameters, PdRouterContext, PdStatement};
 
 use crate::frontend::client::TransactionType;
+use crate::frontend::router::parser::ShardsWithPriority;
 use crate::net::Bind;
 use crate::{
     backend::ShardingSchema,
@@ -45,16 +46,25 @@ pub struct QueryParserContext<'a> {
     pub(super) expanded_explain: bool,
     /// How to handle sharding-key updates.
     pub(super) shard_key_update_mode: RewriteMode,
+    /// Shards calculator.
+    pub(super) shards_calculator: ShardsWithPriority,
 }
 
 impl<'a> QueryParserContext<'a> {
     /// Create query parser context from router context.
-    pub fn new(router_context: RouterContext<'a>) -> Self {
-        Self {
+    pub fn new(router_context: RouterContext<'a>) -> Result<Self, Error> {
+        let mut shards_calculator = ShardsWithPriority::default();
+        let sharding_schema = router_context.cluster.sharding_schema();
+
+        router_context
+            .parameter_hints
+            .compute_shard(&mut shards_calculator, &sharding_schema)?;
+
+        Ok(Self {
             read_only: router_context.cluster.read_only(),
             write_only: router_context.cluster.write_only(),
             shards: router_context.cluster.shards().len(),
-            sharding_schema: router_context.cluster.sharding_schema(),
+            sharding_schema,
             rw_strategy: router_context.cluster.read_write_strategy(),
             router_needed: router_context.cluster.router_needed(),
             multi_tenant: router_context.cluster.multi_tenant(),
@@ -62,7 +72,8 @@ impl<'a> QueryParserContext<'a> {
             expanded_explain: router_context.cluster.expanded_explain(),
             shard_key_update_mode: router_context.cluster.rewrite().shard_key,
             router_context,
-        }
+            shards_calculator,
+        })
     }
 
     /// Write override enabled?

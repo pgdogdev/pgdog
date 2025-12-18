@@ -4,13 +4,15 @@
 mod tests {
     use crate::{
         backend::{
-            pool::Pool,
-            pool::{connection::binding::Binding, PoolConfig},
+            pool::{connection::binding::Binding, Pool, PoolConfig},
             server::test::test_server,
         },
         frontend::{
             client::query_engine::TwoPcPhase,
-            router::{parser::Shard, Route},
+            router::{
+                parser::{Shard, ShardWithPriority},
+                Route,
+            },
         },
     };
 
@@ -46,7 +48,7 @@ mod tests {
             crate::backend::pool::Guard::new(pool3, server3, now),
         ];
 
-        let route = Route::write(Shard::All);
+        let route = Route::write(ShardWithPriority::new_default_unset(Shard::All));
         let multishard = MultiShard::new(3, &route);
 
         let mut binding = Binding::MultiShard(guards, Box::new(multishard));

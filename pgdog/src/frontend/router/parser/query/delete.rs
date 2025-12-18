@@ -5,7 +5,7 @@ impl QueryParser {
     pub(super) fn delete(
         &mut self,
         stmt: &DeleteStmt,
-        context: &QueryParserContext,
+        context: &mut QueryParserContext,
     ) -> Result<Command, Error> {
         let shard = StatementParser::from_delete(
             stmt,
@@ -33,6 +33,12 @@ impl QueryParser {
             }
         };
 
-        Ok(Command::Query(Route::write(shard)))
+        context
+            .shards_calculator
+            .push(ShardWithPriority::new_table(shard));
+
+        Ok(Command::Query(Route::write(
+            context.shards_calculator.shard(),
+        )))
     }
 }

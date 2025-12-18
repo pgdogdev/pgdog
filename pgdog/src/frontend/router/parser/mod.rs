@@ -23,8 +23,6 @@ pub mod order_by;
 pub mod prepare;
 pub mod query;
 pub mod rewrite;
-pub mod rewrite_engine;
-pub mod rewrite_plan;
 pub mod route;
 pub mod schema;
 pub mod sequence;
@@ -57,8 +55,6 @@ pub use query::QueryParser;
 pub use rewrite::{
     Assignment, AssignmentValue, ShardKeyRewritePlan, StatementRewrite, StatementRewriteContext,
 };
-pub use rewrite_engine::RewriteEngine;
-pub use rewrite_plan::{HelperKind, HelperMapping, RewriteOutput, RewritePlan};
 pub use route::{Route, Shard, ShardWithPriority, ShardsWithPriority};
 pub use schema::Schema;
 pub use sequence::{OwnedSequence, Sequence};

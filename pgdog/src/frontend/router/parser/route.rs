@@ -1,8 +1,4 @@
-use std::{
-    collections::BinaryHeap,
-    fmt::Display,
-    ops::{Deref, DerefMut},
-};
+use std::{fmt::Display, ops::Deref};
 
 use lazy_static::lazy_static;
 
@@ -80,7 +76,7 @@ impl From<Vec<usize>> for Shard {
 /// that should be applied to the response.
 #[derive(Debug, Clone, Default, PartialEq, derive_builder::Builder)]
 pub struct Route {
-    shard: Shard,
+    shard: ShardWithPriority,
     read: bool,
     order_by: Vec<OrderBy>,
     aggregate: Aggregate,
@@ -100,7 +96,7 @@ impl Display for Route {
         write!(
             f,
             "shard={}, role={}",
-            self.shard,
+            self.shard.deref(),
             if self.read { "replica" } else { "primary" }
         )
     }
@@ -109,7 +105,7 @@ impl Display for Route {
 impl Route {
     /// Create new route for a `SELECT` query.
     pub fn select(
-        shard: Shard,
+        shard: ShardWithPriority,
         order_by: Vec<OrderBy>,
         aggregate: Aggregate,
         limit: Limit,
@@ -127,18 +123,18 @@ impl Route {
     }
 
     /// A query that should go to a replica.
-    pub fn read(shard: impl Into<Shard>) -> Self {
+    pub fn read(shard: ShardWithPriority) -> Self {
         Self {
-            shard: shard.into(),
+            shard,
             read: true,
             ..Default::default()
         }
     }
 
     /// A write query.
-    pub fn write(shard: impl Into<Shard>) -> Self {
+    pub fn write(shard: ShardWithPriority) -> Self {
         Self {
-            shard: shard.into(),
+            shard,
             ..Default::default()
         }
     }
@@ -160,15 +156,19 @@ impl Route {
         &self.shard
     }
 
+    pub fn shard_with_priority(&self) -> &ShardWithPriority {
+        &self.shard
+    }
+
     /// Returns true if this query should go to all shards.
     pub fn is_all_shards(&self) -> bool {
-        matches!(self.shard, Shard::All)
+        matches!(*self.shard, Shard::All)
     }
 
     /// Returns true if this query should be sent to multiple
     /// but not all shards.
     pub fn is_multi_shard(&self) -> bool {
-        matches!(self.shard, Shard::Multi(_))
+        matches!(*self.shard, Shard::Multi(_))
     }
 
     /// Returns true if this query should be sent to
@@ -189,11 +189,11 @@ impl Route {
         &mut self.aggregate
     }
 
-    pub fn set_shard_mut(&mut self, shard: impl Into<Shard>) {
-        self.shard = shard.into();
+    pub fn set_shard_mut(&mut self, shard: ShardWithPriority) {
+        self.shard = shard;
     }
 
-    pub fn with_shard(mut self, shard: impl Into<Shard>) -> Self {
+    pub fn with_shard(mut self, shard: ShardWithPriority) -> Self {
         self.set_shard_mut(shard);
         self
     }
@@ -210,8 +210,8 @@ impl Route {
         self.maintenance
     }
 
-    pub fn set_shard_raw_mut(&mut self, shard: &Shard) {
-        self.shard = shard.clone();
+    pub fn set_shard_raw_mut(&mut self, shard: ShardWithPriority) {
+        self.shard = shard;
     }
 
     pub fn should_buffer(&self) -> bool {
@@ -294,15 +294,17 @@ impl Route {
 ///
 /// These are ranked from least priority to highest
 /// priority.
-#[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd)]
+#[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd, Default)]
 pub enum ShardSource {
+    #[default]
+    DefaultUnset,
     Table,
     RoundRobin(RoundRobinReason),
     SearchPath(String),
     Set,
     Comment,
     Plugin,
-    Override,
+    Override(OverrideReason),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd)]
@@ -311,9 +313,19 @@ pub enum RoundRobinReason {
     Omni,
     NotExecutable,
     NoTable,
+    EmptyQuery,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd)]
+pub enum OverrideReason {
+    DryRun,
+    ParserDisabled,
+    Transaction,
+    OnlyOneShard,
+    RewriteUpdate,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd, Default)]
 pub struct ShardWithPriority {
     source: ShardSource,
     shard: Shard,
@@ -344,10 +356,45 @@ impl ShardWithPriority {
     }
 
     /// Create new shard with highest priority.
-    pub fn new_override(shard: Shard) -> Self {
+    pub fn new_override_parser_disabled(shard: Shard) -> Self {
         Self {
             shard,
-            source: ShardSource::Override,
+            source: ShardSource::Override(OverrideReason::ParserDisabled),
+        }
+    }
+
+    pub fn new_override_rewrite_update(shard: Shard) -> Self {
+        Self {
+            shard,
+            source: ShardSource::Override(OverrideReason::RewriteUpdate),
+        }
+    }
+
+    pub fn new_override_dry_run(shard: Shard) -> Self {
+        Self {
+            shard,
+            source: ShardSource::Override(OverrideReason::DryRun),
+        }
+    }
+
+    pub fn new_override_transaction(shard: Shard) -> Self {
+        Self {
+            shard,
+            source: ShardSource::Override(OverrideReason::Transaction),
+        }
+    }
+
+    pub fn new_override_only_one_shard(shard: Shard) -> Self {
+        Self {
+            shard,
+            source: ShardSource::Override(OverrideReason::OnlyOneShard),
+        }
+    }
+
+    pub fn new_default_unset(shard: Shard) -> Self {
+        Self {
+            shard,
+            source: ShardSource::DefaultUnset,
         }
     }
 
@@ -376,6 +423,13 @@ impl ShardWithPriority {
         Self {
             shard,
             source: ShardSource::RoundRobin(RoundRobinReason::NoTable),
+        }
+    }
+
+    pub fn new_rr_empty_query(shard: Shard) -> Self {
+        Self {
+            shard,
+            source: ShardSource::RoundRobin(RoundRobinReason::EmptyQuery),
         }
     }
 
@@ -412,40 +466,39 @@ impl Deref for ShardWithPriority {
 /// Ordered collection of set shards.
 #[derive(Default, Debug, Clone)]
 pub struct ShardsWithPriority {
-    shards: BinaryHeap<ShardWithPriority>,
-}
-
-impl Deref for ShardsWithPriority {
-    type Target = BinaryHeap<ShardWithPriority>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.shards
-    }
-}
-
-impl DerefMut for ShardsWithPriority {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.shards
-    }
+    max: Option<ShardWithPriority>,
 }
 
 impl ShardsWithPriority {
     /// Get currently computed shard.
-    pub fn shard(&self) -> &Shard {
+    pub fn shard(&self) -> ShardWithPriority {
         lazy_static! {
             static ref DEFAULT_SHARD: ShardWithPriority = ShardWithPriority {
                 shard: Shard::All,
-                source: ShardSource::Override,
+                source: ShardSource::DefaultUnset,
             };
         }
 
-        self.shards.peek().unwrap_or(&DEFAULT_SHARD)
+        self.peek().cloned().unwrap_or(DEFAULT_SHARD.clone())
+    }
+
+    pub(crate) fn push(&mut self, shard: ShardWithPriority) {
+        if let Some(ref max) = self.max {
+            if max < &shard {
+                self.max = Some(shard);
+            }
+        } else {
+            self.max = Some(shard);
+        }
+    }
+
+    pub(crate) fn peek(&self) -> Option<&ShardWithPriority> {
+        self.max.as_ref()
     }
 
     /// Schema-path based routing priority is used.
     pub fn is_search_path(&self) -> bool {
-        self.shards
-            .peek()
+        self.peek()
             .map(|shard| matches!(shard.source, ShardSource::SearchPath(_)))
             .unwrap_or_default()
     }
@@ -467,7 +520,7 @@ mod test {
         assert!(ShardSource::Table < ShardSource::SearchPath(String::new()));
         assert!(ShardSource::SearchPath(String::new()) < ShardSource::Set);
         assert!(ShardSource::Set < ShardSource::Comment);
-        assert!(ShardSource::Comment < ShardSource::Override);
+        assert!(ShardSource::Comment < ShardSource::Override(OverrideReason::OnlyOneShard));
     }
 
     #[test]
@@ -492,7 +545,7 @@ mod test {
         );
         assert!(
             ShardWithPriority::new_comment(shard.clone())
-                < ShardWithPriority::new_override(shard.clone())
+                < ShardWithPriority::new_override_dry_run(shard.clone())
         );
     }
 
@@ -501,17 +554,17 @@ mod test {
         let mut shards = ShardsWithPriority::default();
 
         shards.push(ShardWithPriority::new_set(Shard::Direct(1)));
-        assert_eq!(shards.shard(), &Shard::Direct(1));
+        assert_eq!(shards.shard().deref(), &Shard::Direct(1));
 
         shards.push(ShardWithPriority::new_comment(Shard::Direct(2)));
-        assert_eq!(shards.shard(), &Shard::Direct(2));
+        assert_eq!(shards.shard().deref(), &Shard::Direct(2));
 
         let mut shards = ShardsWithPriority::default();
 
         shards.push(ShardWithPriority::new_comment(Shard::Direct(3)));
-        assert_eq!(shards.shard(), &Shard::Direct(3));
+        assert_eq!(shards.shard().deref(), &Shard::Direct(3));
 
         shards.push(ShardWithPriority::new_set(Shard::Direct(4)));
-        assert_eq!(shards.shard(), &Shard::Direct(3));
+        assert_eq!(shards.shard().deref(), &Shard::Direct(3));
     }
 }

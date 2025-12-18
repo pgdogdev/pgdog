@@ -24,7 +24,7 @@ impl QueryParser {
         }
 
         Ok(Command::Query(
-            Route::write(self.shard.shard().clone()).with_read(context.read_only),
+            Route::write(context.shards_calculator.shard().clone()).with_read(context.read_only),
         ))
     }
 

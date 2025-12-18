@@ -26,7 +26,12 @@ impl QueryParser {
 
             _ => {
                 // For other statement types, route to all shards
-                Ok(Command::Query(Route::write(None)))
+                context
+                    .shards_calculator
+                    .push(ShardWithPriority::new_table(Shard::All));
+                Ok(Command::Query(Route::write(
+                    context.shards_calculator.shard(),
+                )))
             }
         };
 

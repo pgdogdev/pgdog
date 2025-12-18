@@ -1,5 +1,7 @@
 use tokio::time::timeout;
 
+use crate::frontend::router::parser::ShardWithPriority;
+
 use super::*;
 
 use tracing::{error, trace};
@@ -115,12 +117,20 @@ impl QueryEngine {
         let cluster = self.backend.cluster()?;
 
         if cluster.shards().len() == 1 {
-            Ok(Route::write(Shard::Direct(0)).with_read(route.is_read()))
+            Ok(
+                Route::write(ShardWithPriority::new_override_transaction(Shard::Direct(
+                    0,
+                )))
+                .with_read(route.is_read()),
+            )
         } else if route.is_search_path_driven() {
             // Schema-based routing will only go to one shard.
             Ok(route.clone())
         } else {
-            Ok(Route::write(Shard::All).with_read(route.is_read()))
+            Ok(
+                Route::write(ShardWithPriority::new_override_transaction(Shard::All))
+                    .with_read(route.is_read()),
+            )
         }
     }
 

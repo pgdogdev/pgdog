@@ -20,7 +20,7 @@ fn test_rr_executable() {
 
     assert!(matches!(command.route().shard(), Shard::Direct(_)));
     assert_eq!(
-        test.parser.shard.peek().unwrap().source(),
+        command.route().shard_with_priority().source(),
         &ShardSource::RoundRobin(RoundRobinReason::NotExecutable)
     );
 
