@@ -239,7 +239,9 @@ impl QueryEngine {
                     .await?
             }
             Command::Unlisten(channel) => self.unlisten(context, &channel.clone()).await?,
-            Command::Set { name, value, local } => {
+            Command::Set {
+                name, value, local, ..
+            } => {
                 // FIXME: parameters set in between statements inside a transaction won't
                 // be recorded in the client parameters.
                 if self.backend.connected() {

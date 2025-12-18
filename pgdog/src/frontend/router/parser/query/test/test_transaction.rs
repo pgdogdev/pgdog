@@ -79,13 +79,22 @@ fn test_set_application_name_in_transaction() {
 
     let command = test.execute(vec![Query::new("SET application_name TO 'test'").into()]);
 
-    match command {
-        Command::Set { name, value, local } => {
+    match command.clone() {
+        Command::Set {
+            name,
+            value,
+            local,
+            route,
+        } => {
             assert_eq!(name, "application_name");
             assert_eq!(value.as_str().unwrap(), "test");
             assert!(!local);
             assert!(!test.cluster().read_only());
+            assert!(route.is_write());
+            assert!(route.shard().is_all());
         }
         _ => panic!("expected Set, got {command:?}"),
     }
+
+    assert!(command.route().shard().is_all());
 }

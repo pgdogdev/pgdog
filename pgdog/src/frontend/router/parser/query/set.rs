@@ -20,6 +20,7 @@ impl QueryParser {
                 name: stmt.name.to_string(),
                 value,
                 local: stmt.is_local,
+                route: Route::write(context.shards_calculator.shard()),
             });
         }
 
