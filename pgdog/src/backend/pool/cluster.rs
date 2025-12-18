@@ -539,11 +539,12 @@ impl Cluster {
 mod test {
     use std::{sync::Arc, time::Duration};
 
-    use pgdog_config::OmnishardedTable;
+    use pgdog_config::{OmnishardedTable, ShardedSchema};
 
     use crate::{
         backend::{
             pool::{Address, Config, PoolConfig, ShardConfig},
+            replication::ShardedSchemas,
             Shard, ShardedTables,
         },
         config::{
@@ -610,6 +611,20 @@ mod test {
                         },
                     ],
                 ),
+                sharded_schemas: ShardedSchemas::new(vec![
+                    ShardedSchema {
+                        database: "pgdog".into(),
+                        name: Some("shard_0".into()),
+                        shard: 0,
+                        ..Default::default()
+                    },
+                    ShardedSchema {
+                        database: "pgdog".into(),
+                        name: Some("shard_1".into()),
+                        shard: 1,
+                        ..Default::default()
+                    },
+                ]),
                 shards,
                 identifier,
                 prepared_statements: config.config.general.prepared_statements,

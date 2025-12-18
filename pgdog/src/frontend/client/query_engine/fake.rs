@@ -1,8 +1,8 @@
 use tokio::io::AsyncWriteExt;
 
 use crate::net::{
-    BindComplete, CommandComplete, NoData, ParameterDescription, ParseComplete, Protocol,
-    ProtocolMessage, ReadyForQuery, RowDescription,
+    BindComplete, CommandComplete, NoData, ParameterDescription, ParseComplete, ProtocolMessage,
+    ReadyForQuery, RowDescription,
 };
 
 use super::*;

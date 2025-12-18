@@ -23,8 +23,23 @@ use crate::frontend::{
 use crate::net::messages::Query;
 
 pub mod setup;
+
+static CONFIG_LOCK: Mutex<()> = Mutex::new(());
+pub mod test_comments;
+pub mod test_ddl;
+pub mod test_delete;
+pub mod test_dml;
+pub mod test_explain;
+pub mod test_functions;
+pub mod test_rewrite;
 pub mod test_rr;
+pub mod test_schema_sharding;
+pub mod test_select;
 pub mod test_set;
+pub mod test_sharding;
+pub mod test_special;
+pub mod test_subqueries;
+pub mod test_transaction;
 
 struct ConfigModeGuard {
     original: ConfigAndUsers,
@@ -47,10 +62,8 @@ impl Drop for ConfigModeGuard {
     }
 }
 
-static CONFIG_MODE_LOCK: Mutex<()> = Mutex::new(());
-
 fn lock_config_mode() -> MutexGuard<'static, ()> {
-    CONFIG_MODE_LOCK
+    CONFIG_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
