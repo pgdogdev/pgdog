@@ -50,6 +50,18 @@ pub enum Error {
 
     #[error("unique id: {0}")]
     UniqueId(#[from] unique_id::Error),
+
+    #[error("parser: {0}")]
+    Parser(#[from] crate::frontend::router::parser::Error),
+
+    #[error("rewrite: {0}")]
+    Rewrite(#[from] crate::frontend::router::parser::rewrite::statement::Error),
+
+    #[error("couldn't determine route for statement")]
+    NoRoute,
+
+    #[error("multi-tuple insert requires multi-shard binding")]
+    MultiShardRequired,
 }
 
 impl Error {

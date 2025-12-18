@@ -1,7 +1,7 @@
 use super::code;
 use super::prelude::*;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ParameterDescription {
     params: Vec<i32>,
 }

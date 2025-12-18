@@ -7,7 +7,7 @@ use super::code;
 use super::prelude::*;
 
 /// Describe (F) message.
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct Describe {
     payload: Bytes,
     original: Option<Bytes>,

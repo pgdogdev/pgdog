@@ -60,7 +60,8 @@ impl Command for ShowQueryCache {
 mod test {
     use crate::{
         backend::ShardingSchema,
-        net::{FromBytes, ToBytes},
+        frontend::{BufferedQuery, PreparedStatements},
+        net::{FromBytes, Parse, ToBytes},
     };
 
     use super::*;
@@ -68,12 +69,16 @@ mod test {
     #[tokio::test]
     async fn test_show_query_cache() {
         let cache = Cache::get();
+        let mut prepared_statements = PreparedStatements::default();
 
         for q in 0..5 {
             cache
-                .parse(
-                    format!("SELECT $1::bigint, {}", q).as_str(),
+                .query(
+                    &BufferedQuery::Prepared(Parse::new_anonymous(
+                        format!("SELECT $1::bigint, {}", q).as_str(),
+                    )),
                     &ShardingSchema::default(),
+                    &mut prepared_statements,
                 )
                 .unwrap();
         }

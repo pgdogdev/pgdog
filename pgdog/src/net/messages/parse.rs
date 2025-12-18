@@ -33,6 +33,7 @@ impl Debug for Parse {
 }
 
 impl Parse {
+    /// Length in bytes of the message.
     pub fn len(&self) -> usize {
         self.name.len() + self.query.len() + self.data_types.len() + 5
     }

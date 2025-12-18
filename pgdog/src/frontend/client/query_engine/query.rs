@@ -1,7 +1,10 @@
 use tokio::time::timeout;
 
 use crate::{
-    frontend::{client::TransactionType, router::parser::explain_trace::ExplainTrace},
+    frontend::{
+        client::TransactionType,
+        router::parser::{explain_trace::ExplainTrace, rewrite::statement::plan::RewriteResult},
+    },
     net::{
         DataRow, FromBytes, Message, Protocol, ProtocolMessage, Query, ReadyForQuery,
         RowDescription, ToBytes, TransactionState,
@@ -18,46 +21,33 @@ impl QueryEngine {
     pub(super) async fn execute(
         &mut self,
         context: &mut QueryEngineContext<'_>,
-        route: &Route,
     ) -> Result<(), Error> {
         // Check that we're not in a transaction error state.
-        if !self.transaction_error_check(context, route).await? {
+        if !self.transaction_error_check(context).await? {
             return Ok(());
         }
 
         // Check if we need to do 2pc automatically
         // for single-statement writes.
-        self.two_pc_check(context, route);
+        self.two_pc_check(context);
 
         // We need to run a query now.
         if context.in_transaction() {
             // Connect to one shard if not sharded or to all shards
             // for a cross-shard tranasction.
-            if !self.connect_transaction(context, route).await? {
+            if !self.connect_transaction(context).await? {
                 return Ok(());
             }
-        } else if !self.connect(context, route).await? {
+        } else if !self.connect(context, None).await? {
             return Ok(());
         }
 
         // Check we can run this query.
-        if !self.cross_shard_check(context, route).await? {
+        if !self.cross_shard_check(context).await? {
             return Ok(());
         }
 
-        if let Some(sql) = route.rewritten_sql() {
-            match context.client_request.rewrite(&[Query::new(sql).into()]) {
-                Ok(()) => (),
-                Err(crate::net::Error::OnlySimpleForRewrites) => {
-                    context.client_request.rewrite_prepared(
-                        sql,
-                        context.prepared_statements,
-                        route.rewrite_plan(),
-                    );
-                }
-                Err(err) => return Err(err.into()),
-            }
-        }
+        self.hooks.after_connected(context, &self.backend)?;
 
         // Set response format.
         for msg in context.client_request.messages.iter() {
@@ -66,38 +56,55 @@ impl QueryEngine {
             }
         }
 
-        self.hooks.after_connected(context, &self.backend)?;
+        match context.rewrite_result.take() {
+            Some(RewriteResult::InsertSplit(requests)) => {
+                multi_step::InsertMulti::from_engine(self, requests)
+                    .execute(context)
+                    .await?;
+            }
 
-        self.backend
-            .handle_client_request(context.client_request, &mut self.router, self.streaming)
-            .await?;
+            Some(RewriteResult::InPlace) | None => {
+                self.backend
+                    .handle_client_request(context.client_request, &mut self.router, self.streaming)
+                    .await?;
 
-        while self.backend.has_more_messages()
-            && !self.backend.copy_mode()
-            && !self.streaming
-            && !self.test_mode
-        {
-            let message = match timeout(
-                context.timeouts.query_timeout(&State::Active),
-                self.backend.read(),
-            )
-            .await
-            {
-                Ok(response) => response?,
-                Err(err) => {
-                    // Close the conn, it could be stuck executing a query
-                    // or dead.
-                    self.backend.force_close();
-                    return Err(err.into());
+                while self.backend.has_more_messages()
+                    && !self.backend.copy_mode()
+                    && !self.streaming
+                    && !self.test_mode.enabled
+                {
+                    let message = self.read_server_message(context).await?;
+                    self.process_server_message(context, message).await?;
                 }
-            };
-            self.server_message(context, message).await?;
+            }
         }
 
         Ok(())
     }
 
-    pub async fn server_message(
+    pub async fn read_server_message(
+        &mut self,
+        context: &mut QueryEngineContext<'_>,
+    ) -> Result<Message, Error> {
+        let message = match timeout(
+            context.timeouts.query_timeout(&State::Active),
+            self.backend.read(),
+        )
+        .await
+        {
+            Ok(response) => response?,
+            Err(err) => {
+                // Close the conn, it could be stuck executing a query
+                // or dead.
+                self.backend.force_close();
+                return Err(err.into());
+            }
+        };
+
+        Ok(message)
+    }
+
+    pub async fn process_server_message(
         &mut self,
         context: &mut QueryEngineContext<'_>,
         message: Message,
@@ -166,9 +173,6 @@ impl QueryEngine {
 
                 TransactionState::Idle => {
                     context.transaction = None;
-                    // This is necessary because we set the route
-                    // explicitly with schema-based sharding.
-                    self.set_route = None;
                 }
 
                 TransactionState::InTrasaction => {
@@ -292,7 +296,6 @@ impl QueryEngine {
     async fn cross_shard_check(
         &mut self,
         context: &mut QueryEngineContext<'_>,
-        route: &Route,
     ) -> Result<bool, Error> {
         // Check for cross-shard queries.
         if context.cross_shard_disabled.is_none() {
@@ -309,9 +312,9 @@ impl QueryEngine {
         debug!("cross-shard queries disabled: {}", cross_shard_disabled,);
 
         if cross_shard_disabled
-            && route.is_cross_shard()
+            && context.client_request.route().is_cross_shard()
             && !context.admin
-            && context.client_request.executable()
+            && context.client_request.is_executable()
         {
             let query = context.client_request.query()?;
             let error = ErrorResponse::cross_shard_disabled(query.as_ref().map(|q| q.query()));
@@ -328,7 +331,7 @@ impl QueryEngine {
         }
     }
 
-    fn two_pc_check(&mut self, context: &mut QueryEngineContext<'_>, route: &Route) {
+    fn two_pc_check(&mut self, context: &mut QueryEngineContext<'_>) {
         let enabled = self
             .backend
             .cluster()
@@ -336,9 +339,9 @@ impl QueryEngine {
             .unwrap_or_default();
 
         if enabled
-            && route.should_2pc()
+            && context.client_request.route().should_2pc()
             && self.begin_stmt.is_none()
-            && context.client_request.executable()
+            && context.client_request.is_executable()
             && !context.in_transaction()
         {
             debug!("[2pc] enabling automatic transaction");
@@ -350,7 +353,6 @@ impl QueryEngine {
     async fn transaction_error_check(
         &mut self,
         context: &mut QueryEngineContext<'_>,
-        route: &Route,
     ) -> Result<bool, Error> {
         let shards = if let Ok(shards) = self.backend.shards() {
             shards
@@ -360,8 +362,8 @@ impl QueryEngine {
         if shards > 1 // This check only matters for cross-shard queries
             && context.in_error()
             && !context.rollback
-            && context.client_request.executable()
-            && !route.rollback_savepoint()
+            && context.client_request.is_executable()
+            && !context.client_request.route().rollback_savepoint()
         {
             let error = ErrorResponse::in_failed_transaction();
 

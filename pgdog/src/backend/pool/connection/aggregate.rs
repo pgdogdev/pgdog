@@ -4,7 +4,8 @@ use std::collections::{HashMap, VecDeque};
 
 use crate::{
     frontend::router::parser::{
-        Aggregate, AggregateFunction, AggregateTarget, HelperKind, RewritePlan,
+        rewrite::statement::aggregate::{AggregateRewritePlan, HelperKind},
+        Aggregate, AggregateFunction, AggregateTarget,
     },
     net::{
         messages::{
@@ -445,7 +446,7 @@ impl<'a> Aggregates<'a> {
         rows: &'a VecDeque<DataRow>,
         decoder: &'a Decoder,
         aggregate: &'a Aggregate,
-        plan: &RewritePlan,
+        plan: &AggregateRewritePlan,
     ) -> Self {
         let mut helper_columns: HashMap<(usize, bool), HelperColumns> = HashMap::new();
         let mut unsupported: Option<UnsupportedAggregate> = None;
@@ -709,7 +710,9 @@ fn sqrt_decimal(value: Decimal) -> Option<Decimal> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::frontend::router::parser::{HelperKind, HelperMapping};
+    use crate::frontend::router::parser::rewrite::statement::aggregate::{
+        HelperKind, HelperMapping,
+    };
     use crate::net::{
         messages::{Field, Format, RowDescription},
         Decoder,
@@ -756,7 +759,7 @@ mod test {
             .cloned()
             .unwrap();
         let aggregate = match stmt.stmt.unwrap().node.unwrap() {
-            pg_query::NodeEnum::SelectStmt(stmt) => Aggregate::parse(&stmt).unwrap(),
+            pg_query::NodeEnum::SelectStmt(stmt) => Aggregate::parse(&stmt),
             _ => panic!("expected select stmt"),
         };
 
@@ -772,7 +775,7 @@ mod test {
         shard1.add(3_i64).add(18.0_f64);
         rows.push_back(shard1);
 
-        let plan = RewritePlan::new();
+        let plan = AggregateRewritePlan::default();
         let aggregates = Aggregates::new(&rows, &decoder, &aggregate, &plan);
         assert!(aggregates.merge_supported);
         let mut result = aggregates.aggregate().unwrap();
@@ -796,7 +799,7 @@ mod test {
             .cloned()
             .unwrap();
         let aggregate = match stmt.stmt.unwrap().node.unwrap() {
-            pg_query::NodeEnum::SelectStmt(stmt) => Aggregate::parse(&stmt).unwrap(),
+            pg_query::NodeEnum::SelectStmt(stmt) => Aggregate::parse(&stmt),
             _ => panic!("expected select stmt"),
         };
 
@@ -811,7 +814,7 @@ mod test {
         shard1.add(18.0_f64);
         rows.push_back(shard1);
 
-        let plan = RewritePlan::new();
+        let plan = AggregateRewritePlan::default();
         let aggregates = Aggregates::new(&rows, &decoder, &aggregate, &plan);
         assert!(!aggregates.merge_supported);
         let result = aggregates.aggregate().unwrap();
@@ -833,7 +836,7 @@ mod test {
             .cloned()
             .unwrap();
         let aggregate = match stmt.stmt.unwrap().node.unwrap() {
-            pg_query::NodeEnum::SelectStmt(stmt) => Aggregate::parse(&stmt).unwrap(),
+            pg_query::NodeEnum::SelectStmt(stmt) => Aggregate::parse(&stmt),
             _ => panic!("expected select stmt"),
         };
 
@@ -851,7 +854,7 @@ mod test {
         shard1.add(20.0_f64).add(2_i64);
         rows.push_back(shard1);
 
-        let mut plan = RewritePlan::new();
+        let mut plan = AggregateRewritePlan::default();
         plan.add_drop_column(1);
         plan.add_helper(HelperMapping {
             target_column: 0,
@@ -882,7 +885,7 @@ mod test {
             .cloned()
             .unwrap();
         let aggregate = match stmt.stmt.unwrap().node.unwrap() {
-            pg_query::NodeEnum::SelectStmt(stmt) => Aggregate::parse(&stmt).unwrap(),
+            pg_query::NodeEnum::SelectStmt(stmt) => Aggregate::parse(&stmt),
             _ => panic!("expected select stmt"),
         };
 
@@ -902,7 +905,7 @@ mod test {
         shard1.add(20.0_f64).add(4.0_f64).add(2_i64).add(2_i64);
         rows.push_back(shard1);
 
-        let mut plan = RewritePlan::new();
+        let mut plan = AggregateRewritePlan::default();
         plan.add_drop_column(2);
         plan.add_drop_column(3);
         plan.add_helper(HelperMapping {
@@ -945,7 +948,7 @@ mod test {
             .cloned()
             .unwrap();
         let aggregate = match stmt.stmt.unwrap().node.unwrap() {
-            pg_query::NodeEnum::SelectStmt(stmt) => Aggregate::parse(&stmt).unwrap(),
+            pg_query::NodeEnum::SelectStmt(stmt) => Aggregate::parse(&stmt),
             _ => panic!("expected select stmt"),
         };
 
@@ -973,7 +976,7 @@ mod test {
             .add(808.0_f64);
         rows.push_back(shard1);
 
-        let mut plan = RewritePlan::new();
+        let mut plan = AggregateRewritePlan::default();
         plan.add_drop_column(1);
         plan.add_drop_column(2);
         plan.add_drop_column(3);
@@ -1022,7 +1025,7 @@ mod test {
             .cloned()
             .unwrap();
         let aggregate = match stmt.stmt.unwrap().node.unwrap() {
-            pg_query::NodeEnum::SelectStmt(stmt) => Aggregate::parse(&stmt).unwrap(),
+            pg_query::NodeEnum::SelectStmt(stmt) => Aggregate::parse(&stmt),
             _ => panic!("expected select stmt"),
         };
 
@@ -1042,7 +1045,7 @@ mod test {
         shard1.add(4.0_f64).add(2_i64).add(40.0_f64).add(808.0_f64);
         rows.push_back(shard1);
 
-        let mut plan = RewritePlan::new();
+        let mut plan = AggregateRewritePlan::default();
         plan.add_drop_column(1);
         plan.add_drop_column(2);
         plan.add_drop_column(3);
@@ -1091,7 +1094,7 @@ mod test {
             .cloned()
             .unwrap();
         let aggregate = match stmt.stmt.unwrap().node.unwrap() {
-            pg_query::NodeEnum::SelectStmt(stmt) => Aggregate::parse(&stmt).unwrap(),
+            pg_query::NodeEnum::SelectStmt(stmt) => Aggregate::parse(&stmt),
             _ => panic!("expected select stmt"),
         };
 
@@ -1106,7 +1109,7 @@ mod test {
         shard1.add(3_i64).add(18.0_f64);
         rows.push_back(shard1);
 
-        let plan = RewritePlan::new();
+        let plan = AggregateRewritePlan::default();
         let aggregates = Aggregates::new(&rows, &decoder, &aggregate, &plan);
         assert!(!aggregates.merge_supported); // no matching COUNT without DISTINCT
         let result = aggregates.aggregate().unwrap();
@@ -1129,7 +1132,7 @@ mod test {
             .cloned()
             .unwrap();
         let aggregate = match stmt.stmt.unwrap().node.unwrap() {
-            pg_query::NodeEnum::SelectStmt(stmt) => Aggregate::parse(&stmt).unwrap(),
+            pg_query::NodeEnum::SelectStmt(stmt) => Aggregate::parse(&stmt),
             _ => panic!("expected select stmt"),
         };
 
@@ -1141,7 +1144,7 @@ mod test {
         shard0.add(12.0_f64);
         rows.push_back(shard0);
 
-        let mut plan = RewritePlan::new();
+        let mut plan = AggregateRewritePlan::default();
         plan.add_helper(HelperMapping {
             target_column: 0,
             helper_column: 1,
@@ -1172,7 +1175,7 @@ mod test {
             .cloned()
             .unwrap();
         let aggregate = match stmt.stmt.unwrap().node.unwrap() {
-            pg_query::NodeEnum::SelectStmt(stmt) => Aggregate::parse(&stmt).unwrap(),
+            pg_query::NodeEnum::SelectStmt(stmt) => Aggregate::parse(&stmt),
             _ => panic!("expected select stmt"),
         };
 
@@ -1190,9 +1193,14 @@ mod test {
         shard2.add(20.0_f64).add(4_i64);
         rows.push_back(shard2);
 
-        let mut result = Aggregates::new(&rows, &decoder, &aggregate, &RewritePlan::new())
-            .aggregate()
-            .unwrap();
+        let mut result = Aggregates::new(
+            &rows,
+            &decoder,
+            &aggregate,
+            &AggregateRewritePlan::default(),
+        )
+        .aggregate()
+        .unwrap();
 
         assert_eq!(result.len(), 2);
         let mut groups: Vec<(f64, i64)> = result

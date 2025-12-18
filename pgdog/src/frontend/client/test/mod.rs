@@ -12,8 +12,8 @@ use bytes::{Buf, BufMut, BytesMut};
 use crate::{
     backend::databases::databases,
     config::{
-        config, load_test, load_test_replicas, load_test_with_pooler_mode, set, PreparedStatements,
-        Role,
+        config, load_test, load_test_replicas, load_test_sharded, load_test_with_pooler_mode, set,
+        PreparedStatements, Role,
     },
     frontend::{
         client::{BufferEvent, QueryEngine},
@@ -30,6 +30,8 @@ use crate::{
 use super::Stream;
 
 pub mod target_session_attrs;
+pub mod test_client;
+pub use test_client::TestClient;
 
 //
 // cargo nextest runs these in separate processes.
@@ -42,6 +44,13 @@ pub async fn test_client(replicas: bool) -> (TcpStream, Client) {
     } else {
         load_test();
     }
+
+    parallel_test_client().await
+}
+
+/// Load test client with 4 databases (2 shards, 1 replica each).
+pub async fn test_client_sharded() -> (TcpStream, Client) {
+    load_test_sharded();
 
     parallel_test_client().await
 }
@@ -66,10 +75,10 @@ pub async fn parallel_test_client_with_params(params: Parameters) -> (TcpStream,
     let stream = TcpListener::bind(&conn_addr).await.unwrap();
     let port = stream.local_addr().unwrap().port();
     let connect_handle = tokio::spawn(async move {
-        let (stream, addr) = stream.accept().await.unwrap();
+        let (stream, _) = stream.accept().await.unwrap();
         let stream = Stream::plain(stream, 4096);
 
-        Client::new_test(stream, addr, params)
+        Client::new_test(stream, params)
     });
 
     let conn = TcpStream::connect(&format!("127.0.0.1:{}", port))
@@ -100,13 +109,20 @@ pub fn buffer(messages: &[impl ToBytes]) -> BytesMut {
 
 /// Read a series of messages from the stream and make sure
 /// they arrive in the right order.
-pub async fn read(stream: &mut (impl AsyncRead + Unpin), codes: &[char]) -> Vec<Message> {
+pub async fn read_messages(stream: &mut (impl AsyncRead + Unpin), codes: &[char]) -> Vec<Message> {
     let mut result = vec![];
+    let mut error = false;
 
     for code in codes {
         let c = stream.read_u8().await.unwrap();
 
-        assert_eq!(c as char, *code, "unexpected message received");
+        if c as char != *code {
+            if c as char == 'E' {
+                error = true;
+            } else {
+                panic!("got message code {}, expected {}", c as char, *code);
+            }
+        }
 
         let len = stream.read_i32().await.unwrap();
         let mut data = vec![0u8; len as usize - 4];
@@ -117,7 +133,16 @@ pub async fn read(stream: &mut (impl AsyncRead + Unpin), codes: &[char]) -> Vec<
         message.put_i32(len);
         message.put_slice(&data);
 
-        result.push(Message::new(message.freeze()))
+        let message = Message::new(message.freeze());
+
+        if error {
+            panic!(
+                "{:#}",
+                ErrorResponse::from_bytes(message.to_bytes().unwrap()).unwrap()
+            );
+        } else {
+            result.push(message);
+        }
     }
 
     result
@@ -499,7 +524,6 @@ async fn test_transaction_state() {
 
     assert!(client.transaction.is_some());
     assert!(engine.router().route().is_write());
-    assert!(engine.router().in_transaction());
 
     conn.write_all(&buffer!(
         { Parse::named("test", "SELECT $1") },
@@ -514,7 +538,6 @@ async fn test_transaction_state() {
 
     assert!(client.transaction.is_some());
     assert!(engine.router().route().is_write());
-    assert!(engine.router().in_transaction());
 
     for c in ['1', 't', 'T', 'Z'] {
         let msg = engine.backend().read().await.unwrap();
@@ -555,7 +578,6 @@ async fn test_transaction_state() {
 
     assert!(client.transaction.is_some());
     assert!(engine.router().route().is_write());
-    assert!(engine.router().in_transaction());
 
     conn.write_all(&buffer!({ Query::new("COMMIT") }))
         .await

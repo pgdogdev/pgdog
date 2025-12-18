@@ -1,10 +1,6 @@
 use super::*;
 
 impl QueryEngine {
-    pub fn backend(&mut self) -> &mut Connection {
-        &mut self.backend
-    }
-
     pub fn router(&mut self) -> &mut Router {
         &mut self.router
     }
@@ -14,6 +10,6 @@ impl QueryEngine {
     }
 
     pub fn set_test_mode(&mut self, test_mode: bool) {
-        self.test_mode = test_mode;
+        self.test_mode.enabled = test_mode;
     }
 }

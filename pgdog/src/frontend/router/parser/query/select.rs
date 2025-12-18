@@ -1,5 +1,5 @@
 use crate::frontend::router::parser::{
-    cache::CachedAst, from_clause::FromClause, where_clause::TablesSource,
+    cache::Ast, from_clause::FromClause, where_clause::TablesSource,
 };
 
 use super::*;
@@ -15,11 +15,10 @@ impl QueryParser {
     ///
     pub(super) fn select(
         &mut self,
-        cached_ast: &CachedAst,
+        cached_ast: &Ast,
         stmt: &SelectStmt,
         context: &mut QueryParserContext,
     ) -> Result<Command, Error> {
-        let ast = cached_ast.ast();
         let cte_writes = Self::cte_writes(stmt);
         let mut writes = Self::functions(stmt)?;
 
@@ -32,9 +31,10 @@ impl QueryParser {
             writes.writes = true;
         }
 
-        if matches!(self.shard, Shard::Direct(_)) {
+        // Early return for any direct-to-shard queries.
+        if context.shards_calculator.shard().is_direct() {
             return Ok(Command::Query(
-                Route::read(self.shard.clone()).set_write(writes),
+                Route::read(context.shards_calculator.shard().clone()).with_write(writes),
             ));
         }
 
@@ -47,19 +47,25 @@ impl QueryParser {
             self.recorder_mut(),
         )
         .shard()?;
+
         if let Some(shard) = shard {
             shards.insert(shard);
         }
 
         // `SELECT NOW()`, `SELECT 1`, etc.
         if shards.is_empty() && stmt.from_clause.is_empty() {
+            context
+                .shards_calculator
+                .push(ShardWithPriority::new_rr_no_table(Shard::Direct(
+                    round_robin::next() % context.shards,
+                )));
+
             return Ok(Command::Query(
-                Route::read(Some(round_robin::next() % context.shards)).set_write(writes),
+                Route::read(context.shards_calculator.shard().clone()).with_write(writes),
             ));
         }
 
         let order_by = Self::select_sort(&stmt.sort_clause, context.router_context.bind);
-
         let from_clause = TablesSource::from(FromClause::new(&stmt.from_clause));
 
         // Shard by vector in ORDER BY clause.
@@ -87,11 +93,21 @@ impl QueryParser {
         }
 
         let shard = Self::converge(&shards, ConvergeAlgorithm::default());
-        let aggregates = Aggregate::parse(stmt)?;
+        let aggregates = Aggregate::parse(stmt);
         let limit = LimitClause::new(stmt, context.router_context.bind).limit_offset()?;
         let distinct = Distinct::new(stmt).distinct()?;
 
-        let mut query = Route::select(shard, order_by, aggregates, limit, distinct);
+        context
+            .shards_calculator
+            .push(ShardWithPriority::new_table(shard));
+
+        let mut query = Route::select(
+            context.shards_calculator.shard().clone(),
+            order_by,
+            aggregates,
+            limit,
+            distinct,
+        );
 
         // Omnisharded tables check.
         if query.is_all_shards() {
@@ -117,7 +133,11 @@ impl QueryParser {
                     round_robin::next()
                 } % context.shards;
 
-                query.set_shard_mut(shard);
+                context
+                    .shards_calculator
+                    .push(ShardWithPriority::new_rr_omni(Shard::Direct(shard)));
+
+                query.set_shard_mut(context.shards_calculator.shard().clone());
 
                 if let Some(recorder) = self.recorder_mut() {
                     recorder.record_entry(
@@ -137,42 +157,10 @@ impl QueryParser {
 
         // Only rewrite if query is cross-shard.
         if query.is_cross_shard() && context.shards > 1 {
-            if let Some(buffered_query) = context.router_context.query.as_ref() {
-                let rewrite = RewriteEngine::new().rewrite_select(
-                    ast,
-                    buffered_query.query(),
-                    query.aggregate(),
-                );
-                if !rewrite.plan.is_noop() {
-                    if let BufferedQuery::Prepared(parse) = buffered_query {
-                        let name = parse.name().to_owned();
-                        {
-                            let prepared = context.prepared_statements();
-                            prepared.update_and_set_rewrite_plan(
-                                &name,
-                                &rewrite.sql,
-                                rewrite.plan.clone(),
-                            );
-                        }
-                    }
-                    query.set_rewrite(rewrite.plan, rewrite.sql);
-                } else if let BufferedQuery::Prepared(parse) = buffered_query {
-                    let name = parse.name().to_owned();
-                    let stored_plan = {
-                        let prepared = context.prepared_statements();
-                        prepared.rewrite_plan(&name)
-                    };
-                    if let Some(plan) = stored_plan {
-                        if !plan.is_noop() {
-                            query.clear_rewrite();
-                            *query.rewrite_plan_mut() = plan;
-                        }
-                    }
-                }
-            }
+            query.with_aggregate_rewrite_plan_mut(cached_ast.rewrite_plan.aggregates.clone());
         }
 
-        Ok(Command::Query(query.set_write(writes)))
+        Ok(Command::Query(query.with_write(writes)))
     }
 
     /// Handle the `ORDER BY` clause of a `SELECT` statement.

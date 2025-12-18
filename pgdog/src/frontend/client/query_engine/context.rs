@@ -2,6 +2,7 @@ use crate::{
     backend::pool::{connection::mirror::Mirror, stats::MemoryStats},
     frontend::{
         client::{timeouts::Timeouts, Sticky, TransactionType},
+        router::parser::rewrite::statement::plan::RewriteResult,
         Client, ClientRequest, PreparedStatements,
     },
     net::{BackendKeyData, Parameters, Stream},
@@ -36,6 +37,8 @@ pub struct QueryEngineContext<'a> {
     pub(super) rollback: bool,
     /// Sticky config:
     pub(super) sticky: Sticky,
+    /// Rewrite result.
+    pub(super) rewrite_result: Option<RewriteResult>,
 }
 
 impl<'a> QueryEngineContext<'a> {
@@ -56,6 +59,7 @@ impl<'a> QueryEngineContext<'a> {
             requests_left: 0,
             rollback: false,
             sticky: client.sticky,
+            rewrite_result: None,
         }
     }
 
@@ -81,6 +85,7 @@ impl<'a> QueryEngineContext<'a> {
             requests_left: 0,
             rollback: false,
             sticky: Sticky::new(),
+            rewrite_result: None,
         }
     }
 
@@ -94,5 +99,10 @@ impl<'a> QueryEngineContext<'a> {
 
     pub fn in_error(&self) -> bool {
         self.transaction.map(|t| t.error()).unwrap_or_default()
+    }
+
+    /// Executing a cross-shard INSERT.
+    pub fn in_cross_shard_insert(&self) -> bool {
+        matches!(self.rewrite_result, Some(RewriteResult::InsertSplit(_)))
     }
 }

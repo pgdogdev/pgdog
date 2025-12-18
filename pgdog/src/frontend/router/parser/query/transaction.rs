@@ -13,7 +13,7 @@ impl QueryParser {
     pub(super) fn transaction(
         &mut self,
         stmt: &TransactionStmt,
-        context: &QueryParserContext,
+        context: &mut QueryParserContext,
     ) -> Result<Command, Error> {
         let extended = !context.query()?.simple();
         let mut rollback_savepoint = false;
@@ -30,7 +30,6 @@ impl QueryParser {
                 return Ok(Command::RollbackTransaction { extended })
             }
             TransactionStmtKind::TransStmtBegin | TransactionStmtKind::TransStmtStart => {
-                self.in_transaction = true;
                 let transaction_type = Self::transaction_type(&stmt.options).unwrap_or_default();
                 return Ok(Command::StartTransaction {
                     query: context.query()?.clone(),
@@ -49,8 +48,13 @@ impl QueryParser {
             _ => (),
         }
 
+        context
+            .shards_calculator
+            .push(ShardWithPriority::new_table(Shard::All));
+
         Ok(Command::Query(
-            Route::write(None).set_rollback_savepoint(rollback_savepoint),
+            Route::write(context.shards_calculator.shard())
+                .with_rollback_savepoint(rollback_savepoint),
         ))
     }
 

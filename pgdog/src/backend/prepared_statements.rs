@@ -256,11 +256,14 @@ impl PreparedStatements {
         self.state.done() && self.parses.is_empty() && self.describes.is_empty()
     }
 
+    /// The server connection has more messages to send
+    /// to the client.
     pub(crate) fn has_more_messages(&self) -> bool {
         self.state.has_more_messages()
     }
 
-    pub(crate) fn copy_mode(&self) -> bool {
+    /// The server connection is in COPY mode.
+    pub(crate) fn is_copy_mode(&self) -> bool {
         self.state.copy_mode()
     }
 
@@ -296,7 +299,7 @@ impl PreparedStatements {
     /// Get the Parse message stored in the global prepared statements
     /// cache for this statement.
     pub(crate) fn parse(&self, name: &str) -> Option<Parse> {
-        self.global_cache.read().parse(name)
+        self.global_cache.read().rewritten_parse(name)
     }
 
     /// Get the globally stored RowDescription for this prepared statement,

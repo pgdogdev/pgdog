@@ -8,7 +8,7 @@ use crate::{
         router::parser::{where_clause::TablesSource, Table, WhereClause},
         SearchPath,
     },
-    net::Parameters,
+    net::parameter::ParameterValue,
 };
 
 pub struct MultiTenantCheck<'a> {
@@ -16,7 +16,7 @@ pub struct MultiTenantCheck<'a> {
     config: &'a MultiTenant,
     schema: Schema,
     ast: &'a ParseResult,
-    parameters: &'a Parameters,
+    search_path: Option<&'a ParameterValue>,
 }
 
 impl<'a> MultiTenantCheck<'a> {
@@ -25,13 +25,13 @@ impl<'a> MultiTenantCheck<'a> {
         config: &'a MultiTenant,
         schema: Schema,
         ast: &'a ParseResult,
-        parameters: &'a Parameters,
+        search_path: Option<&'a ParameterValue>,
     ) -> Self {
         Self {
             config,
             schema,
             ast,
-            parameters,
+            search_path,
             user,
         }
     }
@@ -79,7 +79,7 @@ impl<'a> MultiTenantCheck<'a> {
     }
 
     fn check(&self, table: Table, where_clause: Option<WhereClause>) -> Result<(), Error> {
-        let search_path = SearchPath::new(self.user, self.parameters, &self.schema);
+        let search_path = SearchPath::new(self.user, self.search_path, &self.schema);
         let schemas = search_path.resolve();
 
         for schema in schemas {
@@ -111,7 +111,6 @@ impl<'a> MultiTenantCheck<'a> {
 mod tests {
     use super::*;
     use crate::backend::schema::{columns::Column, Relation, Schema};
-    use crate::net::Parameters;
     use std::collections::HashMap;
 
     fn schema_with_tenant_column(column: &str) -> Schema {
@@ -144,9 +143,8 @@ mod tests {
         let config = MultiTenant {
             column: "tenant_id".into(),
         };
-        let params = Parameters::default();
 
-        let check = MultiTenantCheck::new("alice", &config, schema, &ast, &params);
+        let check = MultiTenantCheck::new("alice", &config, schema, &ast, None);
         assert!(check.run().is_ok());
     }
 
@@ -158,9 +156,8 @@ mod tests {
         let config = MultiTenant {
             column: "tenant_id".into(),
         };
-        let params = Parameters::default();
 
-        let check = MultiTenantCheck::new("alice", &config, schema, &ast, &params);
+        let check = MultiTenantCheck::new("alice", &config, schema, &ast, None);
         let err = check
             .run()
             .expect_err("expected tenant id validation error");

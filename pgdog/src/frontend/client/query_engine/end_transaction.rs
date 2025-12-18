@@ -43,7 +43,6 @@ impl QueryEngine {
     pub(super) async fn end_connected(
         &mut self,
         context: &mut QueryEngineContext<'_>,
-        route: &Route,
         rollback: bool,
         extended: bool,
     ) -> Result<(), Error> {
@@ -71,7 +70,7 @@ impl QueryEngine {
 
         // 2pc is used only for writes and is not needed for rollbacks.
         let two_pc = cluster.two_pc_enabled()
-            && route.is_write()
+            && context.client_request.route().is_write()
             && !rollback
             && context.transaction().map(|t| t.write()).unwrap_or(false);
 
@@ -92,7 +91,7 @@ impl QueryEngine {
                 self.notify_buffer.clear();
             }
             context.rollback = rollback;
-            self.execute(context, route).await?;
+            self.execute(context).await?;
         }
 
         Ok(())
@@ -140,11 +139,8 @@ mod tests {
         load_test();
 
         // Create a test client with DevNull stream (doesn't require real I/O)
-        let mut client = crate::frontend::Client::new_test(
-            Stream::dev_null(),
-            std::net::SocketAddr::from(([127, 0, 0, 1], 1234)),
-            Parameters::default(),
-        );
+        let mut client =
+            crate::frontend::Client::new_test(Stream::dev_null(), Parameters::default());
         client.transaction = Some(TransactionType::ReadWrite);
 
         // Create a default query engine (avoids backend connection)

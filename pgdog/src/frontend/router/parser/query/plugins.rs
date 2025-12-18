@@ -1,4 +1,4 @@
-use crate::frontend::router::parser::cache::CachedAst;
+use crate::frontend::router::parser::cache::Ast;
 use pgdog_plugin::{ReadWrite, Shard as PdShard};
 use std::string::String as StdString;
 
@@ -23,7 +23,7 @@ impl QueryParser {
     pub(super) fn plugins(
         &mut self,
         context: &QueryParserContext,
-        statement: &CachedAst,
+        statement: &Ast,
         read: bool,
     ) -> Result<(), Error> {
         // Don't run plugins on Parse only.
@@ -45,8 +45,10 @@ impl QueryParser {
         // The first plugin to returns something, wins.
         debug!("executing {} router plugins", plugins.len());
 
-        let mut context =
-            context.plugin_context(&statement.ast().protobuf, &context.router_context.bind);
+        let mut context = context.plugin_context(
+            &statement.parse_result().protobuf,
+            &context.router_context.bind,
+        );
         context.write_override = if self.write_override || !read { 1 } else { 0 };
 
         for plugin in plugins {

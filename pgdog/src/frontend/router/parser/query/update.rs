@@ -16,7 +16,7 @@ impl QueryParser {
     pub(super) fn update(
         &mut self,
         stmt: &UpdateStmt,
-        context: &QueryParserContext,
+        context: &mut QueryParserContext,
     ) -> Result<Command, Error> {
         let table = stmt.relation.as_ref().map(Table::from);
 
@@ -32,7 +32,13 @@ impl QueryParser {
                     );
                 }
 
-                return Ok(Command::Query(Route::write(shard)));
+                context
+                    .shards_calculator
+                    .push(ShardWithPriority::new_table(shard));
+
+                return Ok(Command::Query(Route::write(
+                    context.shards_calculator.shard(),
+                )));
             }
 
             let shard_key_columns = Self::detect_shard_key_assignments(stmt, table, context);
@@ -65,6 +71,9 @@ impl QueryParser {
                         "UPDATE matched WHERE clause for sharding key",
                     );
                 }
+                context
+                    .shards_calculator
+                    .push(ShardWithPriority::new_table(shard.clone()));
 
                 if let (Some(columns), Some(display)) = (
                     (!shard_key_columns.is_empty()).then_some(&shard_key_columns),
@@ -74,13 +83,15 @@ impl QueryParser {
                         let assignments = Self::collect_assignments(stmt, table, columns, display)?;
 
                         if assignments.is_empty() {
-                            return Ok(Command::Query(Route::write(shard)));
+                            return Ok(Command::Query(Route::write(
+                                context.shards_calculator.shard(),
+                            )));
                         }
 
                         let plan = Self::build_shard_key_rewrite_plan(
                             stmt,
                             table,
-                            shard.clone(),
+                            shard,
                             context,
                             assignments,
                             columns,
@@ -90,14 +101,23 @@ impl QueryParser {
                     }
                 }
 
-                return Ok(Command::Query(Route::write(shard)));
+                return Ok(Command::Query(Route::write(
+                    context.shards_calculator.shard(),
+                )));
             }
         }
 
         if let Some(recorder) = self.recorder_mut() {
             recorder.record_entry(None, "UPDATE fell back to broadcast");
         }
-        Ok(Command::Query(Route::write(Shard::All)))
+
+        context
+            .shards_calculator
+            .push(ShardWithPriority::new_table(Shard::All));
+
+        Ok(Command::Query(Route::write(
+            context.shards_calculator.shard(),
+        )))
     }
 }
 
@@ -123,7 +143,9 @@ impl QueryParser {
 
         Ok(ShardKeyRewritePlan::new(
             owned_table,
-            Route::write(Shard::Direct(old_shard)),
+            Route::write(ShardWithPriority::new_override_rewrite_update(
+                Shard::Direct(old_shard),
+            )),
             new_shard,
             stmt.clone(),
             assignments,

@@ -1,11 +1,14 @@
 //! ClientRequest (messages buffer).
+//!
+//! Contains exactly one request.
+//!
 use std::ops::{Deref, DerefMut};
 
 use lazy_static::lazy_static;
 use regex::Regex;
 
 use crate::{
-    frontend::router::parser::RewritePlan,
+    frontend::router::Ast,
     net::{
         messages::{Bind, CopyData, Protocol},
         Error, Flush, ProtocolMessage,
@@ -17,11 +20,17 @@ use super::{router::Route, PreparedStatements};
 
 pub use super::BufferedQuery;
 
-/// Message buffer.
+/// Client request, containing exactly one query.
 #[derive(Debug, Clone)]
 pub struct ClientRequest {
+    /// Messages, e.g. Query, or Parse, Bind, Execute, etc.
     pub messages: Vec<ProtocolMessage>,
+    /// The route this request will take in our query engine.
+    /// When the request is created, this is not known yet.
+    /// The QueryEngine will set the route once it handles the request.
     pub route: Option<Route>,
+    /// The statement AST, if we parsed the request with our query parser.
+    pub ast: Option<Ast>,
 }
 
 impl MemoryUsage for ClientRequest {
@@ -29,6 +38,7 @@ impl MemoryUsage for ClientRequest {
     fn memory_usage(&self) -> usize {
         // ProtocolMessage uses memory allocated by BytesMut (mostly).
         self.messages.capacity() * std::mem::size_of::<ProtocolMessage>()
+            + std::mem::size_of::<Option<Ast>>()
     }
 }
 
@@ -44,12 +54,20 @@ impl ClientRequest {
         Self {
             messages: Vec::with_capacity(5),
             route: None,
+            ast: None,
         }
     }
 
-    /// The buffer is full and the client won't send any more messages
-    /// until it gets a reply, or we don't want to buffer the data in memory.
-    pub fn full(&self) -> bool {
+    /// Remove any saved state from the request.
+    pub fn clear(&mut self) {
+        self.messages.clear();
+        self.route = None;
+        self.ast = None;
+    }
+
+    /// We received a complete request and we are ready to
+    /// send it to the query engine.
+    pub fn is_complete(&self) -> bool {
         if let Some(message) = self.messages.last() {
             // Flush (F) | Sync (F) | Query (F) | CopyDone (F) | CopyFail (F)
             if matches!(message.code(), 'H' | 'S' | 'Q' | 'c' | 'f') {
@@ -109,6 +127,8 @@ impl ClientRequest {
         Ok(None)
     }
 
+    /// Quick and cheap way to find out if this
+    /// request is starting a transaction.
     pub fn is_begin(&self) -> bool {
         lazy_static! {
             static ref BEGIN: Regex = Regex::new("(?i)^BEGIN").unwrap();
@@ -160,11 +180,12 @@ impl ClientRequest {
         Self {
             messages,
             route: self.route.clone(),
+            ast: self.ast.clone(),
         }
     }
 
     /// The buffer has COPY messages.
-    pub fn copy(&self) -> bool {
+    pub fn is_copy(&self) -> bool {
         self.messages
             .last()
             .map(|m| m.code() == 'd' || m.code() == 'c')
@@ -173,7 +194,7 @@ impl ClientRequest {
 
     /// The client is setting state on the connection
     /// which we can no longer ignore.
-    pub(crate) fn executable(&self) -> bool {
+    pub(crate) fn is_executable(&self) -> bool {
         self.messages
             .iter()
             .any(|m| ['E', 'Q', 'B'].contains(&m.code()))
@@ -187,26 +208,6 @@ impl ClientRequest {
         self.messages.clear();
         self.messages.extend(request.to_vec());
         Ok(())
-    }
-
-    /// Rewrite prepared statement SQL before sending it to the backend.
-    pub fn rewrite_prepared(
-        &mut self,
-        query: &str,
-        prepared: &mut PreparedStatements,
-        plan: &RewritePlan,
-    ) -> bool {
-        let mut updated = false;
-
-        for message in self.messages.iter_mut() {
-            if let ProtocolMessage::Parse(parse) = message {
-                parse.set_query(query);
-                prepared.update_and_set_rewrite_plan(parse.name(), query, plan.clone());
-                updated = true;
-            }
-        }
-
-        updated
     }
 
     /// Get the route for this client request.
@@ -296,6 +297,7 @@ impl From<Vec<ProtocolMessage>> for ClientRequest {
         ClientRequest {
             messages,
             route: None,
+            ast: None,
         }
     }
 }
