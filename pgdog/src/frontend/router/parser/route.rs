@@ -471,7 +471,7 @@ pub struct ShardsWithPriority {
 
 impl ShardsWithPriority {
     /// Get currently computed shard.
-    pub fn shard(&self) -> ShardWithPriority {
+    pub(crate) fn shard(&self) -> ShardWithPriority {
         lazy_static! {
             static ref DEFAULT_SHARD: ShardWithPriority = ShardWithPriority {
                 shard: Shard::All,
@@ -497,7 +497,7 @@ impl ShardsWithPriority {
     }
 
     /// Schema-path based routing priority is used.
-    pub fn is_search_path(&self) -> bool {
+    pub(crate) fn is_search_path(&self) -> bool {
         self.peek()
             .map(|shard| matches!(shard.source, ShardSource::SearchPath(_)))
             .unwrap_or_default()
