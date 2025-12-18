@@ -372,12 +372,9 @@ impl Server {
                             }
                         }
                         Err(err) => {
-                            match err {
-                                Error::ProtocolOutOfSync => {
-                                    // conservatively, we do not know for sure if this is recoverable
-                                    self.stats.state(State::Error);
-                                }
-                                _ => {}
+                            if let Error::ProtocolOutOfSync = err {
+                                // conservatively, we do not know for sure if this is recoverable
+                                self.stats.state(State::Error);
                             }
                             error!(
                                 "{:?} got: {}, extended buffer: {:?}, state: {}",

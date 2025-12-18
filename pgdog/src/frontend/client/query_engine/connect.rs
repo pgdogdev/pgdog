@@ -116,8 +116,6 @@ impl QueryEngine {
     pub(super) fn transaction_route(&mut self, route: &Route) -> Result<Route, Error> {
         let cluster = self.backend.cluster()?;
 
-        println!("route: {:#?}", route);
-
         if cluster.shards().len() == 1 {
             Ok(
                 Route::write(ShardWithPriority::new_override_transaction(Shard::Direct(
